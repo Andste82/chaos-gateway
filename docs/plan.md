@@ -1470,8 +1470,13 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D5 | TLS components | certificate and handshake cases in a TLS responder in the core; interception via a mitmproxy sidecar; the "no Python" rule applies to the core only. Confirmed with a Node prototype in S4; implemented in Go per D15 | S4 |
 | D6 | Uplink types | whatever the OS configures (static or DHCP tested; others such as PPPoE untested) | follows from D3 |
 | D7 | IP versions in V1 | IPv4-only test networks (§2.2); IPv6 blocked on test networks until dual-stack in M32 | review |
+| D8 | L2 transparent mode (gateway as a bridge **between** device and upstream router, not routing) | **later** (§8); only needed when the gateway cannot be the device's default router. Unrelated to the bridge that joins the ports of one test network (D16) | maintainer |
 | D9 | Test infrastructure and hardware | one Ubuntu VM for development, CI runner and nightly tests; ARM64 emulated; hardware validation (H1) when hardware exists | maintainer |
+| D10 | Users | **one admin account plus scoped API tokens** in V1; no roles | maintainer |
+| D11 | Existing connections when an access rule changes | **new connections only** by default; "also cut existing connections" is an explicit option (§2.4) | maintainer |
 | D12 | Rule and fault precedence | as §2.4, with D24–D26 | maintainer |
+| D13 | License | **MIT** (`LICENSE`) | maintainer |
+| D14 | Interface naming | **logical names** (UPLINK, IOT, MGMT) in the UI; Linux names only in the technical views | maintainer |
 | D15 | Implementation stack | **Go backend** (single binary with embedded UI, low memory on Raspberry Pi, mature netlink/nftables/DNS libraries, experience from sessile) **+ Vue 3 frontend**; shared types come from the OpenAPI spec instead of shared code (§3.7) | maintainer |
 | D16 | Test-network attachment | every test network is a gateway-owned bridge; physical port and probes are bridge ports (§2.2). Not to be confused with D8: the gateway still routes, the bridge only joins ports of one network | S12 |
 | D17 | Classification | per packet via the conntrack original tuple, mark with 12-bit fault id and direction bit, identical tc mapping on every interface (§3.3) | S10, S11, S15 |
@@ -1490,15 +1495,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 
 ## 7.2 Open
 
-Each open decision has a recommendation; confirming it is enough to proceed.
-
-| # | Decision | Options | Recommendation |
-|---|---|---|---|
-| D8 | L2 transparent mode (gateway as a bridge **between** device and upstream router, not routing) | V1, later, never | later. Only needed when the gateway cannot be the device's default router. Unrelated to the bridge that joins the ports of one test network (D16) |
-| D10 | Users | single admin + tokens, multi-user with roles | single admin + scoped tokens in V1 |
-| D11 | Existing connections default for access rules | affect new only, cut existing | affect new only; cutting existing is an explicit option |
-| D13 | License | open source (which license), closed | decide before first public release |
-| D14 | Interface naming | Linux names, logical names | logical names (UPLINK, IOT, MGMT) in the UI; Linux names in technical views |
+None. New questions are added here with a recommendation.
 
 ---
 

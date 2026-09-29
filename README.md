@@ -6,8 +6,10 @@ Chaos Gateway is a Linux machine that sits between a test network with IoT devic
 
 | | |
 |---|---|
-| [`docs/plan.md`](docs/plan.md) | product, architecture, test strategy, milestones, open decisions |
+| [`docs/plan.md`](docs/plan.md) | product, architecture, test strategy, milestones, decisions |
 | [`docs/spikes/REPORT.md`](docs/spikes/REPORT.md) | Phase 0 spike results and the decisions derived from them |
 | [`spikes/`](spikes/) | spike scripts and raw results |
 
-Status: planning complete, Phase 0 spikes executed (S8 on Raspberry Pi still open). Implementation starts with milestone M1.
+Status: planning complete, all decisions made (plan §7), Phase 0 spikes S1–S16 executed (hardware measurements on Raspberry Pi follow when hardware exists, H1). Implementation starts with milestone M1.
+
+License: MIT (see [`LICENSE`](LICENSE)).

@@ -189,7 +189,8 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
 - Enable/disable a client (disabled = removed from the interface; usable as a fault: "peer offline"), rotate keys, delete.
 - Status per client and link: last handshake, current endpoint, bytes in/out, online state (handshake younger than 3 min), learned routes. Events on state changes.
 - Clients and their client networks appear as **devices and remote networks** in the model: they can be grouped, targeted by rules, faults, profiles and scenarios, and appear in the access matrix. Identity is the tunnel address or the client network (no MAC, no DHCP).
-- IP versions: tunnel-inner addresses are IPv4 in V1, like test networks. The **underlay** (the encrypted UDP) can use IPv4 or IPv6 on the uplink, so the gateway stays reachable as a WireGuard endpoint behind IPv4-less connections such as DS-Lite (open decision D22).
+- IP versions: V1 is IPv4 only, inside the tunnels and for the underlay (the encrypted UDP); IPv6 for both comes with M32 (D22).
+- **Who connects to whom:** either side of a link can be the reachable one. If the gateway has no publicly reachable IPv4 address (DS-Lite, carrier-grade NAT), it initiates the tunnel towards a remote site with a reachable endpoint and keeps it open with persistent keepalive; hub clients then need a reachable gateway (port forwarding on the upstream router).
 - Addressing: between WireGuard and local test networks traffic is **routed without NAT** by default (remote test machines see real device addresses; the exported client configuration contains the needed routes). Towards the uplink it is masqueraded, like test networks.
 
 **Keys and export**
@@ -506,7 +507,7 @@ edit → validate → preview → apply → verify → commit
 - REST under `/api/v1`, described by OpenAPI (`api/openapi.yaml`, spec-first). UI and automation use the same API.
 - SSE for events and live data.
 - Main resources:
-  - `uplink`, `networks`, `devices`, `groups`, `rules`, `profiles`, `scenarios` (read the active revision)
+  - `uplink`, `networks` (incl. WireGuard networks, clients and `…/export` as `.conf`, QR PNG/SVG, zip), `routing` (static routes, BIRD protocols, `…/status`), `devices`, `groups`, `rules`, `profiles`, `scenarios` (read the active revision)
   - `revisions` (candidates, `…/preview`, `…/apply`, `…/confirm` for commit-confirm, `…/diff?base=`)
   - `overlays` (all kinds of §2.1.1, with owner, TTL and lease; `…/renew`)
   - `runs` (`…/abort`, `…/renew`, `…/report.json`, `…/report.xml`), `captures`, `diagnostics`, `probes`
@@ -968,7 +969,7 @@ Faults are random processes; tests use statistics, not exact values:
 | macvlan | several devices behind one port | many devices without many veth pairs |
 | dummy | a local address or sink | services, routing tests |
 | IFB | ingress shaping | faults on traffic to the gateway itself |
-| WireGuard interface | tunnel endpoint | WireGuard networks, clients and site links (M4b, M37); remote sites are namespaces with their own WireGuard interface and BIRD |
+| WireGuard interface | tunnel endpoint | WireGuard networks, clients and site links (M4b, M4c); remote sites are namespaces with their own WireGuard interface and BIRD |
 | tap | a VM's NIC | connecting appliance VMs (level 2) |
 
 Link events are simulated by setting one end of a veth pair down; the other end loses its carrier. Devices are namespaces with their own MAC, a DHCP client (`udhcpc`) and test tools, so "a device behind another router" or "several LANs" are just different topologies.
@@ -1080,14 +1081,13 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 | Phase | Milestones | Result |
 |---|---|---|
-| 1 Foundation | M1 (M), M2 (M), M3 (M), M4 (L), M4b (L), M5 (L), M5b (M), M6a (M), M6b (M) | API-configurable routed gateway with DHCP, DNS, discovery and WireGuard networks |
+| 1 Foundation | M1 (M), M2 (M), M3 (M), M4 (L), M4b (L), M4c (L), M5 (L), M5b (M), M6a (M), M6b (M) | API-configurable routed gateway with DHCP, DNS, discovery, WireGuard networks and dynamic routing |
 | 2 Faults | M7 (M), M8a (M), M8b (M), M9 (M), M10 (M), M11 (S), H1 (S) | faults, rules, profiles via API, validated on target hardware |
 | 3 Web UI | M12 (L), M13 (L), M14 (M) | interactive use |
 | 4 Automation | M15 (L), M16 (M), M17 (M), M18 (S), M19 (M) | scenarios, checks, capture, CLI |
 | 5 Application layer | M20 (M), M21 (M), M22 (L), M23 (S) | DNS, TLS, DHCP test actions |
 | 6 Diagnostics | M24 (M), M25 (S), M26 (S) | diagnostics, probes, metrics |
 | 7 Production | M27 (M), M28 (M), M29 (M), M30 (S) | recovery, packages, hardening, release |
-| 8 Dynamic routing | M37 (L) | BIRD over WireGuard links |
 
 **MVP (automation first):** Phases 1 and 2 plus M15, M16 and M18 — faults, rules and profiles, scenarios with checks and JUnit reports, driven by the CLI and the API. This already serves the original use case (automated IoT tests in CI). The web UI (Phase 3) follows; V1 is defined at the end of this section.
 
@@ -1119,6 +1119,12 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests (level 1): a device in a local test network reaches a host in a client network without NAT, and the reverse only if the access matrix allows it; a link with static routes carries traffic between the gateway's test network and the remote site; the exported `.conf` brings up a working tunnel in a fresh namespace (as in S15), and the decoded QR equals the file; disabling a client stops its handshake and emits the event; a *test* role client cannot reach the UI/API, a *management* role client can; private keys never appear in configuration exports or logs; re-applying the configuration does not interrupt an established tunnel.
 - Depends on: M4, S15. (API resources follow in M5, UI in M14.)
 
+**M4c — Dynamic routing (BIRD)** (L)
+- Why here: WireGuard links between sites depend on dynamic routing; like WireGuard itself it is part of the foundation, so later features are tested with learned routes too.
+- Scope: BIRD 2 instance managed by Chaos Gateway (§2.2.2): BGP, OSPFv2, Babel, static; router id, ASN, neighbors per link, areas and timers in the model; announced prefixes from the model; import filters (prefix lists, no default unless allowed, protected prefixes, max prefixes); export only into Chaos Gateway's routing tables; `bird -p` validation and `birdc configure` apply as part of the revision; custom snippets; external mode for another daemon's kernel table; neighbor and route status and events; remote-side BIRD snippet in link exports. (API resources in M5, routing view in the UI with M14.)
+- Tests (level 1, as in S15): three sites (gateway plus two remote namespaces with BIRD) over WireGuard links, with BGP and with OSPF; routes are learned and withdrawn; learned routes appear only in Chaos Gateway's tables, never in main; a neighbor announcing a default route, the management prefix or a gateway-own prefix is filtered; max-prefix triggers; taking a link down withdraws its routes within the hold time and they return after it comes back; a configuration change is applied without resetting established sessions; an invalid custom snippet is rejected in preview with BIRD's error message.
+- Depends on: M4b, S15.
+
 **M5 — REST API v1** (L)
 - Scope: API conventions of §2.15 (problem+json, UUID + name, pagination, ETag/If-Match, idempotency keys, SSE with ids and replay); candidate-revision model with preview, apply, confirm and three-way diff (§2.1.1); sessions with CSRF, hashed API tokens with scopes, first-start setup token (§2.16); audit log.
 - Tests: API contract tests against the spec; generated clients compile; E2E through the testbed (configure via API → traffic flows, including creating a WireGuard client and downloading its configuration); conflicting candidate is rejected and the diff endpoint returns the other change; SSE reconnect with `Last-Event-ID` gets the missed events.
@@ -1139,7 +1145,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests: clients in a local test network and a WireGuard client (DNS = gateway tunnel address) resolve names over UDP and TCP; the proxy does not bind 127.0.0.53 and resolved keeps working; changing the uplink address keeps NAT working and emits the event.
 - Depends on: M5.
 
-*After Phase 1: a working, API-configurable test gateway with local and WireGuard networks, without faults.*
+*After Phase 1: a working, API-configurable test gateway with local and WireGuard networks and dynamic routing, without faults.*
 
 ## Phase 2 — Faults (core value)
 
@@ -1155,7 +1161,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M8b — Fault engine: latency, jitter, loss** (M)
 - Scope: apply the tc tree per interface with in-place changes; overlay writes return after verify.
-- Tests: measurement tests (§4.3) for device, group and network scope, for traffic between two test networks and between a test network and a WireGuard client network; isolation test; updating one fault does not disturb others.
+- Tests: measurement tests (§4.3) for device, group and network scope, for traffic between two test networks, between a test network and a WireGuard client network, and over a route learned via BGP; isolation test; updating one fault does not disturb others.
 - Depends on: M8a.
 
 **M9 — Access rules** (M)
@@ -1165,7 +1171,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M10 — Extended faults** (M)
 - Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
-- Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; a tunnel fault affects everything inside that tunnel and nothing else, and stacks with inner faults (as in S15); PMTU faults through a tunnel; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
+- Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; a tunnel fault affects everything inside that tunnel and nothing else, and stacks with inner faults (as in S15); a tunnel blackout on a BGP link withdraws the learned routes and the re-convergence time is reported; PMTU faults through a tunnel; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
 - Depends on: M8b, M9.
 
 **M11 — Profiles** (S)
@@ -1193,7 +1199,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M12.
 
 **M14 — Networks view and technical view** (M)
-- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog, QR dialog and config download, access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
+- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog, QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
 - Tests: Playwright; commit-confirm — an unconfirmed change is rolled back after the timeout and the UI shows it; create a WireGuard client in the UI, scan its QR in the test (decoded content equals the download) and bring the tunnel up in the testbed.
 - Depends on: M13.
 
@@ -1289,26 +1295,19 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests: documentation examples run in CI.
 - Depends on: all milestones included in V1.
 
-## Phase 8 — Dynamic Routing
-
-**M37 — Routing: static and dynamic (BIRD)** (L)
-- Scope: static routes per network, client and link (§2.2.2); BIRD 2 instance managed by Chaos Gateway: BGP, OSPFv2, Babel, static; announced prefixes from the model; import filters (prefix lists, no default unless allowed, protected prefixes, max prefixes); `bird -p` validation and `birdc configure` apply as part of the revision; custom snippets; external mode for another daemon's kernel table; neighbor and route status, events; remote-side BIRD snippet in link exports. UI: routing view with sessions and prefixes.
-- Tests (level 1): three sites (gateway plus two remote namespaces with BIRD) over WireGuard links; routes are learned and withdrawn; learned routes appear only in Chaos Gateway's tables, never in main; a neighbor announcing a default route or the management prefix is filtered; max-prefix triggers; re-convergence after a 20 s tunnel blackout is measured and reported; an invalid custom snippet is rejected in preview with BIRD's error message.
-- Depends on: M4b, M7, S15.
-
 ## After V1
 
 | Milestone | Content |
 |---|---|
 | M31 VLANs | multiple networks on a trunk (VLAN ports on the network bridges), access matrix between them |
-| M32 IPv6 | RA/SLAAC, DHCPv6, IPv6 rules and faults (lifts the V1 IPv6 block) |
+| M32 IPv6 | RA/SLAAC, DHCPv6, IPv6 rules and faults (lifts the V1 IPv6 block); IPv6 inside WireGuard tunnels and as underlay; IPv6 in BIRD |
 | M34 NTP time faults | see §8 |
 | M35 Port forwarding | DNAT for inbound test traffic; matching a device as responder |
 | M36 Further proposals | features from §8 by priority |
 
 ## V1 Scope Summary
 
-V1 = Phases 1–4 (incl. M5b and H1), plus M20, M21, M24, M25, M27, M28, M29, M30.
+V1 = Phases 1–4 (incl. M4b WireGuard, M4c dynamic routing, M5b and H1), plus M20, M21, M24, M25, M27, M28, M29, M30.
 
 M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optional for V1.
 
@@ -1348,6 +1347,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | 28 | Route injection by remote sites | a remote BIRD could announce the default route or management prefixes and divert traffic | learned routes only in Chaos Gateway's tables; import filters, protected prefixes, max prefixes (§2.2.2) |
 | 29 | Tunnel MTU | WireGuard overhead (60–80 bytes) plus PMTU faults can black-hole traffic inside tunnels | MTU 1420 default, MSS clamp on WireGuard interfaces, PMTU tests through tunnels in M10 |
 | 30 | Per-device queues multiply classes | a rate-limited profile on a network of N devices creates N classes per direction (D18); many devices on small hardware | id space and class count limits enforced by the compiler (`capacity_exceeded`); measured in H1 |
+| 31 | Gateway behind an IPv4-less uplink (DS-Lite, CGNAT) | hub clients cannot reach the gateway's WireGuard endpoint over IPv4 in V1 | gateway initiates links towards reachable sites; port forwarding upstream; IPv6 underlay with M32 (D22) |
 
 ---
 
@@ -1367,6 +1367,8 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D19 | WireGuard | hub networks (clients with client networks) and point-to-point links; keys generated on the gateway by default; export as `.conf` and QR (§2.2.1) | maintainer |
 | D20 | Routing daemon | **BIRD 2** in its own managed instance (BGP, OSPFv2, Babel, static); adapter interface for FRR later; external mode for other daemons (§2.2.2) | maintainer |
 | D21 | When WireGuard comes | **Phase 1 (M4b)**, so every later feature works with WireGuard interfaces from the start | maintainer |
+| D22 | IPv6 for WireGuard (underlay and inside) | **later, with M32**; V1 is IPv4 only; behind IPv4-less uplinks the gateway initiates links (§2.2.1) | maintainer |
+| D23 | When dynamic routing comes | **Phase 1 (M4c)**, directly after WireGuard | maintainer |
 
 ## 7.2 Open
 
@@ -1384,8 +1386,6 @@ Each open decision has a recommendation; confirming it is enough to proceed.
 | D11 | Existing connections default for access rules | affect new only, cut existing | affect new only; cutting existing is an explicit option |
 | D12 | Rule and fault precedence | as §2.4 | confirm §2.4 |
 | D13 | License | open source (which license), closed | decide before first public release |
-| D22 | WireGuard underlay over IPv6 | V1 (IPv6 on the uplink only, for the encrypted UDP), with M32 | V1 if the gateway may sit behind DS-Lite or other IPv4-less connections; test and tunnel-inner networks stay IPv4 until M32 |
-| D23 | Placement of dynamic routing (M37) | V1, V1.1 | V1 if the lab connects sites with changing prefixes from the start; otherwise static routes over links (M4b) are enough and M37 follows in V1.1 |
 | D14 | Interface naming | Linux names, logical names | logical names (UPLINK, IOT, MGMT) in the UI; Linux names in technical views |
 
 ---

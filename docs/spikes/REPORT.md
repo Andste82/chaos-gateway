@@ -428,7 +428,7 @@ These changes are applied to `docs/plan.md`:
 | §6 Risks | #3 downgraded (not observed); #4 confirmed with numbers; #6 corrected (same-kind replace keeps queue) |
 | §7 Decisions | D4 → Kea; D5 → confirmed (Node TLS responder + mitmproxy sidecar) |
 | §2.2, §3.3, §3.2 (S11–S14) | test networks as bridges with policy routing (S12); direction bit and identical tc mapping on all interfaces, output hook (S11, S14); apply layout keeping sets and counters (S11) |
-| §2.2.1, §2.2.2, §3.3, M4b, M37 (S15) | WireGuard in Phase 1; tunnel faults as own family; BGP/OSPF over WireGuard links with import filters; golden test for id masks |
+| §2.2.1, §2.2.2, §3.3, M4b, M4c (S15) | WireGuard in Phase 1; tunnel faults as own family; BGP/OSPF over WireGuard links with import filters; golden test for id masks |
 | §2.5, §6 (S13) | PMTUD modes ICMP / black hole / MSS clamp; NAT-address side effect as risk #23 |
 
 ---

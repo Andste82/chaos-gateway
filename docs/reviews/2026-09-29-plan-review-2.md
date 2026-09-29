@@ -2,7 +2,7 @@
 
 Second, independent pass over `docs/plan.md` after the first review and spikes S11–S14 were incorporated. Two reviewers: (A) consistency and implementability, (B) missing features from an IoT QA perspective. Line numbers refer to plan.md at 461ad16. Findings marked **[verified]** were reproduced with nft 1.0.9 in a throwaway namespace.
 
-> **Status:** B2 decided (per device, D18) and incorporated; WireGuard and routing added as §2.2.1/§2.2.2, M33, M37 (not a review finding). All other findings still open.
+> **Status:** B2 decided (per device, D18) and incorporated; WireGuard and routing added as §2.2.1/§2.2.2, M33, M37 (not a review finding). I15 (gateway protection) incorporated in §2.2/M4. All other findings still open.
 
 ## A. Unclear, inconsistent or wrong
 

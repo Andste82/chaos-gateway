@@ -24,6 +24,7 @@ This report records what the Phase 0 spikes (plan §5) proved, disproved or chan
 | S12 Attachment | Probe on a bridge vs. macvlan; tc on the bridge; policy routing | ✅ confirmed | test networks are gateway-owned bridges; policy routing table for test traffic and service uid |
 | S13 PMTUD | Path-MTU faults via ICMP and as black hole | ✅ confirmed, 1 side effect | ICMP mode leaks to other devices through the shared NAT address; MSS clamp as isolated mode |
 | S14 Local replies | Download faults for connections that end on the gateway | ✅ confirmed | classification chain also on the output hook |
+| S15 WireGuard & routing | Faults inside and on WireGuard tunnels; export; BIRD BGP/OSPF over WireGuard with filters | ✅ confirmed | WireGuard in Phase 1 (M4b); tunnel faults as own family; 12-bit id layout works |
 
 ---
 
@@ -381,6 +382,30 @@ cl1's TCP 8883 is redirected to a local server on the gateway; fault for cl1: 0 
 
 `ct original ip saddr` of the redirected connection is still the device, so the output hook uses the same maps and the same key.
 
+### S15 — WireGuard Networks and Dynamic Routing (Ubuntu 6.8, emulated)
+
+Topology: gateway with test network (cl1, cl2), hub interface `wg-hub` (client rA with client network 192.168.50.0/24 and host lab1; client rC set up from an exported configuration), link interface `wg-l1` (point to point to site rB, 192.168.60.0/24), all remote sites behind an "internet" router on the uplink. Mark layout under test: **12-bit fault id in bits 4–15**, direction bit 16. Faults: cl1 30 ms up / 60 ms down; remote network 192.168.50.0/24 40 ms up; tunnel towards rA 50 ms (output hook, keyed on peer endpoint); tunnel from rA 20 ms (IFB, flower on outer UDP). Baseline cl2 → lab1 through the tunnel 5.2 ms (emulated crypto), cl2 → server 2.25 ms.
+
+| Test | Expected | Median | Result |
+|---|---|---|---|
+| W1 test network → client network routed without NAT | lab1 sees 10.10.0.11 | 50 of 50 packets | ✅ |
+| W2 device fault over the hub (up leaves `wg-hub`, down leaves `lan0`) | 90 ms | 95.7 − 5.2 = 90.5 ms | ✅ |
+| W3 host in client network as initiator | 40 ms | 40.7 ms | ✅ |
+| W4 isolation (cl2 → lab1) | 0 | −0.5 ms | ✅ |
+| W5 tunnel fault towards rA (output hook on encrypted UDP) | 50 ms | 50.3 ms | ✅ |
+| W5 isolation: same uplink, other destination | 0 | 0.7 ms | ✅ |
+| W5b tunnel fault both directions (+20 ms via IFB) | 70 ms | 71.7 ms | ✅ |
+| W5c device fault + tunnel fault stack | 160 ms | 161.7 ms | ✅ independent families |
+| W6 exported `.conf` (wg-quick fields stripped, `wg setconf`) in a fresh namespace | tunnel up | handshake, TCP ok | ✅ |
+| R1 BGP over `wg-l1`: routes into table 100 only | allowed prefixes only | 192.168.60.0/24 and .61.0/24 after 4.5 s; default, 192.168.56.0/24 (management) and 10.10.5.0/24 (inside protected 10.10.0.0/16) filtered; 0 BIRD routes in main; uplink default intact | ✅ |
+| R2 device fault over the learned route (TCP) | 90 ms | 91.1 ms | ✅ |
+| R3 tunnel blackout (both directions) with hold time 9 s | withdrawn ≤ 13 s | withdrawn after 6.1 s, back 2.5 s after restore | ✅ |
+| R4 OSPF point to point over WireGuard (multicast hellos) | route learned | after 7.8 s, filters apply | ✅ |
+
+- **First run failed** W2, W3, W5c and R2 because the spike's fault chains used the mask `0xfffe000f`, which also cleared the direction bit, so both directions got the upload parameters (measured 60 instead of 90, 80 instead of 40). The numbers matched that explanation exactly. With `0xffff000f` everything passed. The plan now requires a golden test for the masks.
+- The encrypted WireGuard packets do not carry the inner connection's conntrack entry into the output hook: inner and tunnel faults did not interfere.
+- QR generation was not part of the spike (library functionality); M4b tests it.
+
 ---
 
 ## 4. Plan Changes
@@ -403,6 +428,7 @@ These changes are applied to `docs/plan.md`:
 | §6 Risks | #3 downgraded (not observed); #4 confirmed with numbers; #6 corrected (same-kind replace keeps queue) |
 | §7 Decisions | D4 → Kea; D5 → confirmed (Node TLS responder + mitmproxy sidecar) |
 | §2.2, §3.3, §3.2 (S11–S14) | test networks as bridges with policy routing (S12); direction bit and identical tc mapping on all interfaces, output hook (S11, S14); apply layout keeping sets and counters (S11) |
+| §2.2.1, §2.2.2, §3.3, M4b, M37 (S15) | WireGuard in Phase 1; tunnel faults as own family; BGP/OSPF over WireGuard links with import filters; golden test for id masks |
 | §2.5, §6 (S13) | PMTUD modes ICMP / black hole / MSS clamp; NAT-address side effect as risk #23 |
 
 ---
@@ -437,6 +463,7 @@ TB_PREFIX=h bash s08-perf/run.sh
 TB_PREFIX=h bash s09-capture/run.sh
 ./vm.sh followups.sh                      # S11, S12, S14 in one VM session
 ./vm.sh s12-attachment/run.sh             # or one at a time
+./vm.sh s15-wireguard/run.sh              # needs wireguard-tools and bird2 on the host (shared root fs)
 TB_PREFIX=h bash s13-pmtud/run.sh
 ```
 

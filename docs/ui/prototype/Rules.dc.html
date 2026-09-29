@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chaos Gateway — Rules &amp; Faults</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E1116;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#E7EAEE}
+a{color:#8CC4FF}a:hover{color:#B8DBFF}
+.nav:hover{background:#151A21;color:#E7EAEE}
+.btn:hover{background:#1F2630}
+.rule:hover{border-color:#3A4552}
+input::placeholder{color:#7D8796}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8CC4FF;outline-offset:2px}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; display: flex; background: #0E1116; overflow: hidden">
+<nav aria-label="Main" style="width: 232px; flex-shrink: 0; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; background: #0B0D11; border-right: 1px solid #1E252E">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="19" height="19" rx="4"></rect><path d="M5 12h3l2-5 2.5 9 2-4H17"></path></svg>
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em">CHAOS GATEWAY</span>
+</div>
+<a class="nav" href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg>Overview</a>
+<a class="nav" href="Devices.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"></rect><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"></path></svg>Devices</a>
+<a class="nav" href="Networks.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="3" r="1.8"></circle><circle cx="3" cy="13" r="1.8"></circle><circle cx="13" cy="13" r="1.8"></circle><path d="M7 4.5 4 11.5M9 4.5l3 7M5 13h6"></path></svg>Networks</a>
+<a class="nav" href="Rules.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; background: #1B212A; color: #E7EAEE"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"></path><circle cx="5" cy="4" r="1.5" fill="#0B0D11"></circle><circle cx="11" cy="8" r="1.5" fill="#0B0D11"></circle><circle cx="7" cy="12" r="1.5" fill="#0B0D11"></circle></svg>Rules &amp; Faults</a>
+<a class="nav" href="Profiles.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14 5 8 8 2 5Z"></path><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"></path></svg>Profiles</a>
+<a class="nav" href="Scenarios.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h4M2 8h7M2 13h5"></path><path d="M11 10.5v5l4-2.5Z"></path></svg>Scenarios</a>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.5"></circle></svg>Captures</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"></path></svg>Diagnostics</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3h8M6 8h8M6 13h8"></path><circle cx="2.5" cy="3" r="1"></circle><circle cx="2.5" cy="8" r="1"></circle><circle cx="2.5" cy="13" r="1"></circle></svg>Activity</span>
+<div style="flex-grow: 1"></div>
+<div style="padding: 12px 10px; border-top: 1px solid #1E252E; font-size: 12px; color: #7D8796; line-height: 1.6">gw-lab-01<br>Ubuntu 24.04 · kernel 6.8</div>
+</nav>
+
+<main style="position: relative; flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 24px 32px; display: flex; flex-direction: column; gap: 18px">
+<header style="display: flex; align-items: center; justify-content: space-between; gap: 16px">
+<div>
+<h1 style="margin: 0; font-size: 24px; font-weight: 600">Rules &amp; Faults</h1>
+<div style="margin-top: 4px; font-size: 13px; color: #A3ADBA">First matching access rule wins · the most specific fault wins · revision {{rev}}</div>
+</div>
+<div style="display: flex; gap: 10px">
+<button class="btn" type="button" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer">&lt;/&gt; API</button>
+<button type="button" style="height: 36px; padding: 0 16px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Add rule</button>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 470px; gap: 20px">
+<section aria-label="Rules in order" style="min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 72px">
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="7">
+<div class="rule" style="display: flex; align-items: center; gap: 14px; padding: 12px 14px; background: {{r.bg}}; border: 1px solid {{r.border}}; border-radius: 8px">
+<span style="width: 22px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #7D8796">{{r.pos}}</span>
+<button type="button" onClick="{{r.select}}" aria-label="{{r.selectLabel}}" style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 0; border: 0; background: transparent; color: #E7EAEE; text-align: left; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500">{{r.name}}<sc-if value="{{r.locked}}" hint-placeholder-val="{{false}}"><span style="padding: 1px 6px; border: 1px solid #2F3844; border-radius: 4px; font-size: 11px; color: #A3ADBA">SYSTEM</span></sc-if><sc-if value="{{r.dirty}}" hint-placeholder-val="{{false}}"><span style="padding: 1px 6px; border: 1px solid #3D6A99; border-radius: 4px; font-size: 11px; color: #CFE6FF">CHANGED</span></sc-if></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #A3ADBA">{{r.summary}}</span>
+<span style="display: flex; flex-wrap: wrap; gap: 6px">
+<span style="padding: 2px 8px; border: 1px solid {{r.accBorder}}; border-radius: 4px; background: {{r.accBg}}; color: {{r.accFg}}; font-size: 12px">{{r.accLabel}}</span>
+<sc-for list="{{r.chips}}" as="c" hint-placeholder-count="2"><span style="padding: 2px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">{{c}}</span></sc-for>
+</span>
+</button>
+<div style="width: 120px; text-align: right">
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{r.hits}}</div>
+<div style="font-size: 12px; color: #7D8796">hits</div>
+</div>
+<button type="button" role="switch" aria-checked="{{r.onText}}" aria-label="{{r.toggleLabel}}" onClick="{{r.toggle}}" disabled="{{r.locked}}" style="width: 40px; height: 24px; padding: 2px; box-sizing: border-box; border: 0; border-radius: 12px; background: {{r.swBg}}; cursor: pointer; display: flex; justify-content: {{r.swJustify}}"><span style="width: 20px; height: 20px; border-radius: 10px; background: #E7EAEE"></span></button>
+</div>
+</sc-for>
+</section>
+
+<section aria-labelledby="ed" style="min-height: 0; overflow: auto; background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; margin-bottom: 64px">
+<div>
+<div style="font-size: 12px; color: #7D8796; letter-spacing: 0.04em">RULE {{cur.pos}}</div>
+<h2 id="ed" style="margin: 4px 0 0; font-size: 18px; font-weight: 600">{{cur.name}}</h2>
+</div>
+
+<sc-if value="{{cur.locked}}" hint-placeholder-val="{{false}}">
+<div style="padding: 14px; background: #10151B; border: 1px solid #2F3844; border-radius: 8px; font-size: 14px; line-height: 1.6; color: #D9DEE5">Always allowed. This rule keeps the gateway's UI, API and SSH reachable from the management network, so no other rule can lock you out. It covers nothing else: management traffic to devices or the internet follows the normal rules.</div>
+</sc-if>
+
+<sc-if value="{{cur.editable}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="font-size: 12px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.06em">IF TRAFFIC</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">From
+<select value="{{cur.src}}" onChange="{{setSrc}}" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<option value="device:ESP32-42">Device · ESP32-42</option><option value="device:Sensor-07">Device · Sensor-07</option><option value="group:Sensors">Group · Sensors</option><option value="network:IoT">Network · IoT</option><option value="network:Test">Network · Test</option>
+</select>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">To
+<input type="text" value="{{cur.dst}}" onChange="{{setDst}}" style="height: 36px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px">
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Protocol
+<select value="{{cur.proto}}" onChange="{{setProto}}" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option>
+</select>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Ports
+<input type="text" value="{{cur.ports}}" onChange="{{setPorts}}" placeholder="any" style="height: 36px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px">
+</label>
+</div>
+<sc-if value="{{cur.hostnameHint}}" hint-placeholder-val="{{false}}">
+<div style="font-size: 12px; color: #A3ADBA">Hostname matched via DNS answers (best effort): devices using other resolvers are not covered; other sites on the same IP are affected too.</div>
+</sc-if>
+
+<div style="font-size: 12px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.06em; margin-top: 4px">THEN</div>
+<div role="group" aria-label="Access" style="display: flex; gap: 6px">
+<sc-for list="{{accessOpts}}" as="a" hint-placeholder-count="4">
+<button type="button" onClick="{{a.pick}}" aria-pressed="{{a.pressed}}" style="flex-grow: 1; height: 34px; border-radius: 6px; border: 1px solid {{a.border}}; background: {{a.bg}}; color: {{a.fg}}; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">{{a.label}}</button>
+</sc-for>
+</div>
+<sc-if value="{{cur.blocking}}" hint-placeholder-val="{{false}}">
+<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #D9DEE5"><input type="checkbox" checked="{{cur.cut}}" onChange="{{toggleCut}}" style="width: 16px; height: 16px">Also cut existing connections <span style="color: #A3ADBA">— otherwise only new connections are affected</span></label>
+</sc-if>
+
+<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #D9DEE5"><input type="checkbox" checked="{{cur.fault}}" onChange="{{toggleFault}}" style="width: 16px; height: 16px">Impair matching traffic</label>
+<sc-if value="{{cur.fault}}" hint-placeholder-val="{{true}}">
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A3ADBA">Latency ms<input type="number" min="0" value="{{cur.lat}}" onChange="{{setLat}}" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A3ADBA">Jitter ms<input type="number" min="0" value="{{cur.jit}}" onChange="{{setJit}}" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A3ADBA">Loss %<input type="number" min="0" max="100" value="{{cur.loss}}" onChange="{{setLoss}}" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A3ADBA">Rate<input type="text" value="{{cur.rate}}" onChange="{{setRate}}" placeholder="none" style="height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px"></label>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<div style="padding: 12px 14px; background: #10151B; border: 1px solid #232A34; border-radius: 8px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 12px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.06em">MATCHES</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{cur.hits}} hits · {{cur.bytes}} · last {{cur.last}}</div>
+<div style="font-size: 13px; color: #D9DEE5; line-height: 1.5">{{cur.effective}}</div>
+</div>
+</section>
+</div>
+
+<sc-if value="{{hasPending}}" hint-placeholder-val="{{false}}">
+<div role="region" aria-label="Pending changes" style="position: absolute; left: 32px; right: 32px; bottom: 20px; height: 56px; box-sizing: border-box; padding: 0 12px 0 18px; display: flex; align-items: center; gap: 12px; background: #1B2632; border: 1px solid #3D6A99; border-radius: 10px">
+<span style="width: 8px; height: 8px; border-radius: 4px; background: #6CB2FF"></span>
+<span style="flex-grow: 1; font-size: 14px">{{pendingText}} · not applied yet</span>
+<button class="btn" type="button" onClick="{{discard}}" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">Discard</button>
+<button type="button" onClick="{{openPreview}}" style="height: 36px; padding: 0 16px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Preview &amp; apply</button>
+</div>
+</sc-if>
+</main>
+
+<sc-if value="{{drawer}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; top: 0; left: 0; width: 1440px; height: 900px; background: rgba(5, 7, 10, 0.6); display: flex; justify-content: flex-end">
+<div role="dialog" aria-modal="true" aria-labelledby="pv" style="width: 560px; height: 900px; box-sizing: border-box; background: #151A21; border-left: 1px solid #2F3844; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+<div>
+<div style="font-size: 12px; color: #7D8796; letter-spacing: 0.04em">DRY RUN · NOTHING CHANGED YET</div>
+<h2 id="pv" style="margin: 4px 0 0; font-size: 20px; font-weight: 600">Preview revision {{nextRev}}</h2>
+</div>
+<div style="font-size: 12px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.06em">WHAT CHANGES</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{diff}}" as="d" hint-placeholder-count="2">
+<div style="display: flex; gap: 10px; padding: 10px 12px; background: #1B212A; border: 1px solid #2A323D; border-radius: 6px; font-size: 14px"><span style="font-family: 'IBM Plex Mono', monospace; color: #8CC4FF">~</span><span><span style="font-weight: 500">{{d.rule}}</span> <span style="color: #A3ADBA">{{d.field}}:</span> <span style="font-family: 'IBM Plex Mono', monospace; color: #A3ADBA">{{d.from}}</span> → <span style="font-family: 'IBM Plex Mono', monospace">{{d.to}}</span></span></div>
+</sc-for>
+</div>
+<button type="button" onClick="{{toggleLinux}}" aria-expanded="{{linuxExpanded}}" style="align-self: flex-start; height: 30px; padding: 0; border: 0; background: transparent; color: #8CC4FF; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">{{linuxLabel}}</button>
+<sc-if value="{{linux}}" hint-placeholder-val="{{false}}">
+<pre style="margin: 0; padding: 12px 14px; background: #0E1116; border: 1px solid #232A34; border-radius: 8px; white-space: pre-wrap; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.7; color: #D9DEE5">{{linuxText}}</pre>
+</sc-if>
+<div style="font-size: 13px; color: #A3ADBA; line-height: 1.6">Apply runs validate → apply → verify. If verification fails, revision {{rev}} is restored automatically.</div>
+<div style="flex-grow: 1"></div>
+<div style="display: flex; justify-content: flex-end; gap: 8px">
+<button class="btn" type="button" onClick="{{closePreview}}" style="height: 38px; padding: 0 16px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">Back to editing</button>
+<button type="button" onClick="{{apply}}" style="height: 38px; padding: 0 18px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Apply revision {{nextRev}}</button>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{hasToast}}" hint-placeholder-val="{{false}}">
+<div role="status" style="position: absolute; right: 32px; bottom: 28px; display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #1B212A; border: 1px solid #3D6A99; border-radius: 8px; font-size: 14px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6CB2FF"></span>{{toast}}</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const rules = [
+      { id: 'r0', name: 'Control plane access', src: 'network:Management', dst: 'gateway', proto: 'tcp', ports: '443, 22', access: 'allow', fault: false, locked: true, hits: '4 812', bytes: '38 MB', last: '1 s ago', enabled: true },
+      { id: 'r1', name: 'ESP32-42 → MQTT', src: 'device:ESP32-42', dst: 'any', proto: 'tcp', ports: '8883', access: 'allow', cut: false, fault: true, lat: '200', jit: '50', loss: '5', rate: '', hits: '18 342', bytes: '12.4 MB', last: '2 s ago', enabled: true },
+      { id: 'r2', name: 'Sensor-07 → HTTPS', src: 'device:Sensor-07', dst: 'any', proto: 'tcp', ports: '443', access: 'allow', cut: false, fault: true, lat: '0', jit: '0', loss: '0', rate: '64 kbit/s', hits: '2 104', bytes: '1.1 MB', last: '4 s ago', enabled: true },
+      { id: 'r3', name: 'Sensors → broker', src: 'group:Sensors', dst: 'broker.example.com', proto: 'tcp', ports: '8883', access: 'allow', cut: false, fault: true, lat: '0', jit: '0', loss: '0', rate: '', dns: 'SERVFAIL', hits: '57', bytes: 'DNS', last: '9 s ago', enabled: true },
+      { id: 'r4', name: 'IoT → Management', src: 'network:IoT', dst: 'network:Management', proto: 'any', ports: '', access: 'drop', cut: false, fault: false, lat: '0', jit: '0', loss: '0', rate: '', hits: '311', bytes: '24 KB', last: '3 min ago', enabled: true },
+      { id: 'r5', name: 'Test → Internet (web)', src: 'network:Test', dst: 'uplink', proto: 'tcp', ports: '80, 443', access: 'allow', cut: false, fault: false, lat: '0', jit: '0', loss: '0', rate: '', hits: '90 211', bytes: '310 MB', last: '1 s ago', enabled: true },
+      { id: 'r6', name: 'IoT → Internet', src: 'network:IoT', dst: 'uplink', proto: 'any', ports: '', access: 'allow', cut: false, fault: false, lat: '0', jit: '0', loss: '0', rate: '', hits: '1.2 M', bytes: '2.3 GB', last: '1 s ago', enabled: true }
+    ];
+    this.orig = JSON.parse(JSON.stringify(rules));
+    this.state = { rules, sel: 'r1', drawer: false, linux: false, rev: 42, toast: '' };
+  }
+  componentWillUnmount() { clearTimeout(this.timer); }
+  chipsOf(r) {
+    const out = [];
+    if (r.dns) out.push('DNS ' + r.dns);
+    if (!r.fault) return out;
+    const lat = +r.lat || 0, jit = +r.jit || 0, loss = +r.loss || 0;
+    if (lat) out.push('↑↓ ' + lat + ' ms' + (jit ? ' ±' + jit : ''));
+    if (loss) out.push(loss + ' % loss');
+    if (r.rate) out.push('↓ ' + r.rate);
+    return out;
+  }
+  update(p) {
+    this.setState({ rules: this.state.rules.map((r) => (r.id === this.state.sel ? { ...r, ...p } : r)) });
+  }
+  diff() {
+    const names = { src: 'from', dst: 'to', proto: 'protocol', ports: 'ports', access: 'access', cut: 'cut existing', fault: 'impair', lat: 'latency ms', jit: 'jitter ms', loss: 'loss %', rate: 'rate', enabled: 'enabled' };
+    const out = [];
+    this.state.rules.forEach((r, i) => {
+      const o = this.orig[i];
+      Object.keys(names).forEach((k) => {
+        if (String(o[k]) !== String(r[k])) out.push({ rule: r.name, field: names[k], from: String(o[k] === '' ? '—' : o[k]), to: String(r[k] === '' ? '—' : r[k]), id: r.id, key: k });
+      });
+    });
+    return out;
+  }
+  renderVals() {
+    const s = this.state;
+    const accLabels = { allow: 'Allow', drop: 'Drop', reject: 'Reject', reset: 'TCP reset' };
+    const d = this.diff();
+    const dirtyIds = {};
+    d.forEach((x) => { dirtyIds[x.id] = true; });
+
+    const rules = s.rules.map((r, i) => {
+      const on = r.id === s.sel;
+      const blocking = r.access !== 'allow';
+      return {
+        ...r, pos: i + 1, dirty: !!dirtyIds[r.id],
+        summary: r.src + ' → ' + r.dst + ' · ' + r.proto + (r.ports ? ' ' + r.ports : ''),
+        chips: this.chipsOf(r),
+        accLabel: accLabels[r.access] + (r.cut ? ' · cut existing' : ''),
+        accBg: blocking ? '#2B1717' : '#16222E', accFg: blocking ? '#FFB3B3' : '#B8DBFF', accBorder: blocking ? '#6B2E2E' : '#2D4B6B',
+        bg: on ? '#1B212A' : '#151A21', border: on ? '#3D6A99' : '#232A34',
+        onText: r.enabled ? 'true' : 'false', swBg: r.enabled ? '#6CB2FF' : '#3A4552', swJustify: r.enabled ? 'flex-end' : 'flex-start',
+        toggleLabel: 'Enable rule ' + r.name, selectLabel: 'Edit rule ' + r.name,
+        select: () => this.setState({ sel: r.id }),
+        toggle: () => this.setState({ rules: this.state.rules.map((x) => (x.id === r.id ? { ...x, enabled: !x.enabled } : x)) })
+      };
+    });
+
+    const c = rules.find((r) => r.id === s.sel);
+    const eff = c.locked ? 'Evaluated before every other rule.' :
+      !c.enabled ? 'Disabled — matching traffic falls through to the next rule.' :
+      c.access !== 'allow' ? accLabels[c.access] + ' for new connections' + (c.cut ? ', existing connections are reset once' : '; existing connections continue') + '.' :
+      c.chips.length ? 'Allowed and impaired (' + c.chips.join(', ') + '). This is the most specific fault for this traffic; the network profile “LTE” does not apply to it.' :
+      'Allowed without impairment. Network-level profiles still apply.';
+    const cur = { ...c, editable: !c.locked, blocking: c.access !== 'allow', hostnameHint: /[a-z]\.[a-z]/.test(c.dst) && !c.dst.startsWith('network'), effective: eff };
+
+    const accessOpts = ['allow', 'drop', 'reject', 'reset'].map((id) => {
+      const on = c.access === id;
+      return { label: accLabels[id], pressed: on ? 'true' : 'false', bg: on ? '#1F3550' : '#0E1116', fg: on ? '#CFE6FF' : '#A3ADBA', border: on ? '#3D6A99' : '#2F3844', pick: () => this.update({ access: id, cut: id === 'allow' ? false : this.state.rules.find((r) => r.id === this.state.sel).cut }) };
+    });
+    const setK = (k) => (e) => this.update({ [k]: e.target.value });
+
+    const changedRules = Object.keys(dirtyIds).length;
+    const linuxLines = [];
+    d.forEach((x) => {
+      const r = s.rules.find((y) => y.id === x.id);
+      if (['lat', 'jit', 'loss', 'rate', 'fault'].includes(x.key)) {
+        const cls = { r1: 'a', r2: 'b', r3: 'c' }[x.id] || 'd';
+        const line = 'tc qdisc change dev wan0 parent 1:' + cls + ' handle ' + cls + ': netem limit 10000 delay ' + (+r.lat || 0) + 'ms ' + (+r.jit || 0) + 'ms loss ' + (+r.loss || 0) + '% rate ' + (r.rate ? r.rate.replace(/\s/g, '').replace('/s', '') : '0bit');
+        if (!linuxLines.includes(line)) linuxLines.push(line, line.replace('wan0', 'lan0'));
+      }
+    });
+    if (d.some((x) => !['lat', 'jit', 'loss', 'rate'].includes(x.key))) linuxLines.push('nft -j -f  # rebuild table inet chaosgw (atomic)');
+    linuxLines.push('verify: read back nft/tc state and compare');
+
+    return {
+      rules, cur, accessOpts, rev: s.rev, nextRev: s.rev + 1,
+      setSrc: setK('src'), setDst: setK('dst'), setProto: setK('proto'), setPorts: setK('ports'),
+      setLat: setK('lat'), setJit: setK('jit'), setLoss: setK('loss'), setRate: setK('rate'),
+      toggleCut: () => this.update({ cut: !c.cut }),
+      toggleFault: () => this.update({ fault: !c.fault }),
+      hasPending: d.length > 0 && !s.drawer,
+      pendingText: d.length + (d.length === 1 ? ' change' : ' changes') + ' in ' + changedRules + (changedRules === 1 ? ' rule' : ' rules'),
+      discard: () => this.setState({ rules: JSON.parse(JSON.stringify(this.orig)) }),
+      drawer: s.drawer, diff: d,
+      openPreview: () => this.setState({ drawer: true }),
+      closePreview: () => this.setState({ drawer: false }),
+      linux: s.linux, linuxExpanded: s.linux ? 'true' : 'false',
+      linuxLabel: s.linux ? 'Hide Linux changes' : 'Show Linux changes',
+      toggleLinux: () => this.setState({ linux: !this.state.linux }),
+      linuxText: linuxLines.join('\n'),
+      hasToast: !!s.toast, toast: s.toast,
+      apply: () => {
+        this.orig = JSON.parse(JSON.stringify(this.state.rules));
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.setState({ toast: '' }), 3500);
+        this.setState({ drawer: false, rev: s.rev + 1, toast: 'Revision ' + (s.rev + 1) + ' applied and verified in 84 ms' });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

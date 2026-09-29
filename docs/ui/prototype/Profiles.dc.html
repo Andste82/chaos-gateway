@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chaos Gateway — Profiles</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E1116;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#E7EAEE}
+a{color:#8CC4FF}a:hover{color:#B8DBFF}
+.nav:hover{background:#151A21;color:#E7EAEE}
+.btn:hover{background:#1F2630}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8CC4FF;outline-offset:2px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #0E1116; overflow: hidden">
+<nav aria-label="Main" style="width: 232px; flex-shrink: 0; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; background: #0B0D11; border-right: 1px solid #1E252E">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="19" height="19" rx="4"></rect><path d="M5 12h3l2-5 2.5 9 2-4H17"></path></svg>
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em">CHAOS GATEWAY</span>
+</div>
+<a class="nav" href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg>Overview</a>
+<a class="nav" href="Devices.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"></rect><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"></path></svg>Devices</a>
+<a class="nav" href="Networks.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="3" r="1.8"></circle><circle cx="3" cy="13" r="1.8"></circle><circle cx="13" cy="13" r="1.8"></circle><path d="M7 4.5 4 11.5M9 4.5l3 7M5 13h6"></path></svg>Networks</a>
+<a class="nav" href="Rules.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"></path><circle cx="5" cy="4" r="1.5" fill="#0B0D11"></circle><circle cx="11" cy="8" r="1.5" fill="#0B0D11"></circle><circle cx="7" cy="12" r="1.5" fill="#0B0D11"></circle></svg>Rules &amp; Faults</a>
+<a class="nav" href="Profiles.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; background: #1B212A; color: #E7EAEE"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14 5 8 8 2 5Z"></path><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"></path></svg>Profiles</a>
+<a class="nav" href="Scenarios.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h4M2 8h7M2 13h5"></path><path d="M11 10.5v5l4-2.5Z"></path></svg>Scenarios</a>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.5"></circle></svg>Captures</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"></path></svg>Diagnostics</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3h8M6 8h8M6 13h8"></path><circle cx="2.5" cy="3" r="1"></circle><circle cx="2.5" cy="8" r="1"></circle><circle cx="2.5" cy="13" r="1"></circle></svg>Activity</span>
+<div style="flex-grow: 1"></div>
+<div style="padding: 12px 10px; border-top: 1px solid #1E252E; font-size: 12px; color: #7D8796; line-height: 1.6">gw-lab-01<br>Ubuntu 24.04 · kernel 6.8</div>
+</nav>
+
+<main style="flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 24px 32px; display: flex; flex-direction: column; gap: 16px">
+<header style="display: flex; align-items: center; justify-content: space-between; gap: 16px">
+<div>
+<h1 style="margin: 0; font-size: 24px; font-weight: 600">Profiles</h1>
+<div style="margin-top: 4px; font-size: 13px; color: #A3ADBA">Named network conditions · one active profile per target · device faults still win over a profile</div>
+</div>
+<button type="button" style="height: 36px; padding: 0 16px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">New profile</button>
+</header>
+
+<div style="display: flex; align-items: flex-end; gap: 14px; padding: 12px 14px; background: #151A21; border: 1px solid #232A34; border-radius: 10px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Activate on
+<select value="{{scope}}" onChange="{{setScope}}" style="width: 240px; height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<option value="Everything">Everything</option><option value="Network IoT">Network · IoT</option><option value="Network Test">Network · Test</option><option value="Group Sensors">Group · Sensors</option><option value="ESP32-42">Device · ESP32-42</option>
+</select>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">For
+<select value="{{ttl}}" onChange="{{setTtl}}" style="width: 160px; height: 36px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<option value="until removed">until removed</option><option value="5 min">5 min</option><option value="15 min">15 min</option><option value="1 hour">1 hour</option>
+</select>
+</label>
+<div style="flex-grow: 1; font-size: 13px; color: #A3ADBA; padding-bottom: 9px">Probe measurements run a virtual client on the chosen network and compare the result with the profile.</div>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 14px">
+<sc-for list="{{cards}}" as="p" hint-placeholder-count="9">
+<section aria-label="{{p.name}}" style="box-sizing: border-box; min-height: 0; padding: 16px 18px; background: #151A21; border: 1px solid {{p.border}}; border-radius: 10px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{p.name}}</h2>
+<sc-if value="{{p.isActive}}" hint-placeholder-val="{{false}}"><span style="padding: 1px 8px; border: 1px solid #6B4420; border-radius: 10px; background: #2A1C10; color: #FFB870; font-size: 12px; white-space: nowrap">active</span></sc-if>
+</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #D9DEE5; line-height: 1.6">{{p.params}}</div>
+<div style="font-size: 13px; color: #A3ADBA">{{p.activeText}}</div>
+<sc-if value="{{p.hasResult}}" hint-placeholder-val="{{false}}"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #B8DBFF">{{p.result}}</div></sc-if>
+<div style="flex-grow: 1"></div>
+<div style="display: flex; gap: 8px">
+<button type="button" onClick="{{p.activate}}" style="height: 34px; padding: 0 14px; border: 1px solid {{p.btnBorder}}; border-radius: 6px; background: {{p.btnBg}}; color: {{p.btnFg}}; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer">{{p.btnLabel}}</button>
+<button class="btn" type="button" onClick="{{p.measure}}" style="height: 34px; padding: 0 12px; border: 1px solid #2F3844; border-radius: 6px; background: #1B212A; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">{{p.measureLabel}}</button>
+</div>
+</section>
+</sc-for>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { scope: 'Network IoT', ttl: 'until removed', active: { 'Network IoT': 'lte' }, measuring: {}, measured: {} };
+    this.timers = [];
+  }
+  componentWillUnmount() { this.timers.forEach(clearTimeout); }
+  renderVals() {
+    const s = this.state;
+    const profiles = [
+      { id: 'normal', name: 'Normal', params: 'no impairment', result: '0.3 ms · 0 % loss · within tolerance' },
+      { id: 'lte', name: 'LTE', params: '↑↓ 50 ms ±10 · 0.1 % loss', result: '51.4 ms ±9.6 · 0.13 % loss · within tolerance' },
+      { id: 'badlte', name: 'Bad LTE', params: '↑↓ 150 ms ±50 · 3 % loss · ↓ 2 Mbit/s', result: '152.8 ms ±48.1 · 3.1 % · 1.92 Mbit/s · within tolerance' },
+      { id: 'sat', name: 'Satellite', params: '↑↓ 600 ms ±30 · 1 % loss', result: '603.2 ms ±29.4 · 1.0 % loss · within tolerance' },
+      { id: 'wifi', name: 'Congested WiFi', params: '↑↓ 30 ms ±40 · 2 % burst loss', result: '31.9 ms ±38.7 · 2.2 % loss · within tolerance' },
+      { id: 'offline', name: 'Offline', params: 'blackout · all traffic dropped', result: 'no reply · 100 % loss · as expected' },
+      { id: 'flap', name: 'Intermittent', params: 'flapping · 20 s up / 10 s down', result: 'measured 19.8 s up / 10.1 s down' },
+      { id: 'dns', name: 'DNS broken', params: 'DNS SERVFAIL for all names', result: 'SERVFAIL for 50 of 50 queries' },
+      { id: 'tls', name: 'TLS broken', params: 'TLS handshake reset on 443, 8883', result: 'handshake reset 20 of 20 · as expected' }
+    ];
+    const cards = profiles.map((p) => {
+      const scopes = Object.keys(s.active).filter((k) => s.active[k] === p.id);
+      const here = s.active[s.scope] === p.id;
+      const measuring = !!s.measuring[p.id];
+      return {
+        ...p,
+        isActive: scopes.length > 0,
+        activeText: scopes.length ? 'Active on ' + scopes.join(', ') : 'Not active',
+        border: scopes.length ? '#6B4420' : '#232A34',
+        btnLabel: here ? 'Deactivate on ' + s.scope : 'Activate on ' + s.scope,
+        btnBg: here ? '#151A21' : '#6CB2FF', btnFg: here ? '#E7EAEE' : '#0B0D11', btnBorder: here ? '#2F3844' : '#6CB2FF',
+        hasResult: !!s.measured[p.id], measureLabel: measuring ? 'Measuring…' : 'Measure with probe',
+        activate: () => {
+          const active = { ...this.state.active };
+          if (active[this.state.scope] === p.id) delete active[this.state.scope]; else active[this.state.scope] = p.id;
+          this.setState({ active });
+        },
+        measure: () => {
+          if (this.state.measuring[p.id]) return;
+          this.setState({ measuring: { ...this.state.measuring, [p.id]: true } });
+          this.timers.push(setTimeout(() => this.setState({
+            measuring: { ...this.state.measuring, [p.id]: false },
+            measured: { ...this.state.measured, [p.id]: true }
+          }), 1400));
+        }
+      };
+    });
+    return {
+      cards, scope: s.scope, ttl: s.ttl,
+      setScope: (e) => this.setState({ scope: e.target.value }),
+      setTtl: (e) => this.setState({ ttl: e.target.value })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -411,7 +411,11 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 
 ## 2.17 Web UI
 
-**Design direction:** a modern developer tool / observability dashboard — dark, compact, live, with the data path visualized. The pattern to follow is "Grafana meets firewall rule editor meets network lab", not a router configuration interface. Linux terms appear only in the technical diagnostics view.
+**Reference prototype:** a clickable design of the main screens is kept in [`docs/ui/prototype/`](ui/prototype/) (one `.dc.html` file per screen, sample data). Where this section and the prototype disagree, this section wins.
+
+### Design direction
+
+A modern developer tool / observability dashboard — dark, compact, live, with the data path visualized. The pattern to follow is "Grafana meets firewall rule editor meets network lab", not a router configuration interface. Linux terms appear only in the technical views (§ "Technical view" below).
 
 **Principles**
 
@@ -419,80 +423,75 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 - Progressive disclosure: the common case needs three fields; everything else is under *Advanced*.
 - Everything is connected: a device shows its network, flows, rules, faults and captures, and each links onward.
 - No separate "modes" (router/firewall/chaos).
+- Nothing changes the network without the user seeing what will change (preview) and whether it worked (verified, counters).
+- Every UI action has an API equivalent, and the UI can show it (`</> API`).
 
-**Navigation**
+### Visual system
+
+| Token | Value | Use |
+|---|---|---|
+| `bg` | `#0E1116` | page background |
+| `sidebar` | `#0B0D11` | navigation |
+| `surface` / `surface-2` | `#151A21` / `#1B212A` | cards / raised items, selected rows |
+| `border` / `border-strong` | `#232A34` / `#2F3844` | card borders / inputs, secondary buttons |
+| `text` / `text-2` / `text-3` | `#E7EAEE` / `#A3ADBA` / `#7D8796` | primary / secondary / meta text (all ≥ 4.5:1 on surface) |
+| `accent` | `#6CB2FF` (strong `#3D6A99`, tint `#1F3550`, text `#8CC4FF`) | normal state, primary actions, selection, links |
+| `fault` | `#FFA24C` (border `#6B4420`, tint `#2A1C10`, text `#FFB870`) | anything that impairs traffic: fault chips, active profiles, countdowns |
+| `block` | border `#6B2E2E`, tint `#2B1717`, text `#FFB3B3` | drop/reject, failed checks, abort |
+
+- Blue means "as configured / normal", orange means "traffic is being impaired", red means "blocked or failed". Status is never shown by color alone: every chip and dot has a text label.
+- Type: **IBM Plex Sans** for UI text, **IBM Plex Mono** for addresses, ports, counters, times, parameters and code. Sizes 12 / 13 / 14 / 16 / 20–26 px.
+- Spacing on a 4 px grid; cards 10 px radius, controls 6 px; controls 34–38 px high (dense desktop tool).
+- Icons: 16 px inline stroke icons, 1.5 px stroke.
+- Recurring components: fault chip (mono, orange), access chip (Allow blue / Drop·Reject red), status dot + label, segmented control, switch, card, table row, toast, sticky action bar, side drawer, modal dialog, countdown banner.
+
+### Navigation
 
 ```
 Overview · Devices · Networks · Rules & Faults · Profiles · Scenarios · Captures · Diagnostics · Activity
-Header: gateway health · active overlays counter · </> API · settings
+Header per page: title + context line (revision, sync state) · health · active-faults counter · </> API · primary action
 ```
 
-**Overview**
+### Screens
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ CHAOS GATEWAY                     ● Healthy   3 faults active   </> API  │
-├──────────────┬───────────────────────────────────────────────────────────┤
-│ Overview     │   IoT (17 devices) ───► [ Gateway ] ───► Uplink 42 Mbit/s │
-│ Devices      │                                                           │
-│ Networks     │   Active faults                                           │
-│ Rules/Faults │   ESP32-42 → MQTT    ↑200ms ↓200ms · 5% loss   TTL 4:12   │
-│ Profiles     │   Sensor-07 → HTTPS  ↓64 kbit/s                ∞          │
-│ Scenarios    │                                                           │
-│ Captures     │   Running: mqtt-outage (Run #42)  00:31 / 01:00           │
-│ Diagnostics  │                                                           │
-│ Activity     │   Traffic  ╱╲    ╱╲___╱╲                                  │
-└──────────────┴───────────────────────────────────────────────────────────┘
-```
+| Screen | Content | Key interactions |
+|---|---|---|
+| **Overview** | network topology (test networks → gateway → uplink) with fault badge on the path; active faults with target, effect, affected packets, expiry; running scenario with progress; uplink traffic chart; recent events | every item links to its detail |
+| **Devices** | table: name, IP, MAC, network, traffic, faults, status; search; filter chips (All / Online / With faults / Not adopted) | adopt discovered devices; row opens device detail |
+| **Device detail** | header with identity; active faults with parameters, affected packets and remaining TTL; path view MQTT → broker with fault badge; flows; DHCP lease and DHCP test actions; recent DNS; captures; optional API panel | **Add fault** dialog (below); remove a fault; apply profile; TLS test; capture; diagnose |
+| **Add fault** (dialog) | target, traffic, direction (Both / Upload / Download), start-from presets (LTE, Bad LTE, Satellite, Offline), latency, jitter, loss, duration; *Advanced*: rate, reorder, duplicate, corrupt, keep packet order; live preview sentence | Apply → fault appears with TTL; toast; API panel shows the equivalent `POST /api/v1/overlays` |
+| **Rules & Faults** | ordered rule list: position, name, selector, access chip, fault chips, hit counter, enable switch; system rule "Control plane access" locked at the top | select a rule → editor: **IF** from / to / protocol / ports, **THEN** access (Allow · Drop · Reject · TCP reset) + "also cut existing connections", "impair matching traffic" with parameters; matches box with hits, bytes, last match and the effective result in words; hostname hint for DNS-derived matching |
+| **Preview & apply** (drawer) | "what changes" in domain terms (rule, field, old → new); expandable Linux changes (nft, tc, verify step) | Back to editing · Apply revision N → verified toast |
+| **Profiles** | cards per profile with parameters and where it is active; scope selector (everything / network / group / device) and duration | activate / deactivate on the chosen scope (one profile per scope); "Measure with probe" shows the measured values against the profile |
+| **Scenarios** | list with target, length, steps, last result; tabs Timeline / YAML / Runs; timeline of steps with type chips; checks; run artifacts | Run → live progress, current step marked, checks resolve to PASSED/FAILED at the end, artifacts appear (pcapng, JUnit, JSON, events); Abort → state restored |
+| **Networks** | cards for test networks, management (owned by the OS) and uplink; settings of the selected network (subnet, gateway, attachment, DHCP, DNS, IPv6 blocked); access matrix between networks | toggling a matrix cell applies it with **commit-confirm**; Linux view shows the compiled forward chain |
 
-**Device detail**
+Not yet designed: Captures, Diagnostics (incl. probes), Activity, setup wizard, login, API tokens, settings.
 
-```
-← Devices
-ESP32-42  ● Online                         192.168.10.42 · AA:BB:CC:DD:EE:01 · IoT
-[ Add fault ] [ Apply profile ] [ TLS test ] [ Capture ] [ Diagnose ]
+### States every screen must handle
 
-Flows                                          ↑        ↓
-MQTT   broker.example.com:8883  established   3 KB/s   2 KB/s
-HTTPS  api.example.com:443      established  12 KB/s   1 KB/s
-DNS    42 queries · last: broker.example.com
+| State | Pattern |
+|---|---|
+| Empty (no devices, no faults, no runs) | dashed box with one sentence and the primary action |
+| Unapplied changes | sticky bar at the bottom: "N changes in M rules · not applied yet" · Discard · Preview & apply; changed rows marked CHANGED |
+| Preview | side drawer, marked "dry run · nothing changed yet" |
+| Applying / applied | button busy state; toast "Revision N applied and verified in X ms" |
+| Apply failed | inline error in the drawer with the failing step; "revision N-1 restored" |
+| Commit-confirm | orange banner with live countdown, Confirm / Roll back now; controls that would change more are disabled until resolved; on timeout a notice "rolled back to revision N-1" |
+| Expiring overlays | remaining time next to each fault/profile; toast when one expires |
+| Concurrent change (optimistic locking) | dialog: "revision changed by <user/token> while you were editing" · show their change · reapply mine on top · discard mine |
+| Run states | pending · running (progress, current step) · passed · failed · aborted (with restored revision) |
+| Validation | message under the field, apply disabled until valid |
+| Offline / backend unreachable | banner at the top, live data greyed out with "last updated" time |
+| Safe mode | full-width red banner: forwarding disabled, reason, link to recovery |
 
-Active faults
-MQTT  ↑↓ 200 ms ±50 · 5 % loss · 18 342 pkts affected    [ Edit ] [ × ]
+### Accessibility
 
-DHCP  lease 23h 41m · reserved                [ Renew test ] [ Release ]
-```
+Real buttons, links and labelled inputs; visible focus ring (`accent`, 2 px); `aria-pressed` on toggles, `role="switch"` on switches, `aria-live` status for toasts and countdowns; text contrast ≥ 4.5:1; status never by color alone; keyboard access for every action in dialogs and drawers.
 
-**Add fault (dialog)**
+### Technical view
 
-```
-Target      [ ESP32-42         ▼ ]
-Traffic     [ MQTT / TCP 8883  ▼ ]
-Direction   [ Both             ▼ ]
-Latency     [ 200 ] ms   Jitter [ 50 ] ms   Loss [ 5 ] %
-Duration    [ 5 min ▼ ]
-▸ Advanced   rate · reorder · duplicate · corrupt · burst loss · MTU · asymmetric
-Preview: ESP32-42 upload & download to broker.example.com:8883 → +200 ms, 5 % loss
-                                                     [ Cancel ] [ Apply ]
-```
-
-**Flow view:** the path from device to destination with fault badges on the affected segment:
-
-```
-ESP32-42 ──[↑ 200ms · 5% loss]──► Gateway ──► Uplink ──► broker.example.com
-```
-
-**Other views**
-
-- **Networks:** cards with subnet, device count, DHCP/DNS status, access matrix. Technical settings under *Network settings*.
-- **Rules & Faults:** one ordered list with hit counters and inline preview.
-- **Profiles:** cards with an *Activate* button.
-- **Scenarios:** timeline editor with a YAML view.
-- **Captures:** start/stop, list, download.
-- **Diagnostics:** tools and probes.
-- **Activity:** live event stream.
-- **`</> API` panel:** shows the API call equivalent to the current view or action, ready to copy into a test.
-- **Technical diagnostics:** the compiled configuration (nftables, tc, routes, services) and its live state, next to the domain view.
+Per object, the compiled configuration next to the domain view: nftables rules, tc tree, routes, service configs and their live counters. Reached from "Show Linux view" / "Show Linux changes" links, never needed for normal use.
 
 ---
 
@@ -939,12 +938,12 @@ Order: S1 first, then S10 and S2 together. Classification is the foundation for 
 ## Phase 3 — Web UI
 
 **M12 — UI shell, overview, devices (read and live)**
-- Scope: login, layout, overview, device list and detail with flows, rates and active faults; live updates via SSE; setup wizard for interface assignment.
+- Scope: visual system and shared components (§2.17), login, layout, overview, device list and detail with flows, rates and active faults; live updates via SSE; setup wizard for interface assignment; empty, offline and safe-mode states.
 - Tests: Playwright against a mocked API (all states: empty, many devices, offline); one E2E flow in the testbed.
 - Depends on: M11 (API complete for display).
 
 **M13 — UI for faults, rules and profiles**
-- Scope: add/edit fault dialog with preview, rules & faults list with counters, profile cards, TTL display, `</> API` panel.
+- Scope: add/edit fault dialog with preview, rules & faults list with counters, rule editor (IF/THEN), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog, profile cards, TTL display, `</> API` panel.
 - Tests: Playwright — create a fault in the UI, then verify the measured effect in the testbed; validation errors are shown; concurrent-change conflict dialog.
 - Depends on: M12.
 

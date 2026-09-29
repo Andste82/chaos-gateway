@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chaos Gateway — ESP32-42</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E1116;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#E7EAEE}
+a{color:#8CC4FF}a:hover{color:#B8DBFF}
+.nav:hover{background:#151A21;color:#E7EAEE}
+.btn:hover{background:#1F2630}
+.x:hover{background:#2A323D;color:#E7EAEE}
+input::placeholder{color:#7D8796}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8CC4FF;outline-offset:2px}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; display: flex; background: #0E1116; overflow: hidden">
+<nav aria-label="Main" style="width: 232px; flex-shrink: 0; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; background: #0B0D11; border-right: 1px solid #1E252E">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="19" height="19" rx="4"></rect><path d="M5 12h3l2-5 2.5 9 2-4H17"></path></svg>
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em">CHAOS GATEWAY</span>
+</div>
+<a class="nav" href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg>Overview</a>
+<a class="nav" href="Devices.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; background: #1B212A; color: #E7EAEE"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"></rect><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"></path></svg>Devices</a>
+<a class="nav" href="Networks.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="3" r="1.8"></circle><circle cx="3" cy="13" r="1.8"></circle><circle cx="13" cy="13" r="1.8"></circle><path d="M7 4.5 4 11.5M9 4.5l3 7M5 13h6"></path></svg>Networks</a>
+<a class="nav" href="Rules.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"></path><circle cx="5" cy="4" r="1.5" fill="#0B0D11"></circle><circle cx="11" cy="8" r="1.5" fill="#0B0D11"></circle><circle cx="7" cy="12" r="1.5" fill="#0B0D11"></circle></svg>Rules &amp; Faults</a>
+<a class="nav" href="Profiles.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14 5 8 8 2 5Z"></path><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"></path></svg>Profiles</a>
+<a class="nav" href="Scenarios.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h4M2 8h7M2 13h5"></path><path d="M11 10.5v5l4-2.5Z"></path></svg>Scenarios</a>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.5"></circle></svg>Captures</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"></path></svg>Diagnostics</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3h8M6 8h8M6 13h8"></path><circle cx="2.5" cy="3" r="1"></circle><circle cx="2.5" cy="8" r="1"></circle><circle cx="2.5" cy="13" r="1"></circle></svg>Activity</span>
+<div style="flex-grow: 1"></div>
+<div style="padding: 12px 10px; border-top: 1px solid #1E252E; font-size: 12px; color: #7D8796; line-height: 1.6">gw-lab-01<br>Ubuntu 24.04 · kernel 6.8</div>
+</nav>
+
+<main style="flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 20px 32px 24px; display: flex; flex-direction: column; gap: 18px">
+<header style="display: flex; flex-direction: column; gap: 12px">
+<div style="font-size: 13px; color: #A3ADBA"><a href="Devices.dc.html">Devices</a> / ESP32-42</div>
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 16px">
+<div>
+<div style="display: flex; align-items: center; gap: 12px">
+<h1 style="margin: 0; font-size: 26px; font-weight: 600">ESP32-42</h1>
+<span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #A3ADBA"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6CB2FF"></span>Online</span>
+</div>
+<div style="margin-top: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA">10.10.0.42 · 02:00:00:00:00:2a · IoT network · group Sensors</div>
+</div>
+<div style="display: flex; gap: 8px">
+<button type="button" onClick="{{openDialog}}" style="height: 36px; padding: 0 16px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Add fault</button>
+<a class="btn" href="Profiles.dc.html" style="display: inline-flex; align-items: center; height: 36px; box-sizing: border-box; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-size: 14px; text-decoration: none">Apply profile</a>
+<button class="btn" type="button" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">TLS test</button>
+<button class="btn" type="button" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">Capture</button>
+<button class="btn" type="button" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">Diagnose</button>
+<button class="btn" type="button" onClick="{{toggleApi}}" aria-pressed="{{apiPressed}}" style="height: 36px; padding: 0 12px; border: 1px solid {{apiBorder}}; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer">&lt;/&gt; API</button>
+</div>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px">
+<div style="min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px">
+<section aria-labelledby="af" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<h2 id="af" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">ACTIVE FAULTS</h2>
+<sc-if value="{{hasFaults}}" hint-placeholder-val="{{true}}">
+<button type="button" onClick="{{clearAll}}" style="height: 30px; padding: 0 10px; border: 0; background: transparent; color: #8CC4FF; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">Remove all</button>
+</sc-if>
+</div>
+<sc-for list="{{faults}}" as="f" hint-placeholder-count="1">
+<div style="margin-top: 12px; display: flex; align-items: center; gap: 16px; padding: 14px 16px; background: #1B212A; border: 1px solid #2A323D; border-radius: 8px">
+<div style="flex-grow: 1; min-width: 0">
+<div style="font-size: 15px; font-weight: 500">{{f.sel}}</div>
+<div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{f.chips}}" as="c" hint-placeholder-count="2">
+<span style="padding: 3px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">{{c}}</span>
+</sc-for>
+</div>
+</div>
+<div style="text-align: right; font-size: 13px; line-height: 1.6">
+<div style="font-family: 'IBM Plex Mono', monospace; color: #A3ADBA">{{f.affected}}</div>
+<div style="font-family: 'IBM Plex Mono', monospace">{{f.ttl}}</div>
+</div>
+<button class="x" type="button" onClick="{{f.remove}}" aria-label="Remove fault" style="width: 36px; height: 36px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #A3ADBA; cursor: pointer; display: inline-flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 3 8 8M11 3l-8 8"></path></svg></button>
+</div>
+</sc-for>
+<sc-if value="{{noFaults}}" hint-placeholder-val="{{false}}">
+<div style="margin-top: 12px; padding: 20px; border: 1px dashed #2F3844; border-radius: 8px; color: #A3ADBA; font-size: 14px">No active faults — this device's traffic passes unimpaired. <button type="button" onClick="{{openDialog}}" style="border: 0; background: transparent; color: #8CC4FF; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer; padding: 0">Add a fault</button></div>
+</sc-if>
+</section>
+
+<section aria-labelledby="path" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<h2 id="path" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">PATH · MQTT TO BROKER</h2>
+<div style="margin-top: 16px; display: flex; align-items: center">
+<span style="padding: 8px 12px; background: #1B212A; border: 1px solid #2A323D; border-radius: 6px; font-size: 13px">ESP32-42</span>
+<div style="flex-grow: 1; position: relative; height: 2px; background: {{pathColor}}; margin: 0 10px">
+<sc-if value="{{mqttFault}}" hint-placeholder-val="{{true}}">
+<span style="position: absolute; left: 50%; top: -13px; transform: translateX(-50%); white-space: nowrap; height: 24px; line-height: 24px; padding: 0 8px; border: 1px solid #6B4420; border-radius: 12px; background: #2A1C10; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #FFB870">{{pathBadge}}</span>
+</sc-if>
+</div>
+<span style="padding: 8px 12px; background: #1B212A; border: 1px solid #3A4552; border-radius: 6px; font-size: 13px">Gateway</span>
+<div style="flex-grow: 1; height: 2px; background: #2F3844; margin: 0 10px"></div>
+<span style="padding: 8px 12px; background: #1B212A; border: 1px solid #2A323D; border-radius: 6px; font-size: 13px">Uplink</span>
+<div style="flex-grow: 1; height: 2px; background: #2F3844; margin: 0 10px"></div>
+<span style="padding: 8px 12px; background: #1B212A; border: 1px solid #2A323D; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px">broker.example.com:8883</span>
+</div>
+</section>
+
+<section aria-labelledby="flows" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<h2 id="flows" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">FLOWS</h2>
+<div style="margin-top: 10px; display: grid; grid-template-columns: 90px minmax(0, 1fr) 120px 90px 90px; font-size: 12px; color: #7D8796; padding: 0 0 8px; border-bottom: 1px solid #232A34"><span>Protocol</span><span>Destination</span><span>State</span><span>↑</span><span>↓</span></div>
+<div style="display: grid; grid-template-columns: 90px minmax(0, 1fr) 120px 90px 90px; align-items: center; min-height: 40px; border-bottom: 1px solid #1E252E; font-size: 14px"><span>MQTT</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">broker.example.com:8883</span><span style="color: #A3ADBA; font-size: 13px">established</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">3.0 KB/s</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">2.1 KB/s</span></div>
+<div style="display: grid; grid-template-columns: 90px minmax(0, 1fr) 120px 90px 90px; align-items: center; min-height: 40px; border-bottom: 1px solid #1E252E; font-size: 14px"><span>HTTPS</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">api.example.com:443</span><span style="color: #A3ADBA; font-size: 13px">established</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">0.1 KB/s</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">0.3 KB/s</span></div>
+<div style="display: grid; grid-template-columns: 90px minmax(0, 1fr) 120px 90px 90px; align-items: center; min-height: 40px; border-bottom: 1px solid #1E252E; font-size: 14px"><span>NTP</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">10.10.0.1:123</span><span style="color: #A3ADBA; font-size: 13px">udp</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">0.0 KB/s</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">0.0 KB/s</span></div>
+<div style="display: grid; grid-template-columns: 90px minmax(0, 1fr) 120px 90px 90px; align-items: center; min-height: 40px; font-size: 14px"><span>DNS</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">10.10.0.1:53</span><span style="color: #A3ADBA; font-size: 13px">42 queries</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">—</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">—</span></div>
+</section>
+</div>
+
+<aside style="min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px">
+<sc-if value="{{api}}" hint-placeholder-val="{{false}}">
+<section aria-labelledby="apih" style="background: #10151B; border: 1px solid #3D6A99; border-radius: 10px; padding: 16px 18px">
+<h2 id="apih" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">API · SAME ACTION FROM A TEST</h2>
+<pre style="margin: 10px 0 0; white-space: pre-wrap; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; color: #D9DEE5">{{apiText}}</pre>
+</section>
+</sc-if>
+<section aria-labelledby="net" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 16px 18px">
+<h2 id="net" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">NETWORK</h2>
+<div style="margin-top: 10px; display: grid; grid-template-columns: 110px minmax(0, 1fr); row-gap: 8px; font-size: 13px">
+<span style="color: #A3ADBA">Lease</span><span>reserved · 58 s left of 60 s</span>
+<span style="color: #A3ADBA">Gateway</span><span style="font-family: 'IBM Plex Mono', monospace">10.10.0.1</span>
+<span style="color: #A3ADBA">DNS</span><span style="font-family: 'IBM Plex Mono', monospace">10.10.0.1 (proxy)</span>
+<span style="color: #A3ADBA">Vendor</span><span>Espressif (from MAC)</span>
+</div>
+<div style="margin-top: 14px; display: flex; gap: 8px">
+<button class="btn" type="button" style="height: 34px; padding: 0 12px; border: 1px solid #2F3844; border-radius: 6px; background: #1B212A; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">Force new IP</button>
+<button class="btn" type="button" style="height: 34px; padding: 0 12px; border: 1px solid #2F3844; border-radius: 6px; background: #1B212A; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">Silence DHCP</button>
+</div>
+</section>
+<section aria-labelledby="dns" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 16px 18px">
+<h2 id="dns" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">RECENT DNS</h2>
+<div style="margin-top: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.9">
+<div><span style="color: #7D8796">12:43:02</span> broker.example.com <span style="color: #A3ADBA">→ 203.0.113.20</span></div>
+<div><span style="color: #7D8796">12:42:11</span> api.example.com <span style="color: #A3ADBA">→ 203.0.113.30</span></div>
+<div><span style="color: #7D8796">12:41:47</span> pool.ntp.org <span style="color: #A3ADBA">→ redirected</span></div>
+</div>
+</section>
+<section aria-labelledby="cap" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 16px 18px">
+<h2 id="cap" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">CAPTURES</h2>
+<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<div style="display: flex; justify-content: space-between"><span>run #42 · mqtt-outage</span><a href="Scenarios.dc.html">1.8 MB</a></div>
+<div style="display: flex; justify-content: space-between"><span>manual · 11:02</span><span style="color: #A3ADBA">312 KB</span></div>
+</div>
+</section>
+</aside>
+</div>
+</main>
+
+<sc-if value="{{dialog}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; top: 0; left: 0; width: 1440px; height: 900px; background: rgba(5, 7, 10, 0.72); display: flex; align-items: center; justify-content: center">
+<div role="dialog" aria-modal="true" aria-labelledby="dlg" style="width: 620px; box-sizing: border-box; background: #151A21; border: 1px solid #2F3844; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<h2 id="dlg" style="margin: 0; font-size: 20px; font-weight: 600">Add fault</h2>
+<button class="x" type="button" onClick="{{closeDialog}}" aria-label="Close" style="width: 36px; height: 36px; border: 0; border-radius: 6px; background: transparent; color: #A3ADBA; cursor: pointer; display: inline-flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 3 8 8M11 3l-8 8"></path></svg></button>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Target
+<select disabled="{{yes}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px"><option>ESP32-42</option></select>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Traffic
+<select value="{{form.traffic}}" onChange="{{setTraffic}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<sc-for list="{{traffics}}" as="t" hint-placeholder-count="4"><option value="{{t.id}}">{{t.label}}</option></sc-for>
+</select>
+</label>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span id="dirl" style="font-size: 13px; color: #A3ADBA">Direction</span>
+<div role="group" aria-labelledby="dirl" style="display: flex; gap: 6px">
+<sc-for list="{{dirs}}" as="d" hint-placeholder-count="3">
+<button type="button" onClick="{{d.pick}}" aria-pressed="{{d.pressed}}" style="flex-grow: 1; height: 36px; border-radius: 6px; border: 1px solid {{d.border}}; background: {{d.bg}}; color: {{d.fg}}; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">{{d.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<span style="font-size: 13px; color: #A3ADBA">Start from</span>
+<sc-for list="{{presets}}" as="p" hint-placeholder-count="4">
+<button class="btn" type="button" onClick="{{p.pick}}" style="height: 30px; padding: 0 10px; border: 1px solid #2F3844; border-radius: 15px; background: #1B212A; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; cursor: pointer">{{p.label}}</button>
+</sc-for>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Latency (ms)<input type="number" min="0" value="{{form.lat}}" onChange="{{setLat}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Jitter (ms)<input type="number" min="0" value="{{form.jit}}" onChange="{{setJit}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Loss (%)<input type="number" min="0" max="100" value="{{form.loss}}" onChange="{{setLoss}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Duration
+<select value="{{form.dur}}" onChange="{{setDur}}" style="height: 38px; padding: 0 8px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px">
+<sc-for list="{{durs}}" as="u" hint-placeholder-count="5"><option value="{{u.id}}">{{u.label}}</option></sc-for>
+</select>
+</label>
+</div>
+
+<button type="button" onClick="{{toggleAdv}}" aria-expanded="{{advExpanded}}" style="align-self: flex-start; height: 30px; padding: 0; border: 0; background: transparent; color: #8CC4FF; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; cursor: pointer">{{advLabel}}</button>
+<sc-if value="{{form.adv}}" hint-placeholder-val="{{false}}">
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Rate limit<input type="text" placeholder="e.g. 2 Mbit/s" value="{{form.rate}}" onChange="{{setRate}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Reorder (%)<input type="number" min="0" value="{{form.reorder}}" onChange="{{setReorder}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Duplicate (%)<input type="number" min="0" value="{{form.dup}}" onChange="{{setDup}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A3ADBA">Corrupt (%)<input type="number" min="0" value="{{form.corrupt}}" onChange="{{setCorrupt}}" style="height: 38px; padding: 0 10px; background: #0E1116; border: 1px solid #2F3844; border-radius: 6px; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 14px"></label>
+</div>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #D9DEE5"><input type="checkbox" checked="{{form.keepOrder}}" onChange="{{toggleOrder}}" style="width: 16px; height: 16px">Keep packet order <span style="color: #A3ADBA">— jitter reorders packets unless this is on; it narrows the delay spread</span></label>
+</sc-if>
+
+<div style="padding: 12px 14px; background: #0E1116; border: 1px solid #232A34; border-radius: 8px; font-size: 13px; line-height: 1.6"><span style="color: #A3ADBA">Preview</span><br>{{preview}}</div>
+
+<div style="display: flex; justify-content: flex-end; gap: 8px">
+<button class="btn" type="button" onClick="{{closeDialog}}" style="height: 38px; padding: 0 16px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">Cancel</button>
+<button type="button" onClick="{{apply}}" style="height: 38px; padding: 0 18px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Apply fault</button>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{hasToast}}" hint-placeholder-val="{{false}}">
+<div role="status" style="position: absolute; right: 32px; bottom: 28px; display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #1B212A; border: 1px solid #3D6A99; border-radius: 8px; font-size: 14px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6CB2FF"></span>{{toast}}</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      dialog: false, api: false, toast: '', nextId: 2,
+      form: { traffic: 'mqtt', dir: 'both', lat: '200', jit: '50', loss: '5', dur: '5m', adv: false, rate: '', reorder: '', dup: '', corrupt: '', keepOrder: false },
+      faults: [{ id: 1, sel: 'MQTT · TCP 8883 · upload & download', chips: ['↑↓ 200 ms ±50', '5 % loss'], affected: '18 342 packets affected', ttl: '4:12 left', traffic: 'mqtt' }],
+      lastApi: ''
+    };
+  }
+  componentWillUnmount() { clearTimeout(this.timer); }
+  effects(f) {
+    const arrow = { both: '↑↓', up: '↑', down: '↓' }[f.dir];
+    const lat = +f.lat || 0, jit = +f.jit || 0, loss = +f.loss || 0, out = [];
+    if (loss >= 100) return [arrow + ' blackout'];
+    if (lat) out.push(arrow + ' ' + lat + ' ms' + (jit ? ' ±' + jit : ''));
+    if (loss) out.push(loss + ' % loss');
+    if (f.adv && f.rate) out.push(arrow + ' ' + f.rate);
+    if (f.adv && +f.reorder) out.push(f.reorder + ' % reorder');
+    if (f.adv && +f.dup) out.push(f.dup + ' % duplicate');
+    if (f.adv && +f.corrupt) out.push(f.corrupt + ' % corrupt');
+    if (f.adv && f.keepOrder && jit) out.push('in order');
+    return out;
+  }
+  apiFor(f) {
+    const traffic = { all: undefined, mqtt: { protocol: 'tcp', port: 8883 }, https: { protocol: 'tcp', port: 443 }, dns: { protocol: 'udp', port: 53 } }[f.traffic];
+    const body = {
+      target: { device: 'esp32-42' }, traffic, direction: f.dir,
+      fault: {
+        latency_ms: +f.lat || 0, jitter_ms: +f.jit || 0, loss_pct: +f.loss || 0,
+        rate: f.adv && f.rate ? f.rate : undefined,
+        reorder_pct: f.adv && +f.reorder ? +f.reorder : undefined,
+        keep_order: f.adv && f.keepOrder ? true : undefined
+      },
+      ttl: f.dur === 'perm' ? undefined : f.dur
+    };
+    return 'POST /api/v1/overlays\n' + JSON.stringify(body, null, 2);
+  }
+  renderVals() {
+    const s = this.state, f = s.form;
+    const setF = (k) => (e) => this.setState({ form: { ...this.state.form, [k]: e.target.value } });
+    const patch = (p) => this.setState({ form: { ...this.state.form, ...p } });
+    const traffics = [
+      { id: 'all', label: 'All traffic' }, { id: 'mqtt', label: 'MQTT · TCP 8883' },
+      { id: 'https', label: 'HTTPS · TCP 443' }, { id: 'dns', label: 'DNS · UDP 53' }
+    ];
+    const tLabel = traffics.find((t) => t.id === f.traffic).label;
+    const dirText = { both: 'upload & download', up: 'upload only', down: 'download only' }[f.dir];
+    const durs = [{ id: '1m', label: '1 min' }, { id: '5m', label: '5 min' }, { id: '15m', label: '15 min' }, { id: '1h', label: '1 hour' }, { id: 'perm', label: 'Permanent' }];
+    const durLabel = durs.find((d) => d.id === f.dur).label;
+    const eff = this.effects(f);
+    const preview = 'ESP32-42 · ' + tLabel + ' · ' + dirText + ' → ' + (eff.length ? eff.join(', ') : 'no impairment') +
+      ' · ' + (f.dur === 'perm' ? 'until removed' : 'expires after ' + durLabel);
+
+    const dirs = [['both', 'Both'], ['up', 'Upload'], ['down', 'Download']].map(([id, label]) => {
+      const on = f.dir === id;
+      return { label, pressed: on ? 'true' : 'false', bg: on ? '#1F3550' : '#0E1116', fg: on ? '#CFE6FF' : '#A3ADBA', border: on ? '#3D6A99' : '#2F3844', pick: () => patch({ dir: id }) };
+    });
+    const presets = [
+      { label: 'LTE', v: { lat: '50', jit: '10', loss: '0.1', rate: '' } },
+      { label: 'Bad LTE', v: { lat: '150', jit: '50', loss: '3', rate: '2 Mbit/s', adv: true } },
+      { label: 'Satellite', v: { lat: '600', jit: '30', loss: '1', rate: '' } },
+      { label: 'Offline', v: { lat: '0', jit: '0', loss: '100', rate: '' } }
+    ].map((p) => ({ label: p.label, pick: () => patch(p.v) }));
+
+    const ttlText = { '1m': '1:00 left', '5m': '5:00 left', '15m': '15:00 left', '1h': '60:00 left', perm: 'permanent' };
+    const faults = s.faults.map((x) => ({ ...x, remove: () => this.setState({ faults: this.state.faults.filter((y) => y.id !== x.id) }) }));
+    const mqtt = s.faults.find((x) => x.traffic === 'mqtt' || x.traffic === 'all');
+
+    return {
+      yes: true,
+      dialog: s.dialog, api: s.api, apiPressed: s.api ? 'true' : 'false', apiBorder: s.api ? '#3D6A99' : '#2F3844',
+      apiText: s.lastApi || this.apiFor(f),
+      openDialog: () => this.setState({ dialog: true }),
+      closeDialog: () => this.setState({ dialog: false }),
+      toggleApi: () => this.setState({ api: !this.state.api }),
+      toggleAdv: () => patch({ adv: !f.adv }),
+      advLabel: f.adv ? 'Hide advanced' : 'Advanced: rate, reorder, duplicate, corrupt',
+      advExpanded: f.adv ? 'true' : 'false',
+      toggleOrder: () => patch({ keepOrder: !f.keepOrder }),
+      form: f, traffics, dirs, presets, durs, preview,
+      setTraffic: setF('traffic'), setLat: setF('lat'), setJit: setF('jit'), setLoss: setF('loss'), setDur: setF('dur'),
+      setRate: setF('rate'), setReorder: setF('reorder'), setDup: setF('dup'), setCorrupt: setF('corrupt'),
+      faults, hasFaults: s.faults.length > 0, noFaults: s.faults.length === 0,
+      clearAll: () => this.setState({ faults: [] }),
+      mqttFault: !!mqtt, pathColor: mqtt ? '#B8793A' : '#2F3844', pathBadge: mqtt ? mqtt.chips.join(' · ') : '',
+      hasToast: !!s.toast, toast: s.toast,
+      apply: () => {
+        const fault = {
+          id: s.nextId, sel: tLabel + ' · ' + dirText, chips: eff.length ? eff : ['no impairment'],
+          affected: 'active · verified', ttl: ttlText[f.dur], traffic: f.traffic
+        };
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.setState({ toast: '' }), 3500);
+        this.setState({
+          faults: [...this.state.faults, fault], nextId: s.nextId + 1, dialog: false,
+          lastApi: this.apiFor(f),
+          toast: 'Fault active on ESP32-42' + (f.dur === 'perm' ? '' : ' · expires after ' + durLabel)
+        });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chaos Gateway — Overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E1116;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#E7EAEE}
+a{color:#8CC4FF}a:hover{color:#B8DBFF}
+.nav:hover{background:#151A21;color:#E7EAEE}
+.btn:hover{background:#1F2630}
+.row:hover{background:#1B212A}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8CC4FF;outline-offset:2px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #0E1116; overflow: hidden">
+<nav aria-label="Main" style="width: 232px; flex-shrink: 0; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; background: #0B0D11; border-right: 1px solid #1E252E">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="19" height="19" rx="4"></rect><path d="M5 12h3l2-5 2.5 9 2-4H17"></path></svg>
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em">CHAOS GATEWAY</span>
+</div>
+<a class="nav" href="Main.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; background: #1B212A; color: #E7EAEE"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg>Overview</a>
+<a class="nav" href="Devices.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"></rect><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"></path></svg>Devices</a>
+<a class="nav" href="Networks.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="3" r="1.8"></circle><circle cx="3" cy="13" r="1.8"></circle><circle cx="13" cy="13" r="1.8"></circle><path d="M7 4.5 4 11.5M9 4.5l3 7M5 13h6"></path></svg>Networks</a>
+<a class="nav" href="Rules.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"></path><circle cx="5" cy="4" r="1.5" fill="#0B0D11"></circle><circle cx="11" cy="8" r="1.5" fill="#0B0D11"></circle><circle cx="7" cy="12" r="1.5" fill="#0B0D11"></circle></svg>Rules &amp; Faults</a>
+<a class="nav" href="Profiles.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14 5 8 8 2 5Z"></path><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"></path></svg>Profiles</a>
+<a class="nav" href="Scenarios.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h4M2 8h7M2 13h5"></path><path d="M11 10.5v5l4-2.5Z"></path></svg>Scenarios</a>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.5"></circle></svg>Captures</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"></path></svg>Diagnostics</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3h8M6 8h8M6 13h8"></path><circle cx="2.5" cy="3" r="1"></circle><circle cx="2.5" cy="8" r="1"></circle><circle cx="2.5" cy="13" r="1"></circle></svg>Activity</span>
+<div style="flex-grow: 1"></div>
+<div style="padding: 12px 10px; border-top: 1px solid #1E252E; font-size: 12px; color: #7D8796; line-height: 1.6">gw-lab-01<br>Ubuntu 24.04 · kernel 6.8</div>
+</nav>
+
+<main style="flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 24px 32px; display: flex; flex-direction: column; gap: 20px">
+<header style="display: flex; align-items: center; justify-content: space-between; gap: 16px">
+<div>
+<h1 style="margin: 0; font-size: 24px; font-weight: 600">Overview</h1>
+<div style="margin-top: 4px; font-size: 13px; color: #A3ADBA">Revision 42 · applied 12:40 · kernel state in sync</div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid #262E39; border-radius: 16px; font-size: 13px; color: #A3ADBA"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6CB2FF"></span>Healthy</span>
+<a href="Rules.dc.html" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid #6B4420; border-radius: 16px; background: #2A1C10; font-size: 13px; color: #FFB870; text-decoration: none">3 faults active</a>
+<button class="btn" type="button" style="height: 32px; padding: 0 12px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer">&lt;/&gt; API</button>
+</div>
+</header>
+
+<section aria-labelledby="topo" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<h2 id="topo" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">NETWORK</h2>
+<span style="font-size: 12px; color: #7D8796">Traffic flows left to right · click a box to open it</span>
+</div>
+<div style="display: flex; align-items: center; margin-top: 16px">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<a href="Networks.dc.html" style="display: block; width: 210px; box-sizing: border-box; padding: 12px 14px; background: #1B212A; border: 1px solid #2A323D; border-radius: 8px; text-decoration: none; color: #E7EAEE">
+<div style="font-size: 15px; font-weight: 600">IoT</div>
+<div style="margin-top: 2px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #A3ADBA">10.10.0.0/24 · eth1</div>
+<div style="margin-top: 6px; font-size: 13px; color: #A3ADBA">17 devices · DHCP · DNS</div>
+</a>
+<a href="Networks.dc.html" style="display: block; width: 210px; box-sizing: border-box; padding: 12px 14px; background: #1B212A; border: 1px solid #2A323D; border-radius: 8px; text-decoration: none; color: #E7EAEE">
+<div style="font-size: 15px; font-weight: 600">Test</div>
+<div style="margin-top: 2px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #A3ADBA">10.20.0.0/24 · eth2</div>
+<div style="margin-top: 6px; font-size: 13px; color: #A3ADBA">6 devices · DHCP · DNS</div>
+</a>
+</div>
+<div style="flex-grow: 1; position: relative; height: 2px; background: #2F3844; margin: 0 12px">
+<span style="position: absolute; left: 50%; top: -14px; transform: translateX(-50%); white-space: nowrap; height: 26px; line-height: 26px; padding: 0 10px; border: 1px solid #6B4420; border-radius: 13px; background: #2A1C10; font-size: 12px; color: #FFB870">↑↓ faults on 3 flows</span>
+</div>
+<div style="width: 250px; box-sizing: border-box; padding: 14px 16px; background: #1B212A; border: 1px solid #3A4552; border-radius: 8px">
+<div style="font-size: 15px; font-weight: 600">Chaos Gateway</div>
+<div style="margin-top: 6px; font-size: 13px; color: #A3ADBA; line-height: 1.6">Rules 7 · faults 3 · profile LTE on IoT<br>Scenario <a href="Scenarios.dc.html">mqtt-outage</a> running</div>
+</div>
+<div style="flex-grow: 1; height: 2px; background: #2F3844; margin: 0 12px"></div>
+<div style="width: 200px; box-sizing: border-box; padding: 12px 14px; background: #1B212A; border: 1px solid #2A323D; border-radius: 8px">
+<div style="font-size: 15px; font-weight: 600">Uplink</div>
+<div style="margin-top: 2px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #A3ADBA">192.168.1.57 · eth0 · DHCP</div>
+<div style="margin-top: 6px; font-size: 13px; color: #A3ADBA">↓ 6.2 Mbit/s · ↑ 1.1 Mbit/s</div>
+</div>
+</div>
+</section>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+<section aria-labelledby="faults" style="grid-column: span 2; background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<h2 id="faults" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">ACTIVE FAULTS</h2>
+<a href="Rules.dc.html" style="font-size: 13px">All rules &amp; faults</a>
+</div>
+<div style="margin-top: 12px; display: grid; grid-template-columns: 230px minmax(0, 1fr) 120px 90px; font-size: 12px; color: #7D8796; padding: 0 10px 8px; border-bottom: 1px solid #232A34">
+<span>Target</span><span>Effect</span><span>Affected</span><span>Expires</span>
+</div>
+<a class="row" href="DeviceDetail.dc.html" style="display: grid; grid-template-columns: 230px minmax(0, 1fr) 120px 90px; align-items: center; min-height: 48px; padding: 0 10px; border-bottom: 1px solid #1E252E; text-decoration: none; color: #E7EAEE; font-size: 14px">
+<span>ESP32-42 <span style="color: #7D8796">→ MQTT 8883</span></span>
+<span style="display: flex; gap: 6px; flex-wrap: wrap"><span style="padding: 2px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">↑↓ 200 ms ±50</span><span style="padding: 2px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">5 % loss</span></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA">18 342 pkts</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">4:12</span>
+</a>
+<a class="row" href="Rules.dc.html" style="display: grid; grid-template-columns: 230px minmax(0, 1fr) 120px 90px; align-items: center; min-height: 48px; padding: 0 10px; border-bottom: 1px solid #1E252E; text-decoration: none; color: #E7EAEE; font-size: 14px">
+<span>Sensor-07 <span style="color: #7D8796">→ HTTPS 443</span></span>
+<span style="display: flex; gap: 6px"><span style="padding: 2px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">↓ 64 kbit/s</span></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA">2 104 pkts</span>
+<span style="font-size: 13px; color: #A3ADBA">permanent</span>
+</a>
+<a class="row" href="Rules.dc.html" style="display: grid; grid-template-columns: 230px minmax(0, 1fr) 120px 90px; align-items: center; min-height: 48px; padding: 0 10px; text-decoration: none; color: #E7EAEE; font-size: 14px">
+<span>Group Sensors <span style="color: #7D8796">→ broker.example.com</span></span>
+<span style="display: flex; gap: 6px"><span style="padding: 2px 8px; border: 1px solid #6B4420; border-radius: 4px; background: #2A1C10; color: #FFB870; font-family: 'IBM Plex Mono', monospace; font-size: 12px">DNS SERVFAIL</span></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA">57 queries</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">12:40</span>
+</a>
+</section>
+
+<section aria-labelledby="run" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="run" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">RUNNING SCENARIO</h2>
+<div>
+<div style="font-size: 16px; font-weight: 600">mqtt-outage <span style="font-weight: 400; color: #A3ADBA">· run #42</span></div>
+<div style="margin-top: 4px; font-size: 13px; color: #A3ADBA">Target ESP32-42 · capture on</div>
+</div>
+<div role="progressbar" aria-label="Scenario progress" aria-valuenow="31" aria-valuemin="0" aria-valuemax="60" style="height: 6px; border-radius: 3px; background: #262E39; overflow: hidden"><div style="width: 52%; height: 6px; background: #6CB2FF"></div></div>
+<div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #A3ADBA"><span>00:31</span><span>01:00</span></div>
+<div style="font-size: 13px; line-height: 1.7">Now: <span style="color: #FFB870">drop TCP 8883</span><br><span style="color: #A3ADBA">Next at 00:45: restore</span></div>
+<div style="flex-grow: 1"></div>
+<a href="Scenarios.dc.html" style="font-size: 13px">Open run</a>
+</section>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; flex-grow: 1; min-height: 0">
+<section aria-labelledby="traffic" style="grid-column: span 2; background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column">
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<h2 id="traffic" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">UPLINK TRAFFIC · LAST 10 MIN</h2>
+<div style="display: flex; gap: 16px; font-size: 12px; color: #A3ADBA">
+<span style="display: inline-flex; align-items: center; gap: 6px"><span style="width: 16px; height: 2px; background: #6CB2FF"></span>Download</span>
+<span style="display: inline-flex; align-items: center; gap: 6px"><span style="width: 16px; height: 0; border-top: 2px dashed #D9DEE5"></span>Upload</span>
+</div>
+</div>
+<svg viewBox="0 0 600 140" preserveAspectRatio="none" role="img" aria-label="Uplink throughput, download around 6 Mbit/s, upload around 1 Mbit/s" style="margin-top: 12px; width: 100%; flex-grow: 1; min-height: 120px">
+<path d="M0 35H600M0 70H600M0 105H600" stroke="#232A34" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+<polyline fill="none" stroke="#6CB2FF" stroke-width="2" vector-effect="non-scaling-stroke" points="0,90 20,84 40,88 60,76 80,70 100,74 120,62 140,66 160,58 180,64 200,70 220,60 240,52 260,56 280,48 300,60 320,66 340,58 360,50 380,46 400,52 420,60 440,72 460,68 480,62 500,56 520,60 540,54 560,50 580,58 600,52"></polyline>
+<polyline fill="none" stroke="#D9DEE5" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke" points="0,122 20,120 40,121 60,118 80,117 100,119 120,115 140,116 160,114 180,117 200,118 220,115 240,113 260,114 280,112 300,116 320,117 340,115 360,113 380,112 400,114 420,116 440,119 460,118 480,116 500,114 520,115 540,113 560,112 580,115 600,113"></polyline>
+</svg>
+</section>
+
+<section aria-labelledby="events" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+<h2 id="events" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">RECENT EVENTS</h2>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.9">
+<div><span style="color: #7D8796">12:43:12</span> <span style="color: #FFB870">run #42</span> step 3 · drop TCP 8883</div>
+<div><span style="color: #7D8796">12:43:02</span> ESP32-42 reconnect attempt 2</div>
+<div><span style="color: #7D8796">12:42:58</span> <span style="color: #FFB870">DNS</span> SERVFAIL for Sensor-03</div>
+<div><span style="color: #7D8796">12:42:41</span> run #42 started by ci-token</div>
+<div><span style="color: #7D8796">12:40:05</span> revision 42 applied · verified</div>
+<div><span style="color: #7D8796">12:38:50</span> Sensor-11 discovered (DHCP)</div>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

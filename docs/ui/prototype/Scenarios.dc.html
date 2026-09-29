@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chaos Gateway — Scenarios</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E1116;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#E7EAEE}
+a{color:#8CC4FF}a:hover{color:#B8DBFF}
+.nav:hover{background:#151A21;color:#E7EAEE}
+.btn:hover{background:#1F2630}
+.sc:hover{background:#1B212A}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8CC4FF;outline-offset:2px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #0E1116; overflow: hidden">
+<nav aria-label="Main" style="width: 232px; flex-shrink: 0; box-sizing: border-box; padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; background: #0B0D11; border-right: 1px solid #1E252E">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="19" height="19" rx="4"></rect><path d="M5 12h3l2-5 2.5 9 2-4H17"></path></svg>
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em">CHAOS GATEWAY</span>
+</div>
+<a class="nav" href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg>Overview</a>
+<a class="nav" href="Devices.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"></rect><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"></path></svg>Devices</a>
+<a class="nav" href="Networks.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="3" r="1.8"></circle><circle cx="3" cy="13" r="1.8"></circle><circle cx="13" cy="13" r="1.8"></circle><path d="M7 4.5 4 11.5M9 4.5l3 7M5 13h6"></path></svg>Networks</a>
+<a class="nav" href="Rules.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"></path><circle cx="5" cy="4" r="1.5" fill="#0B0D11"></circle><circle cx="11" cy="8" r="1.5" fill="#0B0D11"></circle><circle cx="7" cy="12" r="1.5" fill="#0B0D11"></circle></svg>Rules &amp; Faults</a>
+<a class="nav" href="Profiles.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: #A3ADBA"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14 5 8 8 2 5Z"></path><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"></path></svg>Profiles</a>
+<a class="nav" href="Scenarios.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; font-size: 14px; text-decoration: none; background: #1B212A; color: #E7EAEE"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h4M2 8h7M2 13h5"></path><path d="M11 10.5v5l4-2.5Z"></path></svg>Scenarios</a>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.5"></circle></svg>Captures</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"></path></svg>Diagnostics</span>
+<span aria-disabled="true" title="Not part of this prototype" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; font-size: 14px; color: #7D8796"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3h8M6 8h8M6 13h8"></path><circle cx="2.5" cy="3" r="1"></circle><circle cx="2.5" cy="8" r="1"></circle><circle cx="2.5" cy="13" r="1"></circle></svg>Activity</span>
+<div style="flex-grow: 1"></div>
+<div style="padding: 12px 10px; border-top: 1px solid #1E252E; font-size: 12px; color: #7D8796; line-height: 1.6">gw-lab-01<br>Ubuntu 24.04 · kernel 6.8</div>
+</nav>
+
+<main style="flex-grow: 1; min-width: 0; box-sizing: border-box; padding: 24px 32px; display: flex; gap: 20px">
+<section aria-labelledby="scl" style="width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<h1 id="scl" style="margin: 0; font-size: 24px; font-weight: 600">Scenarios</h1>
+<button class="btn" type="button" aria-label="New scenario" style="width: 36px; height: 36px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; cursor: pointer; display: inline-flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 2v10M2 7h10"></path></svg></button>
+</div>
+<div style="font-size: 13px; color: #A3ADBA; margin-bottom: 6px">Stored as YAML · runnable from UI, API or CLI</div>
+<sc-for list="{{list}}" as="x" hint-placeholder-count="4">
+<button class="sc" type="button" onClick="{{x.pick}}" aria-pressed="{{x.pressed}}" style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; border: 1px solid {{x.border}}; border-radius: 8px; background: {{x.bg}}; color: #E7EAEE; text-align: left; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 500">{{x.id}}</span>
+<span style="font-size: 12px; color: #A3ADBA">{{x.meta}}</span>
+<span style="font-size: 12px; color: {{x.lastColor}}">{{x.last}}</span>
+</button>
+</sc-for>
+</section>
+
+<section aria-labelledby="sch" style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px">
+<header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 16px">
+<div>
+<h2 id="sch" style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 500">{{cur.id}}</h2>
+<div style="margin-top: 4px; font-size: 13px; color: #A3ADBA">Target {{cur.target}} · {{cur.durText}} · capture {{cur.capture}}</div>
+</div>
+<div style="display: flex; gap: 8px">
+<button class="btn" type="button" style="height: 36px; padding: 0 14px; border: 1px solid #2F3844; border-radius: 6px; background: #151A21; color: #E7EAEE; font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer">&lt;/&gt; API</button>
+<sc-if value="{{running}}" hint-placeholder-val="{{false}}">
+<button type="button" onClick="{{abort}}" style="height: 36px; padding: 0 16px; border: 1px solid #6B2E2E; border-radius: 6px; background: #2B1717; color: #FFB3B3; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Abort run</button>
+</sc-if>
+<sc-if value="{{notRunning}}" hint-placeholder-val="{{true}}">
+<button type="button" onClick="{{start}}" style="height: 36px; padding: 0 18px; border: 0; border-radius: 6px; background: #6CB2FF; color: #0B0D11; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer">Run</button>
+</sc-if>
+</div>
+</header>
+
+<div role="tablist" aria-label="Scenario views" style="display: flex; gap: 4px; border-bottom: 1px solid #232A34">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+<button type="button" role="tab" aria-selected="{{t.selected}}" onClick="{{t.pick}}" style="height: 40px; padding: 0 14px; border: 0; border-bottom: 2px solid {{t.line}}; background: transparent; color: {{t.fg}}; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; cursor: pointer">{{t.label}}</button>
+</sc-for>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; overflow: auto">
+<sc-if value="{{showTimeline}}" hint-placeholder-val="{{true}}">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px">
+<section aria-label="Timeline" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 18px 20px">
+<sc-if value="{{hasRun}}" hint-placeholder-val="{{false}}">
+<div style="margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span>{{runTitle}}</span><span style="font-family: 'IBM Plex Mono', monospace; color: #A3ADBA">{{clock}}</span></div>
+<div role="progressbar" aria-label="Run progress" aria-valuenow="{{pct}}" aria-valuemin="0" aria-valuemax="100" style="height: 6px; border-radius: 3px; background: #262E39; overflow: hidden"><div style="width: {{pct}}%; height: 6px; background: {{barColor}}"></div></div>
+</div>
+</sc-if>
+<sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+<div style="display: grid; grid-template-columns: 64px 24px minmax(0, 1fr); align-items: start; min-height: 56px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA; padding-top: 2px">{{s.at}}</span>
+<span style="display: flex; flex-direction: column; align-items: center; height: 100%"><span style="width: 12px; height: 12px; margin-top: 4px; border-radius: 6px; border: 2px solid {{s.ring}}; background: {{s.fill}}; box-sizing: border-box"></span><span style="flex-grow: 1; width: 2px; background: #262E39"></span></span>
+<span style="padding-bottom: 14px">
+<span style="display: inline-block; padding: 1px 8px; border: 1px solid {{s.kindBorder}}; border-radius: 4px; background: {{s.kindBg}}; color: {{s.kindFg}}; font-size: 12px">{{s.kind}}</span>
+<span style="margin-left: 8px; font-size: 14px; color: {{s.textColor}}">{{s.text}}</span>
+<sc-if value="{{s.now}}" hint-placeholder-val="{{false}}"><span style="margin-left: 8px; font-size: 12px; color: #FFB870">now</span></sc-if>
+</span>
+</div>
+</sc-for>
+</section>
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<section aria-labelledby="chk" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 16px 18px">
+<h3 id="chk" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">CHECKS</h3>
+<sc-for list="{{checks}}" as="c" hint-placeholder-count="2">
+<div style="margin-top: 12px; display: flex; gap: 10px; align-items: flex-start">
+<span style="flex-shrink: 0; margin-top: 2px; padding: 1px 6px; border: 1px solid {{c.border}}; border-radius: 4px; background: {{c.bg}}; color: {{c.fg}}; font-size: 11px; font-weight: 600; letter-spacing: 0.04em">{{c.state}}</span>
+<span style="font-size: 14px; line-height: 1.5">{{c.text}}<sc-if value="{{c.hasDetail}}" hint-placeholder-val="{{false}}"><br><span style="font-size: 12px; color: #A3ADBA">{{c.detail}}</span></sc-if></span>
+</div>
+</sc-for>
+</section>
+<section aria-labelledby="art" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; padding: 16px 18px">
+<h3 id="art" style="margin: 0; font-size: 14px; font-weight: 600; color: #A3ADBA; letter-spacing: 0.04em">RUN ARTIFACTS</h3>
+<sc-if value="{{hasArtifacts}}" hint-placeholder-val="{{false}}">
+<div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<div style="display: flex; justify-content: space-between"><span style="font-family: 'IBM Plex Mono', monospace">capture.pcapng</span><a href="#">1.8 MB</a></div>
+<div style="display: flex; justify-content: space-between"><span style="font-family: 'IBM Plex Mono', monospace">report.xml <span style="color: #A3ADBA">JUnit</span></span><a href="#">2 KB</a></div>
+<div style="display: flex; justify-content: space-between"><span style="font-family: 'IBM Plex Mono', monospace">report.json</span><a href="#">6 KB</a></div>
+<div style="display: flex; justify-content: space-between"><span style="font-family: 'IBM Plex Mono', monospace">events.jsonl</span><a href="#">24 KB</a></div>
+</div>
+</sc-if>
+<sc-if value="{{noArtifacts}}" hint-placeholder-val="{{true}}">
+<div style="margin-top: 10px; font-size: 13px; color: #A3ADBA; line-height: 1.5">{{artifactHint}}</div>
+</sc-if>
+</section>
+<div style="font-size: 12px; color: #7D8796; line-height: 1.6">A run keeps going if this tab closes. It stops at its last step or on Abort; either way the state before the run is restored.</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{showYaml}}" hint-placeholder-val="{{false}}">
+<pre style="margin: 0; padding: 18px 20px; background: #151A21; border: 1px solid #232A34; border-radius: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.7; color: #D9DEE5; white-space: pre">{{yaml}}</pre>
+</sc-if>
+
+<sc-if value="{{showRuns}}" hint-placeholder-val="{{false}}">
+<section aria-label="Past runs" style="background: #151A21; border: 1px solid #232A34; border-radius: 10px; overflow: hidden">
+<div style="display: grid; grid-template-columns: 90px 110px 150px 140px minmax(0, 1fr); height: 40px; align-items: center; padding: 0 18px; border-bottom: 1px solid #232A34; font-size: 12px; color: #7D8796"><span>Run</span><span>Result</span><span>Started</span><span>Started by</span><span>Note</span></div>
+<sc-for list="{{runs}}" as="r" hint-placeholder-count="4">
+<div style="display: grid; grid-template-columns: 90px 110px 150px 140px minmax(0, 1fr); min-height: 46px; align-items: center; padding: 0 18px; border-bottom: 1px solid #1E252E; font-size: 14px">
+<span style="font-family: 'IBM Plex Mono', monospace">#{{r.n}}</span>
+<span><span style="padding: 1px 6px; border: 1px solid {{r.border}}; border-radius: 4px; background: {{r.bg}}; color: {{r.fg}}; font-size: 11px; font-weight: 600; letter-spacing: 0.04em">{{r.result}}</span></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A3ADBA">{{r.at}}</span>
+<span style="color: #A3ADBA">{{r.by}}</span>
+<span style="color: #A3ADBA; font-size: 13px">{{r.note}}</span>
+</div>
+</sc-for>
+</section>
+</sc-if>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 'mqtt-outage', tab: 'timeline', status: 'idle', t: 0, runNo: 43, extraRuns: [] };
+    this.defs = {
+      'mqtt-outage': { target: 'ESP32-42', dur: 60, capture: 'automatic', last: 'last run #42 passed', lastOk: true,
+        steps: [[0, 'profile', 'Normal'], [10, 'fault', '↑↓ +200 ms ±50 on MQTT 8883'], [20, 'fault', '10 % loss on MQTT 8883'], [30, 'rule', 'Drop TCP 8883, cut existing connections'], [45, 'restore', 'Restore state before run']],
+        checks: [['Reconnects to broker within 30 s after restore', 'passed', 'reconnected after 8.2 s'], ['No traffic to unexpected destinations', 'passed', '3 destinations, all expected']] },
+      'intermittent-lte': { target: 'Network IoT', dur: 90, capture: 'off', last: 'last run #39 passed', lastOk: true,
+        steps: [[0, 'profile', 'LTE'], [20, 'fault', 'Flapping 20 s up / 10 s down'], [60, 'fault', '5 % loss'], [80, 'restore', 'Restore state before run']],
+        checks: [['All sensors report within 60 s after restore', 'passed', '17 of 17 reported, slowest after 41 s']] },
+      'tls-validation': { target: 'ESP32-42', dur: 40, capture: 'automatic', last: 'last run #37 failed', lastOk: false,
+        steps: [[0, 'tls', 'Certificate from untrusted CA'], [10, 'tls', 'Self-signed certificate'], [20, 'tls', 'Reset after ClientHello'], [30, 'restore', 'Restore state before run']],
+        checks: [['Rejects certificate from untrusted CA', 'passed', 'handshake aborted by device'], ['Rejects self-signed certificate', 'passed', 'handshake aborted by device'], ['Retries with backoff after reset', 'failed', '212 reconnect attempts in 10 s, no backoff']] },
+      'dhcp-renew': { target: 'ESP32-42', dur: 120, capture: 'off', last: 'never run', lastOk: null,
+        steps: [[0, 'dhcp', 'Lease time 30 s'], [30, 'dhcp', 'Move reservation to 10.10.0.99 (NAK on renew)'], [60, 'dhcp', 'DHCP silent'], [90, 'restore', 'Restore state before run']],
+        checks: [['Moves to the new address', 'passed', 'bound 10.10.0.99 after NAK'], ['Keeps working while DHCP is silent', 'passed', 'lease kept, traffic continued']] }
+    };
+  }
+  componentWillUnmount() { clearInterval(this.iv); }
+  mmss(t) { const s = Math.floor(t); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+  start() {
+    clearInterval(this.iv);
+    this.setState({ status: 'running', t: 0, tab: 'timeline' });
+    this.iv = setInterval(() => {
+      const def = this.defs[this.state.sel];
+      const t = this.state.t + 1.5;
+      if (t >= def.dur) {
+        clearInterval(this.iv);
+        const failed = def.checks.some((c) => c[1] === 'failed');
+        this.setState({ t: def.dur, status: failed ? 'failed' : 'passed',
+          extraRuns: [{ n: this.state.runNo, sel: this.state.sel, result: failed ? 'failed' : 'passed' }, ...this.state.extraRuns],
+          runNo: this.state.runNo + 1 });
+      } else {
+        this.setState({ t });
+      }
+    }, 250);
+  }
+  renderVals() {
+    const s = this.state, def = this.defs[s.sel];
+    const running = s.status === 'running', finished = s.status === 'passed' || s.status === 'failed';
+    const hasRun = s.status !== 'idle';
+    const badge = (k) => ({
+      passed: { state: 'PASSED', bg: '#16222E', fg: '#B8DBFF', border: '#2D4B6B' },
+      failed: { state: 'FAILED', bg: '#2B1717', fg: '#FFB3B3', border: '#6B2E2E' },
+      pending: { state: 'PENDING', bg: '#1B212A', fg: '#A3ADBA', border: '#2F3844' },
+      aborted: { state: 'ABORTED', bg: '#1B212A', fg: '#D9DEE5', border: '#4A5461' }
+    }[k]);
+
+    const list = Object.keys(this.defs).map((id) => {
+      const d = this.defs[id], on = id === s.sel;
+      return { id, meta: d.target + ' · ' + this.mmss(d.dur) + ' · ' + d.steps.length + ' steps', last: d.last,
+        lastColor: d.lastOk === false ? '#FFB3B3' : '#A3ADBA', pressed: on ? 'true' : 'false',
+        bg: on ? '#1B212A' : '#151A21', border: on ? '#3D6A99' : '#232A34',
+        pick: () => { if (this.state.status === 'running') return; this.setState({ sel: id, status: 'idle', t: 0 }); } };
+    });
+
+    const orange = { bg: '#2A1C10', fg: '#FFB870', border: '#6B4420' }, blue = { bg: '#16222E', fg: '#B8DBFF', border: '#2D4B6B' };
+    const steps = def.steps.map(([at, kind, text], i) => {
+      const next = def.steps[i + 1] ? def.steps[i + 1][0] : def.dur;
+      const done = hasRun && s.t >= next, now = running && s.t >= at && s.t < next;
+      const c = kind === 'profile' || kind === 'restore' ? blue : orange;
+      return { at: this.mmss(at), kind, text, now,
+        kindBg: c.bg, kindFg: c.fg, kindBorder: c.border,
+        ring: now ? '#FFA24C' : done ? '#6CB2FF' : '#4A5461', fill: done ? '#6CB2FF' : now ? '#FFA24C' : '#151A21',
+        textColor: hasRun && !done && !now ? '#A3ADBA' : '#E7EAEE' };
+    });
+
+    const checks = def.checks.map(([text, result, detail]) => {
+      const k = finished ? result : s.status === 'aborted' ? 'aborted' : 'pending';
+      return { text, detail, hasDetail: finished, ...badge(k) };
+    });
+
+    const baseRuns = [
+      { n: 42, sel: 'mqtt-outage', result: 'passed', at: 'today 12:42', by: 'ci-token', note: 'reconnected after 8.2 s' },
+      { n: 41, sel: 'mqtt-outage', result: 'failed', at: 'today 09:15', by: 'andreas', note: 'reconnect took 41 s (limit 30 s)' },
+      { n: 39, sel: 'intermittent-lte', result: 'passed', at: 'yesterday 17:03', by: 'ci-token', note: '' },
+      { n: 37, sel: 'tls-validation', result: 'failed', at: 'yesterday 16:40', by: 'andreas', note: 'no backoff after reset' }
+    ];
+    const runs = [...s.extraRuns.map((r) => ({ ...r, at: 'just now', by: 'andreas', note: '' })), ...baseRuns]
+      .filter((r) => r.sel === s.sel).map((r) => ({ ...r, ...badge(r.result), result: badge(r.result).state }));
+
+    const yaml = ['name: ' + s.sel, 'target: { device: ' + def.target + ' }', 'capture: ' + (def.capture === 'automatic'), 'steps:']
+      .concat(def.steps.map(([at, kind, text]) => '  - at: ' + at + 's\n    ' + kind + ': "' + text + '"'))
+      .concat(['checks:'], def.checks.map(([text]) => '  - "' + text + '"')).join('\n');
+
+    const tabs = [['timeline', 'Timeline'], ['yaml', 'YAML'], ['runs', 'Runs']].map(([id, label]) => {
+      const on = s.tab === id;
+      return { label, selected: on ? 'true' : 'false', line: on ? '#6CB2FF' : 'transparent', fg: on ? '#E7EAEE' : '#A3ADBA', pick: () => this.setState({ tab: id }) };
+    });
+
+    const titles = { running: 'Run #' + s.runNo + ' running', passed: 'Run #' + (s.runNo - 1) + ' passed', failed: 'Run #' + (s.runNo - 1) + ' failed', aborted: 'Run #' + s.runNo + ' aborted · state restored to revision 42' };
+    return {
+      list, cur: { id: s.sel, target: def.target, durText: this.mmss(def.dur), capture: def.capture },
+      tabs, showTimeline: s.tab === 'timeline', showYaml: s.tab === 'yaml', showRuns: s.tab === 'runs',
+      steps, checks, runs, yaml,
+      running, notRunning: !running, hasRun,
+      runTitle: titles[s.status] || '', clock: this.mmss(s.t) + ' / ' + this.mmss(def.dur),
+      pct: Math.round((s.t / def.dur) * 100),
+      barColor: s.status === 'failed' ? '#FF8A8A' : s.status === 'aborted' ? '#7D8796' : '#6CB2FF',
+      hasArtifacts: finished, noArtifacts: !finished,
+      artifactHint: running ? 'Capture is recording. Artifacts appear when the run ends.' : s.status === 'aborted' ? 'Run aborted — partial capture kept for 7 days.' : 'Capture, JUnit report, JSON report and event log appear here after a run.',
+      start: () => this.start(),
+      abort: () => { clearInterval(this.iv); this.setState({ status: 'aborted' }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

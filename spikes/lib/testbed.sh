@@ -69,8 +69,22 @@ EOF
   for c in $TB_CLIENTS; do tb_client "$c" "$o"; o=$((o+1)); done
 }
 
+tb_add_lan2() {  # second test network: gw lan1 10.20.0.1/24 ─ sw2 ─ cl3 10.20.0.13
+  ip netns add "$(tb_ns sw2)"; nsx sw2 ip link set lo up
+  nsx sw2 ip link add br0 type bridge; nsx sw2 ip link set br0 up
+  ip link add lan1 netns "$(tb_ns gw)" address 02:00:00:00:01:01 type veth peer name q1 netns "$(tb_ns sw2)"
+  nsx sw2 ip link set q1 master br0 up
+  nsx gw ip addr add 10.20.0.1/24 dev lan1; nsx gw ip link set lan1 up
+  ip netns add "$(tb_ns cl3)"; nsx cl3 ip link set lo up
+  ip link add eth0 netns "$(tb_ns cl3)" address 02:00:00:00:01:0d type veth peer name q13 netns "$(tb_ns sw2)"
+  nsx sw2 ip link set q13 master br0 up
+  nsx cl3 ip addr add 10.20.0.13/24 dev eth0; nsx cl3 ip link set eth0 up
+  nsx cl3 ip route add default via 10.20.0.1
+  tb_noffload gw lan1; tb_noffload sw2 q1; tb_noffload sw2 q13; tb_noffload cl3 eth0
+}
+
 tb_destroy() {
-  for n in gw sw srv cl1 cl2 cl3 probe; do
+  for n in gw sw sw2 srv cl1 cl2 cl3 probe mg; do
     ip netns pids "$(tb_ns $n)" 2>/dev/null | xargs -r kill 2>/dev/null || true
     ip netns del "$(tb_ns $n)" 2>/dev/null || true
   done

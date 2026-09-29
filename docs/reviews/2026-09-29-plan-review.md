@@ -1,5 +1,7 @@
 # Plan review — 2026-09-29
 
+> **Status:** incorporated into `docs/plan.md` on 2026-09-29. The design questions that needed evidence were answered by spikes S11–S14 (`docs/spikes/REPORT.md`); all four confirmed the proposed fixes, S13 added one risk (PMTU side effect through the shared NAT address).
+
 Independent review of `docs/plan.md` (state after commit "Switch implementation stack to Go backend and Vue 3 frontend") against `docs/spikes/REPORT.md`. Line numbers refer to that version of `plan.md`. Spot-checked: C1, G6, T1, T14, C4 confirmed in the text.
 
 The most urgent issues are five design decisions that are missing or inconsistent, and they touch several milestones:

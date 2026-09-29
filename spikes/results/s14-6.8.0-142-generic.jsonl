@@ -1,0 +1,4 @@
+{"test": "L0-forwarded-control", "note": "forwarded: reply passes prerouting", "measured": {"median": 83.78, "n": 45}, "expect_median_ms": 83.15, "tolerance_ms": 7.0, "median_ms": 83.78, "pass_": true}
+{"test": "L1-local-without-output-hook", "note": "expected: fault missing for gateway-terminated connection", "measured": {"median": 2.84, "n": 186}, "expect_median_ms": 3.15, "tolerance_ms": 3.0, "median_ms": 2.84, "pass_": true}
+{"test": "L2-local-with-output-hook", "note": "output hook classifies local replies by the same key", "measured": {"median": 83.28, "n": 46}, "expect_median_ms": 83.15, "tolerance_ms": 7.0, "median_ms": 83.28, "pass_": true}
+{"test": "L3-forwarded-unchanged", "note": "", "measured": {"median": 83.6, "n": 45}, "expect_median_ms": 83.15, "tolerance_ms": 7.0, "median_ms": 83.6, "pass_": true}

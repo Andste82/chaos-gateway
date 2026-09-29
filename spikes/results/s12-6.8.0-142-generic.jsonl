@@ -1,0 +1,5 @@
+{"test":"A-macvlan-on-physical-port","probe_to_gateway":false,"probe_to_device":true,"probe_to_server_via_nat":false}
+{"test":"A-bridge-with-probe-port","probe_to_gateway":true,"probe_to_device":true,"probe_to_server_via_nat":true}
+{"test":"A-bridge-device-to-server","ok":true}
+{"test":"B-bridge-egress-class-counters","per_class_packets":{"1:1": 21, "1:a": 20},"note":"1:a should hold ~20 replies to dev, 1:1 the probe replies"}
+{"test":"C-default-route","forwarded_without_policy":"timeout","leaked_without_policy":2,"forwarded_with_policy":"ok","leaked_after_policy":0,"service_uid_socket":"ok","leaked_by_service_uid":0,"root_socket":"timeout","leaked_by_root_socket":1,"note":"root has no rule: management route by design"}

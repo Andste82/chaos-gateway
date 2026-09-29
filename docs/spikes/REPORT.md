@@ -1,6 +1,6 @@
 # Chaos Gateway — Phase 0 Spike Report
 
-Status: all spikes executed · September 2026
+Status: all spikes executed · September 2026 · S11–S14 added after the plan review of 2026-09-29
 
 This report records what the Phase 0 spikes (plan §5) proved, disproved or changed. Every number below comes from the result files in `spikes/results/`. The scripts are in [`spikes/`](../../spikes/), and each one can be re-run on its own (see *Reproducing*).
 
@@ -20,6 +20,10 @@ This report records what the Phase 0 spikes (plan §5) proved, disproved or chan
 | S7 Deployment | Docker next to the gateway; gateway in a container | ✅ confirmed constraints | native package stays primary; preflight must handle Docker |
 | S8 Performance | Cost of per-packet classification and of updates | ◐ partial (no Pi) | no measurable classification cost on x86; Pi numbers still open |
 | S9 Capture | Capture exactly one selector's traffic | ✅ decided | AF_PACKET on the LAN side by default, NFLOG for rule-based capture |
+| S11 Direction | Direction bit with two test networks; destination selectors; re-apply that keeps dynamic data | ✅ confirmed | mark bit 16 = direction, same tc mapping on every interface; add/flush apply layout |
+| S12 Attachment | Probe on a bridge vs. macvlan; tc on the bridge; policy routing | ✅ confirmed | test networks are gateway-owned bridges; policy routing table for test traffic and service uid |
+| S13 PMTUD | Path-MTU faults via ICMP and as black hole | ✅ confirmed, 1 side effect | ICMP mode leaks to other devices through the shared NAT address; MSS clamp as isolated mode |
+| S14 Local replies | Download faults for connections that end on the gateway | ✅ confirmed | classification chain also on the output hook |
 
 ---
 
@@ -320,6 +324,63 @@ All files open with tshark/Wireshark.
 - **"Capture what this rule matches":** NFLOG from the rule's own nftables selector. It is exact regardless of NAT, but L3 only.
 - Captures on the uplink cannot be attributed to devices and are offered only as "uplink capture".
 
+### S11 — Direction Bit, Destination Selectors, Re-apply (Ubuntu 6.8, emulated)
+
+Topology: two test networks (LAN A with cl1/cl2 on `lan0`, LAN B with cl3 on `lan1`), server on `wan0`. Faults: group *g* {cl1, cl3} 100 ms upload / 20 ms download; device+destination *d* (cl1 → 203.0.113.20) 50 ms upload / 0 ms download. Mark: bits 8–15 fault id, bit 16 set for `ct direction reply`; the same fw filters (`0x00a00/0x1ff00`, `0x10a00/0x1ff00`, …) on all three interfaces. Baseline median 1.96 ms.
+
+| Test | Expected | Median | Result |
+|---|---|---|---|
+| D1 cl1 → server | 120 ms | 123.2 ms | ✅ |
+| D2 cl3 (LAN B) → server | 120 ms | 122.9 ms | ✅ |
+| D3 cl1 → cl3 (A → B) | 120 ms | 123.5 ms | ✅ |
+| D4 cl2 → cl3 (initiator without fault, responder in group) | 0 ms | 2.9 ms | ✅ initiator semantics |
+| D5 cl1 → 203.0.113.20 (device+destination beats group), TCP | 50 ms | 53.7 ms | ✅ |
+| D5b cl1 → 203.0.113.10, TCP | 120 ms | 125.0 ms | ✅ |
+| N3 cl1 → cl3 **without** direction bit (per-interface meaning) | 120 ms | **43.5 ms** | ❌ as predicted: `lan1` applies the download parameters to cl1's upload |
+| N2 cl3 → server without direction bit | 120 ms | 124.5 ms | ✅ (single-network paths are not affected) |
+
+- **T1 dynamic data:** after three re-applies with `add table/set/map/counter/chain` + `flush chain`/`flush map`, a timed set element was still present (1 of 1) and the named counter kept its value (1868 → 1868).
+- **T2 atomic re-apply under traffic:** 20 re-applies while cl1 sent 1500 UDP packets at 4 ms spacing: all received, minimum RTT 121.0 ms, i.e. not a single packet passed unclassified (an unclassified packet would show ≈ 2 ms).
+- D5 uses TCP because the UDP echo server answers from its primary address, not from the secondary .20.
+
+### S12 — Test-Network Attachment and Default Routes (Ubuntu 6.8, emulated)
+
+| Test | Result |
+|---|---|
+| A1 gateway address on physical port, probe via **macvlan** on that port | probe → gateway ❌, probe → device ✅, probe → server via NAT ❌ (macvlan cannot talk to its parent) |
+| A2 gateway address on **bridge** `br-iot` {physical port, probe veth} | probe → gateway ✅, probe → device ✅, probe → server ✅; device → server ✅ |
+| B tc HTB on `br-iot` egress with fw filter `0x10a00/0x1ff00` (download of the device) | class 1:a 20 packets (the device's 20 ping replies), default class 21 (probe) — marks from inet prerouting are visible on the bridge |
+| C1 management default route in main table, no policy routing | forwarded TCP to an internet address: **timeout**, 2 packets leaked into the management network |
+| C2 with `ip rule iif br-iot lookup 100` + `uidrange <service uid> lookup 100` (table 100: default via uplink) | forwarded ✅, 0 leaked; service-uid socket ✅, 0 leaked; root socket still uses the management route (by design) |
+
+The first run of part C used a server on the uplink's connected subnet, where the connected route always wins, so it could not show a leak; the test was corrected to use an address only reachable by a default route (198.51.100.10).
+
+### S13 — PMTUD Faults (host kernel 6.18)
+
+cl1 and cl2 download 300 KB from the same server through the NAT; the fault applies to cl1 only (mark bit 21 → policy table 101 with `mtu lock 1280`, or an nft length drop for the black hole).
+
+| Case | cl1 transfer | cl1 max segment (down) | cl2 transfer | cl2 max segment (up/down) |
+|---|---|---|---|---|
+| baseline | ✅ 0.01 s | 1500 | ✅ | 1500 / 1500 |
+| ICMP mode, cl2 measured first | ✅ 0.05 s; `ping -M do -s 1400` → "message too long, mtu=1280" | 1280 | ✅ | 1500 / 1500 |
+| ICMP mode, cl2 measured after cl1 | ✅ | 1280 | ✅ | **1280 / 1280** |
+| black hole (no ICMP) | ❌ stalls, 0 bytes in 6 s; 18 packets dropped | 60 | ✅ | 1500 / 1500 |
+
+The kernel generates the ICMP "fragmentation needed" itself for forwarded packets. **Side effect:** the server caches the reduced path MTU for the gateway's NAT address, so cl2 is affected after cl1 was (Linux default cache lifetime 10 min). MSS clamping is the isolated alternative for TCP.
+
+### S14 — Local Replies (Ubuntu 6.8, emulated)
+
+cl1's TCP 8883 is redirected to a local server on the gateway; fault for cl1: 0 ms upload, 80 ms download (direction-bit layout). Baseline 3.15 ms.
+
+| Test | Expected | Median | Result |
+|---|---|---|---|
+| L0 forwarded connection (control) | 80 ms | 83.8 ms | ✅ |
+| L1 gateway-terminated, classification in prerouting only | fault missing | 2.8 ms | ✅ gap confirmed |
+| L2 same, classification chain also on the **output** hook | 80 ms | 83.3 ms | ✅ |
+| L3 forwarded connection after adding the output hook | 80 ms | 83.6 ms | ✅ unchanged |
+
+`ct original ip saddr` of the redirected connection is still the device, so the output hook uses the same maps and the same key.
+
 ---
 
 ## 4. Plan Changes
@@ -341,6 +402,8 @@ These changes are applied to `docs/plan.md`:
 | §5 Phase 0 | S1–S7, S9, S10 done; S8 open for Raspberry Pi |
 | §6 Risks | #3 downgraded (not observed); #4 confirmed with numbers; #6 corrected (same-kind replace keeps queue) |
 | §7 Decisions | D4 → Kea; D5 → confirmed (Node TLS responder + mitmproxy sidecar) |
+| §2.2, §3.3, §3.2 (S11–S14) | test networks as bridges with policy routing (S12); direction bit and identical tc mapping on all interfaces, output hook (S11, S14); apply layout keeping sets and counters (S11) |
+| §2.5, §6 (S13) | PMTUD modes ICMP / black hole / MSS clamp; NAT-address side effect as risk #23 |
 
 ---
 
@@ -372,6 +435,9 @@ TB_PREFIX=h bash s06-dhcp/run.sh
 bash s07-deployment/run.sh                # needs Docker and the cg-bb image (see spikes/README.md)
 TB_PREFIX=h bash s08-perf/run.sh
 TB_PREFIX=h bash s09-capture/run.sh
+./vm.sh followups.sh                      # S11, S12, S14 in one VM session
+./vm.sh s12-attachment/run.sh             # or one at a time
+TB_PREFIX=h bash s13-pmtud/run.sh
 ```
 
 Never run a VM spike and a host spike at the same time: `/run/netns` is shared with the guest.

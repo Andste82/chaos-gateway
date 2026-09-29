@@ -55,7 +55,7 @@ Chaos Gateway is a Linux machine that sits as the **gateway** between a test net
 
 | Area | Capabilities |
 |---|---|
-| Connectivity | routed gateway, NAT, DHCP, DNS, later VLANs, IPv6, WireGuard remote access |
+| Connectivity | routed gateway, NAT, DHCP, DNS; WireGuard networks, clients and site links; static and dynamic routing (BIRD); later VLANs, IPv6 |
 | Access control | allow, drop, reject, TCP reset, per device/network/traffic |
 | Network faults | latency, jitter, loss, rate limit, reordering, duplication, corruption, blackout, flapping, MTU/PMTUD faults |
 | Application faults | DNS faults, TLS certificate faults, TLS interception, HTTP manipulation |
@@ -68,7 +68,8 @@ Chaos Gateway is a Linux machine that sits as the **gateway** between a test net
 
 - A general-purpose home or enterprise router or firewall.
 - Link-layer (WiFi radio) impairment in V1 (see §8).
-- Dynamic routing protocols, multi-WAN, PPPoE in V1. The routing model must not rule them out later.
+- Multi-WAN and PPPoE in V1. The routing model must not rule them out later. (Dynamic routing over WireGuard is planned, §2.2.2.)
+- Acting as a general VPN concentrator for end users: WireGuard exists to connect test machines, test networks and administrators (§2.2.1).
 - High-throughput WAN emulation beyond the hardware targets in §3.10.
 - Decrypting TLS of devices that correctly refuse an untrusted CA. That refusal *is* the test result (see §2.8).
 
@@ -96,6 +97,9 @@ The domain model is platform-independent; the execution layer is explicitly Linu
 | **Network** | a logical test network: subnet, DHCP/DNS settings, access to other networks. Its gateway address lives on a Linux bridge owned by Chaos Gateway; **attachments** are the bridge's ports (V1: physical interfaces and probes; later: VLANs, tunnels) |
 | **Device** | a device under test with a stable internal identity. It is recognized by one or more identifiers — MAC address, IPv4 address/range, later IPv6 address or WireGuard peer. Configured or discovered |
 | **Group** | a named set of devices (e.g. "all sensors") |
+| **WireGuard network** | a tunnel network on the gateway: a hub for many clients, or a point-to-point link to another site (§2.2.1) |
+| **Peer / client** | a WireGuard endpoint with keys, a tunnel address and optionally **client networks** — subnets behind it (a remote test lab, another test machine's networks) |
+| **Remote network** | a subnet reached through a peer or learned by dynamic routing; can be source and target of rules and faults like a local network |
 | **Probe** | a virtual test client inside the gateway, attached to a network and treated like a device (see §2.12) |
 | **Traffic selector** | a match expression: source, destination, protocol, ports, hostname, direction |
 | **Flow** | an observed connection (from conntrack), with counters |
@@ -155,8 +159,55 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
 
 - VLANs (multiple networks on one trunk port).
 - IPv6: router advertisements, SLAAC, DHCPv6, IPv6 firewalling and faults.
-- WireGuard remote access, with each peer granted access to specific networks.
 - Port forwarding (DNAT).
+
+### 2.2.1 WireGuard Networks
+
+**Purpose:** connect further test machines and test networks to the gateway, so that Chaos Gateway is the central point that routes, controls and impairs traffic between all of them, and give administrators remote access. Chaos Gateway manages the tunnels, keys, client configurations and routes.
+
+**Network kinds**
+
+| Kind | Topology | Use | Routing |
+|---|---|---|---|
+| **Hub** | one WireGuard interface, many clients (star) | test machines, laptops, remote test computers, a remote lab router | static: each client's tunnel address and its declared client networks become the client's `AllowedIPs` and routes via the interface |
+| **Link** | one WireGuard interface **per remote site** (point to point, /31 transfer net) | connecting another gateway, router or lab network | static routes or dynamic routing (§2.2.2); `AllowedIPs 0.0.0.0/0` on the link, routes decide |
+
+Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one peer of an interface. Dynamically learned prefixes therefore cannot be expressed on a shared hub interface without rewriting `AllowedIPs` on every route change; on a point-to-point link the routing table alone decides, which is the standard way to run BGP/OSPF over WireGuard.
+
+**Managing networks and clients**
+
+- Create, edit and delete WireGuard networks: name, kind, tunnel subnet, gateway tunnel address, listen port, MTU (default 1420), public endpoint (hostname or IP and port that clients use; defaults to the uplink address), role (**test** — untrusted, like a test network; **management** — admin access to UI/API; see §2.16).
+- Create clients (peers) in a hub network: name, tunnel address (next free address proposed), **client networks** (0..n subnets behind the client), networks the client may reach (selection of test networks, other WireGuard networks, other clients' networks, internet via uplink = full tunnel), DNS server for the client (optional: the gateway's DNS proxy, so DNS faults and hostname selectors apply), persistent keepalive (default 25 s).
+- Enable/disable a client (disabled = removed from the interface; usable as a fault: "peer offline"), rotate keys, delete.
+- Status per client and link: last handshake, current endpoint, bytes in/out, online state (handshake younger than 3 min), learned routes. Events on state changes.
+- Clients and their client networks appear as **devices and remote networks** in the model: they can be grouped, targeted by rules, faults, profiles and scenarios, and appear in the access matrix. Identity is the tunnel address or the client network (no MAC, no DHCP).
+- Addressing: between WireGuard and local test networks traffic is **routed without NAT** by default (remote test machines see real device addresses; the exported client configuration contains the needed routes). Towards the uplink it is masqueraded, like test networks.
+
+**Keys and export**
+
+- Default: the gateway generates the client's key pair (and optionally a preshared key), so it can export a complete configuration. Alternative: the client provides only its public key; the export then contains a placeholder for the private key.
+- Client private keys are stored in the secrets directory (§2.16) and can be deleted after the first download ("export once").
+- Export formats: `wg-quick` `.conf` file (download), **QR code** in the UI (for phones and tablets), QR as PNG/SVG via API, a zip with configurations of several clients, `chaosctl wg export <client>`. For links: the configuration of the remote side plus, if dynamic routing is used, a matching BIRD configuration snippet.
+- Exports containing private keys are secret: shown with a warning, never included in configuration exports or logs.
+
+**Faults and WireGuard**
+
+- **Inner faults:** traffic of clients and remote networks is classified like any other traffic (§3.3: conntrack original tuple, direction bit); tc on the WireGuard interface's egress impairs the download towards the remote side, the other interfaces the upload.
+- **Tunnel faults (underlay):** impair a client's or link's encrypted UDP traffic itself — latency, loss, blackout, flapping of the tunnel — to simulate a bad WAN between sites. Everything inside the tunnel is affected, including routing-protocol sessions. Implementation: the output hook classifies WireGuard's UDP packets by peer endpoint (spike S15).
+- Peer disable, key mismatch (rotated key not deployed) and endpoint blocking are available as scenario actions.
+
+### 2.2.2 Routing
+
+- **Static routes:** per test network (devices behind another router), per client (its client networks, automatic), per link.
+- **Dynamic routing** with **BIRD 2**, managed by Chaos Gateway in its own instance (own configuration file and control socket, own systemd unit; an existing BIRD on the host is not touched):
+  - Protocols: **BGP** (recommended for links; private ASNs), **OSPFv2** (point-to-point on links), **Babel** (suited for meshes of links), plus static.
+  - Configured in the model: router id, ASN, neighbors per link, OSPF area, timers, and which prefixes are announced (selection of test networks, WireGuard networks, client networks, remote networks).
+  - Chaos Gateway generates the BIRD configuration, validates it with `bird -p`, then applies it with `birdc configure` (graceful, sessions stay up). It is part of the revision and of preview/diff.
+  - **Import safety:** learned routes go only into Chaos Gateway's routing tables (§2.2 policy routing, and the PMTU mirror tables), never into the main table. Import filters per neighbor: allowed prefix list, no default route unless explicitly allowed, never the management, uplink or gateway-own prefixes, maximum prefix count. A misbehaving remote site cannot hijack management traffic.
+  - **Custom snippets:** per protocol, raw BIRD configuration can be added for cases the model does not cover; it is validated by `bird -p` and marked as "unmanaged" in the UI.
+  - **Other routing daemons:** the routing layer is an adapter (generate configuration, reload, read status). BIRD is the only adapter in the plan; FRR is possible later. As a fallback, **external mode** imports routes that another daemon writes into a designated kernel table, with the same import filters.
+- **Observability:** neighbor/session state, received and announced prefixes, route changes as events and in the activity log; the effective route for a destination is shown in the preview.
+- **Routing faults:** tunnel faults, access rules on routing traffic (e.g. drop TCP 179) and link disable make convergence testable: "site B loses its link for 20 s — do devices reconnect after re-convergence?".
 
 **V1 test networks are IPv4-only.** The gateway sends no router advertisements, offers no DHCPv6 and drops all forwarded IPv6 traffic. Devices only have link-local IPv6 addresses, so dual-stack devices fall back to IPv4. This is intended: faults and rules must never be bypassable, and a device reaching its server over an unimpaired IPv6 path would invalidate the test. On all interfaces it owns, Chaos Gateway disables router-advertisement acceptance, so its own services cannot leave over IPv6 either; the DNS proxy removes AAAA records from answers.
 
@@ -213,6 +264,7 @@ direction   upload (device → destination) | download | both
 
   Within the same level: an explicit priority value decides, then overlays win over configuration, then the newer entry wins (a device in two groups is resolved the same way). An explicit priority can also lift a fault above its level. The preview shows the effective result and which faults were overridden; golden tests cover every row.
 - A profile activated on a scope acts like a fault on that scope. A fault and a profile on the *same* scope: the fault wins as a whole.
+- **Rate and queue limits are per device** (decision D18). "Bad LTE, 2 Mbit/s" on a group, network or globally gives **every** matched device its own 2 Mbit/s queue, as if each had its own LTE link. The same holds for an explicit queue limit and for "keep order" (netem `rate`). Faults without these parameters (delay, jitter, loss, …) are per-packet effects and share one queue per configuration. Addresses in a network that are not (yet) known as devices share one queue per scope until discovery (§2.3) adds them. The preview shows how many queues a scope creates, and the compiler refuses configurations above the capacity limit (`capacity_exceeded`, §3.3).
 - **Initiator semantics:** a device fault applies to connections the device *initiates*, in both directions (upload = packets in the connection's original direction, download = replies). Connections initiated towards the device by another device or by the server are matched by the initiator's scope, not by the responder's. Matching a device as responder is a later extension (§8).
 - Faults act on **every packet**, including packets of connections that already existed when the fault was activated. Classification is therefore evaluated per packet, not cached per connection (see §3.3). Spike S10 confirmed this: with per-packet classification the first message after a change is affected, while conntrack-mark caching left the running connection on its old fault.
 - **Direction "both"** means separate parameters per direction. The UI shows them as a pair, and they can be set asymmetrically (e.g. upload 2 % loss, download 0 %).
@@ -229,7 +281,7 @@ direction   upload (device → destination) | download | both
 | Reordering | % | netem | requires a delay |
 | Duplication | % | netem | |
 | Corruption | % | netem | corrupted packets are usually dropped by checksums at the receiver |
-| Queue limit | packets | netem limit | by default the compiler computes the limit from delay × rate (netem's default of 1000 packets causes tail drop at high delay × rate, e.g. satellite); an explicit value models small buffers |
+| Queue limit | packets | netem limit | per device (D18). By default the compiler computes the limit from delay × rate, where rate is the fault's rate or, without one, the egress interface's link speed capped at 1 Gbit/s, and caps the result by a memory budget per interface (netem's default of 1000 packets causes tail drop at high delay × rate, e.g. satellite); an explicit value models small buffers |
 | Blackout | on/off | netem loss 100 % | "offline"; part of the effective fault configuration, so it follows the same precedence and hits running connections too; fault counters show the dropped packets |
 | Flapping | up/down durations | timed blackout | "intermittent connectivity" |
 | MTU / PMTUD | max. packet size; mode ICMP / black hole / MSS clamp | policy route with `mtu lock` (ICMP), nftables length drop (black hole), TCP MSS rewrite (clamp) | spike S13: with ICMP the kernel itself answers "fragmentation needed, mtu N" in both directions; black hole stalls TCP transfers. **Side effect:** the server caches the reduced path MTU for the shared NAT address, so other devices talking to the same server are affected until the cache expires (Linux: 10 min). MSS clamp affects only TCP of the selected device and has no such side effect. The device's own interface MTU cannot be changed |
@@ -478,7 +530,7 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 
 - The UI/API listens only on the management network, over HTTPS (self-signed certificate by default, replaceable).
 - **First start:** until setup is finished, the UI listens on all interfaces and requires a one-time setup token that the package installation prints and writes to the journal. The setup wizard assigns interfaces, sets the admin password and then restricts the UI to the management network.
-- Devices under test are untrusted: test networks cannot reach the management plane.
+- Devices under test are untrusted: test networks cannot reach the management plane. WireGuard networks with role *test* are treated the same; only WireGuard networks with role *management* (§2.2.1) may reach the UI/API.
 - V1: one admin account plus API tokens (scoped: read-only, overlays only, full).
 - **Sessions:** the UI uses an HTTP-only session cookie with CSRF protection; SSE uses the same cookie. Automation uses bearer tokens; tokens are stored only as hashes and shown once at creation.
 - Privilege separation: the API server runs unprivileged. Only the executor has network privileges; it runs as root under systemd hardening (restricted file system, capability bounding set `CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN` for namespaces, no new privileges).
@@ -600,6 +652,7 @@ Services managed by chaosgw:
   DHCP server    Kea (decided in spike S6)
   tls-proxy      mitmproxy + Chaos Gateway addon (Python sidecar, interception only)
   tcpdump        capture
+  BIRD 2         routing daemon, own instance (chaosgw-bird), config generated by the compiler
 ```
 
 - The core is **one Go binary, `chaosgw`**, with subcommands for the API server, the privileged executor, the DNS proxy and the TLS responder. Each runs as its own systemd unit with only the privileges it needs; the web UI is compiled into the binary (`go:embed`). The spikes built the DNS proxy and TLS responder in Node.js; their findings are language-independent.
@@ -658,16 +711,16 @@ Server reply ──► prerouting on uplink:
                                                           class → netem  (DOWNLOAD fault)
 ```
 
-- **Classification identity:** after precedence resolution, the compiler assigns an id to each *effective fault configuration*, not to each rule.
+- **Classification identity:** after precedence resolution, the compiler assigns an id to each *effective fault configuration*, not to each rule. Configurations with a rate, an explicit queue limit or "keep order" get one id **per matched device** (D18, §2.4); all others one id per configuration. Ids stay stable while the winning fault stays the same; parameter changes are applied to the existing classes in place.
   - Access rules need no marks; they are evaluated directly in nftables.
   - **Mark layout:**
 
     | Bits | Meaning |
     |---|---|
-    | 8–15 | effective-fault id (up to 255 fault configurations active at the same time) |
+    | 4–15 | effective-fault id, 12 bits: up to 4095 ids at the same time (widened from 8 bits because of per-device queues, D18) |
     | 16 | direction: 0 = packet in the connection's original direction (upload of the initiator), 1 = reply (download), from `ct direction` |
     | 17–23 | reserved for routing marks matched by `ip rule fwmark`; e.g. bit 21 (`0x00200000`) selects the PMTU policy route of §2.5 (S13) |
-    | other | untouched, free for other software |
+    | 0–3, 24–31 | untouched, free for other software |
 
   - With the direction bit, every interface uses the **same** mapping (id, direction) → tc class. Without it, the meaning of an id depended on the interface, which breaks as soon as two test networks exist: the second network's interface carries both its own devices' downloads and the first network's uploads towards it. Spike S11 showed exactly that: a group fault (100 ms up, 20 ms down) on devices in two networks gave the correct 120 ms for traffic from network A to network B with the direction bit, and 43 ms without it.
   - **Lookup chain** in the order of §2.4 precedence, each a verdict map keyed on the conntrack original tuple, so it is identical for both directions and unaffected by NAT:
@@ -678,9 +731,9 @@ Server reply ──► prerouting on uplink:
     5. then the same for groups and networks, then global
 
     S11 verified levels 2 and 4 together: a device+destination fault (50 ms) won over the device's group fault (120 ms) for that destination only.
-  - The id space is 255 per direction; with 250 simultaneous faults × 2 directions an interface needs about 500 HTB classes. S8 measured 50 classes; 500 is measured on the target hardware (H1).
+  - Capacity: 4095 ids; each active id needs up to two HTB classes (upload, download) per interface it leaves through. The compiler enforces a configurable class limit per interface (default 1000 on x86, set for Raspberry Pi from H1) and reports `capacity_exceeded` with the scope that caused it. Example: a rate-limited profile on a network with 250 devices needs 500 classes. S8 measured 50 classes; 500 and more are measured on the target hardware (H1).
 - **Per packet, not per connection:** the id is computed for every packet, using the conntrack original tuple for replies. Caching it in the conntrack mark would keep existing connections on the old fault after an overlay changes (S10 showed exactly that). Spike S8 found no measurable throughput cost with 1000 device and 1000 device+port entries on x86; Raspberry Pi still has to be measured.
-- **tc topology** (confirmed in S2 and S11): an HTB root with a default class and one class per active (id, direction), each with a netem leaf, selected by a `fw` filter with mask (`handle 0x00a00/0x1ff00` for upload, `0x10a00/0x1ff00` for download).
+- **tc topology** (confirmed in S2 and S11): an HTB root with a default class and one class per active (id, direction), each with a netem leaf, selected by a `fw` filter with mask (id 0x0a: `handle 0x000a0/0x1fff0` for upload, `0x100a0/0x1fff0` for download; the spikes used the earlier 8-bit layout `0x00a00/0x1ff00`, same mechanism).
   - A classful root is needed as soon as more than one fault is active on an interface; `prio` would be too small, since it is limited to 16 bands.
   - Rate limiting works both as netem `rate` and as HTB class rate. With 50 HTB classes, throughput dropped by about 10 % (S8).
 - **Traffic terminating at the gateway** (DNS proxy, TLS responder, TLS proxy):
@@ -699,13 +752,14 @@ Server reply ──► prerouting on uplink:
 | iproute2 | `ip -j` | `ip -batch` |
 | tc | `tc -j` | `tc -batch` |
 | conntrack-tools | `conntrack -L` | `conntrack -D` |
-| WireGuard | `wg show` | `wg syncconf` |
+| WireGuard | `wgctrl` (netlink) / `wg show` | `wgctrl` (netlink), interfaces via `ip -batch` |
+| BIRD 2 | `birdc show protocols/route` (control socket) | generated config file, `bird -p`, `birdc configure` |
 
 - Event sources, for live data without polling: `ip monitor`, `nft monitor`, `conntrack -E`.
 - Counters are polled once per second from nftables and tc (configurable).
 - **Preflight check** at start and install. It verifies:
   - kernel version
-  - modules — one list, shared with the test-container preflight (§4.5): `sch_netem`, `sch_htb`, `cls_fw`, `cls_u32`, `cls_flower`, `act_mirred`, `ifb`, `nf_conntrack`, `nf_tables` with NAT/ct/log/dup/reject, `nfnetlink_log`, `veth`, `bridge`, later `8021q` and `wireguard`
+  - modules — one list, shared with the test-container preflight (§4.5): `sch_netem`, `sch_htb`, `cls_fw`, `cls_u32`, `cls_flower`, `act_mirred`, `ifb`, `nf_conntrack`, `nf_tables` with NAT/ct/log/dup/reject, `nfnetlink_log`, `veth`, `bridge`, `wireguard` (M33), later `8021q`
   - tool versions
   - IP forwarding
   - conflicting firewalls (ufw, firewalld, Docker). With Docker installed, the FORWARD policy is DROP; an accept rule in Chaos Gateway's own table does not override it, only an accept in Docker's `DOCKER-USER` chain does (spike S7). The preflight offers to add that rule.
@@ -760,6 +814,8 @@ Chaos Gateway owns the interfaces **assigned to it** (uplink, test networks) and
 | Config / scenarios | JSON (revisions), YAML (`gopkg.in/yaml.v3`) for scenarios and profiles |
 | Logging | `log/slog`, JSON to journald |
 | CLI | `chaosctl` with Cobra |
+| WireGuard | `golang.zx2c4.com/wireguard/wgctrl` (netlink) for peers and status; keys via `wgtypes`; QR codes generated in the backend (`skip2/go-qrcode`, PNG/SVG) |
+| Routing | BIRD 2 (`bird2` package), own instance; configuration generated from `text/template`, status via the BIRD control socket |
 | Tests | `go test` (unit, compiler golden files, Linux integration against the testbed) |
 
 **Frontend (Vue)**
@@ -897,7 +953,7 @@ Faults are random processes; tests use statistics, not exact values:
 | macvlan | several devices behind one port | many devices without many veth pairs |
 | dummy | a local address or sink | services, routing tests |
 | IFB | ingress shaping | faults on traffic to the gateway itself |
-| WireGuard interface | tunnel endpoint | remote access (M33) |
+| WireGuard interface | tunnel endpoint | WireGuard networks, clients and site links (M33, M37); remote sites are namespaces with their own WireGuard interface and BIRD |
 | tap | a VM's NIC | connecting appliance VMs (level 2) |
 
 Link events are simulated by setting one end of a veth pair down; the other end loses its carrier. Devices are namespaces with their own MAC, a DHCP client (`udhcpc`) and test tools, so "a device behind another router" or "several LANs" are just different topologies.
@@ -1001,6 +1057,7 @@ Short, throwaway experiments in the testbed. Each answers a specific question wi
 | S12 Attachment | probe on bridge vs. macvlan; tc on the bridge; policy routing vs. management default route | ✅ bridge; macvlan probe cannot reach the gateway | — |
 | S13 PMTUD | path-MTU faults with ICMP and as black hole | ✅ (side effect on shared NAT address) | — |
 | S14 Local replies | download faults for connections that end on the gateway | ✅ with output hook | — |
+| S15 WireGuard & routing | (1) inner faults: classification of client/remote-network traffic and netem on a WireGuard interface's egress; (2) tunnel faults: marking WireGuard's own encrypted UDP in the output hook per peer endpoint, netem on the uplink; (3) BIRD (BGP and OSPF) over a WireGuard link between two sites, exporting only into the Chaos Gateway table, import filter rejects default and management prefixes; (4) re-convergence time when a tunnel fault blacks out the link; (5) hub interface with client networks via `AllowedIPs` | planned | before M33/M37 |
 
 ## Milestone overview and MVP
 
@@ -1015,6 +1072,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 | 5 Application layer | M20 (M), M21 (M), M22 (L), M23 (S) | DNS, TLS, DHCP test actions |
 | 6 Diagnostics | M24 (M), M25 (S), M26 (S) | diagnostics, probes, metrics |
 | 7 Production | M27 (M), M28 (M), M29 (M), M30 (S) | recovery, packages, hardening, release |
+| 8 Sites | M33 (L), M37 (L) | WireGuard networks, clients, site links, static and dynamic routing |
 
 **MVP (automation first):** Phases 1 and 2 plus M15, M16 and M18 — faults, rules and profiles, scenarios with checks and JUnit reports, driven by the CLI and the API. This already serves the original use case (automated IoT tests in CI). The web UI (Phase 3) follows; V1 is defined at the end of this section.
 
@@ -1085,8 +1143,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M8a, S3.
 
 **M10 — Extended faults** (M)
-- Scope: rate, reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), queue limit, blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
-- Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only.
+- Scope: rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
+- Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
 - Depends on: M8b, M9.
 
 **M11 — Profiles** (S)
@@ -1210,13 +1268,24 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests: documentation examples run in CI.
 - Depends on: all milestones included in V1.
 
+## Phase 8 — Sites: WireGuard and Routing
+
+**M33 — WireGuard networks and clients** (L)
+- Scope: hub and link networks (§2.2.1); clients with client networks and reachable-network selection; key generation, optional preshared keys, "export once"; export as `.conf`, QR (UI, PNG/SVG), zip, `chaosctl wg export`; client status (handshake, endpoint, bytes) and events; clients and remote networks as devices/networks in rules, faults, access matrix and scenarios; inner faults on WireGuard traffic; tunnel faults on a peer's encrypted UDP; peer disable and key mismatch as scenario actions; role *management* for admin remote access. UI: WireGuard section in Networks, client list with QR dialog.
+- Tests (level 1): gateway plus two remote namespaces as clients, one with a client network behind it; a device in a local test network reaches a machine in the client network without NAT, and vice versa per access matrix; the exported `.conf` brings up a working tunnel in a fresh namespace, and the decoded QR equals the file; a device fault on a client network is measurable; a tunnel fault (latency, blackout) affects everything inside the tunnel and nothing else; a *test* role client cannot reach the UI, a *management* role client can; private keys are absent from configuration exports.
+- Depends on: M4, M7, M9, S15; UI parts on M13.
+
+**M37 — Routing: static and dynamic (BIRD)** (L)
+- Scope: static routes per network, client and link (§2.2.2); BIRD 2 instance managed by Chaos Gateway: BGP, OSPFv2, Babel, static; announced prefixes from the model; import filters (prefix lists, no default unless allowed, protected prefixes, max prefixes); `bird -p` validation and `birdc configure` apply as part of the revision; custom snippets; external mode for another daemon's kernel table; neighbor and route status, events; remote-side BIRD snippet in link exports. UI: routing view with sessions and prefixes.
+- Tests (level 1): three sites (gateway plus two remote namespaces with BIRD) over WireGuard links; routes are learned and withdrawn; learned routes appear only in Chaos Gateway's tables, never in main; a neighbor announcing a default route or the management prefix is filtered; max-prefix triggers; re-convergence after a 20 s tunnel blackout is measured and reported; an invalid custom snippet is rejected in preview with BIRD's error message.
+- Depends on: M33.
+
 ## After V1
 
 | Milestone | Content |
 |---|---|
 | M31 VLANs | multiple networks on a trunk (VLAN ports on the network bridges), access matrix between them |
 | M32 IPv6 | RA/SLAAC, DHCPv6, IPv6 rules and faults (lifts the V1 IPv6 block) |
-| M33 WireGuard remote access | peers, network access per peer, QR config |
 | M34 NTP time faults | see §8 |
 | M35 Port forwarding | DNAT for inbound test traffic; matching a device as responder |
 | M36 Further proposals | features from §8 by priority |
@@ -1259,6 +1328,10 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | 24 | Hostname-derived sets age | addresses learned from DNS expire with the DNS TTL; a device that caches longer than the TTL or uses a hardcoded IP escapes the rule | set element timeout = max(TTL, configurable minimum); "unmatched hostname" events; documented as best effort |
 | 25 | Distribution matrix grows | each supported release adds kernel and netem differences and a nightly job | support only what is in the level-2 matrix (Ubuntu 24.04/26.04, Debian 12/13); new releases are added when the matrix passes |
 | 26 | Traffic generated on the gateway | replies of the DNS proxy, TLS responder and mitmproxy never pass prerouting | the classification chain is attached to the output hook too (S14); without it, download faults were missing |
+| 27 | WireGuard cryptokey routing vs. dynamic routes | on a shared hub interface every prefix is bound to one peer; learned routes cannot be expressed there | dynamic routing only on point-to-point links (§2.2.1); hub clients use declared client networks |
+| 28 | Route injection by remote sites | a remote BIRD could announce the default route or management prefixes and divert traffic | learned routes only in Chaos Gateway's tables; import filters, protected prefixes, max prefixes (§2.2.2) |
+| 29 | Tunnel MTU | WireGuard overhead (60–80 bytes) plus PMTU faults can black-hole traffic inside tunnels | MTU 1420 default, MSS clamp on WireGuard interfaces, PMTU tests through tunnels in M33 |
+| 30 | Per-device queues multiply classes | a rate-limited profile on a network of N devices creates N classes per direction (D18); many devices on small hardware | id space and class count limits enforced by the compiler (`capacity_exceeded`); measured in H1 |
 
 ---
 
@@ -1273,7 +1346,10 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D7 | IP versions in V1 | IPv4-only test networks (§2.2); IPv6 blocked on test networks until dual-stack in M32 | review |
 | D15 | Implementation stack | **Go backend** (single binary with embedded UI, low memory on Raspberry Pi, mature netlink/nftables/DNS libraries, experience from sessile) **+ Vue 3 frontend**; shared types come from the OpenAPI spec instead of shared code (§3.7) | maintainer |
 | D16 | Test-network attachment | every test network is a gateway-owned bridge; physical port and probes are bridge ports (§2.2). Not to be confused with D8: the gateway still routes, the bridge only joins ports of one network | S12 |
-| D17 | Classification | per packet via the conntrack original tuple, mark with fault id and direction bit, identical tc mapping on every interface, output hook for local replies (§3.3) | S10, S11, S14 |
+| D17 | Classification | per packet via the conntrack original tuple, mark with 12-bit fault id and direction bit, identical tc mapping on every interface, output hook for local replies (§3.3) | S10, S11, S14 |
+| D18 | Rate and queue limits on group/network/global scope | **per device**: every device matched by a rate-limited fault or profile gets its own queue with the full rate; the UI shows how many queues a scope creates (§2.4) | maintainer |
+| D19 | WireGuard | hub networks (clients with client networks) and point-to-point links; keys generated on the gateway by default; export as `.conf` and QR (§2.2.1) | maintainer |
+| D20 | Routing daemon | **BIRD 2** in its own managed instance (BGP, OSPFv2, Babel, static); adapter interface for FRR later; external mode for other daemons (§2.2.2) | maintainer |
 
 ## 7.2 Open
 
@@ -1291,6 +1367,7 @@ Each open decision has a recommendation; confirming it is enough to proceed.
 | D11 | Existing connections default for access rules | affect new only, cut existing | affect new only; cutting existing is an explicit option |
 | D12 | Rule and fault precedence | as §2.4 | confirm §2.4 |
 | D13 | License | open source (which license), closed | decide before first public release |
+| D21 | Placement of Phase 8 (WireGuard, routing) | V1, V1.1 | M33 in V1 (connects the existing test machines and networks); M37 in V1 if the lab depends on dynamic routing from the start, otherwise V1.1 |
 | D14 | Interface naming | Linux names, logical names | logical names (UPLINK, IOT, MGMT) in the UI; Linux names in technical views |
 
 ---

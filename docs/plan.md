@@ -232,7 +232,7 @@ DHCP is both infrastructure and a test instrument.
 
 Selected traffic (by device, port or hostname) is redirected transparently to one of two components. No proxy configuration is needed on the device.
 
-- **TLS responder** (part of the core, Node.js) for certificate test cases. It terminates the connection itself with a deliberately broken certificate generated for the requested SNI and never forwards traffic. A correct device aborts anyway.
+- **TLS responder** (part of the core, Go) for certificate test cases. It terminates the connection itself with a deliberately broken certificate generated for the requested SNI and never forwards traffic. A correct device aborts anyway.
 - **TLS interception proxy** based on mitmproxy (sidecar, see §3.1) for inspection and manipulation.
 
 Spike S4 confirmed the cases below on real TLS clients.
@@ -397,7 +397,7 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 ```
 
 - Writes return only after verification, so a test step can rely on the fault being active.
-- **CLI and SDK:** a TypeScript client library and a CLI (`chaosctl`) for CI pipelines and pytest/Jest test suites.
+- **CLI and clients:** a CLI (`chaosctl`, a single Go binary) for CI pipelines, and API clients generated from the OpenAPI spec: TypeScript (used by the UI, and for Jest suites) and Python (for pytest suites).
 - Optional later: MQTT control interface.
 
 ## 2.16 Security
@@ -501,13 +501,13 @@ Per object, the compiled configuration next to the domain view: nftables rules, 
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ chaosgw-api   (Node.js/TypeScript, unprivileged user)                │
+│ chaosgw api   (Go, unprivileged user)                                │
 │   REST/SSE · auth · domain model · validation · compiler · scheduler │
-│   (overlays/TTL, scenarios) · observers · persistence · static UI    │
+│   (overlays/TTL, scenarios) · observers · persistence · embedded UI  │
 └───────────────┬──────────────────────────────────────────────────────┘
                 │ Unix socket, typed operations (JSON schema)
 ┌───────────────▼──────────────────────────────────────────────────────┐
-│ chaosgw-exec  (Node.js, root / CAP_NET_ADMIN, CAP_NET_RAW)           │
+│ chaosgw exec  (Go, root / CAP_NET_ADMIN, CAP_NET_RAW)                │
 │   applies plans: nft -j -f · tc -batch · ip -batch · sysctl ·        │
 │   conntrack · wg · capture processes · probe namespaces              │
 │   reads state: ip -j · tc -j · nft -j · conntrack events             │
@@ -516,14 +516,15 @@ Per object, the compiled configuration next to the domain view: nftables rules, 
     Linux kernel: nftables · conntrack · tc/netem · routing · netns
 
 Services managed by chaosgw:
-  chaosgw-dns    DNS proxy (Node.js; part of the project)
-  chaosgw-tls    TLS responder for certificate test cases (Node.js; part of the project)
+  chaosgw dns    DNS proxy (Go; part of the project)
+  chaosgw tls    TLS responder for certificate test cases (Go; part of the project)
   DHCP server    Kea (decided in spike S6)
   tls-proxy      mitmproxy + Chaos Gateway addon (Python sidecar, interception only)
   tcpdump        capture
 ```
 
-- The core is TypeScript. Python runs only in the TLS interception sidecar (mitmproxy addon). It communicates with the core via a local API and can be left out entirely if TLS interception is not used; the certificate test cases work without it.
+- The core is **one Go binary, `chaosgw`**, with subcommands for the API server, the privileged executor, the DNS proxy and the TLS responder. Each runs as its own systemd unit with only the privileges it needs; the web UI is compiled into the binary (`go:embed`). The spikes built the DNS proxy and TLS responder in Node.js; their findings are language-independent.
+- Python runs only in the TLS interception sidecar (mitmproxy addon). It communicates with the core via a local API and can be left out entirely if TLS interception is not used; the certificate test cases work without it.
 - The executor accepts only a closed set of operation types. Each is validated and turned into command invocations with argument arrays: no shell, fixed binary paths.
 - The Linux adapter uses the standard command-line tools in V1 (§3.4). It sits behind an interface, so parts can later be replaced by native netlink access (fewer process starts, better error details, events) without changing the compiler.
 - Every executor operation takes an optional **network namespace**. This makes the entire stack testable in namespaces without touching the host (see §4).
@@ -593,7 +594,8 @@ Server reply ──► prerouting on uplink:
 
 ## 3.4 Linux Interface Layer
 
-- **CLI first:** in V1 the executor uses the standard tools with JSON output and batch input. Replacing parts with native netlink later is possible (§3.1).
+- **CLI first:** in V1 the executor uses the standard tools with JSON output and batch input. Replacing parts with native netlink later is possible (§3.1); Go has mature libraries for it (`vishvananda/netlink` for links, addresses, routes and tc including netem/HTB; `google/nftables` for nftables).
+- **Exception from the start:** the DNS proxy's hostname-selector updates use a persistent netlink connection (`google/nftables`) instead of one `nft` process per answer, which limited the spike proxy to ~280 queries/s (S5).
 
 | Tool | Read | Write |
 |---|---|---|
@@ -645,32 +647,55 @@ Chaos Gateway owns the interfaces **assigned to it** (uplink, test networks) and
 
 ## 3.7 Technology Stack
 
+**Backend (Go)**
+
 | Area | Choice |
 |---|---|
-| Language | TypeScript (strict), Node.js LTS |
-| API server | Fastify; schemas shared with the frontend (Zod); OpenAPI generated from schemas |
-| Frontend | React + Vite, TanStack Query, SSE for live data |
-| Tests | Vitest (unit, integration), Playwright (UI) |
-| Build | pnpm workspaces |
-| Packaging | .deb with systemd units; container image for development and demos |
-| TLS proxy | mitmproxy in a Python virtualenv, managed as a systemd unit |
+| Language | Go (current stable), one module, one binary `chaosgw` plus `chaosctl` |
+| HTTP / SSE | Gin (known from sessile); SSE for live data |
+| API contract | **spec-first**: `api/openapi.yaml` is the source of truth; `oapi-codegen` generates the Go server interfaces and request/response types; request validation from the spec |
+| Linux | `nft -j -f` / `tc -batch` / `ip -batch` via the executor (§3.4); `vishvananda/netns` for namespaces; `google/nftables` for DNS selector sets |
+| DNS proxy | `miekg/dns` (UDP and TCP) |
+| TLS responder | Go standard library `crypto/tls`, `crypto/x509` |
+| DHCP | Kea, driven through its JSON control socket |
+| Config / scenarios | JSON (revisions), YAML (`gopkg.in/yaml.v3`) for scenarios and profiles |
+| Logging | `log/slog`, JSON to journald |
+| CLI | `chaosctl` with Cobra |
+| Tests | `go test` (unit, compiler golden files, Linux integration against the testbed) |
+
+**Frontend (Vue)**
+
+| Area | Choice | Why |
+|---|---|---|
+| Framework | Vue 3 + TypeScript + Vite | known from sessile; single-page app embedded into the Go binary |
+| Server state | TanStack Query for Vue, invalidated by SSE events | caching, live updates, conflict handling (§2.17 states) |
+| API client | generated from `openapi.yaml` (Orval: typed Vue Query hooks + Zod schemas) | UI and backend cannot drift apart; client-side validation from the same spec |
+| UI primitives | Reka UI (accessible, unstyled dialogs, selects, switches, tabs, toasts, tooltips) | complete keyboard and ARIA support; more components than Headless UI |
+| Styling | Tailwind CSS 4 with the §2.17 tokens as theme variables | tokens in one place, dense layouts |
+| UI state | Pinia (only for UI state; server data stays in the query cache) | |
+| Charts | uPlot | small and fast for live time series |
+| Tests | Vitest (components), Playwright (end-to-end against the testbed) | |
+
+**Build and packaging:** Makefile as in sessile (`make dev`, `make test`, `make build`); the frontend build lands in `web/dist` and is embedded; `.deb` for amd64/arm64 with systemd units; container image for development and demos; mitmproxy sidecar in its own Python virtualenv.
 
 ```
 chaos-gateway/
-  apps/
-    api/            REST, auth, scheduler, observers
-    exec/           privileged executor
-    web/            React UI
-    dns/            DNS proxy
-    cli/            chaosctl
-  packages/
-    domain/         concepts, schemas, validation
-    compiler/       policy resolution, target state, diff
-    linux/          command builders, parsers (nft/tc/ip JSON)
-    client/         TypeScript API client (used by UI, CLI, tests)
-    testbed/        namespace topology harness
-  sidecars/
-    tls-proxy/      mitmproxy addon
+  api/                openapi.yaml (source of truth)
+  cmd/
+    chaosgw/          subcommands: api, exec, dns, tls
+    chaosctl/         CLI
+  internal/
+    domain/           concepts, validation, precedence resolution
+    compiler/         effective policy, target state, diff
+    linux/            command builders, parsers (nft/tc/ip JSON), netlink
+    executor/         privileged operations, socket protocol
+    apiserver/        handlers (generated interfaces), auth, SSE
+    scheduler/        overlays/TTL, scenarios, checks
+    dnsproxy/  tlsresponder/  dhcp/  capture/  store/
+    testbed/          namespace topology harness (from spike S1)
+  web/                Vue app (src/), build output dist/ embedded via go:embed
+  clients/            generated TypeScript and Python clients
+  sidecars/tls-proxy/ mitmproxy addon
   profiles/  scenarios/  packaging/  docs/
 ```
 
@@ -715,11 +740,11 @@ chaos-gateway/
 
 | Level | What | Tools | Where |
 |---|---|---|---|
-| Unit | domain, validation, precedence resolution, scheduler, parsers | Vitest | every commit |
-| Compiler golden | configuration → nftables/tc/route output, compared with reviewed golden files | Vitest | every commit |
-| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | Vitest + testbed in the privileged test container (§4.5 level 1) | every commit |
+| Unit | domain, validation, precedence resolution, scheduler, parsers | `go test`; Vitest for UI components | every commit |
+| Compiler golden | configuration → nftables/tc/route output, compared with reviewed golden files | `go test` | every commit |
+| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | `go test` + testbed in the privileged test container (§4.5 level 1) | every commit |
 | Measurement | statistical accuracy of faults, timing of scenarios | testbed | nightly, dedicated runner |
-| API contract | OpenAPI conformance, error cases, concurrency | Vitest | every commit |
+| API contract | OpenAPI conformance, error cases, concurrency | `go test` against the spec; generated clients compile | every commit |
 | UI | components against a mocked API; a few end-to-end flows against the real stack in the testbed | Playwright | every commit / nightly |
 | Distribution | install package, preflight, smoke tests on clean Ubuntu 24.04, Debian 12/13, ARM64 | appliance VMs (§4.5 level 2) | nightly / before release |
 
@@ -817,7 +842,7 @@ Development and levels 0–1 run in a Docker container. Verified in this environ
 | Host kernel with the required modules | The container uses the host kernel and cannot bring its own modules: `sch_netem`, `sch_htb`, `cls_fw`, `cls_u32`, `cls_flower`, `act_mirred`, `ifb`, `nf_tables` with NAT/conntrack/log/dup, `8021q`, `wireguard`, `veth`, `bridge`. A test preflight checks them; if some are missing, the affected tests run in level 1b. |
 | `/dev/kvm` passed through (optional) | Level 1b and level 2 inside the container. Without KVM, QEMU falls back to software emulation: functional tests still work, but timing measurements do not (baseline 2.4 ms instead of 0.3 ms, `nft` commands 0.5 s instead of 6 ms). |
 | Unique namespace prefix per test run | Parallel runs with the same names destroy each other's topology. |
-| Test tools in the image | iproute2, nftables, conntrack-tools, tcpdump, tshark, iperf3, dnsutils, busybox (`udhcpc`), ethtool, socat, Kea, Node.js, Python 3, mitmproxy (sidecar tests). |
+| Test tools in the image | iproute2, nftables, conntrack-tools, tcpdump, tshark, iperf3, dnsutils, busybox (`udhcpc`), ethtool, socat, Kea, Go toolchain, Node.js (frontend build and Playwright), Python 3, mitmproxy (sidecar tests). |
 
 ### Reference development setup
 
@@ -825,7 +850,7 @@ Ubuntu Server 24.04 in a VirtualBox VM, development inside the privileged devcon
 
 | Setting | Why |
 |---|---|
-| 4+ vCPUs, 8+ GB RAM, 40+ GB disk | testbed, Kea, mitmproxy, Node toolchain and captures in parallel |
+| 4+ vCPUs, 8+ GB RAM, 40+ GB disk | testbed, Kea, mitmproxy, Go and Node toolchains and captures in parallel |
 | NIC 1: NAT (or bridged) | internet access and SSH from the host |
 | Optional NIC 2: bridged to a dedicated (USB) Ethernet adapter, promiscuous mode "Allow All" | real test devices (e.g. an ESP32) behind the gateway; "Allow All" is needed as soon as the guest bridges this NIC or uses macvlan |
 | Nested VT-x/AMD-V enabled (`VBoxManage modifyvm <vm> --nested-hw-virt on`) | `/dev/kvm` in the guest for levels 1b and 2 |
@@ -862,8 +887,8 @@ Short, throwaway experiments in the testbed. Each answers a specific question wi
 | S1 Testbed | Can we build client/gateway/server namespaces in CI and on target machines? | ping across the topology in CI and on a Raspberry Pi |
 | S2 Fault topology | Which tc topology carries many independent per-direction faults (HTB/DRR/other + netem), including rate limiting and in-place changes? Which approach for traffic terminating at the gateway (IFB)? | device A gets 200 ms/5 % in both directions, device B unaffected; changing A's fault does not disturb B; measured values within tolerance |
 | S3 Connection behavior | How do drop/reject/reset and conntrack deletion affect existing TCP connections? | documented behavior matrix, reproducible tests |
-| S4 TLS | Transparent redirect (REDIRECT vs. TPROXY) by device/port/hostname; SNI handling; certificates generated with broken properties (Node TLS responder); TLS 1.2/1.3; connection reuse; mitmproxy transparent mode, key log, control from Node | each TLS case of §2.8 observable from a client; list of cases that are not feasible |
-| S5 DNS proxy | Node DNS proxy: per-client faults, updating nftables sets for hostname selectors, performance | selectors match after resolution; ≥ 1000 queries/s on Pi |
+| S4 TLS | Transparent redirect (REDIRECT vs. TPROXY) by device/port/hostname; SNI handling; certificates generated with broken properties (TLS responder; spike in Node.js); TLS 1.2/1.3; connection reuse; mitmproxy transparent mode, key log, control from the core | each TLS case of §2.8 observable from a client; list of cases that are not feasible |
+| S5 DNS proxy | DNS proxy (spike in Node.js): per-client faults, updating nftables sets for hostname selectors, performance | selectors match after resolution; ≥ 1000 queries/s on Pi |
 | S6 DHCP server | Kea vs. dnsmasq: reservations, lease deletion, option changes, NAK/silence at runtime via API | decision with feature table |
 | S7 Deployment | Native package vs. container: sysctls, Docker FORWARD policy, NetworkManager/netplan coexistence | documented supported setups |
 | S8 Hardware | Throughput and CPU on Raspberry Pi and x86 with 50 active faults | targets of §3.10 confirmed or adjusted |
@@ -875,7 +900,7 @@ Order: S1 first, then S10 and S2 together. Classification is the foundation for 
 ## Phase 1 — Foundation: Routed Gateway
 
 **M1 — Repository, CI and testbed library**
-- Scope: monorepo, lint/format, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `packages/testbed` from spike S1, the privileged test container image with all test tools, and a kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
+- Scope: Go module and Vue app skeleton, `api/openapi.yaml` with code generation (oapi-codegen, Orval), Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `internal/testbed` from spike S1, the privileged test container image with all test tools, and a kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
 - Tests: CI runs a testbed test (client pings server through a plain forwarding namespace).
 - Depends on: S1.
 
@@ -972,7 +997,7 @@ Order: S1 first, then S10 and S2 together. Classification is the foundation for 
 - Depends on: M7, M15, S9.
 
 **M18 — CLI and client library**
-- Scope: `chaosctl` (apply profile, set fault with TTL, run scenario, wait for result, fetch report); published TypeScript client; examples for pytest and Jest.
+- Scope: `chaosctl` in Go (apply profile, set fault with TTL, run scenario, wait for result, fetch report); generated TypeScript and Python clients; examples for pytest and Jest.
 - Tests: CLI tests against the testbed; the example test suite runs in CI.
 - Depends on: M15.
 
@@ -1102,7 +1127,7 @@ Each decision has a recommendation; confirming it is enough to proceed.
 | D2 | Deployment | native package, container, appliance image | native .deb primary; container for development/demo; appliance image later |
 | D3 | Host ownership | own everything; own assigned interfaces only | own assigned interfaces; management interface stays with the OS |
 | D4 | DHCP server | Kea, dnsmasq, own implementation | **decided (S6): Kea** — short leases and a lease API; dnsmasq's minimum lease is 120 s |
-| D5 | TLS components | mitmproxy for everything, own Node implementation for everything, split | **confirmed (S4):** certificate and handshake cases in a Node TLS responder (core); interception via mitmproxy sidecar; the "no Python" rule applies to the core only |
+| D5 | TLS components | mitmproxy for everything, own Node implementation for everything, split | **confirmed (S4):** certificate and handshake cases in a Go TLS responder (core); interception via mitmproxy sidecar; the "no Python" rule applies to the core only |
 | D6 | Uplink types in V1 | static, DHCP, PPPoE | static and DHCP |
 | D7 | IP versions in V1 | dual-stack, IPv4-only | IPv4-only test networks in V1 (§2.2); dual-stack in M32 |
 | D8 | L2 transparent (bridge) mode | V1, later, never | later. Only needed when the gateway cannot be the device's default router |
@@ -1112,6 +1137,7 @@ Each decision has a recommendation; confirming it is enough to proceed.
 | D12 | Rule and fault precedence | as §2.4 | confirm §2.4 |
 | D13 | License | open source (which license), closed | decide before first public release |
 | D14 | Interface naming | Linux names, logical names | logical names (UPLINK, IOT, MGMT) in the UI; Linux names in technical views |
+| D15 | Implementation stack | TypeScript end to end; Go backend + TypeScript frontend | **decided: Go backend** (single binary with embedded UI, low memory on Raspberry Pi, mature netlink/nftables/DNS libraries, experience from sessile) **+ Vue 3 frontend**; shared types come from the OpenAPI spec instead of shared code (§3.7) |
 
 ---
 

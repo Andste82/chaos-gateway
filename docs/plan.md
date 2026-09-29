@@ -718,21 +718,21 @@ chaos-gateway/
 |---|---|---|---|
 | Unit | domain, validation, precedence resolution, scheduler, parsers | Vitest | every commit |
 | Compiler golden | configuration → nftables/tc/route output, compared with reviewed golden files | Vitest | every commit |
-| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | Vitest + testbed, root | every commit (CI job with sudo) |
+| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | Vitest + testbed in the privileged test container (§4.5 level 1) | every commit |
 | Measurement | statistical accuracy of faults, timing of scenarios | testbed | nightly, dedicated runner |
 | API contract | OpenAPI conformance, error cases, concurrency | Vitest | every commit |
 | UI | components against a mocked API; a few end-to-end flows against the real stack in the testbed | Playwright | every commit / nightly |
-| Distribution | install package, preflight, smoke tests on clean Ubuntu 24.04, Debian 12/13, ARM64 | VMs | nightly / before release |
+| Distribution | install package, preflight, smoke tests on clean Ubuntu 24.04, Debian 12/13, ARM64 | appliance VMs (§4.5 level 2) | nightly / before release |
 
 ## 4.2 Testbed
 
-A library that builds topologies from network namespaces and veth pairs:
+A library that builds topologies from network namespaces and virtual interfaces (see §4.5 for the building blocks). Default topology, as used in the spikes:
 
 ```
- ns: client-a ─┐                                ┌─ ns: server
- ns: client-b ─┼─ veth ─ ns: gateway ─ veth ────┤   (HTTP, TLS, MQTT broker,
- ns: probe    ─┘   (Chaos Gateway stack runs     │    DNS upstream, iperf3,
-                    against this namespace)      │    NTP)
+ ns: client-a ─┐                                                 ┌─ ns: server
+ ns: client-b ─┼─ ns: switch ─ lan0 [ ns: gateway ] wan0 ────────┤  (HTTP, TLS, MQTT broker,
+ ns: probe    ─┘   (bridge)      Chaos Gateway stack runs         │   DNS upstream, iperf3, NTP;
+                                 against this namespace           │   no route back → NAT required)
 ```
 
 - Tests start the real API and executor, pointed at the gateway namespace. Nothing touches the host network.
@@ -751,9 +751,80 @@ Faults are random processes; tests use statistics, not exact values:
 
 ## 4.4 CI
 
-- Hosted Ubuntu runners allow sudo and network namespaces. The Linux integration job checks for the required kernel modules and skips with a clear message if they are missing. Where netem is missing (minimal kernels), the netem tests run inside QEMU with a stock Ubuntu kernel (virtme-ng), as in the spikes.
-- Measurement tests run nightly on a dedicated runner (stable timing), not on shared runners.
-- A distribution matrix in VMs catches differences between Ubuntu and Debian (kernel, nftables version, packaging).
+- CI jobs run the same privileged test container as development (§4.5). Level 1 runs on every commit; if the runner's kernel lacks required modules, the affected tests run in level 1b instead of being skipped silently.
+- Measurement tests run nightly on a runner with native execution or KVM (stable timing), not under software emulation.
+- Level 2 (appliance VMs, distribution matrix) runs nightly on a runner with KVM; level 3 before releases.
+
+## 4.5 Test Environments
+
+**Principle:** almost every feature is tested with virtual network interfaces inside network namespaces. Namespaces are fully isolated from the host network and from each other, and a topology is built in milliseconds. What namespaces cannot change is the **kernel**: all namespaces and containers on a machine share its kernel and its modules. The kernel therefore decides which features can be tested where.
+
+### Virtual building blocks
+
+| Building block | Represents | Used for |
+|---|---|---|
+| network namespace | a device, the gateway, a server | every topology |
+| veth pair | a cable | links between namespaces |
+| bridge (optionally VLAN-filtering) | a switch | LAN segment with several devices, trunk ports |
+| VLAN subinterface | tagged network on a trunk | VLAN networks (M31) |
+| macvlan | several devices behind one port | many devices without many veth pairs |
+| dummy | a local address or sink | services, routing tests |
+| IFB | ingress shaping | faults on traffic to the gateway itself |
+| WireGuard interface | tunnel endpoint | remote access (M33) |
+| tap | a VM's NIC | connecting appliance VMs (level 2) |
+
+Link events are simulated by setting one end of a veth pair down; the other end loses its carrier. Devices are namespaces with their own MAC, a DHCP client (`udhcpc`) and test tools, so "a device behind another router" or "several LANs" are just different topologies.
+
+### Levels
+
+| Level | Environment | What it can test | When |
+|---|---|---|---|
+| **0** | plain process, no root | domain, validation, compiler golden files, API contract, UI against mocked API | every commit |
+| **1** | namespace testbed in the **privileged development/CI container** | routing, NAT, access rules, faults (functional), DNS proxy and faults, DHCP and test actions, TLS responder and interception, capture, probes, API and UI end-to-end, scenarios | every commit |
+| **1b** | namespace testbed inside a VM with a **stock distribution kernel** (QEMU + virtme-ng) | same as level 1 when the host kernel lacks modules (e.g. no netem), or to check a specific distribution kernel | when needed; nightly for the kernel matrix |
+| **2** | **appliance VMs** (QEMU/KVM) from distribution images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | .deb installation, preflight, interface assignment, coexistence with netplan/NetworkManager/systemd-networkd, setup wizard, reboot, last-known-good, safe mode, upgrades and migrations, coexistence with Docker (`DOCKER-USER`) | nightly |
+| **3** | **hardware lab**: Raspberry Pi 4/5, x86 mini PC, real NICs, managed switch, real ESP32 devices (later a WiFi AP) | performance targets (§3.10), timing precision, NIC drivers and offloads, real firmware behavior, long-running tests | before releases |
+
+A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmware with an emulated Ethernet interface. That would allow testing real ESP-IDF firmware against the gateway without hardware; it has to be evaluated first.
+
+### Feature → minimum level
+
+| Feature | Level |
+|---|---|
+| Compiler output, precedence resolution, validation | 0 |
+| Routing, NAT, access rules, connection behavior | 1 |
+| Faults: function (effect, isolation, direction, live changes) | 1 |
+| Faults: accuracy measurements | 1 on native execution or KVM; 3 for Raspberry Pi |
+| DNS proxy, DNS faults, hostname selectors | 1 |
+| DHCP (Kea) and DHCP test actions | 1 |
+| TLS responder, mitmproxy interception | 1 |
+| Capture | 1 |
+| Probes and calibration | 1 |
+| VLANs, WireGuard, IPv6 | 1 (kernel modules `8021q`, `wireguard` required) |
+| API, UI, scenarios end-to-end | 1 |
+| Installation, preflight, interface ownership, network managers | 2 |
+| Boot, recovery, safe mode, upgrades | 2 |
+| Coexistence with Docker on the gateway host | 2 |
+| Performance, timing precision on target hardware | 3 |
+| Real device firmware, WiFi | 3 |
+
+### The development container
+
+Development and levels 0–1 run in a Docker container. Verified in this environment:
+
+| Requirement | Why |
+|---|---|
+| `--privileged` | With only `NET_ADMIN`, `NET_RAW` and `SYS_ADMIN`, the testbed runs, but sysctls in the test namespaces cannot be set (`/proc/sys` is read-only). Forwarding then only worked because new namespaces inherit the host's IPv4 settings — on a host with `ip_forward=0` the tests would fail. |
+| Host kernel with the required modules | The container uses the host kernel and cannot bring its own modules: `sch_netem`, `sch_htb`, `cls_fw`, `cls_u32`, `cls_flower`, `act_mirred`, `ifb`, `nf_tables` with NAT/conntrack/log/dup, `8021q`, `wireguard`, `veth`, `bridge`. A test preflight checks them; if some are missing, the affected tests run in level 1b. |
+| `/dev/kvm` passed through (optional) | Level 1b and level 2 inside the container. Without KVM, QEMU falls back to software emulation: functional tests still work, but timing measurements do not (baseline 2.4 ms instead of 0.3 ms, `nft` commands 0.5 s instead of 6 ms). |
+| Unique namespace prefix per test run | Parallel runs with the same names destroy each other's topology. |
+| Test tools in the image | iproute2, nftables, conntrack-tools, tcpdump, tshark, iperf3, dnsutils, busybox (`udhcpc`), ethtool, socat, Kea, Node.js, Python 3, mitmproxy (sidecar tests). |
+
+Further notes:
+
+- Docker's `FORWARD DROP` policy on the host does not affect the testbed: the test namespaces are separate network namespaces with their own rules.
+- **Docker Desktop (macOS/Windows)** runs containers in a Linux VM whose kernel decides which modules exist. The test preflight shows whether level 1 is complete there; level 2 needs a Linux host with KVM.
+- **What the container cannot cover:** everything that needs a whole machine (installation, boot, network managers — level 2) and real hardware (level 3).
 
 ---
 
@@ -790,7 +861,7 @@ Order: S1 first, then S10 and S2 together. Classification is the foundation for 
 ## Phase 1 — Foundation: Routed Gateway
 
 **M1 — Repository, CI and testbed library**
-- Scope: monorepo, lint/format, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `packages/testbed` from spike S1.
+- Scope: monorepo, lint/format, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `packages/testbed` from spike S1, the privileged test container image with all test tools, and a kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
 - Tests: CI runs a testbed test (client pings server through a plain forwarding namespace).
 - Depends on: S1.
 
@@ -945,7 +1016,7 @@ Order: S1 first, then S10 and S2 together. Classification is the foundation for 
 - Depends on: M5, M8.
 
 **M28 — Packaging and installation**
-- Scope: .deb for amd64/arm64, systemd units, preflight check, network-manager coexistence, uninstall restoring interfaces.
+- Scope: .deb for amd64/arm64, systemd units, preflight check, network-manager coexistence, uninstall restoring interfaces; level 2 test harness (appliance VM with three virtio NICs, §4.5).
 - Tests: install and smoke tests in clean VMs (Ubuntu 24.04, Debian 12/13) and on a Raspberry Pi.
 - Depends on: M14, M27, S7.
 

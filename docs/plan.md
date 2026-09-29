@@ -820,6 +820,20 @@ Development and levels 0–1 run in a Docker container. Verified in this environ
 | Unique namespace prefix per test run | Parallel runs with the same names destroy each other's topology. |
 | Test tools in the image | iproute2, nftables, conntrack-tools, tcpdump, tshark, iperf3, dnsutils, busybox (`udhcpc`), ethtool, socat, Kea, Node.js, Python 3, mitmproxy (sidecar tests). |
 
+### Reference development setup
+
+Ubuntu Server 24.04 in a VirtualBox VM, development inside the privileged devcontainer on that VM (VS Code Remote-SSH + Dev Containers). The VM provides the exact target kernel, so level 1 runs completely.
+
+| Setting | Why |
+|---|---|
+| 4+ vCPUs, 8+ GB RAM, 40+ GB disk | testbed, Kea, mitmproxy, Node toolchain and captures in parallel |
+| NIC 1: NAT (or bridged) | internet access and SSH from the host |
+| Optional NIC 2: bridged to a dedicated (USB) Ethernet adapter, promiscuous mode "Allow All" | real test devices (e.g. an ESP32) behind the gateway; "Allow All" is needed as soon as the guest bridges this NIC or uses macvlan |
+| Nested VT-x/AMD-V enabled (`VBoxManage modifyvm <vm> --nested-hw-virt on`) | `/dev/kvm` in the guest for levels 1b and 2 |
+| Snapshot after base setup | quick reset when an experiment breaks the VM's own networking |
+
+If Hyper-V or Windows virtualization-based security is active on the Windows host (often the case with WSL2 or Memory Integrity), VirtualBox runs on the Hyper-V backend: noticeably slower, and nested virtualization is not available, so the guest has no `/dev/kvm`. Level 1 is unaffected; levels 1b and 2 then fall back to software emulation (functional only) or move to CI.
+
 Further notes:
 
 - **Unprivileged container:** if the development container cannot run privileged, level 1 runs as level 1b *inside* the container. QEMU is an ordinary process and needs no extra capabilities; inside the VM the tests are root with their own kernel. Verified with Docker's default capabilities only (no `NET_ADMIN`, no `SYS_ADMIN`): the guest kernel loaded netem, created namespaces and veth pairs, set sysctls, loaded nftables rules, and a 50 ms netem delay was measurable. The image then needs QEMU, virtme-ng, `busybox-static` and a distribution kernel with modules. Without `/dev/kvm` the VM is emulated in software, which is slow and noisy (50 ms delay measured as 51–115 ms): functional tests only, no measurement tests. Passing `--device /dev/kvm` (not the same as privileged) makes it fast.

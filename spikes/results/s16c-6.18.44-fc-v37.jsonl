@@ -1,0 +1,4 @@
+{"test":"C1-service-container-in-holder-namespace","to_.10":"ok","to_.20":"ok","orig_.10":1,"orig_.20":1,"service_container":"[ALL] user=65534:65534 privileged=false readonly=true","pass_":true}
+{"test":"C2-service-restart-keeps-namespace","svc0":"UP","connect":"ok","pass_":true}
+{"test":"C3-holder-restart","pid_changed":true,"svc0_after_restart":"UP","connect_before_reattach":"ok","after_reattach_only":"refused","after_reattach_and_service_restart":"ok","note":"a joined service keeps the old namespace alive; after re-attaching to the new one the service must be restarted too"}
+{"test":"C4-fail-closed","svc0":"missing","with_prohibit_fallback":"error:[Errno 113] No route to host","without_fallback":"ok","pass_":true,"note":"without the fallback the redirected traffic silently reaches the real server"}

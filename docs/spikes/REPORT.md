@@ -25,6 +25,7 @@ This report records what the Phase 0 spikes (plan §5) proved, disproved or chan
 | S13 PMTUD | Path-MTU faults via ICMP and as black hole | ✅ confirmed, 1 side effect | ICMP mode leaks to other devices through the shared NAT address; MSS clamp as isolated mode |
 | S14 Local replies | Download faults for connections that end on the gateway | ✅ confirmed | classification chain also on the output hook |
 | S15 WireGuard & routing | Faults inside and on WireGuard tunnels; export; BIRD BGP/OSPF over WireGuard with filters | ✅ confirmed | WireGuard in Phase 1 (M4b); tunnel faults as own family; 12-bit id layout works |
+| S16 Service namespace | Upload faults for connections redirected to gateway services; fit with the Docker deployment | ✅ decided: service namespace | services behind a veth pair, selected by routing mark; flower rejected (misses set-based redirects); fail-closed fallback required |
 
 ---
 
@@ -406,6 +407,34 @@ Topology: gateway with test network (cl1, cl2), hub interface `wg-hub` (client r
 - The encrypted WireGuard packets do not carry the inner connection's conntrack entry into the output hook: inner and tunnel faults did not interfere.
 - QR generation was not part of the spike (library functionality); M4b tests it.
 
+### S16 — Gateway Services: Flower vs. Service Namespace (Ubuntu 6.8 emulated; part C on the host with Docker)
+
+Question: at tc ingress a packet redirected to a gateway service (TLS responder, DNS proxy) still carries the original server address, so an IFB filter on "destination = gateway" misses it, and flower cannot use nftables sets. Fault for cl1: upload 50 ms, download 30 ms (12-bit id layout) → expected +80 ms. Service stand-ins: `tools/origdst.py` (TCP, records `SO_ORIGINAL_DST`) and a UDP echo (DNS). Redirects: TCP 8883 for 203.0.113.10 and for the set member 203.0.113.20; UDP 53 for 203.0.113.10.
+
+| Test | V1: IFB + flower, services in the gateway namespace, download via output hook | V2: service namespace behind `svc0`, routing mark, redirect inside |
+|---|---|---|
+| a redirected TCP (expected 80 ms) | 81.9 ✅ | 81.4 ✅ |
+| b redirected UDP (expected 80 ms) | 80.8 ✅ | 80.8 ✅ |
+| c forwarded traffic of the same device — no double fault (80 ms) | 82.2 ✅ | 81.7 ✅ |
+| d isolation: cl2 redirected, no fault (0) | 0.5 ✅ | 0.0 ✅ |
+| e redirect selected by an address set (DNS-derived style) | **+30.7 — upload fault missing** (flower cannot match the set; expected gap confirmed) | 81.9 ✅ |
+| f service sees the original destination | 203.0.113.10:8883, .20:8883 | 203.0.113.10:8883, .20:8883 ✅ |
+| g service upstream through the gateway | — | ok ✅ |
+| h output hook needed | yes (download) | no ✅ |
+
+Values are medians minus the baseline (TCP 2.4–2.6 ms, UDP 2.0 ms).
+
+**Part C — Docker (host kernel 6.18, Docker 29.4.3):** the service namespace is the network namespace of a holder container (`--network none`, only `sleep`); the executor attaches the veth pair by PID; the service runs in its own container joined to it (`--network container:…`) as user 65534, all capabilities dropped, read-only root file system.
+
+| Test | Result |
+|---|---|
+| C1 redirected connections reach the unprivileged service container; original destination visible | ✅ ok for .10 and .20; `SO_ORIGINAL_DST` correct |
+| C2 service container restarts | ✅ namespace kept by the holder, works immediately |
+| C3 holder restarts | new namespace; the running service keeps the **old** one alive (still reachable); after re-attaching `svc0` to the new namespace the service is unreachable ("refused") until it is restarted too → executor must watch the holder and services must exit on a stale namespace |
+| C4 all containers gone | with a `prohibit` default route in table 102: "No route to host" ✅ fail closed; **without it the redirected connection silently reached the real server** (fail open) |
+
+- Two script errors in the first runs: a chain named `dnat` (reserved word, the same pitfall the plan names in §3.2) and `} }` on one line; and `/usr/bin/python3` is an alternatives symlink that does not exist inside the container. None affected the design.
+
 ---
 
 ## 4. Plan Changes
@@ -429,6 +458,7 @@ These changes are applied to `docs/plan.md`:
 | §7 Decisions | D4 → Kea; D5 → confirmed (Node TLS responder + mitmproxy sidecar) |
 | §2.2, §3.3, §3.2 (S11–S14) | test networks as bridges with policy routing (S12); direction bit and identical tc mapping on all interfaces, output hook (S11, S14); apply layout keeping sets and counters (S11) |
 | §2.2.1, §2.2.2, §3.3, M4b, M4c (S15) | WireGuard in Phase 1; tunnel faults as own family; BGP/OSPF over WireGuard links with import filters; golden test for id masks |
+| §3.3, §3.8, M6b, M20, M21, D29 (S16) | gateway services in a service namespace with routing-mark selection and fail-closed fallback; holder-container pattern in the Docker deployment |
 | §2.5, §6 (S13) | PMTUD modes ICMP / black hole / MSS clamp; NAT-address side effect as risk #23 |
 
 ---
@@ -464,6 +494,8 @@ TB_PREFIX=h bash s09-capture/run.sh
 ./vm.sh followups.sh                      # S11, S12, S14 in one VM session
 ./vm.sh s12-attachment/run.sh             # or one at a time
 ./vm.sh s15-wireguard/run.sh              # needs wireguard-tools and bird2 on the host (shared root fs)
+./vm.sh s16-service-ns/run.sh
+TB_PREFIX=h bash s16-service-ns/docker.sh # needs a running Docker daemon and the cg-bb image
 TB_PREFIX=h bash s13-pmtud/run.sh
 ```
 

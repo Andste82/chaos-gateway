@@ -322,7 +322,7 @@ A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a c
 - **Initiator semantics:** a device fault applies to connections the device *initiates*, in both directions (upload = packets in the connection's original direction, download = replies). Connections initiated towards the device by another device or by the server are matched by the initiator's scope, not by the responder's. Matching a device as responder is a later extension (§8).
 - **Global** means: packets whose original source is in a test network, a WireGuard network or a remote network. The gateway's own traffic (management, package updates, BIRD sessions, WireGuard underlay unless a tunnel fault targets it) is never impaired, so a global "Offline" cannot lock the admin out.
 - DHCP and ARP are never impaired by impairment faults; the DHCP family ("silence") exists for that.
-- Connections that end on the gateway (DNS proxy, TLS responder, TLS proxy) **are** impaired like forwarded traffic, because the device experiences them as its path to the server (output hook, §3.3).
+- Connections that end on the gateway (DNS proxy, TLS responder, TLS proxy) **are** impaired like forwarded traffic, because the device experiences them as its path to the server (service namespace, §3.3).
 - Faults act on **every packet**, including packets of connections that already existed when the fault was activated. Classification is therefore evaluated per packet, not cached per connection (see §3.3). Spike S10 confirmed this: with per-packet classification the first message after a change is affected, while conntrack-mark caching left the running connection on its old fault. Exception: redirect-based families (TLS, DNS redirect) change new connections only; activating a TLS case offers "also cut existing connections", and removing it resets the connections still held by the responder.
 - **Direction "both"** means separate parameters per direction. The UI shows them as a pair, and they can be set asymmetrically (e.g. upload 2 % loss, download 0 %).
 
@@ -358,7 +358,7 @@ The gateway provides DNS to test networks through its own **DNS proxy** in front
   - wrong or redirected answer (e.g. the MQTT broker hostname points to a local mock server)
   - truncated answer (forces TCP fallback)
   - short TTLs
-- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy listens only on those addresses (UDP and TCP 53), so it coexists with systemd-resolved on 127.0.0.53. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults are overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current DNS overlays. It binds with `IP_FREEBIND`, so it can start before the executor has created the network addresses.
+- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy runs in the service namespace (§3.3); queries to these addresses (UDP and TCP 53) are forwarded into it, so faults apply in both directions and it never conflicts with systemd-resolved on the host. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults are overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current DNS overlays. It resolves upstream through the gateway like any other service traffic.
 - **Hardcoded resolvers:** DNS traffic to other resolvers (UDP/TCP 53) can be redirected to the gateway, and DNS-over-TLS (853) can be blocked. DNS over HTTPS cannot be distinguished reliably from normal HTTPS (see §6).
 - **Hostname selectors (best effort):** rules and faults can target hostnames (exact name or `*.suffix`). The DNS proxy records which IPs it returned for which name and fills them into address sets, keyed per requesting device. It follows CNAMEs.
   - The set is updated **before** the answer is sent, so the device's first packet already matches.
@@ -803,7 +803,8 @@ Server reply ──► prerouting on uplink:
     | 4–15 | effective-fault id, 12 bits: up to 4095 ids at the same time (widened from 8 bits because of per-device queues, D18) |
     | 16 | direction: 0 = packet in the connection's original direction (upload of the initiator), 1 = reply (download), from `ct direction` |
     | 17–19 | PMTU table index: 0 = none, 1–7 select one of up to seven PMTU mirror tables (§2.5; S13 used a single bit, `0x00200000`) |
-    | 20–23 | reserved for further routing marks |
+    | 20 | service selection: route into the service namespace (§3.3, S16) |
+    | 21–23 | reserved for further routing marks |
     | 0–3, 24–31 | untouched, free for other software |
 
   - Every chain that writes the fault id must keep the direction bit (mask `0xffff000f`, not `0xfffe000f`); a golden test checks the compiled masks. In S15 a wrong mask gave both directions the upload parameters.
@@ -826,12 +827,14 @@ Server reply ──► prerouting on uplink:
 - **tc topology** (confirmed in S2 and S11): an HTB root with a default class and one class per active (id, direction), each with a netem leaf, selected by a `fw` filter with mask (id 0x0a: `handle 0x000a0/0x1fff0` for upload, `0x100a0/0x1fff0` for download; the spikes used the earlier 8-bit layout `0x00a00/0x1ff00`, same mechanism).
   - A classful root is needed as soon as more than one fault is active on an interface; `prio` would be too small, since it is limited to 16 bands.
   - Rate limiting works both as netem `rate` and as HTB class rate. With 50 HTB classes, throughput dropped by about 10 % (S8).
-- **Traffic terminating at the gateway** (DNS proxy, TLS responder, TLS proxy):
-  - DNS faults are implemented inside the DNS proxy (delay, drop, wrong answer); TLS/HTTP faults inside the TLS components.
-  - **Download** (replies generated on the gateway) never passes prerouting. The same classification chain is therefore also attached to the **output** hook; the key is identical because conntrack keeps the original tuple of the redirected connection (spike S14).
-  - **Upload** (packets towards the gateway) has no egress. Spike S2 used IFB ingress redirection with a `flower` filter on the gateway address (+100 ms for one device, the other unaffected). For connections **redirected** to a gateway service this is not enough: at tc ingress their destination is still the original server, and flower cannot use DNS-derived sets. Two designs are open and decided by spike **S16** before M20/M21:
-    1. flower filters that repeat each redirect selector (device address + original destination and port; no hostname-based redirects);
-    2. a **service namespace**: DNS proxy, TLS responder and mitmproxy run in their own network namespace behind a veth pair; marked packets are policy-routed into it unchanged and redirected there, so both directions pass a normal egress with fw marks. This would also remove the output-hook special case.
+- **Gateway services in a service namespace** (DNS proxy, TLS responder, TLS proxy; decided by spike S16, D29):
+  - DNS faults are implemented inside the DNS proxy (delay, drop, wrong answer); TLS/HTTP faults inside the TLS components. L3/L4 faults of the device must still apply to these connections (§2.4).
+  - The services do not run in the gateway's own network namespace but in a **service namespace** connected by a veth pair (`svc0`, gateway side `169.254.100.1/30`, service side `169.254.100.2/30`).
+  - **Selection:** traffic for a service gets routing-mark bit 20 in a prerouting chain right after classification. Selectors are ordinary nftables expressions, including sets (DNS-derived hostname sets, device sets). Policy rule `fwmark 0x00100000/0x00100000 → table 102`; table 102 routes into `svc0` and has a `prohibit` fallback route, so selected traffic **fails closed** when the service namespace is missing instead of silently reaching the real server (S16 C4).
+  - **Redirect inside:** the packets arrive unchanged (original destination); inside the service namespace nftables redirects them to the service's local port, and the service reads the original destination with `SO_ORIGINAL_DST` (S16: `203.0.113.10:8883` and a set-selected `203.0.113.20:8883`). Queries to the gateway's own DNS address are DNAT-ed to `169.254.100.2:53` instead, because packets to a local address cannot be policy-routed and there is no original destination to preserve.
+  - **Faults:** upload leaves the gateway through `svc0`, download through the device's network interface — both are normal egress with fw marks, so the device's faults apply without IFB and without an output hook. S16: +80 ms for a 50/30 ms fault over TCP and UDP, set-based selection included, forwarded traffic of the same device not impaired twice. The alternative with IFB and flower filters missed the upload fault for set-based redirects (+30 instead of +80 ms), because flower cannot match sets.
+  - The services' own upstream connections (TLS proxy → real server) leave through the gateway like other traffic (policy rule for `iif svc0`).
+  - The output hook remains only for the gateway's own packets that faults can target: the encrypted WireGuard underlay (tunnel faults, S15).
 
 ## 3.4 Linux Interface Layer
 
@@ -954,20 +957,22 @@ chaos-gateway/
 
 ## 3.8 Deployment
 
-**Production runs in Docker** (D2): one multi-arch image, started with `docker compose` on an Ubuntu 24.04 or 26.04 host (x86-64 or ARM64). All containers use the **host network**, because Chaos Gateway configures the host's interfaces, bridges, nftables, tc and routes.
+**Production runs in Docker** (D2): one multi-arch image, started with `docker compose` on an Ubuntu 24.04 or 26.04 host (x86-64 or ARM64). The executor, API, Kea and BIRD use the **host network**, because Chaos Gateway configures the host's interfaces, bridges, nftables, tc and routes. The gateway services (DNS proxy, TLS responder, TLS proxy) share the **service namespace** (§3.3) held by a small holder container.
 
 | Container | Privileges | Why |
 |---|---|---|
 | `exec` | **privileged** (the only one), host network, `/run/netns` shared with the host (`rshared`), `/lib/modules` read-only | writes nftables, tc, routes, sysctls (per-interface sysctls of new bridges need a writable `/proc/sys`, which only a privileged container has, S7), network namespaces for probes, loads missing modules |
 | `api` | unprivileged user, all capabilities dropped | REST/SSE/UI; reaches the executor, Kea and BIRD through Unix sockets on a shared volume |
-| `dns`, `tls` | `NET_BIND_SERVICE` | bind port 53 and the redirect ports |
+| `svcns` | none, `--network none` | holder of the service namespace: only `sleep`; the executor attaches the `svc0` veth pair to it by PID and installs the redirect rules inside |
+| `dns`, `tls` | `NET_BIND_SERVICE`, joined to `svcns` (`network_mode: service:svcns`), unprivileged user | bind port 53 and the redirect ports inside the service namespace |
 | `kea` | `NET_RAW`, `NET_BIND_SERVICE` | DHCP on raw sockets |
 | `bird` | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE` | writes routes into Chaos Gateway's tables; OSPF needs raw sockets |
-| `tls-proxy` (optional) | `NET_BIND_SERVICE` | mitmproxy, only when interception is used |
+| `tls-proxy` (optional) | `NET_BIND_SERVICE`, joined to `svcns` | mitmproxy, only when interception is used |
 
 - **Host setup** (a script shipped with the image, run once): installs Docker Engine if missing, loads the kernel modules at boot (`/etc/modules-load.d/chaos-gateway.conf`), sets `net.ipv4.ip_forward=1`, and prints the netplan changes for the test interfaces. It never touches the uplink or management configuration.
 - Docker itself is always present: its FORWARD DROP policy is handled through `DOCKER-USER` (§3.4). Chaos Gateway's networks must not overlap Docker's own address pools.
-- **Start order:** `exec` first (health check: executor socket ready and initial apply verified), then the services. Restart policy `unless-stopped`; containers restart after a host reboot with Docker.
+- **Start order:** `exec` first (health check: executor socket ready and initial apply verified), then `svcns` (the executor attaches the veth pair), then the services.
+- **Service namespace lifecycle** (S16 part C): a restarting service container rejoins the holder's namespace and works immediately. If the holder itself restarts, it gets a new namespace; services still running keep the old one alive. The executor therefore watches the holder's namespace (inode) and re-attaches `svc0` when it changes; each service checks that its namespace carries the `svc0` peer address and exits when not, so its restart policy moves it into the current namespace. While no namespace is attached, selected traffic fails closed (`prohibit` route). Restart policy `unless-stopped`; containers restart after a host reboot with Docker.
 - **Stop:** on `SIGTERM` the executor removes all overlays before it exits (§2.1.1); the kernel state with the configuration stays, so devices keep their normal connectivity while the gateway is stopped. `docker compose run exec chaosgw teardown` removes everything Chaos Gateway created.
 - **Development** uses the same image with the privileged devcontainer (§4.5); a native package (.deb) is not planned for V1 but possible later from the same binary.
 - **Dedicated appliance image** (Raspberry Pi / x86) as a later option.
@@ -1167,9 +1172,9 @@ Short, throwaway experiments in the testbed. Each answers a specific question wi
 | S11 Direction | direction bit with two test networks; device+destination lookup; re-apply that keeps dynamic sets and counters | ✅ (without the direction bit: 43 ms instead of 120 ms) | — |
 | S12 Attachment | probe on bridge vs. macvlan; tc on the bridge; policy routing vs. management default route | ✅ bridge; macvlan probe cannot reach the gateway | — |
 | S13 PMTUD | path-MTU faults with ICMP and as black hole | ✅ (side effect on shared NAT address) | — |
-| S14 Local replies | download faults for connections that end on the gateway | ✅ with output hook | — |
+| S14 Local replies | download faults for connections that end on the gateway | ✅ with output hook (superseded for services by S16) | — |
 | S15 WireGuard & routing | (1) inner faults: classification of client/remote-network traffic and netem on a WireGuard interface's egress; (2) tunnel faults: marking WireGuard's own encrypted UDP in the output hook per peer endpoint, netem on the uplink; (3) BIRD (BGP and OSPF) over a WireGuard link between two sites, exporting only into the Chaos Gateway table, import filter rejects default and management prefixes; (4) re-convergence time when a tunnel fault blacks out the link; (5) hub interface with client networks via `AllowedIPs` | ✅ all 16 checks (12-bit id layout included) | — |
-| S16 Service namespace | upload faults for connections redirected to gateway services: flower filters repeating the redirect selectors vs. a service namespace behind a veth pair (`SO_ORIGINAL_DST` inside, both directions through normal egress); works with the container deployment? | planned | before M20/M21 |
+| S16 Service namespace | upload faults for connections redirected to gateway services: flower filters repeating the redirect selectors vs. a service namespace behind a veth pair (`SO_ORIGINAL_DST` inside, both directions through normal egress); works with the container deployment? | ✅ service namespace (flower misses set-based redirects; Docker holder-container pattern works; fail-closed fallback needed) | — |
 
 ## Milestone overview and MVP
 
@@ -1237,8 +1242,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M5.
 
 **M6b — DNS proxy** (M)
-- Scope: DNS proxy container on each test network's and WireGuard network's gateway address (`IP_FREEBIND`), UDP and TCP, forwarding, caching, query log, AAAA removal; registration with the API at start; coexistence with systemd-resolved; upstream resolver from the host configuration.
-- Tests: clients in a local test network and a WireGuard client (DNS = gateway tunnel address) resolve names over UDP and TCP; the proxy does not bind 127.0.0.53 and resolved keeps working; restarting only the DNS container restores its state from the API.
+- Scope: service namespace (holder container `svcns`, `svc0` veth pair, table 102 with `prohibit` fallback, re-attach on holder change, §3.3); DNS proxy container in it, answering queries to each test network's and WireGuard network's gateway address (DNAT into the service namespace), UDP and TCP, forwarding, caching, query log, AAAA removal; registration with the API at start; coexistence with systemd-resolved; upstream resolver from the host configuration.
+- Tests: clients in a local test network and a WireGuard client (DNS = gateway tunnel address) resolve names over UDP and TCP; the proxy does not bind 127.0.0.53 and resolved keeps working; restarting only the DNS container restores its state from the API; restarting the holder is healed by re-attach and service restart; without a service namespace, selected traffic is refused (fail closed).
 - Depends on: M5.
 
 *After Phase 1: a working, API-configurable test gateway with local and WireGuard networks and dynamic routing, without faults.*
@@ -1334,13 +1339,13 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M20 — DNS faults and hostname selectors** (M)
 - Scope: NXDOMAIN, SERVFAIL, timeout, delay, wrong answer, truncation (with TCP fallback), short TTL, per device/group/pattern; DNS-derived address sets with the lifetime rule of §2.6; redirect of hardcoded DNS; DoT blocking; hostname selectors for rules and faults; "DNS broken" profile; DNS scenario step type.
-- Tests: `dig` from clients shows each fault; a hostname-selector fault affects only traffic to the resolved IPs; a long-lived connection keeps its hostname fault past a 1 s TTL; the set survives 10 overlay changes; hardcoded DNS is redirected; download and upload latency apply to queries of a device (output hook, S16 design).
+- Tests: `dig` from clients shows each fault; a hostname-selector fault affects only traffic to the resolved IPs; a long-lived connection keeps its hostname fault past a 1 s TTL; the set survives 10 overlay changes; hardcoded DNS is redirected; download and upload latency apply to queries of a device (service namespace, S16).
 - Depends on: M8b, M9, M15, S5, S16.
 
 **M21 — TLS responder: certificate cases** (M)
 - Scope: TLS responder in the core, test CA and never-distributed unknown CA, transparent redirect of selected traffic (new connections; "cut existing" on activation, reset on removal), the TLS cases of §2.8 as confirmed by S4, no-SNI fallback, expected results from `trusts_test_ca`, events per handshake, check type "TLS rejected/accepted", "TLS broken" profile, TLS scenario step type.
-- Tests: `openssl s_client`/`curl` with TLS 1.2 and 1.3 — untrusted/expired/wrong-host/self-signed are rejected by a correct client; a deliberately insecure client is flagged by the check; golden test E11; a client trusting the test CA passes the "untrusted CA" case; download latency applies to the responder's replies (output hook); the same cases work for a WireGuard client.
-- Depends on: M9, M16, S4, S14, S16.
+- Tests: `openssl s_client`/`curl` with TLS 1.2 and 1.3 — untrusted/expired/wrong-host/self-signed are rejected by a correct client; a deliberately insecure client is flagged by the check; golden test E11; a client trusting the test CA passes the "untrusted CA" case; upload and download latency apply to connections to the responder (service namespace); the responder reads the original destination; the same cases work for a WireGuard client.
+- Depends on: M9, M16, S4, S16.
 
 **M22 — TLS interception and HTTP faults** (L)
 - Scope: mitmproxy sidecar management and control from the core, test CA management (generate, download for dev firmware), HTTP(S)/WebSocket inspection, URL blocking, error codes, delay/throttle, modification, connection abort, key log for captures; block-UDP-443 option; interception scenario step type.
@@ -1414,7 +1419,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 
 | # | Topic | Consequence | Handling |
 |---|---|---|---|
-| 1 | tc acts on egress only | upload and download faults must be applied on different interfaces; traffic terminating at the gateway has no egress in upload direction | classification by marks (§3.3); faults for DNS/TLS inside the services; IFB where needed (spike S2) |
+| 1 | tc acts on egress only | upload and download faults must be applied on different interfaces; traffic terminating at the gateway has no egress in upload direction | classification by marks (§3.3); gateway services in a service namespace, so they are reached through an egress (S16); IFB only for tunnel faults from a WireGuard peer (S15) |
 | 2 | Uplink egress is after NAT | device IP is invisible there | classification per packet by the conntrack original tuple (`ct original ip saddr`), which is unchanged by NAT (S10, S11) |
 | 3 | netem loss on locally generated traffic may be reported to the local TCP stack | loss on gateway-originated traffic (e.g. proxy → server) could be unrealistic | not observed on Ubuntu 6.8 with netem under HTB (S2); kept in the test matrix |
 | 4 | netem jitter reorders packets by default | 712 of 1000 packets reordered (S2 F1) | default documented; "keep order" option via netem rate, which shifts the delay distribution |
@@ -1439,7 +1444,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | 23 | PMTU faults leak through the shared NAT address | with ICMP mode the server caches the reduced path MTU for the gateway's uplink address, so other devices talking to the same server are affected for up to 10 min (S13) | UI warning; MSS clamp mode as isolated alternative for TCP; documented cache flush on test servers |
 | 24 | Hostname-derived sets age | addresses learned from DNS expire with the DNS TTL; a device that caches longer than the TTL or uses a hardcoded IP escapes the rule | set element timeout = max(TTL, configurable minimum); "unmatched hostname" events; documented as best effort |
 | 25 | Distribution matrix grows | each supported release adds kernel and netem differences and a nightly job | only Ubuntu 24.04 and 26.04 hosts (D1); Kea, BIRD and tools are pinned in the image, so only the host kernel varies |
-| 26 | Traffic generated on the gateway | replies of the DNS proxy, TLS responder and mitmproxy never pass prerouting | the classification chain is attached to the output hook too (S14); without it, download faults were missing |
+| 26 | Connections that end at gateway services | at tc ingress a redirected packet still has the original destination; replies of local services never pass prerouting | services run in a service namespace, so both directions pass a normal egress (S16); the output hook remains only for the WireGuard underlay |
 | 27 | WireGuard cryptokey routing vs. dynamic routes | on a shared hub interface every prefix is bound to one peer; learned routes cannot be expressed there | dynamic routing only on point-to-point links (§2.2.1); hub clients use declared client networks |
 | 28 | Route injection by remote sites | a remote BIRD could announce the default route or management prefixes and divert traffic | learned routes only in Chaos Gateway's tables; import filters, protected prefixes, max prefixes (§2.2.2) |
 | 29 | Tunnel MTU | WireGuard overhead (60–80 bytes) plus PMTU faults can black-hole traffic inside tunnels | MTU 1420 default, MSS clamp on WireGuard interfaces, PMTU tests through tunnels in M10 |
@@ -1448,6 +1453,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | 32 | Privileged executor container | a compromised executor has root on the host network stack | only the executor is privileged; it accepts typed operations over a Unix socket with peer checks and scope validation; the network-facing API runs without any capability (§2.16) |
 | 33 | No hardware and no ARM64 machine in V1 | ARM64 timing and throughput, real NIC behavior and offload costs are not measured | functional ARM64 tests under emulation; x86 measurements with KVM; H1 when hardware exists; release notes mark unvalidated targets |
 | 34 | NIC offloads | with GRO/GSO/TSO, netem acts on 64 KB aggregates, so loss and duplication are far off | offloads switched off on owned interfaces and the uplink (§3.4); cost measured in H1 |
+| 35 | Service namespace missing | redirected traffic could silently reach the real server (fail open), which would pass a TLS test that should fail | `prohibit` fallback in table 102 (S16 C4); executor re-attaches on holder restart; services exit when their namespace is stale |
 
 ---
 
@@ -1468,7 +1474,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D12 | Rule and fault precedence | as §2.4, with D24–D26 | maintainer |
 | D15 | Implementation stack | **Go backend** (single binary with embedded UI, low memory on Raspberry Pi, mature netlink/nftables/DNS libraries, experience from sessile) **+ Vue 3 frontend**; shared types come from the OpenAPI spec instead of shared code (§3.7) | maintainer |
 | D16 | Test-network attachment | every test network is a gateway-owned bridge; physical port and probes are bridge ports (§2.2). Not to be confused with D8: the gateway still routes, the bridge only joins ports of one network | S12 |
-| D17 | Classification | per packet via the conntrack original tuple, mark with 12-bit fault id and direction bit, identical tc mapping on every interface, output hook for local replies (§3.3) | S10, S11, S14 |
+| D17 | Classification | per packet via the conntrack original tuple, mark with 12-bit fault id and direction bit, identical tc mapping on every interface (§3.3) | S10, S11, S15 |
 | D18 | Rate and queue limits on group/network/global scope | **per device**: every device matched by a rate-limited fault or profile gets its own queue with the full rate; the UI shows how many queues a scope creates (§2.4) | maintainer |
 | D19 | WireGuard | hub networks (clients with client networks) and point-to-point links; keys generated on the gateway by default; export as `.conf` and QR (§2.2.1) | maintainer |
 | D20 | Routing daemon | **BIRD 2** in its own managed instance (BGP, OSPFv2, Babel, static); adapter interface for FRR later; external mode for other daemons (§2.2.2) | maintainer |
@@ -1480,6 +1486,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D26 | Explicit fault priorities | **none**; within a level the newer entry wins | maintainer |
 | D27 | Additional features in V1 | **none** of the proposals of §8 (review 2, part B); they stay proposals | maintainer |
 | D28 | Scope reductions for V1 | three-way merge, NFLOG rule captures, live capture streaming, traceroute/path MTU/iperf3, continuous drift detection moved after V1 (M38) | proposed by review 2; reversible |
+| D29 | Gateway services and faults | DNS proxy, TLS responder and TLS proxy run in a **service namespace** reached by policy routing; no IFB/flower for services (§3.3) | S16 |
 
 ## 7.2 Open
 

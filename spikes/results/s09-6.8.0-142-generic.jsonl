@@ -1,0 +1,6 @@
+{"method": "truth", "linktype": "ether", "packets": 145, "upload": 89, "download": 56, "payload_bytes": 40696, "addresses": ["10.10.0.11", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}
+{"method": "m1-afpacket-lan", "linktype": "ether", "packets": 145, "upload": 89, "download": 56, "payload_bytes": 40696, "addresses": ["10.10.0.11", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}
+{"method": "m2-afpacket-wan", "linktype": "ether", "packets": 239, "upload": 151, "download": 88, "payload_bytes": 41392, "addresses": ["203.0.113.1", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}
+{"method": "m3-nflog", "linktype": "nflog", "packets": 145, "upload": 89, "download": 56, "payload_bytes": 40696, "addresses": ["10.10.0.11", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}
+{"method": "m4-nft-dup", "linktype": "ether", "packets": 145, "upload": 89, "download": 56, "payload_bytes": 40696, "addresses": ["10.10.0.11", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}
+{"method": "m5-tc-mirred", "linktype": "ether", "packets": 145, "upload": 89, "download": 56, "payload_bytes": 40696, "addresses": ["10.10.0.11", "203.0.113.10"], "foreign_device_packets": 0, "read_ok": true}

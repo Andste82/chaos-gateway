@@ -1,0 +1,6 @@
+{"config":"P0-nat-only","tcp_mbit":2865,"udp64_pps":90395}
+{"config":"P1-classify-1000-entries-miss","tcp_mbit":3099,"udp64_pps":103262}
+{"config":"P2-classify-1000-entries-hit","tcp_mbit":2863,"udp64_pps":94898}
+{"config":"P3-classify-hit-plus-htb-50-classes","tcp_mbit":2586,"udp64_pps":88392}
+{"config": "nft-update-latency", "per_process_add_ms": 6.24, "batch_100_ms": 9.3, "full_table_rebuild_2000_elements_ms": 23.4}
+{"config":"host","cpus":2,"cpu":"Intel(R) Xeon(R) Processor @ 2.80GHz"}

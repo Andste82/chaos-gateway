@@ -1,0 +1,4 @@
+{"test":"A-docker-forward-policy","forward_policy":"-P FORWARD DROP","routed_ping_plain":false,"with_own_nft_accept":false,"with_DOCKER-USER_accept":true}
+{"test":"B-caps-net_admin-net_raw","nft_table":true,"tc_qdisc":true,"ip_link":true,"ip_addr":true,"sysctl_forward":false,"sysctl_rp_filter":false,"netns_create":false,"raw_socket":true,"bind_port_67":true,"end":true}
+{"test":"B-caps-plus-sys_admin","nft_table":true,"tc_qdisc":true,"ip_link":true,"ip_addr":true,"sysctl_forward":false,"sysctl_rp_filter":false,"netns_create":true,"raw_socket":true,"bind_port_67":true,"end":true}
+{"test":"B-privileged","nft_table":true,"tc_qdisc":true,"ip_link":true,"ip_addr":true,"sysctl_forward":true,"sysctl_rp_filter":true,"netns_create":true,"raw_socket":true,"bind_port_67":true,"end":true}

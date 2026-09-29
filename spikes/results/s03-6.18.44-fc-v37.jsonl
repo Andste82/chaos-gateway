@@ -1,0 +1,8 @@
+{"case": "C0-no-change", "msgs_before": 20, "msgs_ok_after": 50, "events_after": ["done"], "first_problem_after_ms": 5047, "new_connection": {"result": "ok", "ms": 1.9}, "server_side_established_after": 0}
+{"case": "C1-drop-all-packets", "msgs_before": 20, "msgs_ok_after": 0, "events_after": ["done", "timeout"], "first_problem_after_ms": 2040, "new_connection": {"result": "timeout", "ms": 2003.5}, "server_side_established_after": 1}
+{"case": "C2-est-accept-then-drop-new", "msgs_before": 20, "msgs_ok_after": 50, "events_after": ["done"], "first_problem_after_ms": 5052, "new_connection": {"result": "timeout", "ms": 2003.5}, "server_side_established_after": 0}
+{"case": "C3-reject-tcp-reset-all", "msgs_before": 20, "msgs_ok_after": 0, "events_after": ["reset"], "first_problem_after_ms": 38, "new_connection": {"result": "refused", "ms": 1.2}, "server_side_established_after": 1}
+{"case": "C4-C2-plus-conntrack-delete", "msgs_before": 20, "msgs_ok_after": 1, "events_after": ["done", "timeout"], "first_problem_after_ms": 2142, "new_connection": {"result": "timeout", "ms": 2003.5}, "server_side_established_after": 1}
+{"case": "C5-conntrack-delete-only", "msgs_before": 20, "msgs_ok_after": 50, "events_after": ["done"], "first_problem_after_ms": 5047, "new_connection": {"result": "ok", "ms": 1.8}, "server_side_established_after": 0}
+{"case": "C6-one-shot-cut", "msgs_before": 20, "msgs_ok_after": 0, "events_after": ["reset"], "first_problem_after_ms": 37, "new_connection": {"result": "ok", "ms": 1.6}, "server_side_established_after": 1}
+{"case":"sysctl","nf_conntrack_tcp_loose":1}

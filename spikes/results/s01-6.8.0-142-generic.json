@@ -1,0 +1,2 @@
+{"spike":"S1","kernel":"6.8.0-142-generic","reachability":true,"source_seen_by_server":"203.0.113.1.53967",
+ "baseline_udp":{"sent": 500, "received": 500, "loss_pct": 0.0, "duplicates": 0, "reordered": 0, "rtt_ms": {"n": 500, "min": 1.11, "p10": 1.72, "median": 2.43, "p90": 3.35, "max": 6.99, "mean": 2.56, "stdev": 0.79}},"baseline_tcp_rtt_ms":{"n": 230, "median": 2.75, "p90": 3.98, "max": 8.0}}

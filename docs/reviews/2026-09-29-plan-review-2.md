@@ -2,7 +2,7 @@
 
 Second, independent pass over `docs/plan.md` after the first review and spikes S11–S14 were incorporated. Two reviewers: (A) consistency and implementability, (B) missing features from an IoT QA perspective. Line numbers refer to plan.md at 461ad16. Findings marked **[verified]** were reproduced with nft 1.0.9 in a throwaway namespace.
 
-> **Status:** B2 decided (per device, D18) and incorporated; WireGuard and routing added as §2.2.1/§2.2.2, M33, M37 (not a review finding). I15 (gateway protection) incorporated in §2.2/M4. All other findings still open.
+> **Status:** incorporated into `docs/plan.md` on 2026-09-29. Part A: all findings fixed; I9 is decided by the planned spike S16. Decisions by the maintainer: D24 (overlays win), D25 (separate access-rule and fault screens), D26 (no priorities), D3 (OS owns the uplink), D27 (no part-B features in V1 — they are listed in §8), D28 (scope reductions, M38), D1 (Ubuntu 24.04/26.04, x86-64 + ARM64), D9 (one Ubuntu VM), D2 (Docker deployment). Workflow improvements 1–3 are in M15, M16 and M18; 4–5 in §8.
 
 ## A. Unclear, inconsistent or wrong
 

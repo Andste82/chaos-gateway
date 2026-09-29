@@ -822,6 +822,7 @@ Development and levels 0–1 run in a Docker container. Verified in this environ
 
 Further notes:
 
+- **Unprivileged container:** if the development container cannot run privileged, level 1 runs as level 1b *inside* the container. QEMU is an ordinary process and needs no extra capabilities; inside the VM the tests are root with their own kernel. Verified with Docker's default capabilities only (no `NET_ADMIN`, no `SYS_ADMIN`): the guest kernel loaded netem, created namespaces and veth pairs, set sysctls, loaded nftables rules, and a 50 ms netem delay was measurable. The image then needs QEMU, virtme-ng, `busybox-static` and a distribution kernel with modules. Without `/dev/kvm` the VM is emulated in software, which is slow and noisy (50 ms delay measured as 51–115 ms): functional tests only, no measurement tests. Passing `--device /dev/kvm` (not the same as privileged) makes it fast.
 - Docker's `FORWARD DROP` policy on the host does not affect the testbed: the test namespaces are separate network namespaces with their own rules.
 - **Docker Desktop (macOS/Windows)** runs containers in a Linux VM whose kernel decides which modules exist. The test preflight shows whether level 1 is complete there; level 2 needs a Linux host with KVM.
 - **What the container cannot cover:** everything that needs a whole machine (installation, boot, network managers — level 2) and real hardware (level 3).

@@ -1,0 +1,6 @@
+# Python tooling for `make generate` and `make check-spec` (installed into .venv by `make tools`).
+openapi-python-client==0.29.1
+openapi-spec-validator
+PyYAML
+jsonschema
+ruff

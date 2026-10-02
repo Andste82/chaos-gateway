@@ -1,0 +1,111 @@
+# Chaos Gateway — developer entry points. `make help` lists the targets.
+#
+# Test levels (docs/development.md, plan §4.5):
+#   make test             level 0: unit tests, no root, every commit
+#   make test-testbed     levels 1/1b: the namespace testbed, directly or in a VM, chosen automatically
+#   make test-vm          level 1b: always in a QEMU VM (the unprivileged devcontainer)
+#   make test-privileged  level 1: directly (needs a privileged container or a VM)
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+GO      ?= go
+PKG     := github.com/Andste82/chaos-gateway
+VENV    := .venv
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT) -X $(PKG)/internal/version.Date=$(DATE)
+
+# the race detector needs cgo, i.e. a C compiler
+RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
+
+.PHONY: help tools generate generate-go generate-web generate-python \
+        check-spec check-generated check-clients lint test test-web test-testbed test-vm \
+        test-privileged test-arm64 test-e2e build build-web dev image clean
+
+help: ## list the targets
+	@awk -F ':.*## ' '/^[a-zA-Z0-9_-]+:.*## /{printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# ---- setup ------------------------------------------------------------------------------------
+
+tools: ## install the Python tooling (.venv) and the web dependencies
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install -q -r tools/requirements.txt
+	cd web && npm ci
+
+# ---- code generation (api/openapi.yaml is the source of truth) ---------------------------------
+
+generate: generate-go generate-web generate-python ## regenerate all code from api/openapi.yaml
+
+generate-go: ## Go types and Gin server interface (committed)
+	$(GO) tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+
+generate-web: ## Vue Query hooks, Zod schemas and the plain TypeScript client (not committed)
+	cd web && npx orval --config orval.config.ts
+
+generate-python: ## Python client (not committed)
+	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/openapi-python-client generate \
+	  --path api/openapi.yaml --output-path clients/python/chaosgw-client \
+	  --config clients/python/config.yml --overwrite
+
+# ---- checks -----------------------------------------------------------------------------------
+
+check-spec: ## the spec validates and the examples match their schemas
+	$(VENV)/bin/python api/examples/validate.py
+
+check-generated: generate-go ## the committed generated Go code is current and everything compiles
+	git ls-files --error-unmatch internal/apiserver/api.gen.go >/dev/null
+	git diff --exit-code -- internal/apiserver
+	$(GO) build ./...
+
+check-clients: generate-web generate-python ## the generated TypeScript and Python clients compile
+	cd web && npx vue-tsc --noEmit -p tsconfig.json
+	web/node_modules/.bin/tsc -p clients/typescript/tsconfig.json
+	$(VENV)/bin/pip install -q clients/python/chaosgw-client
+	$(VENV)/bin/python -c "import chaosgw_client; print('python client imports:', chaosgw_client.__name__)"
+
+lint: ## golangci-lint and the TypeScript type check
+	golangci-lint run ./...
+	cd web && npm run typecheck
+
+# ---- tests ------------------------------------------------------------------------------------
+
+test: test-web ## level 0: Go unit tests (no root) and the web unit tests
+	$(GO) test $(RACE) -count=1 ./...
+
+test-web:
+	cd web && npm test
+
+test-testbed: ## the namespace testbed: directly where possible, else in a VM
+	$(GO) run ./tools/testvm run $(ARGS)
+
+test-vm: ## the namespace testbed in a QEMU VM (level 1b)
+	$(GO) run ./tools/testvm run -mode vm $(ARGS)
+
+test-privileged: ## the namespace testbed directly (level 1; needs privileges)
+	$(GO) run ./tools/testvm run -mode direct $(ARGS)
+
+test-arm64: ## the unit tests as arm64 binaries under qemu-user
+	GOARCH=arm64 CGO_ENABLED=0 $(GO) test -count=1 -exec qemu-aarch64 ./...
+
+test-e2e: ## Playwright end-to-end tests (needs `npx playwright install chromium` once)
+	cd web && npm run test:e2e
+
+# ---- build ------------------------------------------------------------------------------------
+
+build: build-web ## build chaosgw and chaosctl into bin/ and the web app into web/dist
+	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
+
+build-web:
+	cd web && npm run build
+
+dev: ## web dev server with a proxy to the API (CHAOSGW_API, default https://127.0.0.1:8443)
+	cd web && npm run dev
+
+image: ## multi-arch container image (no push)
+	docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile \
+	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t chaos-gateway:$(VERSION) .
+
+clean: ## remove build output and generated, uncommitted code
+	rm -rf bin web/dist web/src/api/generated clients/typescript/src clients/python/chaosgw-client

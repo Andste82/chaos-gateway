@@ -12,7 +12,11 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM |
-| `internal/apiserver` | generated Go types and Gin server interface |
+| `internal/model` | generated Go types of `api/openapi.yaml`: the domain model (no hand-written code) |
+| `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
+| `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution, overlays and their keys, observed state and device identity, candidate creation (merge patch), domain diff |
+| `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
+| `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
 | `web/` | Vue 3 app (Vite, Tailwind 4, TanStack Query, Pinia, Reka UI) |
 | `clients/` | generated TypeScript and Python clients (not committed) |
@@ -99,7 +103,7 @@ never collide, and removes everything at the end of the test, killing processes 
 
 | Output | Generator | Committed |
 |---|---|---|
-| `internal/apiserver/api.gen.go` | `go tool oapi-codegen` (version pinned in `go.mod`) | yes; `make check-generated` fails when it is stale |
+| `internal/model/model.gen.go`, `internal/apiserver/server.gen.go` | `go tool oapi-codegen` (version pinned in `go.mod`), configs `api/oapi-codegen-model.yaml` and `api/oapi-codegen-server.yaml` | yes; `make check-generated` fails when they are stale |
 | `web/src/api/generated/` | Orval: Vue Query hooks, Zod schemas | no |
 | `clients/typescript/src/` | Orval: plain fetch client | no |
 | `clients/python/chaosgw-client/` | openapi-python-client (version pinned in `tools/requirements.txt`) | no |

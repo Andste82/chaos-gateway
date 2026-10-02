@@ -88,13 +88,9 @@ func TestOverlayRequestRules(t *testing.T) {
 		{"a wireguard action with client and link", `{wireguard: {client: lab-rA, link: site-b, action: disable}}`, "/wireguard", CodeInvalidOverlay},
 		{"a ttl of zero", `{target: {global: true}, fault: {blackout: true}, ttl: 0s}`, "/ttl", CodeInvalidDuration},
 		{"a lease below a second", `{target: {global: true}, fault: {blackout: true}, lease: 500ms}`, "/lease", CodeInvalidDuration},
-		{"a remote network that is unknown", `{target: {remote_network: {cidr: 172.31.0.0/24}}, fault: {blackout: true}}`, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.code == "" {
-				t.Skip("covered: the example has dynamic routing, so any remote prefix is allowed")
-			}
 			_, errs := validateOverlay(t, tt.body)
 			wantError(t, errs, tt.path, tt.code)
 		})

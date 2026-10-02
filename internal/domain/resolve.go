@@ -25,6 +25,11 @@ import (
 //   - Faults of different families combine.
 //   - Faults act on the initiator's traffic (initiator semantics): the query's source is the
 //     device that opened the connection.
+//
+// Resolution is a function of one query: the traffic of one device towards one destination. The
+// compiler (M4, M7) expands it over all devices and selectors to build its maps; it can use
+// Candidates, Level and the order defined here for that, but the expansion itself is not part of
+// the domain.
 
 // Layer says where a candidate comes from.
 type Layer string
@@ -56,6 +61,7 @@ type World struct {
 	Overlays []model.Overlay
 
 	prefixes map[string][]netip.Prefix // per network: the prefixes that belong to it
+	mgmt     []netip.Prefix            // management sources: not reached via the uplink
 }
 
 // NewWorld prepares a resolution. The configuration must be normalized.
@@ -63,14 +69,19 @@ func NewWorld(cfg *model.Configuration, overlays []model.Overlay) *World {
 	idx, _ := BuildIndex(cfg)
 	w := &World{Config: cfg, Index: idx, Overlays: overlays, prefixes: map[string][]netip.Prefix{}}
 	for _, id := range sortedKeys(idx.Networks) {
-		w.prefixes[id] = w.networkPrefixes(idx.Networks[id])
+		w.prefixes[id] = prefixesOf(idx.Networks[id])
+	}
+	for _, s := range deref(cfg.Management.AllowedSources) {
+		if p, ok := parsePrefix(s); ok {
+			w.mgmt = append(w.mgmt, p.Masked())
+		}
 	}
 	return w
 }
 
-// networkPrefixes returns the prefixes that belong to a network: its subnet, for a hub also the
+// prefixesOf returns the prefixes that belong to a network: its subnet, for a hub also the
 // networks behind its clients, for a link its static routes.
-func (w *World) networkPrefixes(n *NetInfo) []netip.Prefix {
+func prefixesOf(n *NetInfo) []netip.Prefix {
 	var out []netip.Prefix
 	if s, ok := networkSubnet(n); ok {
 		out = append(out, s)
@@ -292,7 +303,8 @@ func (w *World) candidates() []Candidate {
 				out = append(out, tlsCandidate(LayerOverlay, id, "", since, *o.Target, *o.Tls))
 			}
 		case "dhcp":
-			if o.Target != nil && o.Dhcp != nil {
+			// delete_lease acts once; it is not a state that could win or lose
+			if o.Target != nil && o.Dhcp != nil && o.Dhcp.Action != "delete_lease" {
 				out = append(out, dhcpCandidate(LayerOverlay, id, "", since, *o.Target, *o.Dhcp))
 			}
 		case "profile":
@@ -448,6 +460,11 @@ func (w *World) viaUplink(ip netip.Addr) bool {
 			}
 		}
 	}
+	for _, p := range w.mgmt { // the management network is reached through its own interface
+		if p.Contains(ip) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -550,26 +567,32 @@ func reason(winner, loser Candidate) string {
 		return "overlay layer wins (D24)"
 	case winner.Level != loser.Level:
 		return fmt.Sprintf("level %d beats level %d", winner.Level, loser.Level)
-	case winner.IsProfilePart() != loser.IsProfilePart():
+	case winner.IsProfilePart() != loser.IsProfilePart() && sameScope(winner, loser):
 		return "a fault beats a profile part at the same scope"
 	case !winner.Since.Equal(loser.Since):
 		return "newer at the same level"
 	}
-	return "tie at the same level and time: the lower id wins"
+	return "tie at the same level and time: the higher id wins"
 }
 
-// better reports whether a beats b within one layer.
+// sameScope reports whether two candidates apply to the very same scope.
+func sameScope(a, b Candidate) bool { return scopeKey(&a.Scope) == scopeKey(&b.Scope) }
+
+// better reports whether a beats b within one layer: the more specific level; at the same level a
+// fault beats a part of an activated profile on the same scope (E8); then the newer one (D26);
+// at the very same time the higher id, which is the newer one for time-ordered UUIDs (v7) and
+// otherwise just a stable choice.
 func better(a, b Candidate) bool {
 	if a.Level != b.Level {
 		return a.Level < b.Level
 	}
-	if a.IsProfilePart() != b.IsProfilePart() {
+	if a.IsProfilePart() != b.IsProfilePart() && sameScope(a, b) {
 		return !a.IsProfilePart()
 	}
 	if !a.Since.Equal(b.Since) {
 		return a.Since.After(b.Since)
 	}
-	return a.ID < b.ID
+	return a.ID > b.ID
 }
 
 func sortCandidates(cs []Candidate) {
@@ -682,7 +705,7 @@ func (w *World) ResolveTunnels() []TunnelResult {
 			if !a.Since.Equal(b.Since) {
 				return a.Since.After(b.Since)
 			}
-			return a.ID < b.ID
+			return a.ID > b.ID
 		})
 		r := TunnelResult{Tunnel: key, Winner: cs[0]}
 		for _, loser := range cs[1:] {

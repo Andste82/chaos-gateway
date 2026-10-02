@@ -40,10 +40,8 @@ func (v *validator) devices() {
 		path := schema.Pointer("/devices", id)
 		me := identity{path, "device " + quote(dev.Name)}
 
+		// a device without identifiers is allowed: it can be adopted before its MAC is known
 		ids := deref(dev.Identifiers)
-		if len(deref(ids.Macs)) == 0 && len(deref(ids.Ipv4)) == 0 {
-			v.add(path+"/identifiers", CodeNoIdentifier, "a device needs at least one MAC address or IPv4 address or range")
-		}
 		for i, m := range deref(ids.Macs) {
 			mp := schema.Pointer(path+"/identifiers/macs", itoa(i))
 			hw, err := net.ParseMAC(m)
@@ -71,9 +69,11 @@ func (v *validator) devices() {
 				v.add(ip, CodeHostBitsSet, "%s has host bits set; the range is %s", s, p.Masked())
 				continue
 			}
+			// ranges may be nested (the most specific one wins, plan §2.3); the same prefix twice,
+			// or one address of two devices, is ambiguous
 			for _, o := range ranges {
-				if overlaps(p, o.p) {
-					v.add(ip, CodeDuplicateIdentifier, "%s overlaps the address of %s (%s)", p, o.id.of, o.id.path)
+				if p == o.p {
+					v.add(ip, CodeDuplicateIdentifier, "%s already identifies %s (%s)", p, o.id.of, o.id.path)
 				}
 			}
 			ranges = append(ranges, struct {

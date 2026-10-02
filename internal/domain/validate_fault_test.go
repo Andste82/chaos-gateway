@@ -16,8 +16,6 @@ func TestFaultRules(t *testing.T) {
 		{"reorder without latency", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"source":{"network":"IoT"},"reorder":"5%"}`), "faults", idNew)
 		}, faultPath(idNew) + "/reorder", CodeReorderNeedsLatency},
-		{"distribution without jitter", func(t *testing.T, d doc) { d.set(t, "normal", "faults", idFaultNet, "distribution") }, f + "/distribution", CodeDistributionNeedsJit},
-		{"loss correlation without loss", func(t *testing.T, d doc) { d.set(t, "20%", "faults", idFaultNet, "loss_correlation") }, f + "/loss_correlation", CodeLossCorrelationNeeds},
 		{"loss and burst loss", func(t *testing.T, d doc) {
 			d.set(t, "1%", "faults", idFaultNet, "loss")
 			d.set(t, obj(t, `{"p":"1%","r":"30%"}`), "faults", idFaultNet, "burst_loss")
@@ -205,9 +203,6 @@ func TestProfileRules(t *testing.T) {
 		{"a short ttl without a ttl", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"action":"short_ttl"}`), "profiles", idProfile, "parts", "dns")
 		}, pr + "/dns/ttl", CodeInvalidDNSFault},
-		{"a ttl below one second", func(t *testing.T, d doc) {
-			d.set(t, obj(t, `{"action":"short_ttl","ttl":"500ms"}`), "profiles", idProfile, "parts", "dns")
-		}, pr + "/dns/ttl", CodeInvalidDuration},
 		{"a delay of zero", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"action":"delay","delay":"0s"}`), "profiles", idProfile, "parts", "dns")
 		}, pr + "/dns/delay", CodeInvalidDuration},

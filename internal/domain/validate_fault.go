@@ -138,12 +138,6 @@ func (v *validator) netem(path string, p model.NetemParams, tunnel bool) {
 	if p.Reorder != nil && pct(p.Reorder) > 0 && latency <= 0 {
 		v.add(path+"/reorder", CodeReorderNeedsLatency, "reordering needs a latency: packets are reordered by delaying some of them")
 	}
-	if p.Distribution != nil && jitter <= 0 {
-		v.add(path+"/distribution", CodeDistributionNeedsJit, "a distribution shapes the jitter: set a jitter")
-	}
-	if p.LossCorrelation != nil && p.Loss == nil {
-		v.add(path+"/loss_correlation", CodeLossCorrelationNeeds, "the correlation applies to the random loss: set loss")
-	}
 	if p.Loss != nil && p.BurstLoss != nil {
 		v.add(path+"/burst_loss", CodeExclusive, "loss and burst_loss are exclusive: choose one loss model")
 	}
@@ -184,19 +178,26 @@ func (v *validator) impairment(path string, flat model.NetemParams, upload, down
 	}
 }
 
+// effective reports whether a parameter set changes anything: `blackout: false` alone does not.
+func effective(p model.NetemParams) bool {
+	for _, name := range netemSet(p) {
+		if name != "blackout" || deref(p.Blackout) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasEffect reports whether the parameters change anything.
 func hasEffect(flat model.NetemParams, upload, download *model.NetemParams) bool {
-	if len(netemSet(flat)) > 0 {
-		return true
-	}
-	return (upload != nil && len(netemSet(*upload)) > 0) || (download != nil && len(netemSet(*download)) > 0)
+	return effective(flat) || (upload != nil && effective(*upload)) || (download != nil && effective(*download))
 }
 
 // ---- fault bodies -----------------------------------------------------------------------
 
 func (v *validator) mtu(path string, m model.MtuParams) {
 	if m.Size < 552 || m.Size > 1500 {
-		v.add(path+"/size", CodeInvalidPrefixLength, "the size must be between 552 and 1500 bytes")
+		v.add(path+"/size", CodeInvalidMTU, "the size must be between 552 and 1500 bytes")
 	}
 }
 
@@ -302,8 +303,9 @@ func (v *validator) dnsFault(path string, d model.DnsFault) {
 		}
 	}
 	if d.Ttl != nil {
-		if got, ok := parseDuration(*d.Ttl); !ok || got < time.Second {
-			v.add(path+"/ttl", CodeInvalidDuration, "the TTL must be at least 1s")
+		// a TTL of 0 is a legitimate test: answers that must not be cached
+		if got, ok := parseDuration(*d.Ttl); !ok || got < 0 {
+			v.add(path+"/ttl", CodeInvalidDuration, "the TTL must not be negative")
 		}
 	}
 	for i, a := range deref(d.Answers) {

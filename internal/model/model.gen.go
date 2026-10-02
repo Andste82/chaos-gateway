@@ -4248,7 +4248,10 @@ type Overlay struct {
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted.
+	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+	// `sni` or a destination count as destination: a case without selectors on a device has
+	// level 3, with an SNI level 1.
 	Tls *TlsCase `json:"tls,omitempty"`
 
 	// Ttl Remove the overlay after this time.
@@ -4329,7 +4332,10 @@ type OverlayRequest struct {
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted.
+	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+	// `sni` or a destination count as destination: a case without selectors on a device has
+	// level 3, with an SNI level 1.
 	Tls *TlsCase `json:"tls,omitempty"`
 
 	// Ttl Remove the overlay after this time.
@@ -4518,7 +4524,10 @@ type ProfileParts struct {
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted.
+	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+	// `sni` or a destination count as destination: a case without selectors on a device has
+	// level 3, with an SNI level 1.
 	Tls *TlsCase `json:"tls,omitempty"`
 }
 
@@ -4607,7 +4616,9 @@ type Revision struct {
 	CreatedBy   Actor      `json:"created_by"`
 	Id          int64      `json:"id"`
 
-	// LastKnownGood The revision booted after a failed start or an unconfirmed change.
+	// LastKnownGood The last revision that was applied, verified and (if it needed it) confirmed. It is
+	// the one applied after a failed start, and a revision that was never confirmed never
+	// becomes it.
 	LastKnownGood *bool          `json:"last_known_good,omitempty"`
 	Message       *string        `json:"message,omitempty"`
 	SchemaVersion int            `json:"schema_version"`
@@ -4639,7 +4650,9 @@ type RevisionWithConfiguration struct {
 	CreatedBy     Actor         `json:"created_by"`
 	Id            int64         `json:"id"`
 
-	// LastKnownGood The revision booted after a failed start or an unconfirmed change.
+	// LastKnownGood The last revision that was applied, verified and (if it needed it) confirmed. It is
+	// the one applied after a failed start, and a revision that was never confirmed never
+	// becomes it.
 	LastKnownGood *bool          `json:"last_known_good,omitempty"`
 	Message       *string        `json:"message,omitempty"`
 	SchemaVersion int            `json:"schema_version"`
@@ -5069,7 +5082,10 @@ type Step struct {
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted.
+	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+	// `sni` or a destination count as destination: a case without selectors on a device has
+	// level 3, with an SNI level 1.
 	Tls *TlsCase `json:"tls,omitempty"`
 
 	// Wait Waits until the condition holds for the step target; on timeout the run ends as `error` (like a failed precondition).
@@ -5113,7 +5129,10 @@ type SystemInfoArch string
 
 // TlsCase TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 // (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-// Default ports 443 and 8883; protocol must be `tcp` or omitted.
+// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+// `sni` or a destination count as destination: a case without selectors on a device has
+// level 3, with an SNI level 1.
 type TlsCase struct {
 	Case        TlsCaseCase `json:"case"`
 	CutExisting *bool       `json:"cut_existing,omitempty"`

@@ -25,6 +25,16 @@ func storeWithTwo(t *testing.T) (*Store, string) {
 	return s, dir
 }
 
+// dirWithTwo is storeWithTwo for tests that open the directory themselves: the store is closed.
+func dirWithTwo(t *testing.T) string {
+	t.Helper()
+	s, dir := storeWithTwo(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func revFile(dir string, id int64) string {
 	return filepath.Join(dir, "revisions", revisionName(id)+".json")
 }
@@ -169,7 +179,7 @@ func TestAConfigurationThatChecksOutButDoesNotDecodeIsNotReturned(t *testing.T) 
 }
 
 func TestACorruptStateFileStopsOpen(t *testing.T) {
-	_, dir := storeWithTwo(t)
+	dir := dirWithTwo(t)
 	rewrite(t, filepath.Join(dir, "config.json"), func(string) string { return "garbage" })
 	if _, err := Open(dir); asCorrupt(err) == nil {
 		t.Fatalf("Open: %v", err)
@@ -185,18 +195,14 @@ func TestAnOrphanRevisionFileRepairsTheNextID(t *testing.T) {
 	// pointer does not know it yet
 	s, dir := storeWithTwo(t)
 	rewrite(t, filepath.Join(dir, "config.json"), func(s string) string { return strings.Replace(s, `"next_id": 3`, `"next_id": 2`, 1) })
-	s2, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s2 := reopen(t, s, dir)
 	if r := create(t, s2, exampleConfig(t), 1, ""); r.Id != 3 {
 		t.Fatalf("the orphan must keep its id: the next id is %d, want 3", r.Id)
 	}
-	_ = s
 }
 
 func TestTemporaryFilesOfAnInterruptedWriteAreRemovedAtOpen(t *testing.T) {
-	_, dir := storeWithTwo(t)
+	dir := dirWithTwo(t)
 	leftovers := []string{
 		filepath.Join(dir, "config.json"+tmpMarker+"deadbeef"),
 		filepath.Join(dir, "revisions", "000003.json"+tmpMarker+"cafe"),
@@ -300,7 +306,7 @@ func TestAFileOfANewerSchemaStopsOpenWithTheVersionThatIsNeeded(t *testing.T) {
 		{"a status file", func(dir string) string { return filepath.Join(dir, "revisions", "000001.status.json") }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, dir := storeWithTwo(t)
+			dir := dirWithTwo(t)
 			rewrite(t, tt.path(dir), func(s string) string { return strings.Replace(s, `"schema_version": 1`, `"schema_version": 7`, 1) })
 			_, err := Open(dir)
 			var newer *ErrNewerSchema
@@ -316,8 +322,7 @@ func TestAFileOfANewerSchemaStopsOpenWithTheVersionThatIsNeeded(t *testing.T) {
 
 // writeOldFormat writes a revision in an imaginary schema version 0, where the id was called "n".
 func TestOlderFilesAreMigratedWithABackup(t *testing.T) {
-	s, dir := storeWithTwo(t)
-	_ = s
+	dir := dirWithTwo(t)
 	// turn revision 1 into a version-0 file: "id" was "n", and no schema_version bump in the content
 	rewrite(t, revFile(dir, 1), func(s string) string {
 		s = strings.Replace(s, `"schema_version": 1`, `"schema_version": 0`, 1)
@@ -346,13 +351,14 @@ func TestOlderFilesAreMigratedWithABackup(t *testing.T) {
 		t.Fatalf("the backup must hold the old content: %v", err)
 	}
 	// a second open has nothing to do
+	_ = s2.Close()
 	if _, err := open(dir, mig); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestMigrationsRunStepByStep(t *testing.T) {
-	_, dir := storeWithTwo(t)
+	dir := dirWithTwo(t)
 	rewrite(t, filepath.Join(dir, "config.json"), func(s string) string { return strings.Replace(s, `"schema_version": 1`, `"schema_version": -1`, 1) })
 	var calls []int
 	mig := migrations{"state": {
@@ -374,7 +380,7 @@ func TestMigrationsRunStepByStep(t *testing.T) {
 }
 
 func TestAMissingOrFailingMigrationStopsOpen(t *testing.T) {
-	_, dir := storeWithTwo(t)
+	dir := dirWithTwo(t)
 	rewrite(t, revFile(dir, 1), func(s string) string { return strings.Replace(s, `"schema_version": 1`, `"schema_version": 0`, 1) })
 	if _, err := Open(dir); asCorrupt(err) == nil || !strings.Contains(err.Error(), "no migration from schema version 0") {
 		t.Fatalf("no migration registered: %v", err)

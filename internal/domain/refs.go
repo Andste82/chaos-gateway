@@ -225,9 +225,9 @@ func visitOverlayRequest(r *model.OverlayRequest, fn refFunc) {
 // Normalize returns a copy of the configuration in which every reference is the UUID of the
 // object it names (plan conventions: stored configurations contain UUIDs only). References that
 // do not resolve are reported as unknown_reference and left as they are.
-func Normalize(cfg *model.Configuration) (*model.Configuration, []model.ValidationError) {
+func Normalize(cfg *model.Configuration, opts ...Option) (*model.Configuration, []model.ValidationError) {
 	out := clone(*cfg)
-	idx, errs := BuildIndex(&out)
+	idx, errs := newIndex(&out, collectOptions(opts))
 	errs = append(errs, resolveRefs(&out, idx)...)
 	return &out, errs
 }

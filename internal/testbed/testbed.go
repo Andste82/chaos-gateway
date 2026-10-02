@@ -68,13 +68,28 @@ func newConfig(opts []Option) config {
 	return c
 }
 
-// RandomPrefix returns a namespace prefix that is unique per call: "tb" and six hex digits.
+var (
+	prefixMu   sync.Mutex
+	prefixUsed = map[string]bool{}
+)
+
+// RandomPrefix returns a namespace prefix that is unique: "tb" and eight random hex digits. It
+// never returns the same prefix twice in one process, so the beds of one test run cannot
+// collide; separate processes (parallel runs) are kept apart by the 32 random bits.
 func RandomPrefix() string {
-	var b [3]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err) // crypto/rand does not fail on Linux
+	prefixMu.Lock()
+	defer prefixMu.Unlock()
+	for {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			panic(err) // crypto/rand does not fail on Linux
+		}
+		p := "tb" + hex.EncodeToString(b[:])
+		if !prefixUsed[p] {
+			prefixUsed[p] = true
+			return p
+		}
 	}
-	return "tb" + hex.EncodeToString(b[:])
 }
 
 // proxyVars are removed from the environment of everything run in a namespace: testbed traffic

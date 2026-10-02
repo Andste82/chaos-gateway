@@ -115,6 +115,10 @@ unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM
 it does not, it runs emulated. Where the KVM-dependent tests finally run is open question Q1.
 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
-(`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem fails it
-visibly. It is marked `continue-on-error` until it is known whether hosted kernels have the
-modules; the workflow has not run on GitHub yet.
+(`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem would
+fail it visibly.
+
+What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
+`/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,
+a 50 ms netem delay measured 50.2 ms), and their kernel has the modules, so the privileged job ran
+the testbed tests directly in 12 s.

@@ -144,6 +144,18 @@ func TestCheckModulesWithoutModuleFilesReportsMissing(t *testing.T) {
 	}
 }
 
+func TestCheckModulesFindsModulesUnderUsrLibWithoutTheLibLink(t *testing.T) {
+	env := Env{
+		Release: "6.8.0-142-generic",
+		FS: fstest.MapFS{
+			"usr/lib/modules/6.8.0-142-generic/modules.dep": {Data: []byte("kernel/net/sched/sch_netem.ko.zst:\n")},
+		},
+	}
+	if r := CheckModules(env, []Module{{Name: "sch_netem"}}); r[0].Status != Available {
+		t.Fatalf("status = %v", r[0].Status)
+	}
+}
+
 func TestMissingModulesIgnoresLaterModules(t *testing.T) {
 	env := Env{FS: fstest.MapFS{}, Release: "6.8.0"}
 	miss := MissingModules(CheckModules(env, Modules()))

@@ -8,6 +8,8 @@
 package vmrun
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -31,13 +33,18 @@ type Unit struct {
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
-// UnitName turns an import path into a name that is safe as a file name.
+// UnitName turns an import path into a name that is safe as a file name. A short hash of the
+// path keeps names unique where the readable part is not ("a/b" and "a_b").
 func UnitName(importPath string) string {
 	n := strings.Trim(unsafeName.ReplaceAllString(importPath, "_"), "_")
 	if n == "" {
-		return "pkg"
+		n = "pkg"
 	}
-	return n
+	if len(n) > 80 {
+		n = n[len(n)-80:]
+	}
+	sum := sha256.Sum256([]byte(importPath))
+	return n + "-" + hex.EncodeToString(sum[:4])
 }
 
 // ShellQuote quotes s for a POSIX shell.
@@ -91,7 +98,7 @@ func GuestScript(o GuestOptions, units []Unit) string {
 		}
 		out := ShellQuote(filepath.Join(results, u.Name+outSuffix))
 		code := ShellQuote(filepath.Join(results, u.Name+exitSuffix))
-		fmt.Fprintf(&b, "echo \"=== %s\"\n", u.ImportPath)
+		fmt.Fprintf(&b, "echo %s\n", ShellQuote("=== "+u.ImportPath))
 		fmt.Fprintf(&b, "( cd %s && %s ) > %s 2>&1\n", ShellQuote(u.Dir), strings.Join(args, " "), out)
 		fmt.Fprintf(&b, "rc=$?\necho $rc > %s\ncat %s\n[ $rc -eq 0 ] || status=1\n", code, out)
 	}

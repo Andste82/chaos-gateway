@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -111,14 +114,156 @@ func TestRunWithFakeVMAllPass(t *testing.T) {
 	}
 }
 
-func TestRunRemovesTheWorkDirectoryUnlessKept(t *testing.T) {
+func TestRunRemovesAWorkDirectoryItCreatedAfterSuccess(t *testing.T) {
+	fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	c, _ := fixtureConfig(t)
+	c.WorkDir = "" // let Run create it
+	if s, err := Run(context.Background(), c); err != nil || !s.OK() {
+		t.Fatalf("run: %v %v", err, s.Problems())
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("the work directory was not removed: %v", left)
+	}
+}
+
+func TestRunKeepsACreatedWorkDirectoryAfterAFailureAndSaysWhere(t *testing.T) {
+	fakeVNG(t, "echo boom >&2\nexit 1\n")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	c, out := fixtureConfig(t)
+	c.WorkDir = ""
+	if s, err := Run(context.Background(), c); err != nil || s.OK() {
+		t.Fatalf("run: %v ok=%v", err, s.OK())
+	}
+	left, _ := os.ReadDir(tmp)
+	if len(left) != 1 || !strings.Contains(out.String(), "kept for inspection: "+filepath.Join(tmp, left[0].Name())) {
+		t.Fatalf("left %v, output:\n%s", left, out)
+	}
+}
+
+func TestRunNeverRemovesADirectoryTheCallerNamedButClearsStaleResults(t *testing.T) {
 	fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
 	c, _ := fixtureConfig(t)
-	if _, err := Run(context.Background(), c); err != nil {
+	if err := os.MkdirAll(filepath.Join(c.WorkDir, "results"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(c.WorkDir); !os.IsNotExist(err) {
-		t.Fatalf("work directory was not removed: %v", err)
+	// a finished earlier run: it must not make a dead VM look like a pass
+	stale := map[string]string{"done": "done\n", "x.exit": "0\n"}
+	for name, body := range stale {
+		if err := os.WriteFile(filepath.Join(c.WorkDir, "results", name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	precious := filepath.Join(c.WorkDir, "keep.txt")
+	if err := os.WriteFile(precious, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakeVNG(t, "exit 1\n") // the new VM dies at boot
+	s, err := Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.OK() || s.Finished {
+		t.Fatalf("stale results made a dead VM look like a pass: %v", s.Problems())
+	}
+	if _, err := os.Stat(precious); err != nil {
+		t.Fatal("a directory the caller named must never be removed")
+	}
+	if _, err := os.Stat(filepath.Join(c.WorkDir, "results", "x.exit")); !os.IsNotExist(err) {
+		t.Fatal("stale results were not cleared")
+	}
+}
+
+func alive(pid int) bool {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	stat := string(raw)
+	rest := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
+	return len(rest) > 0 && rest[0] != "Z" // a zombie is dead, only not yet reaped
+}
+
+// A VM that does not finish is killed with everything it started, and the run says so.
+func TestRunTimeoutKillsTheWholeProcessTree(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	fakeVNG(t, "sleep 300 &\necho $! > '"+pidFile+"'\nwait\n")
+	c, _ := fixtureConfig(t)
+	c.VMTimeout = 2 * time.Second
+	start := time.Now()
+	s, err := Run(context.Background(), c)
+	if err == nil || !strings.Contains(err.Error(), "did not finish within") {
+		t.Fatalf("err = %v", err)
+	}
+	if took := time.Since(start); took > 60*time.Second {
+		t.Fatalf("the timeout took %v", took)
+	}
+	if s.OK() || len(s.Packages) == 0 {
+		t.Fatalf("a timed-out run must return its (failed) summary: %+v", s)
+	}
+	raw, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(pid) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if alive(pid) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("process %d of the VM survived the timeout", pid)
+	}
+}
+
+func TestRunCancelKillsTheVMToo(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	fakeVNG(t, "sleep 300 &\necho $! > '"+pidFile+"'\nwait\n")
+	c, _ := fixtureConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for i := 0; i < 200; i++ { // wait until the fake VM runs
+			if _, err := os.Stat(pidFile); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		cancel()
+	}()
+	_, err := Run(ctx, c)
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("err = %v", err)
+	}
+	raw, _ := os.ReadFile(pidFile)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(pid) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if alive(pid) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("process %d survived the cancel", pid)
+	}
+}
+
+func TestDescendantsFindsAllLevels(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "sleep 30 & sleep 30 & wait")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { killTree(cmd.Process.Pid); _ = cmd.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	var got []int
+	for time.Now().Before(deadline) {
+		if got = descendants(cmd.Process.Pid); len(got) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(got) < 2 {
+		t.Fatalf("descendants = %v, want the two sleeps", got)
 	}
 }
 

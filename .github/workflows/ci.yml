@@ -34,8 +34,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install golangci-lint
-        run: curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/.local/bin" "$GOLANGCI_LINT_VERSION" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: make tools
+        run: curl -fsSL "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT_VERSION/install.sh" | sh -s -- -b "$HOME/.local/bin" "$GOLANGCI_LINT_VERSION" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: make check-spec
       - run: make check-generated
       - run: make check-clients
@@ -67,8 +66,8 @@ jobs:
           context: .devcontainer
           load: true
           tags: chaos-gateway-dev
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
       - name: Enable KVM if the runner offers it
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -81,11 +80,16 @@ jobs:
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm
 
-  # Level 1: the same tests directly in a privileged container, where the runner's kernel has
-  # the modules. If it lacks them, `test-testbed` falls back to a VM instead of skipping.
+  # Level 1: the same tests directly in a privileged container. The container has no modules of
+  # its own, so the runner's /lib/modules is mounted read-only and the tests load them into the
+  # runner's kernel. This job runs the tests directly (`test-privileged`), never in a VM: if the
+  # hosted kernel lacks a module (netem, for one) the preflight fails the job with the list, which
+  # is the information that decides whether this level is available in hosted CI at all. Until
+  # that is known the job must not block the others.
   testbed-privileged:
     name: testbed (level 1, privileged container)
     runs-on: ubuntu-24.04
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -94,9 +98,9 @@ jobs:
           context: .devcontainer
           load: true
           tags: chaos-gateway-dev
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - run: docker run --rm --privileged -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-testbed
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
+      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged
 
   # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).

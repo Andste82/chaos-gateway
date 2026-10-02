@@ -29,10 +29,21 @@ help: ## list the targets
 
 # ---- setup ------------------------------------------------------------------------------------
 
-tools: ## install the Python tooling (.venv) and the web dependencies
+# The tooling is installed on demand: the targets below depend on these stamp files, so a clean
+# checkout works with `make test` or `make check-spec` right away. `make tools` installs both.
+PYTOOLS := $(VENV)/.installed
+WEBDEPS := web/node_modules/.installed
+
+$(PYTOOLS): tools/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -q -r tools/requirements.txt
+	touch $@
+
+$(WEBDEPS): web/package-lock.json
 	cd web && npm ci
+	touch $@
+
+tools: $(PYTOOLS) $(WEBDEPS) ## install the Python tooling (.venv) and the web dependencies
 
 # ---- code generation (api/openapi.yaml is the source of truth) ---------------------------------
 
@@ -41,17 +52,17 @@ generate: generate-go generate-web generate-python ## regenerate all code from a
 generate-go: ## Go types and Gin server interface (committed)
 	$(GO) tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 
-generate-web: ## Vue Query hooks, Zod schemas and the plain TypeScript client (not committed)
+generate-web: $(WEBDEPS) ## Vue Query hooks, Zod schemas and the plain TypeScript client (not committed)
 	cd web && npx orval --config orval.config.ts
 
-generate-python: ## Python client (not committed)
+generate-python: $(PYTOOLS) ## Python client (not committed)
 	PATH="$(CURDIR)/$(VENV)/bin:$$PATH" $(VENV)/bin/openapi-python-client generate \
 	  --path api/openapi.yaml --output-path clients/python/chaosgw-client \
 	  --config clients/python/config.yml --overwrite
 
 # ---- checks -----------------------------------------------------------------------------------
 
-check-spec: ## the spec validates and the examples match their schemas
+check-spec: $(PYTOOLS) ## the spec validates and the examples match their schemas
 	$(VENV)/bin/python api/examples/validate.py
 
 check-generated: generate-go ## the committed generated Go code is current and everything compiles
@@ -65,7 +76,7 @@ check-clients: generate-web generate-python ## the generated TypeScript and Pyth
 	$(VENV)/bin/pip install -q clients/python/chaosgw-client
 	$(VENV)/bin/python -c "import chaosgw_client; print('python client imports:', chaosgw_client.__name__)"
 
-lint: ## golangci-lint and the TypeScript type check
+lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 	golangci-lint run ./...
 	cd web && npm run typecheck
 
@@ -74,7 +85,7 @@ lint: ## golangci-lint and the TypeScript type check
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 	$(GO) test $(RACE) -count=1 ./...
 
-test-web:
+test-web: $(WEBDEPS)
 	cd web && npm test
 
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
@@ -89,7 +100,7 @@ test-privileged: ## the namespace testbed directly (level 1; needs privileges)
 test-arm64: ## the unit tests as arm64 binaries under qemu-user
 	GOARCH=arm64 CGO_ENABLED=0 $(GO) test -count=1 -exec qemu-aarch64 ./...
 
-test-e2e: ## Playwright end-to-end tests (needs `npx playwright install chromium` once)
+test-e2e: $(WEBDEPS) ## Playwright end-to-end tests (needs `npx playwright install chromium` once)
 	cd web && npm run test:e2e
 
 # ---- build ------------------------------------------------------------------------------------
@@ -97,15 +108,15 @@ test-e2e: ## Playwright end-to-end tests (needs `npx playwright install chromium
 build: build-web ## build chaosgw and chaosctl into bin/ and the web app into web/dist
 	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
 
-build-web:
+build-web: $(WEBDEPS)
 	cd web && npm run build
 
-dev: ## web dev server with a proxy to the API (CHAOSGW_API, default https://127.0.0.1:8443)
+dev: $(WEBDEPS) ## web dev server with a proxy to the API (CHAOSGW_API, default https://127.0.0.1:8443)
 	cd web && npm run dev
 
 image: ## multi-arch container image (no push)
 	docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile \
-	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t chaos-gateway:$(VERSION) .
+	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t chaos-gateway:$(VERSION) .
 
 clean: ## remove build output and generated, uncommitted code
 	rm -rf bin web/dist web/src/api/generated clients/typescript/src clients/python/chaosgw-client

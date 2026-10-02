@@ -69,8 +69,8 @@ func runTests(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	verbose := fs.Bool("v", false, "verbose output in direct mode")
 	testTimeout := fs.Duration("test-timeout", 20*time.Minute, "timeout per test binary")
 	vmTimeout := fs.Duration("vm-timeout", 60*time.Minute, "timeout of the whole VM")
-	work := fs.String("work", "", "work directory shared with the VM (default: a temporary one under .testvm)")
-	keep := fs.Bool("keep", false, "keep the work directory (binaries, results)")
+	work := fs.String("work", "", "work directory shared with the VM (default: a temporary one that is kept after a failure; a named one is never removed)")
+	keep := fs.Bool("keep", false, "also keep a created work directory after a successful run")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -141,11 +141,14 @@ func runTests(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		TestTimeout: *testTimeout, VMTimeout: *vmTimeout, WorkDir: *work, Keep: *keep,
 		Stdout: stdout, Stderr: stderr,
 	})
+	if len(summary.Packages) > 0 {
+		// also after a timeout or a cancel: whatever the guest recorded is worth seeing
+		fmt.Fprint(stdout, "\n"+summary.Report())
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "testvm:", err)
 		return 2
 	}
-	fmt.Fprint(stdout, "\n"+summary.Report())
 	if !summary.OK() {
 		return 1
 	}

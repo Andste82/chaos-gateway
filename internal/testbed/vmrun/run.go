@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -205,8 +206,14 @@ func buildUnits(ctx context.Context, c Config, units []Unit) error {
 }
 
 // Run builds the test binaries, boots one VM, runs them all in it and returns the summary. The
-// error is non-nil when the run could not be carried out at all; failing tests are reported in
-// the Summary.
+// error is non-nil when the run could not be carried out completely (the VM hit its timeout, the
+// run was cancelled); the summary then still holds whatever the guest recorded. Failing tests are
+// reported in the Summary only.
+//
+// A work directory that Run created is removed after a successful run; after a failure or an
+// error it is kept and its path is printed, so the output can be inspected. A directory the
+// caller named is never removed, but its results of earlier runs are cleared before the boot:
+// stale files must never make a dead VM look like a pass.
 func Run(ctx context.Context, c Config) (Summary, error) {
 	c.defaults()
 	if _, err := exec.LookPath("vng"); err != nil {
@@ -215,12 +222,13 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 	if !KernelInstalled(c.Kernel) {
 		return Summary{}, fmt.Errorf("kernel %s is not installed (/boot/vmlinuz-%s)", c.Kernel, c.Kernel)
 	}
+	created := false
 	if c.WorkDir == "" {
 		dir, err := os.MkdirTemp("", "testvm-")
 		if err != nil {
 			return Summary{}, err
 		}
-		c.WorkDir = dir
+		c.WorkDir, created = dir, true
 	} else if err := os.MkdirAll(c.WorkDir, 0o755); err != nil {
 		return Summary{}, err
 	}
@@ -229,10 +237,24 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 		return Summary{}, err
 	}
 	c.WorkDir = abs
-	if !c.Keep {
-		defer func() { _ = os.RemoveAll(c.WorkDir) }()
+	for _, stale := range []string{"results", "bin", "guest.sh"} {
+		if err := os.RemoveAll(filepath.Join(c.WorkDir, stale)); err != nil {
+			return Summary{}, err
+		}
 	}
 
+	summary, err := run(ctx, c)
+	if created && !c.Keep {
+		if err == nil && summary.OK() {
+			_ = os.RemoveAll(c.WorkDir)
+		} else {
+			fmt.Fprintf(c.Stderr, "vmrun: the work directory is kept for inspection: %s\n", c.WorkDir)
+		}
+	}
+	return summary, err
+}
+
+func run(ctx context.Context, c Config) (Summary, error) {
 	units, err := TestbedPackages(ctx, c.Dir, c.Tags, c.Packages)
 	if err != nil {
 		return Summary{}, err
@@ -261,14 +283,71 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 	cmd.Dir = c.Dir
 	cmd.Stdout, cmd.Stderr = c.Stdout, c.Stderr
 	cmd.Stdin = nil
+	// QEMU is a grandchild (vng -> virtme-run -> qemu, and script(1) puts it behind a pty):
+	// killing the direct child alone would leave the VM running, so a timeout or Ctrl-C kills
+	// the whole process tree. WaitDelay stops Wait from hanging on pipes the orphans still hold.
+	cmd.Cancel = func() error { killTree(cmd.Process.Pid); return nil }
+	cmd.WaitDelay = 10 * time.Second
 	runErr := cmd.Run()
 
 	summary, err := Collect(os.DirFS(c.WorkDir), units)
 	if err != nil {
 		return summary, err
 	}
-	if runErr != nil && vmCtx.Err() != nil {
+	switch {
+	case runErr != nil && errors.Is(vmCtx.Err(), context.DeadlineExceeded):
 		return summary, fmt.Errorf("the VM did not finish within %v", c.VMTimeout)
+	case runErr != nil && ctx.Err() != nil:
+		return summary, fmt.Errorf("cancelled: %w", ctx.Err())
 	}
 	return summary, nil
+}
+
+// descendants returns the pids of all processes below pid, deepest last.
+func descendants(pid int) []int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	children := map[int][]int{}
+	for _, e := range entries {
+		p, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// "pid (comm) state ppid ...": comm may contain spaces and parentheses
+		stat := string(raw)
+		rest := stat[strings.LastIndexByte(stat, ')')+1:]
+		fields := strings.Fields(rest)
+		if len(fields) < 2 {
+			continue
+		}
+		if ppid, err := strconv.Atoi(fields[1]); err == nil {
+			children[ppid] = append(children[ppid], p)
+		}
+	}
+	var out []int
+	queue := []int{pid}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, ch := range children[cur] {
+			out = append(out, ch)
+			queue = append(queue, ch)
+		}
+	}
+	return out
+}
+
+// killTree kills pid and everything below it.
+func killTree(pid int) {
+	tree := descendants(pid)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	for _, p := range tree {
+		_ = syscall.Kill(p, syscall.SIGKILL)
+	}
 }

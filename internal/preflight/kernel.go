@@ -118,7 +118,14 @@ func moduleIndex(fsys fs.FS, file string) map[string]bool {
 
 // CheckModules reports the state of the given modules on env.
 func CheckModules(env Env, mods []Module) []ModuleReport {
-	dir := path.Join("lib/modules", strings.TrimSpace(env.Release))
+	release := strings.TrimSpace(env.Release)
+	dir := path.Join("lib/modules", release)
+	if _, err := fs.Stat(env.FS, dir); err != nil {
+		// some layouts have no /lib -> usr/lib link
+		if _, err := fs.Stat(env.FS, path.Join("usr/lib/modules", release)); err == nil {
+			dir = path.Join("usr/lib/modules", release)
+		}
+	}
 	available := moduleIndex(env.FS, path.Join(dir, "modules.dep"))
 	builtin := moduleIndex(env.FS, path.Join(dir, "modules.builtin"))
 	out := make([]ModuleReport, 0, len(mods))

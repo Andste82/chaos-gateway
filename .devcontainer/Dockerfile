@@ -95,7 +95,7 @@ RUN python3 -m venv /opt/mitm-venv \
 # Project-specific generators (oapi-codegen) are pinned in go.mod as `go tool`
 # dependencies, not here.
 ARG GOLANGCI_LINT_VERSION=v2.14.0
-RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh \
         | sh -s -- -b /usr/local/bin "${GOLANGCI_LINT_VERSION}" \
     && golangci-lint version
 

@@ -18,13 +18,20 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `clients/` | generated TypeScript and Python clients (not committed) |
 | `deploy/` | the container image (multi-arch) |
 
+## Setup
+
+The devcontainer has all system tools. The Python tooling (`.venv`) and the web dependencies
+(`web/node_modules`) are installed on demand: the make targets that need them depend on stamp
+files, so `make test` or `make check-spec` work in a clean checkout. `make tools` installs both at
+once. Playwright needs its browser once: `cd web && npx playwright install chromium`.
+
 ## Test levels
 
 The plan (§4.5) defines levels; this is how they map to commands.
 
 | Level | Command | What runs | Needs |
 |---|---|---|---|
-| 0 | `make test` | Go unit tests (`-race` when a C compiler is installed), web unit tests | nothing |
+| 0 | `make test` | Go unit tests (`-race` when a C compiler is installed), web unit tests | no root; the web dependencies (installed by make) |
 | 1 | `make test-privileged` | the testbed tests directly | root, kernel modules (a privileged container, or a VM) |
 | 1b | `make test-vm` | the testbed tests in a QEMU VM with a stock Ubuntu kernel | `vng`, QEMU, the kernels in `/boot` (all in the devcontainer) |
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
@@ -47,7 +54,12 @@ tests do not and run at level 0 only.
 `tools/testvm run -mode vm` (`internal/testbed/vmrun`) compiles the test binaries of all packages
 with `testbed`-tagged tests, boots **one** VM and runs them all in it. Results (exit code and
 output per package, a completion marker) come back through a read-write share, so a VM that dies
-halfway is a failed run, not a silent pass. It sets `CHAOSGW_TESTBED_EMULATED=1` in the guest when
+halfway is a failed run, not a silent pass: results of earlier runs are cleared before the boot,
+and a run in which no test ran at all fails too. The exit code is 0 for success, 1 when a test or
+the VM failed and 2 when the run could not be carried out (timeout, cancel, missing tools). On
+a timeout or Ctrl-C the whole process tree of the VM is killed. A work directory the runner
+created is kept after a failure and its path is printed; one you name with `-work` is never
+removed. It sets `CHAOSGW_TESTBED_EMULATED=1` in the guest when
 there is no `/dev/kvm`, which turns accuracy assertions into functional ones (`testbed.Accurate()`).
 
 Things to know:
@@ -101,3 +113,8 @@ Python clients and checks that they compile and import. CI runs all three.
 testbed tests in a VM and in a privileged container, and the arm64 job (multi-arch image build,
 unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
 it does not, it runs emulated. Where the KVM-dependent tests finally run is open question Q1.
+
+The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
+(`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem fails it
+visibly. It is marked `continue-on-error` until it is known whether hosted kernels have the
+modules; the workflow has not run on GitHub yet.

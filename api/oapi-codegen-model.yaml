@@ -1,0 +1,10 @@
+# oapi-codegen configuration for the domain model: the types of api/openapi.yaml (plan §3.7).
+# The domain, the store and the compiler use these types directly; the server code lives in a
+# separate package so that it can import the domain without an import cycle.
+# Regenerate with `make generate`; the generated file is committed (CI checks it).
+package: model
+output: internal/model/model.gen.go
+generate:
+  models: true
+output-options:
+  skip-prune: true

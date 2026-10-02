@@ -49,8 +49,9 @@ tools: $(PYTOOLS) $(WEBDEPS) ## install the Python tooling (.venv) and the web d
 
 generate: generate-go generate-web generate-python ## regenerate all code from api/openapi.yaml
 
-generate-go: ## Go types and Gin server interface (committed)
-	$(GO) tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+generate-go: ## Go model types and Gin server interface (committed)
+	$(GO) tool oapi-codegen -config api/oapi-codegen-model.yaml api/openapi.yaml
+	$(GO) tool oapi-codegen -config api/oapi-codegen-server.yaml api/openapi.yaml
 
 generate-web: $(WEBDEPS) ## Vue Query hooks, Zod schemas and the plain TypeScript client (not committed)
 	cd web && npx orval --config orval.config.ts
@@ -66,8 +67,8 @@ check-spec: $(PYTOOLS) ## the spec validates and the examples match their schema
 	$(VENV)/bin/python api/examples/validate.py
 
 check-generated: generate-go ## the committed generated Go code is current and everything compiles
-	git ls-files --error-unmatch internal/apiserver/api.gen.go >/dev/null
-	git diff --exit-code -- internal/apiserver
+	git ls-files --error-unmatch internal/model/model.gen.go internal/apiserver/server.gen.go >/dev/null
+	git diff --exit-code -- internal/model internal/apiserver
 	$(GO) build ./...
 
 check-clients: generate-web generate-python ## the generated TypeScript and Python clients compile

@@ -79,7 +79,6 @@ expect_invalid("upper-case MAC", "MacAddress", "AA:BB:CC:DD:EE:FF")
 expect_invalid("step without at", "Step", {"id": "x", "restore": True})
 expect_invalid("bad step id", "Step", {"id": "Bad Id", "at": "1s", "restore": True})
 expect_invalid("schema version 2", "Configuration", {**config, "schema_version": 2})
-expect_invalid("one-time DHCP action as persistent fault", "ConfigFault", {"family": "dhcp", "source": {"network": "IoT"}, "dhcp": {"action": "force_new_ip"}})
 
 print("all examples valid" if not failed else f"{failed} problem(s)")
 sys.exit(1 if failed else 0)

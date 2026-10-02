@@ -1151,24 +1151,6 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ProfileView'}
         default: {$ref: '#/components/responses/Problem'}
-  /profile-activations:
-    get:
-      tags: [config]
-      operationId: listProfileActivations
-      summary: Persistent profile activations (overlay activations are under `/overlays?kind=profile`)
-      x-milestone: M11
-      x-required-scope: read
-      parameters:
-        - $ref: '#/components/parameters/RevisionQuery'
-        - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
-      responses:
-        '200':
-          description: Profile activations
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ProfileActivationPage'}
-        default: {$ref: '#/components/responses/Problem'}
   /scenarios:
     get:
       tags: [config]
@@ -2249,10 +2231,6 @@ components:
         faults:
           type: object
           additionalProperties: {$ref: '#/components/schemas/ConfigFault'}
-        profile_activations:
-          type: object
-          description: Persistent profile activations (configuration layer), map keyed by UUID.
-          additionalProperties: {$ref: '#/components/schemas/ProfileActivation'}
         profiles:
           type: object
           additionalProperties: {$ref: '#/components/schemas/Profile'}
@@ -3039,9 +3017,8 @@ components:
         link: {$ref: '#/components/schemas/Ref'}
     FaultBody:
       description: |
-        The overlay/step body of a fault of family `impairment` (default), `mtu` or `tunnel`.
-        Families `dns`, `tls` and `dhcp` have their own overlay keys and bodies (`DnsFault`,
-        `TlsCase`, `DhcpAction`); in the configuration all families are `ConfigFault`.
+        A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
+        and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
         - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
         - `mtu` - `mtu` plus an optional `TrafficMatch`.
         - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -3059,29 +3036,13 @@ components:
             tunnel: {$ref: '#/components/schemas/TunnelRef'}
     ConfigFault:
       description: |
-        A persistent fault (configuration layer): it is part of the revision and survives
-        restarts and reboots. All families are possible (D31):
-        - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
-        - `mtu` - `mtu` plus an optional `TrafficMatch`.
-        - `tunnel` - `tunnel` plus latency, jitter, loss, burst_loss, blackout, flapping; no `source`, no `TrafficMatch`.
-        - `dns` - `dns`; no `TrafficMatch` (the names are the destination).
-        - `tls` - `tls` (with its own `TrafficMatch`); no outer `TrafficMatch`.
-        - `dhcp` - `dhcp` (persistent states only); `source` must be a device or a network.
-        `source` is required except for `tunnel`. Persistent profile activations are
-        `Configuration.profile_activations`.
+        A persistent fault (configuration layer). Only families `impairment`, `mtu` and
+        `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
+        `source` is required except for `tunnel`.
       allOf:
-        - $ref: '#/components/schemas/TrafficMatch'
-        - $ref: '#/components/schemas/ImpairmentParams'
+        - $ref: '#/components/schemas/FaultBody'
         - type: object
           properties:
-            family:
-              allOf: [{$ref: '#/components/schemas/FaultFamily'}]
-              default: impairment
-            mtu: {$ref: '#/components/schemas/MtuParams'}
-            tunnel: {$ref: '#/components/schemas/TunnelRef'}
-            dns: {$ref: '#/components/schemas/DnsFault'}
-            tls: {$ref: '#/components/schemas/TlsCase'}
-            dhcp: {$ref: '#/components/schemas/ConfigDhcpAction'}
             name: {$ref: '#/components/schemas/Name'}
             description: {$ref: '#/components/schemas/Description'}
             source: {$ref: '#/components/schemas/Scope'}
@@ -3209,46 +3170,16 @@ components:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           description: For `short_lease` (Kea, may be below 120 s).
         options: {$ref: '#/components/schemas/DhcpOptions'}
-    ConfigDhcpAction:
-      type: object
-      description: |
-        DHCP behavior as a persistent fault. Only states - `delete_lease` and `force_new_ip`
-        are one-time test actions and exist only as overlays (a permanently different
-        address is `Device.fixed_ip`).
-      required: [action]
-      properties:
-        action:
-          type: string
-          enum: [short_lease, set_options, silence]
-        lease_time:
-          allOf: [{$ref: '#/components/schemas/Duration'}]
-          description: For `short_lease`.
-        options: {$ref: '#/components/schemas/DhcpOptions'}
 
     # ============================================================ profiles
     Profile:
       type: object
-      description: A named bundle across families (plan §2.9). Each part competes in its own family when the profile is activated - persistently (`Configuration.profile_activations`) or as an overlay.
+      description: A named bundle across families (plan §2.9). Each part competes in its own family when the profile is activated (overlay).
       required: [name, parts]
       properties:
         name: {$ref: '#/components/schemas/Name'}
         description: {$ref: '#/components/schemas/Description'}
         parts: {$ref: '#/components/schemas/ProfileParts'}
-    ProfileActivation:
-      type: object
-      description: A profile activated on a scope in the configuration; it survives restarts. Its parts compete like configured faults on that scope (a configured fault of the same family on the same scope wins, plan §2.4).
-      required: [profile, target]
-      properties:
-        name: {$ref: '#/components/schemas/Name'}
-        profile: {$ref: '#/components/schemas/Ref'}
-        target: {$ref: '#/components/schemas/Scope'}
-        enabled:
-          type: boolean
-          default: true
-        created_at:
-          type: string
-          format: date-time
-          description: As `ConfigFault.created_at`.
     ProfileParts:
       type: object
       minProperties: 1
@@ -3472,8 +3403,7 @@ components:
         `disable` removes the peer from the interface ("peer offline", for a link "link
         down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
         as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
-        Requires M10. Persistent equivalents in the configuration: `enabled: false` on the
-        client or link peer, and a tunnel fault with `blackout`.
+        Requires M10.
       required: [action]
       minProperties: 2
       properties:
@@ -3595,7 +3525,7 @@ components:
           enum: [added, removed, changed]
         kind:
           type: string
-          enum: [uplink, management, network, client, link_peer, routing, routing_protocol, device, group, probe, access_rule, access_matrix, fault, profile, profile_activation, scenario, settings]
+          enum: [uplink, management, network, client, link_peer, routing, routing_protocol, device, group, probe, access_rule, access_matrix, fault, profile, scenario, settings]
         id: {type: string}
         name: {type: string}
         path:
@@ -4212,17 +4142,6 @@ components:
         queues:
           type: array
           items: {$ref: '#/components/schemas/QueueStats'}
-    FaultOrigin:
-      type: object
-      description: Where an effective fault comes from.
-      required: [layer, id]
-      properties:
-        layer:
-          type: string
-          enum: [overlay, config]
-        id:
-          allOf: [{$ref: '#/components/schemas/Uuid'}]
-          description: Overlay id, configured fault id or profile activation id.
     FaultRef:
       type: object
       description: A fault or profile part as a candidate in precedence resolution.
@@ -5003,8 +4922,8 @@ components:
         duration_ms: {type: number}
         cached: {type: boolean}
         fault:
-          allOf: [{$ref: '#/components/schemas/FaultOrigin'}]
-          description: DNS fault (overlay or configured) that changed the answer.
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: DNS fault overlay that changed the answer.
         stripped_aaaa: {type: boolean}
     DnsQueryPage:
       type: object
@@ -5087,14 +5006,14 @@ components:
                 items: {$ref: '#/components/schemas/DnsStaticEntry'}
         faults:
           type: array
-          description: Resolved DNS faults from configuration and overlays (precedence already applied); the first entry whose `sources` and `names` match wins.
+          description: Resolved DNS faults (precedence already applied); the first entry whose `sources` and `names` match wins.
           items:
             allOf:
               - $ref: '#/components/schemas/DnsFault'
               - type: object
-                required: [origin, sources]
+                required: [overlay, sources]
                 properties:
-                  origin: {$ref: '#/components/schemas/FaultOrigin'}
+                  overlay: {$ref: '#/components/schemas/Uuid'}
                   sources:
                     type: array
                     items: {$ref: '#/components/schemas/Ipv4OrCidr'}
@@ -5137,14 +5056,14 @@ components:
         generation: {type: integer, format: int64}
         cases:
           type: array
-          description: Resolved TLS cases from configuration and overlays; the service looks up a connection by client address and original destination.
+          description: Resolved TLS cases; the service looks up a connection by client address and original destination.
           items:
             allOf:
               - $ref: '#/components/schemas/TlsCase'
               - type: object
-                required: [origin, sources, expected]
+                required: [overlay, sources, expected]
                 properties:
-                  origin: {$ref: '#/components/schemas/FaultOrigin'}
+                  overlay: {$ref: '#/components/schemas/Uuid'}
                   sources:
                     type: array
                     items: {$ref: '#/components/schemas/Ipv4OrCidr'}
@@ -5162,7 +5081,7 @@ components:
           type: string
           description: '`ip:port` from `SO_ORIGINAL_DST`.'
         sni: {type: string}
-        origin: {$ref: '#/components/schemas/FaultOrigin'}
+        overlay: {$ref: '#/components/schemas/Uuid'}
         case: {type: string}
         outcome:
           type: string
@@ -5172,21 +5091,3 @@ components:
           type: string
           example: bad_certificate
         tls_version: {type: string}
-    ProfileActivationView:
-      type: object
-      required: [id, config, state]
-      properties:
-        id: {$ref: '#/components/schemas/Uuid'}
-        config: {$ref: '#/components/schemas/ProfileActivation'}
-        state: {$ref: '#/components/schemas/EffectState'}
-        overridden_by:
-          type: array
-          items: {$ref: '#/components/schemas/FaultRef'}
-    ProfileActivationPage:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items: {$ref: '#/components/schemas/ProfileActivationView'}
-        next_cursor: {type: string}

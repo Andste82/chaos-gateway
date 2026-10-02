@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- Go (official toolchain) --------------------------------------------------
 ENV PATH=/usr/local/go/bin:$PATH
-RUN GO_VERSION=1.25.11 && ARCH="$(dpkg --print-architecture)" \
+RUN GO_VERSION=1.27.1 && ARCH="$(dpkg --print-architecture)" \
     && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz \
     && rm /tmp/go.tgz \

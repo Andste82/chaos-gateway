@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: draft for review · September 2026
+Status: planning complete · October 2026
 
 ---
 
@@ -988,7 +988,7 @@ chaos-gateway/
 - **Start order:** `exec` first (health check: executor socket ready and initial apply verified), then `svcns` (the executor attaches the veth pair), then the services.
 - **Service namespace lifecycle** (S16 part C): a restarting service container rejoins the holder's namespace and works immediately. If the holder itself restarts, it gets a new namespace; services still running keep the old one alive. The executor therefore watches the holder's namespace (inode) and re-attaches `svc0` when it changes; each service checks that its namespace carries the `svc0` peer address and exits when not, so its restart policy moves it into the current namespace. While no namespace is attached, selected traffic fails closed (`prohibit` route). Restart policy `unless-stopped`; containers restart after a host reboot with Docker.
 - **Stop:** on `SIGTERM` the executor removes all overlays before it exits (§2.1.1); the kernel state with the configuration stays, so devices keep their normal connectivity while the gateway is stopped. `docker compose run exec chaosgw teardown` removes everything Chaos Gateway created.
-- **Development** uses the same image with the privileged devcontainer (§4.5); a native package (.deb) is not planned for V1 but possible later from the same binary.
+- **Development** uses a devcontainer with the same toolchain (unprivileged, §4.5); level 1 in CI uses a privileged one. A native package (.deb) is not planned for V1 but possible later from the same binary.
 - **Dedicated appliance image** (Raspberry Pi / x86) as a later option.
 
 ## 3.9 Updates and Recovery
@@ -1023,8 +1023,8 @@ chaos-gateway/
 |---|---|---|---|
 | Unit | domain, validation, precedence resolution, scheduler, parsers | `go test`; Vitest for UI components | every commit |
 | Compiler golden | configuration → nftables/tc/route output, compared with reviewed golden files | `go test` | every commit |
-| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | `go test` + testbed in the privileged test container (§4.5 level 1) | every commit |
-| Measurement | statistical accuracy of faults, timing of scenarios | testbed | nightly on the development VM with KVM (§4.4) |
+| Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | `go test` + testbed in a VM (§4.5 level 1b, the standard on the development VPS) or in a privileged test container (level 1, CI only) | every commit |
+| Measurement | statistical accuracy of faults, timing of scenarios | testbed on a machine with KVM or native (§4.4, open question Q1) | nightly |
 | API contract | OpenAPI conformance, error cases, concurrency | `go test` against the spec; generated clients compile | every commit |
 | UI | components against a mocked API; a few end-to-end flows against the real stack in the testbed | Playwright | every commit / nightly |
 | Distribution | host setup, container start, preflight, smoke tests on clean Ubuntu 24.04 and 26.04 hosts (x86-64 appliance VMs with KVM; the arm64 image functionally in emulated level 1b) | appliance VMs (§4.5 level 2, harness built in M5b) | nightly / before release |
@@ -1061,10 +1061,10 @@ Faults are random processes; tests use statistics, not exact values:
 
 ## 4.4 CI
 
-**Available infrastructure (V1):** one Ubuntu VM (VirtualBox, §4.5 reference setup). No Raspberry Pi, no ARM64 machine, no dedicated CI runner (D9). The plan works with that:
+**Available infrastructure (V1):** one VPS that is itself a QEMU/KVM guest **without nested virtualization**, so there is no `/dev/kvm` on it, and development runs in an **unprivileged** devcontainer there (D9). No Raspberry Pi, no ARM64 machine, and no KVM-capable machine yet (Q1, §7.2). The plan works with that:
 
-- **Every commit:** levels 0 and 1 in the privileged test container — in the hosted CI of the repository where its runners allow a privileged container, otherwise on the development VM as a self-hosted runner. If the runner's kernel lacks required modules, the affected tests run in level 1b instead of being skipped silently.
-- **Nightly on the development VM** (self-hosted runner): measurement tests with KVM (nested virtualization, §4.5), level 1b for the kernel matrix (Ubuntu 24.04 and 26.04, GA and HWE kernels), level 2 appliance VMs.
+- **Every commit:** levels 0 and 1b on the development VPS: the namespace testbed runs in a QEMU VM with a stock Ubuntu kernel, in software emulation (functional assertions only). One VM boots per test run, not per test (§4.5). In addition level 1 in the hosted CI of the repository where its runners allow a privileged container.
+- **Nightly:** level 1b for the kernel matrix (Ubuntu 24.04 and 26.04, GA and HWE kernels; functional, runs anywhere). **Measurement tests (§4.3) and level 2 appliance VMs need KVM** and run on a KVM-capable machine as soon as one exists (Q1); until then they do not run, and the release notes say that accuracy and timing are unvalidated.
 - **ARM64:** the image is built for arm64 on every commit (cross-compiled Go, `docker buildx`). Unit tests run under `qemu-user`; level 1b runs nightly with an Ubuntu ARM64 kernel in QEMU **software emulation** — functional assertions only, no timing or throughput. ARM64 measurements need hardware (H1).
 - **Level 3** (hardware lab) is not available; H1 runs when hardware exists. Until then the Raspberry Pi targets in §3.10 are unvalidated, and the release notes say so.
 
@@ -1093,9 +1093,9 @@ Link events are simulated by setting one end of a veth pair down; the other end 
 | Level | Environment | What it can test | When |
 |---|---|---|---|
 | **0** | plain process, no root | domain, validation, compiler golden files, API contract, UI against mocked API | every commit |
-| **1** | namespace testbed in the **privileged development/CI container** | routing, NAT, access rules, faults (functional), DNS proxy and faults, DHCP and test actions, TLS responder and interception, capture, probes, API and UI end-to-end, scenarios | every commit |
-| **1b** | namespace testbed inside a VM with a **stock distribution kernel** (QEMU + virtme-ng) | same as level 1 when the host kernel lacks modules (e.g. no netem), or to check a specific distribution kernel; the decision uses the same module list as the product preflight (§3.4) | when needed; nightly for the kernel matrix |
-| **2** | **appliance VMs** (QEMU/KVM) from Ubuntu 24.04 and 26.04 cloud images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | host setup, Docker and the compose deployment, preflight, interface assignment, coexistence with netplan, setup wizard, reboot, last-known-good, safe mode, image updates and migrations, `DOCKER-USER` handling, two- and three-port topologies | nightly on the development VM, from M5b on |
+| **1** | namespace testbed in a **privileged container** (CI only: the development VPS does not allow privileged containers, D9) | routing, NAT, access rules, faults (functional and measurements), DNS proxy and faults, DHCP and test actions, TLS responder and interception, capture, probes, API and UI end-to-end, scenarios | every commit in CI where privileged containers are allowed |
+| **1b** | namespace testbed inside a VM with a **stock distribution kernel** (QEMU + virtme-ng); the **standard testbed on the development VPS** (unprivileged container, no KVM) | the same functional tests as level 1, with any kernel of the matrix; without KVM only functional assertions (§4.3); the decision for modules uses the same list as the product preflight (§3.4) | every commit on the development VPS; nightly for the kernel matrix |
+| **2** | **appliance VMs** (QEMU/KVM) from Ubuntu 24.04 and 26.04 cloud images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | host setup, Docker and the compose deployment, preflight, interface assignment, coexistence with netplan, setup wizard, reboot, last-known-good, safe mode, image updates and migrations, `DOCKER-USER` handling, two- and three-port topologies | nightly on a KVM-capable machine (Q1), from M5b on |
 | **3** | **hardware lab**: Raspberry Pi 4/5, x86 mini PC, real NICs, managed switch, real ESP32 devices (later a WiFi AP) | performance targets (§3.10), timing precision, NIC drivers and offloads, real firmware behavior, long-running tests | when hardware is available (not in V1 infrastructure) |
 
 A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmware with an emulated Ethernet interface. That would allow testing real ESP-IDF firmware against the gateway without hardware; it has to be evaluated first.
@@ -1107,7 +1107,7 @@ A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmw
 | Compiler output, precedence resolution, validation | 0 |
 | Routing, NAT, access rules, connection behavior | 1 |
 | Faults: function (effect, isolation, direction, live changes) | 1 |
-| Faults: accuracy measurements, scenario timing | 1 on the development VM with KVM (x86-64); 3 for ARM64 hardware |
+| Faults: accuracy measurements, scenario timing | 1 or 1b on a machine with KVM (x86-64); 3 for ARM64 hardware |
 | DNS proxy, DNS faults, hostname selectors | 1 |
 | DHCP (Kea) and DHCP test actions | 1 |
 | TLS responder, mitmproxy interception | 1 |
@@ -1123,33 +1123,33 @@ A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmw
 
 ### The development container
 
-Development and levels 0–1 run in a Docker container. Verified in this environment:
+Development runs in a Docker container on the development VPS (`.devcontainer/`). Verified in this environment:
 
 | Requirement | Why |
 |---|---|
-| `--privileged` | With only `NET_ADMIN`, `NET_RAW` and `SYS_ADMIN`, the testbed runs, but sysctls in the test namespaces cannot be set (`/proc/sys` is read-only). Forwarding then only worked because new namespaces inherit the host's IPv4 settings — on a host with `ip_forward=0` the tests would fail. |
-| Host kernel with the required modules | The container uses the host kernel and cannot bring its own modules. The list is the one of the product preflight (§3.4); a test preflight checks it, and if modules are missing, the affected tests run in level 1b. |
-| `/dev/kvm` passed through (optional) | Level 1b and level 2 inside the container. Without KVM, QEMU falls back to software emulation: functional tests still work, but timing measurements do not (baseline 2.4 ms instead of 0.3 ms, `nft` commands 0.5 s instead of 6 ms). |
+| **Unprivileged** (default capabilities and seccomp) | Privileged containers are not allowed on the VPS: network tests could affect other containers and interfaces on the host. The namespace testbed therefore runs in QEMU (level 1b). A user namespace inside the container does not help: Docker's default seccomp profile blocks `unshare`. Each test VM has its own kernel, so nothing can reach the host's interfaces, nftables rules or other containers. |
+| Stock kernels in the image (level 1b) | Ubuntu 24.04 GA `6.8.0-142-generic` and 26.04 GA `7.0.0-38-generic`, extracted from the packages without the metapackages (no firmware, microcode or initramfs). The guest boots from the container's root file system and needs `zstd` (compressed modules), `udev` (the `/dev/virtio-ports` links of `vng --exec`) and `systemd-sysv` (`poweroff`). Smoke test on both kernels: namespaces with veth, netem 50 ms (measured 51–143 ms under emulation), nftables, sysctl, WireGuard, BIRD and Kea. |
+| A pseudo-terminal for `vng` | `vng` refuses to start without a valid PTY; scripts and CI wrap it in `script -qec "vng …" /dev/null` (`spikes/vm.sh` does). |
+| One VM per test run | Under software emulation a VM boots in 3–9 minutes (udev settling dominates). The testbed harness (M1) boots one VM per run and executes all tests in it, with results copied out through a read-write share. |
+| `--privileged` (level 1, CI only) | With only `NET_ADMIN`, `NET_RAW` and `SYS_ADMIN`, the testbed runs, but sysctls in the test namespaces cannot be set (`/proc/sys` is read-only). Forwarding then only worked because new namespaces inherit the host's IPv4 settings — on a host with `ip_forward=0` the tests would fail. |
+| Host kernel with the required modules (level 1 only) | The container uses the host kernel and cannot bring its own modules. The list is the one of the product preflight (§3.4); a test preflight checks it, and if modules are missing, the affected tests run in level 1b. |
+| `/dev/kvm` passed through (optional) | Makes level 1b fast and allows level 2. Without KVM, QEMU falls back to software emulation: functional tests still work, but timing measurements do not (baseline 2.4 ms instead of 0.3 ms, `nft` commands 0.5 s instead of 6 ms). |
 | Unique namespace prefix per test run | Parallel runs with the same names destroy each other's topology. |
 | Test tools in the image | iproute2, nftables, conntrack-tools, tcpdump, tshark, iperf3, dnsutils, busybox (`udhcpc`), ethtool, socat, Kea, BIRD 2, wireguard-tools, QEMU + virtme-ng (level 1b, incl. `qemu-system-aarch64`), Go toolchain, Node.js (frontend build and Playwright), Python 3, mitmproxy (sidecar tests). |
 
 ### Reference development setup
 
-Ubuntu Server 24.04 in a VirtualBox VM, development inside the privileged devcontainer on that VM (VS Code Remote-SSH + Dev Containers). The VM provides the exact target kernel, so level 1 runs completely. In V1 this VM is also the self-hosted runner for the nightly jobs (§4.4); nested virtualization is therefore strongly recommended.
+An Ubuntu VPS (itself a QEMU/KVM guest, kernel 6.8, no nested virtualization) with the unprivileged devcontainer on it (`.devcontainer/start.sh`). The VPS provides the target kernel, but the container may not use it for namespace tests (level 1b instead).
 
 | Setting | Why |
 |---|---|
-| 4+ vCPUs, 8+ GB RAM, 40+ GB disk | testbed, Kea, mitmproxy, Go and Node toolchains and captures in parallel |
-| NIC 1: NAT (or bridged) | internet access and SSH from the host |
-| Optional NIC 2: bridged to a dedicated (USB) Ethernet adapter, promiscuous mode "Allow All" | real test devices (e.g. an ESP32) behind the gateway; "Allow All" is needed as soon as the guest bridges this NIC or uses macvlan |
-| Nested VT-x/AMD-V enabled (`VBoxManage modifyvm <vm> --nested-hw-virt on`) | `/dev/kvm` in the guest for levels 1b and 2 |
-| Snapshot after base setup | quick reset when an experiment breaks the VM's own networking |
+| 4+ vCPUs, 8+ GB RAM, 40+ GB disk | the emulated test VMs, Kea, mitmproxy, Go and Node toolchains and captures in parallel |
+| No `/dev/kvm` | nested virtualization is not offered; level 1b runs in software emulation |
 
-If Hyper-V or Windows virtualization-based security is active on the Windows host (often the case with WSL2 or Memory Integrity), VirtualBox runs on the Hyper-V backend: noticeably slower, and nested virtualization is not available, so the guest has no `/dev/kvm`. Level 1 is unaffected; levels 1b and 2 then fall back to software emulation (functional only); the nightly measurement tests cannot run, so nested virtualization is required on the development VM (D9).
+**Limits of this setup:** measurement tests (§4.3), level 2 and timing precision need a KVM-capable machine (Q1, §7.2); real devices (e.g. an ESP32 behind the gateway) cannot be attached to the VPS (level 3).
 
 Further notes:
 
-- **Unprivileged container:** if the development container cannot run privileged, level 1 runs as level 1b *inside* the container. QEMU is an ordinary process and needs no extra capabilities; inside the VM the tests are root with their own kernel. Verified with Docker's default capabilities only (no `NET_ADMIN`, no `SYS_ADMIN`): the guest kernel loaded netem, created namespaces and veth pairs, set sysctls, loaded nftables rules, and a 50 ms netem delay was measurable. The image then needs QEMU, virtme-ng, `busybox-static` and a distribution kernel with modules. Without `/dev/kvm` the VM is emulated in software, which is slow and noisy (50 ms delay measured as 51–115 ms): functional tests only, no measurement tests. Passing `--device /dev/kvm` (not the same as privileged) makes it fast.
 - Docker's `FORWARD DROP` policy on the host does not affect the testbed: the test namespaces are separate network namespaces with their own rules.
 - **Docker Desktop (macOS/Windows)** runs containers in a Linux VM whose kernel decides which modules exist. The test preflight shows whether level 1 is complete there; level 2 needs a Linux host with KVM.
 - **What the container cannot cover:** everything that needs a whole machine (installation, boot, network managers — level 2) and real hardware (level 3).
@@ -1209,8 +1209,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 1 — Foundation: Routed Gateway
 
 **M1 — Repository, CI and testbed library** (M)
-- Scope: Go module and Vue app skeleton, code generation from the existing `api/openapi.yaml` (oapi-codegen for types and Gin server interfaces, Orval for Vue Query hooks and Zod schemas, openapi-python-client) with a CI check that the spec lints, the examples validate and the generated code compiles, Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology), the privileged test container image with all test tools (also the devcontainer), the injectable test clock, the self-hosted runner setup for the development VM (§4.4), the arm64 image build, and the shared kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
-- Tests: CI runs a testbed test (client pings server through a plain forwarding namespace).
+- Scope: Go module and Vue app skeleton, code generation from the existing `api/openapi.yaml` (oapi-codegen for types and Gin server interfaces, Orval for Vue Query hooks and Zod schemas, openapi-python-client) with a CI check that the spec lints, the examples validate and the generated code compiles, Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI (levels 0 and 1b on the development VPS; a level 1 job in hosted CI where privileged containers are allowed), `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology) and its **level 1b runner**: one QEMU VM per test run, all tests of the run execute in it, results come back through a read-write share, works without a terminal (`script`), the devcontainer image with all test tools and the stock kernels (`.devcontainer/`, exists), the injectable test clock, the arm64 image build, the decision where KVM-dependent tests run (Q1), and the shared kernel-module preflight (level 1; inside the VM on level 1b).
+- Tests: CI runs a testbed test in a level 1b VM (client pings server through a plain forwarding namespace; a netem delay is visible); the runner returns the tests' exit code and results; the same test runs in a privileged container where CI allows it.
 - Depends on: S1.
 
 **M2 — Domain model and persistence** (M)
@@ -1246,7 +1246,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M4, M4b, M4c.
 
 **M5b — Appliance VM harness (test level 2)** (M)
-- Scope: download Ubuntu 24.04 and 26.04 cloud images; boot a gateway VM with three virtio NICs (uplink, test network, management) connected via tap and bridges to client and server namespaces; run a first version of the host-setup script (modules, `ip_forward`) and a minimal compose deployment (executor container plus `chaosgw apply --file`); collect logs. Runs nightly on the development VM with KVM.
+- Scope: download Ubuntu 24.04 and 26.04 cloud images; boot a gateway VM with three virtio NICs (uplink, test network, management) connected via tap and bridges to client and server namespaces; run a first version of the host-setup script (modules, `ip_forward`) and a minimal compose deployment (executor container plus `chaosgw apply --file`); collect logs. Needs KVM: runs nightly on a KVM-capable machine (Q1), not on the development VPS.
 - Tests: a smoke test boots Ubuntu 24.04 and 26.04, starts the current image and passes traffic from a client namespace through the VM; the same in the two-port topology.
 - Depends on: M4.
 
@@ -1299,7 +1299,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests: results recorded; §3.10 targets and the ARM64 timing tolerance confirmed or adjusted. Until H1 has run, the Raspberry Pi targets are published as unvalidated.
 - Depends on: M11 (step timing: M15); hardware.
 
-*After Phase 2: the core product via API — faults, rules, profiles — measured on x86 in the development VM.*
+*After Phase 2: the core product via API — faults, rules, profiles — measured on x86 (accuracy measurements need a KVM-capable machine, Q1).*
 
 ## Phase 3 — Web UI
 
@@ -1324,7 +1324,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M15 — Scenario engine and runs** (L)
 - Scope: scenarios as defined in §2.10 (step semantics, remove/restore, narrowing targets), inline scenarios with parameters in `POST /api/v1/runs`, preconditions, scheduler on the injectable monotonic clock, step types profile, fault, rule, WireGuard action, wait, remove, restore (further step types arrive with M17, M20–M23); runs with lifecycle, owner, one run per target, queue, explicit abort, optional lease, scenario snapshot and generation per step; JSON/JUnit report.
-- Tests: step order and semantics with the fake clock; step timing within ±100 ms on the development VM with KVM; abort removes the run's overlays; a disconnecting client does not stop a run, an expired lease does; a restart ends a running run as `aborted`; a second run on the same target waits in `queued`; a failed precondition ends the run as `error`; an inline scenario runs without changing the active revision; the report contains all steps.
+- Tests: step order and semantics with the fake clock; step timing within ±100 ms on a machine with KVM; abort removes the run's overlays; a disconnecting client does not stop a run, an expired lease does; a restart ends a running run as `aborted`; a second run on the same target waits in `queued`; a failed precondition ends the run as `error`; an inline scenario runs without changing the active revision; the report contains all steps.
 - Depends on: M11.
 
 **M16 — Checks** (M)
@@ -1420,6 +1420,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 | M35 Port forwarding | DNAT for inbound test traffic; matching a device as responder |
 | M36 Further proposals | features from §8 by priority |
 | M38 Deferred from V1 | three-way merge of concurrent revisions; rule captures via NFLOG and live streaming to Wireshark; traceroute, path MTU and iperf3 diagnostics; continuous drift detection with reconcile; native .deb package |
+| M39 Persistent faults for all families | persistent (configuration) DNS faults, TLS cases and DHCP states, and persistent profile activations (`profile_activations`); "permanent" as the default in the add-fault dialog; a run precondition that warns about persistent faults on its target (D31) |
 
 ## V1 Scope Summary
 
@@ -1485,7 +1486,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D6 | Uplink types | whatever the OS configures (static or DHCP tested; others such as PPPoE untested) | follows from D3 |
 | D7 | IP versions in V1 | IPv4-only test networks (§2.2); IPv6 blocked on test networks until dual-stack in M32 | review |
 | D8 | L2 transparent mode (gateway as a bridge **between** device and upstream router, not routing) | **later** (§8); only needed when the gateway cannot be the device's default router. Unrelated to the bridge that joins the ports of one test network (D16) | maintainer |
-| D9 | Test infrastructure and hardware | one Ubuntu VM for development, CI runner and nightly tests; ARM64 emulated; hardware validation (H1) when hardware exists | maintainer |
+| D9 | Test infrastructure and hardware | development on one VPS (QEMU/KVM guest without nested virtualization) in an **unprivileged** devcontainer, because privileged containers could affect other containers and interfaces on the host; the namespace testbed runs in QEMU (level 1b, software emulation, functional only); KVM-dependent tests (measurements, level 2) need a KVM-capable machine (Q1); ARM64 emulated; hardware validation (H1) when hardware exists (updated 2026-10-02; replaces the VirtualBox development VM) | maintainer |
 | D10 | Users | **one admin account plus scoped API tokens** in V1; no roles | maintainer |
 | D11 | Existing connections when an access rule changes | **new connections only** by default; "also cut existing connections" is an explicit option (§2.4) | maintainer |
 | D12 | Rule and fault precedence | as §2.4, with D24–D26 | maintainer |
@@ -1507,10 +1508,15 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D28 | Scope reductions for V1 | three-way merge, NFLOG rule captures, live capture streaming, traceroute/path MTU/iperf3, continuous drift detection moved after V1 (M38) | proposed by review 2; reversible |
 | D29 | Gateway services and faults | DNS proxy, TLS responder and TLS proxy run in a **service namespace** reached by policy routing; no IFB/flower for services (§3.3) | S16 |
 | D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); configured faults only for impairment/MTU/tunnel, everything else as overlays | spec draft 1, independent review 2026-10-02 |
+| D31 | Persistent faults | **V1: only the impairment, MTU and tunnel families are persistent** (configuration); DNS faults, TLS cases, DHCP actions and profile activations exist only as overlays. **After V1 (M39):** every family and profile activations can be persistent. Reason: persistent faults serve a permanent test environment, not the CI use case, and they weaken the clean baseline (`reset` does not remove them; D27 keeps V1 small) | maintainer |
 
 ## 7.2 Open
 
-None. New questions are added here with a recommendation.
+| # | Question | Recommendation |
+|---|---|---|
+| Q1 | Where do the KVM-dependent tests run — measurement tests (§4.3) and level 2 appliance VMs (from M5b)? The development VPS has no `/dev/kvm`. | A KVM-capable CI runner: a hosted runner that offers `/dev/kvm`, or a dedicated or bare-metal machine as self-hosted runner. Decide before M5b (level 2) and before M8b (first accuracy measurements). Until then these tests do not run, and the release notes say that accuracy and timing are unvalidated. |
+
+New questions are added here with a recommendation.
 
 ---
 

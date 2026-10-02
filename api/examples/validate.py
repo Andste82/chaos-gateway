@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate the examples in api/examples against the schemas in api/openapi.yaml.
 
-Schema validation only; semantic rules (exactly one step type, jitter <= latency,
-references exist, ...) belong to the domain package (milestone M2).
+Schema validation only. The semantic rules (exactly one step type, jitter <= latency,
+references exist, ...) are checked by internal/domain; its tests decode these same files.
 
     pip install openapi-spec-validator   # brings openapi-schema-validator
     python3 api/examples/validate.py

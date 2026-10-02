@@ -1,0 +1,10 @@
+# oapi-codegen configuration for the Go server types and the Gin server interface.
+# Regenerate with `make generate`; the generated file is committed (CI checks it).
+package: apiserver
+output: internal/apiserver/api.gen.go
+generate:
+  models: true
+  gin-server: true
+  strict-server: true
+output-options:
+  skip-prune: true

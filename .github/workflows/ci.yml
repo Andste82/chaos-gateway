@@ -40,6 +40,8 @@ jobs:
       - run: make check-clients
       - run: make lint
       - run: make test
+      # 5 minutes of fuzzing on the executor's decoder (plan M3); the nightly run goes longer
+      - run: make fuzz
 
   # Playwright end-to-end tests of the web app.
   e2e:

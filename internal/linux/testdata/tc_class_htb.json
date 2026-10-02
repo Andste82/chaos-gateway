@@ -1,0 +1,1 @@
+[{"class":"htb","handle":"1:","root":true,"rate":1000000,"overhead":0,"mpu":0,"burst":1600,"cburst":1600,"prio":0,"quantum":0,"level":0,"dev":"wan0"},{"class":"htb","handle":"1:10","parent":"1:","leaf":"10:","rate":1000000,"ceil":1000000,"prio":0}]

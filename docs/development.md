@@ -8,7 +8,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (skeletons until M3/M5/M18) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; the other subcommands and the CLI are skeletons until M5/M6b/M18/M21) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM |
@@ -16,11 +16,13 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
 | `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution, overlays and their keys, observed state and device identity, candidate creation (merge patch), domain diff |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
+| `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
+| `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
 | `web/` | Vue 3 app (Vite, Tailwind 4, TanStack Query, Pinia, Reka UI) |
 | `clients/` | generated TypeScript and Python clients (not committed) |
-| `deploy/` | the container image (multi-arch) |
+| `deploy/` | the container image (multi-arch); `compose.executor.yaml`, the executor's hardening profile |
 
 ## Setup
 
@@ -96,6 +98,43 @@ func TestSomething(t *testing.T) {
 `NewDefault` builds the topology of plan §4.2 with a unique namespace prefix, so parallel runs
 never collide, and removes everything at the end of the test, killing processes first. With
 `WithPlainGateway(false)` the gateway is left unconfigured for tests of the product itself.
+
+## The executor
+
+`chaosgw exec` is the only process that writes the kernel's network configuration (plan §3.1). It
+accepts a closed set of operations (`nft_apply`, `nft_add_elements`, `routing`, `tc`, `offloads`,
+`docker_user`, `assign_interfaces`, `read`), each a JSON object with a `type` and an optional
+`namespace`. The decoder (`executor.Decode`) is strict and is where most of the scope is enforced:
+nftables only `inet chaosgw`, routes and rules only in tables 100-110 and always with protocol tag
+201, tc arguments only from a token allowlist without the keywords that override the validated
+fields. What depends on run-time state, the interfaces assigned to Chaos Gateway, is checked by the
+executor's worker before the first operation of a request runs. The `ip`, `tc` and `iptables`
+batches are built from validated fields only, never from text sent by the caller.
+
+Adding an operation means: a type with `validate` in `validate.go`, its commands in `plan.go`, a
+case in `Decode`, golden tests in `plan_test.go`, rejection tests in `decode_test.go` and a seed in
+`fuzz_test.go`. The fuzz targets check that anything the decoder accepts yields inert commands that
+stay in scope.
+
+`make fuzz` runs both fuzz targets for `FUZZTIME` each (default 2m30s, 5 minutes in CI); the
+nightly workflow runs them for an hour each. A crashing input lands in
+`internal/executor/testdata/fuzz/`; commit it as a regression test with the fix.
+
+Deliberately not in M3, each with the milestone that needs it: operations for links, bridges,
+addresses, sysctls and namespaces (M4, the compiler needs them first), `uidrange` selectors on rules
+(service namespace), and the persistent netlink connection for DNS-derived set updates
+(`nft_add_elements` starts one `nft` per call until M6b measures the need). Which interfaces count as
+assigned is decided by whoever may call `assign_interfaces`: loopback and Docker's devices are
+refused, the rest is trusted to the (root or allowed-uid) caller. Routing batches use
+`ip -force -batch` and treat "exists"/"does not exist" answers as success, so re-sending an
+unchanged rule set is safe.
+
+To try the executor by hand (as root, in a namespace you own):
+
+```sh
+sudo go run ./cmd/chaosgw exec -socket /tmp/e.sock -state /tmp/e-state.json &
+go run ./cmd/chaosgw exec -health -socket /tmp/e.sock
+```
 
 ## Generated code
 

@@ -17,13 +17,13 @@ This report records what the Phase 0 spikes (plan §5) proved, disproved or chan
 | S4 TLS | Certificate test cases, transparent interception | ⚠️ plan claim partly wrong | certificate checks can only be told apart with a trusted test CA |
 | S5 DNS proxy | Per-client DNS faults, hostname selectors, throughput | ✅ confirmed, 2 gaps | proxy needs DNS over TCP; nft updates must be deduplicated |
 | S6 DHCP | dnsmasq vs. Kea for runtime test actions | ✅ decided: Kea | dnsmasq cannot do leases below 120 s |
-| S7 Deployment | Docker next to the gateway; gateway in a container | ✅ confirmed constraints | native package stays primary; preflight must handle Docker |
+| S7 Deployment | Docker next to the gateway; gateway in a container | ✅ confirmed constraints | preflight must handle Docker; later made the production deployment (D2), the executor container runs privileged |
 | S8 Performance | Cost of per-packet classification and of updates | ◐ partial (no Pi) | no measurable classification cost on x86; Pi numbers still open |
 | S9 Capture | Capture exactly one selector's traffic | ✅ decided | AF_PACKET on the LAN side by default, NFLOG for rule-based capture |
 | S11 Direction | Direction bit with two test networks; destination selectors; re-apply that keeps dynamic data | ✅ confirmed | mark bit 16 = direction, same tc mapping on every interface; add/flush apply layout |
 | S12 Attachment | Probe on a bridge vs. macvlan; tc on the bridge; policy routing | ✅ confirmed | test networks are gateway-owned bridges; policy routing table for test traffic and service uid |
 | S13 PMTUD | Path-MTU faults via ICMP and as black hole | ✅ confirmed, 1 side effect | ICMP mode leaks to other devices through the shared NAT address; MSS clamp as isolated mode |
-| S14 Local replies | Download faults for connections that end on the gateway | ✅ confirmed | classification chain also on the output hook |
+| S14 Local replies | Download faults for connections that end on the gateway | ✅ confirmed | classification chain also on the output hook (superseded for gateway services by S16/D29; the output hook remains for the WireGuard underlay) |
 | S15 WireGuard & routing | Faults inside and on WireGuard tunnels; export; BIRD BGP/OSPF over WireGuard with filters | ✅ confirmed | WireGuard in Phase 1 (M4b); tunnel faults as own family; 12-bit id layout works |
 | S16 Service namespace | Upload faults for connections redirected to gateway services; fit with the Docker deployment | ✅ decided: service namespace | services behind a veth pair, selected by routing mark; flower rejected (misses set-based redirects); fail-closed fallback required |
 
@@ -46,6 +46,8 @@ This report records what the Phase 0 spikes (plan §5) proved, disproved or chan
 ---
 
 ## 3. Results per Spike
+
+The results are a record of what was measured at the time. Later decisions superseded some design details: the mark layout grew from 8 bits (8–15) to a 12-bit fault id in bits 4–15 (S15, plan §3.3), and IFB with flower filters for gateway-terminated traffic was replaced by the service namespace (S16, D29). The sections below keep their original wording.
 
 ### S1 — Testbed
 
@@ -281,7 +283,7 @@ Consequences:
 1. On hosts with Docker, the gateway must add its own accept rules to `DOCKER-USER`. The preflight check has to detect this and offer the fix.
 2. In a container, sysctls must be set on the host (or the container runs privileged), and probes need `SYS_ADMIN`.
 
-The native package stays the primary deployment; the container remains a development and demo option.
+Decision D2 later made Docker the production deployment; these findings are the reason the executor container runs privileged and the API container does not.
 
 ### S8 — Performance (native host, x86, partial)
 
@@ -450,7 +452,7 @@ These changes are applied to `docs/plan.md`:
 | §2.8 TLS | certificate checks individually testable only with trusted test CA; without it: untrusted chain, self-signed, handshake faults, insecure-acceptance detection |
 | §2.11 Capture | AF_PACKET on LAN side as default, NFLOG for rule-based capture, uplink capture not attributable |
 | §3.2 Compiler | always emit complete netem parameter sets (sticky attributes); generate nftables as JSON (text syntax pitfalls: reserved words like `fwd`/`dnat` as chain names, missing `;`) |
-| §3.3 Classification | design confirmed; mark layout fixed (bits 8–15); IFB + flower for gateway-terminated traffic |
+| §3.3 Classification | design confirmed; mark layout fixed (bits 8–15, later 12 bits in 4–15, S15); IFB + flower for gateway-terminated traffic (superseded by the service namespace, S16/D29) |
 | §3.4 Preflight | minimal kernels can lack netem entirely; on Ubuntu generic 6.8 all needed modules are in `linux-modules` (not `-extra`); detect Docker `FORWARD DROP` and offer `DOCKER-USER` rule |
 | §3.8 Deployment | container needs host-side sysctls and `SYS_ADMIN` for probes |
 | §5 Phase 0 | S1–S7, S9, S10 done; S8 open for Raspberry Pi |
@@ -499,4 +501,4 @@ TB_PREFIX=h bash s16-service-ns/docker.sh # needs a running Docker daemon and th
 TB_PREFIX=h bash s13-pmtud/run.sh
 ```
 
-Never run a VM spike and a host spike at the same time: `/run/netns` is shared with the guest.
+Never run a VM spike and a host spike at the same time: `/run/netns` is shared with the guest. `vm.sh` provides the pseudo-terminal that `vng` needs, so it also works from scripts and CI. Without `/dev/kvm` a VM boots in 3–9 minutes (software emulation).

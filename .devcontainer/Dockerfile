@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     kea-dhcp4-server kea-admin \
     dnsmasq-base dnsmasq-utils \
     python3 python3-venv python3-pip python3-cryptography \
+    python3-yaml python3-jsonschema python3-openapi-spec-validator \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Test level 1b: namespace testbed inside a VM (plan §4.5) ------------------

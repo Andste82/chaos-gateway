@@ -1,0 +1,39 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # lint the namespace testbed tests too
+  build-tags:
+    - testbed
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+    - unconvert
+    - usestdlibvars
+    - copyloopvar
+  settings:
+    errcheck:
+      # writing to a terminal or a buffer: nothing useful to do on failure
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    generated: lax
+    paths:
+      - internal/apiserver
+      - web
+      - clients
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Andste82/chaos-gateway

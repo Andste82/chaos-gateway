@@ -2,3 +2,13 @@ node_modules/
 spikes/results/tmp/
 *.pcap
 __pycache__/
+
+# build output and generated, uncommitted code (make generate)
+/bin/
+/.venv/
+/web/dist/
+/web/src/api/generated/
+/web/test-results/
+/web/playwright-report/
+/clients/typescript/src/
+/clients/python/chaosgw-client/

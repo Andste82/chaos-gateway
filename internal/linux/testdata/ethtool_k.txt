@@ -1,0 +1,10 @@
+Features for wan0:
+rx-checksumming: on
+tx-checksumming: on
+	tx-checksum-ip-generic: on
+scatter-gather: on
+tcp-segmentation-offload: off
+generic-segmentation-offload: off
+generic-receive-offload: off
+large-receive-offload: off [fixed]
+rx-vlan-offload: on

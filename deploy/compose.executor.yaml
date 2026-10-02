@@ -1,0 +1,59 @@
+# Container hardening profile of the executor (plan §2.16, §3.8). The compose file of M-final
+# (the full set of containers) includes this service unchanged; internal/executor/hardening_test.go
+# pins the settings that matter.
+#
+# The executor is the only privileged container: it writes nftables, tc, routes and sysctls on the
+# host's network stack, and per-interface sysctls of new bridges need a writable /proc/sys, which
+# only a privileged container has (spike S7). Everything else about it is closed down:
+#   - read-only root file system; the only writable places are the three volumes and a tmpfs
+#   - no-new-privileges, and `chaosgw exec` sets PR_SET_NO_NEW_PRIVS itself
+#   - it runs no shell: operations are typed, commands are argument arrays with fixed binary paths
+#   - the socket is reachable only for root and the API container's user (SO_PEERCRED check)
+services:
+  exec:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--allow-uid", "65532", "--socket-owner", "65532"]
+    user: "0:0"
+    privileged: true
+    network_mode: host
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+      # iptables -w keeps its lock file in /run; the volumes below are mounted on top
+      - /run:size=4m,mode=0755
+    volumes:
+      # the socket the API container connects to
+      - chaosgw-run:/run/chaosgw
+      # the interfaces assigned to Chaos Gateway; nothing else is stored
+      - chaosgw-exec-state:/var/lib/chaosgw/exec
+      # named network namespaces are shared with the host (probes, the service namespace)
+      - type: bind
+        source: /run/netns
+        target: /run/netns
+        bind:
+          propagation: rshared
+          create_host_path: true
+      # missing kernel modules are loaded from the host's modules
+      - type: bind
+        source: /lib/modules
+        target: /lib/modules
+        read_only: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "chaosgw", "exec", "--health", "--socket", "/run/chaosgw/exec.sock"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  chaosgw-run:
+  chaosgw-exec-state:

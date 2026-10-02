@@ -21,7 +21,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients lint test test-web test-testbed test-vm \
+        check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm \
         test-privileged test-arm64 test-e2e build build-web dev image clean
 
 help: ## list the targets
@@ -85,6 +85,18 @@ lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 	$(GO) test $(RACE) -count=1 ./...
+
+# Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
+# target: the default 2m30s makes the two targets of the executor decoder 5 minutes in CI; the
+# nightly workflow uses a longer time.
+FUZZTIME ?= 150s
+FUZZ_TARGETS := FuzzDecode FuzzFrame
+
+fuzz: ## fuzz the executor's operation decoder and request handling (FUZZTIME per target)
+	@for t in $(FUZZ_TARGETS); do \
+	  echo "== $$t ($(FUZZTIME))"; \
+	  $(GO) test -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) ./internal/executor || exit 1; \
+	done
 
 test-web: $(WEBDEPS)
 	cd web && npm test

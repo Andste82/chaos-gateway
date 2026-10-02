@@ -1,0 +1,27 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Long fuzz runs (plan M3): the CI run fuzzes for 5 minutes, this one for an hour per target.
+  # A crashing input is uploaded: it is the reproducer, and belongs in testdata/fuzz.
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make fuzz FUZZTIME=60m
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashers
+          path: internal/executor/testdata/fuzz
+          if-no-files-found: ignore

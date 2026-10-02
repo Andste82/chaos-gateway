@@ -1,0 +1,308 @@
+package executor
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+)
+
+// Operation types: the closed set the executor accepts.
+const (
+	TypeNftApply       = "nft_apply"
+	TypeNftAddElements = "nft_add_elements"
+	TypeRouting        = "routing"
+	TypeTC             = "tc"
+	TypeOffloads       = "offloads"
+	TypeDockerUser     = "docker_user"
+	TypeAssign         = "assign_interfaces"
+	TypeRead           = "read"
+)
+
+// Operation is one typed request. Exactly one of the implementations below.
+type Operation interface {
+	// OpType is the wire name.
+	OpType() string
+	// Namespace is the target network namespace; empty means the executor's own.
+	Namespace() string
+	// Mutates reports whether the operation changes kernel state (it bumps the generation).
+	Mutates() bool
+	// Validate checks the operation by itself, independent of any scope.
+	validate() error
+}
+
+// Target carries the optional network namespace every operation takes.
+type Target struct {
+	NS string `json:"namespace,omitempty"`
+}
+
+// Namespace returns the target namespace.
+func (t Target) Namespace() string { return t.NS }
+
+var nsName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+
+func (t Target) validate() error {
+	if t.NS != "" && !nsName.MatchString(t.NS) {
+		return fmt.Errorf("invalid namespace name %q", t.NS)
+	}
+	return nil
+}
+
+// NftApply replaces objects of table `inet chaosgw` atomically (`nft -j -f`). Ruleset is an
+// nftables JSON document ({"nftables":[...]}).
+type NftApply struct {
+	Target
+	Ruleset json.RawMessage `json:"ruleset"`
+}
+
+// NftAddElements adds elements to an existing set of the table: the narrow incremental update
+// used for DNS-derived address sets and identity changes (plan §3.4).
+type NftAddElements struct {
+	Target
+	Set      string   `json:"set"`
+	Elements []string `json:"elements"`
+	// TimeoutSeconds is the lifetime of the elements; 0 means the set's default.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+// Route is a route in one of Chaos Gateway's tables. The executor tags it with its own protocol.
+type Route struct {
+	Action string `json:"action"` // replace | delete
+	Family int    `json:"family"` // 4 | 6
+	Table  int    `json:"table"`
+	Dst    string `json:"dst"`            // CIDR, address or "default"
+	Via    string `json:"via,omitempty"`  // gateway address
+	Dev    string `json:"dev,omitempty"`  // assigned interface
+	Type   string `json:"type,omitempty"` // unicast (default) | blackhole | unreachable | prohibit
+	Metric *int   `json:"metric,omitempty"`
+}
+
+// Rule is a policy-routing rule that sends matching traffic to one of Chaos Gateway's tables.
+// The executor tags it with its own protocol, so it can never delete or change foreign rules.
+type Rule struct {
+	Action   string `json:"action"` // add | delete
+	Family   int    `json:"family"` // 4 | 6
+	Priority int    `json:"priority"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
+	Fwmark   string `json:"fwmark,omitempty"` // value or value/mask, hex or decimal
+	Iif      string `json:"iif,omitempty"`
+	Oif      string `json:"oif,omitempty"`
+	Table    int    `json:"table"`
+}
+
+// Routing changes routes and rules.
+type Routing struct {
+	Target
+	Routes []Route `json:"routes,omitempty"`
+	Rules  []Rule  `json:"rules,omitempty"`
+}
+
+// TCEntry is one tc command. Args are validated tokens; the interface is a field of its own.
+type TCEntry struct {
+	Object string `json:"object"` // qdisc | class | filter
+	Action string `json:"action"` // add | replace | change | delete
+	Dev    string `json:"dev"`
+	Parent string `json:"parent,omitempty"` // root | ingress | clsact | handle
+	Handle string `json:"handle,omitempty"`
+	// ClassID names a class (major:minor); classes have no handle. It precedes the kind in the command.
+	ClassID string   `json:"classid,omitempty"`
+	Args    []string `json:"args,omitempty"` // kind and parameters, e.g. ["netem","delay","50ms"]
+}
+
+// TC changes the qdisc tree of assigned interfaces (`tc -batch`).
+type TC struct {
+	Target
+	Entries []TCEntry `json:"entries"`
+}
+
+// Offloads switches GRO, GSO, TSO and LRO off on interfaces (`ethtool -K`) and verifies it.
+type Offloads struct {
+	Target
+	Devs []string `json:"devs"`
+}
+
+// DockerUser maintains the accept rules for Chaos Gateway's interfaces in Docker's DOCKER-USER
+// chain, the only place outside the own table the executor may write (plan §3.4, spike S7).
+type DockerUser struct {
+	Target
+	Action string   `json:"action"` // ensure | remove
+	Devs   []string `json:"devs"`
+}
+
+// AssignInterfaces replaces the set of interfaces that belong to Chaos Gateway (test networks,
+// uplink, helper devices). tc, routing and DOCKER-USER operations are limited to this set.
+type AssignInterfaces struct {
+	Target
+	Devs []string `json:"devs"`
+}
+
+// Read queries kernel state through the standard tools.
+type Read struct {
+	Target
+	What  string `json:"what"` // links | addrs | routes | rules | nft | qdiscs | classes | filters | offloads
+	Dev   string `json:"dev,omitempty"`
+	Table string `json:"table,omitempty"` // routes: table name or number, empty means all
+}
+
+// Read targets.
+const (
+	ReadLinks    = "links"
+	ReadAddrs    = "addrs"
+	ReadRoutes   = "routes"
+	ReadRules    = "rules"
+	ReadNft      = "nft"
+	ReadQdiscs   = "qdiscs"
+	ReadClasses  = "classes"
+	ReadFilters  = "filters"
+	ReadOffloads = "offloads"
+)
+
+func (NftApply) OpType() string         { return TypeNftApply }
+func (NftAddElements) OpType() string   { return TypeNftAddElements }
+func (Routing) OpType() string          { return TypeRouting }
+func (TC) OpType() string               { return TypeTC }
+func (Offloads) OpType() string         { return TypeOffloads }
+func (DockerUser) OpType() string       { return TypeDockerUser }
+func (AssignInterfaces) OpType() string { return TypeAssign }
+func (Read) OpType() string             { return TypeRead }
+
+func (NftApply) Mutates() bool         { return true }
+func (NftAddElements) Mutates() bool   { return true }
+func (Routing) Mutates() bool          { return true }
+func (TC) Mutates() bool               { return true }
+func (Offloads) Mutates() bool         { return true }
+func (DockerUser) Mutates() bool       { return true }
+func (AssignInterfaces) Mutates() bool { return true }
+func (Read) Mutates() bool             { return false }
+
+// Envelope is the wire form of an operation: the type and the operation's own fields side by side.
+type envelope struct {
+	Type string `json:"type"`
+}
+
+// ErrDecode is wrapped by every decoder error.
+var ErrDecode = errors.New("invalid operation")
+
+const maxOperationBytes = 8 << 20
+
+// Decode parses and validates one operation. It is strict: unknown types, unknown fields, trailing
+// data, duplicate keys and malformed values are errors. It never panics on any input.
+func Decode(data []byte) (Operation, error) {
+	if len(data) > maxOperationBytes {
+		return nil, fmt.Errorf("%w: %d bytes exceed the limit of %d", ErrDecode, len(data), maxOperationBytes)
+	}
+	if err := checkNoDuplicateKeys(data); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
+	}
+	var env envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
+	}
+	var op Operation
+	switch env.Type {
+	case TypeNftApply:
+		op = &NftApply{}
+	case TypeNftAddElements:
+		op = &NftAddElements{}
+	case TypeRouting:
+		op = &Routing{}
+	case TypeTC:
+		op = &TC{}
+	case TypeOffloads:
+		op = &Offloads{}
+	case TypeDockerUser:
+		op = &DockerUser{}
+	case TypeAssign:
+		op = &AssignInterfaces{}
+	case TypeRead:
+		op = &Read{}
+	default:
+		return nil, fmt.Errorf("%w: unknown operation type %q", ErrDecode, env.Type)
+	}
+	// the type field is part of the envelope, not of the operation: strip it, then decode strictly
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
+	}
+	delete(fields, "type")
+	body, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(op); err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrDecode, env.Type, err)
+	}
+	if err := op.validate(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrDecode, env.Type, err)
+	}
+	return op, nil
+}
+
+// Encode returns the wire form of an operation.
+func Encode(op Operation) ([]byte, error) {
+	body, err := json.Marshal(op)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	t, _ := json.Marshal(op.OpType())
+	fields["type"] = t
+	return json.Marshal(fields)
+}
+
+// checkNoDuplicateKeys rejects objects with a repeated key at any depth: the two decoders of a
+// pipeline could otherwise disagree about which value counts.
+func checkNoDuplicateKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := walkJSON(dec); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err == nil {
+		return errors.New("trailing data after the operation")
+	}
+	return nil
+}
+
+func walkJSON(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch d {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			k, _ := kt.(string)
+			if seen[k] {
+				return fmt.Errorf("duplicate key %q", k)
+			}
+			seen[k] = true
+			if err := walkJSON(dec); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for dec.More() {
+			if err := walkJSON(dec); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = dec.Token() // closing delimiter
+	return err
+}

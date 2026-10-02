@@ -12,12 +12,15 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/version"
 )
 
-// subcommands maps each service to the milestone that implements it.
-var subcommands = []struct{ name, milestone, summary string }{
-	{"api", "M5", "REST API, web UI and scheduler (unprivileged)"},
-	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls"},
-	{"dns", "M6b", "DNS proxy in the service namespace"},
-	{"tls", "M21", "TLS responder in the service namespace"},
+// subcommands maps each service to the milestone that implements it; main is nil until then.
+var subcommands = []struct {
+	name, milestone, summary string
+	main                     func(args []string, stdout, stderr io.Writer) int
+}{
+	{"api", "M5", "REST API, web UI and scheduler (unprivileged)", nil},
+	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
+	{"dns", "M6b", "DNS proxy in the service namespace", nil},
+	{"tls", "M21", "TLS responder in the service namespace", nil},
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -37,6 +40,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, s := range subcommands {
 		if s.name == args[0] {
+			if s.main != nil {
+				return s.main(args[1:], stdout, stderr)
+			}
 			fmt.Fprintf(stderr, "chaosgw %s is not implemented in this build (milestone %s)\n", s.name, s.milestone)
 			return 2
 		}

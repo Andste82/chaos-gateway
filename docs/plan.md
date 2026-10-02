@@ -1073,7 +1073,7 @@ Faults are random processes; tests use statistics, not exact values:
 | VLAN subinterface | tagged network on a trunk | VLAN networks (M31) |
 | macvlan | several devices behind one port | many devices without many veth pairs |
 | dummy | a local address or sink | services, routing tests |
-| IFB | ingress shaping | faults on traffic to the gateway itself |
+| IFB | ingress shaping | tunnel faults on encrypted UDP from a WireGuard peer (M10, S15) |
 | WireGuard interface | tunnel endpoint | WireGuard networks, clients and site links (M4b, M4c); remote sites are namespaces with their own WireGuard interface and BIRD |
 | tap | a VM's NIC | connecting appliance VMs (level 2) |
 
@@ -1256,9 +1256,9 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 2 — Faults (core value)
 
 **M7 — Classification layer** (M)
-- Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting **and output**, only for test traffic, direction bit, identity updates as incremental map operations from the observed state, flower filters for IFB generated from the same policy.
+- Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting, only for test traffic, direction bit, identity updates as incremental map operations from the observed state. No IFB and no output-hook classification here: gateway services are reached through `svc0` egress (D29, S16); the output hook and IFB are only used for tunnel faults (M10).
 - Tests: with a test tc class per (id, direction), per-class counters increase only for matching traffic, in both directions, behind NAT, across two test networks, for a host in a WireGuard client network (as initiator and as destination), and over a WireGuard link (connections redirected to gateway services are tested with the first redirect in M20/M21); a map change moves an established connection to its new class (observed via the class counters); after a forced address change the device's map entry follows within 1 s and a concurrent full apply does not restore the old address; non-test traffic keeps its mark untouched; golden test of the id masks (direction bit kept).
-- Depends on: M6a, M6b, S2, S10, S11, S14.
+- Depends on: M6a, M6b, S2, S10, S11, S16.
 
 **M8a — Overlays** (M)
 - Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint.

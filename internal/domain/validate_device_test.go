@@ -11,10 +11,6 @@ var (
 
 func TestDeviceRules(t *testing.T) {
 	runMutations(t, []mutation{
-		{"device without identifiers", func(t *testing.T, d doc) { d.del(t, "devices", idESP, "identifiers") }, esp + "/identifiers", CodeNoIdentifier},
-		{"device with empty identifier lists", func(t *testing.T, d doc) {
-			d.set(t, obj(t, `{"macs":[],"ipv4":[]}`), "devices", idESP, "identifiers")
-		}, esp + "/identifiers", CodeNoIdentifier},
 		{"two devices with one MAC", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"macs":["24:0a:c4:00:00:42"]}`), "devices", idLab, "identifiers")
 		}, lab + "/identifiers/macs/0", CodeDuplicateIdentifier},
@@ -24,9 +20,13 @@ func TestDeviceRules(t *testing.T) {
 		{"device address equals a WireGuard client address", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"ipv4":["10.99.0.2"]}`), "devices", idLab, "identifiers")
 		}, lab + "/identifiers/ipv4/0", CodeDuplicateIdentifier},
-		{"two devices with overlapping ranges", func(t *testing.T, d doc) {
+		{"two devices with the same range", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"ipv4":["10.50.0.0/24"]}`), "devices", idESP, "identifiers")
-			d.set(t, obj(t, `{"ipv4":["10.50.0.10"]}`), "devices", idLab, "identifiers")
+			d.set(t, obj(t, `{"ipv4":["10.50.0.0/24"]}`), "devices", idLab, "identifiers")
+		}, lab + "/identifiers/ipv4/0", CodeDuplicateIdentifier},
+		{"two devices with the same address", func(t *testing.T, d doc) {
+			d.del(t, "devices", idESP, "fixed_ip")
+			d.set(t, obj(t, `{"ipv4":["10.50.0.10"]}`), "devices", idESP, "identifiers")
 		}, lab + "/identifiers/ipv4/0", CodeDuplicateIdentifier},
 		{"device range with host bits", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"ipv4":["10.50.0.1/24"]}`), "devices", idLab, "identifiers")

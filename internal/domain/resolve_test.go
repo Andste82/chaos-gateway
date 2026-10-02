@@ -263,10 +263,10 @@ func TestNewerOverlayAtTheSameLevelWinsAndATieIsBrokenByID(t *testing.T) {
 	b := tie.overlay(`{target: {device: esp32-42}, fault: {latency: 20ms}}`, time.Second) // same time
 	res = tie.world().Resolve(toServer("tcp", 443))
 	win := mustWinner(t, res, FamilyImpairment)
-	if win.ID != a.Id.String() { // lower id
-		t.Fatalf("the lower id must win a tie, got %s (b=%s)", win.ID, b.Id)
+	if win.ID != b.Id.String() { // higher id
+		t.Fatalf("the higher id must win a tie, got %s (a=%s)", win.ID, a.Id)
 	}
-	if !strings.Contains(overriddenReason(t, familyResult(t, res, FamilyImpairment), b.Id.String()), "tie") {
+	if !strings.Contains(overriddenReason(t, familyResult(t, res, FamilyImpairment), a.Id.String()), "tie") {
 		t.Error("the reason must say it was a tie")
 	}
 }
@@ -449,13 +449,22 @@ func TestARemoteNetworkViaALinkRoute(t *testing.T) {
 
 func TestADiscoveredDeviceCanBeTargetedByItsUUID(t *testing.T) {
 	tw := newTestWorld(t, false)
-	// ValidateOverlay refuses an unknown device, so build the overlay directly: discovered
-	// devices are not in the configuration but have UUIDs of their own (plan §2.1.1)
+	// discovered devices are not in the configuration but have UUIDs of their own (plan §2.1.1):
+	// the validation takes them from the observed state
 	discovered := "11111111-2222-4333-8444-555555555555"
-	o := tw.overlay(`{target: {global: true}, fault: {latency: 5ms}}`, time.Second)
-	dev := discovered
-	o.Target = &model_scope{Device: &dev}
-	tw.overlays[0] = o
+	req := requestOf(t, `{target: {device: `+discovered+`}, fault: {latency: 5ms}}`)
+	if _, errs := ValidateOverlay(tw.cfg, req); !ValidationErrors(errs).Has("/target/device", CodeUnknownReference) {
+		t.Fatalf("without the observed state the device is unknown: %v", errs)
+	}
+	norm, errs := ValidateOverlay(tw.cfg, req, WithDiscovered(discovered))
+	if len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	o, err := NewOverlay(*norm, admin, mustUUID("00000000-0000-4000-8000-0000000000aa"), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw.overlays = append(tw.overlays, o)
 	w := tw.world()
 	if Winner(w.Resolve(Query{Source: Subject{Device: discovered}}), FamilyImpairment) == nil {
 		t.Error("the discovered device must match its own overlay")

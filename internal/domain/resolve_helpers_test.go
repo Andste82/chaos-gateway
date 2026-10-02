@@ -144,8 +144,6 @@ func familyResult(t *testing.T, results []FamilyResult, family string) FamilyRes
 	return FamilyResult{}
 }
 
-type model_scope = model.Scope
-
 type uuidT = uuid.UUID
 
 func mustUUID(s string) uuid.UUID { return uuid.MustParse(s) }

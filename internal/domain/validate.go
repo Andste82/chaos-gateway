@@ -64,8 +64,8 @@ const (
 	CodeMixedDirections        = "mixed_directions"
 	CodeMixedFamily            = "mixed_family"
 	CodeEmptyFault             = "empty_fault"
-	CodeDistributionNeedsJit   = "distribution_requires_jitter"
-	CodeLossCorrelationNeeds   = "loss_correlation_requires_loss"
+	CodeInvalidMTU             = "invalid_mtu"
+	CodeCutWithAllow           = "cut_existing_with_allow"
 	CodeTunnelParameter        = "tunnel_parameter"
 	CodeInvalidDNSFault        = "invalid_dns_fault"
 	CodeInvalidTLSCase         = "invalid_tls_case"
@@ -95,12 +95,13 @@ var reservedPrefixes = []netip.Prefix{
 //
 // Syntax and the schema are checked by DecodeConfiguration; Validate expects a document that
 // decoded into the model.
-func Validate(cfg *model.Configuration) []model.ValidationError {
+func Validate(cfg *model.Configuration, opts ...Option) []model.ValidationError {
+	o := collectOptions(opts)
 	work := clone(*cfg)
-	idx, errs := BuildIndex(&work)
+	idx, errs := newIndex(&work, o)
 	errs = append(errs, resolveRefs(&work, idx)...)
 	// resolveRefs rewrote the references inside the configuration; the index must see them
-	idx, _ = BuildIndex(&work)
+	idx, _ = newIndex(&work, o)
 
 	v := &validator{cfg: &work, idx: idx}
 	v.run()

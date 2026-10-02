@@ -95,6 +95,9 @@ func ParseDocument(raw []byte, f Format) (any, error) {
 	}
 	switch f {
 	case FormatJSON:
+		if err := checkDuplicateKeys(raw); err != nil {
+			return nil, &ParseError{err}
+		}
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.UseNumber()
 		var v any
@@ -269,4 +272,45 @@ func convert[T any](from any) T {
 		panic(fmt.Sprintf("domain: convert: %v", err))
 	}
 	return out
+}
+
+// checkDuplicateKeys rejects a JSON object that names a key twice: encoding/json would silently
+// keep the last one, which makes "strict decoding" a lie (YAML parsers reject it already).
+func checkDuplicateKeys(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	return walkKeys(dec, "")
+}
+
+func walkKeys(dec *json.Decoder, path string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil // the syntax error is reported by the real parse
+	}
+	switch tok {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return nil
+			}
+			key, _ := keyTok.(string)
+			if seen[key] {
+				return fmt.Errorf("duplicate key %q at %s", key, pathOrRoot(path))
+			}
+			seen[key] = true
+			if err := walkKeys(dec, schema.Pointer(path, key)); err != nil {
+				return err
+			}
+		}
+		_, _ = dec.Token() // the closing brace
+	case json.Delim('['):
+		for i := 0; dec.More(); i++ {
+			if err := walkKeys(dec, schema.Pointer(path, itoa(i))); err != nil {
+				return err
+			}
+		}
+		_, _ = dec.Token()
+	}
+	return nil
 }

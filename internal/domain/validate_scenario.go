@@ -64,9 +64,9 @@ func timelineOrder(steps []model.Step) []int {
 // ValidateScenario checks a scenario against a configuration: used when a scenario is imported
 // or run from a file (`POST /runs` with an inline scenario) without becoming part of a
 // revision. References may be names; errors are reported relative to the scenario.
-func ValidateScenario(cfg *model.Configuration, sc *model.Scenario) []model.ValidationError {
+func ValidateScenario(cfg *model.Configuration, sc *model.Scenario, opts ...Option) []model.ValidationError {
 	work := clone(*cfg)
-	idx, _ := BuildIndex(&work)
+	idx, _ := newIndex(&work, collectOptions(opts))
 	local := clone(*sc)
 	var errs []model.ValidationError
 	visitScenario("", &local, func(path string, kind Kind, ref *string) {
@@ -305,6 +305,11 @@ func (v *validator) check(path string, c model.Check, sc model.Scenario, first m
 	}
 	if c.TrafficNotSeen != nil {
 		v.match(path+"/traffic_not_seen", convert[model.TrafficMatch](*c.TrafficNotSeen))
+		for i, d := range deref(c.TrafficNotSeen.Except) {
+			if d.Cidr != nil {
+				v.cidrOrAddr(schema.Pointer(path+"/traffic_not_seen/except", itoa(i))+"/cidr", *d.Cidr)
+			}
+		}
 	}
 
 	w := c.Window

@@ -50,6 +50,9 @@ func (v *validator) accessRuleBody(path string, b model.AccessRuleBody) {
 	if b.Action == "reset" && proto != "tcp" {
 		v.add(path+"/action", CodeResetRequiresTCP, "a TCP reset needs the protocol tcp, not %s", proto)
 	}
+	if b.CutExisting != nil && *b.CutExisting && b.Action == "allow" {
+		v.add(path+"/cut_existing", CodeCutWithAllow, "cutting established connections only makes sense for drop, reject and reset")
+	}
 	if b.CutExisting != nil && *b.CutExisting && proto != "tcp" && proto != "any" {
 		v.add(path+"/cut_existing", CodeCutRequiresTCP, "cutting established connections works on TCP; the rule's protocol is %s", proto)
 	}

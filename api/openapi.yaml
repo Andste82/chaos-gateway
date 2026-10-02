@@ -3079,7 +3079,10 @@ components:
       description: |
         TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
         (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-        Default ports 443 and 8883; protocol must be `tcp` or omitted.
+        Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+        level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
+        `sni` or a destination count as destination: a case without selectors on a device has
+        level 3, with an SNI level 1.
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object
@@ -3507,7 +3510,10 @@ components:
         confirmed_at: {type: string, format: date-time}
         last_known_good:
           type: boolean
-          description: The revision booted after a failed start or an unconfirmed change.
+          description: |
+            The last revision that was applied, verified and (if it needed it) confirmed. It is
+            the one applied after a failed start, and a revision that was never confirmed never
+            becomes it.
     RevisionWithConfiguration:
       allOf:
         - $ref: '#/components/schemas/Revision'

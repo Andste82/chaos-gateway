@@ -89,6 +89,8 @@ type Index struct {
 	Profiles  map[string]string // ID → name, including the built-in profiles
 	Scenarios map[string]string
 	Protocols map[string]string
+	// Discovered are the UUIDs of discovered devices that are not configured (WithDiscovered).
+	Discovered map[string]bool
 
 	names [kindCount]map[string]string // per Kind: lower-case name → ID
 }
@@ -124,7 +126,7 @@ func (x *Index) exists(kind Kind, id string) bool {
 		return ok
 	case KindDevice:
 		_, ok := x.Devices[id]
-		return ok
+		return ok || x.Discovered[id]
 	case KindGroup:
 		_, ok := x.Groups[id]
 		return ok

@@ -37,7 +37,22 @@ func openStore(t *testing.T) (*Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close() })
 	return s, dir
+}
+
+// reopen closes a store and opens the directory again, like a restart of the process.
+func reopen(t *testing.T, s *Store, dir string) *Store {
+	t.Helper()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	return s2
 }
 
 func create(t *testing.T, s *Store, cfg *model.Configuration, ifMatch int64, msg string) model.Revision {
@@ -146,18 +161,56 @@ func TestAnInvalidConfigurationIsNeverStored(t *testing.T) {
 	}
 }
 
-func TestSecretsAreNotStored(t *testing.T) {
+func TestSecretsAreRefusedNotDroppedSilently(t *testing.T) {
 	s, dir := openStore(t)
 	cfg := exampleConfig(t)
 	cfg.Secrets = &model.ConfigurationSecrets{}
+	if _, err := s.Create(cfg, CreateOptions{Now: t0}); !errors.Is(err, ErrSecretsPresent) {
+		t.Fatalf("err = %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dir, "revisions")); len(entries) != 0 {
+		t.Fatalf("nothing may be written: %v", entries)
+	}
+	cfg.Secrets = nil
 	create(t, s, cfg, 0, "")
 	raw, _ := os.ReadFile(filepath.Join(dir, "revisions", "000001.json"))
 	if strings.Contains(string(raw), "secrets") || strings.Contains(string(raw), "private_key") {
 		t.Fatal("the revision file must not contain secrets")
 	}
+}
+
+func TestACandidateIsStoredWithUUIDsOnly(t *testing.T) {
+	s, dir := openStore(t)
+	// the example configuration refers to objects by name
+	raw, err := os.ReadFile(filepath.Join("..", "..", "api", "examples", "configuration.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := domain.ParseDocument(raw, domain.FormatYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := domain.DecodeConfigurationDocument(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *(*cfg.Devices)["1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a"].Network != "IoT" {
+		t.Fatal("the test needs a configuration with names")
+	}
+	create(t, s, cfg, 0, "")
+	file, _ := os.ReadFile(filepath.Join(dir, "revisions", "000001.json"))
+	if strings.Contains(string(file), `"network": "IoT"`) || strings.Contains(string(file), `"members": [
+`+"          \"esp32-42\"") {
+		t.Fatalf("a name was stored:\n%s", file)
+	}
 	_, back, _ := s.Get(1)
-	if back.Secrets != nil {
-		t.Fatal("secrets must not come back")
+	if got := *(*back.Devices)["1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a"].Network; got != "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21" {
+		t.Fatalf("network = %s", got)
+	}
+	// and the stored configuration is stable under another normalization
+	again, errs := domain.Normalize(back)
+	if len(errs) != 0 || !domain.Equal(again, back) {
+		t.Fatalf("not normalized: %v", errs)
 	}
 }
 
@@ -238,27 +291,22 @@ func TestCommitConfirmKeepsThePreviousRevisionActiveUntilConfirmed(t *testing.T)
 		t.Fatalf("Commit while pending: %v", err)
 	}
 
-	// the pending state survives a restart
-	s2, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p, ok := s2.PendingConfirm(); !ok || p.Revision != 2 || s2.ActiveID() != 1 {
-		t.Fatalf("after a restart: %+v %v active %d", p, ok, s2.ActiveID())
-	}
-
-	confirmed, err := s2.Confirm(2, t0.Add(30*time.Second))
+	confirmed, err := s.Confirm(2, t0.Add(30*time.Second))
 	if err != nil || confirmed.Status != StatusActive || !confirmed.ConfirmedAt.Equal(t0.Add(30*time.Second)) || confirmed.LastKnownGood == nil {
 		t.Fatalf("Confirm: %+v %v", confirmed, err)
 	}
-	if s2.ActiveID() != 2 {
+	if s.ActiveID() != 2 {
 		t.Fatal("the confirmed revision must be active")
 	}
-	if _, ok := s2.PendingConfirm(); ok {
+	if _, ok := s.PendingConfirm(); ok {
 		t.Fatal("nothing waits any more")
 	}
-	if old, _, _ := s2.Get(1); old.Status != StatusSuperseded {
+	if old, _, _ := s.Get(1); old.Status != StatusSuperseded {
 		t.Fatalf("revision 1 = %s", old.Status)
+	}
+	// the state is on disk: a restart sees the confirmed revision
+	if s2 := reopen(t, s, dir); s2.ActiveID() != 2 {
+		t.Fatalf("after a restart the active revision is %d", s2.ActiveID())
 	}
 }
 
@@ -331,10 +379,7 @@ func TestDiscardDeletesACandidateAndItsIDIsNotReused(t *testing.T) {
 		t.Fatalf("discarding an active revision: %v", err)
 	}
 	// ids are not reused after a restart either
-	s2, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s2 := reopen(t, s, dir)
 	if r := create(t, s2, changed(t, cfg), 2, ""); r.Id != 3 {
 		t.Fatalf("id after a restart = %d", r.Id)
 	}
@@ -472,10 +517,7 @@ func TestEverythingSurvivesAReopen(t *testing.T) {
 	create(t, s, cfg, 0, "one")
 	mustCommit(t, s, 1)
 	create(t, s, changed(t, cfg), 1, "two")
-	s2, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s2 := reopen(t, s, dir)
 	if s2.ActiveID() != 1 {
 		t.Fatal("active")
 	}

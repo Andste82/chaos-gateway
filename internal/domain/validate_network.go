@@ -76,8 +76,14 @@ func (v *validator) uplinkAndManagement() {
 		}
 		for _, n := range sortedKeys(v.idx.Networks) {
 			info := v.idx.Networks[n]
-			if sub, ok := networkSubnet(info); ok && overlaps(p, sub) {
-				v.add(path, CodeManagementOverlap, "%s overlaps the test network %q (%s): its devices would reach the control plane", p, info.Name, sub)
+			// a WireGuard network with the role management is meant to reach the control plane
+			if info.WG != nil && info.WG.Role != nil && *info.WG.Role == "management" {
+				continue
+			}
+			for _, sub := range prefixesOf(info) {
+				if overlaps(p, sub) {
+					v.add(path, CodeManagementOverlap, "%s overlaps the test network %q (%s): its devices would reach the control plane", p, info.Name, sub)
+				}
 			}
 		}
 	}

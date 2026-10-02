@@ -74,10 +74,11 @@ type statusFile struct {
 // Store is the persistence of the configuration. It is safe for concurrent use inside one
 // process; one Chaos Gateway API process owns a configuration directory.
 type Store struct {
-	dir string
-	mu  sync.Mutex
-	st  state
-	mig migrations
+	dir  string
+	mu   sync.Mutex
+	st   state
+	mig  migrations
+	lock *os.File // holds the lock on the directory
 }
 
 // Open opens the store in dir and creates it when it is new. It removes the temporary files of
@@ -86,21 +87,33 @@ type Store struct {
 // behind that the pointer does not know yet.
 func Open(dir string) (*Store, error) { return open(dir, defaultMigrations) }
 
-func open(dir string, mig migrations) (*Store, error) {
+func open(dir string, mig migrations) (s *Store, err error) {
 	revs := filepath.Join(dir, "revisions")
 	if err := os.MkdirAll(revs, 0o750); err != nil {
 		return nil, err
 	}
+	lock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			unlockDir(lock)
+		}
+	}()
 	for _, d := range []string{dir, revs} {
 		if err := removeTempFiles(d); err != nil {
 			return nil, err
 		}
 	}
-	s := &Store{dir: dir, mig: mig}
+	s = &Store{dir: dir, mig: mig, lock: lock}
 	if err := s.loadState(); err != nil {
 		return nil, err
 	}
 	if err := s.migrateAll(); err != nil {
+		return nil, err
+	}
+	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
 	ids, err := s.revisionIDs()
@@ -127,7 +140,8 @@ func (s *Store) statusPath(id int64) string {
 func (s *Store) loadState() error {
 	raw, err := os.ReadFile(s.statePath())
 	if errors.Is(err, os.ErrNotExist) {
-		s.st = state{SchemaVersion: SchemaVersion, NextID: 1}
+		// a new store, or a pointer that was lost: rebuild what the revisions still say
+		s.st = s.rebuildState()
 		return s.saveState()
 	}
 	if err != nil {
@@ -387,12 +401,16 @@ type CreateOptions struct {
 // Create stores a configuration as a new candidate revision. The configuration is validated
 // again: an invalid one is never stored (domain.ValidationErrors). Secrets are not stored.
 func (s *Store) Create(cfg *model.Configuration, o CreateOptions) (model.Revision, error) {
-	if errs := domain.Validate(cfg); len(errs) > 0 {
+	if cfg.Secrets != nil {
+		return model.Revision{}, ErrSecretsPresent
+	}
+	// stored configurations contain UUIDs only: a rename must not change what a revision means
+	stored, errs := domain.Normalize(cfg)
+	errs = append(errs, domain.Validate(stored)...)
+	if len(errs) > 0 {
 		return model.Revision{}, domain.ValidationErrors(errs)
 	}
-	stored := *cfg
-	stored.Secrets = nil
-	raw, err := json.MarshalIndent(&stored, "  ", "  ")
+	raw, err := json.MarshalIndent(stored, "  ", "  ")
 	if err != nil {
 		return model.Revision{}, err
 	}
@@ -539,6 +557,9 @@ func (s *Store) Confirm(id int64, now time.Time) (model.Revision, error) {
 	if err != nil {
 		return model.Revision{}, err
 	}
+	if now.After(s.st.Pending.Deadline) {
+		return model.Revision{}, &ErrConfirmExpired{Revision: id, Deadline: s.st.Pending.Deadline}
+	}
 	t := now.UTC()
 	st.Status, st.ConfirmedAt = StatusActive, &t
 	if err := s.activate(id, f, st, true); err != nil {
@@ -595,17 +616,28 @@ func (s *Store) Discard(id int64) error {
 func (s *Store) Prune(keep int) ([]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if keep < 0 {
+		keep = 0
+	}
 	ids, err := s.revisionIDs()
 	if err != nil {
 		return nil, err
 	}
 	var removed []int64
-	for i := 0; i < len(ids)-keep; i++ {
-		id := ids[i]
+	for i, id := range ids {
 		if id == s.st.Active || id == s.st.LastKnownGood || (s.st.Pending != nil && s.st.Pending.Revision == id) {
 			continue
 		}
-		if st, err := s.readStatus(id); err == nil && st.Status == StatusCandidate {
+		st, err := s.readStatus(id)
+		if err == nil && st.Status == StatusCandidate {
+			// A candidate based on a revision that is not active any more can never be
+			// committed (revision_conflict): it is stale and goes, whatever `keep` says. A
+			// current one stays until it is applied or discarded.
+			f, ferr := s.readRevisionFile(id)
+			if ferr != nil || f.Base == s.st.Active {
+				continue
+			}
+		} else if i >= len(ids)-keep {
 			continue
 		}
 		for _, p := range []string{s.revPath(id), s.statusPath(id)} {
@@ -646,6 +678,24 @@ func (s *Store) Verify() ([]Corrupt, error) {
 			}
 			return nil, err
 		}
+	}
+	// the pointers must name revisions that exist and are in the right state
+	check := func(id int64, what, want string) {
+		if id == 0 {
+			return
+		}
+		st, err := s.readStatus(id)
+		switch {
+		case err != nil:
+			bad = append(bad, Corrupt{id, &ErrCorrupt{s.statePath(), what + " points to revision " + strconv.FormatInt(id, 10) + ", which cannot be read"}})
+		case want != "" && st.Status != want:
+			bad = append(bad, Corrupt{id, &ErrCorrupt{s.statePath(), what + " points to revision " + strconv.FormatInt(id, 10) + ", which is " + st.Status}})
+		}
+	}
+	check(s.st.Active, "active", StatusActive)
+	check(s.st.LastKnownGood, "last_known_good", "")
+	if s.st.Pending != nil {
+		check(s.st.Pending.Revision, "pending_confirm", StatusPendingConfirm)
 	}
 	return bad, nil
 }

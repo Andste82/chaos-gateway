@@ -71,7 +71,7 @@ const (
 // semantic validation. The error is a *ParseError or ValidationErrors; nothing is stored.
 //
 // base may be nil only for CandidateFull.
-func NewCandidate(base *model.Configuration, input []byte, f Format, mode CandidateMode, now time.Time) (*model.Configuration, error) {
+func NewCandidate(base *model.Configuration, input []byte, f Format, mode CandidateMode, now time.Time, opts ...Option) (*model.Configuration, error) {
 	doc, err := ParseDocument(input, f)
 	if err != nil {
 		return nil, err
@@ -92,8 +92,8 @@ func NewCandidate(base *model.Configuration, input []byte, f Format, mode Candid
 		return nil, err
 	}
 	assignFaultTimes(base, cfg, now)
-	norm, errs := Normalize(cfg)
-	errs = append(errs, Validate(norm)...)
+	norm, errs := Normalize(cfg, opts...)
+	errs = append(errs, Validate(norm, opts...)...)
 	if len(errs) > 0 {
 		return nil, ValidationErrors(sortErrors(errs))
 	}

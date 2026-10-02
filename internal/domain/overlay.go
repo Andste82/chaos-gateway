@@ -50,10 +50,10 @@ func isTunnelFault(f *model.FaultBody) bool {
 // Rules: exactly one kind; a target for every kind except tunnel faults and WireGuard actions,
 // which have none; DHCP actions target a device or a network; the parameters of the kind are
 // consistent (the same rules as in the configuration); ttl and lease are positive.
-func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest) (*model.OverlayRequest, []model.ValidationError) {
+func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest, opts ...Option) (*model.OverlayRequest, []model.ValidationError) {
 	out := clone(*req)
 	work := clone(*cfg)
-	idx, _ := BuildIndex(&work)
+	idx, _ := newIndex(&work, collectOptions(opts))
 	var errs []model.ValidationError
 	visitOverlayRequest(&out, func(path string, kind Kind, ref *string) {
 		if id, ok := idx.Resolve(kind, *ref); ok {
@@ -126,6 +126,9 @@ func NewOverlay(req model.OverlayRequest, owner model.Owner, id uuid.UUID, now t
 	if err != nil {
 		return model.Overlay{}, err
 	}
+	if t := owner.Type; t != "user" && t != "token" && t != "run" {
+		return model.Overlay{}, fmt.Errorf("an overlay is owned by a user, a token or a run, not %q", t)
+	}
 	return model.Overlay{
 		Id: id, Kind: model.OverlayKind(kind), Owner: owner,
 		Target: req.Target, Ttl: req.Ttl, Lease: req.Lease,
@@ -175,7 +178,8 @@ func destinationKey(d *model.Destination) string {
 	case d.Network != nil:
 		return "network:" + lower(*d.Network)
 	case d.Cidr != nil:
-		return "cidr:" + *d.Cidr
+		// an address and its /32 are the same destination
+		return "cidr:" + strings.TrimSuffix(*d.Cidr, "/32")
 	case d.Hostname != nil:
 		return "host:" + lower(*d.Hostname)
 	}
@@ -202,10 +206,15 @@ func matchKey(m model.TrafficMatch) string {
 		strings.Join(uniq, ","), strings.Join(ranges, ","))
 }
 
+// sortedLower returns the set of names, lower-cased, sorted and without duplicates.
 func sortedLower(names []string) string {
-	out := make([]string, len(names))
-	for i, n := range names {
-		out[i] = lower(n)
+	seen := map[string]bool{}
+	var out []string
+	for _, n := range names {
+		if l := lower(n); !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
 	}
 	sort.Strings(out)
 	return strings.Join(out, ",")

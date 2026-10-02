@@ -19,6 +19,9 @@ type Neighbor struct {
 	MAC       string
 	Interface string
 	Network   string // UUID of the network the interface belongs to
+	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, FAILED). It
+	// only counts while the address still carries connections.
+	Stale bool
 }
 
 // ProbeObservation is what is known about a probe: the MAC of its veth and its addresses.
@@ -144,8 +147,11 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		}
 	}
 	for _, id := range sortedKeys(obs.Probes) {
+		// a probe never takes over the MAC of a configured device
 		if m := lower(obs.Probes[id].MAC); m != "" {
-			macs[m] = id
+			if _, taken := macs[m]; !taken {
+				macs[m] = id
+			}
 		}
 	}
 
@@ -190,6 +196,9 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		}
 	}
 	for _, n := range obs.Neighbors {
+		if n.Stale && !obs.ActiveSources[n.IP] {
+			continue // an old entry says nothing about who has the address now
+		}
 		if dev, ok := macs[lower(n.MAC)]; ok {
 			add(n.IP, claim{dev, claimNeighbor, time.Time{}})
 		}
@@ -249,6 +258,16 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		return a.Prefix.Bits() < b.Prefix.Bits()
 	})
 	res.Discovered = uncovered(obs.Discovered, macs, res)
+	// discovered devices own the addresses nobody else has
+	for _, d := range res.Discovered {
+		for _, ip := range d.IPs {
+			if _, taken := res.Owner[ip]; !taken {
+				res.Owner[ip] = d.ID
+				res.Addresses[d.ID] = append(res.Addresses[d.ID], ip)
+			}
+		}
+		sort.Slice(res.Addresses[d.ID], func(i, j int) bool { return res.Addresses[d.ID][i].Less(res.Addresses[d.ID][j]) })
+	}
 	return res
 }
 

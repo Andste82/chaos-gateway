@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+
+jobs:
+  # Level 0 (plan §4.5): everything that needs no root. Generated code is checked here too:
+  # the spec lints, the examples validate, the Go code is current and all clients compile.
+  level0:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install golangci-lint
+        run: curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/.local/bin" "$GOLANGCI_LINT_VERSION" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: make tools
+      - run: make check-spec
+      - run: make check-generated
+      - run: make check-clients
+      - run: make lint
+      - run: make test
+
+  # Playwright end-to-end tests of the web app.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cd web && npm ci && npx playwright install --with-deps chromium
+      - run: make test-e2e
+
+  # The devcontainer image holds all test tools and the stock kernels for level 1b.
+  testbed-vm:
+    name: testbed (level 1b, VM)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Enable KVM if the runner offers it
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+      # Without /dev/kvm the VM runs in software emulation: functional assertions only, minutes
+      # of boot time (plan §4.3, open question Q1 in §7.2).
+      - name: Run the testbed tests in a VM
+        run: |
+          kvm=()
+          if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm
+
+  # Level 1: the same tests directly in a privileged container, where the runner's kernel has
+  # the modules. If it lacks them, `test-testbed` falls back to a VM instead of skipping.
+  testbed-privileged:
+    name: testbed (level 1, privileged container)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm --privileged -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-testbed
+
+  # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
+  # under qemu-user (functional only; ARM64 measurements need hardware, H1).
+  arm64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - run: make test-arm64

@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+#
+# Multi-arch image (linux/amd64, linux/arm64) of the Chaos Gateway core binaries (plan §3.7,
+# §3.8). M1 builds what exists so far, chaosgw and chaosctl; the full image with Kea, BIRD,
+# tcpdump and the mitmproxy sidecar follows with M28.
+#
+#   docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .   (make image)
+
+FROM --platform=$BUILDPLATFORM golang:1.27.1 AS build
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+# cross-compiled on the build platform: no emulation needed for the Go build
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath \
+      -ldflags "-s -w -X github.com/Andste82/chaos-gateway/internal/version.Version=${VERSION} -X github.com/Andste82/chaos-gateway/internal/version.Commit=${COMMIT}" \
+      -o /out/ ./cmd/...
+
+FROM ubuntu:26.04
+COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
+ENTRYPOINT ["chaosgw"]

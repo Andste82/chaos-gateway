@@ -1514,7 +1514,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | Where do the KVM-dependent tests run — measurement tests (§4.3) and level 2 appliance VMs (from M5b)? The development VPS has no `/dev/kvm`. | A KVM-capable CI runner: a hosted runner that offers `/dev/kvm`, or a dedicated or bare-metal machine as self-hosted runner. Decide before M5b (level 2) and before M8b (first accuracy measurements). Until then these tests do not run, and the release notes say that accuracy and timing are unvalidated. |
+| Q1 | Where do the KVM-dependent tests run — measurement tests (§4.3) and level 2 appliance VMs (from M5b)? The development VPS has no `/dev/kvm`. | A KVM-capable CI runner: a hosted runner that offers `/dev/kvm`, or a dedicated or bare-metal machine as self-hosted runner. Decide before M5b (level 2) and before M8b (first accuracy measurements). **Evidence (first CI run, 2026-10-02):** hosted `ubuntu-24.04` runners offer `/dev/kvm`: the testbed VM job ran with accurate timing (50 ms netem measured 50.2 ms, baseline RTT 0.07 ms), and a privileged container ran level 1 directly with the runner's modules. Not yet tried: level 2 (appliance VMs with Docker inside) and a full nightly measurement run. Until then these tests do not run, and the release notes say that accuracy and timing are unvalidated. |
 
 New questions are added here with a recommendation.
 

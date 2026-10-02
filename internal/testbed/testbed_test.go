@@ -141,9 +141,9 @@ func TestCleanEnvRemovesProxyVariables(t *testing.T) {
 
 func TestRandomPrefixIsUnique(t *testing.T) {
 	seen := map[string]bool{}
-	for range 1000 {
+	for range 100000 { // far more than a run needs; a repeat would be a bug, not chance
 		p := RandomPrefix()
-		if !strings.HasPrefix(p, "tb") || len(p) != 8 {
+		if !strings.HasPrefix(p, "tb") || len(p) != 10 {
 			t.Fatalf("prefix %q", p)
 		}
 		if seen[p] {

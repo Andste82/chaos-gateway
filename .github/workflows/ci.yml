@@ -83,13 +83,11 @@ jobs:
   # Level 1: the same tests directly in a privileged container. The container has no modules of
   # its own, so the runner's /lib/modules is mounted read-only and the tests load them into the
   # runner's kernel. This job runs the tests directly (`test-privileged`), never in a VM: if the
-  # hosted kernel lacks a module (netem, for one) the preflight fails the job with the list, which
-  # is the information that decides whether this level is available in hosted CI at all. Until
-  # that is known the job must not block the others.
+  # hosted kernel lacked a module (netem, for one) the preflight would fail the job with the list.
+  # The first run showed that the hosted ubuntu-24.04 kernel has them.
   testbed-privileged:
     name: testbed (level 1, privileged container)
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

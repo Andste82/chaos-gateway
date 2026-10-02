@@ -1,0 +1,5093 @@
+openapi: 3.0.3
+info:
+  title: Chaos Gateway API
+  version: 1.0.0-draft.1
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  description: |
+    REST API of Chaos Gateway (plan `docs/plan.md` §2.15). This file is the
+    **source of truth** for the domain model and the API (spec-first, plan §3.7):
+    Go server types are generated with `oapi-codegen`, the TypeScript client with
+    Orval, the Python client with `openapi-python-client`.
+
+    OpenAPI 3.0.3 is used on purpose (not 3.1): `oapi-codegen` and `kin-openapi`
+    (request validation) fully support 3.0 only.
+
+    ## Conventions (normative)
+
+    | Topic | Rule |
+    |---|---|
+    | Base path | `/api/v1`; additive changes stay in v1, breaking changes get `/api/v2` |
+    | Identity | every configuration object has a UUID and a unique, renameable `name`; paths accept either. Names match `Name` and are unique per object type, compared case-insensitively |
+    | References | inside a configuration, references are stored as UUIDs. Requests may use names; the server resolves them to UUIDs when it creates the candidate revision or the overlay |
+    | Collections in the configuration | maps keyed by the object's UUID (not arrays), so a JSON Merge Patch can add, change (`{"<uuid>": {...}}`) and delete (`{"<uuid>": null}`) single objects. New objects get a client-generated UUID (v4 or v7). Ordered lists (access rules) keep their order in a separate id array |
+    | Editing | the configuration is changed only through candidate revisions (`POST /revisions` with a full `Configuration` or an `application/merge-patch+json` patch, base revision in `If-Match`). The resource endpoints (`/networks`, `/devices`, …) are read-only views of the active revision (or of a candidate with `?revision=`) joined with observed state |
+    | Base revision | only in `If-Match`; the active revision id is the `ETag` of configuration reads. A missing `If-Match` on `POST /revisions` gives `428 precondition_required` |
+    | Partial updates | JSON Merge Patch (RFC 7396) on candidate revisions |
+    | Durations | Go duration strings (`90s`, `5m`, `1h30m`), schema `Duration` |
+    | Percentages | strings with a `%` suffix (`0.1%`, `10%`), schema `Percentage` |
+    | Bit rates | strings with a unit (`500kbit`, `2Mbit`, `1Gbit`; decimal, bits per second), schema `Bitrate` |
+    | Sizes | strings with a binary unit (`512MiB`, `5GiB`), schema `ByteSize` |
+    | Time stamps | RFC 3339 with time zone, UTC in responses. TTLs, leases and schedules run on the monotonic clock; time stamps are for display |
+    | Lists | cursor pagination (`cursor`, `limit`), response `{items, next_cursor}`; `next_cursor` is absent on the last page |
+    | Errors | RFC 9457 `application/problem+json`, schema `Problem`, with a stable `code` (table below) |
+    | Generation | every apply, overlay change and identity update produces a new generation (monotonic integer, never reused, persisted across restarts). Writes return it in the `Chaos-Generation` header and return only after verification; `GET /state` shows the current one; the SSE event `applied` announces it |
+    | Idempotency | `Idempotency-Key` on `POST /overlays`, `/runs`, `/scenarios/{id}/runs`, `/captures`, `/revisions`, kept for 24 h. The same key with a different body gives `422 idempotency_conflict` |
+    | Busy target | runs are queued by default; `?queue=false` returns `409 target_busy` |
+    | Capabilities | features whose milestone is not in this build are rejected with `422 unsupported_feature`; `GET /capabilities` lists what is available. Each operation names its milestone in `x-milestone` |
+    | Events | `GET /events` is a Server-Sent Events stream; each event has an `id`, the `event` field carries `Event.type`, `data` is an `Event` as JSON. Reconnecting with `Last-Event-ID` replays missed events from a buffer of at least 10 min |
+    | Strict decoding | request bodies are decoded strictly: unknown fields are rejected with `422 validation_failed` (error code `unknown_field`). OpenAPI 3.0 cannot say `additionalProperties: false` together with `allOf`, so this is a server rule, not visible in the schemas. Members of `oneOf` unions (e.g. `Network`) must be decoded strictly as well |
+    | Exactly one of | objects documented as "exactly one of …" (overlay and step types, scopes, destinations, check types) are validated by the server; schemas use `minProperties`/`maxProperties` where possible |
+    | Device namespace | devices, WireGuard clients and probes share one UUID and one name namespace (a client or probe *is* a device; `Scope.device` can name all three) |
+    | Secrets | private keys, password hashes and token values never appear in responses, events, logs or exports, except the one-time token value at creation, WireGuard exports and revision exports with `include_secrets=true`, which are explicitly secret downloads (scope `full`, audit-logged) |
+    | Internal API | paths under `/internal` (`x-internal: true`) are used only by Chaos Gateway's own service containers (DNS proxy, TLS responder, Kea hook) with a service token from the shared secrets volume (scope `service`); they are not part of the public client and may change between releases |
+
+    ## Authentication and scopes
+
+    The UI uses an HTTP-only session cookie (`cookieAuth`); unsafe methods with a
+    session cookie also need the `X-CSRF-Token` header from `GET /auth/session`.
+    Automation uses bearer tokens (`bearerAuth`). Each operation names the minimum
+    token scope in `x-required-scope`:
+
+    | Scope | Allows |
+    |---|---|
+    | `read` | all `GET` operations except secret downloads |
+    | `overlays` | `read` plus overlays, runs, captures, diagnostics, probe calibration, own `reset` |
+    | `full` | everything: revisions, `reset?owner=all`, tokens, secret downloads (WireGuard exports, revision exports with secrets, capture key logs), test CA regeneration, HTTPS certificate |
+    | `service` | only `/internal` paths; tokens are generated at start for the service containers, never by users |
+
+    The admin session has `full`. Overlay owner is the token, the run, or — for UI
+    actions — the admin user (not the browser session).
+
+    ## Error codes
+
+    | `code` | HTTP | Meaning |
+    |---|---|---|
+    | `bad_request` | 400 | malformed JSON, wrong content type |
+    | `unauthorized` | 401 | no or invalid session/token |
+    | `forbidden` | 403 | authenticated, but scope too small |
+    | `csrf_failed` | 403 | session request without valid `X-CSRF-Token` |
+    | `not_found` | 404 | unknown id or name |
+    | `revision_conflict` | 409 | `If-Match` is not the active revision any more; reload and reapply |
+    | `confirm_pending` | 409 | another revision is waiting for commit-confirm |
+    | `target_busy` | 409 | a run is active on the target and `?queue=false` was given |
+    | `name_taken` | 409 | a name is already used by another object of the same type |
+    | `not_a_candidate` | 409 | the revision is not in the state the operation needs (apply/preview/discard on a non-candidate, confirm on a revision that is not `pending_confirm`) |
+    | `setup_completed` | 409 | `POST /setup` after setup was finished |
+    | `validation_failed` | 422 | schema or semantic validation failed; `errors[]` lists each problem with a JSON pointer; `references[]` lists active overlays and runs that block a deletion (`?force=true` removes them) |
+    | `capacity_exceeded` | 422 | the configuration needs more tc classes or fault ids than allowed (`errors[]` names the scope and interface) |
+    | `lockout_protected` | 422 | the change would remove control-plane access from the management network |
+    | `unsupported_feature` | 422 | the feature's milestone is not in this build (`GET /capabilities`) |
+    | `idempotency_conflict` | 422 | the `Idempotency-Key` was used with a different request |
+    | `precondition_required` | 428 | `If-Match` missing |
+    | `rate_limited` | 429 | too many login attempts; `Retry-After` is set |
+    | `apply_failed` | 500 | the executor failed; the previous state was restored |
+    | `verify_failed` | 500 | the kernel state did not match the target after apply; the previous state was restored |
+    | `internal` | 500 | unexpected error |
+    | `unavailable` | 503 | executor not connected, safe mode, or setup not finished |
+servers:
+  - url: /api/v1
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+tags:
+  - name: system
+    description: setup, state, capabilities, preflight, health
+  - name: auth
+    description: login, session, API tokens
+  - name: revisions
+    description: candidate revisions, preview, apply, commit-confirm, export
+  - name: config
+    description: read-only views of the configuration joined with observed state
+  - name: wireguard
+    description: WireGuard networks, clients, exports
+  - name: routing
+    description: static routes and BIRD
+  - name: devices
+    description: configured and discovered devices, flows, leases
+  - name: overlays
+    description: runtime faults, profile activations, rules, DNS/TLS/DHCP overlays
+  - name: runs
+    description: scenario runs, reports
+  - name: captures
+    description: packet captures
+  - name: diagnostics
+    description: diagnostics, probes, calibration
+  - name: observability
+    description: explain, events, metrics, audit log
+  - name: internal
+    description: used only by Chaos Gateway's own service containers (`x-internal`)
+paths:
+  # ------------------------------------------------------------------ system
+  /setup:
+    get:
+      tags: [system]
+      operationId: getSetup
+      summary: First-start status and the data the setup wizard needs
+      description: Available without authentication. After setup, only `completed` is returned.
+      security: []
+      x-milestone: M5
+      x-required-scope: none
+      responses:
+        '200':
+          description: Setup status
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SetupStatus'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [system]
+      operationId: completeSetup
+      summary: Finish first-start setup
+      description: |
+        Requires the one-time setup token from the container log. Creates revision 1
+        from the request, applies it with commit-confirm, sets the admin password and
+        restricts the UI/API to the management network. Fails with `409` once setup is done.
+      security:
+        - setupToken: []
+      x-milestone: M5
+      x-required-scope: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetupRequest'}
+      responses:
+        '200':
+          description: Setup applied; the revision waits for confirmation
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApplyResult'}
+        default: {$ref: '#/components/responses/Problem'}
+  /state:
+    get:
+      tags: [system]
+      operationId: getState
+      summary: Current generation, active revision, pending confirmation, last apply
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GatewayState'}
+        default: {$ref: '#/components/responses/Problem'}
+  /capabilities:
+    get:
+      tags: [system]
+      operationId: getCapabilities
+      summary: Features available in this build
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Capabilities
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capabilities'}
+        default: {$ref: '#/components/responses/Problem'}
+  /system/info:
+    get:
+      tags: [system]
+      operationId: getSystemInfo
+      summary: Version, host, kernel, architecture, boot id
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: System information
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemInfo'}
+        default: {$ref: '#/components/responses/Problem'}
+  /system/health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Health of the managed components
+      description: Without authentication only the overall `status` is returned (container health check).
+      security: []
+      x-milestone: M5
+      x-required-scope: none
+      responses:
+        '200':
+          description: Healthy or degraded
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+        '503':
+          description: Unhealthy
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+  /system/preflight:
+    get:
+      tags: [system]
+      operationId: getPreflight
+      summary: Result of the last preflight check (plan §3.4)
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Preflight report
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PreflightReport'}
+        default: {$ref: '#/components/responses/Problem'}
+  /system/interfaces:
+    get:
+      tags: [system]
+      operationId: listHostInterfaces
+      summary: Physical host interfaces and their assignment
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Host interfaces
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HostInterfacePage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /system/busy:
+    get:
+      tags: [system]
+      operationId: getBusy
+      summary: Whether runs are active or queued (for update scripts)
+      x-milestone: M15
+      x-required-scope: read
+      responses:
+        '200':
+          description: Busy state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Busy'}
+        default: {$ref: '#/components/responses/Problem'}
+  /reset:
+    post:
+      tags: [overlays]
+      operationId: reset
+      summary: Remove overlays and stop runs
+      description: By default only the caller's overlays and runs. `owner=all` needs scope `full`.
+      x-milestone: M8a
+      x-required-scope: overlays
+      parameters:
+        - name: owner
+          in: query
+          schema:
+            type: string
+            enum: [self, all]
+            default: self
+      responses:
+        '200':
+          description: What was removed
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResetResult'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ auth
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in as admin; sets the session cookie
+      security: []
+      x-milestone: M5
+      x-required-scope: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Logged in
+          headers:
+            Set-Cookie:
+              description: '`chaosgw_session`, HttpOnly, Secure, SameSite=Strict'
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: End the current session
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '204': {description: Logged out}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/session:
+    get:
+      tags: [auth]
+      operationId: getSession
+      summary: Current session or token, its scope and the CSRF token
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Session
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      summary: Change the admin password; ends all other sessions
+      x-milestone: M5
+      x-required-scope: full
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PasswordChange'}
+      responses:
+        '204': {description: Changed}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/tokens:
+    get:
+      tags: [auth]
+      operationId: listTokens
+      summary: API tokens (never their values)
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tokens
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiTokenPage'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [auth]
+      operationId: createToken
+      summary: Create an API token; the value is returned once
+      x-milestone: M5
+      x-required-scope: full
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApiTokenCreate'}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiTokenCreated'}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/tokens/{tokenId}:
+    delete:
+      tags: [auth]
+      operationId: deleteToken
+      summary: Revoke a token
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '204': {description: Revoked}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ revisions
+  /revisions:
+    get:
+      tags: [revisions]
+      operationId: listRevisions
+      summary: Revisions, newest first
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/RevisionStatus'}
+      responses:
+        '200':
+          description: Revisions (without configuration bodies)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RevisionPage'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [revisions]
+      operationId: createRevision
+      summary: Create a candidate revision
+      description: |
+        Body: a complete `Configuration` (`application/json`, also used for import)
+        or a JSON Merge Patch against the base revision (`application/merge-patch+json`).
+        The server merges, resolves names to UUIDs, generates WireGuard keys for new
+        clients and links (and for a raised `key.generation`), assigns `created_at` to new
+        faults, and validates. A candidate that fails validation is **not** stored; the
+        response is `422 validation_failed`.
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: message
+          in: query
+          description: Short description stored with the revision
+          schema: {type: string, maxLength: 200}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Configuration'}
+          application/merge-patch+json:
+            schema: {$ref: '#/components/schemas/ConfigurationPatch'}
+      responses:
+        '201':
+          description: Candidate created
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Revision'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/active:
+    get:
+      tags: [revisions]
+      operationId: getActiveRevision
+      summary: The active revision with its configuration
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Active revision
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RevisionWithConfiguration'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    get:
+      tags: [revisions]
+      operationId: getRevision
+      summary: One revision with its configuration
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Revision
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RevisionWithConfiguration'}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [revisions]
+      operationId: discardRevision
+      summary: Discard a candidate
+      x-milestone: M5
+      x-required-scope: full
+      responses:
+        '204': {description: Discarded}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/preview:
+    post:
+      tags: [revisions]
+      operationId: previewRevision
+      summary: Dry run against the active revision, overlays and observed state
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: Preview
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Preview'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/apply:
+    post:
+      tags: [revisions]
+      operationId: applyRevision
+      summary: Apply a candidate (returns after verify)
+      description: |
+        Fails with `409 revision_conflict` if the candidate's base is not the active
+        revision, `409 confirm_pending` if another revision waits for confirmation, and
+        `422 validation_failed` with `references[]` if it deletes objects used by active
+        overlays or runs (`force=true` removes those overlays and aborts those runs).
+        Lockout-relevant changes (plan §2.14) become `pending_confirm` and are rolled back
+        unless confirmed before `confirm_deadline`.
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+        - name: force
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Applied (active or pending confirmation)
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApplyResult'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/confirm:
+    post:
+      tags: [revisions]
+      operationId: confirmRevision
+      summary: Confirm a revision waiting for commit-confirm
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: Confirmed; it is now last-known-good
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Revision'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/clone:
+    post:
+      tags: [revisions]
+      operationId: cloneRevision
+      summary: New candidate with this revision's configuration, based on the active one (used for rollback)
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '201':
+          description: Candidate created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Revision'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/diff:
+    get:
+      tags: [revisions]
+      operationId: diffRevision
+      summary: Domain diff between this revision and `base` (default the active revision)
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+        - name: base
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '200':
+          description: Domain diff
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/DomainChange'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/export:
+    get:
+      tags: [revisions]
+      operationId: exportRevision
+      summary: Export a revision's configuration (without secrets by default)
+      description: |
+        With `include_secrets=true` (scope `full`) the export contains `secrets` (WireGuard
+        private and preshared keys), so it can be used as a complete backup. Importing a
+        configuration without `secrets`: peers in `generated` mode and WireGuard interfaces
+        whose keys are not in the secrets store get new keys when the candidate is created;
+        the candidate lists them as warnings in its preview.
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+        - name: include_secrets
+          in: query
+          schema: {type: boolean, default: false}
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, yaml]
+            default: yaml
+      responses:
+        '200':
+          description: Configuration document
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Configuration'}
+            application/yaml:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ explain
+  /explain:
+    get:
+      tags: [observability]
+      operationId: explain
+      summary: Effective access verdict and winning fault per family for one traffic tuple
+      description: Give `device` or `src`; `dst` is an IPv4 address or a hostname.
+      x-milestone: M8a
+      x-required-scope: read
+      parameters:
+        - name: device
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: src
+          in: query
+          schema: {type: string, format: ipv4}
+        - name: dst
+          in: query
+          required: true
+          schema: {type: string}
+        - name: protocol
+          in: query
+          schema: {$ref: '#/components/schemas/Protocol'}
+        - name: port
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 65535}
+      responses:
+        '200':
+          description: Explanation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Explanation'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ config views
+  /uplink:
+    get:
+      tags: [config]
+      operationId: getUplink
+      summary: Uplink selection and its observed address, gateway and resolvers
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Uplink
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UplinkView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks:
+    get:
+      tags: [config]
+      operationId: listNetworks
+      summary: Local test networks and WireGuard networks
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: type
+          in: query
+          schema: {$ref: '#/components/schemas/NetworkType'}
+      responses:
+        '200':
+          description: Networks
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NetworkPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}:
+    get:
+      tags: [config]
+      operationId: getNetwork
+      summary: One network with status
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Network
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NetworkView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/leases:
+    get:
+      tags: [devices]
+      operationId: listLeases
+      summary: Current DHCP leases of a local network
+      x-milestone: M6a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Leases
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DhcpLeasePage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/clients:
+    get:
+      tags: [wireguard]
+      operationId: listWireGuardClients
+      summary: Clients of a WireGuard hub network with status
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Clients
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WireGuardClientViewPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/clients/{clientId}:
+    get:
+      tags: [wireguard]
+      operationId: getWireGuardClient
+      summary: One client with status
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Client
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WireGuardClientView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/clients/{clientId}/export:
+    get:
+      tags: [wireguard]
+      operationId: exportWireGuardClient
+      summary: Client configuration as wg-quick file or QR code (secret)
+      description: |
+        Contains the client's private key if the gateway generated it and it was not
+        deleted ("export once"); otherwise a `<PRIVATE_KEY>` placeholder. With
+        `key.export_once` the private key is deleted after the first successful download.
+        Every download is recorded in the audit log.
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/ClientId'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [conf, png, svg]
+            default: conf
+      responses:
+        '200':
+          description: Export
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+          content:
+            text/plain:
+              schema: {type: string}
+            image/png:
+              schema: {type: string, format: binary}
+            image/svg+xml:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/clients/{clientId}/private-key:
+    delete:
+      tags: [wireguard]
+      operationId: deleteWireGuardClientPrivateKey
+      summary: Delete the stored private key of a client (later exports contain a placeholder)
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - $ref: '#/components/parameters/ClientId'
+      responses:
+        '204': {description: Deleted}
+        default: {$ref: '#/components/responses/Problem'}
+  /networks/{networkId}/export:
+    get:
+      tags: [wireguard]
+      operationId: exportWireGuardNetwork
+      summary: Hub - zip of client configurations; link - remote-side configuration (secret)
+      description: |
+        Hub network: a zip with one `.conf` per client (all, or those given in `clients`).
+        Link network: the remote side's wg-quick configuration (`format=conf`) or, if a
+        routing protocol uses the link, a matching BIRD snippet (`format=bird`).
+      x-milestone: M5
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/NetworkId'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [zip, conf, bird]
+        - name: clients
+          in: query
+          description: Comma-separated client ids or names (hub only)
+          schema: {type: string}
+      responses:
+        '200':
+          description: Export
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+            text/plain:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /routing:
+    get:
+      tags: [routing]
+      operationId: getRouting
+      summary: Routing configuration
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Routing configuration
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Routing'}
+        default: {$ref: '#/components/responses/Problem'}
+  /routing/status:
+    get:
+      tags: [routing]
+      operationId: getRoutingStatus
+      summary: BIRD protocol and neighbor state
+      x-milestone: M5
+      x-required-scope: read
+      responses:
+        '200':
+          description: Routing status
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RoutingStatus'}
+        default: {$ref: '#/components/responses/Problem'}
+  /routing/routes:
+    get:
+      tags: [routing]
+      operationId: listRoutes
+      summary: Routes in Chaos Gateway's routing tables (static, connected, learned)
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - name: origin
+          in: query
+          schema: {$ref: '#/components/schemas/RouteOrigin'}
+        - name: protocol
+          in: query
+          description: Routing protocol id or name (learned routes only)
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Routes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RouteEntryPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      summary: Configured and discovered devices (incl. WireGuard clients and probes)
+      x-milestone: M6a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: network
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: origin
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceOrigin'}
+        - name: online
+          in: query
+          schema: {type: boolean}
+      responses:
+        '200':
+          description: Devices
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DevicePage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /devices/{deviceId}:
+    get:
+      tags: [devices]
+      operationId: getDevice
+      summary: One device with observed state and active faults
+      x-milestone: M6a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Device
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /flows:
+    get:
+      tags: [devices]
+      operationId: listFlows
+      summary: Current connections from conntrack
+      x-milestone: M6a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: device
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: network
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+      responses:
+        '200':
+          description: Flows
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FlowPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /groups:
+    get:
+      tags: [config]
+      operationId: listGroups
+      summary: Device groups
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Groups
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GroupPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /groups/{groupId}:
+    get:
+      tags: [config]
+      operationId: getGroup
+      summary: One group
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Group
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GroupView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /rules:
+    get:
+      tags: [config]
+      operationId: listAccessRules
+      summary: Configured access rules in evaluation order, with counters
+      description: Overlay rules are listed under `/overlays?kind=rule`; they are evaluated before these.
+      x-milestone: M9
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Access rules
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccessRulePage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /rules/{ruleId}:
+    get:
+      tags: [config]
+      operationId: getAccessRule
+      summary: One access rule
+      x-milestone: M9
+      x-required-scope: read
+      parameters:
+        - name: ruleId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Access rule
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccessRuleView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /faults:
+    get:
+      tags: [config]
+      operationId: listFaults
+      summary: Configured faults with counters and override information
+      x-milestone: M8a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: family
+          in: query
+          schema: {$ref: '#/components/schemas/FaultFamily'}
+      responses:
+        '200':
+          description: Faults
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FaultPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /faults/{faultId}:
+    get:
+      tags: [config]
+      operationId: getFault
+      summary: One configured fault
+      x-milestone: M8a
+      x-required-scope: read
+      parameters:
+        - name: faultId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Fault
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FaultView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /profiles:
+    get:
+      tags: [config]
+      operationId: listProfiles
+      summary: Built-in and user-defined profiles
+      x-milestone: M11
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProfileViewPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /profiles/{profileId}:
+    get:
+      tags: [config]
+      operationId: getProfile
+      summary: One profile
+      x-milestone: M11
+      x-required-scope: read
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProfileView'}
+        default: {$ref: '#/components/responses/Problem'}
+  /scenarios:
+    get:
+      tags: [config]
+      operationId: listScenarios
+      summary: Scenarios of the active revision
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Scenarios
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScenarioViewPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /scenarios/{scenarioId}:
+    get:
+      tags: [config]
+      operationId: getScenario
+      summary: One scenario (JSON, or YAML with `Accept application/yaml`)
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - name: scenarioId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Scenario
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScenarioView'}
+            application/yaml:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /scenarios/{scenarioId}/runs:
+    post:
+      tags: [runs]
+      operationId: runScenario
+      summary: Start a run of a stored scenario
+      x-milestone: M15
+      x-required-scope: overlays
+      parameters:
+        - name: scenarioId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/Queue'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RunOptions'}
+      responses:
+        '201':
+          description: Run created (queued or running)
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /probes:
+    get:
+      tags: [diagnostics]
+      operationId: listProbes
+      summary: Probes with their observed address
+      x-milestone: M25
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Probes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProbeViewPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /probes/{probeId}/calibrate:
+    post:
+      tags: [diagnostics]
+      operationId: calibrateProbe
+      summary: Measure what a profile or the probe's current faults really produce
+      description: Runs synchronously for `duration` (max. 5 min) and compares the measurement with the expected values (plan §4.3 tolerances).
+      x-milestone: M25
+      x-required-scope: overlays
+      parameters:
+        - name: probeId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CalibrationRequest'}
+      responses:
+        '200':
+          description: Calibration result
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CalibrationResult'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ overlays
+  /overlays:
+    get:
+      tags: [overlays]
+      operationId: listOverlays
+      summary: Active overlays
+      x-milestone: M8a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/OverlayKind'}
+        - name: owner
+          in: query
+          description: '`self`, or an owner id (token id, run id, `admin`)'
+          schema: {type: string}
+        - name: device
+          in: query
+          description: Overlays whose target contains this device
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: network
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+      responses:
+        '200':
+          description: Overlays
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OverlayPage'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [overlays]
+      operationId: createOverlay
+      summary: Create or replace an overlay (returns after verify)
+      description: |
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp` must be set; it
+        decides the overlay kind. An overlay with the same key *(owner, kind, target,
+        selector)* is replaced and keeps its id (`200`); otherwise `201`.
+      x-milestone: M8a
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OverlayRequest'}
+      responses:
+        '200':
+          description: Replaced an overlay with the same key
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Overlay'}
+        '201':
+          description: Created
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Overlay'}
+        default: {$ref: '#/components/responses/Problem'}
+  /overlays/{overlayId}:
+    parameters:
+      - name: overlayId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      tags: [overlays]
+      operationId: getOverlay
+      summary: One overlay with counters
+      x-milestone: M8a
+      x-required-scope: read
+      responses:
+        '200':
+          description: Overlay
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Overlay'}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [overlays]
+      operationId: deleteOverlay
+      summary: Remove an overlay (returns after verify)
+      description: Tokens with scope `overlays` may only remove their own overlays.
+      x-milestone: M8a
+      x-required-scope: overlays
+      responses:
+        '204':
+          description: Removed
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+        default: {$ref: '#/components/responses/Problem'}
+  /overlays/{overlayId}/renew:
+    post:
+      tags: [overlays]
+      operationId: renewOverlay
+      summary: Renew an overlay's lease (heartbeat)
+      x-milestone: M8a
+      x-required-scope: overlays
+      parameters:
+        - name: overlayId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Renewed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Overlay'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ runs
+  /runs:
+    get:
+      tags: [runs]
+      operationId: listRuns
+      summary: Runs, newest first
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/RunStatus'}
+        - name: scenario
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Runs (without timeline details)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunPage'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Start a run of a stored scenario (`scenario`) or an inline one (`inline`)
+      x-milestone: M15
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/Queue'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RunRequest'}
+      responses:
+        '201':
+          description: Run created (queued or running)
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}:
+    get:
+      tags: [runs]
+      operationId: getRun
+      summary: Run with timeline, checks and artifacts
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}/abort:
+    post:
+      tags: [runs]
+      operationId: abortRun
+      summary: Abort a queued or running run; its overlays are removed
+      x-milestone: M15
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Aborted
+          headers:
+            Chaos-Generation: {$ref: '#/components/headers/Chaos-Generation'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}/renew:
+    post:
+      tags: [runs]
+      operationId: renewRun
+      summary: Renew a run's lease (heartbeat)
+      x-milestone: M15
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Renewed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}/report.json:
+    get:
+      tags: [runs]
+      operationId: getRunReportJson
+      summary: Final report as JSON
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunReport'}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}/report.xml:
+    get:
+      tags: [runs]
+      operationId: getRunReportJunit
+      summary: Final report as JUnit XML (one testsuite per run, one testcase per check, step errors as errors, zero-hit warnings as system-out or failures)
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: JUnit XML
+          content:
+            application/xml:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /runs/{runId}/events:
+    get:
+      tags: [runs]
+      operationId: getRunEvents
+      summary: All events of the run as JSON Lines
+      x-milestone: M15
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: One `Event` per line
+          content:
+            application/jsonl:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ captures
+  /captures:
+    get:
+      tags: [captures]
+      operationId: listCaptures
+      summary: Captures
+      x-milestone: M17
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: run
+          in: query
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Captures
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CapturePage'}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [captures]
+      operationId: startCapture
+      summary: Start a capture
+      x-milestone: M17
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CaptureRequest'}
+      responses:
+        '201':
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capture'}
+        default: {$ref: '#/components/responses/Problem'}
+  /captures/{captureId}:
+    parameters:
+      - $ref: '#/components/parameters/CaptureId'
+    get:
+      tags: [captures]
+      operationId: getCapture
+      summary: One capture
+      x-milestone: M17
+      x-required-scope: read
+      responses:
+        '200':
+          description: Capture
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capture'}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [captures]
+      operationId: deleteCapture
+      summary: Delete a stopped capture and its files
+      x-milestone: M17
+      x-required-scope: overlays
+      responses:
+        '204': {description: Deleted}
+        default: {$ref: '#/components/responses/Problem'}
+  /captures/{captureId}/stop:
+    post:
+      tags: [captures]
+      operationId: stopCapture
+      summary: Stop a running capture
+      x-milestone: M17
+      x-required-scope: overlays
+      parameters:
+        - $ref: '#/components/parameters/CaptureId'
+      responses:
+        '200':
+          description: Stopped
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capture'}
+        default: {$ref: '#/components/responses/Problem'}
+  /captures/{captureId}/download:
+    get:
+      tags: [captures]
+      operationId: downloadCapture
+      summary: Download the capture (also while running); `keylog` returns the TLS key log
+      description: '`part=keylog` and captures marked `sensitive` need scope `full`.'
+      x-milestone: M17
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/CaptureId'
+        - name: part
+          in: query
+          schema:
+            type: string
+            enum: [capture, keylog]
+            default: capture
+      responses:
+        '200':
+          description: File
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+          content:
+            application/vnd.tcpdump.pcap:
+              schema: {type: string, format: binary}
+            application/x-pcapng:
+              schema: {type: string, format: binary}
+            text/plain:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ diagnostics
+  /diagnostics:
+    post:
+      tags: [diagnostics]
+      operationId: runDiagnostic
+      summary: Run one diagnostic from the gateway or a probe (synchronous, max. 60 s)
+      x-milestone: M24
+      x-required-scope: overlays
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DiagnosticRequest'}
+      responses:
+        '200':
+          description: Result (also when the diagnosed target fails)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticResult'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ TLS
+  /tls/ca:
+    get:
+      tags: [config]
+      operationId: getTestCa
+      summary: The test CA certificate (PEM) for installation on development firmware
+      description: Never returns the unknown CA, which is not distributed (plan §2.8).
+      x-milestone: M21
+      x-required-scope: read
+      responses:
+        '200':
+          description: PEM certificate
+          content:
+            application/x-pem-file:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /tls/ca/regenerate:
+    post:
+      tags: [config]
+      operationId: regenerateTestCa
+      summary: Generate a new test CA (devices must install the new certificate)
+      x-milestone: M22
+      x-required-scope: full
+      responses:
+        '200':
+          description: New CA certificate
+          content:
+            application/x-pem-file:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ DNS log, certificate
+  /dns/queries:
+    get:
+      tags: [devices]
+      operationId: listDnsQueries
+      summary: DNS query log of the DNS proxy, newest first
+      x-milestone: M6b
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: device
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: name
+          in: query
+          description: Exact name or `*.suffix`
+          schema: {type: string}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Queries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DnsQueryPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /system/certificate:
+    get:
+      tags: [system]
+      operationId: getCertificate
+      summary: The UI/API HTTPS certificate
+      x-milestone: M29
+      x-required-scope: read
+      responses:
+        '200':
+          description: Certificate
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CertificateInfo'}
+        default: {$ref: '#/components/responses/Problem'}
+    put:
+      tags: [system]
+      operationId: replaceCertificate
+      summary: Replace the self-signed HTTPS certificate (takes effect for new connections)
+      x-milestone: M29
+      x-required-scope: full
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CertificateUpload'}
+      responses:
+        '200':
+          description: Installed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CertificateInfo'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ internal (service containers)
+  /internal/dhcp/lease-events:
+    post:
+      tags: [internal]
+      operationId: postLeaseEvent
+      summary: Lease event from Kea's run_script hook
+      x-internal: true
+      x-milestone: M6a
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KeaLeaseEvent'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/dns/config:
+    get:
+      tags: [internal]
+      operationId: getDnsServiceConfig
+      summary: Everything the DNS proxy needs (long poll)
+      description: |
+        Returns the current configuration at once if its generation is newer than `after`,
+        otherwise waits up to 30 s and returns `204` if nothing changed. The DNS proxy calls
+        it at start (registration, plan §2.6) and then in a loop; it keeps no state of its own.
+      x-internal: true
+      x-milestone: M6b
+      x-required-scope: service
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64}
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DnsServiceConfig'}
+        '204': {description: Unchanged}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/dns/resolutions:
+    post:
+      tags: [internal]
+      operationId: postDnsResolutions
+      summary: Addresses returned for hostname selectors; returns after the address sets are updated
+      description: |
+        The proxy calls this before it sends an answer whose name is in a hostname set, so the
+        device's first packet already matches (plan §2.6). The API deduplicates and batches
+        concurrent calls into one executor operation (persistent netlink connection).
+      x-internal: true
+      x-milestone: M20
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items: {$ref: '#/components/schemas/DnsResolution'}
+      responses:
+        '204': {description: Sets updated}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/dns/queries:
+    post:
+      tags: [internal]
+      operationId: postDnsQueries
+      summary: Batch of query-log entries (asynchronous)
+      x-internal: true
+      x-milestone: M6b
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 10000
+              items: {$ref: '#/components/schemas/DnsQueryLogEntry'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/tls/config:
+    get:
+      tags: [internal]
+      operationId: getTlsServiceConfig
+      summary: Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
+      x-internal: true
+      x-milestone: M21
+      x-required-scope: service
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64}
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TlsServiceConfig'}
+        '204': {description: Unchanged}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/tls/handshakes:
+    post:
+      tags: [internal]
+      operationId: postTlsHandshakes
+      summary: Handshake outcomes seen by the TLS responder or proxy
+      x-internal: true
+      x-milestone: M21
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items: {$ref: '#/components/schemas/TlsHandshakeReport'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+
+  # ------------------------------------------------------------------ observability
+  /events:
+    get:
+      tags: [observability]
+      operationId: streamEvents
+      summary: Server-Sent Events stream
+      description: |
+        `text/event-stream`. Each message: `id: <Event.id>`, `event: <Event.type>`,
+        `data: <Event as JSON>`. A comment line `: keepalive` is sent every 15 s.
+      x-milestone: M5
+      x-required-scope: read
+      x-sse-event-schema: '#/components/schemas/Event'
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema: {type: string}
+        - name: types
+          in: query
+          description: Comma-separated `EventType` values to receive (default all)
+          schema: {type: string}
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /metrics:
+    get:
+      tags: [observability]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      x-milestone: M26
+      x-required-scope: read
+      responses:
+        '200':
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /audit:
+    get:
+      tags: [observability]
+      operationId: listAudit
+      summary: Audit log, newest first
+      x-milestone: M5
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditPage'}
+        default: {$ref: '#/components/responses/Problem'}
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: chaosgw_session
+      description: Admin UI session. Unsafe methods also need the `X-CSRF-Token` header.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API token (`cgw_…`), scope `read`, `overlays` or `full`.
+    setupToken:
+      type: apiKey
+      in: header
+      name: X-Setup-Token
+      description: One-time token printed to the container log at first start.
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Base revision id as a quoted ETag, e.g. `"42"`.
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: {type: string, maxLength: 128}
+    RevisionQuery:
+      name: revision
+      in: query
+      description: Read a candidate or older revision instead of the active one.
+      schema: {type: integer, format: int64, minimum: 1}
+    Queue:
+      name: queue
+      in: query
+      description: '`false`: fail with `409 target_busy` instead of queueing.'
+      schema: {type: boolean, default: true}
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    NetworkId:
+      name: networkId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Ref'}
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Ref'}
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Ref'}
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    CaptureId:
+      name: captureId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+
+  headers:
+    Chaos-Generation:
+      description: Generation after this write (see `GET /state`).
+      schema: {type: integer, format: int64}
+    ETag:
+      description: Id of the active revision, quoted (`"42"`).
+      schema: {type: string}
+
+  responses:
+    Problem:
+      description: Error (RFC 9457)
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+
+  schemas:
+    # ============================================================ primitives
+    Uuid:
+      type: string
+      format: uuid
+    Ref:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: UUID or name of an object. Stored configurations contain UUIDs only.
+    Name:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$'
+      description: Unique per object type (case-insensitive); must not have the form of a UUID.
+    Description:
+      type: string
+      maxLength: 500
+    Duration:
+      type: string
+      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$'
+      example: 90s
+    Percentage:
+      type: string
+      pattern: '^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)%$'
+      example: 0.5%
+    Bitrate:
+      type: string
+      pattern: '^[0-9]+(\.[0-9]+)?(bit|kbit|Mbit|Gbit)$'
+      example: 2Mbit
+    ByteSize:
+      type: string
+      pattern: '^[0-9]+(B|KiB|MiB|GiB|TiB)$'
+      example: 5GiB
+    Ipv4:
+      type: string
+      format: ipv4
+    Ipv4Cidr:
+      type: string
+      pattern: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$'
+      description: Network prefix; host bits must be zero.
+      example: 10.20.0.0/24
+    Ipv4Interface:
+      type: string
+      pattern: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$'
+      description: Address of the gateway in a network, with prefix length.
+      example: 10.10.0.1/24
+    Ipv4OrCidr:
+      type: string
+      pattern: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(/([0-9]|[12][0-9]|3[0-2]))?$'
+    MacAddress:
+      type: string
+      pattern: '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'
+      description: Lower case, colon-separated.
+    Hostname:
+      type: string
+      maxLength: 253
+      pattern: '^(\*\.)?([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$'
+      description: Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
+    Endpoint:
+      type: string
+      maxLength: 260
+      pattern: '^[^\s:]+:[0-9]{1,5}$'
+      description: '`host:port`, host a DNS name or IPv4 address.'
+      example: gw.example.com:51820
+    WireGuardKey:
+      type: string
+      pattern: '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$'
+      description: Base64 Curve25519 public key.
+    Protocol:
+      type: string
+      enum: [any, tcp, udp, icmp]
+      default: any
+    PortRange:
+      type: object
+      required: [from, to]
+      properties:
+        from: {type: integer, minimum: 1, maximum: 65535}
+        to: {type: integer, minimum: 1, maximum: 65535}
+    StepId:
+      type: string
+      pattern: '^[a-z][a-z0-9_-]{0,31}$'
+      description: Unique within a scenario. `start` is reserved (check windows).
+
+    # ============================================================ errors
+    ErrorCode:
+      type: string
+      enum:
+        - bad_request
+        - unauthorized
+        - forbidden
+        - csrf_failed
+        - not_found
+        - revision_conflict
+        - confirm_pending
+        - target_busy
+        - name_taken
+        - not_a_candidate
+        - setup_completed
+        - validation_failed
+        - capacity_exceeded
+        - lockout_protected
+        - unsupported_feature
+        - idempotency_conflict
+        - precondition_required
+        - rate_limited
+        - apply_failed
+        - verify_failed
+        - internal
+        - unavailable
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: '`https://chaos-gateway.dev/problems/<code>`'
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string}
+        code: {$ref: '#/components/schemas/ErrorCode'}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/ValidationError'}
+        references:
+          type: array
+          description: Active overlays and runs that block a deletion (`validation_failed`).
+          items: {$ref: '#/components/schemas/BlockingReference'}
+        pending_revision:
+          type: integer
+          format: int64
+          description: With `confirm_pending` - the revision waiting for confirmation.
+        active_revision:
+          type: integer
+          format: int64
+          description: With `revision_conflict` - the currently active revision.
+    ValidationError:
+      type: object
+      required: [path, code, message]
+      properties:
+        path:
+          type: string
+          description: JSON pointer into the request (or the merged configuration).
+          example: /networks/7b0c…/dhcp/pools/0/end
+        code:
+          type: string
+          description: Machine-readable reason, e.g. `required`, `pattern`, `jitter_exceeds_latency`, `overlapping_subnet`, `unknown_reference`, `class_limit`.
+        message: {type: string}
+    BlockingReference:
+      type: object
+      required: [kind, id, object]
+      properties:
+        kind:
+          type: string
+          enum: [overlay, run]
+        id: {$ref: '#/components/schemas/Uuid'}
+        owner: {$ref: '#/components/schemas/Owner'}
+        object:
+          type: string
+          description: JSON pointer of the deleted object in the configuration.
+
+    # ============================================================ configuration
+    Configuration:
+      type: object
+      description: |
+        The persistent configuration (plan §2.1.1). Collections are maps keyed by the
+        object's UUID; see the conventions in the API description. Built-in profiles are
+        not part of it.
+      required: [schema_version, uplink, management]
+      properties:
+        schema_version:
+          type: integer
+          enum: [1]
+        uplink: {$ref: '#/components/schemas/Uplink'}
+        management: {$ref: '#/components/schemas/Management'}
+        networks:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Network'}
+        access_matrix: {$ref: '#/components/schemas/AccessMatrix'}
+        routing: {$ref: '#/components/schemas/Routing'}
+        devices:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Device'}
+        groups:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Group'}
+        probes:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Probe'}
+        access_rules:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/AccessRule'}
+        access_rule_order:
+          type: array
+          description: Evaluation order of `access_rules` (first match wins). Must contain each key of `access_rules` exactly once.
+          items: {$ref: '#/components/schemas/Uuid'}
+        faults:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/ConfigFault'}
+        profiles:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Profile'}
+        scenarios:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Scenario'}
+        settings: {$ref: '#/components/schemas/Settings'}
+        secrets: {$ref: '#/components/schemas/ConfigurationSecrets'}
+    ConfigurationSecrets:
+      type: object
+      description: |
+        Only in exports with `include_secrets=true` and accepted on import. Never returned by
+        `GET /revisions/…`. Keys are moved into the secrets store when the candidate is
+        created and are not stored in the revision file.
+      properties:
+        wireguard:
+          type: object
+          description: Map keyed by the UUID of a WireGuard network (its interface key), client or link (peer key).
+          additionalProperties:
+            type: object
+            properties:
+              private_key: {type: string}
+              preshared_key: {type: string}
+    ConfigurationPatch:
+      type: object
+      description: |
+        JSON Merge Patch (RFC 7396) against the base revision's `Configuration`.
+        Not validated on its own; the merged result is validated as a `Configuration`.
+      additionalProperties: true
+
+    InterfaceRef:
+      type: object
+      description: A host interface, identified by MAC address and/or name (plan §3.4). If both are given, the MAC wins and the name is updated when it changes.
+      minProperties: 1
+      properties:
+        name: {type: string, maxLength: 15}
+        mac: {$ref: '#/components/schemas/MacAddress'}
+    Uplink:
+      type: object
+      description: The OS configures the uplink (D3); Chaos Gateway only selects it.
+      required: [interface]
+      properties:
+        interface: {$ref: '#/components/schemas/InterfaceRef'}
+        gateway:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Explicit upstream gateway. Default - the OS default route on the uplink interface.
+        dns_upstream:
+          type: array
+          description: Upstream resolvers of the DNS proxy. Default - the host's resolvers for the uplink.
+          maxItems: 4
+          items: {$ref: '#/components/schemas/Ipv4'}
+    Management:
+      type: object
+      required: [interface]
+      properties:
+        interface:
+          allOf: [{$ref: '#/components/schemas/InterfaceRef'}]
+          description: OS-owned management interface; may be the uplink interface (two-port topology).
+        allowed_sources:
+          type: array
+          description: Sources that always reach UI, API and SSH (anti-lockout). Default - the management interface's connected subnet.
+          items: {$ref: '#/components/schemas/Ipv4Cidr'}
+        ui_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 443
+
+    NetworkType:
+      type: string
+      enum: [lan, wireguard]
+    Network:
+      oneOf:
+        - $ref: '#/components/schemas/LanNetwork'
+        - $ref: '#/components/schemas/WireGuardNetwork'
+      discriminator:
+        propertyName: type
+        mapping:
+          lan: '#/components/schemas/LanNetwork'
+          wireguard: '#/components/schemas/WireGuardNetwork'
+    LanNetwork:
+      type: object
+      description: A local IPv4 test network - a bridge owned by Chaos Gateway with physical ports (plan §2.2).
+      required: [type, name, address, interfaces]
+      properties:
+        type:
+          type: string
+          enum: [lan]
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        interfaces:
+          type: array
+          description: Physical ports of the network's bridge. Must not be configured by netplan/NetworkManager.
+          minItems: 1
+          items: {$ref: '#/components/schemas/InterfaceRef'}
+        address: {$ref: '#/components/schemas/Ipv4Interface'}
+        nat:
+          type: boolean
+          default: true
+          description: Masquerade towards the uplink.
+        dhcp: {$ref: '#/components/schemas/DhcpScope'}
+        dns: {$ref: '#/components/schemas/NetworkDns'}
+        routes:
+          type: array
+          description: Downstream routes for devices behind another router in this network.
+          items: {$ref: '#/components/schemas/DownstreamRoute'}
+    DownstreamRoute:
+      type: object
+      required: [destination, via]
+      properties:
+        destination: {$ref: '#/components/schemas/Ipv4Cidr'}
+        via:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Router inside the network's subnet.
+    DhcpScope:
+      type: object
+      description: One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`.
+      properties:
+        enabled:
+          type: boolean
+          default: true
+        pools:
+          type: array
+          description: Default - the second half of the subnet.
+          items: {$ref: '#/components/schemas/DhcpPool'}
+        lease_time:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 1h
+        options: {$ref: '#/components/schemas/DhcpOptions'}
+    DhcpOptions:
+      type: object
+      properties:
+        router:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Option 3. Default - the network's gateway address.
+        dns_servers:
+          type: array
+          description: Option 6. Default - the network's gateway address (DNS proxy).
+          items: {$ref: '#/components/schemas/Ipv4'}
+        domain:
+          type: string
+          maxLength: 253
+          description: Option 15.
+        ntp_servers:
+          type: array
+          description: Option 42.
+          items: {$ref: '#/components/schemas/Ipv4'}
+        custom:
+          type: array
+          items: {$ref: '#/components/schemas/DhcpCustomOption'}
+    DhcpPool:
+      type: object
+      required: [start, end]
+      properties:
+        start: {$ref: '#/components/schemas/Ipv4'}
+        end: {$ref: '#/components/schemas/Ipv4'}
+    DhcpCustomOption:
+      type: object
+      required: [code, value]
+      properties:
+        code: {type: integer, minimum: 1, maximum: 254}
+        value:
+          type: string
+          description: Value in Kea's `option-data` syntax.
+    NetworkDns:
+      type: object
+      properties:
+        static_entries:
+          type: array
+          items: {$ref: '#/components/schemas/DnsStaticEntry'}
+        redirect_hardcoded:
+          type: boolean
+          default: false
+          description: Redirect DNS (UDP/TCP 53) to other resolvers to the DNS proxy.
+        block_dot:
+          type: boolean
+          default: false
+          description: Block DNS over TLS (TCP 853).
+    DnsStaticEntry:
+      type: object
+      required: [name, addresses]
+      properties:
+        name: {$ref: '#/components/schemas/Hostname'}
+        addresses:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/Ipv4'}
+
+    WireGuardNetwork:
+      type: object
+      description: |
+        A WireGuard network (plan §2.2.1). `hub` - one interface, many `clients`.
+        `link` - one interface per remote site with exactly one `peer` and a /31 `address`.
+      required: [type, kind, name, address, listen_port]
+      properties:
+        type:
+          type: string
+          enum: [wireguard]
+        kind:
+          type: string
+          enum: [hub, link]
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        role:
+          type: string
+          enum: [test, management]
+          default: test
+          description: '`test` - untrusted like a test network; `management` - may reach UI/API (commit-confirm applies).'
+        address: {$ref: '#/components/schemas/Ipv4Interface'}
+        listen_port: {type: integer, minimum: 1, maximum: 65535}
+        mtu:
+          type: integer
+          minimum: 1280
+          maximum: 1500
+          default: 1420
+        endpoint:
+          allOf: [{$ref: '#/components/schemas/Endpoint'}]
+          description: Address clients use to reach the gateway. Default - uplink address and `listen_port`.
+        nat:
+          type: boolean
+          default: true
+          description: Masquerade towards the uplink (never towards test networks).
+        clients:
+          type: object
+          description: Hub only. Map keyed by client UUID.
+          additionalProperties: {$ref: '#/components/schemas/WireGuardClient'}
+        peer:
+          allOf: [{$ref: '#/components/schemas/WireGuardLinkPeer'}]
+          description: Link only.
+        routes:
+          type: array
+          description: Link only - static routes via the link (alternative or addition to dynamic routing).
+          items: {$ref: '#/components/schemas/Ipv4Cidr'}
+    WireGuardKeySettings:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [generated, provided]
+          default: generated
+          description: '`generated` - the gateway generates the peer key pair (complete export possible); `provided` - only the public key is given.'
+        public_key:
+          allOf: [{$ref: '#/components/schemas/WireGuardKey'}]
+          description: Required with `provided`; set by the server with `generated`.
+        preshared_key:
+          type: boolean
+          default: false
+        export_once:
+          type: boolean
+          default: false
+          description: Delete the stored private key after the first download.
+        generation:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Raising it in a candidate makes the server generate a new key pair (key rotation, `generated` only).
+    WireGuardClient:
+      type: object
+      description: A peer of a hub network. Each client is also a device with the same UUID and name (device namespace); there is no separate `Device` entry for it.
+      required: [name, address]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        address:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Tunnel address inside the hub's subnet.
+        client_networks:
+          type: array
+          description: Subnets behind the client (part of its AllowedIPs and routed via the hub).
+          items: {$ref: '#/components/schemas/Ipv4Cidr'}
+        reachable:
+          type: array
+          description: |
+            Networks the client may reach. They become the routes (AllowedIPs) of the exported
+            configuration and implicit `allow` entries from this client in the access matrix.
+            `{uplink: true}` means full tunnel (AllowedIPs 0.0.0.0/0).
+          items: {$ref: '#/components/schemas/MatrixEndpoint'}
+        trusts_test_ca:
+          type: boolean
+          default: false
+          description: As `Device.trusts_test_ca`.
+        labels:
+          type: array
+          items: {type: string, maxLength: 40}
+        dns: {$ref: '#/components/schemas/WireGuardClientDns'}
+        keepalive:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 25s
+        enabled:
+          type: boolean
+          default: true
+          description: Disabled clients are removed from the interface.
+        key: {$ref: '#/components/schemas/WireGuardKeySettings'}
+    WireGuardClientDns:
+      type: object
+      description: DNS server written into the client's exported configuration.
+      properties:
+        mode:
+          type: string
+          enum: [gateway, none, custom]
+          default: gateway
+          description: '`gateway` - the hub address (DNS proxy, so DNS faults and hostname selectors apply).'
+        servers:
+          type: array
+          description: Only with `custom`.
+          items: {$ref: '#/components/schemas/Ipv4'}
+    WireGuardLinkPeer:
+      type: object
+      required: [address]
+      properties:
+        address:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Remote side's address in the /31 transfer net.
+        endpoint:
+          allOf: [{$ref: '#/components/schemas/Endpoint'}]
+          description: Remote endpoint. If set, the gateway initiates the tunnel (needed behind CGNAT/DS-Lite).
+        keepalive:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 25s
+        enabled:
+          type: boolean
+          default: true
+        key: {$ref: '#/components/schemas/WireGuardKeySettings'}
+
+    MatrixEndpoint:
+      type: object
+      description: 'Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources` and the management interface subnet; the control plane itself is governed by gateway protection, not by the matrix).'
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        network: {$ref: '#/components/schemas/Ref'}
+        client: {$ref: '#/components/schemas/Ref'}
+        uplink:
+          type: boolean
+          enum: [true]
+        management:
+          type: boolean
+          enum: [true]
+    AccessMatrix:
+      type: object
+      description: |
+        Default policy between networks (firewall layer 2, plan §2.2). Without an entry:
+        local test networks → uplink `allow`; everything else `deny`. Access to the gateway
+        itself is not part of the matrix (gateway protection, layer 1). A more specific
+        endpoint (client) wins over a network entry.
+      properties:
+        entries:
+          type: array
+          items: {$ref: '#/components/schemas/MatrixEntry'}
+    MatrixEntry:
+      type: object
+      required: [from, to, policy]
+      properties:
+        from: {$ref: '#/components/schemas/MatrixEndpoint'}
+        to: {$ref: '#/components/schemas/MatrixEndpoint'}
+        policy:
+          type: string
+          enum: [allow, deny]
+
+    Routing:
+      type: object
+      description: |
+        The managed BIRD 2 instance (plan §2.2.2). Learned routes only enter Chaos Gateway's
+        tables. Static routes live with their network - `LanNetwork.routes` (downstream
+        routers), `WireGuardNetwork.routes` (links), client networks (automatic) - and are
+        announced by BIRD like other prefixes when selected in `announce`.
+      properties:
+        router_id:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Default - the numerically lowest gateway address of all local test networks.
+        asn:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 4294967295
+          description: Local ASN for BGP (private range recommended).
+        protocols:
+          type: object
+          description: Map keyed by protocol UUID.
+          additionalProperties: {$ref: '#/components/schemas/RoutingProtocol'}
+        external: {$ref: '#/components/schemas/ExternalRouting'}
+    ExternalRouting:
+      type: object
+      description: Import routes that another daemon writes into a kernel table, with the same filters.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        table: {type: integer, minimum: 1, maximum: 4294967294}
+        import: {$ref: '#/components/schemas/ImportFilter'}
+    RoutingProtocol:
+      type: object
+      required: [name, type, link]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        type:
+          type: string
+          enum: [bgp, ospf, babel]
+        link:
+          allOf: [{$ref: '#/components/schemas/Ref'}]
+          description: WireGuard link network the protocol runs on.
+        enabled:
+          type: boolean
+          default: true
+        announce:
+          type: array
+          description: Prefixes announced to the neighbor.
+          items: {$ref: '#/components/schemas/AnnounceEntry'}
+        import: {$ref: '#/components/schemas/ImportFilter'}
+        bgp: {$ref: '#/components/schemas/BgpSettings'}
+        ospf: {$ref: '#/components/schemas/OspfSettings'}
+        babel: {$ref: '#/components/schemas/BabelSettings'}
+        custom_snippet:
+          type: string
+          maxLength: 8192
+          description: Raw BIRD configuration appended inside the protocol block; validated with `bird -p`, shown as unmanaged.
+    AnnounceEntry:
+      type: object
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        network: {$ref: '#/components/schemas/Ref'}
+        client: {$ref: '#/components/schemas/Ref'}
+        cidr: {$ref: '#/components/schemas/Ipv4Cidr'}
+    ImportFilter:
+      type: object
+      description: Management, uplink and gateway-own prefixes are always rejected, regardless of this filter.
+      properties:
+        allowed_prefixes:
+          type: array
+          description: Empty - accept any prefix not otherwise forbidden.
+          items: {$ref: '#/components/schemas/PrefixFilterEntry'}
+        allow_default:
+          type: boolean
+          default: false
+        max_prefixes:
+          type: integer
+          minimum: 1
+          default: 100
+    PrefixFilterEntry:
+      type: object
+      required: [prefix]
+      properties:
+        prefix: {$ref: '#/components/schemas/Ipv4Cidr'}
+        max_length:
+          type: integer
+          minimum: 0
+          maximum: 32
+          description: Also accept more specific prefixes up to this length.
+    BgpSettings:
+      type: object
+      required: [neighbor_asn]
+      properties:
+        neighbor_address:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: Default - the link peer's address.
+        neighbor_asn:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 4294967295
+        hold_time:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 90s
+        keepalive_time:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 30s
+        passive:
+          type: boolean
+          default: false
+    OspfSettings:
+      type: object
+      properties:
+        area:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]+\.[0-9]+\.[0-9]+)?$'
+          default: '0.0.0.0'
+        hello_interval:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 10s
+        dead_interval:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 40s
+        cost:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 10
+    BabelSettings:
+      type: object
+      properties:
+        hello_interval:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 4s
+        rxcost:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 96
+
+    Device:
+      type: object
+      description: |
+        A configured device (plan §2.3). Discovered devices have UUIDs too; adopting one stores
+        it here under the same UUID. Merging two entries (e.g. after a randomized MAC) is a
+        revision that adds the other entry's identifiers to this device; the discovered entry
+        whose identifiers are now covered disappears, and overlays targeting it are moved to
+        this device.
+      required: [name]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        identifiers: {$ref: '#/components/schemas/DeviceIdentifiers'}
+        network:
+          allOf: [{$ref: '#/components/schemas/Ref'}]
+          description: Expected network; informational except for `fixed_ip`.
+        fixed_ip:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: DHCP reservation for the device's first MAC in `network`.
+        trusts_test_ca:
+          type: boolean
+          default: false
+          description: Whether the firmware trusts the test CA; decides expected TLS results (plan §2.8).
+        labels:
+          type: array
+          items: {type: string, maxLength: 40}
+    DeviceIdentifiers:
+      type: object
+      properties:
+        macs:
+          type: array
+          items: {$ref: '#/components/schemas/MacAddress'}
+        ipv4:
+          type: array
+          description: Addresses or ranges for devices without a visible MAC (behind a router, in client networks).
+          items: {$ref: '#/components/schemas/Ipv4OrCidr'}
+    Group:
+      type: object
+      required: [name]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        members:
+          type: array
+          description: Devices (configured, discovered, WireGuard clients, probes).
+          items: {$ref: '#/components/schemas/Ref'}
+    Probe:
+      type: object
+      description: A virtual client inside the gateway, a port of the network's bridge (plan §2.12). It is also a device with the same UUID and name (device namespace); there is no separate `Device` entry for it.
+      required: [name, network]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        network:
+          allOf: [{$ref: '#/components/schemas/Ref'}]
+          description: Local test network.
+        trusts_test_ca:
+          type: boolean
+          default: false
+        labels:
+          type: array
+          items: {type: string, maxLength: 40}
+
+    Settings:
+      type: object
+      properties:
+        commit_confirm_timeout:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 60s
+        class_limit_per_interface:
+          type: integer
+          minimum: 10
+          maximum: 8190
+          description: Default 1000 on x86-64, 200 on ARM64 (plan §3.3).
+        counter_poll_interval:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 1s
+        retention: {$ref: '#/components/schemas/RetentionSettings'}
+    RetentionSettings:
+      type: object
+      properties:
+        revisions: {type: integer, minimum: 10, default: 200}
+        runs:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 720h
+        events:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 168h
+        audit:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 8760h
+        captures_quota:
+          allOf: [{$ref: '#/components/schemas/ByteSize'}]
+          default: 5GiB
+
+    # ============================================================ selectors (plan §2.4)
+    Scope:
+      type: object
+      description: |
+        The source part of a selector (`source` in the configuration, `target` in overlays
+        and scenarios). Exactly one property. Specificity levels (plan §2.4): device → 1–4,
+        group → 5–6, network and remote_network → 7–8, global → 9–10 (with or without a
+        destination/port).
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        device: {$ref: '#/components/schemas/Ref'}
+        group: {$ref: '#/components/schemas/Ref'}
+        network:
+          allOf: [{$ref: '#/components/schemas/Ref'}]
+          description: Local or WireGuard network (hub - incl. all clients and client networks; link - incl. the remote prefixes).
+        remote_network: {$ref: '#/components/schemas/RemoteNetworkRef'}
+        global:
+          type: boolean
+          enum: [true]
+          description: Packets whose original source is in a test, WireGuard or remote network (never the gateway's own traffic).
+    RemoteNetworkRef:
+      type: object
+      description: 'Exactly one of: the client networks of a WireGuard client, the prefixes routed via a link, or a CIDR inside those.'
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        client: {$ref: '#/components/schemas/Ref'}
+        link: {$ref: '#/components/schemas/Ref'}
+        cidr: {$ref: '#/components/schemas/Ipv4Cidr'}
+    Destination:
+      type: object
+      description: Exactly one property. Omit the whole destination for "any".
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        uplink:
+          type: boolean
+          enum: [true]
+          description: Anything routed via the uplink.
+        network: {$ref: '#/components/schemas/Ref'}
+        cidr: {$ref: '#/components/schemas/Ipv4OrCidr'}
+        hostname:
+          allOf: [{$ref: '#/components/schemas/Hostname'}]
+          description: DNS-derived (best effort, plan §2.6). Requires M20.
+    TrafficMatch:
+      type: object
+      description: The destination part of a selector. `ports` and `port_ranges` require protocol `tcp` or `udp`.
+      properties:
+        destination: {$ref: '#/components/schemas/Destination'}
+        protocol: {$ref: '#/components/schemas/Protocol'}
+        ports:
+          type: array
+          maxItems: 64
+          items: {type: integer, minimum: 1, maximum: 65535}
+        port_ranges:
+          type: array
+          maxItems: 16
+          items: {$ref: '#/components/schemas/PortRange'}
+
+    # ============================================================ access rules
+    AccessAction:
+      type: string
+      enum: [allow, drop, reject, reset]
+      description: '`reject` - ICMP unreachable; `reset` - TCP reset (TCP only).'
+    AccessRuleBody:
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - type: object
+          required: [action]
+          properties:
+            action: {$ref: '#/components/schemas/AccessAction'}
+            cut_existing:
+              type: boolean
+              default: false
+              description: Also cut established connections (time-limited TCP reset on established packets, plan §2.4).
+    AccessRule:
+      description: A configured access rule. Evaluated in forward and input on the conntrack original tuple; overlay rules come first.
+      allOf:
+        - $ref: '#/components/schemas/AccessRuleBody'
+        - type: object
+          required: [source]
+          properties:
+            name: {$ref: '#/components/schemas/Name'}
+            description: {$ref: '#/components/schemas/Description'}
+            source: {$ref: '#/components/schemas/Scope'}
+            enabled:
+              type: boolean
+              default: true
+
+    # ============================================================ faults (plan §2.4, §2.5)
+    FaultFamily:
+      type: string
+      enum: [impairment, mtu, dns, tls, dhcp, tunnel]
+    NetemParams:
+      type: object
+      description: |
+        One-way impairment of one direction (plan §2.5). Unset parameters are neutral;
+        the compiler always emits complete parameter sets. Validation: `jitter` ≤ `latency`;
+        `reorder` requires `latency`; `loss` and `burst_loss` are exclusive; `blackout`
+        and `flapping` are exclusive.
+      properties:
+        latency: {$ref: '#/components/schemas/Duration'}
+        jitter: {$ref: '#/components/schemas/Duration'}
+        distribution: {$ref: '#/components/schemas/DelayDistribution'}
+        keep_order:
+          type: boolean
+          default: false
+          description: Prevent reordering by jitter (netem rate; shifts the delay distribution).
+        loss: {$ref: '#/components/schemas/Percentage'}
+        loss_correlation: {$ref: '#/components/schemas/Percentage'}
+        burst_loss: {$ref: '#/components/schemas/GilbertElliott'}
+        rate:
+          allOf: [{$ref: '#/components/schemas/Bitrate'}]
+          description: Per device (D18).
+        queue_limit:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          description: Packets, per device (D18). Default computed from latency × rate (plan §2.5).
+        reorder: {$ref: '#/components/schemas/Percentage'}
+        duplicate: {$ref: '#/components/schemas/Percentage'}
+        corrupt: {$ref: '#/components/schemas/Percentage'}
+        blackout:
+          type: boolean
+          description: Drop everything (netem loss 100 %).
+        flapping: {$ref: '#/components/schemas/Flapping'}
+    DelayDistribution:
+      type: string
+      enum: [uniform, normal, pareto, paretonormal]
+      default: uniform
+    GilbertElliott:
+      type: object
+      description: Gilbert-Elliott burst-loss model (netem `loss gemodel p r 1-h 1-k`).
+      required: [p, r]
+      properties:
+        p:
+          allOf: [{$ref: '#/components/schemas/Percentage'}]
+          description: Probability good → bad.
+        r:
+          allOf: [{$ref: '#/components/schemas/Percentage'}]
+          description: Probability bad → good.
+        h:
+          allOf: [{$ref: '#/components/schemas/Percentage'}]
+          description: Delivery probability in the bad state (default 0%).
+        k:
+          allOf: [{$ref: '#/components/schemas/Percentage'}]
+          description: Delivery probability in the good state (default 100%).
+    Flapping:
+      type: object
+      required: [up, down]
+      description: Timed blackout, starting with `up`.
+      properties:
+        up: {$ref: '#/components/schemas/Duration'}
+        down: {$ref: '#/components/schemas/Duration'}
+    ImpairmentParams:
+      description: |
+        Flat `NetemParams` apply to both directions. Alternatively `upload` and/or `download`
+        give each direction its own complete parameter set (a missing direction is
+        unimpaired); flat parameters and `upload`/`download` must not be mixed. Upload =
+        packets in the connection's original direction (of the initiator), download = replies.
+      allOf:
+        - $ref: '#/components/schemas/NetemParams'
+        - type: object
+          properties:
+            upload: {$ref: '#/components/schemas/NetemParams'}
+            download: {$ref: '#/components/schemas/NetemParams'}
+    MtuParams:
+      type: object
+      required: [size]
+      properties:
+        size:
+          type: integer
+          minimum: 552
+          maximum: 1500
+          description: Maximum packet size in bytes (IP).
+        mode:
+          type: string
+          enum: [icmp, blackhole, mss_clamp]
+          default: icmp
+          description: '`icmp` - policy route with `mtu lock` (fragmentation-needed is sent); `blackhole` - drop larger packets silently; `mss_clamp` - rewrite TCP MSS only. At most 7 distinct `icmp` sizes can be active at once (PMTU mirror tables, plan §3.3); more give `capacity_exceeded`.'
+    TunnelRef:
+      type: object
+      description: The WireGuard client or link whose encrypted underlay traffic is impaired.
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        client: {$ref: '#/components/schemas/Ref'}
+        link: {$ref: '#/components/schemas/Ref'}
+    FaultBody:
+      description: |
+        A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
+        and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+        - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
+        - `mtu` - `mtu` plus an optional `TrafficMatch`.
+        - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
+          burst_loss, blackout and flapping; no `TrafficMatch`, no source/target.
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - $ref: '#/components/schemas/ImpairmentParams'
+        - type: object
+          properties:
+            family:
+              type: string
+              enum: [impairment, mtu, tunnel]
+              default: impairment
+            mtu: {$ref: '#/components/schemas/MtuParams'}
+            tunnel: {$ref: '#/components/schemas/TunnelRef'}
+    ConfigFault:
+      description: |
+        A persistent fault (configuration layer). Only families `impairment`, `mtu` and
+        `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
+        `source` is required except for `tunnel`.
+      allOf:
+        - $ref: '#/components/schemas/FaultBody'
+        - type: object
+          properties:
+            name: {$ref: '#/components/schemas/Name'}
+            description: {$ref: '#/components/schemas/Description'}
+            source: {$ref: '#/components/schemas/Scope'}
+            enabled:
+              type: boolean
+              default: true
+            created_at:
+              type: string
+              format: date-time
+              description: Set by the server when the fault first appears in a revision and preserved for its id afterwards; any value sent by a client is ignored. Decides "newer wins" at the same level (D26).
+    DnsFault:
+      type: object
+      description: DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+      required: [action]
+      properties:
+        names:
+          type: array
+          description: Names the fault applies to (exact or `*.suffix`). Empty - all names.
+          items: {$ref: '#/components/schemas/Hostname'}
+        action:
+          type: string
+          enum: [nxdomain, servfail, timeout, delay, wrong_answer, truncate, short_ttl]
+        delay:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: Required for `delay`.
+        answers:
+          type: array
+          description: Required for `wrong_answer` (A records returned instead).
+          items: {$ref: '#/components/schemas/Ipv4'}
+        ttl:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: Required for `short_ttl`.
+    TlsCase:
+      description: |
+        TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
+        (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
+        Default ports 443 and 8883; protocol must be `tcp` or omitted.
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - type: object
+          required: [case]
+          properties:
+            case:
+              type: string
+              enum: [untrusted_ca, expired, not_yet_valid, hostname_mismatch, self_signed, handshake_reset, handshake_close, handshake_stall, intercept]
+            sni:
+              type: array
+              description: Only connections whose ClientHello SNI matches.
+              items: {$ref: '#/components/schemas/Hostname'}
+            cut_existing:
+              type: boolean
+              default: false
+            intercept: {$ref: '#/components/schemas/InterceptSettings'}
+    InterceptSettings:
+      type: object
+      description: Only with case `intercept` (M22). Requires the device to trust the test CA.
+      properties:
+        keylog:
+          type: boolean
+          default: true
+        block_quic:
+          type: boolean
+          default: true
+          description: Drop UDP 443 for the selected traffic, forcing TCP.
+        http_rules:
+          type: array
+          items: {$ref: '#/components/schemas/HttpRule'}
+    HttpRule:
+      type: object
+      required: [action]
+      properties:
+        match: {$ref: '#/components/schemas/HttpMatch'}
+        action:
+          type: string
+          enum: [block, status, delay, throttle, abort, modify]
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: For `status` (e.g. 500, 503, 429).
+        delay:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: For `delay`.
+        rate:
+          allOf: [{$ref: '#/components/schemas/Bitrate'}]
+          description: For `throttle`.
+        modify: {$ref: '#/components/schemas/HttpModify'}
+    HttpMatch:
+      type: object
+      properties:
+        host: {$ref: '#/components/schemas/Hostname'}
+        path_prefix: {type: string, maxLength: 512}
+        method: {type: string, maxLength: 16}
+    HttpModify:
+      type: object
+      properties:
+        request_headers:
+          type: object
+          description: Header → value; empty value removes the header.
+          additionalProperties: {type: string}
+        response_headers:
+          type: object
+          additionalProperties: {type: string}
+        response_body_replace:
+          type: array
+          items: {$ref: '#/components/schemas/BodyReplace'}
+    BodyReplace:
+      type: object
+      required: [search, replace]
+      properties:
+        search: {type: string}
+        replace: {type: string}
+    DhcpAction:
+      type: object
+      description: |
+        DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
+        `silence` and `force_new_ip` last as long as the overlay; `delete_lease` acts once.
+        Requires M23.
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [short_lease, delete_lease, force_new_ip, set_options, silence]
+        lease_time:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: For `short_lease` (Kea, may be below 120 s).
+        options: {$ref: '#/components/schemas/DhcpOptions'}
+
+    # ============================================================ profiles
+    Profile:
+      type: object
+      description: A named bundle across families (plan §2.9). Each part competes in its own family when the profile is activated (overlay).
+      required: [name, parts]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        parts: {$ref: '#/components/schemas/ProfileParts'}
+    ProfileParts:
+      type: object
+      minProperties: 1
+      properties:
+        impairment: {$ref: '#/components/schemas/ImpairmentParams'}
+        mtu: {$ref: '#/components/schemas/MtuParams'}
+        dns: {$ref: '#/components/schemas/DnsFault'}
+        tls: {$ref: '#/components/schemas/TlsCase'}
+
+    # ============================================================ scenarios (plan §2.10)
+    Scenario:
+      type: object
+      description: |
+        A timeline of steps; YAML is the import/export format. Every step creates or replaces
+        an overlay owned by the run (key = kind, target, selector); `remove` removes one
+        step's overlay, `restore` all of them. Steps inherit `target` and may narrow it, never
+        widen it.
+      required: [name, target, steps]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        target:
+          allOf: [{$ref: '#/components/schemas/Scope'}]
+          description: Device, group or network (not `global`, not `remote_network`). One run per target at a time.
+        capture:
+          type: boolean
+          default: false
+          description: Capture the target's traffic for the whole run (M17).
+        zero_hit:
+          type: string
+          enum: [warning, error]
+          default: warning
+          description: How a fault or rule of the run that matched no packet is reported.
+        preconditions: {$ref: '#/components/schemas/ScenarioPreconditions'}
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: {$ref: '#/components/schemas/Step'}
+        checks:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/Check'}
+    ScenarioPreconditions:
+      type: object
+      properties:
+        skip:
+          type: array
+          description: Preconditions not to check.
+          items: {$ref: '#/components/schemas/PreconditionId'}
+    PreconditionId:
+      type: string
+      enum: [target_online, uses_gateway_dns, no_foreign_overlays]
+    Step:
+      type: object
+      description: |
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`,
+        `capture`, `wait`, `remove`, `restore`. `at` is the offset on the run's timeline; a
+        `wait` step stops the timeline until its condition holds, so later steps shift by the
+        waiting time. Steps with the same `at` run in list order. Tunnel faults and WireGuard
+        actions affect everything in the tunnel; they are only allowed when the client or link
+        lies inside the target (the target is that WireGuard network or that client).
+      required: [id, at]
+      properties:
+        id: {$ref: '#/components/schemas/StepId'}
+        at: {$ref: '#/components/schemas/Duration'}
+        target:
+          allOf: [{$ref: '#/components/schemas/Scope'}]
+          description: Narrows the scenario target (e.g. one device of the target group).
+        profile: {$ref: '#/components/schemas/Ref'}
+        fault: {$ref: '#/components/schemas/FaultBody'}
+        rule: {$ref: '#/components/schemas/AccessRuleBody'}
+        dns: {$ref: '#/components/schemas/DnsFault'}
+        tls: {$ref: '#/components/schemas/TlsCase'}
+        dhcp: {$ref: '#/components/schemas/DhcpAction'}
+        wireguard: {$ref: '#/components/schemas/WireGuardAction'}
+        capture:
+          type: string
+          enum: [start, stop]
+        wait: {$ref: '#/components/schemas/WaitCondition'}
+        remove:
+          allOf: [{$ref: '#/components/schemas/StepId'}]
+          description: Remove the overlay of this earlier step.
+        restore:
+          type: boolean
+          enum: [true]
+          description: Remove all overlays of the run.
+    WaitCondition:
+      description: Waits until the condition holds for the step target; on timeout the run ends as `error` (like a failed precondition).
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - type: object
+          required: [for, timeout]
+          properties:
+            for:
+              type: string
+              enum: [online, connected, dns_query]
+              description: '`connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`.'
+            name: {$ref: '#/components/schemas/Hostname'}
+            timeout: {$ref: '#/components/schemas/Duration'}
+    Check:
+      type: object
+      description: |
+        Exactly one check type besides `window` and `name`. Checks observe the scenario
+        target (flows, DNS log, TLS handshake events) inside the window.
+      required: [window]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Name in the report (JUnit testcase). Default derived from the type.
+        window: {$ref: '#/components/schemas/CheckWindow'}
+        reconnected:
+          allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+          description: A new connection matching the selector is established inside the window.
+        no_connection:
+          allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+          description: No connection matching the selector is established inside the window.
+        traffic_seen:
+          allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+        traffic_not_seen: {$ref: '#/components/schemas/TrafficNotSeenCheck'}
+        dns_query_seen: {$ref: '#/components/schemas/DnsQueryCheck'}
+        tls_rejected:
+          allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+          description: The device aborted the TLS handshake with the responder (M21).
+        tls_accepted:
+          allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+          description: The device completed the handshake (a failed security check if the case must be rejected).
+    DnsQueryCheck:
+      type: object
+      required: [name]
+      properties:
+        name: {$ref: '#/components/schemas/Hostname'}
+    TrafficNotSeenCheck:
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - type: object
+          properties:
+            except:
+              type: array
+              description: Destinations that are allowed ("no traffic to unexpected destinations").
+              items: {$ref: '#/components/schemas/Destination'}
+    CheckWindow:
+      type: object
+      required: [from]
+      properties:
+        from:
+          type: string
+          pattern: '^([a-z][a-z0-9_-]{0,31})$'
+          description: Step id whose application starts the window, or `start` (run start).
+        within:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: Window length. Exactly one of `within` and `until`.
+        until:
+          allOf: [{$ref: '#/components/schemas/StepId'}]
+          description: Window ends when this step is applied.
+
+    # ============================================================ actors and overlays (plan §2.1.1)
+    Actor:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          enum: [user, token, run, system]
+        id:
+          type: string
+          description: '`admin` for the user, token UUID, run UUID, `system`.'
+        name: {type: string}
+    Owner:
+      allOf: [{$ref: '#/components/schemas/Actor'}]
+      description: Owner of an overlay - `user`, `token` or `run`.
+    OverlayKind:
+      type: string
+      enum: [fault, profile, rule, dns, tls, dhcp, wireguard]
+    OverlayRequest:
+      type: object
+      description: |
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`.
+        `target` is required except for tunnel faults and WireGuard actions. Example (plan §2.15):
+        `{"target": {"device": "esp32-42"}, "profile": "bad-lte", "ttl": "5m"}`.
+
+        **Overlay key** (writing an overlay with an existing key replaces it, plan §2.1.1):
+        owner + kind + target + the kind's selector:
+
+        | Kind | Selector part of the key |
+        |---|---|
+        | `fault` | `family` + `TrafficMatch` (impairment, mtu) or `tunnel` (tunnel) |
+        | `profile` | none - one profile activation per owner and target |
+        | `rule` | `TrafficMatch` (changing the action replaces the rule) |
+        | `dns` | the set of `names` |
+        | `tls` | `TrafficMatch` + `sni` |
+        | `dhcp` | `action` |
+        | `wireguard` | `client` or `link` + `action` |
+
+        **Order of overlay rules:** newest first (by `updated_at`), all before configured rules.
+
+        **Specificity of non-impairment families** (plan §2.4 levels): DNS `names` and TLS
+        `TrafficMatch`/`sni` count as destination/port; DHCP actions target a device (level 4)
+        or a network (level 8); tunnel faults are resolved per tunnel only (overlay before
+        configuration, newest wins) and have no level.
+      properties:
+        target: {$ref: '#/components/schemas/Scope'}
+        ttl:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: Remove the overlay after this time.
+        lease:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: The owner must renew the overlay within this interval (`POST /overlays/{id}/renew`).
+        profile: {$ref: '#/components/schemas/Ref'}
+        fault: {$ref: '#/components/schemas/FaultBody'}
+        rule: {$ref: '#/components/schemas/AccessRuleBody'}
+        dns: {$ref: '#/components/schemas/DnsFault'}
+        tls: {$ref: '#/components/schemas/TlsCase'}
+        dhcp: {$ref: '#/components/schemas/DhcpAction'}
+        wireguard: {$ref: '#/components/schemas/WireGuardAction'}
+    WireGuardAction:
+      type: object
+      description: |
+        WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
+        `disable` removes the peer from the interface ("peer offline", for a link "link
+        down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
+        as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
+        Requires M10.
+      required: [action]
+      minProperties: 2
+      properties:
+        client: {$ref: '#/components/schemas/Ref'}
+        link: {$ref: '#/components/schemas/Ref'}
+        action:
+          type: string
+          enum: [disable, key_mismatch, block_endpoint]
+    Overlay:
+      allOf:
+        - $ref: '#/components/schemas/OverlayRequest'
+        - type: object
+          required: [id, kind, owner, created_at, updated_at, generation]
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            kind: {$ref: '#/components/schemas/OverlayKind'}
+            owner: {$ref: '#/components/schemas/Owner'}
+            run: {$ref: '#/components/schemas/OverlayRunRef'}
+            expires_at:
+              type: string
+              format: date-time
+            lease_expires_at:
+              type: string
+              format: date-time
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+              description: Last replacement; decides "newer wins" among overlays at the same level (D26).
+            generation:
+              type: integer
+              format: int64
+              description: Generation in which the current version became active.
+            counters: {$ref: '#/components/schemas/Counter'}
+            queues:
+              type: array
+              description: netem queues currently fed by this overlay (impairment and tunnel faults, profile impairment parts).
+              items: {$ref: '#/components/schemas/QueueStats'}
+            state: {$ref: '#/components/schemas/EffectState'}
+    OverlayRunRef:
+      type: object
+      description: Set when a run owns the overlay.
+      required: [id, step]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        step: {$ref: '#/components/schemas/StepId'}
+    EffectState:
+      type: string
+      enum: [effective, partially_overridden, overridden, disabled]
+      description: Whether the fault, profile part or rule wins anywhere (plan §2.4).
+    Counter:
+      type: object
+      required: [packets, bytes, epoch]
+      properties:
+        packets: {type: integer, format: int64}
+        bytes: {type: integer, format: int64}
+        epoch:
+          type: integer
+          format: int64
+          description: Changes when counters restart (reboot, recreated object).
+    QueueStats:
+      type: object
+      properties:
+        interface: {type: string}
+        direction:
+          type: string
+          enum: [upload, download]
+        device:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Set for per-device queues (D18).
+        sent_packets:
+          type: integer
+          format: int64
+          description: Packets that left the queue (i.e. were delayed and sent).
+        dropped_packets: {type: integer, format: int64}
+        overlimits: {type: integer, format: int64}
+        backlog_packets: {type: integer, format: int64}
+        epoch: {type: integer, format: int64}
+
+    # ============================================================ revisions and apply
+    RevisionStatus:
+      type: string
+      enum: [candidate, pending_confirm, active, superseded, rolled_back]
+    Revision:
+      type: object
+      required: [id, status, created_at, created_by, schema_version]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        status: {$ref: '#/components/schemas/RevisionStatus'}
+        base:
+          type: integer
+          format: int64
+          description: Revision this candidate was created against.
+        message: {type: string}
+        schema_version: {type: integer}
+        created_at: {type: string, format: date-time}
+        created_by: {$ref: '#/components/schemas/Actor'}
+        applied_at: {type: string, format: date-time}
+        confirmed_at: {type: string, format: date-time}
+        last_known_good:
+          type: boolean
+          description: The revision booted after a failed start or an unconfirmed change.
+    RevisionWithConfiguration:
+      allOf:
+        - $ref: '#/components/schemas/Revision'
+        - type: object
+          required: [configuration]
+          properties:
+            configuration: {$ref: '#/components/schemas/Configuration'}
+    DomainChange:
+      type: object
+      description: One change in the user's terms (plan §3.2 "domain diff").
+      required: [op, kind, path, summary]
+      properties:
+        op:
+          type: string
+          enum: [added, removed, changed]
+        kind:
+          type: string
+          enum: [uplink, management, network, client, link_peer, routing, routing_protocol, device, group, probe, access_rule, access_matrix, fault, profile, scenario, settings]
+        id: {type: string}
+        name: {type: string}
+        path:
+          type: string
+          description: JSON pointer in the configuration.
+        summary:
+          type: string
+          example: 'ESP32-42 upload: +200 ms'
+        fields:
+          type: array
+          items:
+            type: object
+            required: [path]
+            properties:
+              path: {type: string}
+              old: {}
+              new: {}
+    Preview:
+      type: object
+      required: [revision, domain, linux, requires_confirm]
+      properties:
+        revision: {type: integer, format: int64}
+        base: {type: integer, format: int64}
+        domain:
+          type: array
+          items: {$ref: '#/components/schemas/DomainChange'}
+        linux:
+          type: object
+          description: Unified diffs of the normalized target state per subsystem (empty when unchanged).
+          properties:
+            nftables: {type: string}
+            tc: {type: string}
+            routes: {type: string}
+            wireguard:
+              type: string
+              description: Without private keys.
+            bird: {type: string}
+            services: {type: string}
+        requires_confirm:
+          type: boolean
+          description: Lockout-relevant change; applying it starts commit-confirm.
+        warnings:
+          type: array
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code: {type: string}
+              message: {type: string}
+              path: {type: string}
+        capacity:
+          type: array
+          description: tc classes per interface after the change.
+          items:
+            type: object
+            required: [interface, classes, limit]
+            properties:
+              interface: {type: string}
+              classes: {type: integer}
+              limit: {type: integer}
+        queues:
+          type: array
+          description: Queues per scope created by per-device rate or queue limits (D18).
+          items:
+            type: object
+            properties:
+              fault: {type: string}
+              scope: {type: string}
+              queues: {type: integer}
+        references:
+          type: array
+          description: Active overlays and runs that applying would orphan (needs `force=true`).
+          items: {$ref: '#/components/schemas/BlockingReference'}
+    ApplyResult:
+      type: object
+      required: [revision, status, generation]
+      properties:
+        revision: {type: integer, format: int64}
+        status:
+          type: string
+          enum: [active, pending_confirm]
+        generation: {type: integer, format: int64}
+        confirm_deadline:
+          type: string
+          format: date-time
+        duration_ms: {type: integer}
+        removed_overlays:
+          type: array
+          description: Overlays removed by `force=true` (event `overlay_orphaned`).
+          items: {$ref: '#/components/schemas/Uuid'}
+        aborted_runs:
+          type: array
+          items: {$ref: '#/components/schemas/Uuid'}
+
+    # ============================================================ system
+    GatewayState:
+      type: object
+      required: [generation, active_revision, safe_mode]
+      properties:
+        generation: {type: integer, format: int64}
+        active_revision: {type: integer, format: int64}
+        last_known_good: {type: integer, format: int64}
+        pending_confirm:
+          type: object
+          properties:
+            revision: {type: integer, format: int64}
+            deadline: {type: string, format: date-time}
+        last_apply:
+          type: object
+          properties:
+            revision: {type: integer, format: int64}
+            generation: {type: integer, format: int64}
+            at: {type: string, format: date-time}
+            result:
+              type: string
+              enum: [ok, rolled_back, failed]
+            duration_ms: {type: integer}
+            error: {type: string}
+        safe_mode: {type: boolean}
+        safe_mode_reason: {type: string}
+        degraded_networks:
+          type: array
+          items: {$ref: '#/components/schemas/Uuid'}
+        counter_epoch: {type: integer, format: int64}
+        boot_id: {type: string}
+        overlays_active: {type: integer}
+        runs_active: {type: integer}
+    Capabilities:
+      type: object
+      required: [version, features, overlay_kinds, fault_families, step_types, check_types]
+      properties:
+        version: {type: string}
+        features:
+          type: array
+          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
+          items: {type: string}
+        overlay_kinds:
+          type: array
+          items: {$ref: '#/components/schemas/OverlayKind'}
+        fault_families:
+          type: array
+          items: {$ref: '#/components/schemas/FaultFamily'}
+        step_types:
+          type: array
+          items: {type: string}
+        check_types:
+          type: array
+          items: {type: string}
+        diagnostic_types:
+          type: array
+          items: {type: string}
+        limits:
+          type: object
+          properties:
+            fault_ids: {type: integer, example: 4095}
+            class_limit_per_interface: {type: integer}
+    SystemInfo:
+      type: object
+      properties:
+        version: {type: string}
+        commit: {type: string}
+        build_date: {type: string, format: date-time}
+        api_version: {type: string}
+        os: {type: string, example: Ubuntu 24.04.3 LTS}
+        kernel: {type: string}
+        arch:
+          type: string
+          enum: [amd64, arm64]
+        hostname: {type: string}
+        boot_id: {type: string}
+        started_at: {type: string, format: date-time}
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        components:
+          type: array
+          items:
+            type: object
+            required: [name, status]
+            properties:
+              name:
+                type: string
+                enum: [api, executor, svcns, dns, tls, tls_proxy, kea, bird]
+              status:
+                type: string
+                enum: [healthy, degraded, unhealthy, disabled]
+              detail: {type: string}
+    PreflightReport:
+      type: object
+      required: [status, checks]
+      properties:
+        at: {type: string, format: date-time}
+        status:
+          type: string
+          enum: [ok, warn, fail]
+        checks:
+          type: array
+          items:
+            type: object
+            required: [id, status, message]
+            properties:
+              id:
+                type: string
+                example: module.sch_netem
+              status:
+                type: string
+                enum: [ok, warn, fail]
+              message: {type: string}
+              fix: {type: string}
+    HostInterface:
+      type: object
+      required: [name, mac]
+      properties:
+        name: {type: string}
+        mac: {$ref: '#/components/schemas/MacAddress'}
+        driver: {type: string}
+        bus:
+          type: string
+          enum: [pci, usb, platform, virtual, unknown]
+        link_up: {type: boolean}
+        speed_mbps: {type: integer}
+        addresses:
+          type: array
+          items: {$ref: '#/components/schemas/Ipv4Interface'}
+        os_managed:
+          type: boolean
+          description: Configured by netplan/NetworkManager (must be false for test interfaces).
+        assigned:
+          type: object
+          properties:
+            role:
+              type: string
+              enum: [uplink, management, network]
+            network: {$ref: '#/components/schemas/Uuid'}
+    Busy:
+      type: object
+      required: [busy]
+      properties:
+        busy: {type: boolean}
+        runs_active: {type: integer}
+        runs_queued: {type: integer}
+        run_ids:
+          type: array
+          items: {$ref: '#/components/schemas/Uuid'}
+    ResetResult:
+      type: object
+      required: [removed_overlays, aborted_runs, generation]
+      properties:
+        removed_overlays: {type: integer}
+        aborted_runs: {type: integer}
+        generation: {type: integer, format: int64}
+
+    # ============================================================ auth and setup
+    TokenScope:
+      type: string
+      enum: [read, overlays, full]
+    LoginRequest:
+      type: object
+      required: [password]
+      properties:
+        username:
+          type: string
+          enum: [admin]
+          default: admin
+        password: {type: string, format: password}
+    Session:
+      type: object
+      required: [kind, scope]
+      properties:
+        kind:
+          type: string
+          enum: [session, token]
+        scope: {$ref: '#/components/schemas/TokenScope'}
+        user:
+          type: string
+          enum: [admin]
+        token:
+          type: object
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            name: {type: string}
+        csrf_token:
+          type: string
+          description: Sessions only; send as `X-CSRF-Token` on unsafe methods.
+        expires_at: {type: string, format: date-time}
+    PasswordChange:
+      type: object
+      required: [current, new]
+      properties:
+        current: {type: string, format: password}
+        new: {type: string, format: password, minLength: 12}
+    ApiToken:
+      type: object
+      required: [id, name, scope, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        name: {type: string, maxLength: 64}
+        scope: {$ref: '#/components/schemas/TokenScope'}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    ApiTokenCreate:
+      type: object
+      required: [name, scope]
+      properties:
+        name: {type: string, maxLength: 64}
+        scope: {$ref: '#/components/schemas/TokenScope'}
+        expires_in:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: Default - no expiry.
+    ApiTokenCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiToken'
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+              description: Shown only in this response; stored as a hash.
+    SetupStatus:
+      type: object
+      required: [completed]
+      properties:
+        completed: {type: boolean}
+        interfaces:
+          type: array
+          items: {$ref: '#/components/schemas/HostInterface'}
+        preflight: {$ref: '#/components/schemas/PreflightReport'}
+        suggested_uplink: {$ref: '#/components/schemas/InterfaceRef'}
+    SetupRequest:
+      type: object
+      required: [admin_password, configuration]
+      properties:
+        admin_password: {type: string, format: password, minLength: 12}
+        configuration:
+          allOf: [{$ref: '#/components/schemas/Configuration'}]
+          description: Initial configuration (revision 1) - uplink, management and at least one test network.
+
+    # ============================================================ views (configuration + observed state)
+    UplinkView:
+      type: object
+      required: [config, status]
+      properties:
+        config: {$ref: '#/components/schemas/Uplink'}
+        status:
+          type: object
+          properties:
+            interface: {type: string}
+            link_up: {type: boolean}
+            address: {$ref: '#/components/schemas/Ipv4Interface'}
+            gateway: {$ref: '#/components/schemas/Ipv4'}
+            dns_servers:
+              type: array
+              items: {$ref: '#/components/schemas/Ipv4'}
+            speed_mbps: {type: integer}
+    NetworkView:
+      type: object
+      required: [id, config, status]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/Network'}
+        status: {$ref: '#/components/schemas/NetworkStatus'}
+    NetworkStatus:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [ok, degraded, pending]
+          description: '`degraded` - an assigned interface is missing; `pending` - not applied yet (candidate view).'
+        interface:
+          type: string
+          description: Linux interface (bridge or WireGuard interface).
+        ports:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              mac: {$ref: '#/components/schemas/MacAddress'}
+              present: {type: boolean}
+              link_up: {type: boolean}
+              speed_mbps: {type: integer}
+              offloads_disabled: {type: boolean}
+        public_key:
+          allOf: [{$ref: '#/components/schemas/WireGuardKey'}]
+          description: WireGuard networks - the gateway's public key.
+        peers_online: {type: integer}
+        peers_total: {type: integer}
+        link_peer: {$ref: '#/components/schemas/WireGuardPeerStatus'}
+        dhcp:
+          type: object
+          properties:
+            enabled: {type: boolean}
+            leases_active: {type: integer}
+            pool_free: {type: integer}
+        rx_bytes: {type: integer, format: int64}
+        tx_bytes: {type: integer, format: int64}
+    WireGuardClientView:
+      type: object
+      required: [id, network, config, status]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        network: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/WireGuardClient'}
+        status: {$ref: '#/components/schemas/WireGuardPeerStatus'}
+        private_key_stored:
+          type: boolean
+          description: Whether a complete export (with private key) is still possible.
+    WireGuardPeerStatus:
+      type: object
+      required: [online]
+      properties:
+        online:
+          type: boolean
+          description: Handshake younger than 3 min.
+        last_handshake: {type: string, format: date-time}
+        endpoint: {type: string}
+        rx_bytes: {type: integer, format: int64}
+        tx_bytes: {type: integer, format: int64}
+        learned_routes:
+          type: array
+          items: {$ref: '#/components/schemas/Ipv4Cidr'}
+    RoutingStatus:
+      type: object
+      properties:
+        bird:
+          type: object
+          properties:
+            running: {type: boolean}
+            version: {type: string}
+            router_id: {$ref: '#/components/schemas/Ipv4'}
+            last_reconfigure: {type: string, format: date-time}
+            last_error: {type: string}
+        protocols:
+          type: array
+          items:
+            type: object
+            required: [id, name, type, state]
+            properties:
+              id: {$ref: '#/components/schemas/Uuid'}
+              name: {type: string}
+              type:
+                type: string
+                enum: [bgp, ospf, babel, static, external]
+              state:
+                type: string
+                enum: [up, down, starting, disabled, error]
+              info:
+                type: string
+                description: BIRD's state detail (e.g. `Established`, `Full/PtP`).
+              since: {type: string, format: date-time}
+              routes:
+                type: object
+                properties:
+                  imported: {type: integer}
+                  filtered: {type: integer}
+                  exported: {type: integer}
+              announced:
+                type: array
+                description: Prefixes announced to the neighbor.
+                items: {$ref: '#/components/schemas/Ipv4Cidr'}
+              received:
+                type: array
+                description: Prefixes received (accepted and filtered are listed under `/routing/routes`).
+                items: {$ref: '#/components/schemas/Ipv4Cidr'}
+              last_error: {type: string}
+    RouteOrigin:
+      type: string
+      enum: [connected, static, client, learned, external]
+    RouteEntry:
+      type: object
+      required: [destination, table, origin]
+      properties:
+        destination: {$ref: '#/components/schemas/Ipv4Cidr'}
+        gateway: {$ref: '#/components/schemas/Ipv4'}
+        interface: {type: string}
+        table: {type: integer}
+        origin: {$ref: '#/components/schemas/RouteOrigin'}
+        protocol:
+          type: object
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            name: {type: string}
+        network: {$ref: '#/components/schemas/Uuid'}
+        metric: {type: integer}
+    DeviceOrigin:
+      type: string
+      enum: [configured, discovered, wireguard_client, probe]
+    DeviceView:
+      type: object
+      required: [id, name, origin, observed]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        name:
+          type: string
+          description: Configured name, or a generated one (`dev-<mac>`) for discovered devices.
+        origin: {$ref: '#/components/schemas/DeviceOrigin'}
+        config: {$ref: '#/components/schemas/Device'}
+        network: {$ref: '#/components/schemas/Uuid'}
+        groups:
+          type: array
+          items: {$ref: '#/components/schemas/Uuid'}
+        observed: {$ref: '#/components/schemas/DeviceObserved'}
+        effective:
+          type: array
+          description: Winning fault per family for the device's traffic without destination (use `/explain` for a destination).
+          items: {$ref: '#/components/schemas/FaultRef'}
+        overlays:
+          type: array
+          items: {$ref: '#/components/schemas/Uuid'}
+    DeviceObserved:
+      type: object
+      required: [online]
+      properties:
+        online: {type: boolean}
+        last_seen: {type: string, format: date-time}
+        macs:
+          type: array
+          items: {$ref: '#/components/schemas/MacAddress'}
+        addresses:
+          type: array
+          items: {$ref: '#/components/schemas/Ipv4'}
+        sources:
+          type: array
+          items:
+            type: string
+            enum: [config, dhcp, neighbor, conntrack, wireguard, probe]
+        lease: {$ref: '#/components/schemas/DhcpLease'}
+        wireguard: {$ref: '#/components/schemas/WireGuardPeerStatus'}
+        upload_bps: {type: integer, format: int64}
+        download_bps: {type: integer, format: int64}
+        flows_active: {type: integer}
+    DhcpLease:
+      type: object
+      required: [ip, mac, network, expires_at]
+      properties:
+        ip: {$ref: '#/components/schemas/Ipv4'}
+        mac: {$ref: '#/components/schemas/MacAddress'}
+        hostname: {type: string}
+        network: {$ref: '#/components/schemas/Uuid'}
+        device: {$ref: '#/components/schemas/Uuid'}
+        expires_at: {type: string, format: date-time}
+        state:
+          type: string
+          enum: [active, expired, declined]
+    Flow:
+      type: object
+      required: [id, protocol, src, dst]
+      properties:
+        id: {type: string}
+        device: {$ref: '#/components/schemas/Uuid'}
+        network: {$ref: '#/components/schemas/Uuid'}
+        protocol:
+          type: string
+          enum: [tcp, udp, icmp, other]
+        src: {$ref: '#/components/schemas/Ipv4'}
+        sport: {type: integer}
+        dst: {$ref: '#/components/schemas/Ipv4'}
+        dport: {type: integer}
+        dst_hostname:
+          type: string
+          description: Name the DNS proxy last returned for `dst` to this device.
+        nat_src: {$ref: '#/components/schemas/Ipv4'}
+        state:
+          type: string
+          description: TCP state from conntrack (e.g. `ESTABLISHED`), or `ASSURED`/`UNREPLIED`.
+        service:
+          type: string
+          enum: [dns_proxy, tls_responder, tls_proxy]
+          description: Set when the flow is redirected into the service namespace.
+        started_at: {type: string, format: date-time}
+        upload:
+          type: object
+          properties:
+            packets: {type: integer, format: int64}
+            bytes: {type: integer, format: int64}
+        download:
+          type: object
+          properties:
+            packets: {type: integer, format: int64}
+            bytes: {type: integer, format: int64}
+    GroupView:
+      type: object
+      required: [id, config]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/Group'}
+    AccessRuleView:
+      type: object
+      required: [id, position, config]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        position:
+          type: integer
+          description: 0-based position in `access_rule_order`.
+        config: {$ref: '#/components/schemas/AccessRule'}
+        counters: {$ref: '#/components/schemas/Counter'}
+    FaultView:
+      type: object
+      required: [id, config, state]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/ConfigFault'}
+        state: {$ref: '#/components/schemas/EffectState'}
+        overridden_by:
+          type: array
+          items: {$ref: '#/components/schemas/FaultRef'}
+        counters: {$ref: '#/components/schemas/Counter'}
+        queues:
+          type: array
+          items: {$ref: '#/components/schemas/QueueStats'}
+    FaultRef:
+      type: object
+      description: A fault or profile part as a candidate in precedence resolution.
+      required: [family, layer, id]
+      properties:
+        family: {$ref: '#/components/schemas/FaultFamily'}
+        layer:
+          type: string
+          enum: [overlay, config]
+        id:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Overlay id or configured fault id.
+        name: {type: string}
+        profile:
+          type: object
+          description: Set when the candidate is a part of an activated profile.
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            name: {type: string}
+        level:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: Specificity level of plan §2.4 (absent for tunnel faults).
+        since:
+          type: string
+          format: date-time
+          description: '`created_at` (configuration) or `updated_at` (overlay).'
+        summary:
+          type: string
+          example: 'upload 200 ms ± 50 ms, download 200 ms ± 50 ms'
+        reason:
+          type: string
+          description: For overridden candidates - why they lost (e.g. `overlay layer wins (D24)`, `level 3 beats level 6`, `newer at same level`).
+    ProfileView:
+      type: object
+      required: [id, builtin, available, config]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        builtin:
+          type: boolean
+          description: Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).
+        available:
+          type: boolean
+          description: False while a part's family is not in this build (e.g. `dns-broken` before M20).
+        config: {$ref: '#/components/schemas/Profile'}
+    ScenarioView:
+      type: object
+      required: [id, config]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/Scenario'}
+    ProbeView:
+      type: object
+      required: [id, config, observed]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/Probe'}
+        observed: {$ref: '#/components/schemas/DeviceObserved'}
+
+    # ============================================================ explain
+    Explanation:
+      type: object
+      required: [generation, source, access, faults]
+      properties:
+        generation: {type: integer, format: int64}
+        source:
+          type: object
+          properties:
+            ip: {$ref: '#/components/schemas/Ipv4'}
+            device:
+              type: object
+              properties:
+                id: {$ref: '#/components/schemas/Uuid'}
+                name: {type: string}
+            network:
+              type: object
+              properties:
+                id: {$ref: '#/components/schemas/Uuid'}
+                name: {type: string}
+            groups:
+              type: array
+              items: {$ref: '#/components/schemas/Uuid'}
+        destination:
+          type: object
+          properties:
+            ip: {$ref: '#/components/schemas/Ipv4'}
+            hostname: {type: string}
+            resolved:
+              type: array
+              description: For a hostname - addresses in the device's DNS-derived set.
+              items: {$ref: '#/components/schemas/Ipv4'}
+        access:
+          type: object
+          required: [verdict, layer]
+          properties:
+            verdict: {$ref: '#/components/schemas/AccessAction'}
+            layer:
+              type: string
+              enum: [gateway_protection, overlay_rule, config_rule, access_matrix]
+            rule:
+              allOf: [{$ref: '#/components/schemas/Uuid'}]
+              description: Overlay or configured rule id.
+        faults:
+          type: array
+          description: One entry per family (families without candidates are omitted).
+          items:
+            type: object
+            required: [family]
+            properties:
+              family: {$ref: '#/components/schemas/FaultFamily'}
+              winner: {$ref: '#/components/schemas/FaultRef'}
+              overridden:
+                type: array
+                items: {$ref: '#/components/schemas/FaultRef'}
+        service:
+          type: string
+          enum: [none, dns_proxy, tls_responder, tls_proxy]
+          description: Whether the connection is redirected into the service namespace.
+        kernel:
+          type: object
+          description: Classification as compiled (plan §3.3).
+          properties:
+            fault_id: {type: integer, minimum: 1, maximum: 4095}
+            mark_upload: {type: string, example: '0x000000a0'}
+            mark_download: {type: string, example: '0x000100a0'}
+            pmtu_table: {type: integer, minimum: 0, maximum: 7}
+        route:
+          type: object
+          properties:
+            table: {type: integer}
+            gateway: {$ref: '#/components/schemas/Ipv4'}
+            interface: {type: string}
+
+    # ============================================================ runs
+    RunStatus:
+      type: string
+      enum: [queued, running, passed, failed, error, aborted]
+    RunOptions:
+      type: object
+      properties:
+        parameters:
+          type: object
+          description: 'Overrides of scenario fields by dotted path, e.g. `{"target.device": "esp32-42"}` (`chaosctl run --set`).'
+          additionalProperties: {type: string}
+        lease:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: The client must renew the run within this interval, else it is aborted.
+    RunRequest:
+      description: Exactly one of `scenario` and `inline`.
+      allOf:
+        - $ref: '#/components/schemas/RunOptions'
+        - type: object
+          properties:
+            scenario:
+              allOf: [{$ref: '#/components/schemas/Ref'}]
+              description: Stored scenario of the active revision.
+            inline:
+              allOf: [{$ref: '#/components/schemas/Scenario'}]
+              description: Scenario sent with the request (stored with the run only).
+    Run:
+      type: object
+      required: [id, scenario, revision, target, owner, status, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        scenario:
+          type: object
+          required: [name, inline]
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            name: {type: string}
+            inline: {type: boolean}
+        snapshot:
+          allOf: [{$ref: '#/components/schemas/Scenario'}]
+          description: The scenario as executed (after parameters), taken at start.
+        revision:
+          type: integer
+          format: int64
+          description: Active revision when the run started.
+        target: {$ref: '#/components/schemas/Scope'}
+        owner: {$ref: '#/components/schemas/Actor'}
+        status: {$ref: '#/components/schemas/RunStatus'}
+        reason:
+          type: string
+          description: For `error` and `aborted` (e.g. `precondition target_online failed`, `lease expired`, `service restart`).
+        created_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time}
+        ended_at: {type: string, format: date-time}
+        lease_expires_at: {type: string, format: date-time}
+        steps:
+          type: array
+          items: {$ref: '#/components/schemas/RunStep'}
+        checks:
+          type: array
+          items: {$ref: '#/components/schemas/CheckResult'}
+        warnings:
+          type: array
+          items: {$ref: '#/components/schemas/RunWarning'}
+        artifacts:
+          type: array
+          items: {$ref: '#/components/schemas/Artifact'}
+    RunStep:
+      type: object
+      required: [id, status]
+      properties:
+        id: {$ref: '#/components/schemas/StepId'}
+        type:
+          type: string
+          enum: [profile, fault, rule, dns, tls, dhcp, wireguard, capture, wait, remove, restore]
+        status:
+          type: string
+          enum: [pending, applied, skipped, error]
+        scheduled_offset: {$ref: '#/components/schemas/Duration'}
+        applied_at:
+          type: string
+          format: date-time
+          description: Executor commit time stamp.
+        offset_ms:
+          type: integer
+          description: Actual offset from run start in milliseconds (monotonic clock).
+        generation: {type: integer, format: int64}
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        error: {type: string}
+    CheckResult:
+      type: object
+      required: [index, name, type, status]
+      properties:
+        index: {type: integer}
+        name: {type: string}
+        type:
+          type: string
+          enum: [reconnected, no_connection, traffic_seen, traffic_not_seen, dns_query_seen, tls_rejected, tls_accepted]
+        status:
+          type: string
+          enum: [pending, passed, failed, error]
+        window_start: {type: string, format: date-time}
+        window_end: {type: string, format: date-time}
+        message: {type: string}
+        evidence:
+          type: array
+          description: Observations that decided the result (flows, queries, handshakes).
+          items:
+            type: object
+            additionalProperties: true
+    RunWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [zero_hit, step_late, capture_missing]
+        step: {$ref: '#/components/schemas/StepId'}
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        message: {type: string}
+    Artifact:
+      type: object
+      required: [kind, url]
+      properties:
+        kind:
+          type: string
+          enum: [report_json, report_xml, events, capture, keylog]
+        url: {type: string}
+        size_bytes: {type: integer, format: int64}
+        capture: {$ref: '#/components/schemas/Uuid'}
+    RunReport:
+      allOf:
+        - $ref: '#/components/schemas/Run'
+        - type: object
+          properties:
+            counters:
+              type: array
+              description: Final counters of every overlay the run created.
+              items:
+                type: object
+                properties:
+                  step: {$ref: '#/components/schemas/StepId'}
+                  overlay: {$ref: '#/components/schemas/Uuid'}
+                  counters: {$ref: '#/components/schemas/Counter'}
+
+    # ============================================================ captures
+    CaptureScope:
+      type: object
+      description: 'Exactly one of: a network (incl. WireGuard interfaces, raw IP), a device, a selector, or the uplink (not attributable to devices after NAT).'
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        network: {$ref: '#/components/schemas/Ref'}
+        device: {$ref: '#/components/schemas/Ref'}
+        selector:
+          allOf:
+            - $ref: '#/components/schemas/TrafficMatch'
+            - type: object
+              required: [source]
+              properties:
+                source: {$ref: '#/components/schemas/Scope'}
+        uplink:
+          type: boolean
+          enum: [true]
+    CaptureRequest:
+      type: object
+      required: [scope]
+      properties:
+        name: {type: string, maxLength: 64}
+        scope: {$ref: '#/components/schemas/CaptureScope'}
+        format:
+          type: string
+          enum: [pcapng, pcap]
+          default: pcapng
+        snaplen:
+          type: integer
+          minimum: 64
+          maximum: 262144
+          default: 262144
+        duration: {$ref: '#/components/schemas/Duration'}
+        max_size: {$ref: '#/components/schemas/ByteSize'}
+        ring_buffer:
+          type: object
+          required: [files, file_size]
+          properties:
+            files: {type: integer, minimum: 2, maximum: 100}
+            file_size: {$ref: '#/components/schemas/ByteSize'}
+    Capture:
+      allOf:
+        - $ref: '#/components/schemas/CaptureRequest'
+        - type: object
+          required: [id, status, started_at]
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            status:
+              type: string
+              enum: [running, stopped, failed]
+            stop_reason:
+              type: string
+              enum: [user, duration, size, disk_low, run_end, error]
+            started_at: {type: string, format: date-time}
+            stopped_at: {type: string, format: date-time}
+            size_bytes: {type: integer, format: int64}
+            packets: {type: integer, format: int64}
+            run: {$ref: '#/components/schemas/Uuid'}
+            keylog:
+              type: boolean
+              description: A TLS key log is attached.
+            sensitive:
+              type: boolean
+              description: Contains a key log or decrypted traffic.
+
+    # ============================================================ diagnostics and probes
+    DiagnosticRequest:
+      type: object
+      required: [type, host]
+      properties:
+        type:
+          type: string
+          enum: [ping, tcp, udp, dns, http, tls, path]
+          description: '`path` runs DNS → route → TCP → TLS and reports each step.'
+        from:
+          type: object
+          description: Default - the gateway itself (not subject to device faults).
+          minProperties: 1
+          maxProperties: 1
+          properties:
+            gateway:
+              type: boolean
+              enum: [true]
+            probe: {$ref: '#/components/schemas/Ref'}
+        host:
+          type: string
+          maxLength: 253
+          description: Hostname or IPv4 address; for `http` the URL host is used if `url` is set.
+        port: {type: integer, minimum: 1, maximum: 65535}
+        count:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 5
+          description: Ping only.
+        timeout:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 5s
+        dns_name:
+          allOf: [{$ref: '#/components/schemas/Hostname'}]
+          description: '`dns` - name to resolve (host is then the server; default the gateway DNS proxy).'
+        url:
+          type: string
+          maxLength: 2048
+          description: '`http` - full URL.'
+        sni:
+          type: string
+          description: '`tls` - SNI (default `host`).'
+    DiagnosticResult:
+      type: object
+      required: [type, ok, started_at, duration_ms]
+      properties:
+        type: {type: string}
+        from: {type: string}
+        ok: {type: boolean}
+        started_at: {type: string, format: date-time}
+        duration_ms: {type: number}
+        error: {type: string}
+        ping:
+          type: object
+          properties:
+            sent: {type: integer}
+            received: {type: integer}
+            loss_percent: {type: number}
+            rtt_min_ms: {type: number}
+            rtt_avg_ms: {type: number}
+            rtt_max_ms: {type: number}
+            rtt_mdev_ms: {type: number}
+        connect:
+          type: object
+          description: '`tcp` and `udp`.'
+          properties:
+            reachable: {type: boolean}
+            rtt_ms: {type: number}
+            detail:
+              type: string
+              example: connection refused
+        dns:
+          type: object
+          properties:
+            server: {type: string}
+            rcode:
+              type: string
+              example: NOERROR
+            answers:
+              type: array
+              items: {type: string}
+            rtt_ms: {type: number}
+        http:
+          type: object
+          properties:
+            status: {type: integer}
+            rtt_ms: {type: number}
+            headers:
+              type: object
+              additionalProperties: {type: string}
+        tls:
+          type: object
+          properties:
+            version: {type: string}
+            cipher: {type: string}
+            alpn: {type: string}
+            verified: {type: boolean}
+            verify_error:
+              type: string
+              example: certificate has expired
+            certificates:
+              type: array
+              items:
+                type: object
+                properties:
+                  subject: {type: string}
+                  issuer: {type: string}
+                  not_before: {type: string, format: date-time}
+                  not_after: {type: string, format: date-time}
+                  dns_names:
+                    type: array
+                    items: {type: string}
+        path:
+          type: array
+          items:
+            type: object
+            required: [step, ok]
+            properties:
+              step:
+                type: string
+                enum: [dns, route, tcp, tls]
+              ok: {type: boolean}
+              detail: {type: string}
+    CalibrationRequest:
+      type: object
+      description: Activates `profile` or `fault` on the probe for the measurement (an overlay owned by the caller, removed afterwards), or measures the probe's current faults if neither is given.
+      required: [host]
+      properties:
+        profile: {$ref: '#/components/schemas/Ref'}
+        fault: {$ref: '#/components/schemas/ImpairmentParams'}
+        host:
+          type: string
+          description: Echo target (TCP/UDP echo on `port`, e.g. the testbed server).
+        port: {type: integer, minimum: 1, maximum: 65535}
+        duration:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          default: 30s
+    CalibrationResult:
+      type: object
+      required: [within_tolerance]
+      properties:
+        within_tolerance: {type: boolean}
+        expected:
+          type: object
+          properties:
+            rtt_ms: {type: number}
+            loss_percent: {type: number}
+            rate_bps: {type: integer, format: int64}
+        measured:
+          type: object
+          properties:
+            baseline_rtt_ms: {type: number}
+            rtt_median_ms: {type: number}
+            rtt_p95_ms: {type: number}
+            loss_percent: {type: number}
+            loss_ci99:
+              type: array
+              description: 99 % confidence interval of the loss rate in percent.
+              items: {type: number}
+            rate_bps: {type: integer, format: int64}
+        detail: {type: string}
+
+    # ============================================================ events and audit
+    EventType:
+      type: string
+      enum:
+        - applied
+        - revision_created
+        - revision_applied
+        - revision_confirmed
+        - revision_rolled_back
+        - overlay_created
+        - overlay_updated
+        - overlay_removed
+        - overlay_expired
+        - overlay_orphaned
+        - run_queued
+        - run_started
+        - run_step
+        - run_check
+        - run_finished
+        - device_discovered
+        - device_online
+        - device_offline
+        - device_identity_changed
+        - dhcp_lease
+        - dns_fault_triggered
+        - dns_set_epoch
+        - tls_handshake
+        - wireguard_peer_online
+        - wireguard_peer_offline
+        - routing_session_changed
+        - routing_routes_changed
+        - uplink_changed
+        - network_degraded
+        - network_restored
+        - capture_started
+        - capture_stopped
+        - safe_mode
+        - counter_epoch
+        - disk_low
+        - service_restarted
+    Event:
+      type: object
+      required: [id, type, time]
+      properties:
+        id:
+          type: string
+          description: Monotonic within a boot; used as SSE `id`.
+        type: {$ref: '#/components/schemas/EventType'}
+        time: {type: string, format: date-time}
+        generation:
+          type: integer
+          format: int64
+          description: Set for events that change the effective state (`applied`, overlay events, identity changes).
+        actor: {$ref: '#/components/schemas/Actor'}
+        subject:
+          type: object
+          properties:
+            kind: {type: string}
+            id: {type: string}
+            name: {type: string}
+        run:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Set for events caused by or relevant to a run.
+        message:
+          type: string
+          description: Human-readable summary (activity log).
+        data:
+          type: object
+          description: Type-specific details.
+          additionalProperties: true
+    AuditEntry:
+      type: object
+      required: [id, time, actor, via, action]
+      properties:
+        id: {type: string}
+        time: {type: string, format: date-time}
+        actor: {$ref: '#/components/schemas/Actor'}
+        via:
+          type: string
+          enum: [ui, api, cli, system]
+        action:
+          type: string
+          example: revision.apply
+        object:
+          type: object
+          properties:
+            kind: {type: string}
+            id: {type: string}
+            name: {type: string}
+        revision: {type: integer, format: int64}
+        detail: {type: string}
+
+    # ============================================================ pages
+    RevisionPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Revision'}
+        next_cursor: {type: string}
+    NetworkPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/NetworkView'}
+        next_cursor: {type: string}
+    DevicePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DeviceView'}
+        next_cursor: {type: string}
+    FlowPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Flow'}
+        next_cursor: {type: string}
+    GroupPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/GroupView'}
+        next_cursor: {type: string}
+    AccessRulePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AccessRuleView'}
+        next_cursor: {type: string}
+    FaultPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/FaultView'}
+        next_cursor: {type: string}
+    OverlayPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Overlay'}
+        next_cursor: {type: string}
+    RunPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Run'}
+        next_cursor: {type: string}
+    CapturePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Capture'}
+        next_cursor: {type: string}
+    AuditPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AuditEntry'}
+        next_cursor: {type: string}
+    HostInterfacePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/HostInterface'}
+        next_cursor: {type: string}
+    ApiTokenPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ApiToken'}
+        next_cursor: {type: string}
+    DhcpLeasePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DhcpLease'}
+        next_cursor: {type: string}
+    WireGuardClientViewPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/WireGuardClientView'}
+        next_cursor: {type: string}
+    RouteEntryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/RouteEntry'}
+        next_cursor: {type: string}
+    ProfileViewPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ProfileView'}
+        next_cursor: {type: string}
+    ScenarioViewPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ScenarioView'}
+        next_cursor: {type: string}
+    ProbeViewPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ProbeView'}
+        next_cursor: {type: string}
+    # ============================================================ DNS log, certificate, internal
+    DnsQueryLogEntry:
+      type: object
+      required: [time, client, name, type, rcode]
+      properties:
+        time: {type: string, format: date-time}
+        client: {$ref: '#/components/schemas/Ipv4'}
+        device:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Filled in by the API from the observed state.
+        protocol:
+          type: string
+          enum: [udp, tcp]
+        name: {type: string}
+        type:
+          type: string
+          example: A
+        rcode:
+          type: string
+          example: NOERROR
+        answers:
+          type: array
+          items: {type: string}
+        duration_ms: {type: number}
+        cached: {type: boolean}
+        fault:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: DNS fault overlay that changed the answer.
+        stripped_aaaa: {type: boolean}
+    DnsQueryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DnsQueryLogEntry'}
+        next_cursor: {type: string}
+    CertificateInfo:
+      type: object
+      properties:
+        subject: {type: string}
+        issuer: {type: string}
+        not_before: {type: string, format: date-time}
+        not_after: {type: string, format: date-time}
+        dns_names:
+          type: array
+          items: {type: string}
+        ip_addresses:
+          type: array
+          items: {type: string}
+        self_signed: {type: boolean}
+        fingerprint_sha256: {type: string}
+    CertificateUpload:
+      type: object
+      required: [certificate, private_key]
+      properties:
+        certificate:
+          type: string
+          description: PEM, leaf first, then intermediates.
+        private_key:
+          type: string
+          format: password
+          description: PEM (PKCS#8, RSA or EC). Stored in the secrets directory, never returned.
+    KeaLeaseEvent:
+      type: object
+      required: [event, ip, mac, subnet_id]
+      properties:
+        event:
+          type: string
+          enum: [select, renew, rebind, release, expire, decline, recover]
+          description: Kea `run_script` hook point (`lease4_select`, …) without the prefix.
+        ip: {$ref: '#/components/schemas/Ipv4'}
+        mac: {$ref: '#/components/schemas/MacAddress'}
+        hostname: {type: string}
+        client_id: {type: string}
+        subnet_id:
+          type: integer
+          description: Kea subnet id; the API maps it to the network.
+        valid_lifetime:
+          type: integer
+          description: Seconds.
+    DnsServiceConfig:
+      type: object
+      required: [generation, upstream, networks, faults]
+      properties:
+        generation: {type: integer, format: int64}
+        upstream:
+          type: array
+          items: {$ref: '#/components/schemas/Ipv4'}
+        strip_aaaa:
+          type: boolean
+          default: true
+        networks:
+          type: array
+          items:
+            type: object
+            required: [network, gateway]
+            properties:
+              network: {$ref: '#/components/schemas/Uuid'}
+              gateway:
+                allOf: [{$ref: '#/components/schemas/Ipv4'}]
+                description: The network's gateway address the clients query.
+              clients:
+                allOf: [{$ref: '#/components/schemas/Ipv4Cidr'}]
+                description: Source range of the network's clients.
+              static_entries:
+                type: array
+                items: {$ref: '#/components/schemas/DnsStaticEntry'}
+        faults:
+          type: array
+          description: Resolved DNS faults (precedence already applied); the first entry whose `sources` and `names` match wins.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/DnsFault'
+              - type: object
+                required: [overlay, sources]
+                properties:
+                  overlay: {$ref: '#/components/schemas/Uuid'}
+                  sources:
+                    type: array
+                    items: {$ref: '#/components/schemas/Ipv4OrCidr'}
+        hostname_sets:
+          type: array
+          description: Names whose answers must be reported via `/internal/dns/resolutions` before answering.
+          items:
+            type: object
+            required: [set, names]
+            properties:
+              set:
+                type: string
+                description: Opaque set id.
+              names:
+                type: array
+                items: {$ref: '#/components/schemas/Hostname'}
+              sources:
+                type: array
+                description: Only queries from these clients (empty - all).
+                items: {$ref: '#/components/schemas/Ipv4OrCidr'}
+    DnsResolution:
+      type: object
+      required: [set, client, name, addresses, ttl]
+      properties:
+        set: {type: string}
+        client: {$ref: '#/components/schemas/Ipv4'}
+        name:
+          type: string
+          description: Queried name (after following CNAMEs, the name of the matching hostname selector).
+        addresses:
+          type: array
+          items: {$ref: '#/components/schemas/Ipv4'}
+        ttl:
+          type: integer
+          description: Seconds, as in the answer; the API applies max(ttl, 10 min) (plan §2.6).
+    TlsServiceConfig:
+      type: object
+      required: [generation, cases]
+      properties:
+        generation: {type: integer, format: int64}
+        cases:
+          type: array
+          description: Resolved TLS cases; the service looks up a connection by client address and original destination.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/TlsCase'
+              - type: object
+                required: [overlay, sources, expected]
+                properties:
+                  overlay: {$ref: '#/components/schemas/Uuid'}
+                  sources:
+                    type: array
+                    items: {$ref: '#/components/schemas/Ipv4OrCidr'}
+                  expected:
+                    type: string
+                    enum: [reject, accept, any]
+                    description: Expected device behavior, from the case and `trusts_test_ca` (plan §2.8).
+    TlsHandshakeReport:
+      type: object
+      required: [time, client, original_dst, outcome]
+      properties:
+        time: {type: string, format: date-time}
+        client: {$ref: '#/components/schemas/Ipv4'}
+        original_dst:
+          type: string
+          description: '`ip:port` from `SO_ORIGINAL_DST`.'
+        sni: {type: string}
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        case: {type: string}
+        outcome:
+          type: string
+          enum: [rejected, accepted, client_closed, timeout, reset_sent, stalled]
+          description: '`rejected` - the client aborted (alert or close) after receiving the certificate; `accepted` - handshake completed.'
+        alert:
+          type: string
+          example: bad_certificate
+        tls_version: {type: string}

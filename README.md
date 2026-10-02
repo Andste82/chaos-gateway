@@ -7,6 +7,7 @@ Chaos Gateway is a Linux machine that sits between a test network with IoT devic
 | | |
 |---|---|
 | [`docs/plan.md`](docs/plan.md) | product, architecture, test strategy, milestones, decisions |
+| [`api/openapi.yaml`](api/openapi.yaml) | API and domain model (normative, spec-first); examples and their validator in [`api/examples/`](api/examples/) |
 | [`docs/spikes/REPORT.md`](docs/spikes/REPORT.md) | Phase 0 spike results and the decisions derived from them |
 | [`spikes/`](spikes/) | spike scripts and raw results |
 

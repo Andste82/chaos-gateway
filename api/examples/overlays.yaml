@@ -1,0 +1,41 @@
+# Example request bodies (schema `OverlayRequest`), one per overlay kind (plan §2.1.1).
+- # plan §2.15: profile activation with TTL
+  target: {device: esp32-42}
+  profile: bad-lte
+  ttl: 5m
+- # fault: asymmetric, with a lease the test job must renew
+  target: {device: esp32-42}
+  fault:
+    destination: {hostname: broker.example.com}
+    protocol: tcp
+    ports: [8883]
+    upload: {latency: 200ms, jitter: 20ms, distribution: normal}
+    download: {burst_loss: {p: 1%, r: 30%}}
+  lease: 30s
+- # E1: network offline as overlay
+  target: {network: IoT}
+  fault: {blackout: true}
+- # E9: per-device rate on a network
+  target: {network: IoT}
+  fault: {latency: 150ms, jitter: 50ms, loss: 3%, rate: 2Mbit}
+- # E10: tunnel fault, no target
+  fault: {family: tunnel, tunnel: {client: lab-rA}, latency: 50ms}
+- # rule: drop MQTT and cut existing connections
+  target: {device: esp32-42}
+  rule: {action: drop, protocol: tcp, ports: [8883], cut_existing: true}
+- # DNS fault
+  target: {group: sensors}
+  dns: {names: [broker.example.com, '*.iot.example.com'], action: servfail}
+  ttl: 2m
+- # TLS case
+  target: {device: esp32-42}
+  tls: {case: expired, ports: [8883], cut_existing: true}
+- # DHCP action
+  target: {device: esp32-42}
+  dhcp: {action: force_new_ip}
+- # flapping
+  target: {device: esp32-42}
+  fault: {flapping: {up: 20s, down: 10s}}
+- # WireGuard action: link down for a convergence test, no target
+  wireguard: {link: site-b, action: disable}
+  ttl: 20s

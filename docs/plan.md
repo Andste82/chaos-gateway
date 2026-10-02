@@ -120,7 +120,7 @@ The domain model is platform-independent; the execution layer is explicitly Linu
 
 Two levels of state are central to the design.
 
-**Configuration** (persistent, revisioned): uplink selection, networks (incl. WireGuard networks and clients), routing, devices, groups, access rules, persistent faults, profile definitions and scenario definitions. It changes rarely and deliberately. Profiles and scenarios are part of each revision; YAML files are only an import/export format.
+**Configuration** (persistent, revisioned): uplink selection, networks (incl. WireGuard networks and clients), routing, devices, groups, access rules, persistent faults (families impairment, MTU and tunnel; DNS faults, TLS cases, DHCP actions and profile activations exist only as overlays), profile definitions and scenario definitions. It changes rarely and deliberately. Profiles and scenarios are part of each revision; YAML files are only an import/export format.
 
 **Overlays** (runtime, never revisioned): what tests switch on and off, often many times per minute.
 
@@ -132,6 +132,7 @@ Two levels of state are central to the design.
 | DNS fault | SERVFAIL for broker.example.com |
 | TLS case | untrusted certificate on TCP 8883 |
 | DHCP action | move reservation, silence DHCP |
+| WireGuard action | link to site B down for 20 s, client key mismatch, endpoint blocked |
 
 Every overlay has an **owner** (a user session, an API token or a run), an optional **expiry** (TTL) and optionally a **lease** that its owner must renew. When the expiry or lease runs out, the overlay is removed and an event is emitted — a crashed test job never leaves the network broken.
 
@@ -141,7 +142,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
 
 **Editing the configuration:** a change is submitted as a **candidate revision** (`POST /api/v1/revisions` with the full configuration or a JSON Merge Patch; the revision it is based on goes into `If-Match`). The server validates it, the preview shows the domain and Linux diff, and applying it by id makes it active after verification. If another revision became active in between, the request fails with `409 revision_conflict`; the client reloads and reapplies its change (a three-way merge follows after V1). The UI's "N changes · not applied yet" bar is a client-side draft that becomes a candidate on *Preview*.
 
-**Overlays and concurrency:** overlays are not revisioned and not locked. An overlay is identified by the key *(owner, kind, target, selector)*; writing an overlay with an existing key replaces it and keeps its id (`200` instead of `201`). Overlays reference targets by UUID, so renaming a device does not affect them; discovered devices that are not adopted yet have UUIDs too and can be targeted. `POST /api/v1/reset` removes overlays and stops runs — by default only those of the caller; `?owner=all` requires the full-access scope. Only one run may be active per target (device, group or network); runs on disjoint targets can run in parallel, others wait in `queued`.
+**Overlays and concurrency:** overlays are not revisioned and not locked. An overlay is identified by the key *(owner, kind, target, selector)* — for faults the family is part of the selector, so faults of different families never replace each other (the per-kind selector is defined in `api/openapi.yaml`, `OverlayRequest`); writing an overlay with an existing key replaces it and keeps its id (`200` instead of `201`). Overlays reference targets by UUID, so renaming a device does not affect them; discovered devices that are not adopted yet have UUIDs too and can be targeted. `POST /api/v1/reset` removes overlays and stops runs — by default only those of the caller; `?owner=all` requires the full-access scope. Only one run may be active per target (device, group or network); runs on disjoint targets can run in parallel, others wait in `queued`.
 
 **Applying a revision while overlays or runs are active:**
 - A revision that deletes an object referenced by an active overlay or by a queued or running run is rejected with `validation_failed`, listing the references. With `?force=true` the orphaned overlays are removed (event `overlay_orphaned`) and the affected runs end as `aborted`.
@@ -213,7 +214,7 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
 
 - **Inner faults:** traffic of clients and remote networks is classified like any other traffic (§3.3: conntrack original tuple, direction bit); tc on the WireGuard interface's egress impairs the download towards the remote side, the other interfaces the upload.
 - **Tunnel faults (underlay):** impair a client's or link's encrypted UDP traffic itself — latency, loss, blackout, flapping of the tunnel — to simulate a bad WAN between sites. Everything inside the tunnel is affected, including routing-protocol sessions. Tunnel faults are their own fault family and **stack** with inner faults (a device fault of 90 ms plus a tunnel fault of 70 ms gave 160 ms). Implementation (spike S15): towards the peer, the output hook classifies WireGuard's encrypted UDP by peer endpoint; from the peer, IFB with a flower filter on the outer source address and port. The encrypted packets do not inherit the inner connection's conntrack entry, so inner and tunnel classification do not interfere.
-- Peer disable, key mismatch (rotated key not deployed) and endpoint blocking are available as scenario actions.
+- Peer or link disable, key mismatch (rotated key not deployed) and endpoint blocking are available as **WireGuard-action overlays** and scenario steps (M10).
 
 ### 2.2.2 Routing
 
@@ -358,7 +359,7 @@ The gateway provides DNS to test networks through its own **DNS proxy** in front
   - wrong or redirected answer (e.g. the MQTT broker hostname points to a local mock server)
   - truncated answer (forces TCP fallback)
   - short TTLs
-- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy runs in the service namespace (§3.3); queries to these addresses (UDP and TCP 53) are forwarded into it, so faults apply in both directions and it never conflicts with systemd-resolved on the host. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults are overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current DNS overlays. It resolves upstream through the gateway like any other service traffic.
+- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy runs in the service namespace (§3.3); queries to these addresses (UDP and TCP 53) are forwarded into it, so faults apply in both directions and it never conflicts with systemd-resolved on the host. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults are overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current DNS overlays (internal API, long poll on `/api/v1/internal/dns/config`; hostname-set updates go through a synchronous call that returns after the executor has updated the set). It resolves upstream through the gateway like any other service traffic.
 - **Hardcoded resolvers:** DNS traffic to other resolvers (UDP/TCP 53) can be redirected to the gateway, and DNS-over-TLS (853) can be blocked. DNS over HTTPS cannot be distinguished reliably from normal HTTPS (see §6).
 - **Hostname selectors (best effort):** rules and faults can target hostnames (exact name or `*.suffix`). The DNS proxy records which IPs it returned for which name and fills them into address sets, keyed per requesting device. It follows CNAMEs.
   - The set is updated **before** the answer is sent, so the device's first packet already matches.
@@ -455,18 +456,18 @@ steps:
   - { id: normal,  at: 0s,  profile: normal }
   - { id: slow,    at: 10s, fault: { latency: 200ms, jitter: 50ms } }
   - { id: lossy,   at: 20s, fault: { latency: 200ms, jitter: 50ms, loss: 10% } }   # replaces "slow": complete parameter set
-  - { id: cut,     at: 30s, rule: { action: drop, protocol: tcp, port: 8883, cut_existing: true } }
+  - { id: cut,     at: 30s, rule: { action: drop, protocol: tcp, ports: [8883], cut_existing: true } }
   - { id: restore, at: 45s, restore: true }
 checks:
-  - { reconnected: { port: 8883 }, window: { from: restore, within: 30s } }
+  - { reconnected: { protocol: tcp, ports: [8883] }, window: { from: restore, within: 30s } }
   - { dns_query_seen: { name: broker.example.com }, window: { from: restore, within: 30s } }
 ```
 
-The scenario format is defined normatively as a JSON Schema inside the OpenAPI spec. Check windows are relative to named steps.
+The scenario format is defined normatively as a JSON Schema inside the OpenAPI spec (`api/openapi.yaml`, schema `Scenario`; this example is part of `api/examples/configuration.yaml` and validated in CI). Check windows are relative to named steps.
 
 - Scenarios are stored in the revisions (§2.1.1); YAML is the import/export format, so they can also be versioned in git.
 - **Runs from a file:** `POST /api/v1/runs` also accepts an inline scenario plus parameters (e.g. `target.device`), stored with the run. CI jobs can run scenarios from their own branch without changing the gateway configuration (`chaosctl run -f mqtt-outage.yaml --set target.device=$DUT`).
-- Step types: profile, fault, rule, DNS fault, TLS case, DHCP action, capture start/stop, wait, remove, restore.
+- Step types: profile, fault, rule, DNS fault, TLS case, DHCP action, WireGuard action, capture start/stop, wait, remove, restore. A `wait` step (device online, connection established, DNS query seen) pauses the timeline until its condition holds; later steps shift by the waiting time, and a timeout ends the run as `error`.
 - **Step semantics:** every step creates or replaces an overlay owned by the run. A step with the same key *(kind, target, selector)* as an earlier step replaces it — its parameters are complete, never merged (see `lossy` above). `remove: <step id>` removes one step's overlay; `restore` removes all overlays of the run. Steps inherit the scenario's target and may narrow it (a device of the target group or network) but never widen it, so the rule "one run per target" holds.
 - **Preconditions:** before the first step, a run checks the baseline — the target device is online, uses the gateway's DNS when the scenario has DNS or hostname steps, and no overlays of other owners are active on the target. A failed precondition ends the run as `error` with the reason.
 - **Zero-hit warning:** a fault or rule of the run that matched no packet is reported as a warning in the report (optionally as an error), because a "passed" run whose fault never hit proves nothing.
@@ -555,6 +556,14 @@ edit → validate → preview → apply → verify → commit
 ## 2.15 API and CLI
 
 - REST under `/api/v1`, described by OpenAPI (`api/openapi.yaml`, spec-first). UI and automation use the same API.
+- **The spec is normative for the domain model and the API shape** — field names, types, enums, defaults, paths, status codes and error codes; this plan is normative for behavior. A contradiction between the two is a bug to fix in both. Examples that double as test fixtures are in `api/examples/` (validated by `api/examples/validate.py`). Model conventions (D30):
+  - Collections in the configuration are maps keyed by UUID (so a JSON Merge Patch can add, change or delete a single object); the order of access rules is a separate id array.
+  - The resource endpoints (`/networks`, `/devices`, `/rules`, …) are read-only views of the active revision joined with observed state; all configuration writes go through candidate revisions.
+  - Durations, percentages and bit rates are strings with units (`200ms`, `10%`, `2Mbit`); ports are `ports: [8883]` plus `port_ranges`.
+  - Overlays and scenario steps share their bodies; the source part of a selector is `target` there and `source` in the configuration. Flat impairment parameters apply to both directions; `upload`/`download` give each direction its own complete set.
+  - Devices, WireGuard clients and probes share one UUID and name namespace.
+  - Request bodies are decoded strictly (unknown fields are rejected).
+  - The service containers use an internal part of the API (`/api/v1/internal/…`, scope `service`): DNS proxy and TLS responder fetch their configuration by long poll and report observations, Kea's hook reports lease events.
 - SSE for events and live data.
 - Main resources:
   - `uplink`, `networks` (incl. WireGuard networks, clients and `…/export` as `.conf`, QR PNG/SVG, zip), `routing` (static routes, BIRD protocols, `…/status`), `devices`, `groups`, `rules`, `profiles`, `scenarios` (read the active revision)
@@ -562,7 +571,7 @@ edit → validate → preview → apply → verify → commit
   - `explain` (`GET /api/v1/explain?device=…&dst=…&port=…`: access verdict, winning fault per family, overridden faults, kernel ids), `state` (current generation, last apply), `capabilities` (features available in this build)
   - `overlays` (all kinds of §2.1.1, with owner, TTL and lease; `…/renew`)
   - `runs` (`POST /api/v1/runs` with a scenario name or an inline scenario; `…/abort`, `…/renew`, `…/report.json`, `…/report.xml`), `captures`, `diagnostics`, `probes`
-  - `reset`, `metrics`, `events`, `auth` (sessions, tokens), `setup` (first start), `system` (`…/busy` for update scripts: are runs active?)
+  - `reset`, `metrics`, `events`, `audit`, `dns/queries` (query log), `tls/ca` (test CA download), `auth` (sessions, tokens), `setup` (first start), `system` (`…/busy` for update scripts: are runs active?, `…/certificate`, preflight, interfaces, health)
 
 **Conventions**
 
@@ -938,7 +947,7 @@ Docker volumes (bind mounts on the host, backed up like any directory):
 
 ```
 chaos-gateway/
-  api/                openapi.yaml (source of truth)
+  api/                openapi.yaml (source of truth), examples/ (fixtures + validate.py)
   cmd/
     chaosgw/          subcommands: api, exec, dns, tls
     chaosctl/         CLI
@@ -1200,13 +1209,13 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 1 — Foundation: Routed Gateway
 
 **M1 — Repository, CI and testbed library** (M)
-- Scope: Go module and Vue app skeleton, `api/openapi.yaml` with code generation (oapi-codegen, Orval), Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology), the privileged test container image with all test tools (also the devcontainer), the injectable test clock, the self-hosted runner setup for the development VM (§4.4), the arm64 image build, and the shared kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
+- Scope: Go module and Vue app skeleton, code generation from the existing `api/openapi.yaml` (oapi-codegen for types and Gin server interfaces, Orval for Vue Query hooks and Zod schemas, openapi-python-client) with a CI check that the spec lints, the examples validate and the generated code compiles, Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI with unprivileged and privileged jobs, `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology), the privileged test container image with all test tools (also the devcontainer), the injectable test clock, the self-hosted runner setup for the development VM (§4.4), the arm64 image build, and the shared kernel-module preflight that sends tests to level 1b when modules are missing (§4.5).
 - Tests: CI runs a testbed test (client pings server through a plain forwarding namespace).
 - Depends on: S1.
 
 **M2 — Domain model and persistence** (M)
-- Scope: schemas for uplink selection, network, device (incl. `trusts_test_ca`), group, access rule, fault (with family), profile, scenario (JSON Schema, §2.10), overlay kinds with owner, key, TTL and lease (§2.1.1); observed-state model; validation incl. jitter ≤ delay; precedence resolution per family with overlays before configuration (§2.4); atomic file persistence; revisions with diff; schema version.
-- Tests: unit tests for validation; golden tests for every precedence row and for the worked examples of §2.4 that need no compiler output yet (E1–E8, E12 as domain resolution); revision round-trip; corrupted-file handling; the scenario example of §2.10 validates.
+- Scope: the domain model from the generated types of `api/openapi.yaml` (uplink selection, networks incl. WireGuard, device incl. `trusts_test_ca`, group, access rule, fault with family, profile, scenario, overlay kinds with owner, key, TTL and lease, §2.1.1); strict decoding; the validation rules the schema cannot express ("exactly one of", references exist, names unique in their namespace, subnets do not overlap, jitter ≤ latency, step ids unique, …); observed-state model; validation incl. jitter ≤ delay; precedence resolution per family with overlays before configuration (§2.4); atomic file persistence; revisions with diff; schema version.
+- Tests: unit tests for validation; golden tests for every precedence row and for the worked examples of §2.4 that need no compiler output yet (E1–E8, E12 as domain resolution); revision round-trip; corrupted-file handling; every file in `api/examples/` decodes and validates, and a set of invalid documents is rejected with the expected JSON pointer and error code.
 - Depends on: M1.
 
 **M3 — Executor and state reader** (M)
@@ -1247,7 +1256,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M5.
 
 **M6b — DNS proxy** (M)
-- Scope: service namespace (holder container `svcns`, `svc0` veth pair, table 102 with `prohibit` fallback, re-attach on holder change, §3.3); DNS proxy container in it, answering queries to each test network's and WireGuard network's gateway address (DNAT into the service namespace), UDP and TCP, forwarding, caching, query log, AAAA removal; registration with the API at start; coexistence with systemd-resolved; upstream resolver from the host configuration.
+- Scope: service namespace (holder container `svcns`, `svc0` veth pair, table 102 with `prohibit` fallback, re-attach on holder change, §3.3); DNS proxy container in it, answering queries to each test network's and WireGuard network's gateway address (DNAT into the service namespace), UDP and TCP, forwarding, caching, query log (`/dns/queries`), AAAA removal; registration with the API at start (internal API, `/internal/dns/config`); coexistence with systemd-resolved; upstream resolver from the host configuration.
 - Tests: clients in a local test network and a WireGuard client (DNS = gateway tunnel address) resolve names over UDP and TCP; the proxy does not bind 127.0.0.53 and resolved keeps working; restarting only the DNS container restores its state from the API; restarting the holder is healed by re-attach and service restart; without a service namespace, selected traffic is refused (fail closed).
 - Depends on: M5.
 
@@ -1276,7 +1285,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M8a, S3.
 
 **M10 — Extended faults** (M)
-- Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
+- Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); **WireGuard-action overlays** (peer or link disable, key mismatch, endpoint blocking); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
 - Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; a tunnel fault affects everything inside that tunnel and nothing else, and stacks with inner faults (as in S15); a tunnel blackout on a BGP link withdraws the learned routes and the re-convergence time is reported; PMTU faults through a tunnel; golden tests E9 and E10; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
 - Depends on: M8b, M9.
 
@@ -1314,7 +1323,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 4 — Automation
 
 **M15 — Scenario engine and runs** (L)
-- Scope: scenarios as defined in §2.10 (step semantics, remove/restore, narrowing targets), inline scenarios with parameters in `POST /api/v1/runs`, preconditions, scheduler on the injectable monotonic clock, step types profile, fault, rule, wait, remove, restore (further step types arrive with M17, M20–M23); runs with lifecycle, owner, one run per target, queue, explicit abort, optional lease, scenario snapshot and generation per step; JSON/JUnit report.
+- Scope: scenarios as defined in §2.10 (step semantics, remove/restore, narrowing targets), inline scenarios with parameters in `POST /api/v1/runs`, preconditions, scheduler on the injectable monotonic clock, step types profile, fault, rule, WireGuard action, wait, remove, restore (further step types arrive with M17, M20–M23); runs with lifecycle, owner, one run per target, queue, explicit abort, optional lease, scenario snapshot and generation per step; JSON/JUnit report.
 - Tests: step order and semantics with the fake clock; step timing within ±100 ms on the development VM with KVM; abort removes the run's overlays; a disconnecting client does not stop a run, an expired lease does; a restart ends a running run as `aborted`; a second run on the same target waits in `queued`; a failed precondition ends the run as `error`; an inline scenario runs without changing the active revision; the report contains all steps.
 - Depends on: M11.
 
@@ -1348,7 +1357,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M8b, M9, M15, S5, S16.
 
 **M21 — TLS responder: certificate cases** (M)
-- Scope: TLS responder in the core, test CA and never-distributed unknown CA, transparent redirect of selected traffic (new connections; "cut existing" on activation, reset on removal), the TLS cases of §2.8 as confirmed by S4, no-SNI fallback, expected results from `trusts_test_ca`, events per handshake, check type "TLS rejected/accepted", "TLS broken" profile, TLS scenario step type.
+- Scope: TLS responder in the core, test CA (with download, `GET /tls/ca`) and never-distributed unknown CA, transparent redirect of selected traffic (new connections; "cut existing" on activation, reset on removal), the TLS cases of §2.8 as confirmed by S4, no-SNI fallback, expected results from `trusts_test_ca`, events per handshake, check type "TLS rejected/accepted", "TLS broken" profile, TLS scenario step type.
 - Tests: `openssl s_client`/`curl` with TLS 1.2 and 1.3 — untrusted/expired/wrong-host/self-signed are rejected by a correct client; a deliberately insecure client is flagged by the check; golden test E11; a client trusting the test CA passes the "untrusted CA" case; upload and download latency apply to connections to the responder (service namespace); the responder reads the original destination; the same cases work for a WireGuard client.
 - Depends on: M9, M16, S4, S16.
 
@@ -1392,7 +1401,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M5b, M14, M27, S7.
 
 **M29 — Security hardening** (M)
-- Scope: HTTPS with replaceable certificate, token scopes, secret storage, secret-free exports, rate limiting on login, container hardening review (capabilities, read-only root file systems), external review of the executor interface.
+- Scope: HTTPS with replaceable certificate (`/system/certificate`), token scopes, secret storage, secret-free exports, rate limiting on login, container hardening review (capabilities, read-only root file systems), external review of the executor interface.
 - Tests: test networks and *test*-role WireGuard clients cannot reach the UI/API (regression of M4); tokens with insufficient scope are rejected; exports contain no secrets; long fuzz runs on executor operations nightly.
 - Depends on: M5, M28.
 
@@ -1497,6 +1506,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D27 | Additional features in V1 | **none** of the proposals of §8 (review 2, part B); they stay proposals | maintainer |
 | D28 | Scope reductions for V1 | three-way merge, NFLOG rule captures, live capture streaming, traceroute/path MTU/iperf3, continuous drift detection moved after V1 (M38) | proposed by review 2; reversible |
 | D29 | Gateway services and faults | DNS proxy, TLS responder and TLS proxy run in a **service namespace** reached by policy routing; no IFB/flower for services (§3.3) | S16 |
+| D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); configured faults only for impairment/MTU/tunnel, everything else as overlays | spec draft 1, independent review 2026-10-02 |
 
 ## 7.2 Open
 

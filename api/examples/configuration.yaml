@@ -1,0 +1,180 @@
+# Example configuration (schema `Configuration`) matching the testbed default topology
+# (plan §4.2): one local test network, a WireGuard hub with a client that has a client
+# network, and a link to a remote site with BGP. Also contains faults for worked examples
+# E2, E6 and E7 (plan §2.4), an access rule, a custom profile and the scenario of §2.10.
+# References use names, as a client may send them in `POST /revisions`; the server stores
+# them resolved to UUIDs. Validated against api/openapi.yaml by api/examples/validate.py.
+schema_version: 1
+
+uplink:
+  interface: {name: wan0}
+
+management:
+  interface: {name: mgmt0}
+  allowed_sources: [192.168.88.0/24]
+
+networks:
+  0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21:
+    type: lan
+    name: IoT
+    interfaces: [{name: lan0, mac: '52:54:00:12:34:01'}]
+    address: 10.10.0.1/24
+    dhcp:
+      pools: [{start: 10.10.0.100, end: 10.10.0.199}]
+      lease_time: 1h
+      options:
+        domain: iot.test
+    dns:
+      static_entries:
+        - {name: mock-broker.iot.test, addresses: [10.10.0.5]}
+      redirect_hardcoded: true
+  4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54:
+    type: wireguard
+    kind: hub
+    name: lab-hub
+    role: test
+    address: 10.99.0.1/24
+    listen_port: 51820
+    endpoint: gw.example.net:51820
+    clients:
+      9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d:
+        name: lab-rA
+        address: 10.99.0.2
+        client_networks: [10.50.0.0/24]
+        reachable:
+          - network: IoT
+        dns: {mode: gateway}
+        key: {mode: generated, preshared_key: true, export_once: false}
+  c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f:
+    type: wireguard
+    kind: link
+    name: site-b
+    address: 10.255.0.0/31
+    listen_port: 51821
+    peer:
+      address: 10.255.0.1
+      endpoint: siteb.example.net:51821
+      key: {mode: provided, public_key: 'xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg='}
+
+access_matrix:
+  entries:
+    - from: {network: lab-hub}
+      to: {network: IoT}
+      policy: allow
+    - from: {network: site-b}
+      to: {network: IoT}
+      policy: allow
+
+routing:
+  asn: 64512
+  protocols:
+    5f6a7b8c-9d0e-4f1a-8b2c-3d4e5f6a7b8c:
+      name: bgp-site-b
+      type: bgp
+      link: site-b
+      announce:
+        - network: IoT
+        - client: lab-rA
+      import:
+        allowed_prefixes:
+          - {prefix: 10.60.0.0/16, max_length: 24}
+        max_prefixes: 50
+      bgp:
+        neighbor_asn: 64513
+        hold_time: 9s
+        keepalive_time: 3s
+
+devices:
+  1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a:
+    name: esp32-42
+    identifiers:
+      macs: ['24:0a:c4:00:00:42']
+    network: IoT
+    fixed_ip: 10.10.0.42
+    trusts_test_ca: false
+    labels: [sensor]
+  2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b:
+    name: lab-host
+    identifiers:
+      ipv4: [10.50.0.10]
+
+groups:
+  3f4a5b6c-7d8e-4f9a-0b1c-2d3e4f5a6b7c:
+    name: sensors
+    members: [esp32-42]
+  4a5b6c7d-8e9f-4a0b-1c2d-3e4f5a6b7c8d:
+    name: g2
+    members: [esp32-42]
+
+probes:
+  5b6c7d8e-9f0a-4b1c-2d3e-4f5a6b7c8d9e:
+    name: probe-iot
+    network: IoT
+
+access_rules:
+  6c7d8e9f-0a1b-4c2d-3e4f-5a6b7c8d9e0f:
+    name: no-dot
+    source: {network: IoT}
+    action: reject
+    protocol: tcp
+    ports: [853]
+access_rule_order:
+  - 6c7d8e9f-0a1b-4c2d-3e4f-5a6b7c8d9e0f
+
+faults:
+  # E2: network 100 ms, device 20 ms -> device wins
+  7d8e9f0a-1b2c-4d3e-4f5a-6b7c8d9e0f1a:
+    name: iot-latency
+    source: {network: IoT}
+    latency: 100ms
+  8e9f0a1b-2c3d-4e4f-5a6b-7c8d9e0f1a2b:
+    name: esp-latency
+    source: {device: esp32-42}
+    upload: {latency: 20ms}
+    download: {latency: 20ms, loss: 0.5%}
+  # E7: any source -> 203.0.113.0/24 loss 10 %
+  9f0a1b2c-3d4e-4f5a-6b7c-8d9e0f1a2b3c:
+    name: lossy-range
+    source: {global: true}
+    destination: {cidr: 203.0.113.0/24}
+    loss: 10%
+  # MTU fault and a tunnel fault
+  0a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4e:
+    name: small-mtu
+    family: mtu
+    source: {device: esp32-42}
+    destination: {hostname: broker.example.com}
+    mtu: {size: 1200, mode: mss_clamp}
+  1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5f:
+    name: bad-wan-site-b
+    family: tunnel
+    tunnel: {link: site-b}
+    latency: 70ms
+    jitter: 10ms
+
+profiles:
+  2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e60:
+    name: slow-dns-lte
+    description: LTE with slow DNS answers
+    parts:
+      impairment: {latency: 50ms, jitter: 10ms, loss: 0.1%}
+      dns: {action: delay, delay: 800ms}
+
+scenarios:
+  3d4e5f6a-7b8c-4d9e-0f1a-2b3c4d5e6f71:
+    name: mqtt-outage
+    target: {device: esp32-42}
+    capture: true
+    steps:
+      - {id: normal,  at: 0s,  profile: normal}
+      - {id: slow,    at: 10s, fault: {latency: 200ms, jitter: 50ms}}
+      - {id: lossy,   at: 20s, fault: {latency: 200ms, jitter: 50ms, loss: 10%}}
+      - {id: cut,     at: 30s, rule: {action: drop, protocol: tcp, ports: [8883], cut_existing: true}}
+      - {id: restore, at: 45s, restore: true}
+    checks:
+      - {reconnected: {protocol: tcp, ports: [8883]}, window: {from: restore, within: 30s}}
+      - {dns_query_seen: {name: broker.example.com}, window: {from: restore, within: 30s}}
+
+settings:
+  commit_confirm_timeout: 60s
+  class_limit_per_interface: 1000

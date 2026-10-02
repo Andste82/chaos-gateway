@@ -1,0 +1,16 @@
+# Example `POST /runs` body (schema `RunRequest`): inline scenario plus parameters,
+# as sent by `chaosctl run -f mqtt-outage.yaml --set target.device=esp32-42 --lease 30s`.
+inline:
+  name: mqtt-outage-ci
+  target: {device: placeholder}
+  zero_hit: error
+  steps:
+    - {id: wait-online, at: 0s, wait: {for: connected, protocol: tcp, ports: [8883], timeout: 60s}}
+    - {id: offline, at: 5s, fault: {blackout: true}}
+    - {id: back, at: 25s, remove: offline}
+  checks:
+    - {name: reconnects within 30 s, reconnected: {protocol: tcp, ports: [8883]}, window: {from: back, within: 30s}}
+    - {traffic_not_seen: {except: [{hostname: broker.example.com}, {hostname: pool.ntp.org}]}, window: {from: start, until: back}}
+parameters:
+  target.device: esp32-42
+lease: 30s

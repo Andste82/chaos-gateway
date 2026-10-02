@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget unzip zip git jq time pkg-config \
-    ripgrep fd-find shellcheck shfmt xxd make \
+    ripgrep fd-find shellcheck shfmt xxd make gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Go (official toolchain) --------------------------------------------------

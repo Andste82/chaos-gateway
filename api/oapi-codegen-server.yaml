@@ -1,0 +1,13 @@
+# oapi-codegen configuration for the Gin server interface and the strict server wrappers.
+# The model types come from internal/model (dot import), see oapi-codegen-model.yaml.
+# Regenerate with `make generate`; the generated file is committed (CI checks it).
+package: apiserver
+output: internal/apiserver/server.gen.go
+generate:
+  gin-server: true
+  strict-server: true
+output-options:
+  skip-prune: true
+additional-imports:
+  - alias: .
+    package: github.com/Andste82/chaos-gateway/internal/model

@@ -26,6 +26,7 @@ linters:
     generated: lax
     paths:
       - internal/apiserver
+      - internal/model
       - web
       - clients
 

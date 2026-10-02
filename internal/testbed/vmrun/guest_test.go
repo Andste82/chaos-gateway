@@ -7,16 +7,24 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/preflight"
 )
 
-func TestUnitName(t *testing.T) {
-	tests := map[string]string{
-		"github.com/Andste82/chaos-gateway/internal/testbed": "github.com_Andste82_chaos-gateway_internal_testbed",
-		"a b/c": "a_b_c",
-		"///":   "pkg",
+func TestUnitNameIsFileSafeAndUnique(t *testing.T) {
+	got := UnitName("github.com/Andste82/chaos-gateway/internal/testbed")
+	if !strings.HasPrefix(got, "github.com_Andste82_chaos-gateway_internal_testbed-") || len(got) != len("github.com_Andste82_chaos-gateway_internal_testbed-")+8 {
+		t.Errorf("UnitName = %q", got)
 	}
-	for in, want := range tests {
-		if got := UnitName(in); got != want {
-			t.Errorf("UnitName(%q) = %q, want %q", in, got, want)
+	for _, in := range []string{"a b/c", "///", "x/../y", strings.Repeat("long/", 50)} {
+		n := UnitName(in)
+		if strings.ContainsAny(n, "/ \x00") || n == "" || len(n) > 90 {
+			t.Errorf("UnitName(%q) = %q is not file safe", in, n)
 		}
+	}
+	// the readable part collides, the names must not
+	if UnitName("a/b") == UnitName("a_b") {
+		t.Error("a/b and a_b must get different names")
+	}
+	first, again := UnitName("a/b"), UnitName("a/b")
+	if first != again {
+		t.Error("names must be stable")
 	}
 }
 
@@ -49,6 +57,7 @@ func TestGuestScriptRunsEveryUnitInItsDirectory(t *testing.T) {
 		`( cd '/src/it'\''s' && '/work/bin/b.test'`,
 		"echo $rc > '/work/results/a.exit'",
 		"echo $rc > '/work/results/b.exit'",
+		"echo '=== example.com/b b'",
 		"mkdir -p '/work/results'",
 	} {
 		if !strings.Contains(s, want) {

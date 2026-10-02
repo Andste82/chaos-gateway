@@ -11,6 +11,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
+ARG DATE=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,9 +20,11 @@ COPY internal ./internal
 # cross-compiled on the build platform: no emulation needed for the Go build
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
-      -ldflags "-s -w -X github.com/Andste82/chaos-gateway/internal/version.Version=${VERSION} -X github.com/Andste82/chaos-gateway/internal/version.Commit=${COMMIT}" \
+      -ldflags "-s -w -X github.com/Andste82/chaos-gateway/internal/version.Version=${VERSION} -X github.com/Andste82/chaos-gateway/internal/version.Commit=${COMMIT} -X github.com/Andste82/chaos-gateway/internal/version.Date=${DATE}" \
       -o /out/ ./cmd/...
 
 FROM ubuntu:26.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
 ENTRYPOINT ["chaosgw"]

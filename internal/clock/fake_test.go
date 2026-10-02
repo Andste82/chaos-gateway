@@ -223,17 +223,55 @@ func TestFakeWallJumpDoesNotMoveTimers(t *testing.T) {
 	}
 }
 
-func TestFakeNegativeAndZeroDurations(t *testing.T) {
+func TestFakeZeroAndNegativeDurationsFireAtOnce(t *testing.T) {
 	c := NewFake(epoch)
-	tm := c.NewTimer(-time.Second) // fires on the next Advance, even Advance(0)
-	c.Advance(0)
+	recv(t, c.NewTimer(0).C())
+	recv(t, c.NewTimer(-time.Second).C())
+	recv(t, c.After(0))
+	c.Sleep(0) // must not block
+	c.Sleep(-time.Second)
+	ran := make(chan struct{})
+	c.AfterFunc(0, func() { close(ran) })
+	<-ran
+	if c.Pending() != 0 {
+		t.Fatalf("%d timers pending after only immediate ones", c.Pending())
+	}
+	// an immediately fired timer can be re-armed
+	tm := c.NewTimer(0)
 	recv(t, tm.C())
+	tm.Reset(time.Second)
+	c.Advance(time.Second)
+	recv(t, tm.C())
+}
+
+func TestFakeAdvanceWithANegativeDurationPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("Advance with a negative duration must panic")
 		}
 	}()
-	c.Advance(-time.Second)
+	NewFake(epoch).Advance(-time.Second)
+}
+
+func TestFakeConcurrentAdvanceNeverMovesTimeBackwards(t *testing.T) {
+	c := NewFake(epoch)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	// a callback that lets a second Advance overtake the first one
+	c.AfterFunc(time.Second, func() { close(entered); <-release })
+	done := make(chan struct{})
+	go func() { c.Advance(10 * time.Second); close(done) }()
+	<-entered
+	c.Advance(time.Hour) // the first Advance had stopped at 1s inside the callback
+	want := time.Hour + time.Second
+	if c.Monotonic() != want {
+		t.Fatalf("Monotonic = %v, want %v", c.Monotonic(), want)
+	}
+	close(release)
+	<-done
+	if c.Monotonic() != want {
+		t.Fatalf("the slower Advance moved the clock back to %v", c.Monotonic())
+	}
 }
 
 func TestFakeSleepWakesWhenAdvanced(t *testing.T) {

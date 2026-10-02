@@ -119,3 +119,31 @@ func TestCollectRejectsGarbageExitCode(t *testing.T) {
 		t.Fatal("expected an error for an unreadable exit code")
 	}
 }
+
+func TestCollectZeroTestsEverywhereIsNotAPass(t *testing.T) {
+	// the binaries exited 0 but ran nothing: a -run filter that matches nothing, or all tests gone
+	fsys := fstest.MapFS{
+		"results/a.exit": {Data: []byte("0\n")},
+		"results/a.out":  {Data: []byte("testing: warning: no tests to run\nPASS\n")},
+		"results/done":   {},
+	}
+	s, err := Collect(fsys, []Unit{{Name: "a", ImportPath: "example.com/a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.OK() {
+		t.Fatal("zero tests must not count as success")
+	}
+	if !strings.Contains(strings.Join(s.Problems(), "\n"), "no test ran") {
+		t.Fatalf("problems = %v", s.Problems())
+	}
+}
+
+func TestCollectAnEmptyPackageAmongRealOnesIsFineWithAFilter(t *testing.T) {
+	fsys := okFS()
+	fsys["results/b.out"] = &fstest.MapFile{Data: []byte("testing: warning: no tests to run\nPASS\n")}
+	s, _ := Collect(fsys, twoUnits())
+	if !s.OK() {
+		t.Fatalf("a package without matching tests must not fail a run that ran others: %v", s.Problems())
+	}
+}

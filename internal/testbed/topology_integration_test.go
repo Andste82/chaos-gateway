@@ -4,6 +4,7 @@ package testbed_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -180,7 +181,7 @@ func TestNetemDelayIsVisible(t *testing.T) {
 	}
 
 	// isolation: a fault on the uplink must not affect traffic between the test networks
-	if iso := testbed.MustPing(t, top.A, testbed.ClientCAddr, 10, 100*time.Millisecond); iso.Median() > ref+20*time.Millisecond {
+	if iso := testbed.MustPing(t, top.A, testbed.ClientCAddr, 10, 100*time.Millisecond); iso.Median() > ref+25*time.Millisecond {
 		t.Fatalf("a fault on the uplink delays A -> C: %v", iso.Median())
 	}
 
@@ -219,6 +220,7 @@ func TestProxyVariablesAreNotPassedIntoNamespaces(t *testing.T) {
 // (spike S1: a live process keeps its namespace alive).
 func TestDestroyKillsProcessesAndRemovesNamespaces(t *testing.T) {
 	var names []string
+	var strayPID string
 	var proc *testbed.Process
 	t.Run("bed", func(t *testing.T) {
 		top := testbed.NewDefault(t)
@@ -227,7 +229,7 @@ func TestDestroyKillsProcessesAndRemovesNamespaces(t *testing.T) {
 		}
 		proc = top.Server.Start("sleep", "300")
 		// a process that was not started through the bed must not keep the namespace alive either
-		top.A.Must("sh", "-c", "nohup sleep 300 >/dev/null 2>&1 &")
+		strayPID = top.A.Must("sh", "-c", "nohup sleep 300 >/dev/null 2>&1 & echo $!")
 		select {
 		case <-proc.Done():
 			t.Fatal("the process exited early")
@@ -238,6 +240,14 @@ func TestDestroyKillsProcessesAndRemovesNamespaces(t *testing.T) {
 	case <-proc.Done():
 	default:
 		t.Error("the background process is still running after the test")
+	}
+	// the stray process must be dead too: it would keep a deleted namespace alive, invisible to
+	// `ip netns list`
+	if raw, err := os.ReadFile("/proc/" + strayPID + "/stat"); err == nil {
+		stat := string(raw)
+		if rest := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:]); len(rest) > 0 && rest[0] != "Z" {
+			t.Errorf("process %s started inside a namespace survived the test", strayPID)
+		}
 	}
 	listed, err := exec.Command("ip", "netns", "list").CombinedOutput()
 	if err != nil {

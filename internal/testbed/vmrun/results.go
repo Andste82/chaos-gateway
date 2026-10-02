@@ -13,6 +13,9 @@ import (
 // Counts are the test results found in `go test -v` output.
 type Counts struct{ Passed, Failed, Skipped int }
 
+// Total returns the number of verdicts.
+func (c Counts) Total() int { return c.Passed + c.Failed + c.Skipped }
+
 var verdictRE = regexp.MustCompile(`(?m)^\s*--- (PASS|FAIL|SKIP): `)
 
 // ParseCounts counts the verdict lines of `go test -v` output, subtests included.
@@ -53,7 +56,7 @@ type Summary struct {
 
 // OK reports whether every package passed and the guest finished.
 func (s Summary) OK() bool {
-	if !s.Finished || len(s.Packages) == 0 {
+	if !s.Finished || len(s.Packages) == 0 || s.Totals().Total() == 0 {
 		return false
 	}
 	for _, p := range s.Packages {
@@ -83,6 +86,9 @@ func (s Summary) Problems() []string {
 	}
 	if !s.Finished {
 		out = append(out, "the VM ended before the tests finished (no completion marker)")
+	}
+	if len(s.Packages) > 0 && s.Totals().Total() == 0 {
+		out = append(out, "no test ran: every package reported zero tests")
 	}
 	for _, p := range s.Packages {
 		switch {

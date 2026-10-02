@@ -17,11 +17,12 @@ type Clock interface {
 	// Deadlines (TTLs, leases, schedules) are computed from it and never jump.
 	Monotonic() time.Duration
 
-	// Sleep blocks until the monotonic clock has advanced by d.
+	// Sleep blocks until the monotonic clock has advanced by d; it returns at once for d <= 0.
 	Sleep(d time.Duration)
 	// After returns a channel that receives the wall time once d has elapsed.
 	After(d time.Duration) <-chan time.Time
-	// AfterFunc runs f in its own goroutine once d has elapsed.
+	// AfterFunc runs f once d has elapsed: in its own goroutine on the real clock, synchronously
+	// inside Advance on the fake. f must not wait for the goroutine that advances the fake.
 	AfterFunc(d time.Duration, f func()) Timer
 	NewTimer(d time.Duration) Timer
 	// NewTicker returns a ticker that fires every d. A tick is dropped if the receiver has not

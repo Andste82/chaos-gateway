@@ -72,7 +72,9 @@ func (f *Fake) Advance(d time.Duration) {
 		default: // the receiver is behind: drop the tick like time.Ticker
 		}
 	}
-	f.mono = target
+	if target > f.mono { // a concurrent Advance may already have gone further
+		f.mono = target
+	}
 	f.mu.Unlock()
 }
 
@@ -94,18 +96,37 @@ func (f *Fake) BlockUntil(n int) {
 // Pending returns the number of pending timers, tickers and sleepers.
 func (f *Fake) Pending() int { f.mu.Lock(); defer f.mu.Unlock(); return f.timers.Len() }
 
-func (f *Fake) Sleep(d time.Duration) { <-f.After(d) }
+// Sleep, like time.Sleep, returns at once for a duration of zero or less.
+func (f *Fake) Sleep(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	<-f.After(d)
+}
 
 func (f *Fake) After(d time.Duration) <-chan time.Time { return f.NewTimer(d).C() }
 
+// NewTimer returns a timer. As with time.NewTimer, a duration of zero or less fires at once,
+// without an Advance.
 func (f *Fake) NewTimer(d time.Duration) Timer {
-	t := &fakeTimer{clock: f, ft: &ftimer{c: make(chan time.Time, 1)}}
+	t := &fakeTimer{clock: f, ft: &ftimer{c: make(chan time.Time, 1), index: -1}}
+	if d <= 0 {
+		t.ft.c <- f.Now()
+		return t
+	}
 	f.arm(t.ft, d, 0)
 	return t
 }
 
+// AfterFunc runs fn once d has elapsed. The fake runs it synchronously inside Advance (the real
+// clock runs it in its own goroutine), so fn must not wait for the goroutine that called
+// Advance. A duration of zero or less runs fn in a new goroutine at once.
 func (f *Fake) AfterFunc(d time.Duration, fn func()) Timer {
-	t := &fakeTimer{clock: f, ft: &ftimer{fn: fn}}
+	t := &fakeTimer{clock: f, ft: &ftimer{fn: fn, index: -1}}
+	if d <= 0 {
+		go fn()
+		return t
+	}
 	f.arm(t.ft, d, 0)
 	return t
 }
@@ -114,7 +135,7 @@ func (f *Fake) NewTicker(d time.Duration) Ticker {
 	if d <= 0 {
 		panic("clock: non-positive interval for NewTicker")
 	}
-	t := &fakeTicker{clock: f, ft: &ftimer{c: make(chan time.Time, 1)}}
+	t := &fakeTicker{clock: f, ft: &ftimer{c: make(chan time.Time, 1), index: -1}}
 	f.arm(t.ft, d, d)
 	return t
 }

@@ -120,7 +120,7 @@ The domain model is platform-independent; the execution layer is explicitly Linu
 
 Two levels of state are central to the design.
 
-**Configuration** (persistent, revisioned): uplink selection, networks (incl. WireGuard networks and clients), routing, devices, groups, access rules, persistent faults of every family (impairment, MTU, tunnel, DNS, TLS, DHCP states), persistent profile activations, profile definitions and scenario definitions (D31). Everything in the configuration survives restarts and reboots; only one-time test actions (delete a lease, force a new IP, WireGuard key mismatch) exist solely as overlays. It changes rarely and deliberately. Profiles and scenarios are part of each revision; YAML files are only an import/export format.
+**Configuration** (persistent, revisioned): uplink selection, networks (incl. WireGuard networks and clients), routing, devices, groups, access rules, persistent faults (families impairment, MTU and tunnel; DNS faults, TLS cases, DHCP actions and profile activations exist only as overlays), profile definitions and scenario definitions. It changes rarely and deliberately. Profiles and scenarios are part of each revision; YAML files are only an import/export format.
 
 **Overlays** (runtime, never revisioned): what tests switch on and off, often many times per minute.
 
@@ -150,7 +150,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
 - A run takes a snapshot of its scenario when it starts and records the revision id; editing the scenario does not affect a running run.
 - Only one revision can wait for confirmation (commit-confirm) at a time; a second apply gets `409 confirm_pending`. A revision that was never confirmed never becomes "last known good"; a reboot inside the confirmation window boots the previous revision.
 
-**Restart:** whenever the service or the machine restarts, the kernel state is recompiled from the committed revision and the observed state only — so every persistent fault and profile activation is active again. Overlays are dropped, active runs end as `aborted`, and an event records both. Tests always restart from a clean baseline. When the service is **stopped**, the executor first removes all overlays (the gateway keeps routing with the configuration only, never with a leftover overlay fault; persistent faults stay as configured); `chaosgw teardown` removes everything Chaos Gateway created.
+**Restart:** whenever the service or the machine restarts, the kernel state is recompiled from the committed revision and the observed state only. Overlays are dropped, active runs end as `aborted`, and an event records both. Tests always restart from a clean baseline. When the service is **stopped**, the executor first removes all overlays (the gateway keeps routing with the configuration only, never with a leftover fault); `chaosgw teardown` removes everything Chaos Gateway created.
 
 **Time:** TTLs, leases and scenario schedules run on the monotonic clock; wall-clock time is used only for display and the audit log. Raspberry-Pi-class machines have no real-time clock, so wall time can jump at the first NTP sync.
 
@@ -359,7 +359,7 @@ The gateway provides DNS to test networks through its own **DNS proxy** in front
   - wrong or redirected answer (e.g. the MQTT broker hostname points to a local mock server)
   - truncated answer (forces TCP fallback)
   - short TTLs
-- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy runs in the service namespace (§3.3); queries to these addresses (UDP and TCP 53) are forwarded into it, so faults apply in both directions and it never conflicts with systemd-resolved on the host. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults come from the configuration (persistent) and from overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current resolved DNS faults (internal API, long poll on `/api/v1/internal/dns/config`; hostname-set updates go through a synchronous call that returns after the executor has updated the set). It resolves upstream through the gateway like any other service traffic.
+- **Wiring:** Kea hands out each network's gateway address as DNS server (option 6). The proxy runs in the service namespace (§3.3); queries to these addresses (UDP and TCP 53) are forwarded into it, so faults apply in both directions and it never conflicts with systemd-resolved on the host. Its upstream resolver is taken from the host's resolver configuration for the uplink or configured explicitly. In V1 it strips AAAA records (test networks are IPv4-only). DNS faults are overlays; the proxy keeps no state of its own: when it starts, it registers with the API and receives the current DNS overlays (internal API, long poll on `/api/v1/internal/dns/config`; hostname-set updates go through a synchronous call that returns after the executor has updated the set). It resolves upstream through the gateway like any other service traffic.
 - **Hardcoded resolvers:** DNS traffic to other resolvers (UDP/TCP 53) can be redirected to the gateway, and DNS-over-TLS (853) can be blocked. DNS over HTTPS cannot be distinguished reliably from normal HTTPS (see §6).
 - **Hostname selectors (best effort):** rules and faults can target hostnames (exact name or `*.suffix`). The DNS proxy records which IPs it returned for which name and fills them into address sets, keyed per requesting device. It follows CNAMEs.
   - The set is updated **before** the answer is sent, so the device's first packet already matches.
@@ -379,7 +379,7 @@ DHCP is both infrastructure and a test instrument.
 - **Per network:** every test network has its own DHCP scope with its own pool, reservations, lease time and options, and DHCP can be switched **on or off per network** (off: devices with static addresses, or another DHCP server on that segment). A network is a bridge (§2.2), so a network with several physical ports has **one** scope for all of them; a port that needs its own DHCP settings becomes its own network. One Kea instance serves all networks, one Kea subnet per network bound to the network's bridge. Test actions address a network or a single device.
 - WireGuard networks have no DHCP; client addresses are assigned when the client is created and are part of its exported configuration (§2.2.1).
 - Pools, reservations per MAC, lease time, options (router, DNS, domain, NTP, custom).
-- Test actions (short lease times, option changes and silence can also be set persistently as DHCP faults in the configuration; deleting a lease and forcing a new IP are one-time overlay actions):
+- Test actions:
   - short lease times
   - delete a lease (on renewal the client simply gets the same address again)
   - **force a new IP**: change the reservation → the renewing client gets a NAK and requests a new address
@@ -442,7 +442,7 @@ Named fault sets, built-in and user-defined:
 | DNS broken | DNS SERVFAIL |
 | TLS broken | handshake reset on TLS ports |
 
-Values are one-way per direction. Profiles apply to a device, group, network or globally; they are activated persistently (configuration, survives reboots) or as an overlay, optionally with a TTL. The built-in values are starting points to be calibrated. "DNS broken" and "TLS broken" become available with the DNS and TLS milestones (M20, M21).
+Values are one-way per direction. Profiles apply to a device, group, network or globally, and can be activated with a TTL. The built-in values are starting points to be calibrated. "DNS broken" and "TLS broken" become available with the DNS and TLS milestones (M20, M21).
 
 ## 2.10 Scenarios and Runs
 
@@ -676,7 +676,7 @@ Header per page: title + context line (revision, sync state) · health · active
 | **Overview** | network topology (test networks → gateway → uplink) with fault badge on the path; active faults with target, effect, affected packets, expiry; running scenario with progress; uplink traffic chart; recent events | every item links to its detail |
 | **Devices** | table: name, IP, MAC, network, traffic, faults, status; search; filter chips (All / Online / With faults / Not adopted) | adopt discovered devices; row opens device detail |
 | **Device detail** | header with identity; active faults with parameters, affected packets and remaining TTL; path view MQTT → broker with fault badge; flows; DHCP lease and DHCP test actions; recent DNS; captures; optional API panel | **Add fault** dialog (below); remove a fault; apply profile; TLS test; capture; diagnose |
-| **Add fault** (dialog) | target, traffic, direction (Both / Upload / Download), start-from presets (LTE, Bad LTE, Satellite, Offline), latency, jitter, loss, duration (**permanent** — the default — or *for N minutes*); *Advanced*: rate, reorder, duplicate, corrupt, keep packet order; live preview sentence | Permanent → added to the unapplied changes (configuration, survives reboots), applied with preview; for N minutes → active at once as an overlay with TTL; toast; API panel shows the equivalent `POST /api/v1/revisions` patch or `POST /api/v1/overlays` |
+| **Add fault** (dialog) | target, traffic, direction (Both / Upload / Download), start-from presets (LTE, Bad LTE, Satellite, Offline), latency, jitter, loss, duration; *Advanced*: rate, reorder, duplicate, corrupt, keep packet order; live preview sentence | Apply → fault appears with TTL; toast; API panel shows the equivalent `POST /api/v1/overlays` |
 | **Access rules** | ordered rule list: position, name, selector, access chip, hit counter, enable switch; system rule "Control plane access" locked at the top; overlay rules shown above configuration rules | select a rule → editor: **IF** from / to / protocol / ports, **THEN** Allow · Drop · Reject · TCP reset + "also cut existing connections"; matches box with hits, bytes, last match and the effective result in words; hostname hint for DNS-derived matching |
 | **Faults** (D25) | faults grouped by family and sorted by scope (device → group → network → any → global), overlays and configuration marked; per fault: selector, parameters, affected packets, TTL, and "overridden by X" where another fault wins | add/edit fault (dialog below); "Explain" for a device and destination shows the winning fault per family (`explain` endpoint) |
 | **Preview & apply** (drawer) | "what changes" in domain terms (rule, field, old → new); expandable Linux changes (nft, tc, verify step) | Back to editing · Apply revision N → verified toast |
@@ -1290,8 +1290,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M8b, M9.
 
 **M11 — Profiles** (S)
-- Scope: built-in (except DNS/TLS profiles, which arrive with M20/M21) and custom profiles, activation on scopes persistently (`profile_activations` in the configuration) and via overlays, precedence with individual faults.
-- Tests: activating/switching profiles yields the configured parameters (compiler) and measured values (integration); a device fault overrides the network profile's impairment part (same layer); a fault on the same scope replaces only the profile part of its family, other families stay active; an overlay profile beats a configuration fault; a persistent profile activation is active again after a restart.
+- Scope: built-in (except DNS/TLS profiles, which arrive with M20/M21) and custom profiles, activation on scopes via overlays, precedence with individual faults.
+- Tests: activating/switching profiles yields the configured parameters (compiler) and measured values (integration); a device fault overrides the network profile's impairment part (same layer); a fault on the same scope replaces only the profile part of its family, other families stay active; an overlay profile beats a configuration fault.
 - Depends on: M10.
 
 **H1 — Hardware validation** (S, **when hardware is available**; not required for the V1 release)
@@ -1309,7 +1309,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M11.
 
 **M13 — UI for faults, rules and profiles** (L)
-- Scope: add/edit fault dialog with preview, access-rules screen (ordered list, rule editor IF/THEN, counters) and faults screen (by family and scope, "overridden by", explain), permanent vs. timed faults in the add-fault dialog (configuration vs. overlay with TTL), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog (reload and reapply), profile cards, TTL display, `</> API` panel.
+- Scope: add/edit fault dialog with preview, access-rules screen (ordered list, rule editor IF/THEN, counters) and faults screen (by family and scope, "overridden by", explain), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog (reload and reapply), profile cards, TTL display, `</> API` panel.
 - Tests: Playwright — create a fault in the UI, then verify the measured effect in the testbed; validation errors are shown; a conflicting change made through the API triggers the conflict dialog; the faults screen marks an overridden fault.
 - Depends on: M12.
 
@@ -1352,12 +1352,12 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 5 — Application Layer
 
 **M20 — DNS faults and hostname selectors** (M)
-- Scope: NXDOMAIN, SERVFAIL, timeout, delay, wrong answer, truncation (with TCP fallback), short TTL, per device/group/pattern, persistent (configuration) and as overlays; DNS-derived address sets with the lifetime rule of §2.6; redirect of hardcoded DNS; DoT blocking; hostname selectors for rules and faults; "DNS broken" profile; DNS scenario step type.
+- Scope: NXDOMAIN, SERVFAIL, timeout, delay, wrong answer, truncation (with TCP fallback), short TTL, per device/group/pattern; DNS-derived address sets with the lifetime rule of §2.6; redirect of hardcoded DNS; DoT blocking; hostname selectors for rules and faults; "DNS broken" profile; DNS scenario step type.
 - Tests: `dig` from clients shows each fault; a hostname-selector fault affects only traffic to the resolved IPs; a long-lived connection keeps its hostname fault past a 1 s TTL; the set survives 10 overlay changes; hardcoded DNS is redirected; download and upload latency apply to queries of a device (service namespace, S16).
 - Depends on: M8b, M9, M15, S5, S16.
 
 **M21 — TLS responder: certificate cases** (M)
-- Scope: TLS responder in the core, test CA (with download, `GET /tls/ca`) and never-distributed unknown CA, TLS cases persistent (configuration) and as overlays, transparent redirect of selected traffic (new connections; "cut existing" on activation, reset on removal), the TLS cases of §2.8 as confirmed by S4, no-SNI fallback, expected results from `trusts_test_ca`, events per handshake, check type "TLS rejected/accepted", "TLS broken" profile, TLS scenario step type.
+- Scope: TLS responder in the core, test CA (with download, `GET /tls/ca`) and never-distributed unknown CA, transparent redirect of selected traffic (new connections; "cut existing" on activation, reset on removal), the TLS cases of §2.8 as confirmed by S4, no-SNI fallback, expected results from `trusts_test_ca`, events per handshake, check type "TLS rejected/accepted", "TLS broken" profile, TLS scenario step type.
 - Tests: `openssl s_client`/`curl` with TLS 1.2 and 1.3 — untrusted/expired/wrong-host/self-signed are rejected by a correct client; a deliberately insecure client is flagged by the check; golden test E11; a client trusting the test CA passes the "untrusted CA" case; upload and download latency apply to connections to the responder (service namespace); the responder reads the original destination; the same cases work for a WireGuard client.
 - Depends on: M9, M16, S4, S16.
 
@@ -1367,7 +1367,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M17, M21.
 
 **M23 — DHCP test actions** (S)
-- Scope: short leases, lease deletion, forced new IP via reservation change (NAK), option changes, silence; short leases, option changes and silence also as persistent DHCP faults; DHCP scenario step type.
+- Scope: short leases, lease deletion, forced new IP via reservation change (NAK), option changes, silence; DHCP scenario step type.
 - Tests: `udhcpc` in the testbed observes each behavior; a device fault stays attached after the forced new IP.
 - Depends on: M6a, M15.
 
@@ -1392,7 +1392,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M27 — Recovery** (M)
 - Scope: last-known-good at start, safe mode, recompile after interrupted apply, verify at start (§2.14), overlay removal on stop, `chaosgw teardown`, degraded networks on missing interfaces.
-- Tests: a broken revision at start leads to last-known-good (level 2); killing the executor mid-apply is recovered; after a reboot (level 2) persistent faults of every family and persistent profile activations are active again and verify passes, while overlays are gone; stopping the containers leaves no overlay active (persistent kernel-level faults stay until `chaosgw teardown`); unplugging a test interface (link removal in the testbed) marks its network degraded without safe mode.
+- Tests: a broken revision at start leads to last-known-good (level 2); killing the executor mid-apply is recovered; stopping the containers leaves no fault active; unplugging a test interface (link removal in the testbed) marks its network degraded without safe mode.
 - Depends on: M5b, M8b.
 
 **M28 — Container deployment** (M)
@@ -1506,8 +1506,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D27 | Additional features in V1 | **none** of the proposals of §8 (review 2, part B); they stay proposals | maintainer |
 | D28 | Scope reductions for V1 | three-way merge, NFLOG rule captures, live capture streaming, traceroute/path MTU/iperf3, continuous drift detection moved after V1 (M38) | proposed by review 2; reversible |
 | D29 | Gateway services and faults | DNS proxy, TLS responder and TLS proxy run in a **service namespace** reached by policy routing; no IFB/flower for services (§3.3) | S16 |
-| D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); persistence of faults see D31 | spec draft 1, independent review 2026-10-02 |
-| D31 | Persistent faults | **every fault family and profile activations can be persistent** (configuration, survive restarts and reboots); overlays stay runtime-only (tests start from a clean baseline); one-time actions (lease deletion, forced new IP, WireGuard key mismatch) exist only as overlays; in the UI "permanent" is the default | maintainer |
+| D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); configured faults only for impairment/MTU/tunnel, everything else as overlays | spec draft 1, independent review 2026-10-02 |
 
 ## 7.2 Open
 

@@ -1,0 +1,8 @@
+{
+  "name": "@chaos-gateway/client",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Plain fetch client generated from api/openapi.yaml (`make generate-web`), for Jest and Vitest suites",
+  "type": "module",
+  "main": "src/index.ts"
+}

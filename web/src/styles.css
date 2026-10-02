@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+/* Visual tokens of plan §2.17. Blue = as configured, orange = impaired, red = blocked or failed. */
+@theme {
+  --color-bg: #0e1116;
+  --color-sidebar: #0b0d11;
+  --color-surface: #151a21;
+  --color-surface-2: #1b212a;
+  --color-border: #232a34;
+  --color-border-strong: #2f3844;
+  --color-text: #e7eaee;
+  --color-text-2: #a3adba;
+  --color-text-3: #7d8796;
+  --color-accent: #6cb2ff;
+  --color-accent-strong: #3d6a99;
+  --color-accent-tint: #1f3550;
+  --color-accent-text: #8cc4ff;
+  --color-fault: #ffa24c;
+  --color-fault-border: #6b4420;
+  --color-fault-tint: #2a1c10;
+  --color-fault-text: #ffb870;
+  --color-block-border: #6b2e2e;
+  --color-block-tint: #2b1717;
+  --color-block-text: #ffb3b3;
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}

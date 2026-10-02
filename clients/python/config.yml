@@ -1,0 +1,5 @@
+# openapi-python-client configuration (plan §2.15, §3.7): Python client for pytest suites.
+project_name_override: chaosgw-client
+package_name_override: chaosgw_client
+# the spec's version ("1.0.0-draft.1") is not a valid Python version; the client is not published yet
+package_version_override: 0.0.0.dev0

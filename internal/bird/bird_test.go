@@ -128,7 +128,7 @@ func TestTheGeneratedFiltersFollowSpikeS15(t *testing.T) {
 		"if net ~ [ 10.10.0.0/24+, 192.168.56.0/24+, 203.0.113.0/24+, 10.255.0.0/31+ ] then reject;",
 		"if net ~ [ 10.60.0.0/22{22,24} ] then accept;",
 		"import limit 10 action disable;",
-		"export where proto = \"ann_bgp_site_b\";",
+		"export where source = RTS_STATIC && net ~ [ 10.10.0.0/24, 10.99.0.0/24 ];",
 		"route 10.10.0.0/24 unreachable;",
 		"route 10.10.0.0/24 blackhole;", // OSPF announces blackhole routes: a device route is not exported
 		"hold time 9;", "keepalive time 3;",

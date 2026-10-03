@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 )
 
 type uidList []uint32
@@ -37,6 +38,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	socket := fs.String("socket", "/run/chaosgw/exec.sock", "path of the Unix socket")
 	state := fs.String("state", "/var/lib/chaosgw/exec/state.json", "file that keeps the assigned interfaces across restarts")
 	owner := fs.Int("socket-owner", -1, "uid that owns the socket file (-1: unchanged)")
+	secretsDir := fs.String("secrets-dir", "", "directory with the secrets (WireGuard keys); the executor only reads it")
 	health := fs.Bool("health", false, "check a running executor (handshake and generation) and exit")
 	var allow uidList
 	fs.Var(&allow, "allow-uid", "uid that may connect besides root (repeatable), e.g. the API container's user")
@@ -62,7 +64,19 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	syscall.Umask(0o077)
 
-	ex, err := executor.New(executor.NewExecRunner(), executor.WithLogger(log), executor.WithStateFile(*state))
+	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state)}
+	if *secretsDir != "" {
+		sec, err := secrets.Open(*secretsDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
+			return 1
+		}
+		opts = append(opts, executor.WithKeys(func(id string) (string, string, error) {
+			k, err := sec.WireGuard(id)
+			return k.PrivateKey, k.PresharedKey, err
+		}))
+	}
+	ex, err := executor.New(executor.NewExecRunner(), opts...)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1

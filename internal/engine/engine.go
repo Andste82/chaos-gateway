@@ -13,6 +13,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/supervisor"
 )
@@ -30,6 +31,9 @@ type Config struct {
 	Log       *slog.Logger
 	// Supervisor starts the goroutines; the engine makes one when nil.
 	Supervisor *supervisor.Supervisor
+	// Secrets is the store of WireGuard keys. The engine reads it to derive the public keys the
+	// compiler needs; the executor reads the private keys itself.
+	Secrets *secrets.Store
 }
 
 // Snapshot is an immutable view of the engine. Nothing in a published snapshot is modified
@@ -52,6 +56,11 @@ type Snapshot struct {
 	LastError string
 	// Problems are the warnings of the last applied target (a degraded network).
 	Problems []compiler.Problem
+	// WireGuardInterfaces are the WireGuard networks of the last applied target (public data only).
+	WireGuardInterfaces []compiler.WGInterface
+	// WireGuard is the state of every peer, by the id of the client (or of the link): the last
+	// poll's result.
+	WireGuard map[string]PeerStatus
 }
 
 // PendingInfo describes a revision waiting for confirmation.

@@ -369,7 +369,9 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 			t.Fatal(err)
 		}
 		(*c.Networks)[linkC] = n
-		iot := tIoT
+		iot, site := tIoT, linkC
+		entries := append(*c.AccessMatrix.Entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &site}, Policy: model.MatrixEntryPolicyAllow})
+		c.AccessMatrix.Entries = &entries
 		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}, Announce: &[]model.AnnounceEntry{{Network: &iot}}}
 	})
 	// the BGP neighbor announces a default route, the management prefix, a prefix of the gateway

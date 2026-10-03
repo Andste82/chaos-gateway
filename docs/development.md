@@ -23,6 +23,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus |
 | `internal/observer` | netlink events (links, addresses, routes, rules) debounced into triggers |
 | `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
+| `internal/secrets` | the protected store for key material (mode 0600/0700, atomic writes); WireGuard keys by UUID |
+| `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
 | `web/` | Vue 3 app (Vite, Tailwind 4, TanStack Query, Pinia, Reka UI) |
@@ -206,6 +208,38 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
 `chaosgw apply --file config.yaml --socket /run/chaosgw/exec.sock` applies a configuration without
 the API; `--dry-run` shows the plan and the diffs, `--state-dir` also stores the configuration as the
 active revision. In the testbed `--namespace` points it at the gateway namespace.
+
+## WireGuard
+
+WireGuard networks (plan §2.2.1) are compiled like test networks: an interface `wg-<name>` per
+network, table 100 routes for its subnet, the networks behind clients and the static routes of a link,
+a policy rule per interface, masquerade towards the uplink, the MSS clamp and the access matrix
+(including the `reachable` list of each client as implicit allow entries after the explicit ones).
+A network of role `test` is untrusted like a bridge; the tunnel subnet of a `management` network joins
+the sources that reach the control plane.
+
+- **Keys.** Private keys live in the secrets store (`--secrets-dir`, `internal/secrets`), never in a
+  revision, an operation, a log or an event. `wireguard.Provision` generates the interface key of each
+  network and the key pair (and preshared key) of every client in mode `generated`, rotates it when
+  `key.generation` is raised, and returns the configuration with the public keys filled in: a
+  candidate is provisioned before it is stored. The compiler is given the public keys of the
+  interfaces (`Input.Keys`) and holds references only. The executor reads private keys itself through
+  a key provider (`chaosgw exec --secrets-dir`, read access); an operation carries a `key_ref`.
+- **Apply.** The executor creates the device with `ip link add type wireguard`, sets the MTU and
+  synchronizes key, port and peers with `wg syncconf`, which leaves unchanged peers alone: a re-apply
+  does not interrupt a tunnel, and apply plans the operation only when something differs. (Deviation
+  from plan §3.4, which names wgctrl: the `wg` tool works in any network namespace without entering
+  it, and the testbed needs that.) `wg show <dev> dump` is the read; the parser drops the private key
+  at once.
+- **Status.** `Engine.PollWireGuard` reads the peers every interval; the snapshot has the state per
+  peer, `wireguard_peer_online` and `wireguard_peer_offline` are emitted when a handshake becomes
+  younger or older than three minutes or a peer disappears from the interface.
+- **Export.** `chaosgw wg export --state-dir D --secrets-dir S --network lab-hub --client rA
+  [--format conf|png|svg|zip] [--out file]`, `--all` for a zip of the hub, `--link` for the remote side
+  of a link. An export with a private key is written with mode 0600 and a warning; with `export_once`
+  the private key is deleted after the export (`--keep-key` prevents that). A client with a provided
+  key gets a placeholder. The testbed's remote machines (`testbed.WithRemotes`) bring tunnels up from
+  these files with `wg-quick`.
 
 ## Generated code
 

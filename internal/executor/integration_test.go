@@ -561,3 +561,78 @@ func TestLinksAndSysctlsOnARealKernel(t *testing.T) {
 		t.Errorf("assigned %v %v", assigned, err)
 	}
 }
+
+const (
+	wgKeyRef  = "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	wgPeerRef = "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+)
+
+// M4b: the executor creates a WireGuard interface, synchronizes it with wg syncconf and deletes it,
+// on a real kernel; the keys come from the provider and appear in no output.
+func TestWireGuardInterfaceOnARealKernel(t *testing.T) {
+	top := testbed.NewDefault(t, testbed.WithPlainGateway(false))
+	priv := strings.TrimSpace(top.GW.Must("wg", "genkey"))
+	psk := strings.TrimSpace(top.GW.Must("wg", "genpsk"))
+	pubA := strings.TrimSpace(top.GW.MustStdin(priv+"\n", "wg", "pubkey"))
+	peerPub := strings.TrimSpace(top.GW.MustStdin(strings.TrimSpace(top.GW.Must("wg", "genkey"))+"\n", "wg", "pubkey"))
+	ex, err := executor.New(executor.NewExecRunner(), executor.WithKeys(func(id string) (string, string, error) {
+		switch id {
+		case wgKeyRef:
+			return priv, "", nil
+		case wgPeerRef:
+			return "", psk, nil
+		}
+		return "", "", errors.New("unknown")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ex.Close)
+	ctx := context.Background()
+	ns := executor.Target{NS: top.GW.Name}
+	ensure := func(allowed ...string) *executor.WireGuard {
+		return &executor.WireGuard{Target: ns, Action: "ensure", Name: "wg-t", ListenPort: 51899, MTU: 1380, KeyRef: wgKeyRef,
+			Peers: []executor.WGPeer{{PublicKey: peerPub, PresharedKeyRef: wgPeerRef, AllowedIPs: allowed, Keepalive: 25, Endpoint: "203.0.113.40:51821"}}}
+	}
+	if _, err := ex.DoBatch(ctx, []executor.Operation{&executor.AssignInterfaces{Target: ns, Devs: []string{"wg-t"}}, ensure("10.99.0.2/32")}); err != nil {
+		t.Fatal(err)
+	}
+	if out := top.GW.Must("ip", "-d", "-o", "link", "show", "dev", "wg-t"); !strings.Contains(out, "wireguard") || !strings.Contains(out, "mtu 1380") {
+		t.Errorf("%s", out)
+	}
+	dump := top.GW.Must("wg", "show", "wg-t", "dump")
+	if !strings.Contains(dump, pubA) || !strings.Contains(dump, "51899") || !strings.Contains(dump, "10.99.0.2/32") || !strings.Contains(dump, "203.0.113.40:51821") {
+		t.Errorf("dump:\n%s", dump)
+	}
+	// synchronizing again with other allowed ips changes the peer in place
+	if _, err := ex.Do(ctx, ensure("10.99.0.2/32", "10.50.0.0/24")); err != nil {
+		t.Fatal(err)
+	}
+	if out := top.GW.Must("wg", "show", "wg-t", "allowed-ips"); !strings.Contains(out, "10.50.0.0/24") {
+		t.Errorf("%s", out)
+	}
+	// the read result holds no secret
+	out, err := ex.Do(ctx, &executor.Read{Target: ns, What: executor.ReadWireGuard, Dev: "wg-t"})
+	if err != nil || strings.Contains(string(out.Data[0]), priv) || strings.Contains(string(out.Data[0]), psk) {
+		t.Fatalf("%v %s", err, out.Data)
+	}
+	// a key that cannot be found fails and changes nothing
+	bad := ensure("10.99.0.2/32")
+	bad.KeyRef = "00000000-0000-4000-8000-000000000000"
+	if _, err := ex.Do(ctx, bad); err == nil {
+		t.Error("an unknown key must fail")
+	}
+	// delete: only a WireGuard interface
+	if _, err := ex.Do(ctx, &executor.WireGuard{Target: ns, Action: "delete", Name: "wg-t"}); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := top.GW.Run(ctx, "ip", "link", "show", "dev", "wg-t"); err == nil {
+		t.Errorf("still there: %s", o)
+	}
+	if _, err := ex.DoBatch(ctx, []executor.Operation{&executor.AssignInterfaces{Target: ns, Devs: []string{"wan0"}}, &executor.WireGuard{Target: ns, Action: "delete", Name: "wan0"}}); err == nil {
+		t.Error("wan0 was deleted as a WireGuard interface")
+	}
+	if o := top.GW.Must("ip", "-o", "link", "show", "dev", "wan0"); o == "" {
+		t.Error("wan0 is gone")
+	}
+}

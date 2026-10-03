@@ -63,7 +63,7 @@ type VM struct {
 func Boot(ctx context.Context, h Host, dir, baseImage, seed string, nics []NIC, addr string, key *Key) (*VM, error) {
 	overlay := filepath.Join(dir, "disk.qcow2")
 	if out, err := exec.CommandContext(ctx, "qemu-img", "create", "-q", "-f", "qcow2", "-b", baseImage, "-F", "qcow2", overlay, "10G").CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("appliance: qemu-img: %v\n%s", err, out)
+		return nil, fmt.Errorf("appliance: qemu-img: %w\n%s", err, out)
 	}
 	cfg := VMConfig{Disk: overlay, Seed: seed, NICs: nics, SerialLog: filepath.Join(dir, "serial.log"), KVM: HasKVM()}
 	argv := h.argv(append(Cmd{"qemu-system-x86_64"}, QEMUArgs(cfg)...))
@@ -105,7 +105,7 @@ func (v *VM) WaitSSH(ctx context.Context, d time.Duration) error {
 	for time.Now().Before(deadline) {
 		select {
 		case <-v.done:
-			return fmt.Errorf("appliance: QEMU exited before SSH came up: %v\n%s", v.err, v.QEMULog())
+			return fmt.Errorf("appliance: QEMU exited before SSH came up: %w\n%s", v.err, v.QEMULog())
 		case <-ctx.Done():
 			return ctx.Err()
 		default:

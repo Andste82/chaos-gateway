@@ -1,4 +1,4 @@
-# the image build needs the Go sources only
+# the image build needs the Go sources and the host-setup script
 *
 !go.mod
 !go.sum
@@ -6,3 +6,4 @@
 !internal/
 !api/embed.go
 !api/openapi.yaml
+!deploy/host-setup.sh

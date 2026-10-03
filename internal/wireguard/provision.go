@@ -266,3 +266,75 @@ func keepKeys(cfg *model.Configuration, keep map[string]bool) {
 		}
 	}
 }
+
+// ExportSecrets collects the keys the configuration uses from the store: the secrets block of a
+// revision export with `include_secrets=true` (plan §2.15). Objects without stored keys are left out.
+func ExportSecrets(cfg *model.Configuration, sec *secrets.Store) (*model.ConfigurationSecrets, error) {
+	keep := map[string]bool{}
+	keepKeys(cfg, keep)
+	ids := make([]string, 0, len(keep))
+	for id := range keep {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	type pair = struct {
+		PresharedKey *string `json:"preshared_key,omitempty"`
+		PrivateKey   *string `json:"private_key,omitempty"`
+	}
+	out := map[string]pair{}
+	for _, id := range ids {
+		k, err := sec.WireGuard(id)
+		if errors.Is(err, secrets.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		p := pair{}
+		if k.PrivateKey != "" {
+			v := k.PrivateKey
+			p.PrivateKey = &v
+		}
+		if k.PresharedKey != "" {
+			v := k.PresharedKey
+			p.PresharedKey = &v
+		}
+		out[id] = p
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return &model.ConfigurationSecrets{Wireguard: &out}, nil
+}
+
+// ImportSecrets stores the keys of the secrets block of an imported configuration. Every key has
+// to be a valid WireGuard key and every id a UUID; nothing is stored when one is not.
+func ImportSecrets(sec *secrets.Store, in *model.ConfigurationSecrets) error {
+	if in == nil || in.Wireguard == nil {
+		return nil
+	}
+	for id, k := range *in.Wireguard {
+		for _, v := range []*string{k.PrivateKey, k.PresharedKey} {
+			if v != nil && !ValidKey(*v) {
+				return fmt.Errorf("secrets.wireguard.%s: not a valid WireGuard key", id)
+			}
+		}
+	}
+	for id, k := range *in.Wireguard {
+		var keys secrets.WireGuardKeys
+		if k.PrivateKey != nil {
+			keys.PrivateKey = *k.PrivateKey
+		}
+		if k.PresharedKey != nil {
+			keys.PresharedKey = *k.PresharedKey
+		}
+		if err := sec.PutWireGuard(id, keys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PeerKeyID is the id of the secret record of a client or a link peer with the given key settings
+// (its UUID and key generation).
+func PeerKeyID(id string, ks *model.WireGuardKeySettings) string { return KeyID(id, generationOf(ks)) }

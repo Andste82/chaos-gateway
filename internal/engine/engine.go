@@ -59,11 +59,14 @@ type Snapshot struct {
 	// Problems are the warnings of the last applied target (a degraded network).
 	Problems []compiler.Problem
 	// WireGuardInterfaces are the WireGuard networks of the last applied target (public data only).
+	// Bridges are the bridges of the last applied target: one per local test network.
+	Bridges             []compiler.Bridge
 	WireGuardInterfaces []compiler.WGInterface
 	// WireGuard is the state of every peer, by the id of the client (or of the link): the last
 	// poll's result.
 	WireGuard map[string]PeerStatus
-	// Bird is set while the last applied target runs dynamic routing; it names the instance.
+	// Bird is set while the last applied target runs dynamic routing: the instance and its
+	// configuration (public data: neighbors and prefixes, no secrets).
 	Bird *compiler.BirdTarget
 	// Routing is the state of every routing protocol by name: the last poll's result.
 	Routing map[string]bird.ProtocolStatus
@@ -152,6 +155,12 @@ func New(cfg Config) (*Engine, error) {
 
 // Snapshot returns the current snapshot. It is safe to call from any goroutine and never blocks.
 func (e *Engine) Snapshot() *Snapshot { return e.snap.Load() }
+
+// Emit publishes an event of the layer above the engine (the API: revision_created, ...); it goes
+// to the same subscribers and the same replay buffer as the engine's own.
+func (e *Engine) Emit(typ string, data map[string]any) {
+	e.events.publish(e.cfg.Clock.Now(), typ, data)
+}
 
 // SubscribeFrom is Subscribe for a client that reconnects: the events after the sequence number
 // last that are still buffered come first (Last-Event-ID, plan §2.15).

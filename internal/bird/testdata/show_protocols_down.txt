@@ -1,0 +1,17 @@
+BIRD 2.18 ready.
+Name       Proto      Table      State  Since         Info
+pa         BGP        ---        down   08:02:00.021  Error: Invalid next hop
+  BGP state:          Down
+    Neighbor address: 127.0.0.2
+    Neighbor AS:      65002
+    Local AS:         65001
+    Last error:       Error: Invalid next hop
+  Channel ipv4
+    State:          DOWN
+    Table:          master4
+    Preference:     100
+    Input filter:   imp_a
+    Output filter:  (unnamed)
+    Import limit:   3
+      Action:       disable
+

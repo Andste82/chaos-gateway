@@ -1,0 +1,42 @@
+BIRD 2.18 ready.
+Name       Proto      Table      State  Since         Info
+device1    Device     ---        up     08:02:00.021  
+gw_table   Kernel     master4    up     08:02:00.021  
+  Channel ipv4
+    State:          UP
+    Table:          master4
+    Preference:     10
+    Input filter:   REJECT
+    Output filter:  (unnamed)
+    Routes:         0 imported, 0 exported, 0 preferred
+ann_bgp_rb Static     master4    up     08:02:00.021  
+  Channel ipv4
+    State:          UP
+    Table:          master4
+    Preference:     200
+    Input filter:   ACCEPT
+    Output filter:  REJECT
+    Routes:         2 imported, 0 exported, 2 preferred
+bgp_rb     BGP        ---        up     2026-10-02    Established   
+  BGP state:          Established
+    Neighbor address: 10.255.0.1
+    Neighbor AS:      65002
+    Local AS:         65001
+    Neighbor ID:      10.255.0.1
+    Session:          external AS4
+    Source address:   10.255.0.0
+    Hold timer:       7.123/9
+    Keepalive timer:  1.234/3
+  Channel ipv4
+    State:          UP
+    Table:          master4
+    Preference:     100
+    Input filter:   imp_bgp_rb
+    Output filter:  (unnamed)
+    Import limit:   10
+      Action:       disable
+    Routes:         2 imported, 3 filtered, 1 exported, 2 preferred
+ospf_rb    OSPF       master4    up     08:02:03.000  Running
+  Channel ipv4
+    State:          UP
+    Routes:         1 imported, 2 exported, 1 preferred

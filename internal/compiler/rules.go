@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"github.com/Andste82/chaos-gateway/internal/bird"
 	"net/netip"
 	"sort"
 
@@ -85,6 +86,23 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		// the UI and API are reachable from the management network only (plan §2.2); SSH is left to
 		// the operating system
 		newRule(eq(payload("tcp", "dport"), t.Management.UIPort), counter("input_drop"), verdict("drop")),
+	)
+	// the routing protocols the gateway runs answer on their link's interface (plan §2.2.2): BGP,
+	// OSPF and Babel are the only traffic besides DHCP, DNS and ping that a test-role link may send to
+	// the gateway
+	if t.Bird != nil {
+		for _, p := range t.Bird.Config.Protocols {
+			switch p.Type {
+			case "bgp":
+				input.Rules = append(input.Rules, newRule(iifname(p.Interface), eq(payload("tcp", "dport"), bird.BGPPort), verdict("accept")))
+			case "ospf":
+				input.Rules = append(input.Rules, newRule(iifname(p.Interface), eq(meta("l4proto"), bird.OSPFProtocol), verdict("accept")))
+			case "babel":
+				input.Rules = append(input.Rules, newRule(iifname(p.Interface), eq(payload("udp", "dport"), bird.BabelPort), verdict("accept")))
+			}
+		}
+	}
+	input.Rules = append(input.Rules,
 		// test networks: only DHCP, DNS and ICMP echo are answered
 		newRule(iifSet(ifsTest.Name), eq(payload("ip", "protocol"), "icmp"), eq(payload("icmp", "type"), "echo-request"), verdict("accept")),
 		newRule(iifSet(ifsTest.Name), eq(payload("udp", "dport"), 67), verdict("accept")),

@@ -36,7 +36,7 @@ func newWGEnv(t *testing.T) *wgEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(k, executor.WithKeys(func(id string) (string, string, error) {
+	ex, err := executor.New(k, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
 		kk, err := sec.WireGuard(id)
 		return kk.PrivateKey, kk.PresharedKey, err
 	}))

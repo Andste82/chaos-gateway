@@ -315,6 +315,9 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 			add("DOCKER-USER remove: "+strings.Join(stale, ", "), &executor.DockerUser{Target: tg, Action: "remove", Devs: stale, OptionalChain: true})
 		}
 	}
+	if err := planBird(t, s, p); err != nil {
+		return nil, err
+	}
 	if len(removed) > 0 {
 		add("interfaces assigned: "+strings.Join(t.Interfaces, ", "), &executor.AssignInterfaces{Target: tg, Devs: t.Interfaces})
 	}

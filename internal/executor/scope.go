@@ -113,6 +113,8 @@ func (s *Scope) Check(op Operation) error {
 		}
 	case *WireGuard:
 		return s.need(o.Name)
+	case *Bird:
+		return nil // no interface: the instance is a name inside the executor's own BIRD directory
 	case *Sysctl:
 		for i, e := range o.Entries {
 			if e.Dev != "" {

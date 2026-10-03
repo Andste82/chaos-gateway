@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
 )
 
 // What Chaos Gateway owns. Anything outside is out of scope for the executor (plan §2.16).
@@ -579,6 +581,44 @@ func (p WGPeer) validate() error {
 	return nil
 }
 
+var instanceRE = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
+
+func (o Bird) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if o.NS != "" {
+		return errors.New("the BIRD instance is not namespaced: its files and its control socket are paths")
+	}
+	if err := oneOf("action", o.Action, "check", "apply"); err != nil {
+		return err
+	}
+	if !instanceRE.MatchString(o.Instance) {
+		return fmt.Errorf("invalid instance name %q", o.Instance)
+	}
+	if o.Config == "" {
+		return errors.New("no configuration")
+	}
+	if len(o.ImportTables) > 8 {
+		return errors.New("too many import tables")
+	}
+	for _, t := range o.ImportTables {
+		if t < 1 || t > 252 || (t >= OwnTableFirst && t <= OwnTableLast) {
+			return fmt.Errorf("import table %d is not usable", t)
+		}
+	}
+	return bird.CheckText(o.Config, o.allowedTables())
+}
+
+// allowedTables are the kernel tables the configuration may name.
+func (o Bird) allowedTables() []int {
+	var t []int
+	for n := OwnTableFirst; n <= OwnTableLast; n++ {
+		t = append(t, n)
+	}
+	return append(t, o.ImportTables...)
+}
+
 func (o Sysctl) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
@@ -662,7 +702,7 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird); err != nil {
 		return err
 	}
 	if o.Dev != "" {
@@ -676,6 +716,13 @@ func (o Read) validate() error {
 		}
 	} else if o.Name != "" {
 		return errors.New("name is only for sysctl reads")
+	}
+	if o.What == ReadBird {
+		if !instanceRE.MatchString(o.Instance) {
+			return fmt.Errorf("invalid instance name %q", o.Instance)
+		}
+	} else if o.Instance != "" {
+		return errors.New("instance is only for bird reads")
 	}
 	if (o.What == ReadOffloads || o.What == ReadWireGuard) && o.Dev == "" {
 		return errors.New(o.What + " needs a dev")

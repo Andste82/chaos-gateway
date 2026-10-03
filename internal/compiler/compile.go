@@ -113,6 +113,7 @@ type Target struct {
 	Management Management             `json:"management"`
 	Bridges    []Bridge               `json:"bridges"`
 	WireGuard  []WGInterface          `json:"wireguard,omitempty"`
+	Bird       *BirdTarget            `json:"bird,omitempty"`
 	Interfaces []string               `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
 	Sysctls    []executor.SysctlEntry `json:"sysctls"`
 	Offloads   []string               `json:"offloads"`
@@ -225,6 +226,7 @@ func Compile(in Input) *Target {
 	t.finishManagementSources()
 	t.compileHostState()
 	t.compileRouting(cfg, idx)
+	t.compileBird(cfg, idx)
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.finish()
 	return t

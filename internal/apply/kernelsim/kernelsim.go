@@ -91,6 +91,7 @@ type Kernel struct {
 	sysctl   map[string]int
 	features map[string]map[string]bool // dev → feature → on
 	// docker
+	birdRunning bool // a configure has reached the simulated BIRD
 	dockerChain bool
 	docker      []dockerRule
 	defaultMain []route // default routes of the main table (OS-owned)
@@ -340,6 +341,8 @@ func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, 
 		return k.wg(c)
 	case executor.ToolTC:
 		return executor.Result{}, nil
+	case executor.ToolBird, executor.ToolBirdc:
+		return k.birdCmd(c)
 	}
 	return executor.Result{Exit: 127, Stderr: "unknown tool"}, nil
 }

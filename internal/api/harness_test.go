@@ -76,6 +76,9 @@ type options struct {
 	confirm   time.Duration
 	// done skips the setup: the admin exists with adminPassword and revision 1 is the fixture
 	done bool
+	// serviceNS is the service namespace of the gateway services; resolvers the DNS proxy's upstream
+	serviceNS string
+	resolvers []netip.Addr
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -127,7 +130,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(func() { _ = lg.Close() })
 	fd := &fakeDHCP{}
-	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec, DHCP: fd})
+	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +140,12 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	t.Cleanup(e.Close)
 	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
 		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm,
-		Resolvers: func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("192.0.2.53")} }})
+		Resolvers: func() []netip.Addr {
+			if len(o.resolvers) > 0 {
+				return o.resolvers
+			}
+			return []netip.Addr{netip.MustParseAddr("192.0.2.53")}
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

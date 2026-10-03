@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -30,6 +31,8 @@ type APIClient struct {
 	CertFile string
 	// Wait is how long a poll may take; default 40 s (the API ends it after 30 s).
 	Wait time.Duration
+	// Dial replaces the dialer; the tests of the service namespace connect from inside it.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	client *http.Client
 }
@@ -52,7 +55,7 @@ func (c *APIClient) http() (*http.Client, error) {
 	} else {
 		tc.InsecureSkipVerify = true //nolint:gosec // the private link to the gateway; see CertFile
 	}
-	c.client = &http.Client{Transport: &http.Transport{TLSClientConfig: tc, MaxIdleConns: 2, IdleConnTimeout: 60 * time.Second}}
+	c.client = &http.Client{Transport: &http.Transport{TLSClientConfig: tc, MaxIdleConns: 2, IdleConnTimeout: 60 * time.Second, DialContext: c.Dial}}
 	return c.client, nil
 }
 
@@ -90,6 +93,13 @@ type cancelBody struct {
 }
 
 func (b *cancelBody) Close() error { err := b.ReadCloser.Close(); b.cancel(); return err }
+
+// CloseIdleConnections closes the connections the client keeps open.
+func (c *APIClient) CloseIdleConnections() {
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+}
 
 // Config asks for a configuration newer than generation `after` (0 asks for any). It returns nil
 // when nothing changed within the poll.

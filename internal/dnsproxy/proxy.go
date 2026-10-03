@@ -90,14 +90,28 @@ func (s *Server) UpstreamQueries() int64 { return s.upstreamQueries.Load() }
 
 // Serve answers on addr (UDP and TCP) until ctx ends.
 func (s *Server) Serve(ctx context.Context, addr string) error {
-	udp := &dns.Server{Addr: addr, Net: "udp", Handler: s, UDPSize: 4096}
-	tcp := &dns.Server{Addr: addr, Net: "tcp", Handler: s, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		_ = pc.Close()
+		return err
+	}
+	return s.ServeOn(ctx, pc, ln)
+}
+
+// ServeOn answers on the sockets it is given until ctx ends and closes them.
+func (s *Server) ServeOn(ctx context.Context, pc net.PacketConn, ln net.Listener) error {
+	udp := &dns.Server{PacketConn: pc, Net: "udp", Handler: s, UDPSize: 4096}
+	tcp := &dns.Server{Listener: ln, Net: "tcp", Handler: s, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 	errc := make(chan error, 2)
 	started := make(chan struct{}, 2)
 	udp.NotifyStartedFunc = func() { started <- struct{}{} }
 	tcp.NotifyStartedFunc = func() { started <- struct{}{} }
-	go func() { errc <- udp.ListenAndServe() }()
-	go func() { errc <- tcp.ListenAndServe() }()
+	go func() { errc <- udp.ActivateAndServe() }()
+	go func() { errc <- tcp.ActivateAndServe() }()
 	var firstErr error
 	for ready := 0; ready < 2 && firstErr == nil; {
 		select {

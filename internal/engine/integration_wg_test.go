@@ -281,6 +281,43 @@ func TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix(t
 	}
 }
 
+// M4b-02 test: a hub client's network reaches a host beyond the uplink only through NAT. The gateway
+// masquerades it towards the uplink, so the server beyond the uplink sees the gateway's own uplink
+// address as the source; turning NAT off on the hub cuts the client network off from the uplink,
+// because the unmasqueraded source has no route back and is dropped.
+func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
+	g := newWGGW(t)
+	setHub := func(nat *bool) func(*model.Configuration) {
+		return func(c *model.Configuration) {
+			n := (*c.Networks)[tHub]
+			wg, _ := n.AsWireGuardNetwork()
+			cl := (*wg.Clients)[tClient]
+			cl.Reachable = &[]model.MatrixEndpoint{{Uplink: ptr(model.MatrixEndpointUplink(true))}}
+			(*wg.Clients)[tClient] = cl
+			if nat != nil {
+				wg.Nat = nat
+			}
+			_ = n.FromWireGuardNetwork(wg)
+			(*c.Networks)[tHub] = n
+		}
+	}
+	g.apply(setHub(nil))
+	conf := g.client(tHub, tClient)
+	g.up(g.top.RC, "wgrA", conf.Conf)
+	if !pingOK(g.top.RC, "", "10.99.0.1") {
+		t.Fatalf("the exported configuration did not bring up a working tunnel\n%s", g.wgShow())
+	}
+	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != testbed.UplinkGateway {
+		t.Fatalf("the server saw %q, want the uplink address %s (masqueraded)", src, testbed.UplinkGateway)
+	}
+
+	off := false
+	g.apply(setHub(&off))
+	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != "" {
+		t.Errorf("the server saw %q although nat is off on the hub", src)
+	}
+}
+
 // M4b test: a link with static routes carries traffic between the gateway's test network and the
 // remote site.
 func TestALinkWithStaticRoutesCarriesTrafficToTheRemoteSite(t *testing.T) {

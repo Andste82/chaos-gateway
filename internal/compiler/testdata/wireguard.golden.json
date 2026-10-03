@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "a59851021a2a1bcb",
+  "hash": "e81f575fea1dccc0",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -1272,28 +1272,12 @@
               {
                 "match": {
                   "left": {
-                    "payload": {
-                      "field": "saddr",
-                      "protocol": "ip"
+                    "meta": {
+                      "key": "iifname"
                     }
                   },
                   "op": "==",
-                  "right": {
-                    "set": [
-                      {
-                        "prefix": {
-                          "addr": "10.255.0.0",
-                          "len": 31
-                        }
-                      },
-                      {
-                        "prefix": {
-                          "addr": "10.60.0.0",
-                          "len": 24
-                        }
-                      }
-                    ]
-                  }
+                  "right": "wg-site-b"
                 }
               },
               {
@@ -1314,7 +1298,7 @@
                 "masquerade": null
               }
             ],
-            "comment": "1db36b90f42c"
+            "comment": "8ceb294d46a3"
           }
         ]
       }

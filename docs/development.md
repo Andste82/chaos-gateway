@@ -181,3 +181,19 @@ What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: t
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,
 a 50 ms netem delay measured 50.2 ms), and their kernel has the modules, so the privileged job ran
 the testbed tests directly in 12 s.
+
+### Image workflow
+
+`.github/workflows/image.yml` builds the multi-arch image (amd64, arm64) and pushes it to
+`ghcr.io/andste82/chaos-gateway`.
+
+- **Manual:** Actions > Image > Run workflow, or `gh workflow run image.yml -f tag=test` (add
+  `--ref <branch>` for a branch). It pushes `:<tag>` and `:sha-<commit>`; with `push` off it only
+  builds. Use it for test containers.
+- **Release:** pushing a tag `v1.2.3` pushes `:1.2.3`, `:1.2`, `:1` and `:latest` (no `:0` for `v0.x`).
+- The first push creates the package as private; make it public under the package settings on
+  GitHub if it should be pulled without login. Pulling a private image needs
+  `docker login ghcr.io` with a token that has `read:packages`.
+- The workflow needs no secret: it logs in with the job's `GITHUB_TOKEN`.
+
+The image holds `chaosgw` and `chaosctl` only until M28 adds the rest.

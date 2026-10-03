@@ -1,0 +1,104 @@
+name: Image
+
+# Builds the multi-arch image (linux/amd64, linux/arm64) and pushes it to ghcr.io.
+#
+#   manual     Actions > Image > Run workflow: pushes ghcr.io/<owner>/chaos-gateway:<tag> and
+#              :sha-<commit> from the selected branch; use it for test containers
+#   release    a pushed tag v* pushes :<version> (v1.2.3 gives 1.2.3, 1.2 and 1) and :latest
+#
+# The image holds what exists so far (chaosgw, chaosctl); the full image follows with M28.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag for a manual run
+        default: test
+        required: true
+      push:
+        description: "Push to ghcr.io (off = build only)"
+        type: boolean
+        default: true
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # registry paths must be lowercase; the owner name may not be
+      - name: Image name
+        id: name
+        run: echo "image=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/chaos-gateway" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=Chaos Gateway
+            org.opencontainers.image.description=Programmable network test gateway
+
+      - name: Build metadata
+        id: build
+        run: |
+          echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.build.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.build.outputs.date }}
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo "digest: \`${{ steps.push.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

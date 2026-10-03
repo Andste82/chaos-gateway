@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"os"
 	"strings"
 	"syscall"
@@ -125,5 +126,25 @@ func TestExecStartsServesAndStopsOnSIGTERM(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the executor did not stop on SIGTERM")
+	}
+}
+
+func TestTheExecutorStartsBeforeTheSecretsExist(t *testing.T) {
+	dir := t.TempDir() // an empty volume: the API has not created anything yet
+	keys := lazyKeys(dir)
+	id := "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	if _, _, err := keys(id); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("%v", err)
+	}
+	// the API creates the store and a key; the same provider finds it
+	sec, err := secrets.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sec.PutWireGuard(id, secrets.WireGuardKeys{PrivateKey: "priv", PresharedKey: "psk"}); err != nil {
+		t.Fatal(err)
+	}
+	if priv, psk, err := keys(id); err != nil || priv != "priv" || psk != "psk" {
+		t.Errorf("%q %q %v", priv, psk, err)
 	}
 }

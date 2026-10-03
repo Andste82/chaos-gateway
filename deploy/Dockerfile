@@ -31,4 +31,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
         iproute2 nftables iptables ethtool procps wireguard-tools bird2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
+# run on the host, not in the container: `docker run --rm --entrypoint cat <image> /usr/local/share/chaosgw/host-setup.sh | sudo sh`
+COPY deploy/host-setup.sh /usr/local/share/chaosgw/host-setup.sh
 ENTRYPOINT ["chaosgw"]

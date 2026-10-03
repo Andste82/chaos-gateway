@@ -1,0 +1,387 @@
+package dnsproxy
+
+import (
+	"context"
+	"log/slog"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/miekg/dns"
+
+	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/model"
+)
+
+// Exchanger sends a query to one upstream resolver. The proxy uses the miekg client; tests use a fake.
+type Exchanger interface {
+	Exchange(ctx context.Context, m *dns.Msg, network, server string) (*dns.Msg, error)
+}
+
+// Options wires a Server.
+type Options struct {
+	Clock clock.Clock
+	Log   *slog.Logger
+	// Upstream defaults to a real client.
+	Upstream Exchanger
+	// Sink receives the query log in batches; nil drops the log.
+	Sink Sink
+	// Timeout is how long one upstream resolver may take; default 2 s.
+	Timeout time.Duration
+	// CacheEntries bounds the cache; default 4096.
+	CacheEntries int
+	// UpstreamPort is the port of the upstream resolvers; default 53.
+	UpstreamPort string
+}
+
+// Server is the DNS proxy.
+type Server struct {
+	opt   Options
+	cfg   atomic.Pointer[model.DnsServiceConfig]
+	cache *cache
+	log   *queryLog
+	// Counters for tests and diagnostics.
+	queries, upstreamQueries atomic.Int64
+	ready                    chan struct{}
+	readyOnce                sync.Once
+}
+
+// New returns a Server that answers SERVFAIL until it has a configuration.
+func New(o Options) *Server {
+	if o.Clock == nil {
+		o.Clock = &clock.Real{}
+	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	if o.Timeout <= 0 {
+		o.Timeout = 2 * time.Second
+	}
+	if o.CacheEntries <= 0 {
+		o.CacheEntries = 4096
+	}
+	if o.UpstreamPort == "" {
+		o.UpstreamPort = "53"
+	}
+	if o.Upstream == nil {
+		o.Upstream = &client{}
+	}
+	return &Server{opt: o, cache: newCache(o.CacheEntries, o.Clock), log: newQueryLog(o.Sink, o.Clock, o.Log), ready: make(chan struct{})}
+}
+
+// SetConfig replaces the configuration. A new generation drops the cache: a changed upstream or
+// static entry must not be hidden by an old answer.
+func (s *Server) SetConfig(c *model.DnsServiceConfig) {
+	old := s.cfg.Swap(c)
+	if old == nil || old.Generation != c.Generation {
+		s.cache.flush()
+	}
+}
+
+// Config returns the configuration in use; nil before the first one.
+func (s *Server) Config() *model.DnsServiceConfig { return s.cfg.Load() }
+
+// Queries is the number of queries answered, UpstreamQueries the number sent upstream.
+func (s *Server) Queries() int64         { return s.queries.Load() }
+func (s *Server) UpstreamQueries() int64 { return s.upstreamQueries.Load() }
+
+// Serve answers on addr (UDP and TCP) until ctx ends.
+func (s *Server) Serve(ctx context.Context, addr string) error {
+	udp := &dns.Server{Addr: addr, Net: "udp", Handler: s, UDPSize: 4096}
+	tcp := &dns.Server{Addr: addr, Net: "tcp", Handler: s, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
+	errc := make(chan error, 2)
+	started := make(chan struct{}, 2)
+	udp.NotifyStartedFunc = func() { started <- struct{}{} }
+	tcp.NotifyStartedFunc = func() { started <- struct{}{} }
+	go func() { errc <- udp.ListenAndServe() }()
+	go func() { errc <- tcp.ListenAndServe() }()
+	var firstErr error
+	for ready := 0; ready < 2 && firstErr == nil; {
+		select {
+		case <-started:
+			ready++
+		case firstErr = <-errc:
+		case <-ctx.Done():
+			firstErr = ctx.Err()
+		}
+	}
+	if firstErr == nil {
+		s.readyOnce.Do(func() { close(s.ready) })
+		select {
+		case <-ctx.Done():
+		case firstErr = <-errc:
+		}
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = udp.ShutdownContext(sctx)
+	_ = tcp.ShutdownContext(sctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return firstErr
+}
+
+// Ready is closed when Serve listens on UDP and TCP.
+func (s *Server) Ready() <-chan struct{} { return s.ready }
+
+// RunLog sends the query log to the sink until ctx ends.
+func (s *Server) RunLog(ctx context.Context) { s.log.run(ctx) }
+
+// ServeDNS implements dns.Handler.
+func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	start := s.opt.Clock.Now()
+	s.queries.Add(1)
+	_, isTCP := w.LocalAddr().(*net.TCPAddr)
+	client := clientAddr(w.RemoteAddr())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opt.Timeout)
+	defer cancel()
+	resp, e := s.answer(ctx, r, client)
+	if !isTCP {
+		resp.Truncate(udpSize(r))
+	}
+	_ = w.WriteMsg(resp)
+	e.Time = start
+	e.Client = client.String()
+	proto := model.DnsQueryLogEntryProtocol("udp")
+	if isTCP {
+		proto = "tcp"
+	}
+	e.Protocol = &proto
+	ms := float32(float64(s.opt.Clock.Now().Sub(start)) / float64(time.Millisecond))
+	e.DurationMs = &ms
+	s.log.add(e)
+}
+
+func clientAddr(a net.Addr) netip.Addr {
+	switch v := a.(type) {
+	case *net.UDPAddr:
+		ip, _ := netip.AddrFromSlice(v.IP)
+		return ip.Unmap()
+	case *net.TCPAddr:
+		ip, _ := netip.AddrFromSlice(v.IP)
+		return ip.Unmap()
+	}
+	return netip.Addr{}
+}
+
+// udpSize is the largest answer the client takes over UDP: its EDNS0 size, else 512.
+func udpSize(r *dns.Msg) int {
+	if o := r.IsEdns0(); o != nil && int(o.UDPSize()) > 512 {
+		return int(o.UDPSize())
+	}
+	return dns.MinMsgSize
+}
+
+const (
+	staticTTL   = 60
+	negativeTTL = 30
+)
+
+// answer builds the reply to one query and the log entry that describes it.
+func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dns.Msg, model.DnsQueryLogEntry) {
+	var e model.DnsQueryLogEntry
+	cfg := s.cfg.Load()
+	fail := func(rcode int) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetRcode(r, rcode)
+		m.RecursionAvailable = true
+		e.Rcode = dns.RcodeToString[rcode]
+		return m
+	}
+	if len(r.Question) != 1 || r.Opcode != dns.OpcodeQuery {
+		if len(r.Question) > 0 {
+			e.Name, e.Type = strings.TrimSuffix(r.Question[0].Name, "."), dns.TypeToString[r.Question[0].Qtype]
+		}
+		return fail(dns.RcodeFormatError), e
+	}
+	q := r.Question[0]
+	name := strings.ToLower(q.Name)
+	e.Name, e.Type = strings.TrimSuffix(name, "."), dns.TypeToString[q.Qtype]
+	if q.Qtype == 0 {
+		e.Type = "TYPE0"
+	}
+	if cfg == nil {
+		return fail(dns.RcodeServerFailure), e // not registered yet: nothing is answered wrongly
+	}
+	if q.Qclass != dns.ClassINET {
+		return fail(dns.RcodeNotImplemented), e
+	}
+	strip := cfg.StripAaaa == nil || *cfg.StripAaaa
+	if q.Qtype == dns.TypeAAAA && strip {
+		// the V1 networks are IPv4 only: a device that gets an IPv6 address would bypass the faults
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.RecursionAvailable = true
+		e.Rcode = "NOERROR"
+		t := true
+		e.StrippedAaaa = &t
+		return m, e
+	}
+	if m, ok := s.static(cfg, r, name, q, client); ok {
+		e.Rcode = dns.RcodeToString[m.Rcode]
+		e.Answers = answers(m)
+		return m, e
+	}
+	key := cacheKey(name, q.Qtype)
+	if m, ok := s.cache.get(key, r); ok {
+		c := true
+		e.Cached = &c
+		e.Rcode = dns.RcodeToString[m.Rcode]
+		e.Answers = answers(m)
+		return m, e
+	}
+	m, err := s.forward(ctx, cfg, r)
+	if err != nil {
+		s.opt.Log.Debug("no upstream answer", "name", e.Name, "error", err)
+		return fail(dns.RcodeServerFailure), e
+	}
+	stripped := false
+	if strip {
+		stripped = stripAAAA(m)
+	}
+	if stripped {
+		t := true
+		e.StrippedAaaa = &t
+	}
+	m.RecursionAvailable = true
+	s.cache.put(key, m)
+	e.Rcode = dns.RcodeToString[m.Rcode]
+	e.Answers = answers(m)
+	return m, e
+}
+
+func answers(m *dns.Msg) *[]string {
+	if len(m.Answer) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m.Answer))
+	for _, rr := range m.Answer {
+		switch v := rr.(type) {
+		case *dns.A:
+			out = append(out, v.A.String())
+		case *dns.CNAME:
+			out = append(out, strings.TrimSuffix(v.Target, "."))
+		default:
+			out = append(out, strings.TrimPrefix(rr.String(), rr.Header().String()))
+		}
+	}
+	return &out
+}
+
+// static answers an entry of the configuration: A queries get the addresses, every other type gets
+// an empty answer (the name exists).
+func (s *Server) static(cfg *model.DnsServiceConfig, r *dns.Msg, name string, q dns.Question, client netip.Addr) (*dns.Msg, bool) {
+	plain := strings.TrimSuffix(name, ".")
+	var found *model.DnsStaticEntry
+	for _, n := range networksFor(cfg, client) {
+		if n.StaticEntries == nil {
+			continue
+		}
+		for i := range *n.StaticEntries {
+			if strings.EqualFold((*n.StaticEntries)[i].Name, plain) {
+				found = &(*n.StaticEntries)[i]
+			}
+		}
+	}
+	if found == nil {
+		return nil, false
+	}
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.RecursionAvailable = true
+	m.Authoritative = true
+	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
+		for _, a := range found.Addresses {
+			if ip, err := netip.ParseAddr(a); err == nil && ip.Is4() {
+				m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: staticTTL}, A: net.IP(ip.AsSlice())})
+			}
+		}
+	}
+	return m, true
+}
+
+// networksFor returns the networks whose client range holds the client; every network when none
+// does (a client behind a router, or a range the configuration leaves out).
+func networksFor(cfg *model.DnsServiceConfig, client netip.Addr) []networkView {
+	var all, hit []networkView
+	for _, n := range cfg.Networks {
+		v := networkView{StaticEntries: n.StaticEntries}
+		all = append(all, v)
+		if n.Clients != nil {
+			if p, err := netip.ParsePrefix(*n.Clients); err == nil && p.Contains(client) {
+				hit = append(hit, v)
+			}
+		}
+	}
+	if len(hit) > 0 {
+		return hit
+	}
+	return all
+}
+
+type networkView struct{ StaticEntries *[]model.DnsStaticEntry }
+
+// forward asks the upstream resolvers one after the other; a truncated UDP answer is asked again
+// over TCP, so the device gets the whole answer (or, over UDP, the truncation it asks for).
+func (s *Server) forward(ctx context.Context, cfg *model.DnsServiceConfig, r *dns.Msg) (*dns.Msg, error) {
+	if len(cfg.Upstream) == 0 {
+		return nil, errNoUpstream
+	}
+	var last error
+	for _, up := range cfg.Upstream {
+		server := net.JoinHostPort(up, s.opt.UpstreamPort)
+		q := r.Copy()
+		q.Id = dns.Id()
+		s.upstreamQueries.Add(1)
+		uctx, cancel := context.WithTimeout(ctx, s.opt.Timeout)
+		resp, err := s.opt.Upstream.Exchange(uctx, q, "udp", server)
+		if err == nil && resp.Truncated {
+			resp, err = s.opt.Upstream.Exchange(uctx, q, "tcp", server)
+		}
+		cancel()
+		if err != nil {
+			last = err
+			continue
+		}
+		resp.Id = r.Id
+		return resp, nil
+	}
+	return nil, last
+}
+
+type proxyError string
+
+func (e proxyError) Error() string { return string(e) }
+
+const errNoUpstream = proxyError("no upstream resolver")
+
+// stripAAAA removes the AAAA records of an answer; it reports whether it removed any.
+func stripAAAA(m *dns.Msg) bool {
+	removed := false
+	filter := func(rrs []dns.RR) []dns.RR {
+		out := rrs[:0:0]
+		for _, rr := range rrs {
+			if rr.Header().Rrtype == dns.TypeAAAA {
+				removed = true
+				continue
+			}
+			out = append(out, rr)
+		}
+		return out
+	}
+	m.Answer = filter(m.Answer)
+	m.Extra = filter(m.Extra)
+	return removed
+}
+
+type client struct{}
+
+func (c *client) Exchange(ctx context.Context, m *dns.Msg, network, server string) (*dns.Msg, error) {
+	cl := &dns.Client{Net: network}
+	resp, _, err := cl.ExchangeContext(ctx, m, server)
+	return resp, err
+}

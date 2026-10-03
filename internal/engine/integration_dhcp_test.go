@@ -269,7 +269,9 @@ func TestAReservationIsHonored(t *testing.T) {
 	if !ok || ip != "10.10.0.60" {
 		t.Fatalf("the client got %q, want its reservation 10.10.0.60", ip)
 	}
-	d := b.waitDevice(testbed.ClientBMAC, 20*time.Second, func(d *engine.DeviceState) bool { return d.Lease != nil })
+	// a device is online when it is seen on the network, not when it holds a lease
+	b.top.B.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+	d := b.waitDevice(testbed.ClientBMAC, 20*time.Second, func(d *engine.DeviceState) bool { return d.Lease != nil && d.Online })
 	if d.ID != devBID || d.Origin != model.DeviceOriginConfigured || d.Name != "esp32-b" || !d.Online {
 		t.Errorf("%+v", d)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,8 @@ type Engine struct {
 	pollingRouting  atomic.Bool
 	pollingObserved atomic.Bool
 	dhcp            dhcpState
+	activeMu        sync.Mutex
+	active          map[netip.Addr]bool
 	// observeNow asks the observation poller to read at once (a lease event, a neighbor change).
 	observeNow chan struct{}
 }

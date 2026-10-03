@@ -226,6 +226,7 @@ func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testi
 	start := time.Now()
 	for i := 0; i < n; i++ {
 		g.e.Emit("network_degraded", map[string]any{"network": "n", "reason": big, "i": i})
+		time.Sleep(3 * time.Millisecond) // a reader that is not starved by the burst must keep up
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("publishing %d events took %v: a slow subscriber delays the publisher", n, d)

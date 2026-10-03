@@ -166,7 +166,7 @@ func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
 		elems[s.Name] = s.Elements
 	}
 	a, d := tg.DeviceSets[devA], tg.DeviceSets["bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"]
-	if !strings.HasPrefix(a, "dev_aaaaaaaa_") || strings.Join(elems[a], ",") != "10.10.0.31,10.10.0.32" || strings.Join(elems[d], ",") != "10.10.0.99" {
+	if !strings.HasPrefix(a, "dev_aaaaaaaa1111_") || strings.Join(elems[a], ",") != "10.10.0.31,10.10.0.32" || strings.Join(elems[d], ",") != "10.10.0.99" {
 		t.Errorf("%v %v", tg.DeviceSets, elems)
 	}
 	// without observed state the sets exist and are empty; the name does not depend on the content

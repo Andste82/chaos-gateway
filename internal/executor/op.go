@@ -98,7 +98,8 @@ type Rule struct {
 }
 
 // NftDelElements deletes elements from a set of the table: the other half of an identity change,
-// when a device loses an address. Deleting an element that is not there is not an error.
+// when a device loses an address. nft refuses to delete an element that is not in the set, and the
+// whole request fails then.
 type NftDelElements struct {
 	Target
 	Set      string   `json:"set"`

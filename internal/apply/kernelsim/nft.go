@@ -185,11 +185,16 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 		_ = json.Unmarshal(f["elem"], &elems)
 		if command == "delete" {
 			for _, e := range elems {
+				found := false
 				for i, x := range s.elems {
 					if string(x) == string(e) {
 						s.elems = append(s.elems[:i:i], s.elems[i+1:]...)
+						found = true
 						break
 					}
+				}
+				if !found {
+					return t, nftErr("No such file or directory") // nft refuses to delete an element that is not there
 				}
 			}
 			return t, nil

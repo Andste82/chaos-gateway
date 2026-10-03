@@ -184,9 +184,7 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		}
 	}
 	if len(wgOps) > 0 {
-		for _, op := range wgOps {
-			p.Ops = append(p.Ops, op)
-		}
+		p.Ops = append(p.Ops, wgOps...)
 		p.Summary = append(p.Summary, "wireguard: "+strings.Join(wgWords, "; "))
 	}
 	for _, b := range t.Bridges {

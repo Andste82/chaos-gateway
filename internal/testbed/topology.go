@@ -53,7 +53,19 @@ const (
 type Topology struct {
 	*Bed
 	GW, Switch0, Switch1, A, B, C, Server, Mgmt *Namespace
+	// Up, RC and Site exist with WithRemotes: the uplink switch, a remote client and a remote site.
+	Up, RC, Site *Namespace
 }
+
+// Addresses of the remote machines (WithRemotes).
+const (
+	RemoteClientAddr = "203.0.113.30"
+	RemoteSiteAddr   = "203.0.113.40"
+	// ClientNetHost lies in the network behind the remote client (10.50.0.0/24), SiteNetHost in the
+	// remote site's network (10.60.0.0/24): each is an address of its machine's loopback.
+	ClientNetHost = "10.50.0.10"
+	SiteNetHost   = "10.60.0.10"
+)
 
 // NewDefault builds the default topology. With the default options the gateway is a plain
 // forwarder (forwarding on, masquerade on wan0).
@@ -93,7 +105,20 @@ func NewDefault(t testing.TB, opts ...Option) *Topology {
 	top.C.Route("default", "via", LAN1Gateway)
 
 	// uplink: the server has no route back to the test networks
-	b.Link(End{NS: top.GW, If: "wan0", Addr: UplinkGateway + "/24"}, End{NS: top.Server, If: "eth0", Addr: ServerAddr + "/24"})
+	if b.cfg.remotes {
+		top.Up = b.Add("up")
+		top.RC = b.Add("rc")
+		top.Site = b.Add("site")
+		top.Up.Bridge("br0", "")
+		b.Link(End{NS: top.GW, If: "wan0", Addr: UplinkGateway + "/24"}, End{NS: top.Up, If: "pw", Master: "br0"})
+		b.Link(End{NS: top.Server, If: "eth0", Addr: ServerAddr + "/24"}, End{NS: top.Up, If: "ps", Master: "br0"})
+		b.Link(End{NS: top.RC, If: "eth0", Addr: RemoteClientAddr + "/24"}, End{NS: top.Up, If: "pr", Master: "br0"})
+		b.Link(End{NS: top.Site, If: "eth0", Addr: RemoteSiteAddr + "/24"}, End{NS: top.Up, If: "pt", Master: "br0"})
+		top.RC.Addr("lo", ClientNetHost+"/32")
+		top.Site.Addr("lo", SiteNetHost+"/32")
+	} else {
+		b.Link(End{NS: top.GW, If: "wan0", Addr: UplinkGateway + "/24"}, End{NS: top.Server, If: "eth0", Addr: ServerAddr + "/24"})
+	}
 	top.Server.Addr("eth0", ServerAddr2+"/24")
 	top.Server.Addr("lo", InternetAddr+"/32")
 

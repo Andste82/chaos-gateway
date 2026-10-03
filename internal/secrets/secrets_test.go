@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ func TestKeysAreStoredPrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.WireGuard(id); err != ErrNotFound {
+	if _, err := s.WireGuard(id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v", err)
 	}
 	k := WireGuardKeys{PrivateKey: "priv", PresharedKey: "psk", Generation: 3}
@@ -39,7 +40,7 @@ func TestKeysAreStoredPrivately(t *testing.T) {
 	if err := s.DeleteWireGuard(id); err != nil {
 		t.Fatalf("deleting what is gone: %v", err)
 	}
-	if _, err := s.WireGuard(id); err != ErrNotFound {
+	if _, err := s.WireGuard(id); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
 }
@@ -47,7 +48,7 @@ func TestKeysAreStoredPrivately(t *testing.T) {
 func TestOnlyAUUIDBecomesAFileName(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	for _, bad := range []string{"", "../x", "a/b", "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f2", "0B7C6A3E-1F2D-4C5B-9A8E-7D6C5B4A3F21"} {
-		if _, err := s.WireGuard(bad); err == nil || err == ErrNotFound {
+		if _, err := s.WireGuard(bad); err == nil || errors.Is(err, ErrNotFound) {
 			t.Errorf("%q: %v", bad, err)
 		}
 		if err := s.PutWireGuard(bad, WireGuardKeys{}); err == nil {
@@ -74,7 +75,7 @@ func TestACorruptFileIsAnError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.dir, "wireguard", id+".json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.WireGuard(id); err == nil || err == ErrNotFound {
+	if _, err := s.WireGuard(id); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v", err)
 	}
 }

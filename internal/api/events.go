@@ -18,7 +18,7 @@ var keepalive = 15 * time.Second
 
 // writeTimeout bounds a write to a client: a client that stops reading is disconnected instead of
 // holding its goroutine (and, through the full buffer, being dropped by the bus).
-const writeTimeout = 10 * time.Second
+var writeTimeout = 10 * time.Second
 
 // publicEvent is the event as the API shows it; internal event types are left out.
 type publicEvent struct {
@@ -147,9 +147,12 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
+	h.Set("Connection", "close") // the stream ends when the server drops a slow client: the connection goes with it
 	c.Status(http.StatusOK)
 	send := func(raw string) bool {
-		_ = rc.SetWriteDeadline(s.clk.Now().Add(writeTimeout))
+		if err := rc.SetWriteDeadline(s.clk.Now().Add(writeTimeout)); err != nil {
+			s.log.Error("write deadline", "error", err)
+		}
 		if _, err := c.Writer.WriteString(raw); err != nil {
 			return false
 		}

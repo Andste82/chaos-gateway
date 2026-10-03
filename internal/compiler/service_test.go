@@ -211,7 +211,11 @@ func ruleLine(r executor.Rule) string {
 
 func TestTheServicesAndTheManagementNetworkReachThePortTheAPIListensOn(t *testing.T) {
 	// the configuration names no ui_port: the port of the API stands in
-	tg := compileWG(t, func(c *model.Configuration, in *Input) { in.ServiceNS = "cgsvc"; in.DefaultUIPort = 8443; c.Management.UiPort = nil })
+	tg := compileWG(t, func(c *model.Configuration, in *Input) {
+		in.ServiceNS = "cgsvc"
+		in.DefaultUIPort = 8443
+		c.Management.UiPort = nil
+	})
 	if tg.Management.UIPort != 8443 {
 		t.Errorf("ui port %d", tg.Management.UIPort)
 	}

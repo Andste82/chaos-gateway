@@ -21,6 +21,8 @@ var fuzzSeeds = []string{
 	`{"type":"offloads","devs":["a"],"devs":["b"]}`,
 	`{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"}]}`,
 	`{"type":"sysctl","entries":[{"name":"accept_ra","dev":"br-lan0","value":0}]}`,
+	`{"type":"wireguard","action":"ensure","name":"wg-hub","listen_port":51820,"mtu":1420,"key_ref":"0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21","peers":[{"public_key":"FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=","allowed_ips":["10.99.0.2/32"],"keepalive":25,"endpoint":"203.0.113.40:51821"}]}`,
+	`{"type":"wireguard","action":"delete","name":"wg-hub"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"table":{"family":"ip","name":"nat","Family":"inet","Name":"chaosgw"}}}]}}`,
 	`{"type":"tc","entries":[{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]}]}`,
 	``, `{}`, `[]`, `null`, `{"type":null}`, `{"type":"read"`, "\x00",

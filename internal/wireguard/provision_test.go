@@ -293,7 +293,7 @@ func TestInterfaceKeysAndPrune(t *testing.T) {
 	}
 	// a key that is missing is an error for the compiler's input
 	_ = sec.DeleteWireGuard(hubID)
-	if _, err := InterfaceKeys(cfg, sec); err == nil {
-		t.Error("a missing interface key must be reported")
+	if partial, err := InterfaceKeys(cfg, sec); err == nil || len(partial) != 0 {
+		t.Errorf("a missing interface key must be reported: %v %v", partial, err)
 	}
 }

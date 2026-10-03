@@ -19,6 +19,7 @@ var subcommands = []struct {
 }{
 	{"api", "M5", "REST API, web UI and scheduler (unprivileged)", nil},
 	{"apply", "M4", "apply a configuration file without the API (bootstrap)", runApply},
+	{"wg", "M4b", "export WireGuard client and link configurations", runWG},
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
 	{"dns", "M6b", "DNS proxy in the service namespace", nil},
 	{"tls", "M21", "TLS responder in the service namespace", nil},

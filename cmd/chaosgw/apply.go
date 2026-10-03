@@ -16,7 +16,9 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
+	"github.com/Andste82/chaos-gateway/internal/wireguard"
 )
 
 // runApply is `chaosgw apply --file`: apply a configuration without the API (the bootstrap of
@@ -29,6 +31,7 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	file := fs.String("file", "", "configuration file (YAML or JSON)")
 	socket := fs.String("socket", "/run/chaosgw/exec.sock", "path of the executor's Unix socket")
 	namespace := fs.String("namespace", "", "network namespace to configure (default: the executor's own; for tests)")
+	secretsDir := fs.String("secrets-dir", "", "directory with the secrets; WireGuard networks need it (their keys are generated there)")
 	stateDir := fs.String("state-dir", "", "store the configuration as the active revision in this directory")
 	dryRun := fs.Bool("dry-run", false, "show what would change and change nothing")
 	execUID := fs.Int("executor-uid", 0, "uid the executor runs as (it must be root or this user)")
@@ -72,6 +75,22 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw apply: %s: %s\n", *file, nerrs[0].Message)
 		return 1
 	}
+	var sec *secrets.Store
+	if *secretsDir != "" {
+		var err error
+		if sec, err = secrets.Open(*secretsDir); err != nil {
+			fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
+			return 1
+		}
+	}
+	// generate the keys of WireGuard networks and clients; the configuration then carries the public keys
+	if cfg, err = wireguard.Provision(cfg, sec); err != nil {
+		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
+		if sec == nil {
+			fmt.Fprintln(stderr, "  (give --secrets-dir for configurations with WireGuard networks)")
+		}
+		return 1
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	c, err := executor.Dial(ctx, *socket, executor.DialOptions{Auth: executor.AllowUIDs(uint32(*execUID))})
@@ -82,18 +101,22 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	defer func() { _ = c.Close() }()
 
 	if *stateDir != "" {
-		return applyThroughStore(ctx, c, *namespace, *stateDir, cfg, stdout, stderr)
+		return applyThroughStore(ctx, c, *namespace, *stateDir, cfg, sec, stdout, stderr)
 	}
-	return applyDirect(ctx, c, *namespace, cfg, *dryRun, stdout, stderr)
+	return applyDirect(ctx, c, *namespace, cfg, sec, *dryRun, stdout, stderr)
 }
 
-func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Configuration, dryRun bool, stdout, stderr io.Writer) int {
+func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Configuration, sec *secrets.Store, dryRun bool, stdout, stderr io.Writer) int {
 	host, err := apply.ReadHost(ctx, ex, ns)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1
 	}
-	tg := compiler.Compile(compiler.Input{Config: cfg, Host: host, Generation: compiler.Generation{Seq: 1}})
+	in := compiler.Input{Config: cfg, Host: host, Generation: compiler.Generation{Seq: 1}}
+	if sec != nil {
+		in.Keys, _ = wireguard.InterfaceKeys(cfg, sec)
+	}
+	tg := compiler.Compile(in)
 	printProblems(stderr, tg)
 	if tg.HasErrors() {
 		fmt.Fprintln(stderr, "chaosgw apply: nothing was changed")
@@ -131,14 +154,14 @@ func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Confi
 	return 0
 }
 
-func applyThroughStore(ctx context.Context, ex apply.Exec, ns, dir string, cfg *model.Configuration, stdout, stderr io.Writer) int {
+func applyThroughStore(ctx context.Context, ex apply.Exec, ns, dir string, cfg *model.Configuration, sec *secrets.Store, stdout, stderr io.Writer) int {
 	st, err := store.Open(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
-	e, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: ns})
+	e, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: ns, Secrets: sec})
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1

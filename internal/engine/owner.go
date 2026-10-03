@@ -79,6 +79,8 @@ type cmdBarrier struct{ reply chan *Snapshot }
 
 type cmdTimeout struct{ rev int64 }
 
+type cmdWGStatus struct{ status map[string]PeerStatus }
+
 type cmdRetry struct{}
 
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
@@ -90,6 +92,7 @@ func (cmdRollback) command() {}
 func (cmdObserve) command()  {}
 func (cmdBarrier) command()  {}
 func (cmdTimeout) command()  {}
+func (cmdWGStatus) command() {}
 func (cmdRetry) command()    {}
 
 // applyResult is what the apply loop reports about one desired state.
@@ -285,6 +288,8 @@ func (o *owner) handle(ctx context.Context, c command) {
 		}
 	case cmdRetry:
 		o.retry()
+	case cmdWGStatus:
+		o.wireguardStatus(c.status)
 	case cmdObserve:
 		o.observe(c.host)
 		o.later(func() { c.reply <- struct{}{} })
@@ -356,6 +361,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Applied = &AppliedInfo{Generation: r.d.Generation, Revision: r.d.Revision, Hash: r.target.Hash, At: o.now(), Uplink: r.target.Uplink}
 		o.snap.LastError = ""
 		o.snap.Problems = r.target.Problems
+		o.snap.WireGuardInterfaces = r.target.WireGuard
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})

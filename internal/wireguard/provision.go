@@ -184,32 +184,38 @@ func ensurePeerKey(sec *secrets.Store, id string, ks *model.WireGuardKeySettings
 }
 
 // InterfaceKeys returns the public key of every WireGuard network's interface, derived from the
-// private keys in the store. The compiler needs them for verify and for the exports; they are not
+// private keys in the store; networks without a usable key are left out and the first problem is
+// returned with the keys that exist. The compiler needs them for verify and for the exports; they are not
 // secret.
 func InterfaceKeys(cfg *model.Configuration, sec *secrets.Store) (map[string]string, error) {
 	out := map[string]string{}
 	if cfg.Networks == nil {
 		return out, nil
 	}
+	var first error
 	for id, n := range *cfg.Networks {
 		wg, err := n.AsWireGuardNetwork()
 		if err != nil || wg.Type != model.WireGuardNetworkTypeWireguard {
 			continue
 		}
 		if sec == nil {
-			return nil, errors.New("wireguard: no secrets store")
+			return out, errors.New("wireguard: no secrets store")
 		}
 		k, err := sec.WireGuard(id)
-		if err != nil {
-			return nil, fmt.Errorf("the key of network %q: %w", wg.Name, err)
+		if err == nil {
+			var pub string
+			if pub, err = PublicKey(k.PrivateKey); err == nil {
+				out[id] = pub
+				continue
+			}
 		}
-		pub, err := PublicKey(k.PrivateKey)
-		if err != nil {
-			return nil, err
+		if first == nil {
+			first = fmt.Errorf("the key of network %q: %w", wg.Name, err)
 		}
-		out[id] = pub
 	}
-	return out, nil
+	// the keys that could be derived are returned in any case: the compiler reports the networks
+	// without one, each by name
+	return out, first
 }
 
 // Prune deletes the secrets of objects that are not in the configuration any more. Call it after a

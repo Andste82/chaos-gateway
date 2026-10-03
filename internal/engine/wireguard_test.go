@@ -13,6 +13,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
+	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/wireguard"
 )
 
@@ -220,4 +221,117 @@ func collect(ch <-chan engine.Event, typ string) []engine.Event {
 func mustJSON(v any) string {
 	b, _ := jsonMarshal(v)
 	return string(b)
+}
+
+// wgRevision stores a candidate the way the product does: provisioned first, so its keys exist.
+func wgRevision(t *testing.T, h *harness, sec *secrets.Store, mod func(*model.Configuration)) int64 {
+	t.Helper()
+	cfg := h.clone()
+	if mod != nil {
+		mod(cfg)
+	}
+	cfg, err := wireguard.Provision(cfg, sec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := h.st.Create(cfg, store.CreateOptions{IfMatch: h.st.ActiveID(), Now: h.clk.Now(), By: model.Actor{Id: "admin", Type: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.Id
+}
+
+func TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores(t *testing.T) {
+	h, sec := newWGHarness(t)
+	h.mustApply(h.revision(nil))
+	before, _ := sec.WireGuard(wgClient)
+	// a rotated candidate: provisioned, so its keys exist, but not applied
+	cand := wgRevision(t, h, sec, func(c *model.Configuration) {
+		n := (*c.Networks)[wgHub]
+		wg, _ := n.AsWireGuardNetwork()
+		cl := (*wg.Clients)[wgClient]
+		gen := 1
+		cl.Key = &model.WireGuardKeySettings{Generation: &gen, PresharedKey: cl.Key.PresharedKey}
+		(*wg.Clients)[wgClient] = cl
+		_ = n.FromWireGuardNetwork(wg)
+		(*c.Networks)[wgHub] = n
+	})
+	if old, err := sec.WireGuard(wgClient); err != nil || old != before {
+		t.Fatalf("the keys of the active revision were touched: %+v %v", old, err)
+	}
+	if _, err := sec.WireGuard(wireguard.KeyID(wgClient, 1)); err != nil {
+		t.Fatalf("the candidate has no keys: %v", err)
+	}
+	// the nftables transaction fails: the active revision is restored with its own keys
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	_, err := h.apply(cand)
+	h.k.Fail = nil
+	if err == nil {
+		t.Fatal("must fail")
+	}
+	h.barrier()
+	if old, err := sec.WireGuard(wgClient); err != nil || old != before {
+		t.Fatalf("a failed apply lost the keys of the active revision: %+v %v", old, err)
+	}
+	// the candidate applies once the failure is gone, and the commit retires the old generation
+	h.mustApply(cand)
+	if _, err := sec.WireGuard(wgClient); err == nil {
+		t.Error("the keys of the previous generation are still there after the commit")
+	}
+	if _, err := sec.WireGuard(wireguard.KeyID(wgClient, 1)); err != nil {
+		t.Errorf("the keys of the active generation are gone: %v", err)
+	}
+}
+
+func TestACandidateKeepsItsKeysWhenAnotherRevisionIsCommitted(t *testing.T) {
+	h, sec := newWGHarness(t)
+	h.mustApply(h.revision(nil))
+	rotated := wgRevision(t, h, sec, func(c *model.Configuration) {
+		n := (*c.Networks)[wgHub]
+		wg, _ := n.AsWireGuardNetwork()
+		cl := (*wg.Clients)[wgClient]
+		gen := 2
+		cl.Key = &model.WireGuardKeySettings{Generation: &gen}
+		(*wg.Clients)[wgClient] = cl
+		_ = n.FromWireGuardNetwork(wg)
+		(*c.Networks)[wgHub] = n
+	})
+	other := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
+	h.mustApply(other)
+	if _, err := sec.WireGuard(wireguard.KeyID(wgClient, 2)); err != nil {
+		t.Fatalf("the commit of another revision removed the keys of a candidate: %v", err)
+	}
+	_ = rotated
+}
+
+func TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesNothing(t *testing.T) {
+	h, _ := newWGHarness(t)
+	h.mustApply(h.revision(nil))
+	// a peer that is online already when the polling starts is not "new"
+	var hubIf, peerPub string
+	for _, w := range h.e.Snapshot().WireGuardInterfaces {
+		if w.NetworkID == wgHub {
+			hubIf, peerPub = w.Name, w.Peers[0].PublicKey
+		}
+	}
+	h.k.Handshake(hubIf, peerPub, h.clk.Now().Unix(), 1, 1)
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	if err := h.e.PollWireGuard(context.Background(), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.PollWireGuard(context.Background(), 5*time.Second); err == nil {
+		t.Fatal("two pollers would duplicate every event")
+	}
+	h.clk.BlockUntil(1)
+	h.clk.Advance(5 * time.Second)
+	waitStatus(t, h, func(s *engine.Snapshot) bool { return s.WireGuard[wgClient].Online })
+	if ev := collect(ch, engine.EventPeerOnline); len(ev) != 0 {
+		t.Errorf("the first poll announced %+v", ev)
+	}
 }

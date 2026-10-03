@@ -3,6 +3,7 @@ package apply
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -484,6 +485,15 @@ func wgDiffers(w compiler.WGInterface, l linux.Link, info *linux.WGInfo, exists 
 	return ""
 }
 
+func ipEndpoint(ep string) bool {
+	host, _, ok := strings.Cut(ep, ":")
+	if !ok {
+		return false
+	}
+	_, err := netip.ParseAddr(host)
+	return err == nil
+}
+
 // wgMismatch lists what differs between an interface of the target and the kernel's.
 func wgMismatch(w compiler.WGInterface, info *linux.WGInfo) []string {
 	var out []string
@@ -511,7 +521,9 @@ func wgMismatch(w compiler.WGInterface, info *linux.WGInfo) []string {
 		if h.Keepalive != p.Keepalive {
 			out = append(out, fmt.Sprintf("peer %s has the keepalive %d, want %d", p.Name, h.Keepalive, p.Keepalive))
 		}
-		if p.Endpoint != "" && h.Endpoint != p.Endpoint {
+		// a host name is resolved by `wg` and the kernel reports the address: only an address
+		// literal can be compared
+		if ipEndpoint(p.Endpoint) && h.Endpoint != p.Endpoint {
 			out = append(out, fmt.Sprintf("peer %s has the endpoint %q, want %q", p.Name, h.Endpoint, p.Endpoint))
 		}
 		if h.HasPresharedKey != (p.PresharedKeyRef != "") {

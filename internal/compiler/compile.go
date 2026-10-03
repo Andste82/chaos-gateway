@@ -389,6 +389,26 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 		r.Action, r.Family, r.Table = "replace", 4, PolicyTable
 		t.Routes = append(t.Routes, r)
 	}
+	// Replies from the uplink to a network behind a router or a tunnel arrive on the uplink
+	// interface and are looked up in the main table, which does not know the network: a rule on the
+	// destination sends them to table 100 as well.
+	toSeen := map[string]bool{}
+	addTo := func(prefix string) {
+		if toSeen[prefix] {
+			return
+		}
+		toSeen[prefix] = true
+		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority, To: prefix, Table: PolicyTable})
+	}
+	defer func() {
+		// after the iif rules, in a stable order
+		sort.SliceStable(t.Rules, func(i, j int) bool {
+			if (t.Rules[i].Iif == "") != (t.Rules[j].Iif == "") {
+				return t.Rules[i].Iif != ""
+			}
+			return t.Rules[i].To < t.Rules[j].To
+		})
+	}()
 	for _, b := range t.Bridges {
 		add(executor.Route{Dst: b.Address.Masked().String(), Dev: b.Name})
 	}
@@ -409,6 +429,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 				continue
 			}
 			add(executor.Route{Dst: p.Masked().String(), Via: r.Via, Dev: b.Name})
+			addTo(p.Masked().String())
 		}
 	}
 	sort.SliceStable(t.Routes, func(i, j int) bool {
@@ -434,6 +455,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 				if !seen[a] {
 					seen[a] = true
 					add(executor.Route{Dst: a, Dev: w.Name})
+					addTo(a)
 				}
 			}
 		}

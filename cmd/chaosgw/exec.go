@@ -66,7 +66,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 
 	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state)}
 	if *secretsDir != "" {
-		sec, err := secrets.Open(*secretsDir)
+		sec, err := secrets.OpenReadOnly(*secretsDir)
 		if err != nil {
 			fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 			return 1

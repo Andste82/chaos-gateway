@@ -284,8 +284,8 @@ func TestMasqueradeTowardsTheUplinkOnlyAndForTheNetworksBehindClients(t *testing
 	if hub == "" || !strings.Contains(hub, `"10.50.0.0"`) {
 		t.Errorf("the hub is masqueraded together with the network behind its client: %s", hub)
 	}
-	if link == "" || strings.Contains(link, `"10.60.0.0"`) {
-		t.Errorf("only the transfer net of a link: %s", link)
+	if link == "" || !strings.Contains(link, `"10.60.0.0"`) {
+		t.Errorf("a link masquerades its transfer net and what is reached through it: %s", link)
 	}
 	// NAT off
 	off := compileWG(t, func(cfg *model.Configuration, in *Input) {
@@ -408,5 +408,50 @@ func TestWireGuardInterfaceNames(t *testing.T) {
 	b := wgName("22222222-0000-4000-8000-000000000000", "x", used)
 	if a == b {
 		t.Errorf("both got %q", a)
+	}
+}
+
+func TestRepliesFromTheUplinkToNetworksBehindTunnelsAndRoutersFindTable100(t *testing.T) {
+	tg := compileWG(t, nil)
+	var to []string
+	for _, r := range tg.Rules {
+		if r.To != "" {
+			to = append(to, r.To)
+			if r.Iif != "" || r.Table != PolicyTable || r.Priority != PolicyRulePriority {
+				t.Errorf("%+v", r)
+			}
+		}
+	}
+	if strings.Join(to, ",") != "10.50.0.0/24,10.60.0.0/24" {
+		t.Errorf("destination rules %v: the network behind the client and the link's static route", to)
+	}
+}
+
+func TestADeviceUnderTestCannotReachTheManagementNetworkBehindTheUplinkEvenWithAFullTunnel(t *testing.T) {
+	tg := compileWG(t, func(cfg *model.Configuration, in *Input) {
+		cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+	})
+	guard, implicit := -1, -1
+	for i, r := range chainOf(t, tg, "forward").Rules {
+		s := js(r.Expr)
+		if strings.Contains(s, "mgmt_src") && strings.Contains(s, "ifs_test") && strings.Contains(s, "drop") {
+			guard = i
+		}
+		if strings.Contains(s, `"10.99.0.2"`) && strings.Contains(s, `"right":"wan0"`) && strings.Contains(s, "accept") {
+			implicit = i
+		}
+	}
+	if guard < 0 || implicit < 0 || guard > implicit {
+		t.Fatalf("guard %d, implicit client -> uplink %d: the guard comes first", guard, implicit)
+	}
+}
+
+func TestTheMSSClampIsCounted(t *testing.T) {
+	tg := compileWG(t, nil)
+	if !contains(tg.Nft.Counters, "mss_clamp") {
+		t.Errorf("counters %v", tg.Nft.Counters)
+	}
+	if contains(compileBasic(t, nil).Nft.Counters, "mss_clamp") {
+		t.Error("a counter without a clamp")
 	}
 }

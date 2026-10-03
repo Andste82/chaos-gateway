@@ -65,66 +65,107 @@ func endpointOf(wg model.WireGuardNetwork, in ExportInput) (string, error) {
 	return in.UplinkAddress + ":" + strconv.Itoa(wg.ListenPort), nil
 }
 
-// reachPrefixes returns the prefixes a client reaches through the tunnel: the tunnel subnet and
-// what its `reachable` list names. The uplink means a full tunnel.
-func reachPrefixes(cfg *model.Configuration, hub model.WireGuardNetwork, c model.WireGuardClient) []string {
-	set := map[string]bool{}
-	if p, err := netip.ParsePrefix(hub.Address); err == nil {
-		set[p.Masked().String()] = true
+// networkPrefixes returns the prefixes of a network: a test network's subnet; a WireGuard
+// network's tunnel subnet, the networks behind its clients and a link's static routes.
+func networkPrefixes(cfg *model.Configuration, id string, add func(string)) {
+	if cfg.Networks == nil {
+		return
 	}
-	addPrefix := func(s string) {
+	n, ok := (*cfg.Networks)[id]
+	if !ok {
+		return
+	}
+	if disc, _ := n.Discriminator(); disc == "lan" {
+		if lan, err := n.AsLanNetwork(); err == nil {
+			add(lan.Address)
+		}
+		return
+	}
+	wg, err := n.AsWireGuardNetwork()
+	if err != nil {
+		return
+	}
+	add(wg.Address)
+	if wg.Clients != nil {
+		for _, oc := range *wg.Clients {
+			if oc.ClientNetworks != nil {
+				for _, cn := range *oc.ClientNetworks {
+					add(cn)
+				}
+			}
+		}
+	}
+	if wg.Routes != nil {
+		for _, r := range *wg.Routes {
+			add(r)
+		}
+	}
+}
+
+func clientPrefixes(cfg *model.Configuration, clientID string, add func(string)) {
+	if cfg.Networks == nil {
+		return
+	}
+	for _, n := range *cfg.Networks {
+		wg, err := n.AsWireGuardNetwork()
+		if err != nil || wg.Clients == nil {
+			continue
+		}
+		if oc, ok := (*wg.Clients)[clientID]; ok {
+			if a, err := netip.ParseAddr(oc.Address); err == nil {
+				add(netip.PrefixFrom(a, 32).String())
+			}
+			if oc.ClientNetworks != nil {
+				for _, cn := range *oc.ClientNetworks {
+					add(cn)
+				}
+			}
+		}
+	}
+}
+
+// reachPrefixes returns what the tunnel of a client carries: the tunnel subnet, what its
+// `reachable` list names, and what the access matrix lets reach the client or its hub. The last
+// part matters as much as the first: WireGuard drops a decrypted packet whose source is not in the
+// AllowedIPs of the peer it came from, so a network that may reach the client has to be in the list
+// even though the client never sends to it. The uplink means a full tunnel.
+func reachPrefixes(cfg *model.Configuration, hubID string, hub model.WireGuardNetwork, clientID string, c model.WireGuardClient) []string {
+	set := map[string]bool{}
+	add := func(s string) {
 		if p, err := netip.ParsePrefix(s); err == nil {
 			set[p.Masked().String()] = true
 		}
 	}
+	add(hub.Address)
+	endpoint := func(ep model.MatrixEndpoint) {
+		switch {
+		case ep.Uplink != nil && bool(*ep.Uplink):
+			set["0.0.0.0/0"] = true
+		case ep.Management != nil && bool(*ep.Management):
+			if cfg.Management.AllowedSources != nil {
+				for _, s := range *cfg.Management.AllowedSources {
+					add(s)
+				}
+			}
+		case ep.Network != nil:
+			networkPrefixes(cfg, *ep.Network, add)
+		case ep.Client != nil:
+			clientPrefixes(cfg, *ep.Client, add)
+		}
+	}
 	if c.Reachable != nil {
 		for _, ep := range *c.Reachable {
-			switch {
-			case ep.Uplink != nil && bool(*ep.Uplink):
-				set["0.0.0.0/0"] = true
-			case ep.Network != nil && cfg.Networks != nil:
-				n, ok := (*cfg.Networks)[*ep.Network]
-				if !ok {
-					continue
-				}
-				if disc, _ := n.Discriminator(); disc == "lan" {
-					if lan, err := n.AsLanNetwork(); err == nil {
-						addPrefix(lan.Address)
-					}
-				} else if wg, err := n.AsWireGuardNetwork(); err == nil {
-					addPrefix(wg.Address)
-					if wg.Clients != nil {
-						for _, oc := range *wg.Clients {
-							if oc.ClientNetworks != nil {
-								for _, cn := range *oc.ClientNetworks {
-									addPrefix(cn)
-								}
-							}
-						}
-					}
-					if wg.Routes != nil {
-						for _, r := range *wg.Routes {
-							addPrefix(r)
-						}
-					}
-				}
-			case ep.Client != nil && cfg.Networks != nil:
-				for _, n := range *cfg.Networks {
-					wg, err := n.AsWireGuardNetwork()
-					if err != nil || wg.Clients == nil {
-						continue
-					}
-					if oc, ok := (*wg.Clients)[*ep.Client]; ok {
-						if a, err := netip.ParseAddr(oc.Address); err == nil {
-							set[netip.PrefixFrom(a, 32).String()] = true
-						}
-						if oc.ClientNetworks != nil {
-							for _, cn := range *oc.ClientNetworks {
-								addPrefix(cn)
-							}
-						}
-					}
-				}
+			endpoint(ep)
+		}
+	}
+	if cfg.AccessMatrix != nil && cfg.AccessMatrix.Entries != nil {
+		for _, e := range *cfg.AccessMatrix.Entries {
+			if e.Policy != model.MatrixEntryPolicyAllow {
+				continue
+			}
+			toUs := (e.To.Client != nil && *e.To.Client == clientID) || (e.To.Network != nil && *e.To.Network == hubID)
+			if toUs && e.From.Uplink == nil {
+				endpoint(e.From)
 			}
 		}
 	}
@@ -170,7 +211,7 @@ func ClientConfig(in ExportInput, networkID, clientID string) (Export, error) {
 	if err != nil {
 		return Export{}, err
 	}
-	ck, err := in.Secrets.WireGuard(clientID)
+	ck, err := in.Secrets.WireGuard(KeyID(clientID, generationOf(c.Key)))
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return Export{}, err
 	}
@@ -189,10 +230,10 @@ func ClientConfig(in ExportInput, networkID, clientID string) (Export, error) {
 		mtu = *hub.Mtu
 	}
 	fmt.Fprintf(&b, "MTU = %d\n\n[Peer]\nPublicKey = %s\n", mtu, gwPub)
-	if ck.PresharedKey != "" {
+	if wantsPSK(c.Key) && ck.PresharedKey != "" {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", ck.PresharedKey)
 	}
-	fmt.Fprintf(&b, "Endpoint = %s\nAllowedIPs = %s\n", endpoint, strings.Join(reachPrefixes(in.Config, hub, c), ", "))
+	fmt.Fprintf(&b, "Endpoint = %s\nAllowedIPs = %s\n", endpoint, strings.Join(reachPrefixes(in.Config, networkID, hub, clientID, c), ", "))
 	ka := 25
 	if c.Keepalive != nil {
 		if d, err := time.ParseDuration(*c.Keepalive); err == nil {
@@ -203,6 +244,12 @@ func ClientConfig(in ExportInput, networkID, clientID string) (Export, error) {
 		fmt.Fprintf(&b, "PersistentKeepalive = %d\n", ka)
 	}
 	return Export{Name: c.Name, Conf: b.String(), HasPrivateKey: has}, nil
+}
+
+// wantsPSK reports whether the key settings ask for a preshared key: a key that is stored but no
+// longer asked for is not part of any configuration.
+func wantsPSK(ks *model.WireGuardKeySettings) bool {
+	return ks != nil && ks.PresharedKey != nil && *ks.PresharedKey
 }
 
 func clientDNS(c model.WireGuardClient, hub netip.Prefix) string {
@@ -237,7 +284,7 @@ func LinkRemoteConfig(in ExportInput, networkID string) (Export, error) {
 	if err != nil {
 		return Export{}, err
 	}
-	pk, err := in.Secrets.WireGuard(LinkPeerKeyID(networkID))
+	pk, err := in.Secrets.WireGuard(KeyID(LinkPeerKeyID(networkID), generationOf(wg.Peer.Key)))
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return Export{}, err
 	}
@@ -263,7 +310,7 @@ func LinkRemoteConfig(in ExportInput, networkID string) (Export, error) {
 		fmt.Fprintf(&b, "ListenPort = %s\n", port)
 	}
 	fmt.Fprintf(&b, "\n[Peer]\nPublicKey = %s\n", gwPub)
-	if pk.PresharedKey != "" {
+	if wantsPSK(wg.Peer.Key) && pk.PresharedKey != "" {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", pk.PresharedKey)
 	}
 	if !gatewayInitiates {
@@ -289,7 +336,8 @@ func ConsumePrivateKey(in ExportInput, networkID, clientID string) (bool, error)
 	if !ok || c.Key == nil || c.Key.ExportOnce == nil || !*c.Key.ExportOnce {
 		return false, nil
 	}
-	k, err := in.Secrets.WireGuard(clientID)
+	rid := KeyID(clientID, generationOf(c.Key))
+	k, err := in.Secrets.WireGuard(rid)
 	if err != nil {
 		return false, err
 	}
@@ -297,7 +345,7 @@ func ConsumePrivateKey(in ExportInput, networkID, clientID string) (bool, error)
 		return false, nil
 	}
 	k.PrivateKey, k.Exported = "", true
-	return true, in.Secrets.PutWireGuard(clientID, k)
+	return true, in.Secrets.PutWireGuard(rid, k)
 }
 
 // MaxQRBytes is what fits into a QR code at the error correction level used.

@@ -14,8 +14,8 @@ const (
 	peerID  = "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 	pubA    = "FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo="
 	pubB    = "cFTvlxJ49hG8zsQ91QN8ATdE5+4QELIulw1yJEvpdGY="
-	secPriv = "SECRETPRIVATEKEYSECRETPRIVATEKEYSECRETPRI="
-	secPSK  = "SECRETPRESHAREDKEYSECRETPRESHAREDKEYSECRE="
+	secPriv = "SECRETPRIVATEKEYSECRETPRIVATEKEYSECRETPRIVA="
+	secPSK  = "SECRETPSHAREDKEYSECRETPSHAREDKEYSECRETPSHAR="
 )
 
 const wgOp = `{"type":"wireguard","action":"ensure","name":"wg-hub","listen_port":51820,"mtu":1420,"key_ref":"` + netID + `","peers":[` +
@@ -229,5 +229,37 @@ func TestReadWireGuardKeepsNoSecret(t *testing.T) {
 	var info linux.WGInfo
 	if err := jsonUnmarshal(out.Data[0], &info); err != nil || info.ListenPort != 51820 || len(info.Peers) != 1 || !info.Peers[0].HasPresharedKey {
 		t.Fatalf("%+v %v", info, err)
+	}
+}
+
+func TestAMalformedKeyIsRefusedAndNeverEchoedByAnErrorMessage(t *testing.T) {
+	bad := "not-a-key-but-sensitive"
+	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		if c.Tool == ToolWg {
+			// the real tool quotes the key it rejects
+			return Result{Exit: 1, Stderr: "Key is not the correct length or format: `" + secPriv + "'\n"}, nil
+		}
+		return Result{}, nil
+	}}
+	e, _ := New(fr, WithKeys(func(id string) (string, string, error) { return bad, "", nil }))
+	t.Cleanup(e.Close)
+	ctx := context.Background()
+	_, _ = e.Do(ctx, mustDecode(t, `{"type":"assign_interfaces","devs":["wg-hub"]}`))
+	_, err := e.Do(ctx, mustDecode(t, wgOp))
+	if err == nil || strings.Contains(err.Error(), bad) {
+		t.Fatalf("a malformed key must be refused without being echoed: %v", err)
+	}
+	for _, c := range fr.commands() {
+		if c.Tool == ToolWg {
+			t.Error("wg ran with a malformed key")
+		}
+	}
+	// a well-formed key that wg rejects: the error does not quote the tool's message
+	e2, _ := New(fr, WithKeys(keys))
+	t.Cleanup(e2.Close)
+	_, _ = e2.Do(ctx, mustDecode(t, `{"type":"assign_interfaces","devs":["wg-hub"]}`))
+	_, err = e2.Do(ctx, mustDecode(t, wgOp))
+	if err == nil || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "correct length") {
+		t.Fatalf("the message of wg must not reach the error: %v", err)
 	}
 }

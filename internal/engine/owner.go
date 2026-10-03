@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/wireguard"
+
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -136,6 +138,7 @@ type owner struct {
 	// answer must see the state it describes
 	outbox   []func()
 	retrying bool
+	wgSeen   bool
 	// settled is the highest generation the apply loop has reported on, successfully or not
 	settled uint64
 	snap    Snapshot
@@ -223,6 +226,32 @@ func (o *owner) scheduleRetry() {
 			}
 		}()
 	})
+}
+
+// prune removes the secrets that the committed configuration does not use any more: those of
+// deleted objects and of older key generations. A revision that waits for confirmation still has
+// its predecessor to go back to, so this runs when a revision has become the active one.
+func (o *owner) prune(cfg *model.Configuration) {
+	if o.e.cfg.Secrets == nil {
+		return
+	}
+	keep := []*model.Configuration{cfg}
+	// a candidate that has not been applied yet may carry rotated keys that exist in the store
+	if revs, err := o.e.cfg.Store.List(store.ListOptions{Status: store.StatusCandidate}); err == nil {
+		for _, r := range revs {
+			if _, c, err := o.e.cfg.Store.Get(r.Id); err == nil {
+				keep = append(keep, c)
+			}
+		}
+	}
+	if p, ok := o.e.cfg.Store.PendingConfirm(); ok {
+		if _, c, err := o.e.cfg.Store.Get(p.Revision); err == nil {
+			keep = append(keep, c)
+		}
+	}
+	if err := wireguard.Prune(o.e.cfg.Secrets, keep...); err != nil {
+		o.e.cfg.Log.Warn("cannot remove unused secrets", "error", err)
+	}
 }
 
 func (o *owner) later(f func()) { o.outbox = append(o.outbox, f) }
@@ -465,6 +494,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 		return
 	}
 	o.committed = run.d
+	o.prune(run.cfg)
 	o.snap.Revision, o.snap.Config = run.d.Revision, run.d.Config
 	o.running = nil
 	res := Applied{Revision: c.rev, Generation: r.d.Generation, Status: "active", Duration: took}
@@ -505,6 +535,7 @@ func (o *owner) confirm(rev int64) error {
 		o.timer.Stop()
 	}
 	o.committed = o.pending.d
+	o.prune(o.committed.Config)
 	o.snap.Revision, o.snap.Config = o.committed.Revision, o.committed.Config
 	o.pending = nil
 	o.event(EventConfirmed, map[string]any{"revision": rev})

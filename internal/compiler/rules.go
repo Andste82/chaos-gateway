@@ -110,15 +110,19 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		newRule(iifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 		newRule(oifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 	)
-	forward.Rules = append(forward.Rules, t.matrixRules(cfg, tp, mgmtSrc.Name)...)
+	explicit, implicit := t.matrixRules(cfg, tp, mgmtSrc.Name)
+	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
 	uplink := t.Uplink.Name
+	if uplink != "" && t.Management.Name == uplink {
+		// two-port topology: the management network lies behind the uplink interface. Devices under
+		// test cannot reach it (plan §2.16) unless an explicit entry says so: this guard stands after
+		// the explicit entries and before the allows that follow from a client's reachable list and
+		// before the default.
+		forward.Rules = append(forward.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
+	}
+	forward.Rules = append(forward.Rules, implicit...)
 	if uplink != "" {
-		if t.Management.Name == uplink {
-			// two-port topology: the management network lies behind the uplink interface and is
-			// not reachable from test networks unless the matrix says so
-			forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
-		}
 		forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), verdict("accept")))
 	}
 	forward.Rules = append(forward.Rules,
@@ -147,10 +151,12 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		syn := eq(map[string]any{"&": []any{payload("tcp", "flags"), "syn"}}, "syn")
 		mss := Chain{Name: "mss", Base: &BaseChain{Type: "filter", Hook: "forward", Prio: -150, Policy: "accept"}}
 		mss.Rules = append(mss.Rules,
-			newRule(oifSet(ifsWG.Name), syn, clamp),
-			newRule(iifSet(ifsWG.Name), syn, clamp),
+			newRule(oifSet(ifsWG.Name), syn, counter("mss_clamp"), clamp),
+			newRule(iifSet(ifsWG.Name), syn, counter("mss_clamp"), clamp),
 		)
 		t.Nft.Chains = append(t.Nft.Chains, mss)
+		t.Nft.Counters = append(t.Nft.Counters, "mss_clamp")
+		sort.Strings(t.Nft.Counters)
 	}
 	// sorted by name, as the kernel lists them: the preview diff compares line by line
 	sort.Slice(t.Nft.Chains, func(i, j int) bool { return t.Nft.Chains[i].Name < t.Nft.Chains[j].Name })
@@ -196,7 +202,7 @@ func prefixValue(p netip.Prefix) any {
 // single WireGuard clients with the networks behind them, the uplink and the management network are
 // endpoints. The more specific endpoint comes first: a client before a network, the management
 // network (told apart from the uplink by its addresses) before the uplink.
-func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) []Rule {
+func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) (explicit, implicit []Rule) {
 	resolve := func(ep model.MatrixEndpoint, from bool) (endpoint, int, bool) {
 		dev := func(name string, addrs any) endpoint {
 			var e endpoint
@@ -281,9 +287,12 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 		}
 		return items[i].rank < items[j].rank
 	})
-	var out []Rule
 	for _, it := range items {
-		out = append(out, it.rule)
+		if it.implicit {
+			implicit = append(implicit, it.rule)
+		} else {
+			explicit = append(explicit, it.rule)
+		}
 	}
-	return out
+	return explicit, implicit
 }

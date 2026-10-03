@@ -90,7 +90,7 @@ func TestTheServiceNamespaceIsRoutedAndFailsClosed(t *testing.T) {
 			}
 		}
 	}
-	if !(viaMetric < prohibitMetric) {
+	if viaMetric >= prohibitMetric {
 		t.Errorf("metrics %d and %d", viaMetric, prohibitMetric)
 	}
 
@@ -134,7 +134,7 @@ func TestTheServiceNamespaceIsRoutedAndFailsClosed(t *testing.T) {
 	}
 	// the services reach the API's port and nothing else of the gateway
 	in := chainByName(t, tg, "input")
-	var accept, drop int = -1, -1
+	accept, drop := -1, -1
 	for i, r := range in.Rules {
 		b, _ := json.Marshal(r.Expr)
 		s := string(b)

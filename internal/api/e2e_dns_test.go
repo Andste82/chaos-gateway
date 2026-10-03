@@ -244,7 +244,7 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		_, err := top.GW.Run(context.Background(), "ip", "-br", "addr", "show", "dev", "svc0")
 		return err == nil
 	})
-	p = startProxy(t, ns, token)
+	startProxy(t, ns, token)
 	waitFor(t, 60*time.Second, "A resolves again after the namespace was created again", func() bool {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"

@@ -89,7 +89,7 @@ func TestAnOldNamespaceIsReplacedWhenItsHolderIsGone(t *testing.T) {
 	del := strings.Index(joined, "ip link delete dev svc0 type veth")
 	rm := strings.Index(joined, "ip netns delete cgsvc")
 	att := strings.Index(joined, "ip netns attach cgsvc 43")
-	if del < 0 || rm < 0 || att < 0 || !(del < rm && rm < att) {
+	if del < 0 || rm < 0 || att < 0 || del >= rm || rm >= att {
 		t.Errorf("the old pair and name must go before the new namespace is attached:\n%s", joined)
 	}
 	// the namespace of the holder that is there: nothing is deleted

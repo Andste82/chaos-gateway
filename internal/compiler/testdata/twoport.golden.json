@@ -1,0 +1,751 @@
+{
+  "generation": {
+    "revision": 3,
+    "seq": 7
+  },
+  "hash": "dffcb7d7fbd17fdc",
+  "uplink": {
+    "name": "wan0",
+    "addr": "203.0.113.1/24",
+    "gateway": "203.0.113.10"
+  },
+  "management": {
+    "name": "wan0",
+    "sources": [
+      "203.0.113.0/24"
+    ],
+    "ui_port": 443
+  },
+  "bridges": [
+    {
+      "name": "br-iot",
+      "network_id": "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21",
+      "network_name": "IoT",
+      "address": "10.10.0.1/24",
+      "ports": [
+        "lan0"
+      ],
+      "nat": true
+    },
+    {
+      "name": "br-lab",
+      "network_id": "1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32",
+      "network_name": "Lab",
+      "address": "10.20.0.1/24",
+      "ports": [
+        "lan1"
+      ],
+      "nat": false
+    }
+  ],
+  "interfaces": [
+    "br-iot",
+    "br-lab",
+    "lan0",
+    "lan1",
+    "wan0"
+  ],
+  "sysctls": [
+    {
+      "name": "ip_forward",
+      "value": 1
+    },
+    {
+      "name": "accept_ra",
+      "dev": "br-iot",
+      "value": 0
+    },
+    {
+      "name": "accept_ra",
+      "dev": "br-lab",
+      "value": 0
+    },
+    {
+      "name": "accept_ra",
+      "dev": "lan0",
+      "value": 0
+    },
+    {
+      "name": "accept_ra",
+      "dev": "lan1",
+      "value": 0
+    }
+  ],
+  "offloads": [
+    "br-iot",
+    "br-lab",
+    "lan0",
+    "lan1",
+    "wan0"
+  ],
+  "routes": [
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.10.0.0/24",
+      "dev": "br-iot"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.20.0.0/24",
+      "dev": "br-lab"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "203.0.113.0/24",
+      "dev": "wan0"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.30.0.0/24",
+      "via": "10.10.0.2",
+      "dev": "br-iot"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "default",
+      "via": "203.0.113.10",
+      "dev": "wan0"
+    }
+  ],
+  "rules": [
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "iif": "br-iot",
+      "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1001,
+      "iif": "br-lab",
+      "table": 100
+    }
+  ],
+  "docker_user": [
+    "br-iot",
+    "br-lab",
+    "wan0"
+  ],
+  "nft": {
+    "sets": [
+      {
+        "name": "ifs_test_bf4feb",
+        "type": "ifname",
+        "elements": [
+          "br-iot",
+          "br-lab"
+        ]
+      },
+      {
+        "name": "mgmt_src_8743d6",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "elements": [
+          "203.0.113.0/24"
+        ]
+      }
+    ],
+    "counters": [
+      "forward_drop",
+      "input_drop",
+      "ipv6_drop",
+      "nat_0b7c6a3e"
+    ],
+    "chains": [
+      {
+        "name": "forward",
+        "base": {
+          "type": "filter",
+          "hook": "forward",
+          "prio": 0,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "state"
+                    }
+                  },
+                  "op": "in",
+                  "right": [
+                    "established",
+                    "related"
+                  ]
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "449cc4c202ef"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "state"
+                    }
+                  },
+                  "op": "in",
+                  "right": [
+                    "invalid"
+                  ]
+                }
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "1ac1a8df8489"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "state"
+                    }
+                  },
+                  "op": "in",
+                  "right": [
+                    "invalid"
+                  ]
+                }
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "fc5d413532fb"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "nfproto"
+                    }
+                  },
+                  "op": "==",
+                  "right": "ipv6"
+                }
+              },
+              {
+                "counter": "ipv6_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "74bbeb198e5e"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "nfproto"
+                    }
+                  },
+                  "op": "==",
+                  "right": "ipv6"
+                }
+              },
+              {
+                "counter": "ipv6_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "f0b5497d39ac"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "daddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@mgmt_src_8743d6"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "b2e03b0238ac"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "58af70301e4d"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "d397fd720236"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "3aaef70e2ce3"
+          }
+        ]
+      },
+      {
+        "name": "input",
+        "base": {
+          "type": "filter",
+          "hook": "input",
+          "prio": 0,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "state"
+                    }
+                  },
+                  "op": "in",
+                  "right": [
+                    "established",
+                    "related"
+                  ]
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "449cc4c202ef"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "lo"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "31cdf58e7b48"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@mgmt_src_8743d6"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "dport",
+                      "protocol": "tcp"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "set": [
+                      22,
+                      443
+                    ]
+                  }
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "3275380f38d5"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "protocol",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": "icmp"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "type",
+                      "protocol": "icmp"
+                    }
+                  },
+                  "op": "==",
+                  "right": "echo-request"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "c1d2f59d7aa1"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "dport",
+                      "protocol": "udp"
+                    }
+                  },
+                  "op": "==",
+                  "right": 67
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "bf86a0fb410a"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "dport",
+                      "protocol": "udp"
+                    }
+                  },
+                  "op": "==",
+                  "right": 53
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "0a40bb0c16de"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "dport",
+                      "protocol": "tcp"
+                    }
+                  },
+                  "op": "==",
+                  "right": 53
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "b7f61439d950"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "counter": "input_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "3fb664d93e2f"
+          }
+        ]
+      },
+      {
+        "name": "postrouting",
+        "base": {
+          "type": "nat",
+          "hook": "postrouting",
+          "prio": 100,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "prefix": {
+                      "addr": "10.10.0.0",
+                      "len": 24
+                    }
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "counter": "nat_0b7c6a3e"
+              },
+              {
+                "masquerade": null
+              }
+            ],
+            "comment": "47409993750f"
+          }
+        ]
+      }
+    ],
+    "generation": "gen=7 rev=3"
+  }
+}

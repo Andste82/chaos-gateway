@@ -1,0 +1,430 @@
+package compiler
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/model"
+)
+
+// PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2).
+const PolicyTable = 100
+
+// PolicyRulePriority is the priority of the first policy rule; one rule per test network follows.
+const PolicyRulePriority = 1000
+
+// DefaultUIPort is the UI/API port when the configuration names none.
+const DefaultUIPort = 443
+
+// Generation identifies an applied state: the revision and the running number of the desired
+// state (plan §2.15). It is stored as the comment of the rule in the chain `generation`.
+type Generation struct {
+	Revision int64  `json:"revision"`
+	Seq      uint64 `json:"seq"`
+}
+
+// String is the comment text.
+func (g Generation) String() string { return fmt.Sprintf("gen=%d rev=%d", g.Seq, g.Revision) }
+
+// Input is everything the compiler reads.
+type Input struct {
+	Config     *model.Configuration
+	Host       Host
+	Generation Generation
+	// DynamicSets are sets that are filled at run time and survive every apply (later: the
+	// DNS-derived address sets). They are part of the layout, never flushed.
+	DynamicSets []SetDef
+}
+
+// Severity of a Problem.
+type Severity string
+
+// Severities: an error stops the apply, a warning is reported (an event in the product).
+const (
+	SevError   Severity = "error"
+	SevWarning Severity = "warning"
+)
+
+// Problem is something about the input the compiler cannot or should not ignore.
+type Problem struct {
+	Severity Severity `json:"severity"`
+	Code     string   `json:"code"`
+	Message  string   `json:"message"`
+	// Network names the test network concerned, empty for the gateway as a whole.
+	Network string `json:"network,omitempty"`
+}
+
+// Problem codes.
+const (
+	CodeUplinkMissing    = "uplink_missing"
+	CodeUplinkNoAddress  = "uplink_no_address"
+	CodeUplinkNoGateway  = "uplink_no_gateway"
+	CodePortMissing      = "port_missing"
+	CodeManagementAbsent = "management_missing"
+	CodeNoManagementSrc  = "no_management_sources"
+	CodeUnsupported      = "unsupported"
+)
+
+// Bridge is a test network as it is built on the host.
+type Bridge struct {
+	Name        string       `json:"name"`
+	NetworkID   string       `json:"network_id"`
+	NetworkName string       `json:"network_name"`
+	Address     netip.Prefix `json:"address"`
+	Ports       []string     `json:"ports"`
+	// NAT reports whether the network is masqueraded towards the uplink.
+	NAT bool `json:"nat"`
+}
+
+// Uplink is the interface towards the Internet with the address and gateway it has now.
+type Uplink struct {
+	Name    string       `json:"name"`
+	Addr    netip.Prefix `json:"addr"`
+	Gateway netip.Addr   `json:"gateway"`
+}
+
+// Management is the OS-owned management interface and the sources that always reach the control
+// plane (anti-lockout).
+type Management struct {
+	Name    string         `json:"name,omitempty"`
+	Sources []netip.Prefix `json:"sources"`
+	UIPort  int            `json:"ui_port"`
+}
+
+// Target is the compiled state of the gateway.
+type Target struct {
+	Generation Generation `json:"generation"`
+	// Hash identifies the content apart from the generation: two targets with the same hash
+	// need no apply.
+	Hash string `json:"hash"`
+
+	Uplink     Uplink                 `json:"uplink"`
+	Management Management             `json:"management"`
+	Bridges    []Bridge               `json:"bridges"`
+	Interfaces []string               `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
+	Sysctls    []executor.SysctlEntry `json:"sysctls"`
+	Offloads   []string               `json:"offloads"`
+	Routes     []executor.Route       `json:"routes"`
+	Rules      []executor.Rule        `json:"rules"`
+	DockerUser []string               `json:"docker_user"`
+	Nft        Nft                    `json:"nft"`
+	Problems   []Problem              `json:"problems,omitempty"`
+}
+
+// HasErrors reports whether the target must not be applied.
+func (t *Target) HasErrors() bool {
+	for _, p := range t.Problems {
+		if p.Severity == SevError {
+			return true
+		}
+	}
+	return false
+}
+
+// Errors returns the problems that stop an apply.
+func (t *Target) Errors() []Problem {
+	var out []Problem
+	for _, p := range t.Problems {
+		if p.Severity == SevError {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+var (
+	nameClean = regexp.MustCompile(`[^a-z0-9_-]+`)
+	// Docker's own bridges: the executor refuses to assign such names
+	dockerLike = regexp.MustCompile(`^br-[0-9a-f]{12}$`)
+)
+
+// bridgeName derives a stable name for a test network: br-<name>, at most 15 characters. A name
+// that would clash with another bridge or look like one of Docker's gets the network's id.
+func bridgeName(id, name string, used map[string]bool) string {
+	n := nameClean.ReplaceAllString(strings.ToLower(name), "-")
+	n = strings.Trim(n, "-_")
+	if len(n) > 12 {
+		n = n[:12]
+	}
+	cand := "br-" + n
+	if n == "" || dockerLike.MatchString(cand) || used[cand] {
+		cand = "br-" + strings.ReplaceAll(id, "-", "")[:8]
+	}
+	used[cand] = true
+	return cand
+}
+
+// Compile builds the target state. It never fails: what it cannot build is reported as a Problem,
+// and a target with errors is not applied.
+func Compile(in Input) *Target {
+	t := &Target{Generation: in.Generation}
+	cfg := in.Config
+	idx, _ := domain.BuildIndex(cfg)
+
+	// ---- uplink and management -------------------------------------------------------
+	t.compileUplink(cfg, in.Host)
+	t.compileManagement(cfg, in.Host)
+
+	// ---- test networks -------------------------------------------------------------------
+	ids := make([]string, 0, len(idx.Networks))
+	for id := range idx.Networks {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := idx.Networks[ids[i]], idx.Networks[ids[j]]
+		if a.Name != b.Name {
+			return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+		}
+		return ids[i] < ids[j]
+	})
+	used := map[string]bool{}
+	netByID := map[string]*Bridge{}
+	for _, id := range ids {
+		n := idx.Networks[id]
+		if n.Lan == nil {
+			t.warn(CodeUnsupported, n.Name, "WireGuard networks are compiled by milestone M4b; %q is ignored", n.Name)
+			continue
+		}
+		addr, err := netip.ParsePrefix(n.Lan.Address)
+		if err != nil {
+			t.errorf(CodeUnsupported, n.Name, "network %q has no valid address", n.Name)
+			continue
+		}
+		b := Bridge{Name: bridgeName(id, n.Name, used), NetworkID: id, NetworkName: n.Name, Address: addr, NAT: n.Lan.Nat == nil || *n.Lan.Nat}
+		for _, ref := range n.Lan.Interfaces {
+			l, ok := in.Host.Resolve(ref)
+			if !ok {
+				t.warn(CodePortMissing, n.Name, "interface %s of network %q is not present: the network is degraded", describeRef(ref), n.Name)
+				continue
+			}
+			b.Ports = append(b.Ports, l.Name)
+		}
+		sort.Strings(b.Ports)
+		t.Bridges = append(t.Bridges, b)
+		netByID[id] = &t.Bridges[len(t.Bridges)-1]
+	}
+	// the slice may have moved while appending: rebuild the lookup
+	for i := range t.Bridges {
+		netByID[t.Bridges[i].NetworkID] = &t.Bridges[i]
+	}
+
+	t.compileHostState()
+	t.compileRouting(cfg, idx)
+	t.compileNft(cfg, netByID, in.DynamicSets)
+	t.finish()
+	return t
+}
+
+func describeRef(r model.InterfaceRef) string {
+	switch {
+	case r.Mac != nil && r.Name != nil:
+		return fmt.Sprintf("%s (%s)", *r.Name, *r.Mac)
+	case r.Mac != nil:
+		return *r.Mac
+	case r.Name != nil:
+		return *r.Name
+	}
+	return "?"
+}
+
+func (t *Target) warn(code, network, format string, a ...any) {
+	t.Problems = append(t.Problems, Problem{Severity: SevWarning, Code: code, Network: network, Message: fmt.Sprintf(format, a...)})
+}
+
+func (t *Target) errorf(code, network, format string, a ...any) {
+	t.Problems = append(t.Problems, Problem{Severity: SevError, Code: code, Network: network, Message: fmt.Sprintf(format, a...)})
+}
+
+func (t *Target) compileUplink(cfg *model.Configuration, h Host) {
+	l, ok := h.Resolve(cfg.Uplink.Interface)
+	if !ok {
+		t.errorf(CodeUplinkMissing, "", "the uplink interface %s is not present", describeRef(cfg.Uplink.Interface))
+		return
+	}
+	t.Uplink.Name = l.Name
+	if a, ok := l.FirstV4(); ok {
+		t.Uplink.Addr = a
+	} else {
+		t.errorf(CodeUplinkNoAddress, "", "the uplink %s has no IPv4 address (the OS configures it)", l.Name)
+	}
+	switch {
+	case cfg.Uplink.Gateway != nil:
+		g, err := netip.ParseAddr(*cfg.Uplink.Gateway)
+		if err != nil {
+			t.errorf(CodeUplinkNoGateway, "", "the configured uplink gateway %q is not an address", *cfg.Uplink.Gateway)
+			return
+		}
+		t.Uplink.Gateway = g
+	default:
+		if g, ok := h.DefaultGateway(l.Name); ok {
+			t.Uplink.Gateway = g
+		} else {
+			t.errorf(CodeUplinkNoGateway, "", "the uplink %s has no default route and the configuration names no gateway", l.Name)
+		}
+	}
+}
+
+func (t *Target) compileManagement(cfg *model.Configuration, h Host) {
+	m := &t.Management
+	m.UIPort = DefaultUIPort
+	if cfg.Management.UiPort != nil {
+		m.UIPort = *cfg.Management.UiPort
+	}
+	var sources []netip.Prefix
+	if cfg.Management.AllowedSources != nil {
+		for _, s := range *cfg.Management.AllowedSources {
+			if p, err := netip.ParsePrefix(s); err == nil {
+				sources = append(sources, p.Masked())
+			}
+		}
+	}
+	l, ok := h.Resolve(cfg.Management.Interface)
+	if !ok {
+		t.warn(CodeManagementAbsent, "", "the management interface %s is not present", describeRef(cfg.Management.Interface))
+	} else {
+		m.Name = l.Name
+		if cfg.Management.AllowedSources == nil {
+			// default: the management interface's connected subnet
+			if a, ok := l.FirstV4(); ok {
+				sources = append(sources, a.Masked())
+			}
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool { return sources[i].String() < sources[j].String() })
+	m.Sources = dedupePrefixes(sources)
+	if len(m.Sources) == 0 {
+		t.warn(CodeNoManagementSrc, "", "no source is allowed to reach the control plane (UI, API, SSH) from the management network")
+	}
+}
+
+func dedupePrefixes(p []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for i, x := range p {
+		if i > 0 && x == p[i-1] {
+			continue
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
+// compileHostState derives the interface set, sysctls, offloads, links and DOCKER-USER interfaces.
+func (t *Target) compileHostState() {
+	owned := map[string]bool{}
+	var ports []string
+	for _, b := range t.Bridges {
+		owned[b.Name] = true
+		for _, p := range b.Ports {
+			owned[p] = true
+			ports = append(ports, p)
+		}
+	}
+	// the uplink is OS-owned: assigned (routes, offloads, DOCKER-USER) but its sysctls stay alone
+	iface := map[string]bool{}
+	for n := range owned {
+		iface[n] = true
+	}
+	if t.Uplink.Name != "" {
+		iface[t.Uplink.Name] = true
+	}
+	for n := range iface {
+		t.Interfaces = append(t.Interfaces, n)
+	}
+	sort.Strings(t.Interfaces)
+
+	t.Sysctls = append(t.Sysctls, executor.SysctlEntry{Name: "ip_forward", Value: 1})
+	var ownedNames []string
+	for n := range owned {
+		ownedNames = append(ownedNames, n)
+	}
+	sort.Strings(ownedNames)
+	// router advertisements are not accepted on interfaces Chaos Gateway owns (plan §2.2.2)
+	for _, n := range ownedNames {
+		t.Sysctls = append(t.Sysctls, executor.SysctlEntry{Name: "accept_ra", Dev: n, Value: 0})
+	}
+	// offloads off on the ports and bridges of test networks and on the uplink (plan §3.4)
+	t.Offloads = append(t.Offloads, t.Interfaces...)
+
+	du := map[string]bool{}
+	for _, b := range t.Bridges {
+		du[b.Name] = true
+	}
+	if t.Uplink.Name != "" {
+		du[t.Uplink.Name] = true
+	}
+	for n := range du {
+		t.DockerUser = append(t.DockerUser, n)
+	}
+	sort.Strings(t.DockerUser)
+}
+
+// compileRouting builds table 100 and the rules that send test traffic into it (plan §2.2).
+func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
+	add := func(r executor.Route) {
+		r.Action, r.Family, r.Table = "replace", 4, PolicyTable
+		t.Routes = append(t.Routes, r)
+	}
+	for _, b := range t.Bridges {
+		add(executor.Route{Dst: b.Address.Masked().String(), Dev: b.Name})
+	}
+	if t.Uplink.Name != "" && t.Uplink.Addr.IsValid() {
+		add(executor.Route{Dst: t.Uplink.Addr.Masked().String(), Dev: t.Uplink.Name})
+		if t.Uplink.Gateway.IsValid() {
+			add(executor.Route{Dst: "default", Via: t.Uplink.Gateway.String(), Dev: t.Uplink.Name})
+		}
+	}
+	for _, b := range t.Bridges {
+		n := idx.Networks[b.NetworkID]
+		if n == nil || n.Lan == nil || n.Lan.Routes == nil {
+			continue
+		}
+		for _, r := range *n.Lan.Routes {
+			p, err := netip.ParsePrefix(r.Destination)
+			if err != nil {
+				continue
+			}
+			add(executor.Route{Dst: p.Masked().String(), Via: r.Via, Dev: b.Name})
+		}
+	}
+	sort.SliceStable(t.Routes, func(i, j int) bool {
+		// stable, readable order: connected routes first, then downstream, the default last
+		ri, rj := routeRank(t.Routes[i]), routeRank(t.Routes[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return t.Routes[i].Dst < t.Routes[j].Dst
+	})
+	for i, b := range t.Bridges {
+		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority + i, Iif: b.Name, Table: PolicyTable})
+	}
+}
+
+func routeRank(r executor.Route) int {
+	switch {
+	case r.Dst == "default":
+		return 2
+	case r.Via != "":
+		return 1
+	}
+	return 0
+}
+
+// finish computes the hash of everything but the generation.
+func (t *Target) finish() {
+	cp := *t
+	cp.Generation = Generation{}
+	cp.Hash = ""
+	cp.Nft.Generation = ""
+	b, _ := json.Marshal(cp)
+	h := sha256.Sum256(b)
+	t.Hash = hex.EncodeToString(h[:8])
+	t.Nft.Generation = t.Generation.String()
+}

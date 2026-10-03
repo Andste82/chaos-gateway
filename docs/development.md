@@ -185,6 +185,24 @@ uses cannot be deleted, `add set` of another type fails). The real executor with
 scope checks sits on top of it. The same scenarios run against the real kernel in the testbed
 (`integration_test.go` in `internal/apply`, `internal/engine` and `internal/executor`).
 
+What M4 deliberately leaves to later milestones, and where it is weaker than it may look:
+
+- **Verify recognizes rules by a hash in their comment**, not by comparing expressions: a rule
+  changed in place with its comment kept goes unnoticed. Sets are compared by type, flags and
+  elements, chains by hook, priority, policy and the order of their rule hashes. The next apply
+  rewrites every rule anyway.
+- **DOCKER-USER** gets accept rules for the bridges of the test networks only (`-i` and `-o`): a
+  packet to or from the uplink has a bridge on its other side, and Docker's own bridges keep their
+  isolation. Docker that starts after the last apply is not noticed until the next one.
+- **Gateway protection** closes the UI port for everything but the management sources and drops
+  all but DHCP, DNS and ping from test networks. SSH stays with the operating system.
+- Not yet compiled: WireGuard networks and their matrix endpoints (M4b), the `uidrange` rule of
+  the service user (M7), device identity maps and faults (M6a, M8).
+- A failed `chaosgw apply --file` without `--state-dir` leaves the kernel as the failed apply left
+  it; with `--state-dir` the engine restores the previous revision.
+- `Rollback` and `Observe` return when the owner has taken the command; `Barrier` waits for the
+  apply that follows.
+
 `chaosgw apply --file config.yaml --socket /run/chaosgw/exec.sock` applies a configuration without
 the API; `--dry-run` shows the plan and the diffs, `--state-dir` also stores the configuration as the
 active revision. In the testbed `--namespace` points it at the gateway namespace.

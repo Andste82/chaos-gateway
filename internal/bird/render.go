@@ -257,11 +257,7 @@ func (c Config) renderProtocol(b *strings.Builder, p Protocol) {
 		// matched by prefix, not by the static protocol: when two protocols announce the same prefix
 		// only one static route is the best one, and a filter on its protocol would export it for one
 		// of them only
-		set := make([]string, len(p.Announce))
-		for i, a := range p.Announce {
-			set[i] = a
-		}
-		exportClause = fmt.Sprintf("export where source = RTS_STATIC && net ~ [ %s ];", strings.Join(set, ", "))
+		exportClause = fmt.Sprintf("export where source = RTS_STATIC && net ~ [ %s ];", strings.Join(p.Announce, ", "))
 	}
 	channel := fmt.Sprintf("ipv4 { import filter %s; %s %s};", filter, exportClause, importLimit(p.Import))
 	switch p.Type {

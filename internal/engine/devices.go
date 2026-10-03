@@ -74,7 +74,7 @@ type trackerEvent struct {
 const forgetAfter = 24 * time.Hour
 
 // maxDiscovered bounds the registry.
-const maxDiscovered = 4096
+const maxDiscovered = 1024
 
 // tracker keeps the devices the gateway has seen and works out identity and online state (plan
 // §2.3). It is a pure state machine: observations in, state and events out. The state owner holds
@@ -141,14 +141,26 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		d.Sources = nil
 	}
 	seenNow := map[string]bool{}
+	// a device that has a fresh entry is known by that one: its stale entries (the address it had
+	// before) say nothing any more, unless that address still carries connections
+	fresh := map[string]bool{}
+	for _, n := range obs.Neighbors {
+		if n.MAC != "" && !n.Stale {
+			fresh[strings.ToLower(n.MAC)] = true
+		}
+	}
 	for _, n := range obs.Neighbors {
 		if n.MAC == "" {
 			continue
 		}
 		mac := strings.ToLower(n.MAC)
+		if n.Stale && fresh[mac] && !obs.Active[n.IP] {
+			continue
+		}
 		id := DeviceID(mac)
 		t.see(id, mac, n.IP, n.Network, "neighbor", obs.At)
-		seenNow[id] = true
+		delete(t.registry, ipDeviceID(n.IP)) // a host known by address only is this device
+		seenNow[id] = !n.Stale || seenNow[id]
 	}
 	for _, l := range obs.Leases {
 		if l.State != nil && *l.State != "active" {
@@ -160,6 +172,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 			continue
 		}
 		t.see(DeviceID(mac), mac, ip, l.Network.String(), "dhcp", obs.At)
+		delete(t.registry, ipDeviceID(ip))
 	}
 	for _, ip := range obs.UnknownSources {
 		t.see(ipDeviceID(ip), "", ip, "", "conntrack", obs.At)
@@ -207,7 +220,9 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 				return true
 			}
 			for _, n := range obs.Neighbors {
-				if n.IP == a { // the entries the kernel gave up on (FAILED) are not passed in
+				// a confirmed entry: the kernel keeps STALE entries for ever on a quiet network, they
+				// do not say that the device is there now
+				if n.IP == a && !n.Stale {
 					return true
 				}
 			}

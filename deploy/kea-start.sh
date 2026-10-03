@@ -6,6 +6,8 @@ set -eu
 GROUP="${CHAOSGW_API_GID:-65532}"
 umask 0007
 mkdir -p /run/kea /var/lib/kea
+# a PID file of an earlier run (a killed container, a reboot) would make Kea refuse to start
+rm -f /run/kea/*.pid
 chgrp "$GROUP" /run/kea
 chmod 0750 /run/kea
 # before the API has sent the scopes: no subnet, and the hook that reports leases

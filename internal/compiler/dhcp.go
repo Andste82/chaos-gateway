@@ -209,7 +209,7 @@ func (t *Target) compileDeviceSets(idx *domain.Index, id *domain.Identity) {
 		el := addrs[did]
 		sort.Strings(el)
 		s := SetDef{Type: "ipv4_addr", Elements: el}
-		s.Name = hashName("dev_"+strings.ReplaceAll(did, "-", "")[:8], s.Type, s.Flags)
+		s.Name = hashName("dev_"+strings.ReplaceAll(did, "-", "")[:12], s.Type, s.Flags)
 		t.deviceSets = append(t.deviceSets, s)
 		t.DeviceSets[did] = s.Name
 	}

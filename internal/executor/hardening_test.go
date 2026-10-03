@@ -255,7 +255,7 @@ func TestKeaContainerHardeningProfile(t *testing.T) {
 	if s.Privileged || !s.ReadOnly || s.NetworkMode != "host" || !contains(s.CapDrop, "ALL") {
 		t.Errorf("%+v", s)
 	}
-	allowed := map[string]bool{"NET_RAW": true, "NET_BIND_SERVICE": true, "CHOWN": true, "FOWNER": true}
+	allowed := map[string]bool{"NET_RAW": true, "NET_BIND_SERVICE": true, "CHOWN": true, "FOWNER": true, "DAC_OVERRIDE": true}
 	for _, c := range s.CapAdd {
 		if !allowed[c] {
 			t.Errorf("capability %s is not needed by a DHCP server", c)

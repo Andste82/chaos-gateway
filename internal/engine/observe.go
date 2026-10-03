@@ -138,8 +138,11 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 			}
 			sort.Slice(obs.UnknownSources, func(i, j int) bool { return obs.UnknownSources[i].Less(obs.UnknownSources[j]) })
 		}
+		e.setActive(obs.Active)
 	} else if err != nil {
+		// a failed read is not "no connections": the addresses that were in use stay in use
 		e.cfg.Log.Debug("cannot read the connections", "error", err)
+		obs.Active = e.lastActive()
 	}
 	if e.cfg.DHCP != nil {
 		if ls, err := e.cfg.DHCP.Leases(ctx); err == nil {
@@ -163,6 +166,22 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 }
 
 func wait2[T any](ctx context.Context, e *Engine, ch <-chan T) (T, error) { return wait(ctx, e, ch) }
+
+func (e *Engine) setActive(a map[netip.Addr]bool) {
+	e.activeMu.Lock()
+	e.active = a
+	e.activeMu.Unlock()
+}
+
+func (e *Engine) lastActive() map[netip.Addr]bool {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	out := make(map[netip.Addr]bool, len(e.active))
+	for a := range e.active {
+		out[a] = true
+	}
+	return out
+}
 
 // bridgeNetworks maps the bridge of each local test network to its network.
 func bridgeNetworks(bridges []compiler.Bridge) map[string]string {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -102,7 +103,11 @@ func (c *Client) TestConfig(ctx context.Context, doc map[string]any) error {
 // `config-set` can leave the server without its lease database, a failed check changes nothing.
 func (c *Client) Apply(ctx context.Context, doc map[string]any) error {
 	if err := c.TestConfig(ctx, doc); err != nil {
-		return err
+		// config-test checks the interfaces against the list Kea read at its start; a bridge that came
+		// later is found by `config-set` (re-detect), which is the only way to learn about it
+		if !strings.Contains(err.Error(), "is not present in the system") {
+			return err
+		}
 	}
 	return c.SetConfig(ctx, doc)
 }

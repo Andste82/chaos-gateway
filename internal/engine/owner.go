@@ -544,6 +544,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 		return
 	}
 	o.committed = run.d
+	o.e.TriggerObserve() // the devices of the new revision
 	o.prune(run.cfg)
 	o.snap.Revision, o.snap.Config = run.d.Revision, run.d.Config
 	o.running = nil

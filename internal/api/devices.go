@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -327,7 +328,7 @@ func (s *Server) PostLeaseEvent(c *gin.Context) {
 		return
 	}
 	ip, err := netip.ParseAddr(body.IP)
-	if err != nil || !ip.Is4() || !model.KeaLeaseEventEvent(body.Event).Valid() {
+	if _, merr := net.ParseMAC(body.MAC); merr != nil || len(body.Hostname) > 253 || err != nil || !ip.Is4() || !model.KeaLeaseEventEvent(body.Event).Valid() {
 		errs := []model.ValidationError{{Path: "/ip", Code: "invalid", Message: "event and ip must be a Kea hook event and an IPv4 address"}}
 		s.write(c, newProblem(model.ErrorCodeValidationFailed, "the lease event is not valid").with(func(b *model.Problem) { b.Errors = &errs }))
 		return

@@ -80,7 +80,7 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 	}
 	sock, leases := filepath.Join(dir, "ctrl.sock"), filepath.Join(dir, "leases.csv")
 	// the hook script of the product is `chaosgw kea-hook`; here it only records the calls
-	script := "#!/bin/sh\necho \"$1 $KEA_LEASE4_ADDRESS $KEA_LEASE4_HWADDR $KEA_SUBNET_ID $KEA_LEASES4_AT0_ADDRESS $KEA_LEASES4_AT0_HWADDR\" >> " + hookLog + "\nenv | grep '^KEA_' | sort >> " + hookLog + "\n"
+	script := "#!/bin/sh\necho \"$1 $KEA_LEASE4_ADDRESS $KEA_LEASE4_HWADDR $KEA_SUBNET_ID $LEASES4_AT0_ADDRESS $LEASES4_AT0_HWADDR\" >> " + hookLog + "\nenv | grep -E '^(KEA_|LEASE)' | sort >> " + hookLog + "\n"
 	if err := os.MkdirAll(filepath.Dir(kea.HookScript), 0o755); err != nil {
 		t.Fatal(err)
 	}

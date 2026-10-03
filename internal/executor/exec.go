@@ -270,7 +270,7 @@ func onlyBenign(stderr string) bool {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "", strings.HasPrefix(line, "Command failed"):
-		case strings.HasSuffix(line, "File exists"), strings.HasSuffix(line, "No such process"), strings.HasSuffix(line, "No such file or directory"), strings.HasSuffix(line, "Cannot assign requested address"):
+		case strings.HasSuffix(line, "File exists"), strings.HasSuffix(line, "No such process"), strings.HasSuffix(line, "No such file or directory"), strings.HasSuffix(line, "Cannot assign requested address"), strings.HasSuffix(line, "Address not found."):
 		default:
 			return false
 		}

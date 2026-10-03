@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"go.uber.org/goleak"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // The commands start the executor, the engine and their goroutines: none may outlive a test.

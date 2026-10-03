@@ -39,6 +39,7 @@ type config struct {
 	prefix                 string
 	plainGateway           bool
 	managementDefaultRoute bool
+	gatewayBridges         bool
 }
 
 // Option changes how a Bed or a default Topology is built.
@@ -60,8 +61,14 @@ func WithManagementDefaultRoute(on bool) Option {
 	return func(c *config) { c.managementDefaultRoute = on }
 }
 
+// WithGatewayBridges chooses whether the default topology's gateway already has its bridges
+// br-lan0 and br-lan1 with their addresses, as the plain gateway of M1 does. Product tests (M4 on)
+// switch it off: the gateway then has the bare ports lan0 and lan1, and the product builds the
+// bridges, as it does on a real host.
+func WithGatewayBridges(on bool) Option { return func(c *config) { c.gatewayBridges = on } }
+
 func newConfig(opts []Option) config {
-	c := config{plainGateway: true, managementDefaultRoute: true}
+	c := config{plainGateway: true, managementDefaultRoute: true, gatewayBridges: true}
 	for _, o := range opts {
 		o(&c)
 	}

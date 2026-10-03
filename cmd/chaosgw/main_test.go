@@ -36,7 +36,7 @@ func TestHelpListsEverySubcommandWithItsMilestone(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d", code)
 	}
-	for _, want := range []string{"api", "M5", "exec", "M3", "dns", "M6b", "tls", "M21"} {
+	for _, want := range []string{"api", "M5", "exec", "M3", "apply", "M4", "dns", "M6b", "tls", "M21"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}

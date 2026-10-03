@@ -18,6 +18,7 @@ var subcommands = []struct {
 	main                     func(args []string, stdout, stderr io.Writer) int
 }{
 	{"api", "M5", "REST API, web UI and scheduler (unprivileged)", nil},
+	{"apply", "M4", "apply a configuration file without the API (bootstrap)", runApply},
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
 	{"dns", "M6b", "DNS proxy in the service namespace", nil},
 	{"tls", "M21", "TLS responder in the service namespace", nil},

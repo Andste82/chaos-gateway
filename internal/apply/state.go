@@ -166,6 +166,11 @@ func (s *State) Host() compiler.Host {
 	sortStrings(names)
 	for _, n := range names {
 		l := s.Links[n]
+		// bridges are what Chaos Gateway builds: they are never an uplink or a port, and leaving
+		// them out keeps the compiler's own work from showing up as a change of the host
+		if l.Kind() == "bridge" {
+			continue
+		}
 		hl := compiler.HostLink{Name: l.Name, MAC: l.MAC, Kind: l.Kind()}
 		for _, a := range s.Addrs[n] {
 			if a.Family != "inet" {

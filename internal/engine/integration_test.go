@@ -249,7 +249,7 @@ func TestAnUnconfirmedChangeIsRolledBackOnARealKernel(t *testing.T) {
 	if snap.Pending != nil || snap.Revision != r1.Revision {
 		t.Fatalf("%+v", snap)
 	}
-	if strings.Contains(r.nft(), "10.0.0.0/8") {
+	if strings.Contains(r.nft(), "172.16.0.0/12") {
 		t.Errorf("the rolled back source is still in the kernel:\n%s", r.nft())
 	}
 	// the management network still reaches the control plane: it never lost it

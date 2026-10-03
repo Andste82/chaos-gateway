@@ -16,10 +16,10 @@ import (
 )
 
 // bedGW is the API on the real executor in the namespaces of the testbed.
-func newBedGW(t *testing.T) (*gw, *testbed.Topology) {
+func newBedGW(t *testing.T, extra ...func(*options)) (*gw, *testbed.Topology) {
 	t.Helper()
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false), testbed.WithRemotes(true))
-	g := newGW(t, func(o *options) { o.runner = executor.NewExecRunner(); o.namespace = top.GW.Name })
+	g := newGW(t, append([]func(*options){func(o *options) { o.runner = executor.NewExecRunner(); o.namespace = top.GW.Name }}, extra...)...)
 	raw, err := os.ReadFile("../engine/testdata/testbed_wg.yaml")
 	if err != nil {
 		t.Fatal(err)

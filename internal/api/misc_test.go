@@ -161,7 +161,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 46 {
+	if len(m5) != 49 {
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	for _, o := range m5 {

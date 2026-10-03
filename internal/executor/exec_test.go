@@ -475,3 +475,80 @@ func TestMissingNamespaceIsNotAnEmptyNftState(t *testing.T) {
 		t.Fatalf("%s %v", out.Data[0], err)
 	}
 }
+
+// Plan §3.11: a running operation is never interrupted. Close waits for it, and its caller still
+// gets the result.
+func TestCloseLetsTheRunningRequestFinish(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	fr := &fakeRunner{respond: func(Command) (Result, error) { close(started); <-release; return Result{}, nil }}
+	e, _ := New(fr)
+	res := make(chan error, 1)
+	go func() { _, err := e.Do(context.Background(), mustDecode(t, nftOp)); res <- err }()
+	<-started
+	closed := make(chan struct{})
+	go func() { e.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a request was running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	// a request queued behind it is dropped, not executed
+	queued := make(chan error, 1)
+	go func() { _, err := e.Do(context.Background(), mustDecode(t, nftOp)); queued <- err }()
+	close(release)
+	<-closed
+	if err := <-res; err != nil {
+		t.Errorf("the running request must complete normally: %v", err)
+	}
+	if err := <-queued; err != nil && !errors.Is(err, ErrClosed) {
+		t.Errorf("queued request: %v", err)
+	}
+	if n := len(fr.commands()); n != 1 {
+		t.Errorf("%d commands ran, want only the running one", n)
+	}
+}
+
+func TestCallerCancellationDoesNotInterruptARunningRequest(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var cmdCtxErr error
+	fr := &fakeRunner{respond: func(Command) (Result, error) { close(started); <-release; return Result{}, nil }}
+	e := newExec(t, fr)
+	ctx, cancel := context.WithCancel(context.Background())
+	res := make(chan error, 1)
+	go func() { _, err := e.Do(ctx, mustDecode(t, nftOp)); res <- err }()
+	<-started
+	cancel()
+	if err := <-res; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the caller must return at once: %v", err)
+	}
+	close(release)
+	// the request still completes and counts: the next request sees generation 1
+	out, err := e.DoBatch(context.Background(), nil)
+	if err != nil || out.Generation != 1 || cmdCtxErr != nil {
+		t.Fatalf("%+v %v %v", out, err, cmdCtxErr)
+	}
+}
+
+func TestPanicInAnOperationIsAFailedRequestNotACrash(t *testing.T) {
+	boom := true
+	fr := &fakeRunner{respond: func(Command) (Result, error) {
+		if boom {
+			panic("boom")
+		}
+		return Result{}, nil
+	}}
+	e := newExec(t, fr)
+	out, err := e.Do(context.Background(), mustDecode(t, nftOp))
+	if err == nil || !strings.Contains(err.Error(), "internal error") {
+		t.Fatalf("got %v", err)
+	}
+	if out.Generation != 1 {
+		t.Errorf("the kernel state is unknown after a panic: generation %d", out.Generation)
+	}
+	boom = false
+	if _, err := e.Do(context.Background(), mustDecode(t, nftOp)); err != nil {
+		t.Fatalf("the executor must keep working: %v", err)
+	}
+}

@@ -368,3 +368,46 @@ func TestClientContextCancel(t *testing.T) {
 // selfOpts trusts this process's own user as the executor: in the tests both ends are the same
 // process, and CI does not run as root.
 func selfOpts() DialOptions { return DialOptions{Auth: AllowUIDs(uint32(os.Getuid()))} }
+
+// Shutdown (plan §3.11): the request that is running finishes and its client gets the answer.
+func TestServerShutdownLetsTheRunningRequestFinish(t *testing.T) {
+	dir, err := os.MkdirTemp("", "cgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	path := filepath.Join(dir, "e.sock")
+	l, err := Listen(path, 0o660, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	e, _ := New(&fakeRunner{respond: func(Command) (Result, error) { close(started); <-release; return Result{}, nil }})
+	s := &Server{Exec: e, Auth: AllowUIDs(uint32(os.Getuid()))}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { _ = s.Serve(ctx, l); close(served) }()
+	c, err := Dial(context.Background(), path, selfOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	res := make(chan error, 1)
+	go func() { _, err := c.Do(context.Background(), mustDecode(t, nftOp)); res <- err }()
+	<-started
+	cancel() // shutdown begins while the operation runs
+	select {
+	case <-served:
+		t.Fatal("Serve returned while an operation was running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-served
+	e.Close()
+	// the connection was closed by the shutdown, but the operation completed
+	if e.Generation() != 1 {
+		t.Errorf("generation %d: the operation did not complete", e.Generation())
+	}
+	<-res
+}

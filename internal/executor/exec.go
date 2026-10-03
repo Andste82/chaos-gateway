@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -33,11 +34,12 @@ type Executor struct {
 	log   *slog.Logger
 	state string // file holding the assigned interfaces, empty for none
 
-	jobs chan *job
-	done chan struct{}
-	once sync.Once
-	mu   sync.Mutex // guards gen
-	gen  uint64
+	jobs    chan *job
+	done    chan struct{} // closed by Close
+	stopped chan struct{} // closed when the worker has returned
+	once    sync.Once
+	mu      sync.Mutex // guards gen
+	gen     uint64
 }
 
 type job struct {
@@ -62,7 +64,7 @@ func WithStateFile(path string) Option { return func(e *Executor) { e.state = pa
 
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
-	e := &Executor{run: run, scope: NewScope(), log: slog.New(slog.DiscardHandler), jobs: make(chan *job, 64), done: make(chan struct{})}
+	e := &Executor{run: run, scope: NewScope(), log: slog.New(slog.DiscardHandler), jobs: make(chan *job, 64), done: make(chan struct{}), stopped: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
@@ -73,8 +75,13 @@ func New(run Runner, opts ...Option) (*Executor, error) {
 	return e, nil
 }
 
-// Close stops the worker after the running request.
-func (e *Executor) Close() { e.once.Do(func() { close(e.done) }) }
+// Close stops the executor: the request that is running finishes (an operation is never
+// interrupted, plan §3.11), queued requests are dropped with ErrClosed. Close returns when the
+// worker has stopped.
+func (e *Executor) Close() {
+	e.once.Do(func() { close(e.done) })
+	<-e.stopped
+}
 
 // Scope returns the executor's scope.
 func (e *Executor) Scope() *Scope { return e.scope }
@@ -114,12 +121,23 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	select {
 	case r := <-j.out:
 		return r.outcome, r.err
-	case <-e.done:
-		return Outcome{}, ErrClosed
+	case <-e.stopped:
+		// the worker is gone: the result is either already there or never will be
+		select {
+		case r := <-j.out:
+			return r.outcome, r.err
+		default:
+			return Outcome{}, ErrClosed
+		}
+	case <-ctx.Done():
+		// the request stays queued or keeps running: an operation is never interrupted, and a
+		// request that already started has to finish for the kernel state to stay consistent
+		return Outcome{Generation: e.Generation()}, ctx.Err()
 	}
 }
 
 func (e *Executor) worker() {
+	defer close(e.stopped)
 	for {
 		select {
 		case <-e.done:
@@ -133,6 +151,24 @@ func (e *Executor) worker() {
 func (e *Executor) execute(j *job) (res jobResult) {
 	var out Outcome
 	mutating := false
+	defer func() {
+		if mutating {
+			e.mu.Lock()
+			e.gen++
+			e.mu.Unlock()
+		}
+		out.Generation = e.Generation()
+		res.outcome = out
+	}()
+	// a panic in an operation is a failed request, not the end of the only writer; the stack is
+	// logged, and the generation bumps because the kernel state is unknown
+	defer func() {
+		if r := recover(); r != nil {
+			e.log.Error("panic while executing a request", "panic", r, "stack", string(debug.Stack()))
+			mutating = true
+			res = jobResult{err: fmt.Errorf("internal error: %v", r)}
+		}
+	}()
 	// the scope is checked here, in the serialized worker: an assignment queued earlier has
 	// taken effect by now. Assignments inside the batch widen the scope for the operations after
 	// them, and all operations are checked before the first one runs.
@@ -146,15 +182,6 @@ func (e *Executor) execute(j *job) (res jobResult) {
 			return jobResult{outcome: out, err: fmt.Errorf("operation %d (%s): %w", i, op.OpType(), err)}
 		}
 	}
-	defer func() {
-		if mutating {
-			e.mu.Lock()
-			e.gen++
-			e.mu.Unlock()
-		}
-		out.Generation = e.Generation()
-		res.outcome = out
-	}()
 	if err := j.ctx.Err(); err != nil {
 		return jobResult{err: err} // cancelled while queued: nothing ran
 	}

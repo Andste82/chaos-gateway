@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/version"
 )
 
@@ -61,7 +62,7 @@ func handshake(ctx context.Context, conn net.Conn, opt DialOptions) (*Client, er
 	if proto == 0 {
 		proto = ProtocolVersion
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := (&clock.Real{}).Now().Add(10 * time.Second)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}

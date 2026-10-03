@@ -37,6 +37,19 @@ type State struct {
 	WireGuard map[string]*linux.WGInfo
 	// Bird is the BIRD instance; nil when the executor has no BIRD directory.
 	Bird *executor.BirdState
+	// Service is the service namespace; nil when none was asked for.
+	Service *ServiceState
+}
+
+// ServiceState is the service namespace as it is now.
+type ServiceState struct {
+	// Exists is false when the namespace is missing (its holder died, or it was never created).
+	Exists bool
+	// PeerAddrs are the IPv4 addresses of the peer interface ("ip/len"), PeerUp its state.
+	PeerAddrs []string
+	PeerUp    bool
+	// DefaultVia is the next hop of the namespace's default route.
+	DefaultVia string
 }
 
 // Want names what to read besides the basics: sysctls and offloads exist per interface.
@@ -45,6 +58,9 @@ type Want struct {
 	Offloads []string
 	// BirdInstance is the instance to read; empty reads none.
 	BirdInstance string
+	// ServiceNS is the service namespace to read and ServicePeerIf the interface inside it; empty
+	// reads none.
+	ServiceNS, ServicePeerIf string
 }
 
 func read(ns, what, dev string) *executor.Read {
@@ -143,6 +159,10 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		}
 	}
 
+	if want.ServiceNS != "" {
+		s.Service = readService(ctx, ex, want.ServiceNS, want.ServicePeerIf)
+	}
+
 	// per-interface reads only for interfaces that exist
 	var ops []executor.Operation
 	var keys []string
@@ -184,6 +204,43 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		s.Sysctl[k] = n
 	}
 	return s, nil
+}
+
+// readService reads the service namespace. A namespace that cannot be read is a namespace that does
+// not exist (the executor answers "cannot open network namespace"): the plan creates it.
+func readService(ctx context.Context, ex Exec, ns, peer string) *ServiceState {
+	out, err := ex.Do(ctx, read(ns, executor.ReadLinks, ""), read(ns, executor.ReadAddrs, ""), read(ns, executor.ReadRoutes, ""))
+	if err != nil {
+		return &ServiceState{}
+	}
+	st := &ServiceState{Exists: true}
+	if links, err := decode[[]linux.Link](out, 0, "service links"); err == nil {
+		for _, l := range links {
+			if l.Name == peer {
+				st.PeerUp = l.Up()
+			}
+		}
+	}
+	if addrs, err := decode[[]linux.Addrs](out, 1, "service addrs"); err == nil {
+		for _, a := range addrs {
+			if a.Name != peer {
+				continue
+			}
+			for _, x := range a.Addrs {
+				if x.Family == "inet" {
+					st.PeerAddrs = append(st.PeerAddrs, fmt.Sprintf("%s/%d", x.Local, x.PrefixLen))
+				}
+			}
+		}
+	}
+	if routes, err := decode[[]linux.Route](out, 2, "service routes"); err == nil {
+		for _, r := range routes {
+			if r.Dst == "default" && (r.Table == "" || r.Table == "main") && r.Dev == peer {
+				st.DefaultVia = r.Gateway
+			}
+		}
+	}
+	return st
 }
 
 func sysctlKey(e executor.SysctlEntry) string {

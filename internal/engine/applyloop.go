@@ -118,7 +118,7 @@ func (e *Engine) applyIdentity(ctx context.Context, old, next *compiler.Target) 
 	}
 	// the generation of the rules did not change: verify against the target as it stands in the kernel
 	next.Nft.Generation = old.Nft.Generation
-	st, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.Want{Sysctls: next.Sysctls, Offloads: next.Offloads, BirdInstance: compiler.BirdInstance})
+	st, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.WantOf(next))
 	if err != nil {
 		return false, err
 	}

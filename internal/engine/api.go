@@ -140,7 +140,7 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 			return nil, err
 		}
 	}
-	state, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads, BirdInstance: compiler.BirdInstance})
+	state, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.WantOf(tg))
 	if err != nil {
 		return nil, err
 	}

@@ -30,6 +30,12 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 		bad("interfaces", "assigned %q, want %q", got, want)
 	}
 
+	if t.Service != nil {
+		if why := serviceDiffers(t.Service, s); why != "" {
+			bad("service", "%s", why)
+		}
+	}
+
 	// links
 	for _, b := range t.Bridges {
 		l, ok := s.Links[b.Name]

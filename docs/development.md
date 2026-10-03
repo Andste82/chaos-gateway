@@ -290,7 +290,10 @@ configuration at start when there is none.
   problem with BIRD's own message, and nothing changes.
 - **Status.** `Engine.PollRouting` reads the protocols every interval; the snapshot has them by name,
   `routing_session_changed` (data `state`: `up` or `down`) is emitted when an adjacency (BGP Established,
-  OSPF/Babel up) changes. `kernelsim` simulates BIRD (`SetBirdProtocols` sets the protocol table).
+  OSPF/Babel up) changes, and `routing_routes_changed` (data `imported`, `exported`, `filtered`,
+  `previous_imported`, `previous_exported`) is emitted when a protocol's route counts change. A poll
+  that changes nothing publishes no snapshot and emits no event. `kernelsim` simulates BIRD
+  (`SetBirdProtocols` sets the protocol table).
 - **Remote side.** `chaosgw wg export ... --link --bird [--remote-interface wg0]` prints the BIRD
   configuration for the other end of the link: roles swapped, same timers, a static protocol for the
   remote site's own prefixes.

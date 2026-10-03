@@ -495,6 +495,90 @@ func checkSysctl(name, dev string) error {
 	return nil
 }
 
+var (
+	wgKey      = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
+	uuidRef    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	hostName   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	maxWGPeers = 4096
+)
+
+func (o WireGuard) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if err := oneOf("action", o.Action, "ensure", "delete"); err != nil {
+		return err
+	}
+	if err := checkDev(o.Name); err != nil {
+		return err
+	}
+	if o.Action == "delete" {
+		if o.ListenPort != 0 || o.MTU != 0 || o.KeyRef != "" || len(o.Peers) != 0 {
+			return errors.New("delete takes the name only")
+		}
+		return nil
+	}
+	if o.ListenPort < 1 || o.ListenPort > 65535 {
+		return fmt.Errorf("listen port %d out of range", o.ListenPort)
+	}
+	if o.MTU != 0 && (o.MTU < 1280 || o.MTU > 9000) {
+		return fmt.Errorf("mtu %d out of range 1280-9000", o.MTU)
+	}
+	if !uuidRef.MatchString(o.KeyRef) {
+		return fmt.Errorf("key_ref %q is not a UUID", o.KeyRef)
+	}
+	if len(o.Peers) > maxWGPeers {
+		return fmt.Errorf("%d peers exceed the limit of %d", len(o.Peers), maxWGPeers)
+	}
+	seen := map[string]bool{}
+	for i, p := range o.Peers {
+		if err := p.validate(); err != nil {
+			return fmt.Errorf("peers[%d]: %w", i, err)
+		}
+		if seen[p.PublicKey] {
+			return fmt.Errorf("peers[%d]: the public key is used twice", i)
+		}
+		seen[p.PublicKey] = true
+	}
+	return nil
+}
+
+func (p WGPeer) validate() error {
+	if !wgKey.MatchString(p.PublicKey) {
+		return errors.New("invalid public key")
+	}
+	if p.PresharedKeyRef != "" && !uuidRef.MatchString(p.PresharedKeyRef) {
+		return fmt.Errorf("preshared_key_ref %q is not a UUID", p.PresharedKeyRef)
+	}
+	if len(p.AllowedIPs) > 1024 {
+		return errors.New("too many allowed ips")
+	}
+	for _, a := range p.AllowedIPs {
+		pf, err := netip.ParsePrefix(a)
+		if err != nil || !pf.Addr().Is4() || pf.Masked() != pf {
+			return fmt.Errorf("allowed ip %q is not an IPv4 network prefix", a)
+		}
+	}
+	if p.Keepalive < 0 || p.Keepalive > 65535 {
+		return fmt.Errorf("keepalive %d out of range", p.Keepalive)
+	}
+	if p.Endpoint != "" {
+		host, port, ok := strings.Cut(p.Endpoint, ":")
+		n, err := strconv.Atoi(port)
+		if !ok || err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("endpoint %q is not host:port", p.Endpoint)
+		}
+		if a, err := netip.ParseAddr(host); err == nil {
+			if !a.Is4() {
+				return fmt.Errorf("endpoint %q: only IPv4 addresses", p.Endpoint)
+			}
+		} else if !hostName.MatchString(host) {
+			return fmt.Errorf("endpoint %q: invalid host", p.Endpoint)
+		}
+	}
+	return nil
+}
+
 func (o Sysctl) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
@@ -578,7 +662,7 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard); err != nil {
 		return err
 	}
 	if o.Dev != "" {
@@ -593,8 +677,8 @@ func (o Read) validate() error {
 	} else if o.Name != "" {
 		return errors.New("name is only for sysctl reads")
 	}
-	if (o.What == ReadOffloads) && o.Dev == "" {
-		return errors.New("offloads need a dev")
+	if (o.What == ReadOffloads || o.What == ReadWireGuard) && o.Dev == "" {
+		return errors.New(o.What + " needs a dev")
 	}
 	if o.Table != "" && (o.What != ReadRoutes || !readTbl.MatchString(o.Table)) {
 		return fmt.Errorf("invalid table %q", o.Table)

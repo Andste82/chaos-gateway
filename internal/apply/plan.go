@@ -57,6 +57,10 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		add("interfaces assigned: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both})
 	}
 	removed := minus(oldAssigned, t.Interfaces)
+	wgWant := map[string]compiler.WGInterface{}
+	for _, w := range t.WireGuard {
+		wgWant[w.Name] = w
+	}
 
 	// ---- routes and rules in Chaos Gateway's tables ----------------------------------------
 	// Stale routes and rules go before the links they refer to are removed (deleting a route of a
@@ -147,6 +151,43 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 			}
 		}
 		links = append(links, executor.LinkEntry{Action: "delete_bridge", Name: d})
+	}
+	// WireGuard interfaces that are no longer wanted go; the ones that are wanted are created or
+	// synchronized before the links step gives them addresses
+	var wgOps []executor.Operation
+	var wgWords []string
+	for _, d := range removed {
+		if l, ok := s.Links[d]; ok && l.Kind() == "wireguard" {
+			wgOps = append(wgOps, &executor.WireGuard{Target: tg, Action: "delete", Name: d})
+			wgWords = append(wgWords, "delete "+d)
+		}
+	}
+	for _, w := range t.WireGuard {
+		l, exists := s.Links[w.Name]
+		if exists && l.Kind() != "wireguard" {
+			return nil, fmt.Errorf("%s exists but is not a WireGuard interface: refusing to touch it", w.Name)
+		}
+		if exists && !contains(oldAssigned, w.Name) {
+			return nil, fmt.Errorf("the WireGuard interface %s exists but does not belong to Chaos Gateway: refusing to take it over", w.Name)
+		}
+		if why := wgDiffers(w, l, s.WireGuard[w.Name], exists); why != "" {
+			wgOps = append(wgOps, wgEnsure(tg, w))
+			wgWords = append(wgWords, fmt.Sprintf("%s %s (%d peers)", why, w.Name, len(w.Peers)))
+		}
+		if !exists {
+			links = append(links, executor.LinkEntry{Action: "addr_replace", Name: w.Name, CIDR: w.Address.String()})
+		} else {
+			links = append(links, addrEntries(s, w.Name, w.Address.String())...)
+		}
+		if !exists || !l.Up() {
+			ups = append(ups, executor.LinkEntry{Action: "up", Name: w.Name})
+		}
+	}
+	if len(wgOps) > 0 {
+		for _, op := range wgOps {
+			p.Ops = append(p.Ops, op)
+		}
+		p.Summary = append(p.Summary, "wireguard: "+strings.Join(wgWords, "; "))
 	}
 	for _, b := range t.Bridges {
 		bl, exists := s.Links[b.Name]
@@ -400,4 +441,89 @@ func stateRule(r linux.Rule) (executor.Rule, bool) {
 		er.Family = 6
 	}
 	return er, true
+}
+
+// addrEntries makes want the only IPv4 address of dev.
+func addrEntries(s *State, dev, want string) []executor.LinkEntry {
+	var out []executor.LinkEntry
+	have := false
+	for _, a := range s.Addrs[dev] {
+		if a.Family != "inet" {
+			continue
+		}
+		c := fmt.Sprintf("%s/%d", a.Local, a.PrefixLen)
+		if c == want {
+			have = true
+		} else {
+			out = append(out, executor.LinkEntry{Action: "addr_delete", Name: dev, CIDR: c})
+		}
+	}
+	if !have {
+		out = append(out, executor.LinkEntry{Action: "addr_replace", Name: dev, CIDR: want})
+	}
+	return out
+}
+
+func wgEnsure(tg executor.Target, w compiler.WGInterface) *executor.WireGuard {
+	op := &executor.WireGuard{Target: tg, Action: "ensure", Name: w.Name, ListenPort: w.ListenPort, MTU: w.MTU, KeyRef: w.KeyRef}
+	for _, p := range w.Peers {
+		op.Peers = append(op.Peers, executor.WGPeer{
+			PublicKey: p.PublicKey, PresharedKeyRef: p.PresharedKeyRef, AllowedIPs: p.AllowedIPs, Keepalive: p.Keepalive, Endpoint: p.Endpoint,
+		})
+	}
+	return op
+}
+
+// wgDiffers says why the kernel's interface does not match the target ("create", "update"), or ""
+// when it does. Unchanged peers are left alone: a re-apply must not touch an established tunnel.
+func wgDiffers(w compiler.WGInterface, l linux.Link, info *linux.WGInfo, exists bool) string {
+	if !exists || info == nil {
+		return "create"
+	}
+	if l.MTU != w.MTU || len(wgMismatch(w, info)) > 0 {
+		return "update"
+	}
+	return ""
+}
+
+// wgMismatch lists what differs between an interface of the target and the kernel's.
+func wgMismatch(w compiler.WGInterface, info *linux.WGInfo) []string {
+	var out []string
+	if info.ListenPort != w.ListenPort {
+		out = append(out, fmt.Sprintf("listen port %d, want %d", info.ListenPort, w.ListenPort))
+	}
+	if info.PublicKey != w.PublicKey {
+		out = append(out, "the interface key differs from the stored one")
+	}
+	have := map[string]linux.WGPeerInfo{}
+	for _, p := range info.Peers {
+		have[p.PublicKey] = p
+	}
+	want := map[string]bool{}
+	for _, p := range w.Peers {
+		want[p.PublicKey] = true
+		h, ok := have[p.PublicKey]
+		if !ok {
+			out = append(out, fmt.Sprintf("peer %s is missing", p.Name))
+			continue
+		}
+		if strings.Join(sorted(h.AllowedIPs), ",") != strings.Join(sorted(p.AllowedIPs), ",") {
+			out = append(out, fmt.Sprintf("peer %s has the allowed ips %v, want %v", p.Name, h.AllowedIPs, p.AllowedIPs))
+		}
+		if h.Keepalive != p.Keepalive {
+			out = append(out, fmt.Sprintf("peer %s has the keepalive %d, want %d", p.Name, h.Keepalive, p.Keepalive))
+		}
+		if p.Endpoint != "" && h.Endpoint != p.Endpoint {
+			out = append(out, fmt.Sprintf("peer %s has the endpoint %q, want %q", p.Name, h.Endpoint, p.Endpoint))
+		}
+		if h.HasPresharedKey != (p.PresharedKeyRef != "") {
+			out = append(out, fmt.Sprintf("peer %s: preshared key present %v, want %v", p.Name, h.HasPresharedKey, p.PresharedKeyRef != ""))
+		}
+	}
+	for pub := range have {
+		if !want[pub] {
+			out = append(out, "a peer that the target does not have: "+pub[:8])
+		}
+	}
+	return out
 }

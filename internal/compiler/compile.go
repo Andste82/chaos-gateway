@@ -39,6 +39,9 @@ type Input struct {
 	Config     *model.Configuration
 	Host       Host
 	Generation Generation
+	// Keys holds the public key of every WireGuard network's interface (the private keys stay in the
+	// secrets store; the compiler never sees them). A network without one cannot be compiled.
+	Keys map[string]string
 	// DynamicSets are sets that are filled at run time and survive every apply (later: the
 	// DNS-derived address sets). They are part of the layout, never flushed.
 	DynamicSets []SetDef
@@ -109,6 +112,7 @@ type Target struct {
 	Uplink     Uplink                 `json:"uplink"`
 	Management Management             `json:"management"`
 	Bridges    []Bridge               `json:"bridges"`
+	WireGuard  []WGInterface          `json:"wireguard,omitempty"`
 	Interfaces []string               `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
 	Sysctls    []executor.SysctlEntry `json:"sysctls"`
 	Offloads   []string               `json:"offloads"`
@@ -186,11 +190,12 @@ func Compile(in Input) *Target {
 		return ids[i] < ids[j]
 	})
 	used := map[string]bool{}
+	wgUsed := map[string]bool{}
 	netByID := map[string]*Bridge{}
 	for _, id := range ids {
 		n := idx.Networks[id]
 		if n.Lan == nil {
-			t.warn(CodeUnsupported, n.Name, "WireGuard networks are compiled by milestone M4b; %q is ignored", n.Name)
+			t.compileWireGuardNetwork(id, n, in, wgUsed)
 			continue
 		}
 		addr, err := netip.ParsePrefix(n.Lan.Address)
@@ -215,10 +220,12 @@ func Compile(in Input) *Target {
 	for i := range t.Bridges {
 		netByID[t.Bridges[i].NetworkID] = &t.Bridges[i]
 	}
+	sort.Slice(t.WireGuard, func(i, j int) bool { return t.WireGuard[i].Name < t.WireGuard[j].Name })
 
+	t.finishManagementSources()
 	t.compileHostState()
 	t.compileRouting(cfg, idx)
-	t.compileNft(cfg, netByID, in.DynamicSets)
+	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.finish()
 	return t
 }
@@ -300,9 +307,6 @@ func (t *Target) compileManagement(cfg *model.Configuration, h Host) {
 	}
 	sort.Slice(sources, func(i, j int) bool { return sources[i].String() < sources[j].String() })
 	m.Sources = dedupePrefixes(sources)
-	if len(m.Sources) == 0 {
-		t.warn(CodeNoManagementSrc, "", "no source is allowed to reach the control plane (UI, API, SSH) from the management network")
-	}
 }
 
 func dedupePrefixes(p []netip.Prefix) []netip.Prefix {
@@ -324,6 +328,9 @@ func (t *Target) compileHostState() {
 		for _, p := range b.Ports {
 			owned[p] = true
 		}
+	}
+	for _, w := range t.WireGuard {
+		owned[w.Name] = true
 	}
 	// the uplink is OS-owned: assigned (routes, offloads, DOCKER-USER) but its sysctls stay alone
 	iface := map[string]bool{}
@@ -348,8 +355,17 @@ func (t *Target) compileHostState() {
 	for _, n := range ownedNames {
 		t.Sysctls = append(t.Sysctls, executor.SysctlEntry{Name: "accept_ra", Dev: n, Value: 0})
 	}
-	// offloads off on the ports and bridges of test networks and on the uplink (plan §3.4)
-	t.Offloads = append(t.Offloads, t.Interfaces...)
+	// offloads off on the ports and bridges of test networks and on the uplink (plan §3.4); a
+	// WireGuard interface has no offloads to switch off
+	wgNames := map[string]bool{}
+	for _, w := range t.WireGuard {
+		wgNames[w.Name] = true
+	}
+	for _, n := range t.Interfaces {
+		if !wgNames[n] {
+			t.Offloads = append(t.Offloads, n)
+		}
+	}
 
 	// DOCKER-USER accepts what comes from or goes to the bridges of test networks: traffic to and
 	// from the uplink is covered by it (a packet between a bridge and the uplink has the bridge on
@@ -357,6 +373,9 @@ func (t *Target) compileHostState() {
 	du := map[string]bool{}
 	for _, b := range t.Bridges {
 		du[b.Name] = true
+	}
+	for _, w := range t.WireGuard {
+		du[w.Name] = true
 	}
 	for n := range du {
 		t.DockerUser = append(t.DockerUser, n)
@@ -404,6 +423,21 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 	// and no window opens in which test traffic falls through to the main table
 	for _, b := range t.Bridges {
 		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority, Iif: b.Name, Table: PolicyTable})
+	}
+	// WireGuard networks: connected routes, the networks behind clients and the static routes of
+	// links go via the interface; its traffic uses the table, too (plan §2.2.1)
+	for _, w := range t.WireGuard {
+		add(executor.Route{Dst: w.Address.Masked().String(), Dev: w.Name})
+		seen := map[string]bool{w.Address.Masked().String(): true}
+		for _, p := range w.Peers {
+			for _, a := range p.Routes {
+				if !seen[a] {
+					seen[a] = true
+					add(executor.Route{Dst: a, Dev: w.Name})
+				}
+			}
+		}
+		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority, Iif: w.Name, Table: PolicyTable})
 	}
 }
 

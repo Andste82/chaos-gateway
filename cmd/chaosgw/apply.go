@@ -66,6 +66,12 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	// the compiler works on a configuration that names objects by UUID, as a stored revision does
+	cfg, nerrs := domain.Normalize(cfg)
+	if len(nerrs) > 0 {
+		fmt.Fprintf(stderr, "chaosgw apply: %s: %s\n", *file, nerrs[0].Message)
+		return 1
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	c, err := executor.Dial(ctx, *socket, executor.DialOptions{Auth: executor.AllowUIDs(uint32(*execUID))})

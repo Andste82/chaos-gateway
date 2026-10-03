@@ -19,6 +19,7 @@ const (
 	TypeAssign         = "assign_interfaces"
 	TypeLinks          = "links"
 	TypeSysctl         = "sysctl"
+	TypeWireGuard      = "wireguard"
 	TypeRead           = "read"
 )
 
@@ -173,6 +174,31 @@ type Sysctl struct {
 	Entries []SysctlEntry `json:"entries"`
 }
 
+// WGPeer is a peer of a WireGuard interface. Keys are given as public keys and references: the
+// preshared key of a peer is looked up in the key provider under PresharedKeyRef, so no secret
+// passes through an operation.
+type WGPeer struct {
+	PublicKey       string   `json:"public_key"`
+	PresharedKeyRef string   `json:"preshared_key_ref,omitempty"`
+	AllowedIPs      []string `json:"allowed_ips"`
+	Keepalive       int      `json:"keepalive,omitempty"` // seconds, 0 off
+	Endpoint        string   `json:"endpoint,omitempty"`  // host:port; set when the gateway initiates
+}
+
+// WireGuard creates, updates or deletes a WireGuard interface (plan §2.2.1). `ensure` creates the
+// device when it is missing, sets its MTU and synchronizes key, port and peers with `wg syncconf`:
+// unchanged peers keep their session, so a re-apply does not interrupt a tunnel. Address and link
+// state are set with the links operation. The private key is looked up under KeyRef.
+type WireGuard struct {
+	Target
+	Action     string   `json:"action"` // ensure | delete
+	Name       string   `json:"name"`
+	ListenPort int      `json:"listen_port,omitempty"`
+	MTU        int      `json:"mtu,omitempty"`
+	KeyRef     string   `json:"key_ref,omitempty"`
+	Peers      []WGPeer `json:"peers,omitempty"`
+}
+
 // Read queries kernel state through the standard tools.
 type Read struct {
 	Target
@@ -198,6 +224,8 @@ const (
 	ReadSysctl = "sysctl"
 	// ReadAssigned returns the interfaces assigned to Chaos Gateway; ReadDockerUser the accept
 	// rules of Chaos Gateway in DOCKER-USER (linux.DockerUserState).
+	// ReadWireGuard returns a WireGuard interface and its peers (linux.WGInfo), without any secret.
+	ReadWireGuard  = "wireguard"
 	ReadAssigned   = "assigned"
 	ReadDockerUser = "docker_user"
 )
@@ -211,6 +239,7 @@ func (DockerUser) OpType() string       { return TypeDockerUser }
 func (AssignInterfaces) OpType() string { return TypeAssign }
 func (Links) OpType() string            { return TypeLinks }
 func (Sysctl) OpType() string           { return TypeSysctl }
+func (WireGuard) OpType() string        { return TypeWireGuard }
 func (Read) OpType() string             { return TypeRead }
 
 func (NftApply) Mutates() bool         { return true }
@@ -222,6 +251,7 @@ func (DockerUser) Mutates() bool       { return true }
 func (AssignInterfaces) Mutates() bool { return true }
 func (Links) Mutates() bool            { return true }
 func (Sysctl) Mutates() bool           { return true }
+func (WireGuard) Mutates() bool        { return true }
 func (Read) Mutates() bool             { return false }
 
 // Envelope is the wire form of an operation: the type and the operation's own fields side by side.
@@ -267,6 +297,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &Links{}
 	case TypeSysctl:
 		op = &Sysctl{}
+	case TypeWireGuard:
+		op = &WireGuard{}
 	case TypeRead:
 		op = &Read{}
 	default:

@@ -1,9 +1,9 @@
 {
   "generation": {
-    "revision": 3,
-    "seq": 7
+    "revision": 2,
+    "seq": 5
   },
-  "hash": "33f7ffcb54989a47",
+  "hash": "cafd9cdee3adaea4",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -12,6 +12,7 @@
   "management": {
     "name": "mgmt0",
     "sources": [
+      "10.98.0.0/24",
       "192.168.56.0/24"
     ],
     "ui_port": 443
@@ -26,24 +27,87 @@
         "lan0"
       ],
       "nat": true
+    }
+  ],
+  "wireguard": [
+    {
+      "network_id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+      "network_name": "admin",
+      "name": "wg-admin",
+      "kind": "hub",
+      "role": "management",
+      "address": "10.98.0.1/24",
+      "mtu": 1420,
+      "listen_port": 51822,
+      "key_ref": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+      "public_key": "f0hqF2PfgXJaiBxECr4K5bNLUJAZEoJ2VRZc0WB2qhQ=",
+      "nat": true,
+      "peers": null
     },
     {
-      "name": "br-lab",
-      "network_id": "1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32",
-      "network_name": "Lab",
-      "address": "10.20.0.1/24",
-      "ports": [
-        "lan1"
-      ],
-      "nat": false
+      "network_id": "4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54",
+      "network_name": "lab-hub",
+      "name": "wg-lab-hub",
+      "kind": "hub",
+      "role": "test",
+      "address": "10.99.0.1/24",
+      "mtu": 1420,
+      "listen_port": 51820,
+      "key_ref": "4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54",
+      "public_key": "ov3zCc517NpPaIPJUL0t2dYjNw0kOoERebHfxWS6YW0=",
+      "nat": true,
+      "peers": [
+        {
+          "id": "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "name": "rA",
+          "public_key": "FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=",
+          "preshared_key_ref": "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "allowed_ips": [
+            "10.99.0.2/32",
+            "10.50.0.0/24"
+          ],
+          "routes": [
+            "10.50.0.0/24"
+          ]
+        }
+      ]
+    },
+    {
+      "network_id": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f",
+      "network_name": "site-b",
+      "name": "wg-site-b",
+      "kind": "link",
+      "role": "test",
+      "address": "10.255.0.0/31",
+      "mtu": 1380,
+      "listen_port": 51821,
+      "key_ref": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f",
+      "public_key": "miaYWhpFycB9c97CyvAQIRquPycwnSZeInykQdnr/Qk=",
+      "nat": true,
+      "peers": [
+        {
+          "id": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f",
+          "name": "site-b",
+          "public_key": "sckuQf8RqKUj8wQ5b3zY+eRVCD0nfD1C6ns80SJSqxM=",
+          "allowed_ips": [
+            "0.0.0.0/0"
+          ],
+          "keepalive": 25,
+          "endpoint": "203.0.113.40:51821",
+          "routes": [
+            "10.60.0.0/24"
+          ]
+        }
+      ]
     }
   ],
   "interfaces": [
     "br-iot",
-    "br-lab",
     "lan0",
-    "lan1",
-    "wan0"
+    "wan0",
+    "wg-admin",
+    "wg-lab-hub",
+    "wg-site-b"
   ],
   "sysctls": [
     {
@@ -57,25 +121,28 @@
     },
     {
       "name": "accept_ra",
-      "dev": "br-lab",
-      "value": 0
-    },
-    {
-      "name": "accept_ra",
       "dev": "lan0",
       "value": 0
     },
     {
       "name": "accept_ra",
-      "dev": "lan1",
+      "dev": "wg-admin",
+      "value": 0
+    },
+    {
+      "name": "accept_ra",
+      "dev": "wg-lab-hub",
+      "value": 0
+    },
+    {
+      "name": "accept_ra",
+      "dev": "wg-site-b",
       "value": 0
     }
   ],
   "offloads": [
     "br-iot",
-    "br-lab",
     "lan0",
-    "lan1",
     "wan0"
   ],
   "routes": [
@@ -90,23 +157,8 @@
       "action": "replace",
       "family": 4,
       "table": 100,
-      "dst": "10.20.0.0/24",
-      "dev": "br-lab"
-    },
-    {
-      "action": "replace",
-      "family": 4,
-      "table": 100,
       "dst": "203.0.113.0/24",
       "dev": "wan0"
-    },
-    {
-      "action": "replace",
-      "family": 4,
-      "table": 100,
-      "dst": "10.30.0.0/24",
-      "via": "10.10.0.2",
-      "dev": "br-iot"
     },
     {
       "action": "replace",
@@ -115,6 +167,41 @@
       "dst": "default",
       "via": "203.0.113.10",
       "dev": "wan0"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.98.0.0/24",
+      "dev": "wg-admin"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.99.0.0/24",
+      "dev": "wg-lab-hub"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.50.0.0/24",
+      "dev": "wg-lab-hub"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.255.0.0/31",
+      "dev": "wg-site-b"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 100,
+      "dst": "10.60.0.0/24",
+      "dev": "wg-site-b"
     }
   ],
   "rules": [
@@ -129,13 +216,29 @@
       "action": "add",
       "family": 4,
       "priority": 1000,
-      "iif": "br-lab",
+      "iif": "wg-admin",
+      "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "iif": "wg-lab-hub",
+      "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "iif": "wg-site-b",
       "table": 100
     }
   ],
   "docker_user": [
     "br-iot",
-    "br-lab"
+    "wg-admin",
+    "wg-lab-hub",
+    "wg-site-b"
   ],
   "nft": {
     "sets": [
@@ -144,15 +247,16 @@
         "type": "ifname",
         "elements": [
           "br-iot",
-          "br-lab"
+          "wg-admin",
+          "wg-lab-hub",
+          "wg-site-b"
         ]
       },
       {
         "name": "ifs_lan_bf4feb",
         "type": "ifname",
         "elements": [
-          "br-iot",
-          "br-lab"
+          "br-iot"
         ]
       },
       {
@@ -160,7 +264,17 @@
         "type": "ifname",
         "elements": [
           "br-iot",
-          "br-lab"
+          "wg-lab-hub",
+          "wg-site-b"
+        ]
+      },
+      {
+        "name": "ifs_wg_bf4feb",
+        "type": "ifname",
+        "elements": [
+          "wg-admin",
+          "wg-lab-hub",
+          "wg-site-b"
         ]
       },
       {
@@ -170,6 +284,7 @@
           "interval"
         ],
         "elements": [
+          "10.98.0.0/24",
           "192.168.56.0/24"
         ]
       }
@@ -178,7 +293,10 @@
       "forward_drop",
       "input_drop",
       "ipv6_drop",
-      "nat_0b7c6a3e"
+      "nat_0b7c6a3e",
+      "nat_4e2f9d1c",
+      "nat_7a8b9c0d",
+      "nat_c3d4e5f6"
     ],
     "chains": [
       {
@@ -241,36 +359,6 @@
               }
             ],
             "comment": "2a45a9c42344"
-          },
-          {
-            "expr": [
-              {
-                "match": {
-                  "left": {
-                    "meta": {
-                      "key": "iifname"
-                    }
-                  },
-                  "op": "==",
-                  "right": "br-lab"
-                }
-              },
-              {
-                "match": {
-                  "left": {
-                    "meta": {
-                      "key": "oifname"
-                    }
-                  },
-                  "op": "==",
-                  "right": "br-lab"
-                }
-              },
-              {
-                "accept": null
-              }
-            ],
-            "comment": "c639507a3cea"
           },
           {
             "expr": [
@@ -401,6 +489,150 @@
               }
             ],
             "comment": "e485c9ec98bd"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-iot"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wg-lab-hub"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "6f22b875edcf"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wg-lab-hub"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "set": [
+                      {
+                        "prefix": {
+                          "addr": "10.99.0.2",
+                          "len": 32
+                        }
+                      },
+                      {
+                        "prefix": {
+                          "addr": "10.50.0.0",
+                          "len": 24
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "cdde6ffdc7c7"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wg-lab-hub"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "set": [
+                      {
+                        "prefix": {
+                          "addr": "10.99.0.2",
+                          "len": 32
+                        }
+                      },
+                      {
+                        "prefix": {
+                          "addr": "10.50.0.0",
+                          "len": 24
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-iot"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "e143786d922a"
           },
           {
             "expr": [
@@ -760,6 +992,113 @@
         ]
       },
       {
+        "name": "mss",
+        "base": {
+          "type": "filter",
+          "hook": "forward",
+          "prio": -150,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_wg_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "\u0026": [
+                      {
+                        "payload": {
+                          "field": "flags",
+                          "protocol": "tcp"
+                        }
+                      },
+                      "syn"
+                    ]
+                  },
+                  "op": "==",
+                  "right": "syn"
+                }
+              },
+              {
+                "mangle": {
+                  "key": {
+                    "tcp option": {
+                      "field": "size",
+                      "name": "maxseg"
+                    }
+                  },
+                  "value": {
+                    "rt": {
+                      "key": "mtu"
+                    }
+                  }
+                }
+              }
+            ],
+            "comment": "e9d0e917dff8"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_wg_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "\u0026": [
+                      {
+                        "payload": {
+                          "field": "flags",
+                          "protocol": "tcp"
+                        }
+                      },
+                      "syn"
+                    ]
+                  },
+                  "op": "==",
+                  "right": "syn"
+                }
+              },
+              {
+                "mangle": {
+                  "key": {
+                    "tcp option": {
+                      "field": "size",
+                      "name": "maxseg"
+                    }
+                  },
+                  "value": {
+                    "rt": {
+                      "key": "mtu"
+                    }
+                  }
+                }
+              }
+            ],
+            "comment": "0a0a2fc84585"
+          }
+        ]
+      },
+      {
         "name": "postrouting",
         "base": {
           "type": "nat",
@@ -806,10 +1145,137 @@
               }
             ],
             "comment": "47409993750f"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "prefix": {
+                      "addr": "10.98.0.0",
+                      "len": 24
+                    }
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "counter": "nat_7a8b9c0d"
+              },
+              {
+                "masquerade": null
+              }
+            ],
+            "comment": "e7907e102520"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "set": [
+                      {
+                        "prefix": {
+                          "addr": "10.99.0.0",
+                          "len": 24
+                        }
+                      },
+                      {
+                        "prefix": {
+                          "addr": "10.50.0.0",
+                          "len": 24
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "counter": "nat_4e2f9d1c"
+              },
+              {
+                "masquerade": null
+              }
+            ],
+            "comment": "5fb276c97083"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "saddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": {
+                    "prefix": {
+                      "addr": "10.255.0.0",
+                      "len": 31
+                    }
+                  }
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "counter": "nat_c3d4e5f6"
+              },
+              {
+                "masquerade": null
+              }
+            ],
+            "comment": "ee9504949f5c"
           }
         ]
       }
     ],
-    "generation": "gen=7 rev=3"
+    "generation": "gen=5 rev=2"
   }
 }

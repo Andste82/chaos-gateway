@@ -111,6 +111,8 @@ func (s *Scope) Check(op Operation) error {
 				}
 			}
 		}
+	case *WireGuard:
+		return s.need(o.Name)
 	case *Sysctl:
 		for i, e := range o.Entries {
 			if e.Dev != "" {

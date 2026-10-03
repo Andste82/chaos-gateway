@@ -27,6 +27,8 @@ type link struct {
 	up                      bool
 	addrs                   []string // "ip/len"
 	index                   int
+	mtu                     int
+	wg                      *wgState
 }
 
 type route struct {
@@ -121,7 +123,7 @@ func (k *Kernel) AddLink(name, mac, kind string, up bool) {
 
 func (k *Kernel) addLink(name, mac, kind string, up bool) *link {
 	k.nextIdx++
-	l := &link{name: name, mac: mac, kind: kind, up: up, index: k.nextIdx}
+	l := &link{name: name, mac: mac, kind: kind, up: up, index: k.nextIdx, mtu: 1500}
 	k.links[name] = l
 	k.features[name] = map[string]bool{"generic-receive-offload": true, "generic-segmentation-offload": true, "tcp-segmentation-offload": true}
 	return l
@@ -334,6 +336,8 @@ func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, 
 		return k.ethtool(c)
 	case executor.ToolIptables:
 		return k.iptables(c)
+	case executor.ToolWg:
+		return k.wg(c)
 	case executor.ToolTC:
 		return executor.Result{}, nil
 	}
@@ -395,7 +399,7 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			if l.up {
 				flags = append(flags, "UP", "LOWER_UP")
 			}
-			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether"}
+			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether", "mtu": l.mtu}
 			if l.master != "" {
 				m["master"] = l.master
 			}
@@ -490,6 +494,16 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			return executor.Result{Exit: 1, Stderr: fmt.Sprintf("Device \"%s\" does not exist.\n", a[3])}, nil
 		}
 	case "link add":
+		// ip link add dev X type wireguard
+		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && a[5] == "wireguard" {
+			if _, exists := k.links[a[3]]; exists {
+				return fail("RTNETLINK answers: File exists")
+			}
+			l := k.addLink(a[3], "", "wireguard", false)
+			l.mtu = 1420
+			l.wg = &wgState{peers: map[string]*wgPeer{}}
+			return ok2()
+		}
 		// ip link add name X type bridge
 		if len(a) == 6 && a[2] == "name" && a[4] == "type" && a[5] == "bridge" {
 			if _, exists := k.links[a[3]]; exists {
@@ -499,7 +513,7 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			return ok2()
 		}
 	case "link delete":
-		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && a[5] == "bridge" {
+		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && (a[5] == "bridge" || a[5] == "wireguard") {
 			_, exists := k.links[a[3]]
 			if !exists {
 				return fail("Cannot find device \"%s\"", a[3])
@@ -529,6 +543,13 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 				return ok2()
 			case a[4] == "nomaster":
 				l.master = ""
+				return ok2()
+			case a[4] == "mtu" && len(a) == 6:
+				n, err := strconv.Atoi(a[5])
+				if err != nil {
+					return fail("Error: argument \"%s\" is wrong: mtu", a[5])
+				}
+				l.mtu = n
 				return ok2()
 			case a[4] == "up":
 				l.up = true

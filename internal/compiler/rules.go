@@ -45,14 +45,17 @@ type endpoint struct {
 }
 
 // compileNft builds the table `inet chaosgw`: gateway protection (input), the access matrix and
-// the IPv6 block (forward), masquerade (postrouting) and the generation chain.
-func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, dynamic []SetDef) {
-	var testIfs []string
-	for _, b := range t.Bridges {
-		testIfs = append(testIfs, b.Name)
+// the IPv6 block (forward), masquerade (postrouting), the MSS clamp on WireGuard interfaces and
+// the generation chain.
+func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef) {
+	mkSet := func(base string, elems []string) SetDef {
+		s := SetDef{Type: "ifname", Elements: elems}
+		s.Name = hashName(base, s.Type, s.Flags)
+		return s
 	}
-	ifsTest := SetDef{Type: "ifname", Elements: testIfs}
-	ifsTest.Name = hashName("ifs_test", ifsTest.Type, ifsTest.Flags)
+	ifsLan := mkSet("ifs_lan", tp.lan)    // local test networks: what may reach the uplink by default
+	ifsTest := mkSet("ifs_test", tp.test) // untrusted: gateway protection applies
+	ifsCG := mkSet("ifs_cg", tp.all)      // every interface of a network of Chaos Gateway
 	var srcs []string
 	for _, p := range t.Management.Sources {
 		srcs = append(srcs, linux.NormalizeElement(p.String()))
@@ -60,7 +63,12 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 	mgmtSrc := SetDef{Type: "ipv4_addr", Flags: []string{"interval"}, Elements: srcs}
 	mgmtSrc.Name = hashName("mgmt_src", mgmtSrc.Type, mgmtSrc.Flags)
 
-	t.Nft.Sets = []SetDef{ifsTest, mgmtSrc}
+	t.Nft.Sets = []SetDef{ifsLan, ifsTest, ifsCG, mgmtSrc}
+	var ifsWG SetDef
+	if len(tp.wg) > 0 {
+		ifsWG = mkSet("ifs_wg", tp.wg)
+		t.Nft.Sets = append(t.Nft.Sets, ifsWG)
+	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
 	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop"}
@@ -96,42 +104,68 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 		forward.Rules = append(forward.Rules, newRule(iifname(b.Name), oifname(b.Name), verdict("accept")))
 	}
 	forward.Rules = append(forward.Rules,
-		newRule(iifSet(ifsTest.Name), ctState("invalid"), verdict("drop")),
-		newRule(oifSet(ifsTest.Name), ctState("invalid"), verdict("drop")),
-		// the V1 test networks are IPv4 only: forwarded IPv6 is dropped (plan §2.2.2)
-		newRule(iifSet(ifsTest.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
-		newRule(oifSet(ifsTest.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
+		newRule(iifSet(ifsCG.Name), ctState("invalid"), verdict("drop")),
+		newRule(oifSet(ifsCG.Name), ctState("invalid"), verdict("drop")),
+		// the V1 networks are IPv4 only: forwarded IPv6 is dropped (plan §2.2.2)
+		newRule(iifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
+		newRule(oifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 	)
-	forward.Rules = append(forward.Rules, t.matrixRules(cfg, nets, mgmtSrc.Name)...)
+	forward.Rules = append(forward.Rules, t.matrixRules(cfg, tp, mgmtSrc.Name)...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
 	uplink := t.Uplink.Name
 	if uplink != "" {
 		if t.Management.Name == uplink {
 			// two-port topology: the management network lies behind the uplink interface and is
 			// not reachable from test networks unless the matrix says so
-			forward.Rules = append(forward.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
+			forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
 		}
-		forward.Rules = append(forward.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), verdict("accept")))
+		forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), verdict("accept")))
 	}
 	forward.Rules = append(forward.Rules,
-		newRule(iifSet(ifsTest.Name), counter("forward_drop"), verdict("drop")),
-		newRule(oifSet(ifsTest.Name), counter("forward_drop"), verdict("drop")),
+		newRule(iifSet(ifsCG.Name), counter("forward_drop"), verdict("drop")),
+		newRule(oifSet(ifsCG.Name), counter("forward_drop"), verdict("drop")),
 	)
 
 	// ---- postrouting: masquerade per network (layer 4) -----------------------------------
 	post := Chain{Name: "postrouting", Base: &BaseChain{Type: "nat", Hook: "postrouting", Prio: 100, Policy: "accept"}}
 	if uplink != "" {
-		for _, b := range t.Bridges {
-			if !b.NAT {
-				continue
-			}
-			name := "nat_" + shortID(b.NetworkID)
+		for _, n := range tp.nat {
+			name := "nat_" + shortID(n.id)
 			t.Nft.Counters = append(t.Nft.Counters, name)
-			post.Rules = append(post.Rules, newRule(eq(payload("ip", "saddr"), prefixValue(b.Address.Masked())), oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
+			post.Rules = append(post.Rules, newRule(eq(payload("ip", "saddr"), prefixes(n.prefixes)), oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
 		}
 	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
+
+	// ---- MSS clamp on WireGuard interfaces (plan §2.2.1) ----------------------------------
+	if len(tp.wg) > 0 {
+		clamp := map[string]any{"mangle": map[string]any{
+			"key":   map[string]any{"tcp option": map[string]any{"name": "maxseg", "field": "size"}},
+			"value": map[string]any{"rt": map[string]any{"key": "mtu"}},
+		}}
+		syn := eq(map[string]any{"&": []any{payload("tcp", "flags"), "syn"}}, "syn")
+		mss := Chain{Name: "mss", Base: &BaseChain{Type: "filter", Hook: "forward", Prio: -150, Policy: "accept"}}
+		mss.Rules = append(mss.Rules,
+			newRule(oifSet(ifsWG.Name), syn, clamp),
+			newRule(iifSet(ifsWG.Name), syn, clamp),
+		)
+		t.Nft.Chains = append(t.Nft.Chains, mss)
+	}
+	// sorted by name, as the kernel lists them: the preview diff compares line by line
+	sort.Slice(t.Nft.Chains, func(i, j int) bool { return t.Nft.Chains[i].Name < t.Nft.Chains[j].Name })
+}
+
+// prefixes is the value of an address match: one prefix, or a set of them.
+func prefixes(p []netip.Prefix) any {
+	if len(p) == 1 {
+		return prefixValue(p[0])
+	}
+	vals := make([]any, len(p))
+	for i, x := range p {
+		vals[i] = prefixValue(x)
+	}
+	return anon(vals...)
 }
 
 // controlPorts is SSH and the UI port as one match value: a set, or the port alone when they are
@@ -157,74 +191,96 @@ func prefixValue(p netip.Prefix) any {
 	return map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
 }
 
-// matrixRules turns the explicit entries of the access matrix into forward rules. Entries between
-// networks, the uplink and the management network are supported; WireGuard endpoints follow with
-// M4b. The management endpoint is told apart from the uplink by the source or destination
-// address, so its rules come first.
-func (t *Target) matrixRules(cfg *model.Configuration, nets map[string]*Bridge, mgmtSet string) []Rule {
-	if cfg.AccessMatrix == nil || cfg.AccessMatrix.Entries == nil {
-		return nil
-	}
+// matrixRules turns the access matrix into forward rules: the explicit entries first, then the
+// implicit allows of the clients' `reachable` lists. Networks (bridges and WireGuard interfaces),
+// single WireGuard clients with the networks behind them, the uplink and the management network are
+// endpoints. The more specific endpoint comes first: a client before a network, the management
+// network (told apart from the uplink by its addresses) before the uplink.
+func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) []Rule {
 	resolve := func(ep model.MatrixEndpoint, from bool) (endpoint, int, bool) {
-		dev := func(kind string, name string, addrSet bool) endpoint {
+		dev := func(name string, addrs any) endpoint {
 			var e endpoint
+			side, field := "oifname", "daddr"
 			if from {
-				e.iif = []any{iifname(name)}
-				if addrSet {
-					e.iif = append(e.iif, eq(payload("ip", "saddr"), setRef(mgmtSet)))
-				}
+				side, field = "iifname", "saddr"
+			}
+			m := eq(meta(side), name)
+			parts := []any{m}
+			if addrs != nil {
+				parts = append(parts, eq(payload("ip", field), addrs))
+			}
+			if from {
+				e.iif = parts
 			} else {
-				e.oif = []any{oifname(name)}
-				if addrSet {
-					e.oif = append(e.oif, eq(payload("ip", "daddr"), setRef(mgmtSet)))
-				}
+				e.oif = parts
 			}
 			return e
 		}
 		switch {
-		case ep.Network != nil:
-			b := nets[*ep.Network]
-			if b == nil {
+		case ep.Client != nil:
+			cm, ok := tp.clients[*ep.Client]
+			if !ok {
 				return endpoint{}, 0, false
 			}
-			return dev("lan", b.Name, false), 2, true
+			return dev(cm.dev, prefixes(cm.prefixes)), 0, true
+		case ep.Network != nil:
+			d, ok := tp.netDev[*ep.Network]
+			if !ok {
+				return endpoint{}, 0, false
+			}
+			return dev(d, nil), 3, true
 		case ep.Management != nil && bool(*ep.Management):
 			if t.Management.Name == "" {
 				return endpoint{}, 0, false
 			}
-			return dev("mgmt", t.Management.Name, true), 0, true
+			return dev(t.Management.Name, setRef(mgmtSet)), 1, true
 		case ep.Uplink != nil && bool(*ep.Uplink):
 			if t.Uplink.Name == "" {
 				return endpoint{}, 0, false
 			}
-			return dev("uplink", t.Uplink.Name, false), 1, true
+			return dev(t.Uplink.Name, nil), 2, true
 		}
 		return endpoint{}, 0, false
 	}
 	type item struct {
-		rank int
-		rule Rule
+		rank     int
+		implicit bool
+		rule     Rule
 	}
 	var items []item
-	for _, e := range *cfg.AccessMatrix.Entries {
-		from, fr, ok1 := resolve(e.From, true)
-		to, tr, ok2 := resolve(e.To, false)
+	add := func(from, to model.MatrixEndpoint, policy model.MatrixEntryPolicy, implicit bool) {
+		f, fr, ok1 := resolve(from, true)
+		d, dr, ok2 := resolve(to, false)
 		if !ok1 || !ok2 {
-			t.warn(CodeUnsupported, "", "an access matrix entry with a WireGuard client or an unknown endpoint is not compiled before M4b")
-			continue
+			t.warn(CodeUnsupported, "", "an access matrix entry with an endpoint that does not exist (or is not available) is not compiled")
+			return
 		}
 		var expr []any
-		expr = append(expr, from.iif...)
-		expr = append(expr, to.oif...)
+		expr = append(expr, f.iif...)
+		expr = append(expr, d.oif...)
 		v := "accept"
-		if e.Policy == model.MatrixEntryPolicyDeny {
+		if policy == model.MatrixEntryPolicyDeny {
 			expr = append(expr, counter("forward_drop"))
 			v = "drop"
 		}
 		expr = append(expr, verdict(v))
-		items = append(items, item{rank: fr*3 + tr, rule: newRule(expr...)})
+		items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].rank < items[j].rank })
+	if cfg.AccessMatrix != nil && cfg.AccessMatrix.Entries != nil {
+		for _, e := range *cfg.AccessMatrix.Entries {
+			add(e.From, e.To, e.Policy, false)
+		}
+	}
+	for _, r := range tp.reach {
+		c := r.client
+		add(model.MatrixEndpoint{Client: &c}, r.ep, model.MatrixEntryPolicyAllow, true)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].implicit != items[j].implicit {
+			return !items[i].implicit // explicit entries win over what a client's list implies
+		}
+		return items[i].rank < items[j].rank
+	})
 	var out []Rule
 	for _, it := range items {
 		out = append(out, it.rule)

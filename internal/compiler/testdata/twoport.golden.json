@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "8ef5d17afd822936",
+  "hash": "08b81626907b5ecf",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -140,6 +140,22 @@
   "nft": {
     "sets": [
       {
+        "name": "ifs_cg_bf4feb",
+        "type": "ifname",
+        "elements": [
+          "br-iot",
+          "br-lab"
+        ]
+      },
+      {
+        "name": "ifs_lan_bf4feb",
+        "type": "ifname",
+        "elements": [
+          "br-iot",
+          "br-lab"
+        ]
+      },
+      {
         "name": "ifs_test_bf4feb",
         "type": "ifname",
         "elements": [
@@ -266,7 +282,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -286,7 +302,7 @@
                 "drop": null
               }
             ],
-            "comment": "1ac1a8df8489"
+            "comment": "66bd7b6b2457"
           },
           {
             "expr": [
@@ -298,7 +314,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -318,7 +334,7 @@
                 "drop": null
               }
             ],
-            "comment": "fc5d413532fb"
+            "comment": "95073f739c32"
           },
           {
             "expr": [
@@ -330,7 +346,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -351,7 +367,7 @@
                 "drop": null
               }
             ],
-            "comment": "74bbeb198e5e"
+            "comment": "ce9534dfbfb3"
           },
           {
             "expr": [
@@ -363,7 +379,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -384,7 +400,7 @@
                 "drop": null
               }
             ],
-            "comment": "f0b5497d39ac"
+            "comment": "e485c9ec98bd"
           },
           {
             "expr": [
@@ -396,7 +412,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_lan_bf4feb"
                 }
               },
               {
@@ -429,7 +445,7 @@
                 "drop": null
               }
             ],
-            "comment": "b2e03b0238ac"
+            "comment": "945ad9a00e9b"
           },
           {
             "expr": [
@@ -441,7 +457,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_lan_bf4feb"
                 }
               },
               {
@@ -459,7 +475,7 @@
                 "accept": null
               }
             ],
-            "comment": "58af70301e4d"
+            "comment": "b2f96a069b8e"
           },
           {
             "expr": [
@@ -471,7 +487,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -481,7 +497,7 @@
                 "drop": null
               }
             ],
-            "comment": "d397fd720236"
+            "comment": "e0d65f81fe3a"
           },
           {
             "expr": [
@@ -493,7 +509,7 @@
                     }
                   },
                   "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                  "right": "@ifs_cg_bf4feb"
                 }
               },
               {
@@ -503,7 +519,7 @@
                 "drop": null
               }
             ],
-            "comment": "3aaef70e2ce3"
+            "comment": "4159606cfb8d"
           }
         ]
       },

@@ -34,6 +34,7 @@ type Executor struct {
 	scope *Scope
 	log   *slog.Logger
 	state string // file holding the assigned interfaces, empty for none
+	keys  KeyProvider
 
 	jobs    chan *job
 	done    chan struct{} // closed by Close
@@ -59,6 +60,14 @@ type Option func(*Executor)
 
 // WithLogger sets the logger.
 func WithLogger(l *slog.Logger) Option { return func(e *Executor) { e.log = l } }
+
+// KeyProvider looks up the WireGuard keys of an object by its UUID: the private key of an
+// interface or of a peer the gateway generated, and the preshared key. Keys reach the executor
+// this way and never in an operation (plan §2.16).
+type KeyProvider func(id string) (private, preshared string, err error)
+
+// WithKeys gives the executor access to the secrets store.
+func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
 
 // WithStateFile makes the set of assigned interfaces survive restarts.
 func WithStateFile(path string) Option { return func(e *Executor) { e.state = path } }
@@ -230,6 +239,11 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 			return nil, err
 		}
 	}
+	if w, ok := op.(*WireGuard); ok && w.Action == "delete" {
+		if err := e.checkKind(ctx, w.Target, w.Name, "wireguard"); err != nil {
+			return nil, err
+		}
+	}
 	steps, err := Plan(op)
 	if err != nil {
 		return nil, err
@@ -253,7 +267,15 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 				continue
 			}
 		}
-		r, err := e.run.Run(ctx, s.Cmd)
+		cmd := s.Cmd
+		if s.NeedsConfig {
+			conf, err := e.wgConfig(op.(*WireGuard))
+			if err != nil {
+				return nil, err
+			}
+			cmd.Stdin = conf
+		}
+		r, err := e.run.Run(ctx, cmd)
 		if err != nil {
 			return nil, err
 		}
@@ -281,6 +303,66 @@ func onlyBenign(stderr string) bool {
 		}
 	}
 	return true
+}
+
+// checkKind makes sure that a device exists as the kind it is deleted as: `ip link delete ... type
+// X` does not refuse a device of another kind. A device that does not exist is fine.
+func (e *Executor) checkKind(ctx context.Context, tg Target, name, kind string) error {
+	r, err := e.run.Run(ctx, ReadCommand(&Read{Target: tg, What: ReadLinks, Dev: name}))
+	if err != nil {
+		return err
+	}
+	if r.Exit != 0 {
+		return nil
+	}
+	links, err := linux.ParseLinks([]byte(r.Stdout))
+	if err != nil {
+		return err
+	}
+	for _, x := range links {
+		if x.Name == name && x.Kind() != kind {
+			return fmt.Errorf("%s is not a %s: refusing to delete it", name, kind)
+		}
+	}
+	return nil
+}
+
+// wgConfig renders the configuration `wg syncconf` reads. It holds the private key of the
+// interface and the preshared keys of the peers: it goes to the tool's standard input and nowhere
+// else, and it is not logged.
+func (e *Executor) wgConfig(w *WireGuard) (string, error) {
+	if e.keys == nil {
+		return "", errors.New("the executor has no access to the WireGuard keys")
+	}
+	priv, _, err := e.keys(w.KeyRef)
+	if err != nil {
+		return "", fmt.Errorf("the key of %s: %w", w.Name, err)
+	}
+	if priv == "" {
+		return "", fmt.Errorf("the key of %s has no private key", w.Name)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nListenPort = %d\n", priv, w.ListenPort)
+	for _, p := range w.Peers {
+		fmt.Fprintf(&b, "\n[Peer]\nPublicKey = %s\n", p.PublicKey)
+		if p.PresharedKeyRef != "" {
+			_, psk, err := e.keys(p.PresharedKeyRef)
+			if err != nil {
+				return "", fmt.Errorf("the preshared key of a peer of %s: %w", w.Name, err)
+			}
+			if psk != "" {
+				fmt.Fprintf(&b, "PresharedKey = %s\n", psk)
+			}
+		}
+		fmt.Fprintf(&b, "AllowedIPs = %s\n", strings.Join(p.AllowedIPs, ", "))
+		if p.Keepalive > 0 {
+			fmt.Fprintf(&b, "PersistentKeepalive = %d\n", p.Keepalive)
+		}
+		if p.Endpoint != "" {
+			fmt.Fprintf(&b, "Endpoint = %s\n", p.Endpoint)
+		}
+	}
+	return b.String(), nil
 }
 
 // checkBridges makes sure that delete_bridge only ever deletes a bridge: `ip link delete ... type
@@ -375,6 +457,9 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		v = n
 	case ReadDockerUser:
 		v = linux.ParseDockerUser(r.Stdout)
+	case ReadWireGuard:
+		// the dump starts with the private key: the parser drops it, and the output goes no further
+		v, err = linux.ParseWGDump(r.Stdout)
 	}
 	if err != nil {
 		return nil, err

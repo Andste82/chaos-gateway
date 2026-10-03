@@ -68,6 +68,40 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 		}
 	}
 
+	// WireGuard interfaces
+	for _, w := range t.WireGuard {
+		l, ok := s.Links[w.Name]
+		switch {
+		case !ok:
+			bad("wireguard", "interface %s is missing", w.Name)
+			continue
+		case l.Kind() != "wireguard":
+			bad("wireguard", "%s is not a WireGuard interface", w.Name)
+			continue
+		case !l.Up():
+			bad("wireguard", "%s is down", w.Name)
+		case l.MTU != w.MTU:
+			bad("wireguard", "%s has the MTU %d, want %d", w.Name, l.MTU, w.MTU)
+		}
+		var got []string
+		for _, a := range s.Addrs[w.Name] {
+			if a.Family == "inet" {
+				got = append(got, fmt.Sprintf("%s/%d", a.Local, a.PrefixLen))
+			}
+		}
+		if len(got) != 1 || got[0] != w.Address.String() {
+			bad("wireguard", "%s has the addresses %v, want [%s]", w.Name, got, w.Address)
+		}
+		info := s.WireGuard[w.Name]
+		if info == nil {
+			bad("wireguard", "%s could not be read", w.Name)
+			continue
+		}
+		for _, m := range wgMismatch(w, info) {
+			bad("wireguard", "%s: %s", w.Name, m)
+		}
+	}
+
 	// sysctls and offloads
 	for _, e := range t.Sysctls {
 		if v, ok := s.Sysctl[sysctlKey(e)]; !ok || v != e.Value {

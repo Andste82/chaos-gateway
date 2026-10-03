@@ -6,11 +6,15 @@ import (
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 )
 
-func diffOf(t *testing.T, e *env) apply.LinuxDiff {
+func diffOf(t *testing.T, e *env, targets ...*compiler.Target) apply.LinuxDiff {
 	t.Helper()
 	tg := e.compile()
+	if len(targets) > 0 {
+		tg = targets[0]
+	}
 	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
 	if err != nil {
 		t.Fatal(err)

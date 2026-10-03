@@ -76,6 +76,7 @@ func TestAHolderThatDiesIsHealedByTheNextApply(t *testing.T) {
 func TestAHolderThatChangedGetsItsNamespaceAttached(t *testing.T) {
 	e := newEnv(t)
 	e.k.ServiceNamespace("cgsvc")
+	e.k.AddHolder(4711)
 	e.apply(e.compile(func(c *model.Configuration, in *compiler.Input) { in.ServiceNS = "cgsvc"; in.ServiceHolderPID = 4711 }))
 	found := false
 	for _, c := range e.k.Commands() {
@@ -126,5 +127,50 @@ func TestTheServiceNamespaceDoesNotTouchTheRoutesOfOthers(t *testing.T) {
 	}
 	if !fw || !prohibit {
 		t.Errorf("fwmark rule %v, prohibit route %v", fw, prohibit)
+	}
+}
+
+func TestARestartedHolderLeavesAnOldNamespaceThatIsReplaced(t *testing.T) {
+	e := newEnv(t)
+	e.k.ServiceNamespace("cgsvc")
+	holder := func(c *model.Configuration, in *compiler.Input) { in.ServiceNS = "cgsvc"; in.ServiceHolderPID = 4711 }
+	e.k.AddHolder(4711)
+	tg := e.compile(holder)
+	e.apply(tg)
+	old, _ := e.k.NetnsInode("/run/netns/cgsvc")
+	if old == 0 {
+		t.Fatal("no namespace")
+	}
+	// the same holder again: nothing to do for the namespace
+	if res := e.apply(e.compile(holder)); strings.Contains(strings.Join(res.Plan.Summary, "\n"), "service namespace") {
+		t.Fatalf("a holder that did not change is planned again:\n%s", strings.Join(res.Plan.Summary, "\n"))
+	}
+	// the holder container restarted: same PID in the test, a new network namespace. The name still
+	// points at the old one, which stays alive as long as something holds it.
+	e.k.AddHolder(4711)
+	st, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(e.compile(holder)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range apply.Verify(e.compile(holder), st) {
+		found = found || m.Subsystem == "service"
+	}
+	if !found {
+		t.Fatal("verify does not notice the holder that changed")
+	}
+	res := e.apply(e.compile(holder))
+	if !strings.Contains(strings.Join(res.Plan.Summary, "\n"), "is not the one of its holder") {
+		t.Errorf("%s", strings.Join(res.Plan.Summary, "\n"))
+	}
+	now, ok := e.k.NetnsInode("/run/netns/cgsvc")
+	want, _ := e.k.NetnsInode("/proc/4711/ns/net")
+	if !ok || now == old || now != want {
+		t.Errorf("the namespace was not replaced by the holder's: old %d, now %d, holder %d", old, now, want)
+	}
+	// the pair leads into the new namespace
+	st, _ = apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(e.compile(holder)))
+	if st.Service == nil || !st.Service.HolderMatches || len(st.Service.PeerAddrs) != 1 {
+		t.Errorf("%+v", st.Service)
 	}
 }

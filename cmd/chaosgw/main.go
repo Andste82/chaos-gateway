@@ -24,6 +24,7 @@ var subcommands = []struct {
 	{"wg", "M4b", "export WireGuard client and link configurations", runWG},
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
 	{"dns", "M6b", "DNS proxy in the service namespace", runDNS},
+	{"svcns", "M6b", "holder of the service namespace", runSvcNS},
 	{"tls", "M21", "TLS responder in the service namespace", nil},
 }
 

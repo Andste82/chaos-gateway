@@ -54,7 +54,7 @@ func want(t *compiler.Target) Want { return WantOf(t) }
 func WantOf(t *compiler.Target) Want {
 	w := Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance}
 	if t.Service != nil {
-		w.ServiceNS, w.ServicePeerIf = t.Service.Name, t.Service.PeerIf
+		w.ServiceNS, w.ServicePeerIf, w.ServiceHolderPID = t.Service.Name, t.Service.PeerIf, t.Service.HolderPID
 	}
 	return w
 }

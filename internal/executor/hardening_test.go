@@ -10,16 +10,18 @@ import (
 
 // service is the part of a compose service this test pins.
 type service struct {
-	Privileged  bool     `yaml:"privileged"`
-	ReadOnly    bool     `yaml:"read_only"`
-	NetworkMode string   `yaml:"network_mode"`
-	Restart     string   `yaml:"restart"`
-	User        string   `yaml:"user"`
-	SecurityOpt []string `yaml:"security_opt"`
-	Command     []string `yaml:"command"`
-	Tmpfs       []string `yaml:"tmpfs"`
-	CapAdd      []string `yaml:"cap_add"`
-	CapDrop     []string `yaml:"cap_drop"`
+	Pid         string    `yaml:"pid"`
+	DependsOn   yaml.Node `yaml:"depends_on"`
+	Privileged  bool      `yaml:"privileged"`
+	ReadOnly    bool      `yaml:"read_only"`
+	NetworkMode string    `yaml:"network_mode"`
+	Restart     string    `yaml:"restart"`
+	User        string    `yaml:"user"`
+	SecurityOpt []string  `yaml:"security_opt"`
+	Command     []string  `yaml:"command"`
+	Tmpfs       []string  `yaml:"tmpfs"`
+	CapAdd      []string  `yaml:"cap_add"`
+	CapDrop     []string  `yaml:"cap_drop"`
 	Healthcheck struct {
 		Test []string `yaml:"test"`
 	} `yaml:"healthcheck"`
@@ -57,6 +59,9 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 	}
 	if s.NetworkMode != "host" {
 		t.Errorf("network_mode %q: the executor configures the host's network stack", s.NetworkMode)
+	}
+	if s.Pid != "host" {
+		t.Errorf("pid %q: the executor attaches the namespace of the service holder by its PID", s.Pid)
 	}
 	if s.Restart != "unless-stopped" {
 		t.Errorf("restart %q", s.Restart)
@@ -196,14 +201,14 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "api" {
 		t.Fatalf("command %v", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--service-token-file": true}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 6 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket and the service token", len(s.Volumes))
+	if len(s.Volumes) != 7 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the service token and the holder's PID", len(s.Volumes))
 	}
 	if len(s.Healthcheck.Test) < 4 || s.Healthcheck.Test[1] != "chaosgw" || !contains(s.Healthcheck.Test, "--health") {
 		t.Errorf("health check: %v", s.Healthcheck.Test)
@@ -284,5 +289,65 @@ func TestKeaContainerHardeningProfile(t *testing.T) {
 				t.Error("Kea only reads the service token")
 			}
 		}
+	}
+}
+
+// The holder of the service namespace has no network, no capability and no privilege; the DNS proxy
+// joins its namespace with the one capability that port 53 needs and mounts the service token
+// read-only.
+func TestDNSContainersHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.dns.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Services) != 2 {
+		t.Fatalf("services %v", doc.Services)
+	}
+	holder, dns := doc.Services["svcns"], doc.Services["dns"]
+	for name, s := range map[string]service{"svcns": holder, "dns": dns} {
+		if s.Privileged || !s.ReadOnly || !contains(s.CapDrop, "ALL") || !contains(s.SecurityOpt, "no-new-privileges:true") || s.User != "65532:65532" {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+	if holder.NetworkMode != "none" || holder.Pid != "host" || len(holder.CapAdd) != 0 {
+		t.Errorf("the holder has no network, sees the host's PIDs and needs no capability: %+v", holder)
+	}
+	if dns.NetworkMode != "service:svcns" || len(dns.CapAdd) != 1 || dns.CapAdd[0] != "NET_BIND_SERVICE" {
+		t.Errorf("the proxy joins the namespace of the holder and binds port 53: %+v", dns)
+	}
+	if len(dns.Command) < 1 || dns.Command[0] != "dns" {
+		t.Fatalf("command %v", dns.Command)
+	}
+	known := map[string]bool{"--listen": true, "--api": true, "--service-token-file": true, "--api-cert-file": true}
+	for _, a := range dns.Command[1:] {
+		if strings.HasPrefix(a, "--") && !known[a] {
+			t.Errorf("flag %s is not a flag of `chaosgw dns`", a)
+		}
+	}
+	if len(holder.Command) < 1 || holder.Command[0] != "svcns" {
+		t.Errorf("command %v", holder.Command)
+	}
+	for _, v := range dns.Volumes {
+		var m struct {
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+		}
+		if v.Kind == yaml.MappingNode {
+			if err := v.Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Target == "/var/lib/chaosgw/service" && !m.ReadOnly {
+				t.Error("the proxy only reads the service token")
+			}
+		}
+	}
+	if len(dns.Volumes) != 1 || len(holder.Volumes) != 1 {
+		t.Errorf("volumes: the proxy %d, the holder %d", len(dns.Volumes), len(holder.Volumes))
 	}
 }

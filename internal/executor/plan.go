@@ -345,11 +345,19 @@ func planServiceNS(o *ServiceNS) []Step {
 		return []Step{{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")}}
 	}
 	nsThere := inside("link", "show", "dev", "lo")
+	var steps []Step
+	if o.recreate {
+		// the namespace is the one of a holder that is gone: the pair that leads into it goes first,
+		// then the name, so that the namespace is freed and the new holder's is attached
+		steps = append(steps,
+			Step{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
+			Step{Cmd: Command{Tool: ToolIP, Args: []string{"netns", "delete", o.Name}}})
+	}
 	mk := Command{Tool: ToolIP, Args: []string{"netns", "add", o.Name}}
 	if o.HolderPID > 0 {
 		mk = Command{Tool: ToolIP, Args: []string{"netns", "attach", o.Name, strconv.Itoa(o.HolderPID)}}
 	}
-	return []Step{
+	return append(steps, []Step{
 		{Probe: &nsThere, RunIfProbeOK: false, Cmd: mk},
 		{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", o.HostIf, "type", "veth", "peer", "name", o.PeerIf, "netns", o.Name)},
 		{Cmd: ip("addr", "replace", o.HostCIDR, "dev", o.HostIf)},
@@ -358,7 +366,7 @@ func planServiceNS(o *ServiceNS) []Step {
 		{Cmd: inside("addr", "replace", o.PeerCIDR, "dev", o.PeerIf)},
 		{Cmd: inside("link", "set", "dev", o.PeerIf, "up")},
 		{Cmd: inside("route", "replace", "default", "via", hostIP, "dev", o.PeerIf)},
-	}
+	}...)
 }
 
 func planWireGuard(o *WireGuard) []Step {

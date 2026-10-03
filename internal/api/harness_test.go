@@ -106,10 +106,14 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(runner, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
+	eopts := []executor.Option{executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
 		kk, err := sec.WireGuard(id)
 		return kk.PrivateKey, kk.PresharedKey, err
-	}))
+	})}
+	if k != nil {
+		eopts = append(eopts, executor.WithNetnsInode(k.NetnsInode))
+	}
+	ex, err := executor.New(runner, eopts...)
 	if err != nil {
 		t.Fatal(err)
 	}

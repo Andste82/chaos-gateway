@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
 
@@ -34,6 +35,8 @@ type Outcome struct {
 // Executor runs requests one at a time, in arrival order. It is the single writer of the
 // kernel's network configuration.
 type Executor struct {
+	// inode identifies a network namespace file; see WithNetnsInode
+	inode   func(path string) (uint64, bool)
 	run     Runner
 	scope   *Scope
 	log     *slog.Logger
@@ -89,9 +92,15 @@ func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir
 // WithStateFile makes the set of assigned interfaces survive restarts.
 func WithStateFile(path string) Option { return func(e *Executor) { e.state = path } }
 
+// WithNetnsInode replaces how the executor identifies a network namespace file (the tests of the
+// service namespace have no real namespaces).
+func WithNetnsInode(f func(path string) (uint64, bool)) Option {
+	return func(e *Executor) { e.inode = f }
+}
+
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
-	e := &Executor{run: run, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), done: make(chan struct{}), stopped: make(chan struct{})}
+	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), done: make(chan struct{}), stopped: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
@@ -323,6 +332,12 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 	if b, ok := op.(*Bird); ok {
 		return nil, e.runBird(ctx, b)
 	}
+	if s, ok := op.(*ServiceNS); ok && s.Action == "ensure" && s.HolderPID > 0 {
+		st := e.serviceNSState(s.Name, s.HolderPID)
+		if st.Exists && !st.HolderMatches {
+			s.recreate = true
+		}
+	}
 	if s, ok := op.(*ServiceNS); ok && s.Action == "delete" {
 		if err := e.checkKind(ctx, s.Target, s.HostIf, "veth"); err != nil {
 			return nil, err
@@ -516,6 +531,9 @@ func (e *Executor) verifyOffloads(ctx context.Context, o *Offloads) error {
 func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	if o.What == ReadAssigned {
 		return json.Marshal(e.scope.Devs())
+	}
+	if o.What == ReadServiceNS {
+		return json.Marshal(e.serviceNSState(o.Service, o.PID))
 	}
 	if o.What == ReadBird {
 		st, err := e.readBird(ctx, o.Instance)
@@ -758,4 +776,28 @@ func (e *Executor) readBird(ctx context.Context, instance string) (*BirdState, e
 	}
 	st.Running, st.Protocols = true, protos
 	return st, nil
+}
+
+// serviceNSState compares the namespace file of the service namespace with the network namespace of
+// its holder: the same namespace has the same inode.
+func (e *Executor) serviceNSState(name string, pid int) ServiceNSState {
+	have, exists := e.inode("/run/netns/" + name)
+	st := ServiceNSState{Exists: exists, HolderMatches: true}
+	if exists && pid > 0 {
+		want, ok := e.inode("/proc/" + strconv.Itoa(pid) + "/ns/net")
+		st.HolderMatches = ok && want == have
+	}
+	return st
+}
+
+func realInode(path string) (uint64, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Ino, true
 }

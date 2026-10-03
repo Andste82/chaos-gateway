@@ -50,6 +50,9 @@ type ServiceState struct {
 	PeerUp    bool
 	// DefaultVia is the next hop of the namespace's default route.
 	DefaultVia string
+	// HolderMatches is false when the namespace is not the one of the holder process that was asked
+	// for: the holder container restarted and left the old namespace behind.
+	HolderMatches bool
 }
 
 // Want names what to read besides the basics: sysctls and offloads exist per interface.
@@ -59,8 +62,9 @@ type Want struct {
 	// BirdInstance is the instance to read; empty reads none.
 	BirdInstance string
 	// ServiceNS is the service namespace to read and ServicePeerIf the interface inside it; empty
-	// reads none.
+	// reads none. ServiceHolderPID is the holder the namespace should belong to (0: any).
 	ServiceNS, ServicePeerIf string
+	ServiceHolderPID         int
 }
 
 func read(ns, what, dev string) *executor.Read {
@@ -160,7 +164,7 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 	}
 
 	if want.ServiceNS != "" {
-		s.Service = readService(ctx, ex, want.ServiceNS, want.ServicePeerIf)
+		s.Service = readService(ctx, ex, want.ServiceNS, want.ServicePeerIf, want.ServiceHolderPID)
 	}
 
 	// per-interface reads only for interfaces that exist
@@ -208,12 +212,20 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 
 // readService reads the service namespace. A namespace that cannot be read is a namespace that does
 // not exist (the executor answers "cannot open network namespace"): the plan creates it.
-func readService(ctx context.Context, ex Exec, ns, peer string) *ServiceState {
+func readService(ctx context.Context, ex Exec, ns, peer string, pid int) *ServiceState {
+	probe, err := ex.Do(ctx, &executor.Read{What: executor.ReadServiceNS, Service: ns, PID: pid})
+	if err != nil {
+		return &ServiceState{}
+	}
+	ss, err := decode[executor.ServiceNSState](probe, 0, "service namespace")
+	if err != nil || !ss.Exists {
+		return &ServiceState{}
+	}
 	out, err := ex.Do(ctx, read(ns, executor.ReadLinks, ""), read(ns, executor.ReadAddrs, ""), read(ns, executor.ReadRoutes, ""))
 	if err != nil {
 		return &ServiceState{}
 	}
-	st := &ServiceState{Exists: true}
+	st := &ServiceState{Exists: true, HolderMatches: ss.HolderMatches}
 	if links, err := decode[[]linux.Link](out, 0, "service links"); err == nil {
 		for _, l := range links {
 			if l.Name == peer {

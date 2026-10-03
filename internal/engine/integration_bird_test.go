@@ -402,13 +402,21 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 		t.Errorf("the management default route is gone\n%s", main)
 	}
 	// the neighbors learn the gateway's network (the return path); give them a moment
-	time.Sleep(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
+	for !strings.Contains(g.top.Site2.Must("ip", "route", "show"), "10.10.0.0/24") && time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+	}
+	if !strings.Contains(g.top.Site2.Must("ip", "route", "show"), "10.10.0.0/24") {
+		t.Errorf("the OSPF neighbor does not learn the gateway's network\n%s\n%s\n%s\n%s", birdc(t, g.gwSock, "show", "route", "export", "ospf_site_c"), birdc(t, g.gwSock, "show", "protocols", "all", "ospf_site_c"), birdc(t, g.gwSock, "show", "ospf", "state", "ospf_site_c"), g.top.GW.Must("cat", filepath.Join(g.bird, compiler.BirdInstance+".conf")))
+		// the rest of the test needs the return path
+		g.top.Site2.Must("ip", "route", "add", "10.10.0.0/24", "via", "10.255.1.0", "dev", "wgsite2")
+	}
 	for _, r := range []struct {
 		ns   *testbed.Namespace
 		host string
 	}{{g.top.Site, testbed.SiteNetHost}, {g.top.Site2, testbed.Site2NetHost}} {
 		if !pingOK(g.top.A, "", r.host) {
-			t.Errorf("A cannot reach %s\n%s\nremote routes:\n%s\n%s", r.host, g.table100(), r.ns.Must("ip", "route", "show"), birdc(t, g.gwSock, "show", "route", "all", "protocol", "ann_ospf_site_c")+birdc(t, g.gwSock, "show", "ospf", "lsadb")+"site2:\n"+birdc(t, siteC, "show", "route", "all")+birdc(t, siteC, "show", "ospf", "lsadb"))
+			t.Errorf("A cannot reach %s\n%s\nremote routes:\n%s", r.host, g.table100(), r.ns.Must("ip", "route", "show"))
 		}
 	}
 	// taking the OSPF link down withdraws its routes within the dead interval

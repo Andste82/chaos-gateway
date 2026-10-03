@@ -35,12 +35,16 @@ type State struct {
 	DockerUser linux.DockerUserState
 	// WireGuard holds the interfaces of kind wireguard with their peers (no secret).
 	WireGuard map[string]*linux.WGInfo
+	// Bird is the BIRD instance; nil when the executor has no BIRD directory.
+	Bird *executor.BirdState
 }
 
 // Want names what to read besides the basics: sysctls and offloads exist per interface.
 type Want struct {
 	Sysctls  []executor.SysctlEntry
 	Offloads []string
+	// BirdInstance is the instance to read; empty reads none.
+	BirdInstance string
 }
 
 func read(ns, what, dev string) *executor.Read {
@@ -130,6 +134,12 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 				return nil, err
 			}
 			s.WireGuard[n] = info
+		}
+	}
+
+	if want.BirdInstance != "" {
+		if s.Bird, err = readBird(ctx, ex, want.BirdInstance); err != nil {
+			return nil, err
 		}
 	}
 

@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
@@ -30,11 +34,12 @@ type Outcome struct {
 // Executor runs requests one at a time, in arrival order. It is the single writer of the
 // kernel's network configuration.
 type Executor struct {
-	run   Runner
-	scope *Scope
-	log   *slog.Logger
-	state string // file holding the assigned interfaces, empty for none
-	keys  KeyProvider
+	run     Runner
+	scope   *Scope
+	log     *slog.Logger
+	state   string // file holding the assigned interfaces, empty for none
+	keys    KeyProvider
+	birdDir string // where the BIRD configuration files and control sockets live
 
 	jobs    chan *job
 	done    chan struct{} // closed by Close
@@ -68,6 +73,10 @@ type KeyProvider func(id string) (private, preshared string, err error)
 
 // WithKeys gives the executor access to the secrets store.
 func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
+
+// WithBirdDir tells the executor where BIRD's configuration files and control sockets are
+// (<dir>/<instance>.conf and .ctl): a directory shared with the BIRD container.
+func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir } }
 
 // WithStateFile makes the set of assigned interfaces survive restarts.
 func WithStateFile(path string) Option { return func(e *Executor) { e.state = path } }
@@ -238,6 +247,9 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		if err := e.checkBridges(ctx, l); err != nil {
 			return nil, err
 		}
+	}
+	if b, ok := op.(*Bird); ok {
+		return nil, e.runBird(ctx, b)
 	}
 	if w, ok := op.(*WireGuard); ok && w.Action == "delete" {
 		if err := e.checkKind(ctx, w.Target, w.Name, "wireguard"); err != nil {
@@ -428,6 +440,13 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	if o.What == ReadAssigned {
 		return json.Marshal(e.scope.Devs())
 	}
+	if o.What == ReadBird {
+		st, err := e.readBird(ctx, o.Instance)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(st)
+	}
 	cmd := ReadCommand(o)
 	r, err := e.run.Run(ctx, cmd)
 	if err != nil {
@@ -527,4 +546,110 @@ func (e *Executor) saveState() error {
 		return err
 	}
 	return os.Rename(tmp, e.state)
+}
+
+// BirdState is what a bird read returns.
+type BirdState struct {
+	// Running reports whether the instance answers on its control socket.
+	Running bool `json:"running"`
+	// ConfigHash is the SHA-256 of the configuration file, empty when there is none.
+	ConfigHash string `json:"config_hash,omitempty"`
+	// Protocols are the protocols of the running instance.
+	Protocols []bird.ProtocolStatus `json:"protocols,omitempty"`
+}
+
+var errNoBirdDir = errors.New("the executor has no BIRD directory (--bird-dir)")
+
+func (e *Executor) birdPaths(instance string) (conf, sock string, err error) {
+	if e.birdDir == "" {
+		return "", "", errNoBirdDir
+	}
+	return filepath.Join(e.birdDir, instance+".conf"), filepath.Join(e.birdDir, instance+".ctl"), nil
+}
+
+// birdOutput runs a BIRD tool and returns its output; the tools print their errors on either stream.
+func (e *Executor) birdOutput(ctx context.Context, tool Tool, args ...string) (string, int, error) {
+	r, err := e.run.Run(ctx, Command{Tool: tool, Args: args})
+	if err != nil {
+		return "", 0, err
+	}
+	return r.Stdout + r.Stderr, r.Exit, nil
+}
+
+// runBird implements the bird operation.
+func (e *Executor) runBird(ctx context.Context, o *Bird) error {
+	conf, sock, err := e.birdPaths(o.Instance)
+	if err != nil {
+		return err
+	}
+	// the text is parsed from a file of its own first: a rejected configuration never replaces the
+	// one that runs
+	tmp, err := os.CreateTemp(e.birdDir, ".check-*.conf")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.WriteString(o.Config); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	out, exit, err := e.birdOutput(ctx, ToolBird, "-p", "-c", tmpName)
+	if err != nil {
+		return err
+	}
+	if exit != 0 {
+		return &BirdError{Message: strings.TrimSpace(strings.ReplaceAll(out, tmpName, "configuration"))}
+	}
+	if o.Action == "check" {
+		return nil
+	}
+	if err := os.Rename(tmpName, conf); err != nil {
+		return err
+	}
+	out, exit, err = e.birdOutput(ctx, ToolBirdc, "-s", sock, "configure")
+	if err != nil {
+		return err
+	}
+	if exit != 0 || (!strings.Contains(out, "Reconfigured") && !strings.Contains(out, "Reconfiguration in progress")) {
+		return &BirdError{Message: strings.TrimSpace(out)}
+	}
+	return nil
+}
+
+// BirdError is a configuration BIRD rejects, or a BIRD that cannot be reached; Message is BIRD's.
+type BirdError struct{ Message string }
+
+func (e *BirdError) Error() string { return "bird: " + e.Message }
+
+func (e *Executor) readBird(ctx context.Context, instance string) (*BirdState, error) {
+	conf, sock, err := e.birdPaths(instance)
+	if err != nil {
+		return nil, err
+	}
+	st := &BirdState{}
+	if b, err := os.ReadFile(conf); err == nil {
+		sum := sha256.Sum256(b)
+		st.ConfigHash = hex.EncodeToString(sum[:])
+	}
+	out, exit, err := e.birdOutput(ctx, ToolBirdc, "-s", sock, "show", "protocols", "all")
+	if err != nil {
+		return nil, err
+	}
+	if exit != 0 {
+		return st, nil // not running
+	}
+	protos, err := bird.ParseProtocols(out)
+	if err != nil {
+		return nil, err
+	}
+	st.Running, st.Protocols = true, protos
+	return st, nil
 }

@@ -20,6 +20,8 @@ const (
 	ToolIptables Tool = "iptables"
 	ToolSysctl   Tool = "sysctl"
 	ToolWg       Tool = "wg"
+	ToolBird     Tool = "bird"
+	ToolBirdc    Tool = "birdc"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard
@@ -78,6 +80,8 @@ func Plan(op Operation) ([]Step, error) {
 		return planDockerUser(o), nil
 	case *WireGuard:
 		return planWireGuard(o), nil
+	case *Bird:
+		return nil, nil // handled by the executor itself: it writes a file and runs two tools
 	case *Links:
 		return planLinks(o), nil
 	case *Sysctl:

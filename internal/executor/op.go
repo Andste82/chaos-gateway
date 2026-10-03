@@ -20,6 +20,7 @@ const (
 	TypeLinks          = "links"
 	TypeSysctl         = "sysctl"
 	TypeWireGuard      = "wireguard"
+	TypeBird           = "bird"
 	TypeRead           = "read"
 )
 
@@ -199,6 +200,20 @@ type WireGuard struct {
 	Peers      []WGPeer `json:"peers,omitempty"`
 }
 
+// Bird checks or applies the configuration of Chaos Gateway's BIRD instance (plan §2.2.2). `check`
+// parses the text with `bird -p` and changes nothing: the preview shows BIRD's own error message.
+// `apply` writes <bird dir>/<instance>.conf, parses it and has the running instance read it with
+// `birdc configure`, which keeps established sessions. The text is checked before: no `include`, and
+// `kernel table` only for Chaos Gateway's tables and the ones listed in ImportTables.
+type Bird struct {
+	Target
+	Action   string `json:"action"` // check | apply
+	Instance string `json:"instance"`
+	Config   string `json:"config"`
+	// ImportTables are the kernel tables the configuration may read besides Chaos Gateway's own.
+	ImportTables []int `json:"import_tables,omitempty"`
+}
+
 // Read queries kernel state through the standard tools.
 type Read struct {
 	Target
@@ -207,6 +222,8 @@ type Read struct {
 	Table string `json:"table,omitempty"` // routes: table name or number, empty means all
 	// Name selects the parameter of a sysctl read (ip_forward | accept_ra | disable_ipv6).
 	Name string `json:"name,omitempty"`
+	// Instance names the BIRD instance of a bird read.
+	Instance string `json:"instance,omitempty"`
 }
 
 // Read targets.
@@ -224,6 +241,9 @@ const (
 	ReadSysctl = "sysctl"
 	// ReadAssigned returns the interfaces assigned to Chaos Gateway; ReadDockerUser the accept
 	// rules of Chaos Gateway in DOCKER-USER (linux.DockerUserState).
+	// ReadBird returns the state of the BIRD instance Instance (BirdState): whether it runs, the hash
+	// of its configuration file and its protocols.
+	ReadBird = "bird"
 	// ReadWireGuard returns a WireGuard interface and its peers (linux.WGInfo), without any secret.
 	ReadWireGuard  = "wireguard"
 	ReadAssigned   = "assigned"
@@ -240,6 +260,7 @@ func (AssignInterfaces) OpType() string { return TypeAssign }
 func (Links) OpType() string            { return TypeLinks }
 func (Sysctl) OpType() string           { return TypeSysctl }
 func (WireGuard) OpType() string        { return TypeWireGuard }
+func (Bird) OpType() string             { return TypeBird }
 func (Read) OpType() string             { return TypeRead }
 
 func (NftApply) Mutates() bool         { return true }
@@ -252,6 +273,7 @@ func (AssignInterfaces) Mutates() bool { return true }
 func (Links) Mutates() bool            { return true }
 func (Sysctl) Mutates() bool           { return true }
 func (WireGuard) Mutates() bool        { return true }
+func (o Bird) Mutates() bool           { return o.Action == "apply" }
 func (Read) Mutates() bool             { return false }
 
 // Envelope is the wire form of an operation: the type and the operation's own fields side by side.
@@ -299,6 +321,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &Sysctl{}
 	case TypeWireGuard:
 		op = &WireGuard{}
+	case TypeBird:
+		op = &Bird{}
 	case TypeRead:
 		op = &Read{}
 	default:

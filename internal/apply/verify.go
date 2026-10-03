@@ -102,6 +102,8 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 		}
 	}
 
+	verifyBird(t, s, bad)
+
 	// sysctls and offloads
 	for _, e := range t.Sysctls {
 		if v, ok := s.Sysctl[sysctlKey(e)]; !ok || v != e.Value {

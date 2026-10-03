@@ -48,7 +48,9 @@ func (e *Error) Unwrap() error { return e.Err }
 // ErrVerify is wrapped by a verify failure.
 var ErrVerify = errors.New("the kernel does not match the target")
 
-func want(t *compiler.Target) Want { return Want{Sysctls: t.Sysctls, Offloads: t.Offloads} }
+func want(t *compiler.Target) Want {
+	return Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance}
+}
 
 // Preview reads the current state and plans what an apply would do, without changing anything.
 func Preview(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Plan, error) {

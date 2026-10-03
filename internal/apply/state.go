@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strconv"
+	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -168,7 +169,7 @@ func (s *State) Host() compiler.Host {
 		l := s.Links[n]
 		// bridges are what Chaos Gateway builds: they are never an uplink or a port, and leaving
 		// them out keeps the compiler's own work from showing up as a change of the host
-		if l.Kind() == "bridge" {
+		if l.Kind() == "bridge" || dockerNoise(l.Name) {
 			continue
 		}
 		hl := compiler.HostLink{Name: l.Name, MAC: l.MAC, Kind: l.Kind()}
@@ -197,6 +198,18 @@ func (s *State) Host() compiler.Host {
 		h.Defaults = append(h.Defaults, compiler.HostRoute{Dev: r.Dev, Gateway: gw, Metric: metric})
 	}
 	return h
+}
+
+// dockerNoise matches the interfaces Docker creates and removes all the time: they are never an
+// uplink or a port, and a change of one must not look like a change of the host.
+func dockerNoise(name string) bool {
+	if strings.HasPrefix(name, "docker") {
+		return true
+	}
+	if strings.HasPrefix(name, "veth") && len(name) == 11 {
+		return true
+	}
+	return strings.HasPrefix(name, "br-") && len(name) == 15 && strings.Trim(name[3:], "0123456789abcdef") == ""
 }
 
 // ReadHost reads the observed host: the compiler's input.

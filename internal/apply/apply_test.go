@@ -216,7 +216,7 @@ func TestApplyOrder(t *testing.T) {
 	for _, op := range res.Plan.Ops {
 		kinds = append(kinds, op.OpType())
 	}
-	want := "assign_interfaces links sysctl offloads routing nft_apply docker_user"
+	want := "assign_interfaces links sysctl offloads links routing nft_apply docker_user"
 	if strings.Join(kinds, " ") != want {
 		t.Errorf("order %v, want %s", kinds, want)
 	}
@@ -394,7 +394,7 @@ func TestVerifyDetectsManipulation(t *testing.T) {
 		"offload on":          {func(h *newEnvHandle) { h.runEthtool("wan0") }, "offloads"},
 		"port detached":       {func(h *newEnvHandle) { h.runIP("link", "set", "dev", "lan0", "nomaster") }, "bridge br-iot has ports"},
 		"bridge down":         {func(h *newEnvHandle) { h.runIP("link", "set", "dev", "br-iot", "down") }, "bridge br-iot is down"},
-		"docker rule gone":    {func(h *newEnvHandle) { h.runIptables("-D", "DOCKER-USER", "-i", "wan0") }, "DOCKER-USER"},
+		"docker rule gone":    {func(h *newEnvHandle) { h.runIptables("-D", "DOCKER-USER", "-i", "br-iot") }, "DOCKER-USER"},
 		"own route added":     {func(h *newEnvHandle) { h.batch("route replace 10.77.0.0/16 table 100 proto 201 dev lan0") }, "unexpected route"},
 		"own rule removed":    {func(h *newEnvHandle) { h.batch("rule del priority 1000 iif br-iot table 100 protocol 201") }, "missing rule"},
 	} {
@@ -504,5 +504,136 @@ func TestNamespaceIsPassedThrough(t *testing.T) {
 		if enc, _ := executor.Encode(op); !strings.Contains(string(enc), `"namespace":"gwns"`) {
 			t.Errorf("%s has no namespace: %s", op.OpType(), enc)
 		}
+	}
+}
+
+func TestAPortThatMovesToAnotherNetworkEndsUpInThatBridge(t *testing.T) {
+	// both directions: to a bridge that sorts earlier (br-iot) and to one that sorts later (br-lab)
+	e := newEnv(t)
+	e.apply(e.compile())
+	swap := func(cfg *model.Configuration) {
+		for id, ifs := range map[string][]model.InterfaceRef{
+			"0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21": {{Name: ptr("lan1"), Mac: ptr("02:00:00:00:01:01")}},
+			"1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32": {{Name: ptr("lan0"), Mac: ptr("02:00:00:00:00:01")}},
+		} {
+			n := (*cfg.Networks)[id]
+			lan, _ := n.AsLanNetwork()
+			lan.Interfaces = ifs
+			_ = n.FromLanNetwork(lan)
+			(*cfg.Networks)[id] = n
+		}
+	}
+	swap(e.cfg)
+	res := e.apply(e.compile())
+	if res.After.Links["lan1"].Master != "br-iot" || res.After.Links["lan0"].Master != "br-lab" {
+		t.Errorf("lan1 in %q, lan0 in %q", res.After.Links["lan1"].Master, res.After.Links["lan0"].Master)
+	}
+}
+
+func TestHostRoutesAndHostSourcesVerifyAsTheKernelPrintsThem(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Management.AllowedSources = &[]string{"192.168.56.0/24", "10.0.0.5/32"}
+	n := (*e.cfg.Networks)["0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"]
+	lan, _ := n.AsLanNetwork()
+	lan.Routes = &[]model.DownstreamRoute{{Destination: "10.30.0.5/32", Via: "10.10.0.2"}}
+	_ = n.FromLanNetwork(lan)
+	(*e.cfg.Networks)["0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"] = n
+	res := e.apply(e.compile()) // verify inside apply would fail on a /32 mismatch
+	if len(res.Mismatches) != 0 {
+		t.Fatal(res.Mismatches)
+	}
+	// and a second apply recognizes both as already there
+	res = e.apply(e.compile())
+	if !res.Plan.Empty() {
+		t.Errorf("a /32 route is planned again: %v", res.Plan.Summary)
+	}
+}
+
+func TestNewRoutesAreAddedBeforeStaleOnesGo(t *testing.T) {
+	e := newEnv(t)
+	e.apply(e.compile())
+	e.cfg.Uplink.Gateway = ptr("203.0.113.20")
+	p, err := apply.Preview(context.Background(), e.exec(), "", e.compile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var routing []*executor.Routing
+	for _, op := range p.Ops {
+		if r, ok := op.(*executor.Routing); ok {
+			routing = append(routing, r)
+		}
+	}
+	if len(routing) != 1 {
+		t.Fatalf("%d routing operations: the old default route is not on a device that goes, it must be deleted in the same operation after the new one is added", len(routing))
+	}
+	var replace, del bool
+	for _, r := range routing[0].Routes {
+		replace = replace || r.Action == "replace" && r.Via == "203.0.113.20"
+		del = del || r.Action == "delete" && r.Via == "203.0.113.10"
+	}
+	if !replace || !del {
+		t.Errorf("%+v", routing[0].Routes)
+	}
+}
+
+func TestAnExistingBridgeThatIsNotOursIsNotTakenOver(t *testing.T) {
+	e := newEnv(t)
+	e.k.AddLink("br-iot", "02:aa:00:00:00:02", "bridge", true) // an operating system bridge
+	_, err := apply.Preview(context.Background(), e.exec(), "", e.compile())
+	var ae *apply.Error
+	if !asError(err, &ae) || ae.Stage != "plan" || !strings.Contains(err.Error(), "does not belong to Chaos Gateway") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDockerAcceptRulesBehindDockersReturnArePutInFront(t *testing.T) {
+	e := newEnv(t)
+	e.apply(e.compile())
+	e.k.DockerOursLast()
+	tg := e.compile()
+	s, _ := apply.ReadState(context.Background(), e.exec(), "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
+	var found bool
+	for _, m := range apply.Verify(tg, s) {
+		found = found || m.Subsystem == "docker"
+	}
+	if !found {
+		t.Fatal("verify did not notice that the rules are ineffective")
+	}
+	res := e.apply(tg)
+	if len(res.Mismatches) != 0 || !res.After.DockerUser.OursFirst {
+		t.Fatalf("not repaired: %v %+v", res.Mismatches, res.After.DockerUser)
+	}
+}
+
+func TestDockersInterfacesAreNotPartOfTheObservedHost(t *testing.T) {
+	e := newEnv(t)
+	e.k.AddLink("docker0", "02:42:00:00:00:01", "bridge", true)
+	e.k.AddLink("veth0123abc", "02:42:00:00:00:02", "veth", true)
+	e.k.AddLink("br-0123456789ab", "02:42:00:00:00:03", "bridge", true)
+	h, err := apply.ReadHost(context.Background(), e.exec(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range h.Links {
+		if strings.HasPrefix(l.Name, "docker") || strings.HasPrefix(l.Name, "veth") || strings.HasPrefix(l.Name, "br-") {
+			t.Errorf("%s is part of the host: a Docker container starting would look like a change", l.Name)
+		}
+	}
+}
+
+func TestLinksComeUpAfterTheirSysctls(t *testing.T) {
+	e := newEnv(t)
+	res := e.apply(e.compile())
+	sysctl, up := -1, -1
+	for i, op := range res.Plan.Ops {
+		if _, ok := op.(*executor.Sysctl); ok {
+			sysctl = i
+		}
+		if l, ok := op.(*executor.Links); ok && len(l.Entries) > 0 && l.Entries[0].Action == "up" {
+			up = i
+		}
+	}
+	if sysctl < 0 || up < sysctl {
+		t.Errorf("sysctl at %d, up at %d: a bridge must not be up before accept_ra is off", sysctl, up)
 	}
 }

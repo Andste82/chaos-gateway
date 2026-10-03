@@ -55,7 +55,7 @@ func (k *Kernel) nftList() any {
 			m["flags"] = s.flags
 		}
 		if len(s.elems) > 0 {
-			m["elem"] = s.elems
+			m["elem"] = printedElems(s)
 		}
 		out = append(out, map[string]any{"set": m})
 	}
@@ -312,3 +312,24 @@ func walk(e any, pred func(any) bool) bool {
 }
 
 func refersTo(e any, ref string) bool { s, ok := e.(string); return ok && s == ref }
+
+// printedElems renders the elements as nft prints them: a single-address interval element (a /32
+// prefix) comes out as the bare address.
+func printedElems(s *nftSet) []json.RawMessage {
+	out := make([]json.RawMessage, 0, len(s.elems))
+	for _, e := range s.elems {
+		var v struct {
+			Prefix *struct {
+				Addr string `json:"addr"`
+				Len  int    `json:"len"`
+			} `json:"prefix"`
+		}
+		if json.Unmarshal(e, &v) == nil && v.Prefix != nil && v.Prefix.Len == 32 {
+			b, _ := json.Marshal(v.Prefix.Addr)
+			out = append(out, b)
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}

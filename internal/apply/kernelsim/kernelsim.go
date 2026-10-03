@@ -213,6 +213,22 @@ func (k *Kernel) ForeignRoute(table, dst, via, dev string) {
 	k.routes = append(k.routes, route{table: table, dst: dst, via: via, dev: dev, proto: "static"})
 }
 
+// DockerOursLast moves the accept rules of Chaos Gateway behind Docker's RETURN rule, which makes
+// them ineffective: what a Docker restart or another tool can do to the chain.
+func (k *Kernel) DockerOursLast() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var ours, other []dockerRule
+	for _, r := range k.docker {
+		if r.ours {
+			ours = append(ours, r)
+		} else {
+			other = append(other, r)
+		}
+	}
+	k.docker = append(other, ours...)
+}
+
 // BumpCounter adds to a named counter, as traffic would.
 func (k *Kernel) BumpCounter(name string, n int64) {
 	k.mu.Lock()
@@ -432,7 +448,8 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			out = append(out, map[string]any{"dst": "default", "gateway": r.via, "dev": r.dev, "flags": []string{}})
 		}
 		for _, r := range k.routes {
-			m := map[string]any{"dst": r.dst, "table": r.table, "flags": []string{}}
+			// `ip -j` prints a host route as the bare address
+			m := map[string]any{"dst": strings.TrimSuffix(r.dst, "/32"), "table": r.table, "flags": []string{}}
 			if r.via != "" {
 				m["gateway"] = r.via
 			}

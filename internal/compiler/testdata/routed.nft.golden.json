@@ -232,6 +232,80 @@
       "add": {
         "rule": {
           "chain": "forward",
+          "comment": "2a45a9c42344",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "br-iot"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "br-iot"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "c639507a3cea",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "br-lab"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "br-lab"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
           "comment": "1ac1a8df8489",
           "expr": [
             {
@@ -540,8 +614,19 @@
       "add": {
         "rule": {
           "chain": "input",
-          "comment": "3275380f38d5",
+          "comment": "d41f816bae07",
           "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "!=",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
             {
               "match": {
                 "left": {
@@ -573,6 +658,36 @@
             },
             {
               "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "10673c09e7ec",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "tcp"
+                  }
+                },
+                "op": "==",
+                "right": 443
+              }
+            },
+            {
+              "counter": "input_drop"
+            },
+            {
+              "drop": null
             }
           ],
           "family": "inet",

@@ -42,7 +42,10 @@ func targetNftLines(t *compiler.Target) []line {
 	for _, s := range t.Nft.Sets {
 		add(fmt.Sprintf("set %s type %s%s", s.Name, s.Type, flagText(s.Flags)))
 		if !s.Dynamic {
-			els := append([]string(nil), s.Elements...)
+			els := make([]string, 0, len(s.Elements))
+			for _, e := range s.Elements {
+				els = append(els, linux.NormalizeElement(e))
+			}
 			sort.Strings(els)
 			for _, e := range els {
 				add("  element " + e)

@@ -8,8 +8,8 @@ type DockerUserState struct {
 	ChainExists bool
 	In          []string
 	Out         []string
-	// Position is the index of the first foreign rule relative to ours: rules of Chaos Gateway
-	// must stand in front of Docker's own (a RETURN at the end of the chain).
+	// OursFirst is false when a foreign rule that ends the traversal (Docker's RETURN) stands in
+	// front of ours: such a rule makes ours ineffective.
 	OursFirst bool
 }
 
@@ -29,7 +29,15 @@ func ParseDockerUser(out string) *DockerUserState {
 			}
 		}
 		if !ours {
-			foreign = true
+			// only a rule that ends the traversal in front of ours makes ours ineffective
+			for i, w := range f {
+				if w == "-j" && i+1 < len(f) {
+					switch f[i+1] {
+					case "RETURN", "ACCEPT", "DROP", "REJECT":
+						foreign = true
+					}
+				}
+			}
 			continue
 		}
 		if foreign {

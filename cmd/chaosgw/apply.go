@@ -36,6 +36,10 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if *execUID < 0 {
+		fmt.Fprintln(stderr, "chaosgw apply: --executor-uid must not be negative")
+		return 2
+	}
 	if *file == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "usage: chaosgw apply --file <configuration> [--socket <path>] [--state-dir <dir>] [--dry-run]")
 		return 2

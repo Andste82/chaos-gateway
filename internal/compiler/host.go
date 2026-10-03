@@ -48,7 +48,7 @@ func (h Host) Resolve(ref model.InterfaceRef) (HostLink, bool) {
 	if ref.Mac != nil && *ref.Mac != "" {
 		mac := strings.ToLower(*ref.Mac)
 		for _, l := range h.Links {
-			if l.Kind != "bridge" && strings.ToLower(l.MAC) == mac {
+			if !sharesParentMAC(l.Kind) && strings.ToLower(l.MAC) == mac {
 				return l, true
 			}
 		}
@@ -58,6 +58,16 @@ func (h Host) Resolve(ref model.InterfaceRef) (HostLink, bool) {
 		return h.Link(*ref.Name)
 	}
 	return HostLink{}, false
+}
+
+// sharesParentMAC reports whether devices of that kind carry the MAC of another interface: a
+// bridge takes the MAC of its first port, a VLAN, macvlan or bond that of its parent.
+func sharesParentMAC(kind string) bool {
+	switch kind {
+	case "bridge", "vlan", "macvlan", "macvtap", "bond":
+		return true
+	}
+	return false
 }
 
 // DefaultGateway returns the gateway of the default route of the main table on dev (lowest metric).

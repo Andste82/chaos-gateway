@@ -905,6 +905,9 @@ func TestSubscribersThatDoNotReadAreDroppedWithoutDelayingOthers(t *testing.T) {
 		if err := h.e.Observe(context.Background(), host); err != nil {
 			t.Fatal(err)
 		}
+		if i%10 == 0 {
+			time.Sleep(2 * time.Millisecond) // the fast reader gets to run; the slow one never does
+		}
 	}
 	h.barrier()
 	cancelFast()
@@ -921,5 +924,199 @@ func TestSubscribersThatDoNotReadAreDroppedWithoutDelayingOthers(t *testing.T) {
 	defer mu.Unlock()
 	if got < 300 {
 		t.Errorf("the fast subscriber got %d events", got)
+	}
+}
+
+type panicExec struct {
+	inner apply.Exec
+	armed *bool
+}
+
+func (p panicExec) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	if *p.armed {
+		for _, op := range ops {
+			if _, ok := op.(*executor.NftApply); ok {
+				panic("kaboom")
+			}
+		}
+	}
+	return p.inner.Do(ctx, ops...)
+}
+
+func TestAPanicInTheApplyLoopStopsTheEngineInsteadOfHangingItsCallers(t *testing.T) {
+	h := newHarness(t)
+	armed := false
+	e, err := engine.New(engine.Config{Store: h.st, Exec: panicExec{inner: apply.Local{E: h.ex}, armed: &armed}, Clock: h.clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e
+	t.Cleanup(e.Close)
+	armed = true
+	_, err = h.apply(h.revision(nil))
+	if err == nil || !errors.Is(err, engine.ErrClosed) {
+		t.Fatalf("got %v", err)
+	}
+	select {
+	case <-e.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done is not closed: the process cannot tell that the engine is gone")
+	}
+	var panicked bool
+	for _, hl := range e.Health() {
+		panicked = panicked || hl.State == "panicked"
+	}
+	if !panicked {
+		t.Errorf("health %+v", e.Health())
+	}
+}
+
+func TestCloseWithoutStartAndTwiceIsFine(t *testing.T) {
+	h := newHarness(t)
+	e, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: h.ex}, Clock: h.clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Close() // never started
+	if err := e.FollowHost(context.Background(), time.Second); err == nil {
+		t.Error("FollowHost before Start must fail")
+	}
+	h.start()
+	h.e.Close()
+	h.e.Close()
+	if err := h.e.Start(context.Background()); err == nil {
+		t.Error("a second Start must fail")
+	}
+}
+
+// An observation that arrives while a revision is being applied, and an apply that then fails: the
+// caller is told about the restore, not about the generation the observation created.
+func TestAFailedApplyWithAnObservationInBetweenIsRestoredAndReportedRight(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(nil))
+	base := h.e.Snapshot()
+	block := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") && strings.Contains(stdin, "203.0.113.20") == false {
+			// the first transaction after the revision starts blocks, then fails
+			var first bool
+			once.Do(func() { first = true; close(entered); <-block })
+			if first {
+				return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+			}
+		}
+		return nil
+	}
+	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
+	done := make(chan error, 1)
+	go func() { _, err := h.apply(r2); done <- err }()
+	<-entered
+	host := base.Host
+	links := append([]compiler.HostLink(nil), host.Links...)
+	for i, l := range links {
+		if l.Name == "wan0" {
+			links[i].Addrs = []netipPrefix{mustPrefix("198.51.100.5/24")}
+		}
+	}
+	host.Links = links
+	if err := h.e.Observe(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	close(block)
+	err := <-done
+	var af *engine.ErrApplyFailed
+	if !errors.As(err, &af) || !af.Restored {
+		t.Fatalf("got %v", err)
+	}
+	s := h.barrier()
+	if s.Revision == r2 || h.st.ActiveID() == r2 {
+		t.Error("the failed revision became active")
+	}
+	h.k.Fail = nil
+	// the kernel runs the committed revision with the observed address
+	if s.Applied.Uplink.Addr.String() != "198.51.100.5/24" || s.LastError != "" || s.Applied.Revision != s.Revision {
+		t.Errorf("applied %+v, error %q", s.Applied, s.LastError)
+	}
+	// (the observed host here is made up, so the kernel is not compared with a compile of the real one)
+}
+
+func TestAFailedApplyWithoutAWaiterIsRetried(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(nil))
+	var fails int
+	var mu sync.Mutex
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
+			mu.Lock()
+			defer mu.Unlock()
+			if fails < 1 {
+				fails++
+				return &executor.Result{Exit: 1, Stderr: "Error: transient\n"}
+			}
+		}
+		return nil
+	}
+	base := h.e.Snapshot()
+	host := base.Host
+	links := append([]compiler.HostLink(nil), host.Links...)
+	for i, l := range links {
+		if l.Name == "wan0" {
+			links[i].Addrs = []netipPrefix{mustPrefix("198.51.100.5/24")}
+		}
+	}
+	host.Links = links
+	if err := h.e.Observe(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	s := h.barrier()
+	if s.LastError == "" {
+		t.Fatalf("the apply did not fail: %+v", s)
+	}
+	h.clk.BlockUntil(1)
+	h.clk.Advance(11 * time.Second) // the retry delay
+	for i := 0; i < 200; i++ {
+		s = h.barrier()
+		if s.LastError == "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.LastError != "" || s.Applied.Uplink.Addr.String() != "198.51.100.5/24" {
+		t.Fatalf("the failed apply was not retried: %+v", s)
+	}
+}
+
+func TestAFirstRevisionThatFailedIsNotAppliedAgainByLaterObservations(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	if _, err := h.apply(h.revision(nil)); err == nil {
+		t.Fatal("must fail")
+	}
+	h.k.ClearLog()
+	if err := h.e.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.k.AddLink("lan9", "02:00:00:00:09:09", "veth", true)
+	if err := h.e.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.barrier()
+	for _, c := range h.k.Commands() {
+		if strings.HasPrefix(c, "nft -j -f") {
+			t.Errorf("an uncommitted candidate was applied again: %s", c)
+		}
 	}
 }

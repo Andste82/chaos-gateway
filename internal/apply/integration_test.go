@@ -245,6 +245,16 @@ func TestGatewayProtection(t *testing.T) {
 	if !strings.Contains(l67.Output(), "datagram "+testbed.ClientAAddr) || !strings.Contains(l53.Output(), "datagram "+testbed.ClientAAddr) {
 		t.Errorf("DHCP and DNS ports must be reachable: 67=%q 53=%q", l67.Output(), l53.Output())
 	}
+	// DHCP discovers are broadcasts: they must reach the server port, too
+	_, _ = g.top.B.Run(context.Background(), "python3", "-c", `import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(b"x", ("255.255.255.255", 67))
+`)
+	time.Sleep(500 * time.Millisecond)
+	if !strings.Contains(l67.Output(), "datagram "+testbed.ClientBAddr) {
+		t.Errorf("a broadcast to UDP 67 did not arrive: %q", l67.Output())
+	}
 	if !tcpConnects(g.top.A, testbed.LAN0Gateway, 53) || !strings.Contains(t53.Output(), "connect") {
 		t.Error("TCP 53 (DNS) must be reachable from a test network")
 	}
@@ -392,8 +402,10 @@ func TestAChangedUplinkAddressKeepsNATWorkingOnARealKernel(t *testing.T) {
 	if got := udpSourceSeen(t, g.top.Server, testbed.ServerAddr, g.top.A); got != testbed.UplinkGateway {
 		t.Fatalf("before: the server saw %s", got)
 	}
-	g.top.GW.Must("ip", "addr", "add", "203.0.113.50/24", "dev", "wan0")
+	// the old address goes first: a second address in the same prefix would be a secondary one and
+	// vanish with the primary
 	g.top.GW.Must("ip", "addr", "del", testbed.UplinkGateway+"/24", "dev", "wan0")
+	g.top.GW.Must("ip", "addr", "add", "203.0.113.50/24", "dev", "wan0")
 	tg := g.compile()
 	if tg.Uplink.Addr.Addr().String() != "203.0.113.50" {
 		t.Fatalf("uplink %+v", tg.Uplink)

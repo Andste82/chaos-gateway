@@ -18,7 +18,7 @@ import (
 // PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2).
 const PolicyTable = 100
 
-// PolicyRulePriority is the priority of the first policy rule; one rule per test network follows.
+// PolicyRulePriority is the priority of the policy rules: one rule per test network, all alike.
 const PolicyRulePriority = 1000
 
 // DefaultUIPort is the UI/API port when the configuration names none.
@@ -351,12 +351,12 @@ func (t *Target) compileHostState() {
 	// offloads off on the ports and bridges of test networks and on the uplink (plan §3.4)
 	t.Offloads = append(t.Offloads, t.Interfaces...)
 
+	// DOCKER-USER accepts what comes from or goes to the bridges of test networks: traffic to and
+	// from the uplink is covered by it (a packet between a bridge and the uplink has the bridge on
+	// one side), and Docker's own bridges keep their isolation
 	du := map[string]bool{}
 	for _, b := range t.Bridges {
 		du[b.Name] = true
-	}
-	if t.Uplink.Name != "" {
-		du[t.Uplink.Name] = true
 	}
 	for n := range du {
 		t.DockerUser = append(t.DockerUser, n)
@@ -400,8 +400,10 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 		}
 		return t.Routes[i].Dst < t.Routes[j].Dst
 	})
-	for i, b := range t.Bridges {
-		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority + i, Iif: b.Name, Table: PolicyTable})
+	// one priority for all of them: a network that is added or removed never renumbers the others,
+	// and no window opens in which test traffic falls through to the main table
+	for _, b := range t.Bridges {
+		t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: PolicyRulePriority, Iif: b.Name, Table: PolicyTable})
 	}
 }
 

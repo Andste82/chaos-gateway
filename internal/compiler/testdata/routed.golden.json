@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "bd6f30c869ccf5ec",
+  "hash": "73c0fbc85c30b047",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -128,15 +128,14 @@
     {
       "action": "add",
       "family": 4,
-      "priority": 1001,
+      "priority": 1000,
       "iif": "br-lab",
       "table": 100
     }
   ],
   "docker_user": [
     "br-iot",
-    "br-lab",
-    "wan0"
+    "br-lab"
   ],
   "nft": {
     "sets": [
@@ -196,6 +195,66 @@
               }
             ],
             "comment": "449cc4c202ef"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-iot"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-iot"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "2a45a9c42344"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-lab"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "br-lab"
+                }
+              },
+              {
+                "accept": null
+              }
+            ],
+            "comment": "c639507a3cea"
           },
           {
             "expr": [
@@ -458,6 +517,17 @@
               {
                 "match": {
                   "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "!=",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
                     "payload": {
                       "field": "saddr",
                       "protocol": "ip"
@@ -488,7 +558,30 @@
                 "accept": null
               }
             ],
-            "comment": "3275380f38d5"
+            "comment": "d41f816bae07"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "dport",
+                      "protocol": "tcp"
+                    }
+                  },
+                  "op": "==",
+                  "right": 443
+                }
+              },
+              {
+                "counter": "input_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "10673c09e7ec"
           },
           {
             "expr": [

@@ -178,8 +178,14 @@ func verifyNft(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 		if want.Dynamic {
 			continue
 		}
+		if typ := strings.Trim(string(got.Type), `"`); typ != want.Type || strings.Join(got.Flags, ",") != strings.Join(want.Flags, ",") {
+			bad("set %s is %s %v, want %s %v", name, typ, got.Flags, want.Type, want.Flags)
+		}
 		have := got.Elements()
-		wantEl := append([]string(nil), want.Elements...)
+		wantEl := make([]string, 0, len(want.Elements))
+		for _, e := range want.Elements {
+			wantEl = append(wantEl, linux.NormalizeElement(e))
+		}
 		sort.Strings(wantEl)
 		if strings.Join(have, ",") != strings.Join(wantEl, ",") {
 			bad("set %s holds %v, want %v", name, have, wantEl)

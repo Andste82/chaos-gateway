@@ -184,6 +184,11 @@ func TestParseDockerUser(t *testing.T) {
 	if !st.ChainExists || len(st.In) != 1 || st.In[0] != "br-lan0" || len(st.Out) != 1 || !st.OursFirst {
 		t.Fatalf("%+v", st)
 	}
+	// a foreign rule that does not end the traversal does not matter
+	soft := ParseDockerUser("-N DOCKER-USER\n-A DOCKER-USER -j LOG\n-A DOCKER-USER -i br-lan0 -m comment --comment chaosgw -j ACCEPT\n-A DOCKER-USER -j RETURN\n")
+	if !soft.OursFirst {
+		t.Errorf("a LOG rule in front of ours: %+v", soft)
+	}
 	late := ParseDockerUser("-N DOCKER-USER\n-A DOCKER-USER -j RETURN\n-A DOCKER-USER -i br-lan0 -m comment --comment \"chaosgw\" -j ACCEPT\n")
 	if late.OursFirst || len(late.In) != 1 {
 		t.Fatalf("a rule behind Docker's RETURN is ineffective: %+v", late)

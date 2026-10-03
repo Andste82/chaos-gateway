@@ -184,8 +184,8 @@ func TestTheEngineFollowsTheUplinkThroughNetlinkEvents(t *testing.T) {
 		t.Fatalf("before: %s", got)
 	}
 	// the OS changes the uplink address; nobody tells the engine
-	r.top.GW.Must("ip", "addr", "add", "203.0.113.50/24", "dev", "wan0")
 	r.top.GW.Must("ip", "addr", "del", testbed.UplinkGateway+"/24", "dev", "wan0")
+	r.top.GW.Must("ip", "addr", "add", "203.0.113.50/24", "dev", "wan0")
 	ev, ok := waitEvent(ch, engine.EventUplinkChanged, 60*time.Second)
 	if !ok {
 		t.Fatal("no uplink_changed event after the address change")

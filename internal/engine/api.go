@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -142,8 +143,21 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 // interfaces behind the configured MACs and names) through netlink events: after a burst of
 // events the host is read and handed to the state owner (plan §2.2). It runs until ctx ends.
 func (e *Engine) FollowHost(ctx context.Context, debounce time.Duration) error {
+	if !e.started {
+		return errors.New("engine: not started")
+	}
+	// the watcher belongs to the engine: it ends with it, and with the caller's context
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-e.ctx.Done():
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
 	trigger, err := observer.Watch(ctx, e.cfg.Namespace, e.cfg.Clock, debounce)
 	if err != nil {
+		cancel()
 		return err
 	}
 	e.sup.Go(ctx, "engine.follow-host", func(ctx context.Context) error {

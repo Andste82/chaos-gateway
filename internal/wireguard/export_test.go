@@ -268,3 +268,55 @@ func TestZipHoldsOneFilePerExportInNameOrder(t *testing.T) {
 		t.Errorf("content %v", content)
 	}
 }
+
+func TestTheClientConfigCarriesWhatTheMatrixLetsReachTheClient(t *testing.T) {
+	in, hubID, cid, _, _ := exportSetup(t)
+	// without a reachable list and without matrix entries the client carries its tunnel subnet only
+	n := (*in.Config.Networks)[hubID]
+	wg, _ := n.AsWireGuardNetwork()
+	c := (*wg.Clients)[cid]
+	c.Reachable = nil
+	(*wg.Clients)[cid] = c
+	_ = n.FromWireGuardNetwork(wg)
+	(*in.Config.Networks)[hubID] = n
+	e, _ := ClientConfig(in, hubID, cid)
+	if !strings.Contains(e.Conf, "AllowedIPs = 10.99.0.0/24\n") {
+		t.Fatalf("%s", e.Conf)
+	}
+	// an entry that allows a test network to reach the hub: the decrypted packets of that network
+	// are only accepted by the client when their source is in AllowedIPs
+	iot := ""
+	for id, nn := range *in.Config.Networks {
+		if disc, _ := nn.Discriminator(); disc == "lan" {
+			iot = id
+		}
+	}
+	hub := hubID
+	in.Config.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{
+		{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &hub}, Policy: model.MatrixEntryPolicyAllow},
+	}}
+	e, _ = ClientConfig(in, hubID, cid)
+	if !strings.Contains(e.Conf, "AllowedIPs = 10.10.0.0/24, 10.99.0.0/24\n") {
+		t.Errorf("a network that may reach the hub must be in the client's AllowedIPs:\n%s", e.Conf)
+	}
+	// a deny entry, and an entry from the uplink, add nothing
+	up := model.MatrixEndpointUplink(true)
+	in.Config.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{
+		{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &hub}, Policy: model.MatrixEntryPolicyDeny},
+		{From: model.MatrixEndpoint{Uplink: &up}, To: model.MatrixEndpoint{Network: &hub}, Policy: model.MatrixEntryPolicyAllow},
+	}}
+	e, _ = ClientConfig(in, hubID, cid)
+	if !strings.Contains(e.Conf, "AllowedIPs = 10.99.0.0/24\n") {
+		t.Errorf("%s", e.Conf)
+	}
+	// reachable management: the allowed sources
+	m := model.MatrixEndpointManagement(true)
+	c.Reachable = &[]model.MatrixEndpoint{{Management: &m}}
+	(*wg.Clients)[cid] = c
+	_ = n.FromWireGuardNetwork(wg)
+	(*in.Config.Networks)[hubID] = n
+	e, _ = ClientConfig(in, hubID, cid)
+	if !strings.Contains(e.Conf, "192.168.88.0/24") {
+		t.Errorf("the management network is in the list of a client that may reach it:\n%s", e.Conf)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -77,5 +78,61 @@ func TestACorruptFileIsAnError(t *testing.T) {
 	}
 	if _, err := s.WireGuard(id); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestOpenReadOnlyCreatesAndChangesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := OpenReadOnly(dir); err == nil {
+		t.Fatal("a directory without secrets is an error: nothing is created")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "wireguard")); err == nil {
+		t.Fatal("OpenReadOnly created a directory")
+	}
+	rw, _ := Open(dir)
+	if err := rw.PutWireGuard(id, WireGuardKeys{PrivateKey: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, err := ro.WireGuard(id); err != nil || k.PrivateKey != "p" {
+		t.Fatalf("%+v %v", k, err)
+	}
+	// a directory that others can read is refused: the secrets are not protected
+	if err := os.Chmod(filepath.Join(dir, "wireguard"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReadOnly(dir); err == nil {
+		t.Fatal("an open directory must be refused")
+	}
+	if st, _ := os.Stat(filepath.Join(dir, "wireguard")); st.Mode().Perm() != 0o755 {
+		t.Error("OpenReadOnly changed the mode")
+	}
+}
+
+func TestConcurrentWritersDoNotCollide(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.PutWireGuard(id, WireGuardKeys{PrivateKey: "k", Generation: i}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, err := s.WireGuard(id); err != nil {
+		t.Fatal(err)
+	}
+	ents, _ := os.ReadDir(filepath.Join(s.dir, "wireguard"))
+	if len(ents) != 1 {
+		t.Errorf("%d files: no temporary file is left behind", len(ents))
+	}
+	if ids, _ := s.IDs(); len(ids) != 1 {
+		t.Errorf("%v", ids)
 	}
 }

@@ -280,7 +280,12 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 			return nil, err
 		}
 		if r.Exit != 0 && (!s.Idempotent || !onlyBenign(r.Stderr)) {
-			return nil, &CommandError{Cmd: s.Cmd, Exit: r.Exit, Stderr: r.Stderr}
+			stderr := r.Stderr
+			if s.NeedsConfig {
+				// the message of a rejected configuration may quote a key
+				stderr = "wg rejected the configuration"
+			}
+			return nil, &CommandError{Cmd: s.Cmd, Exit: r.Exit, Stderr: stderr}
 		}
 	}
 	if o, ok := op.(*Offloads); ok {
@@ -341,6 +346,10 @@ func (e *Executor) wgConfig(w *WireGuard) (string, error) {
 	if priv == "" {
 		return "", fmt.Errorf("the key of %s has no private key", w.Name)
 	}
+	// `wg` echoes a key it rejects: a malformed one is refused here, before it is rendered
+	if !wgKey.MatchString(priv) {
+		return "", fmt.Errorf("the key of %s is not a WireGuard key", w.Name)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nListenPort = %d\n", priv, w.ListenPort)
 	for _, p := range w.Peers {
@@ -351,6 +360,9 @@ func (e *Executor) wgConfig(w *WireGuard) (string, error) {
 				return "", fmt.Errorf("the preshared key of a peer of %s: %w", w.Name, err)
 			}
 			if psk != "" {
+				if !wgKey.MatchString(psk) {
+					return "", fmt.Errorf("the preshared key of a peer of %s is not a WireGuard key", w.Name)
+				}
 				fmt.Fprintf(&b, "PresharedKey = %s\n", psk)
 			}
 		}

@@ -277,12 +277,11 @@ func TestTwoPortTopologyDeniesTestToManagementByDefault(t *testing.T) {
 	var guard, accept = -1, -1
 	for i, r := range chainOf(t, tg, "forward").Rules {
 		s := js(r.Expr)
-		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) {
-			if strings.Contains(s, "mgmt_src") && strings.Contains(s, "drop") {
-				guard = i
-			} else if strings.Contains(s, "accept") {
-				accept = i
-			}
+		if strings.Contains(s, "mgmt_src") && strings.Contains(s, "drop") && strings.Contains(s, "ifs_test") && strings.Contains(s, `"wan0"`) {
+			guard = i
+		}
+		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept") {
+			accept = i
 		}
 	}
 	if guard < 0 || accept < 0 || guard > accept {

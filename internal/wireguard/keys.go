@@ -22,6 +22,17 @@ func LinkPeerKeyID(networkID string) string {
 	return uuid.NewSHA1(linkPeerNamespace, []byte(networkID+"/peer")).String()
 }
 
+// KeyID is the secrets store id of the key material of a peer in a key generation. Generation 0 uses
+// the id itself; every rotation gets a record of its own, so a revision that is rolled back or
+// discarded still finds the keys it refers to. Records of generations that no committed revision
+// uses are removed by Prune.
+func KeyID(id string, generation int) string {
+	if generation <= 0 {
+		return id
+	}
+	return uuid.NewSHA1(linkPeerNamespace, []byte(fmt.Sprintf("%s/generation/%d", id, generation))).String()
+}
+
 // KeyLen is the length of a WireGuard key in bytes.
 const KeyLen = 32
 

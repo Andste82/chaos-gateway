@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "cafd9cdee3adaea4",
+  "hash": "bc157d2c61af5385",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -232,6 +232,20 @@
       "priority": 1000,
       "iif": "wg-site-b",
       "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "to": "10.50.0.0/24",
+      "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "to": "10.60.0.0/24",
+      "table": 100
     }
   ],
   "docker_user": [
@@ -293,6 +307,7 @@
       "forward_drop",
       "input_drop",
       "ipv6_drop",
+      "mss_clamp",
       "nat_0b7c6a3e",
       "nat_4e2f9d1c",
       "nat_7a8b9c0d",
@@ -1031,6 +1046,9 @@
                 }
               },
               {
+                "counter": "mss_clamp"
+              },
+              {
                 "mangle": {
                   "key": {
                     "tcp option": {
@@ -1046,7 +1064,7 @@
                 }
               }
             ],
-            "comment": "e9d0e917dff8"
+            "comment": "9d39d425bcff"
           },
           {
             "expr": [
@@ -1079,6 +1097,9 @@
                 }
               },
               {
+                "counter": "mss_clamp"
+              },
+              {
                 "mangle": {
                   "key": {
                     "tcp option": {
@@ -1094,7 +1115,7 @@
                 }
               }
             ],
-            "comment": "0a0a2fc84585"
+            "comment": "0ede9e1a40b7"
           }
         ]
       },
@@ -1246,10 +1267,20 @@
                   },
                   "op": "==",
                   "right": {
-                    "prefix": {
-                      "addr": "10.255.0.0",
-                      "len": 31
-                    }
+                    "set": [
+                      {
+                        "prefix": {
+                          "addr": "10.255.0.0",
+                          "len": 31
+                        }
+                      },
+                      {
+                        "prefix": {
+                          "addr": "10.60.0.0",
+                          "len": 24
+                        }
+                      }
+                    ]
                   }
                 }
               },
@@ -1271,7 +1302,7 @@
                 "masquerade": null
               }
             ],
-            "comment": "ee9504949f5c"
+            "comment": "1db36b90f42c"
           }
         ]
       }

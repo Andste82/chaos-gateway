@@ -72,6 +72,13 @@ func wgName(id, name string, used map[string]bool) string {
 	return cand
 }
 
+func keyGeneration(k *model.WireGuardKeySettings) int {
+	if k == nil || k.Generation == nil {
+		return 0
+	}
+	return *k.Generation
+}
+
 func seconds(d *model.Duration, def int) int {
 	if d == nil {
 		return def
@@ -150,7 +157,7 @@ func (t *Target) compileWireGuardNetwork(id string, n *domain.NetInfo, in Input,
 					p.networks = append(p.networks, pf)
 				}
 				if c.Key.PresharedKey != nil && *c.Key.PresharedKey {
-					p.PresharedKeyRef = cid
+					p.PresharedKeyRef = wireguard.KeyID(cid, keyGeneration(c.Key))
 				}
 				if c.Reachable != nil {
 					p.reachable = *c.Reachable
@@ -176,7 +183,7 @@ func (t *Target) compileWireGuardNetwork(id string, n *domain.NetInfo, in Input,
 					p.Routes = maskedStrings(wg.Routes)
 				}
 				if wg.Peer.Key.PresharedKey != nil && *wg.Peer.Key.PresharedKey {
-					p.PresharedKeyRef = wireguard.LinkPeerKeyID(id)
+					p.PresharedKeyRef = wireguard.KeyID(wireguard.LinkPeerKeyID(id), keyGeneration(wg.Peer.Key))
 				}
 				w.Peers = append(w.Peers, p)
 			}
@@ -257,7 +264,15 @@ func (t *Target) topology(idx *domain.Index, nets map[string]*Bridge) *topo {
 			src = append(src, p.networks...)
 		}
 		if w.Kind == "link" {
+			// a link masquerades its transfer net and what is reached through it
 			src = []netip.Prefix{w.Address.Masked()}
+			for _, p := range w.Peers {
+				for _, r := range p.Routes {
+					if pf, err := netip.ParsePrefix(r); err == nil {
+						src = append(src, pf)
+					}
+				}
+			}
 		}
 		if w.NAT {
 			tp.nat = append(tp.nat, natSource{id: w.NetworkID, prefixes: src})

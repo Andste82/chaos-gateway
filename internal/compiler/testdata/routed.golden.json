@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "33f7ffcb54989a47",
+  "hash": "f3d99028a742e057",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -130,6 +130,13 @@
       "family": 4,
       "priority": 1000,
       "iif": "br-lab",
+      "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 1000,
+      "to": "10.30.0.0/24",
       "table": 100
     }
   ],

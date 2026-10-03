@@ -218,6 +218,16 @@ a policy rule per interface, masquerade towards the uplink, the MSS clamp and th
 A network of role `test` is untrusted like a bridge; the tunnel subnet of a `management` network joins
 the sources that reach the control plane.
 
+- **Key generations.** Every key generation has a record of its own (`wireguard.KeyID(id, generation)`):
+  raising `key.generation` adds one and leaves the keys of the active revision where they are, so a
+  revision that is rolled back, fails or is discarded still finds its keys. `Prune` (called by the
+  engine when a revision becomes active, with the active configuration and all candidates) removes
+  records that no configuration uses. A preshared key that is switched off is only no longer
+  referenced. Verify compares the presence of a preshared key, not its value.
+- **Return traffic.** A network behind a tunnel or a router (client networks, static routes of links
+  and of test networks) gets a rule `to <prefix> lookup 100` next to the rules for the interfaces:
+  replies from the uplink arrive on the uplink interface, and the main table does not know the
+  network.
 - **Keys.** Private keys live in the secrets store (`--secrets-dir`, `internal/secrets`), never in a
   revision, an operation, a log or an event. `wireguard.Provision` generates the interface key of each
   network and the key pair (and preshared key) of every client in mode `generated`, rotates it when
@@ -236,7 +246,7 @@ the sources that reach the control plane.
   younger or older than three minutes or a peer disappears from the interface.
 - **Export.** `chaosgw wg export --state-dir D --secrets-dir S --network lab-hub --client rA
   [--format conf|png|svg|zip] [--out file]`, `--all` for a zip of the hub, `--link` for the remote side
-  of a link. An export with a private key is written with mode 0600 and a warning; with `export_once`
+  of a link. An export with a private key is written with mode 0600 (also over an existing file) and a warning; with `export_once`
   the private key is deleted after the export (`--keep-key` prevents that). A client with a provided
   key gets a placeholder. The testbed's remote machines (`testbed.WithRemotes`) bring tunnels up from
   these files with `wg-quick`.

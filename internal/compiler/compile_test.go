@@ -245,7 +245,9 @@ func TestPolicyRoutingTable100(t *testing.T) {
 	if strings.Join(got, "; ") != strings.Join(want, "; ") {
 		t.Errorf("routes:\n%v\nwant\n%v", got, want)
 	}
-	if len(tg.Rules) != 2 || tg.Rules[0].Iif != "br-iot" || tg.Rules[1].Iif != "br-lab" || tg.Rules[0].Priority != 1000 || tg.Rules[1].Priority != 1000 || tg.Rules[0].Table != 100 {
+	// one rule per bridge, and one for the destination of every route behind a router: replies
+	// from the uplink to such a network arrive on the uplink interface
+	if len(tg.Rules) != 3 || tg.Rules[0].Iif != "br-iot" || tg.Rules[1].Iif != "br-lab" || tg.Rules[0].Priority != 1000 || tg.Rules[1].Priority != 1000 || tg.Rules[0].Table != 100 || tg.Rules[2].To != "10.30.0.0/24" || tg.Rules[2].Iif != "" {
 		t.Errorf("rules %+v", tg.Rules)
 	}
 	for _, r := range tg.Rules {

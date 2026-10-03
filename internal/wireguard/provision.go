@@ -73,6 +73,13 @@ func Provision(cfg *model.Configuration, sec *secrets.Store) (*model.Configurati
 	return out, nil
 }
 
+func generationOf(ks *model.WireGuardKeySettings) int {
+	if ks == nil || ks.Generation == nil {
+		return 0
+	}
+	return *ks.Generation
+}
+
 func clone(cfg *model.Configuration) (*model.Configuration, error) {
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -119,6 +126,7 @@ func ensurePeerKey(sec *secrets.Store, id string, ks *model.WireGuardKeySettings
 		}
 		// the peer keeps its own key pair, but a preshared key is shared: the gateway generates it
 		// and the export tells the administrator
+		id = KeyID(id, generationOf(ks))
 		rec, err := sec.WireGuard(id)
 		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			return nil, err
@@ -131,10 +139,6 @@ func ensurePeerKey(sec *secrets.Store, id string, ks *model.WireGuardKeySettings
 			if err := sec.PutWireGuard(id, rec); err != nil {
 				return nil, err
 			}
-		case !wantPSK && (rec.PresharedKey != "" || rec.PrivateKey != ""):
-			if err := sec.DeleteWireGuard(id); err != nil {
-				return nil, err
-			}
 		}
 		return ks, nil
 	}
@@ -142,12 +146,15 @@ func ensurePeerKey(sec *secrets.Store, id string, ks *model.WireGuardKeySettings
 	if ks.Generation != nil {
 		gen = *ks.Generation
 	}
+	// every generation has a record of its own: raising the generation adds one and leaves the
+	// keys of the active revision where they are
+	id = KeyID(id, gen)
 	rec, err := sec.WireGuard(id)
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return nil, err
 	}
 	exists := err == nil
-	needPair := !exists || rec.Generation != gen
+	needPair := !exists
 	if needPair {
 		priv, err := GeneratePrivateKey()
 		if err != nil {
@@ -155,14 +162,12 @@ func ensurePeerKey(sec *secrets.Store, id string, ks *model.WireGuardKeySettings
 		}
 		rec = secrets.WireGuardKeys{PrivateKey: priv, Generation: gen}
 	}
-	switch {
-	case wantPSK && rec.PresharedKey == "":
+	// switching the preshared key off only stops referring to it: the active revision may still
+	// use it, and Prune removes it with the generation it belongs to
+	if wantPSK && rec.PresharedKey == "" {
 		if rec.PresharedKey, err = GeneratePresharedKey(); err != nil {
 			return nil, err
 		}
-		needPair = true
-	case !wantPSK && rec.PresharedKey != "":
-		rec.PresharedKey = ""
 		needPair = true
 	}
 	if needPair {
@@ -218,24 +223,14 @@ func InterfaceKeys(cfg *model.Configuration, sec *secrets.Store) (map[string]str
 	return out, first
 }
 
-// Prune deletes the secrets of objects that are not in the configuration any more. Call it after a
-// revision without them has been committed.
-func Prune(cfg *model.Configuration, sec *secrets.Store) error {
+// Prune deletes the secrets that none of the given configurations uses: those of objects that are
+// gone and those of key generations that are not current in any of them. Pass the committed
+// configuration and every candidate that may still be applied: a candidate with a rotated key has
+// its keys in the store already.
+func Prune(sec *secrets.Store, cfgs ...*model.Configuration) error {
 	keep := map[string]bool{}
-	if cfg.Networks != nil {
-		for id, n := range *cfg.Networks {
-			wg, err := n.AsWireGuardNetwork()
-			if err != nil || wg.Type != model.WireGuardNetworkTypeWireguard {
-				continue
-			}
-			keep[id] = true
-			keep[LinkPeerKeyID(id)] = true
-			if wg.Clients != nil {
-				for cid := range *wg.Clients {
-					keep[cid] = true
-				}
-			}
-		}
+	for _, cfg := range cfgs {
+		keepKeys(cfg, keep)
 	}
 	ids, err := sec.IDs()
 	if err != nil {
@@ -249,4 +244,25 @@ func Prune(cfg *model.Configuration, sec *secrets.Store) error {
 		}
 	}
 	return nil
+}
+
+func keepKeys(cfg *model.Configuration, keep map[string]bool) {
+	if cfg == nil || cfg.Networks == nil {
+		return
+	}
+	for id, n := range *cfg.Networks {
+		wg, err := n.AsWireGuardNetwork()
+		if err != nil || wg.Type != model.WireGuardNetworkTypeWireguard {
+			continue
+		}
+		keep[id] = true
+		if wg.Clients != nil {
+			for cid, c := range *wg.Clients {
+				keep[KeyID(cid, generationOf(c.Key))] = true
+			}
+		}
+		if wg.Peer != nil {
+			keep[KeyID(LinkPeerKeyID(id), generationOf(wg.Peer.Key))] = true
+		}
+	}
 }

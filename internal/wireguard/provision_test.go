@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -159,10 +160,27 @@ func TestRaisingTheGenerationRotatesTheKeyPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, _ := sec.WireGuard(cid)
+	after, err := sec.WireGuard(KeyID(cid, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, c2 := firstClient(t, out)
-	if after.PrivateKey == before.PrivateKey || *c2.Key.PublicKey == oldPub || after.Generation != 1 {
+	if after.PrivateKey == before.PrivateKey || *c2.Key.PublicKey == oldPub {
 		t.Errorf("not rotated: %+v", after)
+	}
+	// the keys of the generation before are still there: a revision that is rolled back or a
+	// candidate that is discarded must find them, until a commit makes them unused
+	if old, err := sec.WireGuard(cid); err != nil || old != before {
+		t.Errorf("the previous generation was touched: %+v %v", old, err)
+	}
+	if err := Prune(sec, out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sec.WireGuard(cid); err == nil {
+		t.Error("the previous generation is unused after a commit: Prune removes it")
+	}
+	if _, err := sec.WireGuard(KeyID(cid, 1)); err != nil {
+		t.Errorf("the current generation was pruned: %v", err)
 	}
 	// the interface key stays
 	ik, _ := sec.WireGuard(hubID)
@@ -191,8 +209,14 @@ func TestPresharedKeyFollowsTheSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := sec.WireGuard(cid)
-	if after.PresharedKey != "" || after.PrivateKey != before.PrivateKey {
-		t.Errorf("%+v: the preshared key goes, the key pair stays", after)
+	if after.PrivateKey != before.PrivateKey || after.PresharedKey != before.PresharedKey {
+		t.Errorf("%+v: switching the preshared key off must not touch what the active revision may use", after)
+	}
+	// but no configuration carries it any more
+	in := ExportInput{Config: out2(t, cfg, sec), Secrets: sec, UplinkAddress: "203.0.113.1"}
+	e, err := ClientConfig(in, hubID, cid)
+	if err != nil || strings.Contains(e.Conf, "PresharedKey") {
+		t.Errorf("%v\n%s", err, e.Conf)
 	}
 }
 
@@ -282,7 +306,7 @@ func TestInterfaceKeysAndPrune(t *testing.T) {
 	// a client that is removed takes its secrets along when pruned
 	cid, _ := firstClient(t, cfg)
 	delete(*cfg.Networks, linkID)
-	if err := Prune(cfg, sec); err != nil {
+	if err := Prune(sec, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sec.WireGuard(linkID); err == nil {
@@ -296,4 +320,36 @@ func TestInterfaceKeysAndPrune(t *testing.T) {
 	if partial, err := InterfaceKeys(cfg, sec); err == nil || len(partial) != 0 {
 		t.Errorf("a missing interface key must be reported: %v %v", partial, err)
 	}
+}
+
+func out2(t *testing.T, cfg *model.Configuration, sec *secrets.Store) *model.Configuration {
+	t.Helper()
+	out, err := Provision(cfg, sec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestKeyIDs(t *testing.T) {
+	id := "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	if KeyID(id, 0) != id || KeyID(id, -1) != id {
+		t.Error("generation 0 uses the id itself")
+	}
+	a, b := KeyID(id, 1), KeyID(id, 2)
+	if a == id || a == b || KeyID(id, 1) != a {
+		t.Errorf("%s %s", a, b)
+	}
+	if !idLooksLikeUUID(a) {
+		t.Errorf("%q is no file name the store accepts", a)
+	}
+}
+
+func idLooksLikeUUID(s string) bool {
+	sec, err := secrets.Open(os.TempDir() + "/cgx-keyid-test")
+	if err != nil {
+		return false
+	}
+	_, err = sec.WireGuard(s)
+	return errors.Is(err, secrets.ErrNotFound)
 }

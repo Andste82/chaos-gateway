@@ -77,8 +77,19 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	}
 	var sec *secrets.Store
 	if *secretsDir != "" {
+		dir := *secretsDir
+		if *dryRun {
+			// a dry run must not create keys: it works on a copy of the secrets
+			tmp, err := copySecrets(dir)
+			if err != nil {
+				fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
+				return 1
+			}
+			defer func() { _ = os.RemoveAll(tmp) }()
+			dir = tmp
+		}
 		var err error
-		if sec, err = secrets.Open(*secretsDir); err != nil {
+		if sec, err = secrets.Open(dir); err != nil {
 			fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 			return 1
 		}
@@ -204,4 +215,38 @@ func printDiff(w io.Writer, what, d string) {
 	for _, l := range strings.Split(strings.TrimRight(d, "\n"), "\n") {
 		fmt.Fprintln(w, "  "+l)
 	}
+}
+
+// copySecrets copies a secrets directory to a temporary one (mode 0700).
+func copySecrets(dir string) (string, error) {
+	tmp, err := os.MkdirTemp("", "chaosgw-dryrun-")
+	if err != nil {
+		return "", err
+	}
+	src, err := secrets.Open(dir)
+	if err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	dst, err := secrets.Open(tmp)
+	if err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	ids, err := src.IDs()
+	if err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	for _, id := range ids {
+		k, err := src.WireGuard(id)
+		if err == nil {
+			err = dst.PutWireGuard(id, k)
+		}
+		if err != nil {
+			_ = os.RemoveAll(tmp)
+			return "", err
+		}
+	}
+	return tmp, nil
 }

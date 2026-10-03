@@ -96,6 +96,7 @@ type Engine struct {
 	core    sync.WaitGroup // the state owner and the apply loop
 	done    chan struct{}  // closed when both have returned
 	started bool
+	polling atomic.Bool
 }
 
 // ErrClosed is returned by commands after Close.

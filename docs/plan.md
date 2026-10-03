@@ -849,7 +849,7 @@ Server reply ──► prerouting on uplink:
 
 ## 3.4 Linux Interface Layer
 
-- **CLI first:** in V1 the executor uses the standard tools with JSON output and batch input. Replacing parts with native netlink later is possible (§3.1); Go has mature libraries for it (`vishvananda/netlink` for links, addresses, routes and tc including netem/HTB; `google/nftables` for nftables).
+- **CLI first:** in V1 the executor uses the standard tools with JSON output and batch input. Replacing parts with native netlink later is possible (§3.1). WireGuard interfaces are managed with the `wg` tool in V1 (`wg syncconf`, `wg show dump`): it works in any network namespace without entering it, which wgctrl cannot do, and the testbed needs that (M4b); Go has mature libraries for it (`vishvananda/netlink` for links, addresses, routes and tc including netem/HTB; `google/nftables` for nftables).
 - **Exception from the start:** DNS-derived address-set updates go through a persistent netlink connection (`google/nftables`) held by the executor, instead of one `nft` process per answer, which limited the spike proxy to ~280 queries/s (S5).
 
 | Tool | Read | Write |
@@ -858,7 +858,7 @@ Server reply ──► prerouting on uplink:
 | iproute2 | `ip -j` | `ip -batch` |
 | tc | `tc -j` | `tc -batch` |
 | conntrack-tools | `conntrack -L` | `conntrack -D` |
-| WireGuard | `wgctrl` (netlink) / `wg show` | `wgctrl` (netlink), interfaces via `ip -batch` |
+| WireGuard | `wg show <dev> dump` (V1; `wgctrl` later) | `wg syncconf` (V1; `wgctrl` later), interfaces via `ip link` |
 | BIRD 2 | `birdc show protocols/route` (control socket) | generated config file, `bird -p`, `birdc configure` |
 
 - Event sources, for live data without polling: `ip monitor`, `nft monitor`, `conntrack -E`.
@@ -926,7 +926,7 @@ Docker volumes (bind mounts on the host, backed up like any directory):
 | Config / scenarios | JSON (revisions), YAML (`gopkg.in/yaml.v3`) for scenarios and profiles |
 | Logging | `log/slog`, JSON to stdout (container log) |
 | CLI | `chaosctl` with Cobra |
-| WireGuard | `golang.zx2c4.com/wireguard/wgctrl` (netlink) for peers and status; keys via `wgtypes`; QR codes generated in the backend (`skip2/go-qrcode`, PNG/SVG) |
+| WireGuard | the `wg` tool for peers and status in V1 (`wgctrl` is the later replacement); keys via `golang.org/x/crypto/curve25519`; QR codes generated in the backend (`skip2/go-qrcode`, PNG/SVG) |
 | Routing | BIRD 2 (`bird2` package), own instance; configuration generated from `text/template`, status via the BIRD control socket |
 | Tests | `go test` with `-race` (unit, compiler golden files, Linux integration against the testbed); `go.uber.org/goleak` for goroutine leaks |
 
@@ -1297,7 +1297,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M4b — WireGuard networks and clients** (L)
 - Why here: WireGuard networks are a first-class network type from the start, so every later feature (faults, rules, DNS, TLS, capture, scenarios, UI) is built and tested against WireGuard interfaces as well as local test networks.
-- Scope: hub and link networks (§2.2.1) as network type `wireguard` in the domain model, compiler and executor (`wgctrl`); clients with client networks and reachable-network selection; static routes for client networks, links and downstream routers (§2.2.2); policy-routing rules for WireGuard interfaces; routed without NAT towards test networks, masqueraded towards the uplink; key generation, optional preshared keys, "export once"; export as `.conf`, QR (PNG/SVG), zip; client status (handshake, endpoint, bytes) and online/offline events; WireGuard clients as configured devices, hosts in client networks as IP-identified devices (§2.3); role *management* for admin remote access; MSS clamp and MTU 1420 on WireGuard interfaces; the testbed default topology gains a hub client with a client network and a link site (§4.2).
+- Scope: hub and link networks (§2.2.1) as network type `wireguard` in the domain model, compiler and executor (the `wg` tool in V1, §3.4); clients with client networks and reachable-network selection; static routes for client networks, links and downstream routers (§2.2.2); policy-routing rules for WireGuard interfaces; routed without NAT towards test networks, masqueraded towards the uplink; key generation, optional preshared keys, "export once"; export as `.conf`, QR (PNG/SVG), zip; client status (handshake, endpoint, bytes) and online/offline events; WireGuard clients as configured devices, hosts in client networks as IP-identified devices (§2.3); role *management* for admin remote access; MSS clamp and MTU 1420 on WireGuard interfaces; the testbed topology gains a hub client with a client network and a link site (§4.2; an option of the testbed, `WithRemotes`, because every namespace costs time under emulation).
 - Tests (level 1): a device in a local test network reaches a host in a client network without NAT, and the reverse only if the access matrix allows it; a link with static routes carries traffic between the gateway's test network and the remote site; the exported `.conf` brings up a working tunnel in a fresh namespace (as in S15), and the decoded QR equals the file; disabling a client stops its handshake and emits the event; a *test* role client cannot reach a test listener on the UI/API port, a *management* role client can; private keys never appear in configuration exports or logs; re-applying the configuration does not interrupt an established tunnel.
 - Depends on: M4, S15. (API resources follow in M5, UI in M14.)
 

@@ -71,7 +71,7 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "exec" {
 		t.Fatalf("command %v: the image's entrypoint is chaosgw, the command starts with the subcommand", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true}
+	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw exec`", a)
@@ -97,7 +97,7 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			if err := v.Decode(&m); err != nil {
 				t.Fatal(err)
 			}
-			if m.Target == "/lib/modules" && !m.ReadOnly {
+			if (m.Target == "/lib/modules" || m.Target == "/var/lib/chaosgw/secrets") && !m.ReadOnly {
 				t.Error("/lib/modules must be mounted read-only")
 			}
 			mounts = append(mounts, m.Source+":"+m.Target)
@@ -108,8 +108,8 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			t.Errorf("unexpected mount %q", m)
 		}
 	}
-	if len(mounts) != 4 {
-		t.Errorf("mounts %v: want the socket and state volumes, /run/netns and /lib/modules", mounts)
+	if len(mounts) != 5 {
+		t.Errorf("mounts %v: want the socket, state and secrets volumes, /run/netns and /lib/modules", mounts)
 	}
 	if len(s.Tmpfs) != 2 || !strings.Contains(s.Tmpfs[0], "mode=0700") {
 		t.Errorf("tmpfs %v", s.Tmpfs)

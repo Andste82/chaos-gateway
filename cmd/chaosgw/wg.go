@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -138,7 +139,7 @@ func runWG(args []string, stdout, stderr io.Writer) int {
 		if secret {
 			mode = 0o600
 		}
-		if err := os.WriteFile(*out, data, mode); err != nil {
+		if err := writeExport(*out, data, mode); err != nil {
 			fmt.Fprintf(stderr, "chaosgw wg export: %v\n", err)
 			return 1
 		}
@@ -185,4 +186,28 @@ func findClient(hub model.WireGuardNetwork, ref string) (string, error) {
 		}
 	}
 	return "", errors.New("no client " + ref)
+}
+
+// writeExport writes a file with exactly the given mode, also over an existing file: the file is
+// created next to its destination with that mode and moved into place, so a key never lands in a
+// file that is readable by others, not even for a moment.
+func writeExport(path string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".export-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

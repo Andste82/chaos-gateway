@@ -415,3 +415,33 @@ func TestWireGuardApplyNeedsTheKeys(t *testing.T) {
 		t.Fatal("a target without keys has errors")
 	}
 }
+
+func TestAHostNameEndpointDoesNotMakeEveryApplyFail(t *testing.T) {
+	e := newWGEnv(t)
+	n := (*e.cfg.Networks)[linkID]
+	wg, _ := n.AsWireGuardNetwork()
+	host := "site.example.net:51821"
+	wg.Peer.Endpoint = &host
+	_ = n.FromWireGuardNetwork(wg)
+	(*e.cfg.Networks)[linkID] = n
+	e.apply() // the kernel reports the resolved address: the name cannot be compared
+	e.k.ClearLog()
+	res := e.apply()
+	if e.syncs() != 0 || e.wgOps(res) != 0 {
+		t.Errorf("a re-apply synchronizes the link again: %v", res.Plan.Summary)
+	}
+}
+
+func TestRepliesToANetworkBehindATunnelAreRoutedByTable100(t *testing.T) {
+	e := newWGEnv(t)
+	res := e.apply()
+	var to []string
+	for _, r := range res.After.Rules {
+		if r.Protocol == "201" && r.Dst != "" && r.Dst != "all" {
+			to = append(to, r.Dst)
+		}
+	}
+	if len(to) != 2 {
+		t.Errorf("destination rules in the kernel: %v", to)
+	}
+}

@@ -12,7 +12,7 @@
 services:
   exec:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--allow-uid", "65532", "--socket-owner", "65532"]
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--allow-uid", "65532", "--socket-owner", "65532"]
     user: "0:0"
     privileged: true
     network_mode: host
@@ -28,6 +28,11 @@ services:
       - chaosgw-run:/run/chaosgw
       # the interfaces assigned to Chaos Gateway; nothing else is stored
       - chaosgw-exec-state:/var/lib/chaosgw/exec
+      # the WireGuard keys: the executor only reads them (the API container writes)
+      - type: volume
+        source: chaosgw-secrets
+        target: /var/lib/chaosgw/secrets
+        read_only: true
       # named network namespaces are shared with the host (probes, the service namespace)
       - type: bind
         source: /run/netns
@@ -57,3 +62,4 @@ services:
 volumes:
   chaosgw-run:
   chaosgw-exec-state:
+  chaosgw-secrets:

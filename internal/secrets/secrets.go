@@ -48,6 +48,22 @@ func Open(dir string) (*Store, error) {
 	return &Store{dir: dir}, nil
 }
 
+// OpenReadOnly opens an existing secrets directory for reading only: it creates nothing and changes
+// no permission. The executor uses it, the secrets volume being mounted read-only there.
+func OpenReadOnly(dir string) (*Store, error) {
+	st, err := os.Stat(filepath.Join(dir, "wireguard"))
+	if err != nil {
+		return nil, err
+	}
+	if !st.IsDir() {
+		return nil, fmt.Errorf("secrets: %s is not a directory", filepath.Join(dir, "wireguard"))
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("secrets: %s is accessible to others (mode %v)", filepath.Join(dir, "wireguard"), st.Mode().Perm())
+	}
+	return &Store{dir: dir}, nil
+}
+
 func (s *Store) path(id string) (string, error) {
 	// the id becomes a file name: nothing but a UUID is accepted
 	if !idRE.MatchString(id) {
@@ -86,16 +102,40 @@ func (s *Store) PutWireGuard(id string, k WireGuardKeys) error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// a temporary file of its own (writers do not collide), private from the first byte
+	f, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
+	if err != nil {
 		return err
 	}
-	f, err := os.Open(tmp)
-	if err == nil {
-		_ = f.Sync()
+	tmp := f.Name()
+	if _, err := f.Write(b); err != nil {
 		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
 	}
-	return os.Rename(tmp, p)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(p)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // DeleteWireGuard removes the keys of an object; removing what is not there is fine.

@@ -416,6 +416,11 @@ s.connect(("`+testbed.ClientAAddr+`", 9200))
 	if n == 0 || n > 1380 {
 		t.Errorf("the server side MSS is %q: it must fit the tunnel (<= 1380), not the LAN's 1460", mss)
 	}
+	// the clamp is what did it: its counter saw the SYNs (the client's own MTU already advertises
+	// a small MSS, so the MSS alone would prove nothing)
+	if out := g.top.GW.Must("nft", "list", "counter", "inet", "chaosgw", "mss_clamp"); strings.Contains(out, "packets 0 ") {
+		t.Errorf("no SYN passed the clamp:\n%s", out)
+	}
 }
 
 // M4b test: private keys never appear in revisions, exports of the configuration, the snapshot, the
@@ -442,7 +447,11 @@ func TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel(t *te
 		t.Fatal("no tunnel traffic")
 	}
 
-	// re-apply while a ping runs: not one packet may be lost, and the peer is never removed
+	// re-apply while a ping runs: not one packet may be lost, and the peer is never removed or reset
+	handshakeBefore := g.wgShow("wg-lab-hub", "latest-handshakes")
+	if strings.HasSuffix(strings.TrimSpace(handshakeBefore), "\t0") {
+		t.Fatalf("no handshake yet: %q", handshakeBefore)
+	}
 	rxBefore := g.wgShow("wg-lab-hub", "transfer")
 	pinger := g.top.A.Start("ping", "-n", "-i", "0.1", "-c", "60", testbed.ClientNetHost)
 	for i := 0; i < 5; i++ {
@@ -457,6 +466,9 @@ func TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel(t *te
 	out := pinger.Output()
 	if !strings.Contains(out, " 0% packet loss") {
 		t.Errorf("a re-apply interrupted the tunnel:\n%s", out)
+	}
+	if after := g.wgShow("wg-lab-hub", "latest-handshakes"); after != handshakeBefore {
+		t.Errorf("the peer's session changed over the re-applies: %q -> %q", handshakeBefore, after)
 	}
 	if after := g.wgShow("wg-lab-hub", "transfer"); len(after) < len(rxBefore)/2 {
 		t.Errorf("the peer was reset: %q -> %q", rxBefore, after)

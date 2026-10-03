@@ -41,6 +41,9 @@ func (e *Engine) PollWireGuard(ctx context.Context, interval time.Duration) erro
 	if !e.started {
 		return fmt.Errorf("engine: not started")
 	}
+	if !e.polling.CompareAndSwap(false, true) {
+		return fmt.Errorf("engine: the WireGuard state is polled already")
+	}
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -90,6 +93,13 @@ func (e *Engine) pollWireGuardOnce(ctx context.Context) error {
 	for i, w := range snap.WireGuardInterfaces {
 		var info linux.WGInfo
 		if i >= len(out.Data) || json.Unmarshal(out.Data[i], &info) != nil {
+			// an interface that cannot be read keeps the last known state of its peers: a
+			// failed read is not a peer that went away
+			for _, p := range w.Peers {
+				if old, ok := snap.WireGuard[p.ID]; ok {
+					status[p.ID] = old
+				}
+			}
 			continue
 		}
 		byKey := map[string]linux.WGPeerInfo{}
@@ -115,6 +125,8 @@ func (e *Engine) pollWireGuardOnce(ctx context.Context) error {
 // gone from the interface (a disabled client) is offline.
 func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 	prev := o.snap.WireGuard
+	first := !o.wgSeen // the first poll announces nothing: the peers are not "new", they were there
+	o.wgSeen = true
 	ids := make([]string, 0, len(next)+len(prev))
 	for id := range next {
 		ids = append(ids, id)
@@ -130,7 +142,7 @@ func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 		now, has := next[id]
 		wasOnline := had && was.Online
 		isOnline := has && now.Online
-		if wasOnline == isOnline {
+		if wasOnline == isOnline || first {
 			continue
 		}
 		st := now

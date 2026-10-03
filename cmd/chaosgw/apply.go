@@ -134,7 +134,7 @@ func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Confi
 		return 1
 	}
 	if dryRun {
-		state, err := apply.ReadState(ctx, ex, ns, apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
+		state, err := apply.ReadState(ctx, ex, ns, apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads, BirdInstance: compiler.BirdInstance})
 		if err != nil {
 			fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 			return 1

@@ -39,6 +39,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	state := fs.String("state", "/var/lib/chaosgw/exec/state.json", "file that keeps the assigned interfaces across restarts")
 	owner := fs.Int("socket-owner", -1, "uid that owns the socket file (-1: unchanged)")
 	secretsDir := fs.String("secrets-dir", "", "directory with the secrets (WireGuard keys); the executor only reads it")
+	birdDir := fs.String("bird-dir", "", "directory shared with the BIRD container (<instance>.conf and .ctl); without it dynamic routing is refused")
 	health := fs.Bool("health", false, "check a running executor (handshake and generation) and exit")
 	var allow uidList
 	fs.Var(&allow, "allow-uid", "uid that may connect besides root (repeatable), e.g. the API container's user")
@@ -65,6 +66,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	syscall.Umask(0o077)
 
 	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state)}
+	if *birdDir != "" {
+		opts = append(opts, executor.WithBirdDir(*birdDir))
+	}
 	if *secretsDir != "" {
 		sec, err := secrets.OpenReadOnly(*secretsDir)
 		if err != nil {

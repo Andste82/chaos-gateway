@@ -185,3 +185,32 @@ func TestWGExportUsageAndErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestWGExportLinkBirdRendersTheRemoteSide(t *testing.T) {
+	raw, err := os.ReadFile(wgConfigFile(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("routing:\n  asn: 65001\n  protocols:\n    11111111-2222-4333-8444-555555555555:\n      name: site-b\n      type: bgp\n      link: c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f\n      bgp: {neighbor_asn: 65002}\n")...)
+	file := filepath.Join(t.TempDir(), "routing.yaml")
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, secretsDir := t.TempDir(), filepath.Join(t.TempDir(), "secrets")
+	_, sock, _ := startExecutorWithKeys(t, secretsDir)
+	if code, out, errOut := runCmd("apply", "--file", file, "--socket", sock, "--executor-uid", uid(), "--state-dir", state, "--secrets-dir", secretsDir); code != 0 {
+		t.Fatalf("code %d\n%s\n%s", code, out, errOut)
+	}
+	code, out, errOut := runCmd("wg", "export", "--state-dir", state, "--secrets-dir", secretsDir, "--network", "site-b", "--link", "--bird", "--remote-interface", "wg-gw")
+	if code != 0 {
+		t.Fatalf("code %d\n%s\n%s", code, out, errOut)
+	}
+	for _, want := range []string{"protocol bgp gateway", "neighbor 10.255.0.0 as 65001", "local 10.255.0.1 as 65002", "protocol static announce"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if code, _, _ := runCmd("wg", "export", "--state-dir", state, "--secrets-dir", secretsDir, "--network", "site-b", "--client", "x", "--bird"); code != 2 {
+		t.Errorf("--bird without --link: %d", code)
+	}
+}

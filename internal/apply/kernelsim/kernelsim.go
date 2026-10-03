@@ -91,7 +91,8 @@ type Kernel struct {
 	sysctl   map[string]int
 	features map[string]map[string]bool // dev → feature → on
 	// docker
-	birdRunning bool // a configure has reached the simulated BIRD
+	birdShow    string // output of `show protocols all` set by a test
+	birdRunning bool   // a configure has reached the simulated BIRD
 	dockerChain bool
 	docker      []dockerRule
 	defaultMain []route // default routes of the main table (OS-owned)

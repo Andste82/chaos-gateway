@@ -85,6 +85,9 @@ func digA(top *testbed.Topology, from *testbed.Namespace, server string, extra .
 	return strings.TrimSpace(out), err
 }
 
+// diagnose is called when a wait times out: what the gateway looks like then.
+var diagnose func()
+
 func waitFor(t *testing.T, d time.Duration, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -93,6 +96,9 @@ func waitFor(t *testing.T, d time.Duration, what string, ok func() bool) {
 			return
 		}
 		time.Sleep(300 * time.Millisecond)
+	}
+	if diagnose != nil {
+		diagnose()
 	}
 	t.Fatalf("timeout: %s", what)
 }
@@ -154,6 +160,26 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 	}
 
 	p := startProxy(t, ns, token)
+	diagnose = func() {
+		show := func(title string, cmd *exec.Cmd) {
+			out, err := cmd.CombinedOutput()
+			t.Logf("---- %s (%v)\n%s", title, err, out)
+		}
+		show("gateway nft", exec.Command("ip", "netns", "exec", top.GW.Name, "nft", "list", "ruleset"))
+		show("gateway rules", exec.Command("ip", "netns", "exec", top.GW.Name, "ip", "rule", "show"))
+		show("gateway routes 100", exec.Command("ip", "netns", "exec", top.GW.Name, "ip", "route", "show", "table", "100"))
+		show("gateway addr", exec.Command("ip", "netns", "exec", top.GW.Name, "ip", "-br", "addr"))
+		show("gateway conntrack", exec.Command("ip", "netns", "exec", top.GW.Name, "conntrack", "-L"))
+		show("gateway sockets", exec.Command("ip", "netns", "exec", top.GW.Name, "ss", "-tlnp"))
+		show("service addr", exec.Command("ip", "netns", "exec", ns, "ip", "-br", "addr"))
+		show("service routes", exec.Command("ip", "netns", "exec", ns, "ip", "route", "show"))
+		show("service sockets", exec.Command("ip", "netns", "exec", ns, "ss", "-anp"))
+		t.Logf("proxy configuration: %+v", p.srv.Config())
+		t.Logf("proxy queries %d, upstream %d", p.srv.Queries(), p.srv.UpstreamQueries())
+		out, _ := top.A.Run(context.Background(), "dig", "+time=2", "+tries=1", "@"+testbed.LAN0Gateway, "example.test")
+		t.Logf("dig from A:\n%s", out)
+	}
+	t.Cleanup(func() { diagnose = nil })
 	waitFor(t, 30*time.Second, "A resolves example.test through the gateway", func() bool {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"

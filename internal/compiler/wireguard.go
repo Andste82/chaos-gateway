@@ -232,9 +232,12 @@ type reachEntry struct {
 	ep     model.MatrixEndpoint
 }
 
+// natSource is one postrouting masquerade rule: matched either by source prefix, or, for a routed
+// link, by the interface it comes in on (dev set, prefixes empty).
 type natSource struct {
 	id       string
 	prefixes []netip.Prefix
+	dev      string
 }
 
 func (t *Target) topology(idx *domain.Index, nets map[string]*Bridge) *topo {
@@ -263,20 +266,17 @@ func (t *Target) topology(idx *domain.Index, nets map[string]*Bridge) *topo {
 			}
 			src = append(src, p.networks...)
 		}
+		if !w.NAT {
+			continue
+		}
 		if w.Kind == "link" {
-			// a link masquerades its transfer net and what is reached through it
-			src = []netip.Prefix{w.Address.Masked()}
-			for _, p := range w.Peers {
-				for _, r := range p.Routes {
-					if pf, err := netip.ParsePrefix(r); err == nil {
-						src = append(src, pf)
-					}
-				}
-			}
+			// a link's traffic is routed, not addressed from a fixed prefix: everything coming in
+			// through it is masqueraded towards the uplink, covering static routes and whatever a
+			// routing protocol learns over it (plan §2.2.1).
+			tp.nat = append(tp.nat, natSource{id: w.NetworkID, dev: w.Name})
+			continue
 		}
-		if w.NAT {
-			tp.nat = append(tp.nat, natSource{id: w.NetworkID, prefixes: src})
-		}
+		tp.nat = append(tp.nat, natSource{id: w.NetworkID, prefixes: src})
 	}
 	sort.Strings(tp.lan)
 	sort.Strings(tp.test)

@@ -171,7 +171,10 @@ func (c Config) Render() (string, error) {
 		}
 	}
 	if c.External != nil {
-		sources["RTS_PIPE"] = true
+		// routes read from the other daemon's kernel table and piped into master4
+		// keep the source of the originating protocol inside that daemon, not RTS_PIPE:
+		// BIRD only tags a route RTS_PIPE while it still sits in the pipe's own table.
+		sources["RTS_INHERIT"] = true
 	}
 	var src []string
 	for s := range sources {

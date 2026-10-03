@@ -169,7 +169,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		for _, n := range tp.nat {
 			name := "nat_" + shortID(n.id)
 			t.Nft.Counters = append(t.Nft.Counters, name)
-			post.Rules = append(post.Rules, newRule(eq(payload("ip", "saddr"), prefixes(n.prefixes)), oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
+			match := eq(payload("ip", "saddr"), prefixes(n.prefixes))
+			if n.dev != "" {
+				match = iifname(n.dev)
+			}
+			post.Rules = append(post.Rules, newRule(match, oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
 		}
 	}
 	if r := t.serviceMasquerade(uplink); r != nil {

@@ -122,7 +122,7 @@ func TestTheGeneratedFiltersFollowSpikeS15(t *testing.T) {
 		"learned routes are exported into table 100 only",
 		"kernel table 100;",
 		"learn off;",
-		"import none; export where source ~ [ RTS_BABEL, RTS_BGP, RTS_OSPF, RTS_OSPF_EXT1, RTS_OSPF_EXT2, RTS_OSPF_IA, RTS_PIPE ];",
+		"import none; export where source ~ [ RTS_BABEL, RTS_BGP, RTS_INHERIT, RTS_OSPF, RTS_OSPF_EXT1, RTS_OSPF_EXT2, RTS_OSPF_IA ];",
 		// BGP: no default, protected prefixes (and everything inside them) rejected, then the allowed list
 		"if net = 0.0.0.0/0 then reject;",
 		"if net ~ [ 10.10.0.0/24+, 192.168.56.0/24+, 203.0.113.0/24+, 10.255.0.0/31+ ] then reject;",

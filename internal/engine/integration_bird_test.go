@@ -430,6 +430,32 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	}
 }
 
+// M4c-01 test: external mode reads routes another daemon writes into its own kernel table (simulated
+// here with a plain `ip route add ... table 200`, since BIRD cannot tell the difference) and exports
+// only the ones that pass the import filter into table 100; the protected prefix and the default
+// route stay out.
+func TestExternalModeImportsAnotherDaemonsTable(t *testing.T) {
+	g := &bgpGW{wgGW: newWGGW(t)}
+	g.gwSock = startBird(t, g.top.GW, g.bird, compiler.BirdInstance, "router id 127.0.0.1;\nprotocol device { }\n")
+	enabled, table := true, 200
+	g.apply(func(c *model.Configuration) {
+		c.Routing = &model.Routing{External: &model.ExternalRouting{Enabled: &enabled, Table: &table}}
+	})
+	// another daemon's routes, injected directly into table 200
+	g.top.GW.Must("ip", "route", "add", "10.80.0.0/24", "dev", "wg-site-b", "table", "200", "proto", "static")
+	g.top.GW.Must("ip", "route", "add", "default", "dev", "wg-site-b", "table", "200")
+	g.top.GW.Must("ip", "route", "add", "10.10.0.0/24", "dev", "wg-site-b", "table", "200")
+	if !g.waitRoute("10.80.0.0/24", true, 30*time.Second) {
+		t.Fatalf("the external route is not in table 100\n%s\n%s", g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	table100 := g.table100()
+	for _, bad := range []string{"default dev wg-site-b", "10.10.0.0/24 dev wg-site-b"} {
+		if strings.Contains(table100, bad) {
+			t.Errorf("the filter let %q through\n%s", bad, table100)
+		}
+	}
+}
+
 // waitRoutingState waits for a routing_session_changed event with the given state.
 func waitRoutingState(ch <-chan engine.Event, state string, d time.Duration) (engine.Event, bool) {
 	deadline := time.After(d)

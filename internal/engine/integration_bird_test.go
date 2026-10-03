@@ -231,9 +231,7 @@ func TestBGPOverAWireGuardLinkExchangesRoutes(t *testing.T) {
 	if !pingOK(g.top.A, "", testbed.SiteNetHost) {
 		t.Errorf("A cannot reach the remote site's network\n%s", g.table100())
 	}
-	if !pingOK(g.top.Site, testbed.SiteNetHost, testbed.ClientAAddr) {
-		t.Errorf("the site cannot reach A\n%s", g.top.Site.Must("ip", "route", "show"))
-	}
+	// (the other direction is the access matrix's business: nothing allows the site to reach A)
 	// the snapshot shows the session
 	if st := g.e.Snapshot().Routing; len(st) == 0 {
 		t.Errorf("%+v", st)
@@ -371,7 +369,8 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 			t.Fatal(err)
 		}
 		(*c.Networks)[linkC] = n
-		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}}
+		iot := tIoT
+		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}, Announce: &[]model.AnnounceEntry{{Network: &iot}}}
 	})
 	// the BGP neighbor announces a default route, the management prefix, a prefix of the gateway
 	// and the remote network

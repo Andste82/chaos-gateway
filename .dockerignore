@@ -4,3 +4,5 @@
 !go.sum
 !cmd/
 !internal/
+!api/embed.go
+!api/openapi.yaml

@@ -625,3 +625,37 @@ func TestOptionalDockerChainMissingIsNoError(t *testing.T) {
 		t.Fatalf("%+v %v", du, err)
 	}
 }
+
+// `ip link delete dev X type bridge` deletes a veth, too: the executor reads the kind first.
+func TestDeleteBridgeNeverDeletesAnotherKindOfDevice(t *testing.T) {
+	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		if c.Tool == ToolIP && len(c.Args) > 3 && c.Args[0] == "-j" && c.Args[len(c.Args)-1] == "wan0" {
+			return Result{Stdout: `[{"ifindex":3,"ifname":"wan0","flags":["UP"],"link_type":"ether"}]`}, nil
+		}
+		if c.Tool == ToolIP && len(c.Args) > 3 && c.Args[0] == "-j" && c.Args[len(c.Args)-1] == "br-x" {
+			return Result{Stdout: `[{"ifindex":4,"ifname":"br-x","flags":["UP"],"link_type":"ether","linkinfo":{"info_kind":"bridge"}}]`}, nil
+		}
+		if c.Tool == ToolIP && len(c.Args) > 3 && c.Args[0] == "-j" {
+			return Result{Exit: 1, Stderr: "Device does not exist.\n"}, nil
+		}
+		return Result{}, nil
+	}}
+	e := newExec(t, fr)
+	ctx := context.Background()
+	if _, err := e.Do(ctx, mustDecode(t, `{"type":"assign_interfaces","devs":["wan0","br-x","gone0"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Do(ctx, mustDecode(t, `{"type":"links","entries":[{"action":"delete_bridge","name":"wan0"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "not a bridge") {
+		t.Fatalf("a veth must not be deleted as a bridge: %v", err)
+	}
+	for _, c := range fr.commands() {
+		if len(c.Args) > 1 && c.Args[0] == "link" && c.Args[1] == "delete" && c.Args[3] == "wan0" {
+			t.Fatalf("the delete ran: %s", c)
+		}
+	}
+	// a real bridge and a device that is gone are fine
+	if _, err := e.Do(ctx, mustDecode(t, `{"type":"links","entries":[{"action":"delete_bridge","name":"br-x"},{"action":"delete_bridge","name":"gone0"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+}

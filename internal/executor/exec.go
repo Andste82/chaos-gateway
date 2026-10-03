@@ -225,6 +225,11 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 	case *Read:
 		return e.read(ctx, o)
 	}
+	if l, ok := op.(*Links); ok {
+		if err := e.checkBridges(ctx, l); err != nil {
+			return nil, err
+		}
+	}
 	steps, err := Plan(op)
 	if err != nil {
 		return nil, err
@@ -276,6 +281,35 @@ func onlyBenign(stderr string) bool {
 		}
 	}
 	return true
+}
+
+// checkBridges makes sure that delete_bridge only ever deletes a bridge: `ip link delete ... type
+// bridge` does not refuse a device of another kind (a veth was deleted by it in the testbed), so
+// the kind is read first. A device that does not exist is fine, deleting it is a no-op.
+func (e *Executor) checkBridges(ctx context.Context, l *Links) error {
+	for _, en := range l.Entries {
+		if en.Action != "delete_bridge" {
+			continue
+		}
+		cmd := ReadCommand(&Read{Target: l.Target, What: ReadLinks, Dev: en.Name})
+		r, err := e.run.Run(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if r.Exit != 0 {
+			continue // no such device
+		}
+		links, err := linux.ParseLinks([]byte(r.Stdout))
+		if err != nil {
+			return err
+		}
+		for _, x := range links {
+			if x.Name == en.Name && x.Kind() != "bridge" {
+				return fmt.Errorf("%s is not a bridge: refusing to delete it", en.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // verifyOffloads checks the result instead of trusting ethtool's exit status: a feature that is

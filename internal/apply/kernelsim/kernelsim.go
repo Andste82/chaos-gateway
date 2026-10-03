@@ -382,7 +382,15 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 	switch {
 	case len(a) >= 2 && a[0] == "link" && a[1] == "show":
 		var out []map[string]any
+		if len(a) >= 4 && a[2] == "dev" {
+			if _, exists := k.links[a[3]]; !exists {
+				return executor.Result{Exit: 1, Stderr: "Device \"" + a[3] + "\" does not exist.\n"}, nil
+			}
+		}
 		for _, l := range k.sortedLinks() {
+			if len(a) >= 4 && a[2] == "dev" && l.name != a[3] {
+				continue
+			}
 			flags := []string{"BROADCAST", "MULTICAST"}
 			if l.up {
 				flags = append(flags, "UP", "LOWER_UP")
@@ -492,13 +500,11 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 		}
 	case "link delete":
 		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && a[5] == "bridge" {
-			l, exists := k.links[a[3]]
+			_, exists := k.links[a[3]]
 			if !exists {
 				return fail("Cannot find device \"%s\"", a[3])
 			}
-			if l.kind != "bridge" {
-				return fail("RTNETLINK answers: Operation not supported")
-			}
+			// like the real tool, the simulator does not check the kind: the executor must
 			for _, o := range k.links {
 				if o.master == a[3] {
 					o.master = ""

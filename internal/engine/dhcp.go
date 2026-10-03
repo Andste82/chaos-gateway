@@ -27,14 +27,20 @@ type DHCP interface {
 // KeaDHCP is the DHCP interface on Kea's control socket.
 type KeaDHCP struct {
 	Client *kea.Client
+	// Base is the configuration without scopes (DHCP off for every network): it carries the paths and
+	// the hook script the server runs with. Its zero value is Kea's default container paths.
+	Base kea.Config
 
 	mu   sync.Mutex
 	last string // hash of the document sent last
+	// running is the hash Kea reported after it took that document: a Kea that restarted reports
+	// another one, and the document is sent again
+	running string
 }
 
 // Apply sends the configuration with `config-test` and `config-set`; an unchanged one is not sent again.
 func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
-	var cfg kea.Config
+	cfg := k.Base
 	if t != nil {
 		cfg = t.Config
 	}
@@ -45,10 +51,16 @@ func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
 	sum := sha256.Sum256([]byte(text))
 	h := hex.EncodeToString(sum[:])
 	k.mu.Lock()
-	same := k.last == h
+	same, want := k.last == h, k.running
 	k.mu.Unlock()
 	if same {
-		return nil
+		now, err := k.Client.Hash(ctx)
+		if err != nil {
+			return err
+		}
+		if now == want {
+			return nil
+		}
 	}
 	doc, err := cfg.Document()
 	if err != nil {
@@ -57,8 +69,12 @@ func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
 	if err := k.Client.Apply(ctx, doc); err != nil {
 		return err
 	}
+	running, err := k.Client.Hash(ctx)
+	if err != nil {
+		return err
+	}
 	k.mu.Lock()
-	k.last = h
+	k.last, k.running = h, running
 	k.mu.Unlock()
 	return nil
 }
@@ -143,7 +159,8 @@ func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target) string {
 	return msg
 }
 
-// runDHCPRetry sends the configuration again while the server has not taken it.
+// runDHCPRetry sends the configuration again while the server has not taken it, and when the server
+// restarted and forgot it: Apply is cheap while the server runs what it was given.
 func (e *Engine) runDHCPRetry(ctx context.Context) error {
 	tick := e.cfg.Clock.NewTicker(dhcpRetry)
 	defer tick.Stop()
@@ -156,7 +173,7 @@ func (e *Engine) runDHCPRetry(ctx context.Context) error {
 		e.dhcp.mu.Lock()
 		wanted, t, had := e.dhcp.wanted, e.dhcp.target, e.dhcp.err
 		e.dhcp.mu.Unlock()
-		if !wanted || had == "" {
+		if !wanted {
 			continue
 		}
 		err := e.cfg.DHCP.Apply(ctx, t)

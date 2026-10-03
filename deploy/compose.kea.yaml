@@ -1,0 +1,40 @@
+# The Kea DHCP server container (plan §2.7, §3.8): one Kea instance for all networks, one subnet per
+# network on the network's bridge. It listens with raw sockets on the host's bridges, so it runs in the
+# host network namespace, and it needs only NET_RAW and NET_BIND_SERVICE (plus CHOWN and FOWNER to give
+# its control socket directory to the API's group at start). It runs as root without any other
+# capability; its root file system is read-only. The API container configures it through the control
+# socket (`config-set`) and gets the lease events from Kea's run_script hook (`chaosgw-kea-hook`),
+# which posts them to the API with the service token.
+services:
+  kea:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    entrypoint: ["/usr/local/bin/chaosgw-kea-start"]
+    user: "0:65532"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, NET_BIND_SERVICE, CHOWN, FOWNER]
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the control socket, shared with the API container
+      - chaosgw-kea-run:/run/kea
+      # the leases and the configuration Kea was started with
+      - chaosgw-kea-state:/var/lib/kea
+      # the service token the hook reads: nothing else of the secrets volume
+      - type: volume
+        source: chaosgw-service
+        target: /var/lib/chaosgw/service
+        read_only: true
+    restart: unless-stopped
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  chaosgw-kea-run:
+  chaosgw-kea-state:
+  chaosgw-service:

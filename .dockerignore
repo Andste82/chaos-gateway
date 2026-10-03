@@ -7,3 +7,5 @@
 !api/embed.go
 !api/openapi.yaml
 !deploy/host-setup.sh
+!deploy/chaosgw-kea-hook
+!deploy/kea-start.sh

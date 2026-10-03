@@ -2,7 +2,7 @@
 # It is unprivileged: it runs as the user the executor lets through its socket, drops every
 # capability and has a read-only root file system. It owns the engine: it compiles revisions and has
 # the executor apply them, it keeps the revisions, the credentials and the audit log, and it writes
-# the WireGuard keys the executor reads.
+# the WireGuard keys the executor reads, and it configures Kea through its control socket.
 #
 # It runs in the host's network namespace to listen on the management network (and, until the setup is
 # finished, on every address of the host) and to watch the interfaces; the port is above 1024, so it
@@ -11,7 +11,7 @@
 services:
   api:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api"]
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--service-token-file", "/var/lib/chaosgw/service/token"]
     user: "65532:65532"
     network_mode: host
     read_only: true
@@ -29,6 +29,10 @@ services:
       - chaosgw-secrets:/var/lib/chaosgw/secrets
       # the audit log and the idempotency keys
       - chaosgw-api:/var/lib/chaosgw/api
+      # Kea's control socket (the Kea container creates it, in the group of this user)
+      - chaosgw-kea-run:/run/kea
+      # the token of the service containers: written here, read by Kea's hook
+      - chaosgw-service:/var/lib/chaosgw/service
     depends_on:
       exec:
         condition: service_healthy
@@ -51,3 +55,5 @@ volumes:
   chaosgw-state:
   chaosgw-secrets:
   chaosgw-api:
+  chaosgw-kea-run:
+  chaosgw-service:

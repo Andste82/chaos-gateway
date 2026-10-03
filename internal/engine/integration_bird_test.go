@@ -217,8 +217,8 @@ func TestBGPOverAWireGuardLinkExchangesRoutes(t *testing.T) {
 	if !g.established(90 * time.Second) {
 		t.Fatalf("the BGP session did not come up\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"))
 	}
-	if _, ok := waitEvent(ch, engine.EventRoutingUp, 30*time.Second); !ok {
-		t.Error("no routing_session_up event")
+	if _, ok := waitRoutingState(ch, "up", 30*time.Second); !ok {
+		t.Error("no routing_session_changed event (up)")
 	}
 	if !g.waitRoute("10.60.0.0/24 via 10.255.0.1 dev wg-site-b", true, 30*time.Second) {
 		t.Fatalf("the learned route is not in table 100\n%s", g.table100())
@@ -252,8 +252,8 @@ func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {
 	}
 	g.top.Site.Must("ip", "link", "set", "wgsite", "down")
 	// the hold time of the fixture is 9 s: the session ends within it, plus the poll interval
-	if _, ok := waitEvent(ch, engine.EventRoutingDown, 30*time.Second); !ok {
-		t.Fatalf("no routing_session_down event\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	if _, ok := waitRoutingState(ch, "down", 30*time.Second); !ok {
+		t.Fatalf("no routing_session_changed event (down)\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
 	}
 	if !g.waitRoute("10.60.0.0/24", false, 30*time.Second) {
 		t.Errorf("the learned route stays in table 100\n%s", g.table100())
@@ -427,5 +427,23 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	g.top.Site2.Must("ip", "link", "set", "wgsite2", "up")
 	if !g.waitRoute("10.70.0.0/24 via 10.255.1.1", true, 120*time.Second) {
 		t.Errorf("the OSPF route does not return\n%s", g.table100())
+	}
+}
+
+// waitRoutingState waits for a routing_session_changed event with the given state.
+func waitRoutingState(ch <-chan engine.Event, state string, d time.Duration) (engine.Event, bool) {
+	deadline := time.After(d)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return engine.Event{}, false
+			}
+			if ev.Type == engine.EventRoutingChanged && ev.Data["state"] == state {
+				return ev, true
+			}
+		case <-deadline:
+			return engine.Event{}, false
+		}
 	}
 }

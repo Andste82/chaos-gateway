@@ -283,7 +283,7 @@ configuration at start when there is none.
 - **Preview.** `Engine.Preview` runs the `check` operation: an invalid custom snippet is an error
   problem with BIRD's own message, and nothing changes.
 - **Status.** `Engine.PollRouting` reads the protocols every interval; the snapshot has them by name,
-  `routing_session_up` and `routing_session_down` are emitted when an adjacency (BGP Established,
+  `routing_session_changed` (data `state`: `up` or `down`) is emitted when an adjacency (BGP Established,
   OSPF/Babel up) changes. `kernelsim` simulates BIRD (`SetBirdProtocols` sets the protocol table).
 - **Remote side.** `chaosgw wg export ... --link --bird [--remote-interface wg0]` prints the BIRD
   configuration for the other end of the link: roles swapped, same timers, a static protocol for the

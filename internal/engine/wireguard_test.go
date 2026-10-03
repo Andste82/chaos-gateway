@@ -341,3 +341,48 @@ func TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesWhatIsOnline(t *testing.T)
 		t.Errorf("a second announcement: %+v", ev)
 	}
 }
+
+func TestAReconnectingSubscriberGetsTheBufferedEvents(t *testing.T) {
+	h, _ := newWGHarness(t)
+	h.mustApply(h.revision(nil))
+	all, _, cancel := h.e.SubscribeFrom(0)
+	cancel()
+	if len(all) == 0 {
+		t.Fatal("no events are buffered")
+	}
+	for i, ev := range all {
+		if ev.Seq != all[0].Seq+uint64(i) {
+			t.Fatalf("the events are not in order: %v", all)
+		}
+	}
+	// a client that saw the first event gets the rest, then the live stream continues without a gap
+	rest, live, cancel := h.e.SubscribeFrom(all[0].Seq)
+	defer cancel()
+	if len(rest) != len(all)-1 {
+		t.Fatalf("replayed %d of %d", len(rest), len(all)-1)
+	}
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		n := (*c.Networks)[wgHub]
+		wg, _ := n.AsWireGuardNetwork()
+		cl := (*wg.Clients)[wgClient]
+		off := false
+		cl.Enabled = &off
+		(*wg.Clients)[wgClient] = cl
+		_ = n.FromWireGuardNetwork(wg)
+		(*c.Networks)[wgHub] = n
+	}))
+	select {
+	case ev := <-live:
+		if ev.Seq != all[len(all)-1].Seq+1 {
+			t.Errorf("a gap between replay and live: %d after %d", ev.Seq, all[len(all)-1].Seq)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no live event")
+	}
+	// a sequence number from another boot replays nothing
+	none, _, cancel := h.e.SubscribeFrom(1 << 40)
+	cancel()
+	if len(none) != 0 {
+		t.Errorf("%d events replayed for a number beyond the newest", len(none))
+	}
+}

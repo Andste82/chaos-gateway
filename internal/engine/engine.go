@@ -153,6 +153,12 @@ func New(cfg Config) (*Engine, error) {
 // Snapshot returns the current snapshot. It is safe to call from any goroutine and never blocks.
 func (e *Engine) Snapshot() *Snapshot { return e.snap.Load() }
 
+// SubscribeFrom is Subscribe for a client that reconnects: the events after the sequence number
+// last that are still buffered come first (Last-Event-ID, plan §2.15).
+func (e *Engine) SubscribeFrom(last uint64) ([]Event, <-chan Event, func()) {
+	return e.events.subscribeFrom(last)
+}
+
 // Subscribe returns a channel of events and a function that ends the subscription.
 func (e *Engine) Subscribe() (<-chan Event, func()) { return e.events.subscribe() }
 

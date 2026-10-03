@@ -3,6 +3,9 @@ package linux
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // NftObject is one object of an `nft -j` ruleset: exactly one of the pointer fields is set for the
@@ -13,6 +16,18 @@ type NftObject struct {
 	Rule  *NftRule  `json:"rule,omitempty"`
 	Set   *NftSet   `json:"set,omitempty"`
 	Map   *NftSet   `json:"map,omitempty"`
+	// Counter is a named counter; its packet and byte counts are runtime data, not configuration.
+	Counter *NftCounter `json:"counter,omitempty"`
+}
+
+// NftCounter is a named counter object.
+type NftCounter struct {
+	Family  string `json:"family"`
+	Table   string `json:"table"`
+	Name    string `json:"name"`
+	Handle  int    `json:"handle"`
+	Packets int64  `json:"packets"`
+	Bytes   int64  `json:"bytes"`
 }
 
 // NftTable is a table.
@@ -94,6 +109,78 @@ func ParseNft(data []byte) (*Ruleset, error) {
 		rs.Objects = append(rs.Objects, o)
 	}
 	return rs, nil
+}
+
+// Elements returns the elements of the set as normalized strings, sorted: addresses as they are,
+// prefixes as addr/len, ranges as a-b, timeouts dropped (they are runtime data), concatenations
+// joined with ".". It is the form verify compares.
+func (s *NftSet) Elements() []string {
+	out := make([]string, 0, len(s.Elem))
+	for _, raw := range s.Elem {
+		out = append(out, normalizeElem(raw))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeElem(raw json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	return elemString(v)
+}
+
+func elemString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case map[string]any:
+		if e, ok := x["elem"]; ok { // an element with a timeout or a counter
+			if m, ok := e.(map[string]any); ok {
+				return elemString(m["val"])
+			}
+		}
+		if p, ok := x["prefix"].(map[string]any); ok {
+			return fmt.Sprintf("%s/%s", elemString(p["addr"]), elemString(p["len"]))
+		}
+		if r, ok := x["range"].([]any); ok && len(r) == 2 {
+			return elemString(r[0]) + "-" + elemString(r[1])
+		}
+		if c, ok := x["concat"].([]any); ok {
+			parts := make([]string, len(c))
+			for i, p := range c {
+				parts[i] = elemString(p)
+			}
+			return strings.Join(parts, ".")
+		}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// Counters returns the names of the named counters, sorted.
+func (r *Ruleset) Counters() []string {
+	var out []string
+	for _, o := range r.Objects {
+		if o.Counter != nil {
+			out = append(out, o.Counter.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Chain returns the named chain.
+func (r *Ruleset) Chain(name string) *NftChain {
+	for _, o := range r.Objects {
+		if o.Chain != nil && o.Chain.Name == name {
+			return o.Chain
+		}
+	}
+	return nil
 }
 
 // Tables returns the tables of the ruleset.

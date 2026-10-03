@@ -1,0 +1,838 @@
+{
+  "nftables": [
+    {
+      "add": {
+        "table": {
+          "family": "inet",
+          "name": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "forward_drop",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "input_drop",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "ipv6_drop",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "nat_0b7c6a3e",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "name": "ifs_test_bf4feb",
+          "table": "chaosgw",
+          "type": "ifname"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "mgmt_src_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "hook": "forward",
+          "name": "forward",
+          "policy": "accept",
+          "prio": 0,
+          "table": "chaosgw",
+          "type": "filter"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "hook": "input",
+          "name": "input",
+          "policy": "accept",
+          "prio": 0,
+          "table": "chaosgw",
+          "type": "filter"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "hook": "postrouting",
+          "name": "postrouting",
+          "policy": "accept",
+          "prio": 100,
+          "table": "chaosgw",
+          "type": "nat"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "forward",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "input",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "postrouting",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "ifs_test_bf4feb",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            "br-iot",
+            "br-lab"
+          ],
+          "family": "inet",
+          "name": "ifs_test_bf4feb",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "mgmt_src_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "192.168.56.0",
+                "len": 24
+              }
+            }
+          ],
+          "family": "inet",
+          "name": "mgmt_src_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "449cc4c202ef",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "op": "in",
+                "right": [
+                  "established",
+                  "related"
+                ]
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "1ac1a8df8489",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "op": "in",
+                "right": [
+                  "invalid"
+                ]
+              }
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "fc5d413532fb",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "op": "in",
+                "right": [
+                  "invalid"
+                ]
+              }
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "74bbeb198e5e",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv6"
+              }
+            },
+            {
+              "counter": "ipv6_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "f0b5497d39ac",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv6"
+              }
+            },
+            {
+              "counter": "ipv6_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "58af70301e4d",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "wan0"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "d397fd720236",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "counter": "forward_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "3aaef70e2ce3",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "counter": "forward_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "449cc4c202ef",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "op": "in",
+                "right": [
+                  "established",
+                  "related"
+                ]
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "31cdf58e7b48",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "lo"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "3275380f38d5",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@mgmt_src_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "tcp"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    22,
+                    443
+                  ]
+                }
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "c1d2f59d7aa1",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "protocol",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "icmp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "type",
+                    "protocol": "icmp"
+                  }
+                },
+                "op": "==",
+                "right": "echo-request"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "bf86a0fb410a",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "udp"
+                  }
+                },
+                "op": "==",
+                "right": 67
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "0a40bb0c16de",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "udp"
+                  }
+                },
+                "op": "==",
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "b7f61439d950",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "tcp"
+                  }
+                },
+                "op": "==",
+                "right": 53
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
+          "comment": "3fb664d93e2f",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "counter": "input_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "postrouting",
+          "comment": "47409993750f",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "10.10.0.0",
+                    "len": 24
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "wan0"
+              }
+            },
+            {
+              "counter": "nat_0b7c6a3e"
+            },
+            {
+              "masquerade": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "generation",
+          "comment": "gen=7 rev=3",
+          "expr": [
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    }
+  ]
+}

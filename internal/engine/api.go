@@ -123,7 +123,8 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 		p.Domain = domain.Diff(&model.Configuration{}, cfg)
 	}
 	p.NeedsConfirmation = LockoutRelevant(snap.Config, cfg)
-	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}))
+	id := snap.Identity
+	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id))
 	p.Target, p.Problems = tg, tg.Problems
 	if tg.HasErrors() {
 		return p, nil

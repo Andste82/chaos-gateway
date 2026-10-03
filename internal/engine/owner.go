@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"reflect"
 	"time"
 
@@ -22,6 +23,12 @@ type desired struct {
 	Revision   int64
 	Host       compiler.Host
 	Generation uint64
+	// Identity is which addresses belong to which device (observed state); the compiler fills the
+	// device sets from it. A full apply always uses the latest one.
+	Identity *domain.Identity
+	// IdentityOnly marks a desired state that differs from the one before only in the identity: the
+	// apply loop then changes set elements instead of rebuilding the ruleset.
+	IdentityOnly bool
 }
 
 type ownerInit struct {
@@ -90,6 +97,14 @@ type cmdRoutingStatus struct {
 
 type cmdRetry struct{}
 
+// cmdObserved carries a reading of what the gateway sees (leases, neighbors, connections).
+type cmdObserved struct {
+	obs   observation
+	reply chan struct{}
+}
+
+type cmdDHCPStatus struct{ err string }
+
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
 const retryDelay = 10 * time.Second
 
@@ -102,6 +117,8 @@ func (cmdTimeout) command()       {}
 func (cmdWGStatus) command()      {}
 func (cmdRoutingStatus) command() {}
 func (cmdRetry) command()         {}
+func (cmdObserved) command()      {}
+func (cmdDHCPStatus) command()    {}
 
 // applyResult is what the apply loop reports about one desired state.
 type applyResult struct {
@@ -109,6 +126,8 @@ type applyResult struct {
 	target *compiler.Target
 	err    error
 	took   time.Duration
+	// dhcpErr is why the DHCP server did not take the configuration; it does not fail the apply.
+	dhcpErr string
 }
 
 // inflight is a revision apply the state owner waits for.
@@ -151,6 +170,9 @@ type owner struct {
 	snap    Snapshot
 	lastApp *compiler.Target
 	problem map[string]bool
+	// tracker works out identity, device state and their events from observations.
+	tracker  *tracker
+	identity *domain.Identity
 }
 
 type pendingState struct {
@@ -165,7 +187,7 @@ type barrier struct {
 }
 
 func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
-	o := &owner{e: e, host: init.host, problem: map[string]bool{}}
+	o := &owner{e: e, host: init.host, problem: map[string]bool{}, tracker: newTracker()}
 	o.snap.Host = init.host
 	if init.config != nil {
 		o.gen = 1
@@ -296,7 +318,7 @@ func (o *owner) converge(d *desired) {
 // nextDesired returns a desired state with a fresh generation for the given configuration.
 func (o *owner) nextDesired(cfg *model.Configuration, rev int64) *desired {
 	o.gen++
-	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen}
+	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity}
 }
 
 func (o *owner) handle(ctx context.Context, c command) {
@@ -326,6 +348,17 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.retry()
 	case cmdWGStatus:
 		o.wireguardStatus(c.status)
+	case cmdObserved:
+		o.observed(c.obs)
+		o.later(func() {
+			if c.reply != nil {
+				c.reply <- struct{}{}
+			}
+		})
+		o.flush()
+	case cmdDHCPStatus:
+		o.snap.DHCPError = c.err
+		o.publish()
 	case cmdRoutingStatus:
 		o.routingStatus(c.status)
 	case cmdObserve:
@@ -402,6 +435,11 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.WireGuardInterfaces = r.target.WireGuard
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
+		o.snap.DHCPError = r.dhcpErr
+		o.snap.KeaNetworks = nil
+		if r.target.Kea != nil {
+			o.snap.KeaNetworks = r.target.Kea.Networks
+		}
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})
@@ -605,3 +643,41 @@ func (o *owner) settledAtLeast(gen, applied uint64) bool {
 }
 
 func hostEqual(a, b compiler.Host) bool { return reflect.DeepEqual(a, b) }
+
+// observed takes a reading of the gateway's surroundings: the tracker works out which address belongs
+// to which device and which devices are online (plan §2.3). A change of identity makes a new desired
+// state, flagged so that the apply loop updates set elements instead of rebuilding the ruleset; the
+// state it leaves in the snapshot is what the API shows.
+func (o *owner) observed(obs observation) {
+	cfg := &model.Configuration{}
+	if o.committed != nil {
+		cfg = o.committed.Config
+	}
+	id, states, events := o.tracker.step(cfg, obs)
+	changed := o.identity == nil || !sameIdentity(*o.identity, id)
+	o.identity = &id
+	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
+	for _, ev := range events {
+		o.event(ev.Type, ev.Data)
+	}
+	if changed && o.current != nil {
+		d := o.nextDesired(o.current.Config, o.current.Revision)
+		d.IdentityOnly = true
+		o.converge(d)
+	}
+	o.publish()
+}
+
+// sameIdentity compares what the compiler uses: the addresses of every device.
+func sameIdentity(a, b domain.Identity) bool {
+	if len(a.Addresses) != len(b.Addresses) {
+		return false
+	}
+	for dev, x := range a.Addresses {
+		y, ok := b.Addresses[dev]
+		if !ok || !sameAddrs(x, y) {
+			return false
+		}
+	}
+	return true
+}

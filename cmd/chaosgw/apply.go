@@ -151,6 +151,8 @@ func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Confi
 		d := apply.Diff(tg, state)
 		printDiff(stdout, "nftables", d.Nftables)
 		printDiff(stdout, "network", d.Routes)
+		printDiff(stdout, "wireguard", d.WireGuard)
+		printDiff(stdout, "bird", d.Bird)
 		return 0
 	}
 	res, err := apply.Apply(ctx, ex, ns, tg)

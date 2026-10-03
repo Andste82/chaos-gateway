@@ -16,6 +16,9 @@ services:
     user: "0:0"
     privileged: true
     network_mode: host
+    # the service namespace of the gateway services is the namespace of the holder container: the
+    # executor attaches it by the holder's PID, which it can only see in the host's PID namespace
+    pid: host
     read_only: true
     security_opt:
       - no-new-privileges:true

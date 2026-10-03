@@ -355,6 +355,8 @@ func serviceDiffers(w *compiler.ServiceNS, s *State) string {
 	switch {
 	case s.Service == nil || !s.Service.Exists:
 		return "namespace " + w.Name + " is missing"
+	case !s.Service.HolderMatches:
+		return fmt.Sprintf("namespace %s is not the one of its holder (process %d)", w.Name, w.HolderPID)
 	}
 	l, ok := s.Links[w.HostIf]
 	switch {

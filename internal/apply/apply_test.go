@@ -38,7 +38,7 @@ func newTestbedKernel() *kernelsim.Kernel {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	k := newTestbedKernel()
-	ex, err := executor.New(k)
+	ex, err := executor.New(k, executor.WithNetnsInode(k.NetnsInode))
 	if err != nil {
 		t.Fatal(err)
 	}

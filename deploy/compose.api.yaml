@@ -11,7 +11,7 @@
 services:
   api:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--service-token-file", "/var/lib/chaosgw/service/token"]
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid"]
     user: "65532:65532"
     network_mode: host
     read_only: true
@@ -33,6 +33,11 @@ services:
       - chaosgw-kea-run:/run/kea
       # the token of the service containers: written here, read by Kea's hook
       - chaosgw-service:/var/lib/chaosgw/service
+      # the PID of the service namespace's holder, written by the svcns container (compose.dns.yaml)
+      - type: volume
+        source: chaosgw-svcns
+        target: /run/chaosgw-svcns
+        read_only: true
     depends_on:
       exec:
         condition: service_healthy
@@ -57,3 +62,4 @@ volumes:
   chaosgw-api:
   chaosgw-kea-run:
   chaosgw-service:
+  chaosgw-svcns:

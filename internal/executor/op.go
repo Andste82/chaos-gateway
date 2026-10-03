@@ -127,6 +127,16 @@ type ServiceNS struct {
 	// HolderPID is the process whose network namespace becomes the service namespace; 0 creates an
 	// empty one.
 	HolderPID int `json:"holder_pid,omitempty"`
+	// recreate is set by the executor when the namespace belongs to a holder that is gone: it is
+	// deleted first, together with the pair that leads into it.
+	recreate bool
+}
+
+// ServiceNSState is what a service_ns read returns.
+type ServiceNSState struct {
+	Exists bool `json:"exists"`
+	// HolderMatches is true when no holder was asked for, or the namespace is the holder's.
+	HolderMatches bool `json:"holder_matches"`
 }
 
 // Routing changes routes and rules.
@@ -257,6 +267,10 @@ type Read struct {
 	Name string `json:"name,omitempty"`
 	// Instance names the BIRD instance of a bird read.
 	Instance string `json:"instance,omitempty"`
+	// Service names the service namespace of a service_ns read, PID the holder it should belong to
+	// (0: any).
+	Service string `json:"service,omitempty"`
+	PID     int    `json:"pid,omitempty"`
 }
 
 // Read targets.
@@ -282,7 +296,10 @@ const (
 	// of its configuration file and its protocols.
 	ReadBird = "bird"
 	// ReadWireGuard returns a WireGuard interface and its peers (linux.WGInfo), without any secret.
-	ReadWireGuard  = "wireguard"
+	ReadWireGuard = "wireguard"
+	// ReadServiceNS reports whether the named service namespace exists and, when a holder PID is
+	// given, whether it is the network namespace of that process (ServiceNSState).
+	ReadServiceNS  = "service_ns"
 	ReadAssigned   = "assigned"
 	ReadDockerUser = "docker_user"
 )

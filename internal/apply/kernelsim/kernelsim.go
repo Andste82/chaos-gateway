@@ -107,6 +107,11 @@ type Kernel struct {
 	// `ip netns add` created it, and has a kernel of its own
 	svcNames map[string]bool
 	svc      map[string]*Kernel
+	// inode is the identity of this kernel as a network namespace; holders are the processes whose
+	// namespaces can be attached
+	inode     uint64
+	holders   map[int]uint64
+	nextInode uint64
 
 	// Fail is consulted before every command; a non-nil result is returned as the command's
 	// outcome (an injected failure). It receives the command with the tool name first.
@@ -136,8 +141,44 @@ func (k *Kernel) ServiceNamespace(name string) {
 	if k.svcNames == nil {
 		k.svcNames = map[string]bool{}
 		k.svc = map[string]*Kernel{}
+		k.holders = map[int]uint64{}
+		k.nextInode = 4026531000
 	}
 	k.svcNames[name] = true
+}
+
+// AddHolder registers a process whose network namespace can be attached and returns the namespace's
+// identity; a second call for the same pid is a new namespace (the holder restarted under the same
+// number).
+func (k *Kernel) AddHolder(pid int) uint64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.nextInode++
+	k.holders[pid] = k.nextInode
+	return k.nextInode
+}
+
+// NetnsInode identifies a network namespace file the way the executor asks for it
+// (executor.WithNetnsInode): /run/netns/NAME and /proc/PID/ns/net.
+func (k *Kernel) NetnsInode(path string) (uint64, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if name, ok := strings.CutPrefix(path, "/run/netns/"); ok {
+		if sub := k.svc[name]; sub != nil {
+			return sub.inode, true
+		}
+		return 0, false
+	}
+	if rest, ok := strings.CutPrefix(path, "/proc/"); ok {
+		if pid, ok2 := strings.CutSuffix(rest, "/ns/net"); ok2 {
+			n, err := strconv.Atoi(pid)
+			if err == nil {
+				ino, found := k.holders[n]
+				return ino, found
+			}
+		}
+	}
+	return 0, false
 }
 
 // InService returns the kernel of a service namespace, nil while it does not exist.
@@ -567,7 +608,32 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 		if k.svc[a[2]] != nil {
 			return fail("Cannot create namespace file \"/run/netns/%s\": File exists", a[2])
 		}
-		k.svc[a[2]] = New()
+		sub := New()
+		k.nextInode++
+		sub.inode = k.nextInode
+		if a[1] == "attach" {
+			if len(a) != 4 {
+				return fail("usage: ip netns attach NAME PID")
+			}
+			pid, err := strconv.Atoi(a[3])
+			ino, ok := k.holders[pid]
+			if err != nil || !ok {
+				return fail("Cannot open network namespace of pid %s: No such file or directory", a[3])
+			}
+			sub.inode = ino
+		}
+		k.svc[a[2]] = sub
+		return ok2()
+	case "netns delete":
+		if len(a) != 3 || k.svc[a[2]] == nil {
+			return fail("Cannot remove namespace file: No such file or directory")
+		}
+		delete(k.svc, a[2])
+		for n, l := range k.links {
+			if l.peerNS == a[2] {
+				delete(k.links, n)
+			}
+		}
 		return ok2()
 	case "route replace":
 		// ip route replace default via V dev D (the main table of a service namespace)

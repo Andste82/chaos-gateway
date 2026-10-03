@@ -750,8 +750,15 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS); err != nil {
 		return err
+	}
+	if o.What == ReadServiceNS {
+		if !nsName.MatchString(o.Service) || o.PID < 0 || o.PID > 1<<22 {
+			return fmt.Errorf("invalid service namespace %q or pid %d", o.Service, o.PID)
+		}
+	} else if o.Service != "" || o.PID != 0 {
+		return errors.New("service and pid are only for service_ns reads")
 	}
 	if o.Dev != "" {
 		if err := checkDev(o.Dev); err != nil {

@@ -3,9 +3,10 @@ package engine
 import (
 	"context"
 	"errors"
-	"github.com/Andste82/chaos-gateway/internal/bird"
 	"reflect"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
 
 	"github.com/Andste82/chaos-gateway/internal/wireguard"
 

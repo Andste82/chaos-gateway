@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
+
 	"golang.org/x/sys/unix"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -86,6 +88,10 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer ex.Close()
+	if err := ex.EnsureBirdConfig(compiler.BirdInstance); err != nil {
+		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
+		return 1
+	}
 	l, err := executor.Listen(*socket, 0o660, *owner)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)

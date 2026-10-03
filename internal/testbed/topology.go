@@ -53,8 +53,8 @@ const (
 type Topology struct {
 	*Bed
 	GW, Switch0, Switch1, A, B, C, Server, Mgmt *Namespace
-	// Up, RC and Site exist with WithRemotes: the uplink switch, a remote client and a remote site.
-	Up, RC, Site *Namespace
+	// Up, RC, Site and Site2 exist with WithRemotes: the uplink switch, a remote client and two remote sites.
+	Up, RC, Site, Site2 *Namespace
 }
 
 // Addresses of the remote machines (WithRemotes).
@@ -65,6 +65,9 @@ const (
 	// remote site's network (10.60.0.0/24): each is an address of its machine's loopback.
 	ClientNetHost = "10.50.0.10"
 	SiteNetHost   = "10.60.0.10"
+	// RemoteSite2Addr and Site2NetHost belong to the second remote site (10.70.0.0/24).
+	RemoteSite2Addr = "203.0.113.50"
+	Site2NetHost    = "10.70.0.10"
 )
 
 // NewDefault builds the default topology. With the default options the gateway is a plain
@@ -109,13 +112,16 @@ func NewDefault(t testing.TB, opts ...Option) *Topology {
 		top.Up = b.Add("up")
 		top.RC = b.Add("rc")
 		top.Site = b.Add("site")
+		top.Site2 = b.Add("site2")
 		top.Up.Bridge("br0", "")
 		b.Link(End{NS: top.GW, If: "wan0", Addr: UplinkGateway + "/24"}, End{NS: top.Up, If: "pw", Master: "br0"})
 		b.Link(End{NS: top.Server, If: "eth0", Addr: ServerAddr + "/24"}, End{NS: top.Up, If: "ps", Master: "br0"})
 		b.Link(End{NS: top.RC, If: "eth0", Addr: RemoteClientAddr + "/24"}, End{NS: top.Up, If: "pr", Master: "br0"})
 		b.Link(End{NS: top.Site, If: "eth0", Addr: RemoteSiteAddr + "/24"}, End{NS: top.Up, If: "pt", Master: "br0"})
+		b.Link(End{NS: top.Site2, If: "eth0", Addr: RemoteSite2Addr + "/24"}, End{NS: top.Up, If: "pu", Master: "br0"})
 		top.RC.Addr("lo", ClientNetHost+"/32")
 		top.Site.Addr("lo", SiteNetHost+"/32")
+		top.Site2.Addr("lo", Site2NetHost+"/32")
 	} else {
 		b.Link(End{NS: top.GW, If: "wan0", Addr: UplinkGateway + "/24"}, End{NS: top.Server, If: "eth0", Addr: ServerAddr + "/24"})
 	}

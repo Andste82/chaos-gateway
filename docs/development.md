@@ -24,6 +24,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/observer` | netlink events (links, addresses, routes, rules) debounced into triggers |
 | `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
 | `internal/secrets` | the protected store for key material (mode 0600/0700, atomic writes); WireGuard keys by UUID |
+| `internal/bird` | the BIRD 2 configuration: renderer (BGP, OSPFv2, Babel, static announcements, import filters, external mode), lexical checks of custom snippets, parsers for `birdc show protocols all`, the remote side's snippet |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
@@ -250,6 +251,46 @@ the sources that reach the control plane.
   the private key is deleted after the export (`--keep-key` prevents that). A client with a provided
   key gets a placeholder. The testbed's remote machines (`testbed.WithRemotes`) bring tunnels up from
   these files with `wg-quick`.
+
+## Dynamic routing (BIRD)
+
+`routing` in the configuration (plan §2.2.2) becomes the configuration of one BIRD 2 instance,
+`chaosgw`, run by its own container (`deploy/compose.bird.yaml`, not privileged) next to the
+executor. The two share a volume: the executor writes `<bird-dir>/chaosgw.conf` and reconfigures the
+running daemon through `<bird-dir>/chaosgw.ctl` (`chaosgw exec --bird-dir`). The daemon starts from
+that file, so BIRD and the executor have to name the same path; the executor writes an idle
+configuration at start when there is none.
+
+- **Compiler.** `Target.Bird` holds the model (`bird.Config`) and its rendered text. A protocol runs on
+  one WireGuard link (neighbor = the link peer's address); the filters follow plan §2.2.2: the import
+  filter accepts only the allowed prefixes, never a default route, never a protected prefix (the
+  gateway's own networks, the management network, the uplink network and the tunnel subnets), and
+  `import limit N action disable` makes the maximum number of prefixes a hard stop. BIRD's kernel
+  protocol exports only into table 100 (`learn off`, `export where source ~ [RTS_...]`), so learned
+  routes never reach the main table. External mode reads another daemon's table through a pipe. The
+  input chain accepts BGP (tcp 179), OSPF (ip protocol 89) and Babel (udp 6696) from the link's
+  interface, because the interfaces of test networks are otherwise dropped.
+- **Executor.** The `bird` operation (`check` | `apply`) writes the text to a temporary file, runs
+  `bird -p -c` on it and only then replaces `chaosgw.conf` and runs `birdc configure`, which keeps
+  established sessions. A rejected text never replaces the running one; BIRD's message comes back as
+  the error (with the temporary path removed). The text is checked first: no `include`, `kernel
+  table` only for Chaos Gateway's tables and the external table the configuration names. `read`
+  with `what: bird` returns whether the daemon runs, the hash of the file and the protocols.
+- **Apply.** The BIRD step is the last one of the plan, after the interfaces and the firewall it
+  needs. It is planned when the file's hash differs from the target's text or the daemon does not
+  run; switching routing off applies the idle configuration, which withdraws everything. Verify
+  compares the same hash. A target with routing but an executor without `--bird-dir` fails in plan.
+- **Preview.** `Engine.Preview` runs the `check` operation: an invalid custom snippet is an error
+  problem with BIRD's own message, and nothing changes.
+- **Status.** `Engine.PollRouting` reads the protocols every interval; the snapshot has them by name,
+  `routing_session_up` and `routing_session_down` are emitted when an adjacency (BGP Established,
+  OSPF/Babel up) changes. `kernelsim` simulates BIRD (`SetBirdProtocols` sets the protocol table).
+- **Remote side.** `chaosgw wg export ... --link --bird [--remote-interface wg0]` prints the BIRD
+  configuration for the other end of the link: roles swapped, same timers, a static protocol for the
+  remote site's own prefixes.
+- **Testbed.** `WithRemotes` adds a second remote site (`site2`, 203.0.113.50, network 10.70.0.10).
+  The tests in `internal/engine/integration_bird_test.go` run BIRD in the gateway's namespace and in
+  the remote ones.
 
 ## Generated code
 

@@ -25,9 +25,10 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
       -o /out/ ./cmd/...
 
 FROM ubuntu:26.04
-# the executor runs these tools (plan §3.4); the full image with Kea, BIRD and tcpdump follows with M28
+# the executor runs these tools (plan §3.4; bird2 gives it `bird -p` and `birdc`, and the BIRD container
+# runs the daemon from the same image); the full image with Kea and tcpdump follows with M28
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-        iproute2 nftables iptables ethtool procps wireguard-tools \
+        iproute2 nftables iptables ethtool procps wireguard-tools bird2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
 ENTRYPOINT ["chaosgw"]

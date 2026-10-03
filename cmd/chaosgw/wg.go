@@ -4,13 +4,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/Andste82/chaos-gateway/internal/bird"
-	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/secrets"

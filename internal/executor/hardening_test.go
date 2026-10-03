@@ -71,7 +71,7 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "exec" {
 		t.Fatalf("command %v: the image's entrypoint is chaosgw, the command starts with the subcommand", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true}
+	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true, "--bird-dir": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw exec`", a)
@@ -108,8 +108,8 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			t.Errorf("unexpected mount %q", m)
 		}
 	}
-	if len(mounts) != 5 {
-		t.Errorf("mounts %v: want the socket, state and secrets volumes, /run/netns and /lib/modules", mounts)
+	if len(mounts) != 6 {
+		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns and /lib/modules", mounts)
 	}
 	if len(s.Tmpfs) != 2 || !strings.Contains(s.Tmpfs[0], "mode=0700") {
 		t.Errorf("tmpfs %v", s.Tmpfs)
@@ -123,4 +123,38 @@ func contains(l []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// The BIRD container is not privileged: the network capabilities it needs and nothing else, a
+// read-only root and the volume it shares with the executor.
+func TestBirdContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.bird.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := doc.Services["bird"]
+	if len(doc.Services) != 1 || !ok {
+		t.Fatalf("services %v", doc.Services)
+	}
+	if s.Privileged || !s.ReadOnly || s.NetworkMode != "host" || !contains(s.SecurityOpt, "no-new-privileges:true") {
+		t.Errorf("%+v", s)
+	}
+	for _, c := range s.CapAdd {
+		if c != "NET_ADMIN" && c != "NET_RAW" && c != "NET_BIND_SERVICE" {
+			t.Errorf("capability %s is not needed by a routing daemon", c)
+		}
+	}
+	// BIRD starts from the file the executor keeps and listens where the executor reconfigures it
+	if !contains(s.Command, "/run/chaosgw/bird/chaosgw.conf") || !contains(s.Command, "/run/chaosgw/bird/chaosgw.ctl") {
+		t.Errorf("command %v", s.Command)
+	}
+	if len(s.Volumes) != 1 {
+		t.Errorf("volumes %v", s.Volumes)
+	}
 }

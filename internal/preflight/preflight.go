@@ -12,7 +12,7 @@ import (
 )
 
 // Tools the namespace testbed calls (plan §4.5, test tools in the image).
-var TestbedTools = []string{"ip", "tc", "nft", "ping", "ethtool", "wg", "wg-quick"}
+var TestbedTools = []string{"ip", "tc", "nft", "ping", "ethtool", "wg", "wg-quick", "bird", "birdc"}
 
 // Report is the result of a preflight run.
 type Report struct {

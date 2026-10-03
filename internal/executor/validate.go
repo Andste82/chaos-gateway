@@ -641,6 +641,50 @@ func (o Sysctl) validate() error {
 	return nil
 }
 
+func (o ServiceNS) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if err := oneOf("action", o.Action, "ensure", "delete"); err != nil {
+		return err
+	}
+	if !nsName.MatchString(o.Name) {
+		return fmt.Errorf("invalid namespace name %q", o.Name)
+	}
+	if o.NS != "" && o.NS == o.Name {
+		return errors.New("the service namespace is not the namespace it is attached to")
+	}
+	for _, d := range []string{o.HostIf, o.PeerIf} {
+		if err := checkDev(d); err != nil {
+			return err
+		}
+	}
+	if o.HostIf == o.PeerIf {
+		return errors.New("the two ends of the pair need different names")
+	}
+	if o.HolderPID < 0 || o.HolderPID > 1<<22 {
+		return fmt.Errorf("holder_pid %d out of range", o.HolderPID)
+	}
+	h, err := netip.ParsePrefix(o.HostCIDR)
+	if err != nil {
+		return fmt.Errorf("host_cidr: %w", err)
+	}
+	p, err := netip.ParsePrefix(o.PeerCIDR)
+	if err != nil {
+		return fmt.Errorf("peer_cidr: %w", err)
+	}
+	ll := netip.MustParsePrefix("169.254.0.0/16")
+	for _, a := range []netip.Prefix{h, p} {
+		if !a.Addr().Is4() || !ll.Contains(a.Addr()) || a.Bits() < 24 || a.Bits() > 30 {
+			return fmt.Errorf("%s is not a link-local IPv4 address with a prefix of /24 to /30", a)
+		}
+	}
+	if h.Masked() != p.Masked() || h.Addr() == p.Addr() {
+		return errors.New("the two addresses must be different and in one subnet")
+	}
+	return nil
+}
+
 func (o Links) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err

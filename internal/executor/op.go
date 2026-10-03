@@ -22,6 +22,7 @@ const (
 	TypeSysctl         = "sysctl"
 	TypeWireGuard      = "wireguard"
 	TypeBird           = "bird"
+	TypeServiceNS      = "service_ns"
 	TypeRead           = "read"
 )
 
@@ -104,6 +105,28 @@ type NftDelElements struct {
 	Target
 	Set      string   `json:"set"`
 	Elements []string `json:"elements"`
+}
+
+// ServiceNS sets up the service namespace (plan §3.3, D29): the named namespace the gateway
+// services (DNS proxy, TLS responder) run in, and the veth pair that connects it to the gateway.
+// `ensure` creates the namespace when it is missing (or attaches the namespace of the holder
+// container with HolderPID), creates the pair, gives both ends their addresses, brings them up and
+// points the namespace's default route at the gateway end. Everything is fixed: the operation
+// takes names and link-local addresses, never a command.
+type ServiceNS struct {
+	Target
+	Action string `json:"action"` // ensure | delete
+	// Name is the service namespace.
+	Name string `json:"name"`
+	// HostIf stays in the gateway's namespace, PeerIf goes into the service namespace.
+	HostIf string `json:"host_if"`
+	PeerIf string `json:"peer_if"`
+	// HostCIDR and PeerCIDR are the two ends' addresses, link-local and in one subnet.
+	HostCIDR string `json:"host_cidr"`
+	PeerCIDR string `json:"peer_cidr"`
+	// HolderPID is the process whose network namespace becomes the service namespace; 0 creates an
+	// empty one.
+	HolderPID int `json:"holder_pid,omitempty"`
 }
 
 // Routing changes routes and rules.
@@ -276,6 +299,7 @@ func (Links) OpType() string            { return TypeLinks }
 func (Sysctl) OpType() string           { return TypeSysctl }
 func (WireGuard) OpType() string        { return TypeWireGuard }
 func (Bird) OpType() string             { return TypeBird }
+func (ServiceNS) OpType() string        { return TypeServiceNS }
 func (Read) OpType() string             { return TypeRead }
 
 func (NftApply) Mutates() bool         { return true }
@@ -289,6 +313,7 @@ func (AssignInterfaces) Mutates() bool { return true }
 func (Links) Mutates() bool            { return true }
 func (Sysctl) Mutates() bool           { return true }
 func (WireGuard) Mutates() bool        { return true }
+func (ServiceNS) Mutates() bool        { return true }
 func (o Bird) Mutates() bool           { return o.Action == "apply" }
 func (Read) Mutates() bool             { return false }
 
@@ -341,6 +366,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &WireGuard{}
 	case TypeBird:
 		op = &Bird{}
+	case TypeServiceNS:
+		op = &ServiceNS{}
 	case TypeRead:
 		op = &Read{}
 	default:

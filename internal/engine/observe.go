@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"net/netip"
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"

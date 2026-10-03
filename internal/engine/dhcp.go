@@ -5,9 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/kea"
@@ -43,6 +44,13 @@ func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
 	cfg := k.Base
 	if t != nil {
 		cfg = t.Config
+		// the paths of this installation (Kea restricts them; a test runs Kea elsewhere)
+		if k.Base.Socket != "" {
+			cfg.Socket = k.Base.Socket
+		}
+		if k.Base.Leases != "" {
+			cfg.Leases = k.Base.Leases
+		}
 	}
 	text, err := cfg.Render()
 	if err != nil {

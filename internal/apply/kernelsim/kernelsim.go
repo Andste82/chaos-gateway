@@ -14,11 +14,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Andste82/chaos-gateway/internal/linux"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Andste82/chaos-gateway/internal/linux"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )

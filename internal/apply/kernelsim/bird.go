@@ -1,9 +1,10 @@
 package kernelsim
 
 import (
-	"github.com/Andste82/chaos-gateway/internal/linux"
 	"os"
 	"strings"
+
+	"github.com/Andste82/chaos-gateway/internal/linux"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )

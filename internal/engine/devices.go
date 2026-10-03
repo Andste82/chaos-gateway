@@ -90,15 +90,6 @@ func newTracker() *tracker {
 	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}}
 }
 
-func sortedAddrs(s map[netip.Addr]bool) []netip.Addr {
-	out := make([]netip.Addr, 0, len(s))
-	for a := range s {
-		out = append(out, a)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
-	return out
-}
-
 func (t *tracker) see(id string, mac string, ip netip.Addr, network, source string, at time.Time) {
 	d := t.registry[id]
 	if d == nil {

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/Andste82/chaos-gateway/internal/compiler"
-	"github.com/Andste82/chaos-gateway/internal/kea"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -18,6 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/kea"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"

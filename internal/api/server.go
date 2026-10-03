@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,9 @@ type Config struct {
 	Preflight func() *PreflightReport
 	// ConfirmTimeout overrides the commit-confirm window (tests use seconds).
 	ConfirmTimeout time.Duration
+	// Resolvers returns the host's upstream resolvers for the DNS proxy when the uplink names none;
+	// nil reads the host's resolver files.
+	Resolvers func() []netip.Addr
 }
 
 // Server implements apiserver.ServerInterface.
@@ -57,6 +61,7 @@ type Server struct {
 	// setupMu serializes POST /setup: two requests with the token must not run the setup twice.
 	setupMu sync.Mutex
 	streams atomic.Int64
+	dns     dnsState
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)

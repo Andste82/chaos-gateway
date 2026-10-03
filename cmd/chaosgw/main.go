@@ -23,7 +23,7 @@ var subcommands = []struct {
 	{"kea-hook", "M6a", "Kea run_script hook: report a lease event to the API", runKeaHook},
 	{"wg", "M4b", "export WireGuard client and link configurations", runWG},
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
-	{"dns", "M6b", "DNS proxy in the service namespace", nil},
+	{"dns", "M6b", "DNS proxy in the service namespace", runDNS},
 	{"tls", "M21", "TLS responder in the service namespace", nil},
 }
 

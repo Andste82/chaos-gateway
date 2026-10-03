@@ -436,6 +436,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.WireGuardInterfaces = r.target.WireGuard
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
+		o.snap.Service = r.target.Service
 		o.snap.DHCPError = r.dhcpErr
 		o.snap.KeaNetworks = nil
 		if r.target.Kea != nil {

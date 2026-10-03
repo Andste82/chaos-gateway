@@ -411,3 +411,44 @@ func TestServerShutdownLetsTheRunningRequestFinish(t *testing.T) {
 	}
 	<-res
 }
+
+func TestRedialingFindsARestartedExecutor(t *testing.T) {
+	dir, err := os.MkdirTemp("", "cgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "e.sock")
+	serve := func() (stop func()) {
+		l, err := Listen(path, 0o660, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := newExec(t, &fakeRunner{})
+		s := &Server{Exec: e, Auth: AllowUIDs(uint32(os.Getuid()))}
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.Serve(ctx, l) }()
+		return func() { cancel(); wg.Wait() }
+	}
+	r := NewRedialing(path, selfOpts())
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+	if _, err := r.Do(ctx); err == nil {
+		t.Fatal("no executor yet: an error expected")
+	}
+	stop := serve()
+	if _, err := r.Do(ctx); err != nil {
+		t.Fatalf("the executor is up: %v", err)
+	}
+	stop() // the executor goes away
+	if _, err := r.Do(ctx); err == nil {
+		t.Fatal("the executor is down: an error expected")
+	}
+	stop = serve() // and comes back
+	defer stop()
+	if _, err := r.Do(ctx); err != nil {
+		t.Fatalf("the client does not connect again: %v", err)
+	}
+}

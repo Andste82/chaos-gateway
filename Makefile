@@ -21,7 +21,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm \
+        check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm test-appliance \
         test-privileged test-arm64 test-e2e build build-web dev image clean
 
 help: ## list the targets
@@ -103,6 +103,9 @@ test-web: $(WEBDEPS)
 
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)
+
+test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm and CHAOSGW_APPLIANCE_IMAGE_TAR)
+	$(GO) test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
 
 test-vm: ## the namespace testbed in a QEMU VM (level 1b)
 	$(GO) run ./tools/testvm run -mode vm $(ARGS)

@@ -117,7 +117,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	defer func() { _ = ex.Close() }()
 	var dhcp engine.DHCP
 	if o.keaSocket != "" {
-		dhcp = &engine.KeaDHCP{Client: &kea.Client{Socket: o.keaSocket}}
+		dhcp = &engine.KeaDHCP{Client: &kea.Client{Socket: o.keaSocket}, Base: kea.Config{Script: kea.HookScript}}
 	}
 	eng, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp})
 	if err != nil {

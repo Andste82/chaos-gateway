@@ -196,14 +196,14 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "api" {
 		t.Fatalf("command %v", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--service-token-file": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 4 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets and the audit log", len(s.Volumes))
+	if len(s.Volumes) != 6 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket and the service token", len(s.Volumes))
 	}
 	if len(s.Healthcheck.Test) < 4 || s.Healthcheck.Test[1] != "chaosgw" || !contains(s.Healthcheck.Test, "--health") {
 		t.Errorf("health check: %v", s.Healthcheck.Test)
@@ -233,4 +233,56 @@ func containsPair(l []string, k, v string) bool {
 		}
 	}
 	return false
+}
+
+// The Kea container has the capabilities of raw DHCP and nothing else, and no other volume than its
+// own state, the control socket and the service token (read-only).
+func TestKeaContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.kea.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := doc.Services["kea"]
+	if len(doc.Services) != 1 || !ok {
+		t.Fatalf("services %v", doc.Services)
+	}
+	if s.Privileged || !s.ReadOnly || s.NetworkMode != "host" || !contains(s.CapDrop, "ALL") {
+		t.Errorf("%+v", s)
+	}
+	allowed := map[string]bool{"NET_RAW": true, "NET_BIND_SERVICE": true, "CHOWN": true, "FOWNER": true}
+	for _, c := range s.CapAdd {
+		if !allowed[c] {
+			t.Errorf("capability %s is not needed by a DHCP server", c)
+		}
+	}
+	if !contains(s.CapAdd, "NET_RAW") || !contains(s.CapAdd, "NET_BIND_SERVICE") {
+		t.Errorf("cap_add %v", s.CapAdd)
+	}
+	// the control socket is shared with the API's group
+	if s.User != "0:65532" {
+		t.Errorf("user %q", s.User)
+	}
+	if len(s.Volumes) != 3 {
+		t.Errorf("volumes %d", len(s.Volumes))
+	}
+	for _, v := range s.Volumes {
+		if v.Kind == yaml.MappingNode {
+			var m struct {
+				Target   string `yaml:"target"`
+				ReadOnly bool   `yaml:"read_only"`
+			}
+			if err := v.Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Target == "/var/lib/chaosgw/service" && !m.ReadOnly {
+				t.Error("Kea only reads the service token")
+			}
+		}
+	}
 }

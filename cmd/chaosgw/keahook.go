@@ -63,6 +63,22 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runKeaConfig is `chaosgw kea-config`: the configuration Kea starts with, before the API has sent
+// the scopes of the networks: no subnet, the control socket and the lease hook.
+func runKeaConfig(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(stderr, "usage: chaosgw kea-config")
+		return 2
+	}
+	text, err := kea.Config{Script: kea.HookScript}.Render()
+	if err != nil {
+		fmt.Fprintf(stderr, "chaosgw kea-config: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(stdout, text)
+	return 0
+}
+
 func envOr(name, def string) string {
 	if v := os.Getenv(name); v != "" {
 		return v

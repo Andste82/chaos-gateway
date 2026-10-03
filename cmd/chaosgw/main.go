@@ -19,6 +19,7 @@ var subcommands = []struct {
 	{"api", "M5", "REST API, web UI and scheduler (unprivileged)", runAPI},
 	{"admin", "M5", "administration from the host: reset-password", func(args []string, stdout, stderr io.Writer) int { return runAdmin(args, stdout, stderr, os.Stdin) }},
 	{"apply", "M4", "apply a configuration file without the API (bootstrap)", runApply},
+	{"kea-config", "M6a", "print Kea's initial configuration (no scopes)", runKeaConfig},
 	{"kea-hook", "M6a", "Kea run_script hook: report a lease event to the API", runKeaHook},
 	{"wg", "M4b", "export WireGuard client and link configurations", runWG},
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},

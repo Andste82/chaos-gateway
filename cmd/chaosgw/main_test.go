@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 
 	"go.uber.org/goleak"
 )

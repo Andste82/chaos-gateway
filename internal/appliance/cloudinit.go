@@ -116,7 +116,7 @@ func WriteSeed(ctx context.Context, dir string, s Seed) (string, error) {
 		return "", fmt.Errorf("appliance: neither cloud-localds (cloud-image-utils) nor genisoimage is installed")
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("appliance: build the seed image: %v\n%s", err, out)
+		return "", fmt.Errorf("appliance: build the seed image: %w\n%s", err, out)
 	}
 	return iso, nil
 }

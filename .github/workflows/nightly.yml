@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      fuzz:
+        description: 'run the one-hour fuzz job too'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ jobs:
   # Long fuzz runs (plan M3): the CI run fuzzes for 5 minutes, this one for an hour per target.
   # A crashing input is uploaded: it is the reproducer, and belongs in testdata/fuzz.
   fuzz:
+    if: github.event_name == 'schedule' || inputs.fuzz
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

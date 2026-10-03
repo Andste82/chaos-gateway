@@ -14,6 +14,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
@@ -36,6 +37,8 @@ type Config struct {
 	// Secrets is the store of WireGuard keys. The engine reads it to derive the public keys the
 	// compiler needs; the executor reads the private keys itself.
 	Secrets *secrets.Store
+	// DHCP is the DHCP server (Kea); nil leaves DHCP out: nothing is configured, no leases are read.
+	DHCP DHCP
 }
 
 // Snapshot is an immutable view of the engine. Nothing in a published snapshot is modified
@@ -70,6 +73,16 @@ type Snapshot struct {
 	Bird *compiler.BirdTarget
 	// Routing is the state of every routing protocol by name: the last poll's result.
 	Routing map[string]bird.ProtocolStatus
+	// Devices are the configured and the discovered devices with their addresses and state (plan §2.3).
+	Devices []DeviceState
+	// Identity is which addresses belong to which device now.
+	Identity domain.Identity
+	// Leases are the DHCP leases of the last observation.
+	Leases []model.DhcpLease
+	// KeaNetworks maps a Kea subnet id to the UUID of its network (last applied target).
+	KeaNetworks map[int]string
+	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
+	DHCPError string
 }
 
 // PendingInfo describes a revision waiting for confirmation.
@@ -100,13 +113,17 @@ type Engine struct {
 	events  *bus
 	sup     *supervisor.Supervisor
 
-	ctx            context.Context
-	cancel         context.CancelFunc
-	core           sync.WaitGroup // the state owner and the apply loop
-	done           chan struct{}  // closed when both have returned
-	started        bool
-	polling        atomic.Bool
-	pollingRouting atomic.Bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	core            sync.WaitGroup // the state owner and the apply loop
+	done            chan struct{}  // closed when both have returned
+	started         bool
+	polling         atomic.Bool
+	pollingRouting  atomic.Bool
+	pollingObserved atomic.Bool
+	dhcp            dhcpState
+	// observeNow asks the observation poller to read at once (a lease event, a neighbor change).
+	observeNow chan struct{}
 }
 
 // ErrClosed is returned by commands after Close.
@@ -137,7 +154,7 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
 	e := &Engine{cfg: cfg, cmds: make(chan command, 64), wake: make(chan struct{}, 1), results: make(chan applyResult, 8),
-		events: newBus(), sup: cfg.Supervisor, done: make(chan struct{})}
+		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{})}
 	if e.sup == nil {
 		// a panic in the state owner or the apply loop stops the engine: the commands that wait
 		// get ErrClosed, and the process (which watches Done) restarts and recompiles from the
@@ -191,6 +208,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.core.Add(2)
 	e.sup.Critical(ctx, "engine.owner", func(ctx context.Context) error { defer e.core.Done(); return e.runOwner(ctx, init) })
 	e.sup.Critical(ctx, "engine.apply", func(ctx context.Context) error { defer e.core.Done(); return e.runApplyLoop(ctx) })
+	if e.cfg.DHCP != nil {
+		e.sup.Go(ctx, "engine.dhcp", e.runDHCPRetry)
+	}
 	go func() { e.core.Wait(); close(e.done) }()
 	return nil
 }

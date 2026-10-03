@@ -285,7 +285,7 @@ func ReadCommand(o *Read) Command {
 	case ReadWireGuard:
 		c.Tool, c.Args = ToolWg, []string{"show", o.Dev, "dump"}
 	case ReadNeighbors:
-		c.Tool, c.Args = ToolIP, []string{"-j", "-4", "neigh", "show"}
+		c.Tool, c.Args = ToolIP, []string{"-4", "-j", "neigh", "show"}
 		if o.Dev != "" {
 			c.Args = append(c.Args, "dev", o.Dev)
 		}

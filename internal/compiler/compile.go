@@ -48,6 +48,12 @@ type Input struct {
 	// Identity is which addresses belong to which device right now (observed state); nil before
 	// anything was observed.
 	Identity *domain.Identity
+	// ServiceNS is the name of the service namespace the gateway services run in; empty compiles
+	// no service namespace (and no DNS redirect).
+	ServiceNS string
+	// ServiceHolderPID is the process whose namespace is attached as the service namespace when it
+	// has to be created.
+	ServiceHolderPID int
 }
 
 // Severity of a Problem.
@@ -117,6 +123,8 @@ type Target struct {
 	Bridges    []Bridge      `json:"bridges"`
 	WireGuard  []WGInterface `json:"wireguard,omitempty"`
 	Bird       *BirdTarget   `json:"bird,omitempty"`
+	// Service is the service namespace; nil when the gateway runs no service.
+	Service *ServiceNS `json:"service,omitempty"`
 	// Kea is the DHCP configuration; nil when no network has DHCP switched on.
 	Kea *KeaTarget `json:"kea,omitempty"`
 	// DeviceSets maps a device (configured or discovered) to its nftables set of addresses.
@@ -184,6 +192,7 @@ func Compile(in Input) *Target {
 
 	// ---- uplink and management -------------------------------------------------------
 	t.compileUplink(cfg, in.Host)
+	t.compileService(in)
 	t.compileManagement(cfg, in.Host)
 
 	// ---- test networks -------------------------------------------------------------------
@@ -344,6 +353,9 @@ func (t *Target) compileHostState() {
 	for _, w := range t.WireGuard {
 		owned[w.Name] = true
 	}
+	if t.Service != nil {
+		owned[t.Service.HostIf] = true
+	}
 	// the uplink is OS-owned: assigned (routes, offloads, DOCKER-USER) but its sysctls stay alone
 	iface := map[string]bool{}
 	for n := range owned {
@@ -374,7 +386,7 @@ func (t *Target) compileHostState() {
 		wgNames[w.Name] = true
 	}
 	for _, n := range t.Interfaces {
-		if !wgNames[n] {
+		if !wgNames[n] && (t.Service == nil || n != t.Service.HostIf) {
 			t.Offloads = append(t.Offloads, n)
 		}
 	}
@@ -388,6 +400,9 @@ func (t *Target) compileHostState() {
 	}
 	for _, w := range t.WireGuard {
 		du[w.Name] = true
+	}
+	if t.Service != nil {
+		du[t.Service.HostIf] = true
 	}
 	for n := range du {
 		t.DockerUser = append(t.DockerUser, n)
@@ -444,6 +459,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 			addTo(p.Masked().String())
 		}
 	}
+	t.serviceRouting(add)
 	sort.SliceStable(t.Routes, func(i, j int) bool {
 		// stable, readable order: connected routes first, then downstream, the default last
 		ri, rj := routeRank(t.Routes[i]), routeRank(t.Routes[j])

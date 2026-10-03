@@ -323,6 +323,11 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 	if b, ok := op.(*Bird); ok {
 		return nil, e.runBird(ctx, b)
 	}
+	if s, ok := op.(*ServiceNS); ok && s.Action == "delete" {
+		if err := e.checkKind(ctx, s.Target, s.HostIf, "veth"); err != nil {
+			return nil, err
+		}
+	}
 	if w, ok := op.(*WireGuard); ok && w.Action == "delete" {
 		if err := e.checkKind(ctx, w.Target, w.Name, "wireguard"); err != nil {
 			return nil, err

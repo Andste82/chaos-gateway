@@ -57,7 +57,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	ifsLan := mkSet("ifs_lan", tp.lan)    // local test networks: what may reach the uplink by default
 	ifsTest := mkSet("ifs_test", tp.test) // untrusted: gateway protection applies
-	ifsCG := mkSet("ifs_cg", tp.all)      // every interface of a network of Chaos Gateway
+	if t.Service != nil {
+		tp.all = append(append([]string{}, tp.all...), t.Service.HostIf)
+		sort.Strings(tp.all)
+	}
+	ifsCG := mkSet("ifs_cg", tp.all) // every interface of a network of Chaos Gateway
 	var srcs []string
 	for _, p := range t.Management.Sources {
 		srcs = append(srcs, linux.NormalizeElement(p.String()))
@@ -81,6 +85,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	input.Rules = append(input.Rules,
 		newRule(ctState("established", "related"), verdict("accept")),
 		newRule(iifname("lo"), verdict("accept")),
+	)
+	// the gateway services answer through svc0 and reach only the internal API (these rules stand
+	// before the UI port rule below)
+	input.Rules = append(input.Rules, t.serviceInput()...)
+	input.Rules = append(input.Rules,
 		// anti-lockout: the management sources always reach the control plane; nothing below
 		// and no access rule can take this away. A device on a test network that claims a
 		// management address does not count: the rule is for what does not come from there.
@@ -118,6 +127,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	forward.Rules = append(forward.Rules,
 		newRule(ctState("established", "related"), verdict("accept")),
 	)
+	// a packet for the service namespace's subnet that does not leave through svc0 is dropped, so
+	// selected traffic fails closed when the namespace is missing
+	forward.Rules = append(forward.Rules, t.serviceForwardGuard()...)
 	// with br_netfilter loaded, traffic that is switched inside one test network passes the
 	// forward hook with the same interface in and out: it is never ours to impair or drop (plan §2.2)
 	for _, b := range t.Bridges {
@@ -142,6 +154,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		forward.Rules = append(forward.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
 	}
 	forward.Rules = append(forward.Rules, implicit...)
+	forward.Rules = append(forward.Rules, t.serviceForward(ifsCG.Name, uplink)...)
 	if uplink != "" {
 		forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), verdict("accept")))
 	}
@@ -159,8 +172,14 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 			post.Rules = append(post.Rules, newRule(eq(payload("ip", "saddr"), prefixes(n.prefixes)), oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
 		}
 	}
+	if r := t.serviceMasquerade(uplink); r != nil {
+		post.Rules = append(post.Rules, *r)
+	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
+	if c := t.serviceRedirect(tp); c != nil {
+		t.Nft.Chains = append(t.Nft.Chains, *c)
+	}
 
 	// ---- MSS clamp on WireGuard interfaces (plan §2.2.1) ----------------------------------
 	if len(tp.wg) > 0 {

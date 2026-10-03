@@ -18,7 +18,7 @@ func TestEveryTransactionIsAcceptedByNftsParser(t *testing.T) {
 	if err != nil {
 		t.Skip("nft is not installed")
 	}
-	for name, tg := range map[string]*Target{"routed": compileBasic(t, nil), "wireguard": compileWG(t, nil), "routing": withRouting(t, nil), "dhcp": compileBasic(t, func(c *model.Configuration, _ *Host) { withDHCP(c, iotNet, &model.DhcpScope{}) })} {
+	for name, tg := range map[string]*Target{"routed": compileBasic(t, nil), "wireguard": compileWG(t, nil), "routing": withRouting(t, nil), "service": withService(t), "dhcp": compileBasic(t, func(c *model.Configuration, _ *Host) { withDHCP(c, iotNet, &model.DhcpScope{}) })} {
 		tx, err := tg.Nft.Transaction(nil)
 		if err != nil {
 			t.Fatal(err)

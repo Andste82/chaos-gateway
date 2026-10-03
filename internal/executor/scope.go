@@ -113,6 +113,8 @@ func (s *Scope) Check(op Operation) error {
 		}
 	case *WireGuard:
 		return s.need(o.Name)
+	case *ServiceNS:
+		return s.need(o.HostIf)
 	case *Bird:
 		return nil // no interface: the instance is a name inside the executor's own BIRD directory
 	case *Sysctl:

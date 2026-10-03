@@ -272,3 +272,69 @@ func TestOptionalDockerChainIsGuarded(t *testing.T) {
 		}
 	}
 }
+
+const goodServiceNS = `{"type":"service_ns","action":"ensure","namespace":"gw","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"`
+
+func TestPlanServiceNamespaceGolden(t *testing.T) {
+	steps := mustPlan(t, goodServiceNS+`}`)
+	var got []string
+	for _, s := range steps {
+		line := s.Cmd.String()
+		if s.Probe != nil {
+			line = fmt.Sprintf("if probe %q %v: %s", s.Probe.String(), s.RunIfProbeOK, line)
+		}
+		got = append(got, line)
+	}
+	want := []string{
+		`if probe "[cgsvc] ip link show dev lo" false: ip netns add cgsvc`,
+		`if probe "[gw] ip link show dev svc0" false: [gw] ip link add svc0 type veth peer name svc1 netns cgsvc`,
+		`[gw] ip addr replace 169.254.100.1/30 dev svc0`,
+		`[gw] ip link set dev svc0 up`,
+		`[cgsvc] ip link set dev lo up`,
+		`[cgsvc] ip addr replace 169.254.100.2/30 dev svc1`,
+		`[cgsvc] ip link set dev svc1 up`,
+		`[cgsvc] ip route replace default via 169.254.100.1 dev svc1`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// a holder container's namespace is attached instead of created
+	steps = mustPlan(t, goodServiceNS+`,"holder_pid":77}`)
+	if c := steps[0].Cmd.String(); c != "ip netns attach cgsvc 77" {
+		t.Errorf("%s", c)
+	}
+	// delete only removes a veth
+	steps = mustPlan(t, `{"type":"service_ns","action":"delete","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`)
+	if len(steps) != 1 || steps[0].Cmd.String() != "ip link delete dev svc0 type veth" || !steps[0].RunIfProbeOK {
+		t.Errorf("%+v", steps)
+	}
+}
+
+func TestServiceNamespaceRefusesWhatIsNotLinkLocal(t *testing.T) {
+	for name, mut := range map[string]string{
+		"routable host address": `"host_cidr":"10.0.0.1/30"`,
+		"routable peer":         `"peer_cidr":"192.0.2.2/30"`,
+		"different subnets":     `"peer_cidr":"169.254.101.2/30"`,
+		"same address":          `"peer_cidr":"169.254.100.1/30"`,
+		"wide prefix":           `"host_cidr":"169.254.100.1/16","peer_cidr":"169.254.100.2/16"`,
+		"same names":            `"peer_if":"svc0"`,
+		"bad namespace":         `"name":"a b"`,
+		"negative pid":          `"holder_pid":-1`,
+		"namespace is target":   `"name":"gw"`,
+	} {
+		in := goodServiceNS + `}`
+		// the later key wins in Go, but duplicates are refused: replace the field instead
+		in = strings.Replace(in, `"name":"cgsvc"`, `"name":"cgsvc"`, 1)
+		var m map[string]any
+		_ = json.Unmarshal([]byte(in), &m)
+		var over map[string]any
+		_ = json.Unmarshal([]byte("{"+mut+"}"), &over)
+		for k, v := range over {
+			m[k] = v
+		}
+		raw, _ := json.Marshal(m)
+		if _, err := Decode(raw); err == nil {
+			t.Errorf("%s: accepted\n%s", name, raw)
+		}
+	}
+}

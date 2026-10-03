@@ -87,6 +87,8 @@ func Plan(op Operation) ([]Step, error) {
 		return nil, nil // handled by the executor itself: it writes a file and runs two tools
 	case *Links:
 		return planLinks(o), nil
+	case *ServiceNS:
+		return planServiceNS(o), nil
 	case *Sysctl:
 		var steps []Step
 		for _, e := range o.Entries {
@@ -331,6 +333,32 @@ func planLinks(o *Links) []Step {
 		}
 	}
 	return steps
+}
+
+func planServiceNS(o *ServiceNS) []Step {
+	ip := func(args ...string) Command { return Command{Tool: ToolIP, Args: args, NS: o.NS} }
+	inside := func(args ...string) Command { return Command{Tool: ToolIP, Args: args, NS: o.Name} }
+	hostIP := strings.SplitN(o.HostCIDR, "/", 2)[0]
+	exists := ip("link", "show", "dev", o.HostIf)
+	if o.Action == "delete" {
+		// `type veth` makes ip refuse any other kind of device
+		return []Step{{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")}}
+	}
+	nsThere := inside("link", "show", "dev", "lo")
+	mk := Command{Tool: ToolIP, Args: []string{"netns", "add", o.Name}}
+	if o.HolderPID > 0 {
+		mk = Command{Tool: ToolIP, Args: []string{"netns", "attach", o.Name, strconv.Itoa(o.HolderPID)}}
+	}
+	return []Step{
+		{Probe: &nsThere, RunIfProbeOK: false, Cmd: mk},
+		{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", o.HostIf, "type", "veth", "peer", "name", o.PeerIf, "netns", o.Name)},
+		{Cmd: ip("addr", "replace", o.HostCIDR, "dev", o.HostIf)},
+		{Cmd: ip("link", "set", "dev", o.HostIf, "up")},
+		{Cmd: inside("link", "set", "dev", "lo", "up")},
+		{Cmd: inside("addr", "replace", o.PeerCIDR, "dev", o.PeerIf)},
+		{Cmd: inside("link", "set", "dev", o.PeerIf, "up")},
+		{Cmd: inside("route", "replace", "default", "via", hostIP, "dev", o.PeerIf)},
+	}
 }
 
 func planWireGuard(o *WireGuard) []Step {

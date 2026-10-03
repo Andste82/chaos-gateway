@@ -20,6 +20,7 @@ func TestDecodeAcceptsEveryOperationType(t *testing.T) {
 		TypeAssign:         `{"type":"assign_interfaces","devs":["wan0","lan0","br-lan0"]}`,
 		TypeRead:           `{"type":"read","what":"routes","table":"100","dev":"wan0"}`,
 		TypeLinks:          `{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"up","name":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"},{"action":"addr_delete","name":"br-lan0","cidr":"10.9.0.1/24"},{"action":"release","name":"lan1"},{"action":"down","name":"lan1"},{"action":"delete_bridge","name":"br-old"}]}`,
+		TypeServiceNS:      `{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30","holder_pid":4242}`,
 		TypeSysctl:         `{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"br-lan0","value":0},{"name":"disable_ipv6","dev":"lan0","value":1}]}`,
 	} {
 		op, err := Decode([]byte(in))

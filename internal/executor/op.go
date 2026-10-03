@@ -12,6 +12,7 @@ import (
 const (
 	TypeNftApply       = "nft_apply"
 	TypeNftAddElements = "nft_add_elements"
+	TypeNftDelElements = "nft_del_elements"
 	TypeRouting        = "routing"
 	TypeTC             = "tc"
 	TypeOffloads       = "offloads"
@@ -94,6 +95,14 @@ type Rule struct {
 	Iif      string `json:"iif,omitempty"`
 	Oif      string `json:"oif,omitempty"`
 	Table    int    `json:"table"`
+}
+
+// NftDelElements deletes elements from a set of the table: the other half of an identity change,
+// when a device loses an address. Deleting an element that is not there is not an error.
+type NftDelElements struct {
+	Target
+	Set      string   `json:"set"`
+	Elements []string `json:"elements"`
 }
 
 // Routing changes routes and rules.
@@ -252,6 +261,7 @@ const (
 
 func (NftApply) OpType() string         { return TypeNftApply }
 func (NftAddElements) OpType() string   { return TypeNftAddElements }
+func (NftDelElements) OpType() string   { return TypeNftDelElements }
 func (Routing) OpType() string          { return TypeRouting }
 func (TC) OpType() string               { return TypeTC }
 func (Offloads) OpType() string         { return TypeOffloads }
@@ -265,6 +275,7 @@ func (Read) OpType() string             { return TypeRead }
 
 func (NftApply) Mutates() bool         { return true }
 func (NftAddElements) Mutates() bool   { return true }
+func (NftDelElements) Mutates() bool   { return true }
 func (Routing) Mutates() bool          { return true }
 func (TC) Mutates() bool               { return true }
 func (Offloads) Mutates() bool         { return true }
@@ -305,6 +316,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &NftApply{}
 	case TypeNftAddElements:
 		op = &NftAddElements{}
+	case TypeNftDelElements:
+		op = &NftDelElements{}
 	case TypeRouting:
 		op = &Routing{}
 	case TypeTC:

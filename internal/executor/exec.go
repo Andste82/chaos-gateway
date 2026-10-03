@@ -41,7 +41,15 @@ type Executor struct {
 	keys    KeyProvider
 	birdDir string // where the BIRD configuration files and control sockets live
 
-	jobs    chan *job
+	// queue holds the requests that wait. Identity updates (incremental set elements, plan §2.3,
+	// §3.11) go before queued plans; within a class the order is the arrival order. One worker takes
+	// them one at a time: an update never runs while a plan does.
+	queue struct {
+		mu           sync.Mutex
+		high, normal []*job
+	}
+	wake    chan struct{} // an enqueued job
+	slots   chan struct{} // bounds the queue: a request waits for a slot
 	done    chan struct{} // closed by Close
 	stopped chan struct{} // closed when the worker has returned
 	once    sync.Once
@@ -83,7 +91,7 @@ func WithStateFile(path string) Option { return func(e *Executor) { e.state = pa
 
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
-	e := &Executor{run: run, scope: NewScope(), log: slog.New(slog.DiscardHandler), jobs: make(chan *job, 64), done: make(chan struct{}), stopped: make(chan struct{})}
+	e := &Executor{run: run, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), done: make(chan struct{}), stopped: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
@@ -131,12 +139,13 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	}
 	j := &job{ctx: ctx, ops: ops, out: make(chan jobResult, 1)}
 	select {
-	case e.jobs <- j:
+	case e.slots <- struct{}{}:
 	case <-e.done:
 		return Outcome{}, ErrClosed
 	case <-ctx.Done():
 		return Outcome{Generation: e.Generation()}, ctx.Err()
 	}
+	e.enqueue(j)
 	select {
 	case r := <-j.out:
 		return r.outcome, r.err
@@ -155,14 +164,77 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	}
 }
 
+// waiting returns how many requests wait in the queue.
+func (e *Executor) waiting() int {
+	e.queue.mu.Lock()
+	defer e.queue.mu.Unlock()
+	return len(e.queue.high) + len(e.queue.normal)
+}
+
+// queueSlots is how many requests may wait.
+const queueSlots = 64
+
+// isIdentityUpdate reports whether a request consists of incremental set-element operations only.
+func isIdentityUpdate(ops []Operation) bool {
+	if len(ops) == 0 {
+		return false
+	}
+	for _, op := range ops {
+		switch op.(type) {
+		case *NftAddElements, *NftDelElements:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Executor) enqueue(j *job) {
+	e.queue.mu.Lock()
+	if isIdentityUpdate(j.ops) {
+		e.queue.high = append(e.queue.high, j)
+	} else {
+		e.queue.normal = append(e.queue.normal, j)
+	}
+	e.queue.mu.Unlock()
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Executor) pop() *job {
+	e.queue.mu.Lock()
+	defer e.queue.mu.Unlock()
+	var j *job
+	switch {
+	case len(e.queue.high) > 0:
+		j, e.queue.high = e.queue.high[0], e.queue.high[1:]
+	case len(e.queue.normal) > 0:
+		j, e.queue.normal = e.queue.normal[0], e.queue.normal[1:]
+	}
+	if j != nil {
+		<-e.slots
+	}
+	return j
+}
+
 func (e *Executor) worker() {
 	defer close(e.stopped)
 	for {
 		select {
 		case <-e.done:
 			return
-		case j := <-e.jobs:
+		default:
+		}
+		if j := e.pop(); j != nil {
 			j.out <- e.execute(j)
+			continue
+		}
+		select {
+		case <-e.done:
+			return
+		case <-e.wake:
 		}
 	}
 }

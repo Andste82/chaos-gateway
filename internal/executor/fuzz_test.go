@@ -23,6 +23,7 @@ var fuzzSeeds = []string{
 	`{"type":"sysctl","entries":[{"name":"accept_ra","dev":"br-lan0","value":0}]}`,
 	`{"type":"wireguard","action":"ensure","name":"wg-hub","listen_port":51820,"mtu":1420,"key_ref":"0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21","peers":[{"public_key":"FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=","allowed_ips":["10.99.0.2/32"],"keepalive":25,"endpoint":"203.0.113.40:51821"}]}`,
 	`{"type":"wireguard","action":"delete","name":"wg-hub"}`,
+	`{"type":"nft_del_elements","set":"dev_a","elements":["10.10.0.5","192.0.2.0/24"]}`,
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol device { }\n","import_tables":[10]}`,
 	`{"type":"bird","action":"check","instance":"chaosgw","config":"include \"/etc/shadow\";"}`,
 	`{"type":"read","what":"bird","instance":"chaosgw"}`,

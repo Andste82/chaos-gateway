@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func TestQueueKeepsArrivalOrder(t *testing.T) {
 		if i == 0 {
 			<-started
 		}
-		for len(e.jobs) < i {
+		for e.waiting() < i {
 			time.Sleep(100 * time.Microsecond)
 		}
 	}
@@ -656,6 +657,80 @@ func TestDeleteBridgeNeverDeletesAnotherKindOfDevice(t *testing.T) {
 	}
 	// a real bridge and a device that is gone are fine
 	if _, err := e.Do(ctx, mustDecode(t, `{"type":"links","entries":[{"action":"delete_bridge","name":"br-x"},{"action":"delete_bridge","name":"gone0"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// plan §3.11: identity updates (incremental set elements) are taken before queued plans, and the
+// executor never runs two requests at the same time.
+func TestIdentityUpdatesGoBeforeQueuedPlansAndNeverRunConcurrently(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var order []string
+	var first atomic.Bool
+	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		if first.CompareAndSwap(false, true) {
+			close(started)
+			<-release // the first plan occupies the worker
+		}
+		kind := "plan"
+		if strings.Contains(c.Stdin, `"element"`) {
+			kind = "identity"
+		}
+		mu.Lock()
+		order = append(order, kind)
+		mu.Unlock()
+		return Result{}, nil
+	}}
+	e := newExec(t, fr)
+	plan := mustDecode(t, nftOp)
+	add := mustDecode(t, `{"type":"nft_add_elements","set":"dev_a","elements":["10.10.0.5"]}`)
+	del := mustDecode(t, `{"type":"nft_del_elements","set":"dev_a","elements":["10.10.0.4"]}`)
+
+	var wg sync.WaitGroup
+	submit := func(op Operation, waiting int) {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = e.Do(context.Background(), op) }()
+		for e.waiting() < waiting {
+			time.Sleep(100 * time.Microsecond)
+		}
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); _, _ = e.Do(context.Background(), plan) }()
+	<-started
+	// two plans queue up, then two identity updates: the updates overtake the plans
+	submit(plan, 1)
+	submit(plan, 2)
+	submit(add, 3)
+	submit(del, 4)
+	close(release)
+	wg.Wait()
+	if got := strings.Join(order, ","); got != "plan,identity,identity,plan,plan" {
+		t.Errorf("order %s", got)
+	}
+	if fr.overlap.Load() {
+		t.Error("two commands ran at the same time")
+	}
+	// the elements are an incremental change of the table, deletion included
+	cmds := fr.commands()
+	if !strings.Contains(cmds[2].Stdin, `"delete"`) || !strings.Contains(cmds[1].Stdin, `"add"`) {
+		t.Errorf("%+v", cmds)
+	}
+}
+
+func TestADeleteOfElementsIsValidatedLikeAnAdd(t *testing.T) {
+	for name, in := range map[string]string{
+		"a bad set name":  `{"type":"nft_del_elements","set":"x y","elements":["10.0.0.1"]}`,
+		"no elements":     `{"type":"nft_del_elements","set":"dev_a","elements":[]}`,
+		"a bad element":   `{"type":"nft_del_elements","set":"dev_a","elements":["$(id)"]}`,
+		"a timeout field": `{"type":"nft_del_elements","set":"dev_a","elements":["10.0.0.1"],"timeout_seconds":5}`,
+	} {
+		if _, err := Decode([]byte(in)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := Decode([]byte(`{"type":"nft_del_elements","set":"dev_a","elements":["10.0.0.1","192.0.2.0/24"]}`)); err != nil {
 		t.Fatal(err)
 	}
 }

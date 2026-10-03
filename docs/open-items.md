@@ -12,7 +12,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 - decisions the plan leaves open or got wrong;
 - plan and doc drift.
 
-| Milestone | Verdict | Open items | High | Medium | Need a decision |
+| Milestone | Verdict | Open items | High | Medium | Decided 2026-10-04 |
 |---|---|---|---|---|---|
 | M0 (spikes, docs) | – | 3 | 0 | 0 | 1 |
 | M1 Repository, CI, testbed | incomplete | 10 | 0 | 2 | 2 |
@@ -54,7 +54,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Items marked "Needs maintainer: yes".** Do not implement them until the maintainer has answered (see the decision list below). Doc-only parts that do not depend on the answer may be done.
+2. **Decisions.** All open questions were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision.
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).
@@ -67,35 +67,35 @@ The most common causes are:
 5. **Updating this file.** When an item is done, delete its block here in the same PR and mention the item id in the commit message. Keep the tables in "Result" up to date.
 6. **Plan changes.** Edit `docs/plan.md` only where an item says so (`plan-error` tasks).
 
-## Decisions needed from the maintainer
+## Decisions (made 2026-10-04)
 
-| Item | Question | Recommendation |
-|---|---|---|
-| M1-01 | Where do KVM-dependent tests run (Q1)? | Hosted GitHub runners with `/dev/kvm` now, a self-hosted runner when H1 hardware exists |
-| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 |
-| M2-03 | Configured address vs. DHCP lease: who wins? | Configuration wins (current) |
-| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files |
-| M3-01 | Restrict ops on OS-owned interfaces (uplink)? | Yes, an `os_owned` class |
-| M3-04 | Persist the executor generation? | No, document it as per-process |
-| M4-02 | Management matrix endpoint: spec or code? | The spec follows the code |
-| M4-07 | Warn when `apply --file` runs without `--state-dir`? | Yes |
-| M4b-04 | PSK verify by presence only: accept? | Accept |
-| M4b-05 | First poll announces online peers: intended? | Yes |
-| M4c-02 | Should a BIRD outage fail applies? | No: write the file, warn, do not fail |
-| M4c-04 | Max-prefix action? | `restart` |
-| M4c-05 | Make Babel work or drop it from V1? | Make it work |
-| M4c-10 | Effective route for a destination: where? | In M8a `/explain` |
-| M4c-12 | Source match on routing input rules? | Accept as is |
-| M5-02 | How is a client told it missed events? | Synthetic `events_lost` event |
-| M5-03 | Setup with commit-confirm? | Yes, implement it |
-| M5-07 | Loopback binding of the API? | Document it |
-| M5-10 | 413 for oversized bodies? | Add `payload_too_large` |
-| M6a-04 | Conntrack events or polling? | Polling, amend the plan |
-| M6a-09 | Kea hook per lease (fork + TLS)? | A datagram socket to the API |
-| M6a-12 | Generation marker and identity updates? | Amend §2.14 |
-| M6b-02 | Dead holder blocks applies? | Degrade and report |
-| M6b-12 | `ui_port` default 443 vs the API's port? | The spec follows the code |
-| M0-03 | ESP32 QEMU evaluation? | After V1 |
+| Item | Question | Recommendation | Decision (2026-10-04) |
+|---|---|---|---|
+| M1-01 | Where do KVM-dependent tests run (Q1)? | Hosted GitHub runners with `/dev/kvm` now, a self-hosted runner when H1 hardware exists | hosted runners only |
+| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 | with M28 |
+| M2-03 | Configured address vs. DHCP lease: who wins? | Configuration wins (current) | configuration wins |
+| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files | bind mounts in M28 |
+| M3-01 | Restrict ops on OS-owned interfaces (uplink)? | Yes, an `os_owned` class | `os_owned` |
+| M3-04 | Persist the executor generation? | No, document it as per-process | document |
+| M4-02 | Management matrix endpoint: spec or code? | The spec follows the code | spec follows code |
+| M4-07 | Warn when `apply --file` runs without `--state-dir`? | Yes | warn |
+| M4b-04 | PSK verify by presence only: accept? | Accept | accept |
+| M4b-05 | First poll announces online peers: intended? | Yes | intended |
+| M4c-02 | Should a BIRD outage fail applies? | No: write the file, warn, do not fail | best effort |
+| M4c-04 | Max-prefix action? | `restart` | `action block` |
+| M4c-05 | Make Babel work or drop it from V1? | Make it work | make it work |
+| M4c-10 | Effective route for a destination: where? | In M8a `/explain` | M8a explain |
+| M4c-12 | Source match on routing input rules? | Accept as is | accept |
+| M5-02 | How is a client told it missed events? | Synthetic `events_lost` event | `events_lost` |
+| M5-03 | Setup with commit-confirm? | Yes, implement it | implement |
+| M5-07 | Loopback binding of the API? | Document it | document |
+| M5-10 | 413 for oversized bodies? | Add `payload_too_large` | 413 |
+| M6a-04 | Conntrack events or polling? | Polling, amend the plan | events now |
+| M6a-09 | Kea hook per lease (fork + TLS)? | A datagram socket to the API | datagram socket |
+| M6a-12 | Generation marker and identity updates? | Amend §2.14 | amend plan |
+| M6b-02 | Dead holder blocks applies? | Degrade and report | degrade |
+| M6b-12 | `ui_port` default 443 vs the API's port? | The spec follows the code | spec follows code |
+| M0-03 | ESP32 QEMU evaluation? | After V1 | remove from §4.5 |
 
 ## Suggested work packages
 
@@ -115,7 +115,8 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 9. **Plan and docs sync**:
    - all `plan-error` items once their decisions are made: M1-01, M1-06, M1-10, M3-06, M4-09, M4b-03, M4b-07, M4b-08, M4c-11, M4c-16, M5-07, M5-23, M6a-04, M6a-07 (doc part), M6a-10, M6a-12, M6a-23, M6a-24, M6b-04 (M7 test), M6b-11;
    - doc items M0-01, M0-02, M3-07, M4-08, M4b-06, M6b-09, CC-01, CC-02.
-10. **After the decisions**: the remaining `needs-decision` items.
+10. **Decided changes**: M3-01, M4c-02, M4c-04, M4c-05, M5-02, M5-03, M5-10, M6a-09, M6b-02; close M4b-04, M4b-05 and M4c-12 with a doc sentence.
+11. **Conntrack events** (effort L): M6a-04, then the rates of M6a-03 on top of it.
 
 ## Cross-cutting
 
@@ -211,9 +212,9 @@ Also seen: the doc comment of `vmrun.GuestOptions` mentions a `Verbose` field th
 - Severity: low
 - Reason: deferred — §4.5 calls it "a candidate … has to be evaluated first"; no milestone owns it.
 - Evidence: plan.md:1168.
-- Task: per the decision, add it to §8 or "After V1" as a spike, or schedule a spike S17.
+- Task: remove the sentence about the Espressif QEMU fork from §4.5 (plan.md:1168); firmware tests keep using real devices.
 - Acceptance: doc review.
-- Needs maintainer: yes — (a) after V1 (consistent with D27, recommended); (b) a spike now.
+- Needs maintainer: decided 2026-10-04: remove the ESP32 QEMU candidate from §4.5 (see the revised task).
 - Effort: S
 
 Removed from the old list: "Devcontainer rebuild never verified" — wrong: CI builds `.devcontainer/Dockerfile` on every run (jobs `testbed-vm`, `testbed-privileged`); only the `start.sh rebuild` wrapper is untested. "Q1 evidence outdated" moved to M1-01, "Nightly kernel matrix" to M1-02.
@@ -246,9 +247,9 @@ Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open ar
 - Severity: medium
 - Reason: needs-decision — the M1 scope includes "the decision where KVM-dependent tests run (Q1)"; the evidence exists (level 1b with `kvm=true` in run 37147106957, level 2 green on 24.04 and 26.04 in nightly run 37121687715 on hosted runners), but §7.2 still lists Q1 as open and says level 2 was "not yet tried".
 - Evidence: plan.md:1279 (M1 scope), :1586 (Q1), :1131, :1134, :1165, :1216, :1316, D9 :1557; README.md:15; `.github/workflows/nightly.yml` job `appliance`.
-- Task: 1. After the maintainer's answer, move Q1 from §7.2 to §7.1 as `D33` with the answer and both run ids. 2. Update §4.4 (remove "no KVM-capable machine yet"; nightly measurement and level 2 run on hosted `ubuntu-24.04` runners with `/dev/kvm`), the §4.5 level-2 "When" column, "Limits of this setup" (:1216), the M5b text (:1316), the "After Phase 2" line (:1369) and D9. 3. Update docs/development.md ("Level 1b", "CI", "Appliance VMs"). 4. README.md:15: remove "except the open question Q1".
+- Task: 1. Move Q1 from §7.2 to §7.1 as `D33`: "KVM-dependent tests (level 1b with KVM, level 2 appliance, later measurements) run on hosted GitHub runners (`ubuntu-24.04` with `/dev/kvm`); no self-hosted runner is planned; measurement accuracy depends on the hosted hardware". Cite both run ids. 2. Update §4.4 (remove "no KVM-capable machine yet"; nightly level 2 and measurements on hosted runners), the §4.5 level-2 "When" column, "Limits of this setup" (:1216), the M5b text (:1316), the "After Phase 2" line (:1369) and D9. 3. Update docs/development.md ("Level 1b", "CI", "Appliance VMs"). 4. README.md:15: remove "except the open question Q1".
 - Acceptance: doc review; `grep -n "Q1" docs/plan.md` shows no "open" wording.
-- Needs maintainer: yes — (a) hosted GitHub runners with `/dev/kvm` (in use, free for public repos; the offer can change); (b) a self-hosted bare-metal runner; (c) (a) now, (b) when H1 hardware exists. Recommendation: (c).
+- Needs maintainer: decided 2026-10-04: (b) hosted GitHub runners with `/dev/kvm` only; no self-hosted runner is planned. Record this as D33, and note that measurement accuracy depends on the hosted hardware.
 - Effort: S
 
 ### M1-02 Nightly level 1b kernel matrix and arm64 level 1b missing
@@ -258,7 +259,7 @@ Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open ar
 - Evidence: plan.md:1134-1135; `nightly.yml` (only `fuzz` and `appliance`); `.devcontainer/Dockerfile` `ARG KERNELS` (two GA kernels); `vmrun.DefaultKernel` (run.go:21); `vmrun` has no arch option (an arm64 guest needs its own arm64 root file system).
 - Task: 1. Add a `testbed-matrix` job to `nightly.yml` that builds `.devcontainer` as ci.yml does and runs `make test-vm ARGS="-kernel ${{ matrix.kernel }}"` for each kernel in `ARG KERNELS` (`6.8.0-142-generic`, `7.0.0-38-generic`). 2. Find the current 24.04 HWE kernel (`apt-cache policy linux-image-generic-hwe-24.04`), add it to `ARG KERNELS` and the matrix; 26.04 has no HWE kernel yet, so change §4.4 to "HWE kernels where they exist". 3. Arm64 per the decision: if deferred, change §4.4 to say arm64 level 1b comes with M28 (its test list already has "the arm64 image … in emulated level 1b").
 - Acceptance: a manually started nightly run (`gh workflow run nightly.yml --ref <branch>`) shows one green `testbed-matrix` job per kernel.
-- Needs maintainer: yes — arm64 level 1b: (a) defer to M28 and amend §4.4 (recommended); (b) build it now (L).
+- Needs maintainer: decided 2026-10-04: (a) arm64 level 1b comes with M28; amend §4.4. Do the x86 kernel matrix now.
 - Effort: S (x86) / L (arm64)
 
 ### M1-03 The plan says level 1b runs "on the development VPS" on every commit
@@ -383,7 +384,7 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 - Evidence: `internal/domain/observed.go:106-113`; `TestTwoDevicesClaimingOneAddressTheStrongerClaimWins`.
 - Task: keep: add a sentence to plan §2.3 and development.md "DHCP and devices"; change: swap `claimLease`/`claimExplicit` and update the test.
 - Acceptance: doc review (plus a unit test if changed).
-- Needs maintainer: yes — (a) configuration wins (current, recommended); (b) lease wins.
+- Needs maintainer: decided 2026-10-04: (a) configuration wins (current behaviour); document it.
 - Effort: S
 
 ### M2-04 Reserved routing tables hard-coded in the domain
@@ -433,7 +434,7 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 - Evidence: plan.md:891-903; `deploy/compose.api.yaml`; `store.revPath`/`statusPath` (store.go:133-138).
 - Task: per the decision, update §3.6 to the real paths, volumes and status files, or switch the compose files to bind mounts at the §3.6 paths in M28 (record in the M28 scope).
 - Acceptance: doc review.
-- Needs maintainer: yes — (a) keep named volumes and amend the plan; (b) bind mounts as planned in M28 (easier host backups; recommended), and amend §3.6 now for the status files and that paths are flags.
+- Needs maintainer: decided 2026-10-04: (b) bind mounts at the §3.6 paths in M28. Amend §3.6 now for the status files and the path flags, and add the switch to the M28 scope.
 - Effort: S
 
 ### M2-09 Overlay and run-request examples bypass the strict Go decoder
@@ -467,9 +468,9 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 - Severity: low
 - Reason: needs-decision — plan M3 says "tc only assigned interfaces and the uplink qdisc"; the uplink is a fully assigned interface, so `links` (down, addr_delete, enslave), `sysctl`, `wireguard` and `service_ns` ops are accepted on it; in the two-port topology it is also the management NIC.
 - Evidence: `internal/executor/scope.go:67-134`; `internal/compiler/compile.go:365-372`; docs/development.md:141-142.
-- Task (option A): 1. Add `OSOwned []string \`json:"os_owned,omitempty"\`` to `AssignInterfaces` (`op.go`), validated as a subset of `Devs`, stored in `Scope` and in the state file. 2. In `Scope.Check` refuse `Links` entries, per-device `Sysctl` entries, `WireGuard` and `ServiceNS` naming an OS-owned interface (`ErrOutOfScope`). 3. Compiler: `Target.OSOwned` (uplink, plus the management interface when assigned), passed in `internal/apply/plan.go` where `AssignInterfaces` is built. 4. Tests: `TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads` (exec_test.go), rejection cases in decode_test.go, a fuzz seed. 5. Update development.md.
+- Task: 1. Add `OSOwned []string \`json:"os_owned,omitempty"\`` to `AssignInterfaces` (`op.go`), validated as a subset of `Devs`, stored in `Scope` and in the state file. 2. In `Scope.Check` refuse `Links` entries, per-device `Sysctl` entries, `WireGuard` and `ServiceNS` naming an OS-owned interface (`ErrOutOfScope`). 3. Compiler: `Target.OSOwned` (uplink, plus the management interface when assigned), passed in `internal/apply/plan.go` where `AssignInterfaces` is built. 4. Tests: `TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads` (exec_test.go), rejection cases in decode_test.go, a fuzz seed. 5. Update development.md.
 - Acceptance: `go test ./internal/executor ./internal/apply ./internal/compiler`; CI testbed level 1/1b green.
-- Needs maintainer: yes — (A) implement as above (recommended; guards against compiler bugs touching the uplink); (B) amend plan M3 to "tc and routes on assigned interfaces, which include the uplink; the caller is trusted".
+- Needs maintainer: decided 2026-10-04: (A) implement the `os_owned` class.
 - Effort: M
 
 ### M3-02 `Server.Serve` goroutine leak and accept race
@@ -497,9 +498,9 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 - Severity: low
 - Reason: needs-decision — `Outcome.Generation` is per process; nothing in the plan requires persistence (the API generation lives in the engine, see M5-01).
 - Evidence: `internal/executor/exec.go:57-60,251-262`.
-- Task (option B): doc comment on `Outcome.Generation`: "counts mutating requests since this executor started; not persistent".
+- Task: doc comment on `Outcome.Generation`: "counts mutating requests since this executor started; not persistent".
 - Acceptance: doc review.
-- Needs maintainer: yes — (A) persist it in the state file; (B) document it as per-process (recommended).
+- Needs maintainer: decided 2026-10-04: (B) document the counter as per-process.
 - Effort: S
 
 ### M3-05 Parser test data is hand-trimmed
@@ -565,7 +566,7 @@ Verdict: incomplete. All scope and test items exist and pass; open are superviso
 - Evidence: api/openapi.yaml:2560 vs :2294; `internal/compiler/compile.go:315-334`; `rules.go:277-281`.
 - Task: (A) change the description at openapi.yaml:2560 to "`Management.allowed_sources`, or the management interface subnet when none are given"; run `make check-spec check-generated check-clients`. (B) add a set `mgmt_net` (allowed_sources ∪ interface subnet) used only in `matrixRules`, golden update, `TestTheManagementEndpointIncludesTheInterfaceSubnet`.
 - Acceptance: doc review + `make check-spec` (A) or local unit test (B).
-- Needs maintainer: yes — (A) spec follows code (recommended); (B) union.
+- Needs maintainer: decided 2026-10-04: (A) the spec follows the code.
 - Effort: S
 
 ### M4-03 The lockout rollback test accepts too much
@@ -613,9 +614,9 @@ Verdict: incomplete. All scope and test items exist and pass; open are superviso
 - Severity: low
 - Reason: deferred — documented (development.md:210); without a store there is nothing to restore.
 - Evidence: `cmd/chaosgw/apply.go`.
-- Task (option B): print a warning on stderr when `--state-dir` is missing; assert it in `TestApplyFileFailures`.
+- Task: print a warning on stderr when `--state-dir` is missing; assert it in `TestApplyFileFailures`.
 - Acceptance: `go test ./cmd/chaosgw`.
-- Needs maintainer: yes — (A) documented limit only; (B) also warn (recommended).
+- Needs maintainer: decided 2026-10-04: (B) warn on stderr.
 - Effort: S
 
 ### M4-08 docs/development.md M4 notes outdated
@@ -700,7 +701,7 @@ Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); op
 - Evidence: `internal/apply/plan.go:595-596`; docs/development.md:228-233.
 - Task: none, or a key-hash fingerprint compared with the executor's read.
 - Acceptance: doc review.
-- Needs maintainer: yes — close as accepted (recommended) or implement.
+- Needs maintainer: decided 2026-10-04: accepted as documented; close the item with a sentence in docs/development.md.
 - Effort: S
 
 ### M4b-05 The first poll after a restart announces every online peer
@@ -710,7 +711,7 @@ Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); op
 - Evidence: `internal/engine/wireguard.go:128,145`; `TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesWhatIsOnline`.
 - Task: one sentence in docs/development.md.
 - Acceptance: doc review.
-- Needs maintainer: yes — confirm as intended (recommended).
+- Needs maintainer: decided 2026-10-04: intended; close the item with a sentence in docs/development.md.
 - Effort: S
 
 ### M4b-06 Development doc claims a deviation that is none
@@ -778,9 +779,9 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Severity: medium
 - Reason: needs-decision — `planBird` plans `birdc configure` whenever the daemon is not running, so unrelated revisions and restores fail.
 - Evidence: `internal/apply/bird.go:40-55`; `executor/exec.go:739-756`; docs/development.md:299.
-- Task (option a): 1. In `executor.runBird`, when `birdc configure` fails because the socket is missing or refused, keep the new file (BIRD reads it at start) and return a typed `BirdDownError` instead of restoring. 2. `apply` treats `BirdDownError` as success with a warning `routing_daemon_down`. 3. `verifyBird` reports "not running" as a warning, not as drift. 4. Emit an event (`routing_session_changed` with state `daemon_down`, or add `routing_daemon_down` to the spec). 5. `TestABirdThatIsDownDoesNotFailTheApply` (kernelsim, BIRD not running).
+- Task: 1. In `executor.runBird`, when `birdc configure` fails because the socket is missing or refused, keep the new file (BIRD reads it at start) and return a typed `BirdDownError` instead of restoring. 2. `apply` treats `BirdDownError` as success with a warning `routing_daemon_down`. 3. `verifyBird` reports "not running" as a warning, not as drift. 4. Emit an event (`routing_session_changed` with state `daemon_down`, or add `routing_daemon_down` to the spec). 5. `TestABirdThatIsDownDoesNotFailTheApply` (kernelsim, BIRD not running).
 - Acceptance: unit tests in `internal/apply`, `internal/executor`.
-- Needs maintainer: yes — (a) best effort, warn, do not fail (recommended); (b) keep failing; (c) fail only when the routing configuration changes.
+- Needs maintainer: decided 2026-10-04: (a) best effort: write the file, warn, do not fail.
 - Effort: M
 
 ### M4c-03 No route-change events; `routing_routes_changed` never sent
@@ -798,9 +799,9 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Severity: medium
 - Reason: needs-decision — `import limit N action disable` leaves the protocol down until its configuration changes; no flag or event says "limit hit".
 - Evidence: `internal/bird/render.go:204-209`; docs/development.md:299-300.
-- Task (option a): `action restart` in `importLimit` (BGP already backs off with `error wait time 1, 30`); expose BIRD's info/last error as `reason: "limit"` in `routing_session_changed`; update goldens and `TestMoreRoutesThanTheLimitDisableTheSession` (session goes down with the limit reason; after the site withdraws to ≤ limit it comes back).
+- Task: 1. In `internal/bird/render.go` `importLimit`, emit `import limit N action block`: the session stays up and the routes over the limit are not imported. 2. Parse BIRD's import-limit state from `show protocols all` (the "Import limit" line; check the exact output of BIRD 2.18 in CI or with a local instance) into `ImportLimitHit bool` in `bird.ProtocolStatus`. 3. Show the flag in the routing status of the API (extend the spec field if missing and run `make generate`), and send `routing_routes_changed` (M4c-03) with `limit_hit: true` when it turns on. 4. Update the goldens. Rewrite `TestMoreRoutesThanTheLimitDisableTheSession` as `TestMoreRoutesThanTheLimitAreBlocked`: the session stays established, table 100 holds at most the limit, and the status reports the limit hit. 5. Document the behaviour in docs/development.md.
 - Acceptance: unit tests in `internal/bird`; CI testbed.
-- Needs maintainer: yes — (a) `action restart` (recommended); (b) `action block`; (c) keep `disable` plus an API operation to re-enable.
+- Needs maintainer: decided 2026-10-04: (b) `action block` (see the revised task).
 - Effort: M
 
 ### M4c-05 Babel probably does not work and is not tested
@@ -810,7 +811,7 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Evidence: `internal/bird/render.go:276-281`; `bird/remote.go`; `compiler/rules.go:111-112`; no `fe80`/`addrgenmode` in the code.
 - Task: 1. Testbed test `TestBabelOverAWireGuardLink` like `TestBGPOverAWireGuardLinkExchangesRoutes` with `Type: model.RoutingProtocolTypeBabel`. 2. If it fails for lack of a link-local address: the compiler emits `fe80::<last octet of the transfer address>/64` for link interfaces running Babel (new address entry in `WGInterface`; the executor `links` address action accepts `fe80::/64` only). 3. `RenderRemote` prints the matching `ip -6 addr add` hint. 4. Forwarded IPv6 stays dropped.
 - Acceptance: CI testbed.
-- Needs maintainer: only for (b) — (a) make Babel work (recommended); (b) drop Babel from V1 (amend D20, §2.2.2, M4c).
+- Needs maintainer: decided 2026-10-04: (a) make Babel work.
 - Effort: M
 
 ### M4c-06 Preview has no BIRD (or WireGuard) diff
@@ -858,9 +859,9 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Severity: low
 - Reason: needs-decision — §2.2.2 promises it; no milestone schedules it.
 - Evidence: docs/plan.md:230; `internal/engine/api.go:110-150`.
-- Task (option a): amend the M8a scope (`/explain`) to include the table-100 lookup (`ip route get <dst> from <src> iif <dev>` via an executor read) and change §2.2.2 to "shown by explain".
+- Task: amend the M8a scope (`/explain`) to include the table-100 lookup (`ip route get <dst> from <src> iif <dev>` via an executor read) and change §2.2.2 to "shown by explain".
 - Acceptance: doc review.
-- Needs maintainer: yes — (a) move to M8a explain (recommended); (b) a `destination` parameter on preview; (c) drop it.
+- Needs maintainer: decided 2026-10-04: (a) move it to M8a `/explain`.
 - Effort: S (doc) / M (code)
 
 ### M4c-11 Learned routes are not exported into the PMTU mirror tables
@@ -880,7 +881,7 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Evidence: `internal/compiler/rules.go:101-113`.
 - Task: optional `ip saddr <link peer>` for BGP.
 - Acceptance: local compiler test.
-- Needs maintainer: yes — close as accepted (recommended) or harden.
+- Needs maintainer: decided 2026-10-04: accepted as is; close the item with a sentence in docs/development.md.
 - Effort: S
 
 ### M4c-13 No OSPF import-filter test
@@ -964,9 +965,9 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Severity: medium
 - Reason: needs-decision — event ids are per boot; a `Last-Event-ID` older than the buffer or from another boot replays partially or nothing, and the client is not told.
 - Evidence: `internal/engine/events.go:64-76`; `internal/api/events.go:153-178`.
-- Task (option a): 1. Ids `<boot_id>-<seq>` (`engine/events.go`), parse both parts. 2. If the boot differs or seq is below the oldest buffered seq − 1, first send `event: events_lost` with `{"reason":"restart"|"expired"}`, then the live stream. 3. Add `events_lost` to `EventType` in api/openapi.yaml, `make generate`, add to `knownTypes`. 4. `TestAStaleLastEventIDGetsEventsLost`, `TestAnIdFromAnotherBootGetsEventsLost`.
+- Task: 1. Ids `<boot_id>-<seq>` (`engine/events.go`), parse both parts. 2. If the boot differs or seq is below the oldest buffered seq − 1, first send `event: events_lost` with `{"reason":"restart"|"expired"}`, then the live stream. 3. Add `events_lost` to `EventType` in api/openapi.yaml, `make generate`, add to `knownTypes`. 4. `TestAStaleLastEventIDGetsEventsLost`, `TestAnIdFromAnotherBootGetsEventsLost`.
 - Acceptance: local unit tests; `make check-generated`.
-- Needs maintainer: yes — (a) synthetic `events_lost` event, spec addition (recommended: EventSource reconnects by itself and handles non-200 badly); (b) answer a stale id with 409/410; (c) document that clients re-read `GET /state` after every reconnect.
+- Needs maintainer: decided 2026-10-04: (a) synthetic `events_lost` event.
 - Effort: S
 
 ### M5-03 Setup applies without commit-confirm
@@ -974,9 +975,9 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Severity: medium
 - Reason: needs-decision — the spec (`POST /setup`, openapi.yaml:145, "the revision waits for confirmation") requires commit-confirm; the code applies directly because `LockoutRelevant` is false without a current configuration; a wrong management interface at setup locks the admin out.
 - Evidence: `internal/api/system.go:403`; `internal/engine/lockout.go:15-16`; `TestTheSetupNeedsTheTokenAndCreatesRevisionOne`.
-- Task (option a): 1. `ForceConfirm bool` in `engine.ApplyOptions`, used by `CompleteSetup`. 2. Keep the binder on the pre-setup addresses until the revision is confirmed (pass `Pending != nil` into `listenAddrs`). 3. On rollback (no active revision) reopen setup (`auth.ReopenSetup()` prints a new token). 4. `TestTheSetupWaitsForConfirmation`, `TestAnUnconfirmedSetupIsRolledBackAndReopened` (short confirm timeout); update e2e_test.go:54 to confirm first.
+- Task: 1. `ForceConfirm bool` in `engine.ApplyOptions`, used by `CompleteSetup`. 2. Keep the binder on the pre-setup addresses until the revision is confirmed (pass `Pending != nil` into `listenAddrs`). 3. On rollback (no active revision) reopen setup (`auth.ReopenSetup()` prints a new token). 4. `TestTheSetupWaitsForConfirmation`, `TestAnUnconfirmedSetupIsRolledBackAndReopened` (short confirm timeout); update e2e_test.go:54 to confirm first.
 - Acceptance: local unit tests in `internal/api` and `cmd/chaosgw`; CI testbed for e2e_test.go.
-- Needs maintainer: yes — (a) implement as above (recommended); (b) change the spec to "applies it" and accept the risk; (c) only keep listening on all non-test addresses until the first explicit confirm.
+- Needs maintainer: decided 2026-10-04: (a) implement commit-confirm for the setup.
 - Effort: M
 
 ### M5-04 Audit retention, fsync per entry, failures not surfaced
@@ -1016,7 +1017,7 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Evidence: `cmd/chaosgw/api.go:240`.
 - Task: plan §2.16: "plus the loopback address for the container health check; local processes on the host are trusted".
 - Acceptance: doc review.
-- Needs maintainer: yes — (a) document (recommended); (b) health check over a Unix socket and drop the loopback.
+- Needs maintainer: decided 2026-10-04: (a) document the loopback binding.
 - Effort: S
 
 ### M5-09 `auth.refresh` detects changes by mtime and size only
@@ -1036,7 +1037,7 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Evidence: `internal/api/helpers.go:106-110`, `revisions.go:112-115`, `middleware.go:64`.
 - Task: add `payload_too_large` (413) to `ErrorCode` and the spec table, regenerate; detect `*http.MaxBytesError` in `decodeJSON` and `CreateRevision`; `statusOf`/`titleOf`; `TestAnOversizedBodyIs413`.
 - Acceptance: local unit test.
-- Needs maintainer: yes — add the code (recommended), or keep 400 and document.
+- Needs maintainer: decided 2026-10-04: add `payload_too_large` (413).
 - Effort: S
 
 ### M5-11 No read timeout on the API servers
@@ -1279,9 +1280,9 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Severity: medium
 - Reason: needs-decision — the M6a scope and §3.1/§3.4 name conntrack events; the code runs `conntrack -L` every second and on each `GET /flows`; the executor protocol has no streaming read.
 - Evidence: `engine/observe.go:123,259`; `executor/plan.go:295`.
-- Task (option a): amend plan M6a scope to "flow observer polling conntrack every second (events later)" and §3.4; note it in development.md. Option b: a streaming executor read `conntrack_events` (`conntrack -E` or netlink) over a separate connection, PollObserved triggered by events.
+- Task: 1. Executor: add a streaming read. The protocol is request/response today, so add a new request kind on its own connection: `{"type":"watch","what":"conntrack","namespace":...}` after the hello. The server runs `conntrack -E -o id` (fixed path, argument array, in the target namespace) as a child of that connection and sends one JSON line per event (`new`/`update`/`destroy` with the parsed tuple, `internal/linux/conntrack.go`). It kills the child when the connection closes or the executor stops. Watches are reads: they do not take the write queue, need the same peer-credential check, and are limited to a few per client. 2. Client: `executor.Client.Watch(ctx, what, ns) (<-chan json.RawMessage, error)`, plus `executor.Redialing` support with reconnect. 3. Engine: `FollowConntrack(ctx, debounce)`, like `FollowNeighbors`, triggers `TriggerObserve` (debounced 100 ms). The 1 s `conntrack -L` poll becomes a fallback every 10 s. 4. kernelsim: a scripted event source for unit tests. 5. Tests: an executor unit test of the watch lifecycle with a fake runner (the child is killed on close; goleak), an engine unit test that an event triggers an observation, and a testbed test that a new flow from client A appears in `GET /flows` within 300 ms without waiting for the poll. 6. Wire it in `cmd/chaosgw/api.go`. Document it in docs/development.md (executor operations, M6a).
 - Acceptance: doc review (a) or a CI testbed test that a new flow triggers an observation within 200 ms (b).
-- Needs maintainer: yes — (a) amend the plan (recommended; the ≤1 s identity target is met through neighbor and lease events); (b) implement event streaming (L).
+- Needs maintainer: decided 2026-10-04: (b) implement conntrack events now (see the revised task).
 - Effort: S (a) / L (b)
 
 ### M6a-05 Identity resolved against the committed configuration only
@@ -1329,9 +1330,9 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Severity: medium
 - Reason: needs-decision — `run_script` with `sync:false`, unbounded; a DHCP flood from an untrusted device forks `chaosgw` plus a TLS handshake per lease.
 - Evidence: `internal/kea/config.go:185`; `cmd/chaosgw/keahook.go:22-49`.
-- Task (option a): `chaosgw kea-hook` writes one JSON line to a Unix datagram socket `/run/kea/chaosgw-events.sock` (created by the API in the shared `chaosgw-kea-run` volume), non-blocking, dropped when full; the API reads, coalesces and calls `Engine.LeaseEvent`; HTTP stays as fallback; unit tests for reader and hook.
+- Task: `chaosgw kea-hook` writes one JSON line to a Unix datagram socket `/run/kea/chaosgw-events.sock` (created by the API in the shared `chaosgw-kea-run` volume), non-blocking, dropped when full; the API reads, coalesces and calls `Engine.LeaseEvent`; HTTP stays as fallback; unit tests for reader and hook.
 - Acceptance: local unit tests.
-- Needs maintainer: yes — (a) datagram socket (recommended); (b) drop the hook and rely on the 1 s lease poll, amending §2.7; (c) accept the risk.
+- Needs maintainer: decided 2026-10-04: (a) a datagram socket to the API.
 - Effort: M
 
 ### M6a-10 Kea container path never exercised
@@ -1359,9 +1360,9 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Severity: low
 - Reason: needs-decision — §2.14 says the `generation` chain holds the applied generation; identity updates bump the generation but leave the marker at the last full apply.
 - Evidence: `engine/applyloop.go:123`.
-- Task (option a): amend §2.14: "the marker names the last full apply; identity updates are element operations and do not rewrite it".
+- Task: amend §2.14: "the marker names the last full apply; identity updates are element operations and do not rewrite it".
 - Acceptance: doc review.
-- Needs maintainer: yes — (a) amend the plan (recommended); (b) an executor op that rewrites only the `generation` chain in the same transaction.
+- Needs maintainer: decided 2026-10-04: (a) amend the plan.
 - Effort: S
 
 ### M6a-13 ICMP flow ids collide
@@ -1530,9 +1531,9 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Severity: medium
 - Reason: needs-decision — a dead holder (PID file survives a crash in the named volume) makes every revision apply and every rollback fail.
 - Evidence: `internal/executor/exec.go:335-341`; `internal/apply/plan.go:66-68`; docs/development.md.
-- Task (option a): before compiling, if `ServiceHolderPID()` names a process that does not exist, compile with `HolderPID=0` or skip `serviceOp` (table 102 and the forward guard keep traffic fail-closed); `Snapshot.ServiceError` plus a problem event; `TestADeadHolderDoesNotBlockARevisionApply` (simulated kernel: apply succeeds, `ServiceError` set, a later live PID re-attaches).
+- Task: before compiling, if `ServiceHolderPID()` names a process that does not exist, compile with `HolderPID=0` or skip `serviceOp` (table 102 and the forward guard keep traffic fail-closed); `Snapshot.ServiceError` plus a problem event; `TestADeadHolderDoesNotBlockARevisionApply` (simulated kernel: apply succeeds, `ServiceError` set, a later live PID re-attaches).
 - Acceptance: local unit test; CI testbed e2e still passes.
-- Needs maintainer: yes — (a) degrade and report (recommended); (b) keep failing but exempt rollbacks; (c) keep as is.
+- Needs maintainer: decided 2026-10-04: (a) degrade and report.
 - Effort: M
 
 ### M6b-03 No test with a real holder process and automatic healing
@@ -1630,9 +1631,9 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Severity: low
 - Reason: needs-decision — M6b made the API's own port (`--port`, 8443) the default of the gateway's input rules; the spec still says `default: 443`.
 - Evidence: api/openapi.yaml:2296-2300; `compiler.Input.DefaultUIPort`, `cmd/chaosgw/api.go`.
-- Task (option a): replace `default: 443` with the description "Default - the port the API listens on (8443 in the shipped compose files)"; `make generate`.
+- Task: replace `default: 443` with the description "Default - the port the API listens on (8443 in the shipped compose files)"; `make generate`.
 - Acceptance: `make check-generated`.
-- Needs maintainer: yes — (a) spec follows code (recommended); (b) default 443 with `NET_BIND_SERVICE` for the API container (M28).
+- Needs maintainer: decided 2026-10-04: (a) the spec follows the code.
 - Effort: S
 
 Removed from the old list: "Query log in memory only" — the plan asks only for `/dns/queries` with a device filter (§2.13); persistence is not required.

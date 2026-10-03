@@ -43,7 +43,7 @@ type proxyIn struct {
 	srv    *dnsproxy.Server
 }
 
-func startProxy(t *testing.T, ns, token string) *proxyIn {
+func startProxy(t *testing.T, ns, token, base string) *proxyIn {
 	t.Helper()
 	pc, err := testbed.ListenPacketIn(ns, "udp", ":53")
 	if err != nil {
@@ -54,7 +54,7 @@ func startProxy(t *testing.T, ns, token string) *proxyIn {
 		_ = pc.Close()
 		t.Fatal(err)
 	}
-	c := &dnsproxy.APIClient{Base: "http://169.254.100.1:8443", TokenFile: token, Dial: testbed.DialerIn(ns), Wait: 3 * time.Second}
+	c := &dnsproxy.APIClient{Base: base, TokenFile: token, Dial: testbed.DialerIn(ns), Wait: 3 * time.Second}
 	srv := dnsproxy.New(dnsproxy.Options{Upstream: nsExchanger{ns: ns}, Sink: c})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{}, 3)
@@ -147,7 +147,13 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 	}
 
 	// the API listens on the gateway's end of the link, as in the container deployment
-	l, err := testbed.ListenIn(top.GW.Name, "tcp", "169.254.100.1:8443")
+	// on the port of the management interface: the gateway's input rules let the services reach that one
+	port := 8443
+	if cfg := g.e.Snapshot().Config; cfg != nil && cfg.Management.UiPort != nil && *cfg.Management.UiPort > 0 {
+		port = *cfg.Management.UiPort
+	}
+	base := fmt.Sprintf("http://169.254.100.1:%d", port)
+	l, err := testbed.ListenIn(top.GW.Name, "tcp", fmt.Sprintf("169.254.100.1:%d", port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +165,7 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := startProxy(t, ns, token)
+	p := startProxy(t, ns, token, base)
 	diagnose = func() {
 		show := func(title string, cmd *exec.Cmd) {
 			out, err := cmd.CombinedOutput()
@@ -240,7 +246,7 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 
 	// restarting only the proxy: the new one gets everything from the API
 	p.stop()
-	p = startProxy(t, ns, token)
+	p = startProxy(t, ns, token, base)
 	waitFor(t, 30*time.Second, "a restarted proxy resolves again", func() bool {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"
@@ -270,7 +276,7 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		_, err := top.GW.Run(context.Background(), "ip", "-br", "addr", "show", "dev", "svc0")
 		return err == nil
 	})
-	startProxy(t, ns, token)
+	startProxy(t, ns, token, base)
 	waitFor(t, 60*time.Second, "A resolves again after the namespace was created again", func() bool {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"

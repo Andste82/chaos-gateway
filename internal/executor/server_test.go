@@ -29,7 +29,8 @@ func startServer(t *testing.T, fr Runner, mod func(*Server)) (string, *Executor)
 		t.Fatal(err)
 	}
 	e := newExec(t, fr)
-	s := &Server{Exec: e}
+	// the tests run as whatever user the CI runner is: that user is the peer on both ends
+	s := &Server{Exec: e, Auth: AllowUIDs(uint32(os.Getuid()))}
 	if mod != nil {
 		mod(s)
 	}
@@ -43,7 +44,7 @@ func startServer(t *testing.T, fr Runner, mod func(*Server)) (string, *Executor)
 
 func dial(t *testing.T, path string) *Client {
 	t.Helper()
-	c, err := Dial(context.Background(), path, DialOptions{})
+	c, err := Dial(context.Background(), path, selfOpts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,13 +212,13 @@ func TestServerTimesOutWithoutClientHello(t *testing.T) {
 
 func TestClientRefusesAServerWithAnotherProtocolVersion(t *testing.T) {
 	path, _ := startServer(t, &fakeRunner{}, func(s *Server) { s.Protocol = 2 })
-	_, err := Dial(context.Background(), path, DialOptions{})
+	_, err := Dial(context.Background(), path, selfOpts())
 	if !errors.Is(err, ErrProtocolMismatch) {
 		t.Fatalf("got %v", err)
 	}
 	// the other direction: a client with a newer version is refused by the server
 	path, _ = startServer(t, &fakeRunner{}, nil)
-	_, err = Dial(context.Background(), path, DialOptions{Protocol: 2})
+	_, err = Dial(context.Background(), path, DialOptions{Auth: selfOpts().Auth, Protocol: 2})
 	if !errors.Is(err, ErrProtocolMismatch) {
 		t.Fatalf("got %v", err)
 	}
@@ -228,7 +229,7 @@ func TestPeerCredentialsAreChecked(t *testing.T) {
 	path, e := startServer(t, &fakeRunner{}, func(s *Server) {
 		s.Auth = func(c Cred) error { return errors.New("not allowed") }
 	})
-	_, err := Dial(context.Background(), path, DialOptions{})
+	_, err := Dial(context.Background(), path, selfOpts())
 	var re *RemoteError
 	if !errors.As(err, &re) || re.Code != CodeForbidden {
 		t.Fatalf("got %v", err)
@@ -362,3 +363,7 @@ func TestClientContextCancel(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// selfOpts trusts this process's own user as the executor: in the tests both ends are the same
+// process, and CI does not run as root.
+func selfOpts() DialOptions { return DialOptions{Auth: AllowUIDs(uint32(os.Getuid()))} }

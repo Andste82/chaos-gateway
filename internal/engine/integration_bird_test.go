@@ -408,7 +408,7 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 		host string
 	}{{g.top.Site, testbed.SiteNetHost}, {g.top.Site2, testbed.Site2NetHost}} {
 		if !pingOK(g.top.A, "", r.host) {
-			t.Errorf("A cannot reach %s\n%s\nremote routes:\n%s\n%s", r.host, g.table100(), r.ns.Must("ip", "route", "show"), birdc(t, g.gwSock, "show", "route", "all", "protocol", "ann_ospf_site_c")+birdc(t, g.gwSock, "show", "ospf", "lsadb"))
+			t.Errorf("A cannot reach %s\n%s\nremote routes:\n%s\n%s", r.host, g.table100(), r.ns.Must("ip", "route", "show"), birdc(t, g.gwSock, "show", "route", "all", "protocol", "ann_ospf_site_c")+birdc(t, g.gwSock, "show", "ospf", "lsadb")+"site2:\n"+birdc(t, siteC, "show", "route", "all")+birdc(t, siteC, "show", "ospf", "lsadb"))
 		}
 	}
 	// taking the OSPF link down withdraws its routes within the dead interval

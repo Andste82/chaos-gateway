@@ -399,8 +399,15 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	if !strings.Contains(main, "default via 192.168.56.254") {
 		t.Errorf("the management default route is gone\n%s", main)
 	}
-	if !pingOK(g.top.A, "", testbed.SiteNetHost) || !pingOK(g.top.A, "", testbed.Site2NetHost) {
-		t.Errorf("A cannot reach the remote networks\n%s", g.table100())
+	// the neighbors learn the gateway's network (the return path); give them a moment
+	time.Sleep(5 * time.Second)
+	for _, r := range []struct {
+		ns   *testbed.Namespace
+		host string
+	}{{g.top.Site, testbed.SiteNetHost}, {g.top.Site2, testbed.Site2NetHost}} {
+		if !pingOK(g.top.A, "", r.host) {
+			t.Errorf("A cannot reach %s\n%s\nremote routes:\n%s\n%s", r.host, g.table100(), r.ns.Must("ip", "route", "show"), g.top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "forward"))
+		}
 	}
 	// taking the OSPF link down withdraws its routes within the dead interval
 	g.top.Site2.Must("ip", "link", "set", "wgsite2", "down")

@@ -65,7 +65,9 @@ func Plan(op Operation) ([]Step, error) {
 	case *NftApply:
 		return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(o.Ruleset), NS: o.NS}}}, nil
 	case *NftAddElements:
-		return planAddElements(o)
+		return planElements("add", o.Target, o.Set, o.Elements, o.TimeoutSeconds)
+	case *NftDelElements:
+		return planElements("delete", o.Target, o.Set, o.Elements, 0)
 	case *Routing:
 		return planRouting(o), nil
 	case *TC:
@@ -96,26 +98,26 @@ func Plan(op Operation) ([]Step, error) {
 	return nil, fmt.Errorf("no plan for %T", op)
 }
 
-func planAddElements(o *NftAddElements) ([]Step, error) {
-	elems := make([]any, len(o.Elements))
-	for i, e := range o.Elements {
+func planElements(verb string, tg Target, set string, elements []string, timeout int) ([]Step, error) {
+	elems := make([]any, len(elements))
+	for i, e := range elements {
 		var val any = e
 		if p, err := netip.ParsePrefix(e); err == nil {
 			val = map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
 		}
-		if o.TimeoutSeconds > 0 {
-			val = map[string]any{"elem": map[string]any{"val": val, "timeout": o.TimeoutSeconds}}
+		if timeout > 0 {
+			val = map[string]any{"elem": map[string]any{"val": val, "timeout": timeout}}
 		}
 		elems[i] = val
 	}
-	doc := map[string]any{"nftables": []any{map[string]any{"add": map[string]any{"element": map[string]any{
-		"family": NftFamily, "table": NftTable, "name": o.Set, "elem": elems,
+	doc := map[string]any{"nftables": []any{map[string]any{verb: map[string]any{"element": map[string]any{
+		"family": NftFamily, "table": NftTable, "name": set, "elem": elems,
 	}}}}}
 	b, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
-	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(b), NS: o.NS}}}, nil
+	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(b), NS: tg.NS}}}, nil
 }
 
 // planRouting writes one `ip -batch` per address family: routes first (replace) or last (delete),

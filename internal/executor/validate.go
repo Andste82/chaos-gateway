@@ -207,6 +207,10 @@ func (o NftAddElements) validate() error {
 	return nil
 }
 
+func (o NftDelElements) validate() error {
+	return NftAddElements{Target: o.Target, Set: o.Set, Elements: o.Elements}.validate()
+}
+
 func validElement(e string) bool {
 	if a, err := netip.ParseAddr(e); err == nil {
 		return a.Zone() == ""

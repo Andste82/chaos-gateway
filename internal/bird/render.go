@@ -242,15 +242,16 @@ func (c Config) renderProtocol(b *strings.Builder, p Protocol) {
 	c.renderFilter(b, filter, p.Import)
 	exportClause := "export none;"
 	if len(p.Announce) > 0 {
-		// BGP announces what the static protocol holds as unreachable; OSPF and Babel only originate
-		// unicast routes, so there the prefix is a device route onto the link
+		// the static protocol holds the prefixes as routes to nowhere: BGP, OSPF and Babel originate them
+		// (a device route is not exported to OSPF, as tested with BIRD 2.18; `unreachable` and
+		// `blackhole` are)
+		route := "unreachable"
+		if p.Type != "bgp" {
+			route = "blackhole"
+		}
 		fmt.Fprintf(b, "protocol static %s {\n  ipv4;\n", ann)
 		for _, a := range p.Announce {
-			if p.Type == "bgp" {
-				fmt.Fprintf(b, "  route %s unreachable;\n", a)
-			} else {
-				fmt.Fprintf(b, "  route %s via %q;\n", a, p.Interface)
-			}
+			fmt.Fprintf(b, "  route %s %s;\n", a, route)
 		}
 		b.WriteString("}\n\n")
 		exportClause = fmt.Sprintf("export where proto = %q;", ann)

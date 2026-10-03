@@ -130,7 +130,7 @@ func TestTheGeneratedFiltersFollowSpikeS15(t *testing.T) {
 		"import limit 10 action disable;",
 		"export where proto = \"ann_bgp_site_b\";",
 		"route 10.10.0.0/24 unreachable;",
-		`route 10.10.0.0/24 via "wg-site-c";`, // OSPF announces device routes: only unicast routes are originated
+		"route 10.10.0.0/24 blackhole;", // OSPF announces blackhole routes: a device route is not exported
 		"hold time 9;", "keepalive time 3;",
 		"interface \"wg-site-c\" { type ptp; hello 2; dead 8; cost 20; };",
 		"interface \"wg-site-d\" { type tunnel; hello interval 4 s; rxcost 96; };",

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,6 +36,8 @@ func runWG(args []string, stdout, stderr io.Writer) int {
 	format := fs.String("format", "conf", "conf, png (QR code), svg (QR code) or zip")
 	out := fs.String("out", "", "write to this file instead of standard output")
 	uplink := fs.String("uplink-address", "", "the gateway's address for clients, when the network names no public endpoint")
+	birdSnippet := fs.Bool("bird", false, "with --link: the BIRD configuration of the remote side instead of the WireGuard one")
+	remoteIface := fs.String("remote-interface", "wg0", "with --bird: the name of the tunnel interface on the remote machine")
 	keep := fs.Bool("keep-key", false, "do not delete the private key of an `export_once` client")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -63,6 +67,27 @@ func runWG(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw wg export: %v\n", err)
 		return 1
+	}
+
+	if *birdSnippet {
+		if !*link {
+			fmt.Fprintln(stderr, "chaosgw wg export: --bird needs --link")
+			return 2
+		}
+		text, err := remoteBird(cfg, sec, netID, *remoteIface)
+		if err != nil {
+			fmt.Fprintf(stderr, "chaosgw wg export: %v\n", err)
+			return 1
+		}
+		if *out != "" {
+			if err := writeExport(*out, []byte(text), 0o644); err != nil {
+				fmt.Fprintf(stderr, "chaosgw wg export: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+		_, _ = io.WriteString(stdout, text)
+		return 0
 	}
 
 	var exports []wireguard.Export
@@ -160,6 +185,30 @@ func runWG(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// remoteBird renders the BIRD configuration for the remote end of a link that carries a routing
+// protocol.
+func remoteBird(cfg *model.Configuration, sec *secrets.Store, netID, remoteIface string) (string, error) {
+	keys, err := wireguard.InterfaceKeys(cfg, sec)
+	if err != nil {
+		return "", err
+	}
+	tg := compiler.Compile(compiler.Input{Config: cfg, Generation: compiler.Generation{Seq: 1}, Keys: keys})
+	if tg.Bird == nil {
+		return "", errors.New("the configuration runs no routing protocol")
+	}
+	for _, w := range tg.WireGuard {
+		if w.NetworkID != netID {
+			continue
+		}
+		for _, p := range tg.Bird.Config.Protocols {
+			if p.Interface == w.Name {
+				return bird.RenderRemote(tg.Bird.Config, p, remoteIface)
+			}
+		}
+	}
+	return "", errors.New("no routing protocol runs on this link")
 }
 
 func findWG(cfg *model.Configuration, ref string) (string, model.WireGuardNetwork, error) {

@@ -32,7 +32,7 @@ func startExecutorWithKeys(t *testing.T, secretsDir string) (*kernelsim.Kernel, 
 	k.SetAddr("mgmt0", "192.168.56.1/24")
 	k.SetMainDefault("192.168.56.254", "mgmt0")
 	k.AddDockerChain()
-	var opts []executor.Option
+	opts := []executor.Option{executor.WithBirdDir(t.TempDir())}
 	if secretsDir != "" {
 		sec, err := secrets.Open(secretsDir)
 		if err != nil {

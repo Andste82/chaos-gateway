@@ -63,6 +63,11 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		wgWant[w.Name] = w
 	}
 
+	// ---- the service namespace: the pair of interfaces and the namespace's side of it -----------
+	if op, why := serviceOp(t, s, tg); op != nil {
+		add("service namespace: "+why, op)
+	}
+
 	// ---- routes and rules in Chaos Gateway's tables ----------------------------------------
 	// Stale routes and rules go before the links they refer to are removed (deleting a route of a
 	// device that is gone fails); new ones come after the links exist.
@@ -132,6 +137,13 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	}
 	if len(stale.Routes)+len(stale.Rules) > 0 {
 		p.Ops = append(p.Ops, stale)
+	}
+	// the pair goes after the routes that lead through it
+	for _, d := range removed {
+		if l, ok := s.Links[d]; ok && d == compiler.ServiceHostIf && l.Kind() == "veth" && t.Service == nil {
+			add("service namespace: delete "+d, &executor.ServiceNS{Target: tg, Action: "delete", Name: compiler.ServiceNSDefault, HostIf: compiler.ServiceHostIf, PeerIf: compiler.ServicePeerIf,
+				HostCIDR: compiler.ServiceHostCIDR.String(), PeerCIDR: compiler.ServicePeerCIDR.String()})
+		}
 	}
 
 	// ---- links ---------------------------------------------------------------------------
@@ -322,6 +334,55 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		add("interfaces assigned: "+strings.Join(t.Interfaces, ", "), &executor.AssignInterfaces{Target: tg, Devs: t.Interfaces})
 	}
 	return p, nil
+}
+
+// serviceOp returns the operation that makes the service namespace what the target wants, with the
+// reason, or nil when it is as wanted.
+func serviceOp(t *compiler.Target, s *State, tg executor.Target) (executor.Operation, string) {
+	if t.Service == nil {
+		return nil, ""
+	}
+	why := serviceDiffers(t.Service, s)
+	if why == "" {
+		return nil, ""
+	}
+	return &executor.ServiceNS{Target: tg, Action: "ensure", Name: t.Service.Name, HostIf: t.Service.HostIf, PeerIf: t.Service.PeerIf,
+		HostCIDR: t.Service.HostCIDR.String(), PeerCIDR: t.Service.PeerCIDR.String(), HolderPID: t.Service.HolderPID}, why
+}
+
+// serviceDiffers says what is wrong with the service namespace; empty when nothing is.
+func serviceDiffers(w *compiler.ServiceNS, s *State) string {
+	switch {
+	case s.Service == nil || !s.Service.Exists:
+		return "namespace " + w.Name + " is missing"
+	}
+	l, ok := s.Links[w.HostIf]
+	switch {
+	case !ok:
+		return w.HostIf + " is missing"
+	case l.Kind() != "veth":
+		return w.HostIf + " is not a veth"
+	case !l.Up():
+		return w.HostIf + " is down"
+	}
+	var have []string
+	for _, a := range s.Addrs[w.HostIf] {
+		if a.Family == "inet" {
+			have = append(have, fmt.Sprintf("%s/%d", a.Local, a.PrefixLen))
+		}
+	}
+	if len(have) != 1 || have[0] != w.HostCIDR.String() {
+		return fmt.Sprintf("%s has addresses %v, want %s", w.HostIf, have, w.HostCIDR)
+	}
+	switch {
+	case len(s.Service.PeerAddrs) != 1 || s.Service.PeerAddrs[0] != w.PeerCIDR.String():
+		return fmt.Sprintf("%s in %s has addresses %v, want %s", w.PeerIf, w.Name, s.Service.PeerAddrs, w.PeerCIDR)
+	case !s.Service.PeerUp:
+		return w.PeerIf + " in " + w.Name + " is down"
+	case s.Service.DefaultVia != w.HostCIDR.Addr().String():
+		return fmt.Sprintf("the default route in %s goes via %q, want %s", w.Name, s.Service.DefaultVia, w.HostCIDR.Addr())
+	}
+	return ""
 }
 
 func sortedLinks(s *State) []linux.Link {

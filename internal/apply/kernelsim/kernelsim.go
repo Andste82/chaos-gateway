@@ -25,6 +25,8 @@ import (
 )
 
 type link struct {
+	// peerNS and peerName name the other end of a veth pair that lives in a service namespace
+	peerNS, peerName        string
 	name, mac, kind, master string
 	up                      bool
 	addrs                   []string // "ip/len"
@@ -41,6 +43,7 @@ type rule struct {
 	prio               int
 	iif, oif, from, to string
 	table, proto       string
+	fwmark, fwmask     string
 }
 
 type nftSet struct {
@@ -100,6 +103,10 @@ type Kernel struct {
 	dockerChain bool
 	docker      []dockerRule
 	defaultMain []route // default routes of the main table (OS-owned)
+	// svcNames are the names of service namespaces the simulator knows; a namespace exists once
+	// `ip netns add` created it, and has a kernel of its own
+	svcNames map[string]bool
+	svc      map[string]*Kernel
 
 	// Fail is consulted before every command; a non-nil result is returned as the command's
 	// outcome (an injected failure). It receives the command with the tool name first.
@@ -118,6 +125,39 @@ func New() *Kernel {
 	k := &Kernel{links: map[string]*link{}, sysctl: map[string]int{}, features: map[string]map[string]bool{}}
 	k.AddLink("lo", "00:00:00:00:00:00", "", true)
 	return k
+}
+
+// ServiceNamespace tells the simulator that commands for the namespace name run in a kernel of
+// their own, which exists after `ip netns add` (and not before: like the real tool, a command for
+// a namespace that is missing fails).
+func (k *Kernel) ServiceNamespace(name string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.svcNames == nil {
+		k.svcNames = map[string]bool{}
+		k.svc = map[string]*Kernel{}
+	}
+	k.svcNames[name] = true
+}
+
+// InService returns the kernel of a service namespace, nil while it does not exist.
+func (k *Kernel) InService(name string) *Kernel {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.svc[name]
+}
+
+// DropService removes a service namespace with everything in it: its holder died. The veth end
+// outside goes with it, as in the kernel.
+func (k *Kernel) DropService(name string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.svc, name)
+	for n, l := range k.links {
+		if l.peerNS == name {
+			delete(k.links, n)
+		}
+	}
 }
 
 // AddLink adds a physical (kind "") or virtual interface.
@@ -331,6 +371,14 @@ func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, 
 			return *r, nil
 		}
 	}
+	if c.NS != "" && k.svcNames[c.NS] {
+		sub := k.svc[c.NS]
+		if sub == nil {
+			return executor.Result{Exit: 1, Stderr: fmt.Sprintf("Cannot open network namespace \"%s\": No such file or directory\n", c.NS)}, nil
+		}
+		c.NS = ""
+		return sub.Run(ctx, c)
+	}
 	switch c.Tool {
 	case executor.ToolIP:
 		return k.ip(c)
@@ -473,6 +521,9 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			if r.proto != "" {
 				m["protocol"] = r.proto
 			}
+			if r.fwmark != "" {
+				m["fwmark"], m["fwmask"] = r.fwmark, r.fwmask
+			}
 			out = append(out, m)
 		}
 		out = append(out, map[string]any{"priority": 32766, "src": "all", "table": "main"}, map[string]any{"priority": 32767, "src": "all", "table": "default"})
@@ -509,6 +560,30 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 		return fail("ip: bad command")
 	}
 	switch a[0] + " " + a[1] {
+	case "netns add", "netns attach":
+		if len(a) < 3 || !k.svcNames[a[2]] {
+			return fail("netns: unknown namespace")
+		}
+		if k.svc[a[2]] != nil {
+			return fail("Cannot create namespace file \"/run/netns/%s\": File exists", a[2])
+		}
+		k.svc[a[2]] = New()
+		return ok2()
+	case "route replace":
+		// ip route replace default via V dev D (the main table of a service namespace)
+		if len(a) == 7 && a[2] == "default" && a[3] == "via" && a[5] == "dev" {
+			if _, exists := k.links[a[6]]; !exists {
+				return fail("Cannot find device \"%s\"", a[6])
+			}
+			for i, x := range k.routes {
+				if x.table == "main" && x.dst == "default" {
+					k.routes = append(k.routes[:i], k.routes[i+1:]...)
+					break
+				}
+			}
+			k.routes = append(k.routes, route{table: "main", dst: "default", via: a[4], dev: a[6]})
+			return ok2()
+		}
 	case "link show":
 		if len(a) >= 4 && a[2] == "dev" {
 			if _, ok := k.links[a[3]]; ok {
@@ -527,6 +602,20 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			l.wg = &wgState{peers: map[string]*wgPeer{}}
 			return ok2()
 		}
+		// ip link add X type veth peer name Y netns NS
+		if len(a) == 10 && a[3] == "type" && a[4] == "veth" && a[5] == "peer" && a[6] == "name" && a[8] == "netns" {
+			if _, exists := k.links[a[2]]; exists {
+				return fail("RTNETLINK answers: File exists")
+			}
+			sub := k.svc[a[9]]
+			if sub == nil {
+				return fail("Cannot open network namespace \"%s\": No such file or directory", a[9])
+			}
+			l := k.addLink(a[2], fmt.Sprintf("02:ee:00:00:00:%02x", k.nextIdx+1), "veth", false)
+			l.peerNS, l.peerName = a[9], a[7]
+			sub.addLink(a[7], fmt.Sprintf("02:ee:00:01:00:%02x", sub.nextIdx+1), "veth", false)
+			return ok2()
+		}
 		// ip link add name X type bridge
 		if len(a) == 6 && a[2] == "name" && a[4] == "type" && a[5] == "bridge" {
 			if _, exists := k.links[a[3]]; exists {
@@ -536,7 +625,7 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			return ok2()
 		}
 	case "link delete":
-		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && (a[5] == "bridge" || a[5] == "wireguard") {
+		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && (a[5] == "bridge" || a[5] == "wireguard" || a[5] == "veth") {
 			_, exists := k.links[a[3]]
 			if !exists {
 				return fail("Cannot find device \"%s\"", a[3])
@@ -545,6 +634,11 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			for _, o := range k.links {
 				if o.master == a[3] {
 					o.master = ""
+				}
+			}
+			if pl := k.links[a[3]]; pl.peerNS != "" {
+				if sub := k.svc[pl.peerNS]; sub != nil {
+					delete(sub.links, pl.peerName)
 				}
 			}
 			delete(k.links, a[3])
@@ -688,7 +782,7 @@ func (k *Kernel) batchRoute(f []string) string {
 	if verb == "replace" {
 		// a route of the same table and prefix is replaced, whatever its next hop
 		for i, x := range k.routes {
-			if x.table == r.table && x.dst == r.dst && x.proto == r.proto {
+			if x.table == r.table && x.dst == r.dst && x.proto == r.proto && x.typ == r.typ {
 				idx = i
 			}
 		}
@@ -726,6 +820,12 @@ func (k *Kernel) batchRule(f []string) string {
 			r.table = f[i+1]
 		case "protocol":
 			r.proto = f[i+1]
+		case "fwmark":
+			v, m, _ := strings.Cut(f[i+1], "/")
+			r.fwmark, r.fwmask = hexMark(v), "0xffffffff"
+			if m != "" {
+				r.fwmask = hexMark(m)
+			}
 		}
 	}
 	for i, x := range k.rules {
@@ -861,4 +961,13 @@ func ruleOf(a []string) (dir, dev string) {
 		}
 	}
 	return "", ""
+}
+
+// hexMark prints a mark the way `ip -j rule` does: lower-case hex without leading zeros.
+func hexMark(v string) string {
+	n, err := strconv.ParseUint(v, 0, 32)
+	if err != nil {
+		return v
+	}
+	return fmt.Sprintf("0x%x", n)
 }

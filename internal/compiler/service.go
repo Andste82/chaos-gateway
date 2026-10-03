@@ -25,6 +25,8 @@ const (
 	ServiceRulePriority = PolicyRulePriority - 100
 	// ServiceDNSPort is the port of the DNS proxy inside the namespace.
 	ServiceDNSPort = 53
+	// ServiceNSDefault is the name of the service namespace when nothing else is configured.
+	ServiceNSDefault = "cgsvc"
 )
 
 // The two addresses of the pair: link-local, so they never clash with a test network.

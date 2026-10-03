@@ -48,8 +48,15 @@ func (e *Error) Unwrap() error { return e.Err }
 // ErrVerify is wrapped by a verify failure.
 var ErrVerify = errors.New("the kernel does not match the target")
 
-func want(t *compiler.Target) Want {
-	return Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance}
+func want(t *compiler.Target) Want { return WantOf(t) }
+
+// WantOf is what to read for a target besides the basics.
+func WantOf(t *compiler.Target) Want {
+	w := Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance}
+	if t.Service != nil {
+		w.ServiceNS, w.ServicePeerIf = t.Service.Name, t.Service.PeerIf
+	}
+	return w
 }
 
 // Preview reads the current state and plans what an apply would do, without changing anything.

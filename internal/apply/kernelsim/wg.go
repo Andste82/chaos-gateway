@@ -56,11 +56,11 @@ func (k *Kernel) syncconf(l *link, conf string) (executor.Result, error) {
 	port := 0
 	for _, line := range strings.Split(conf, "\n") {
 		line = strings.TrimSpace(line)
-		switch {
-		case line == "":
-		case line == "[Interface]":
+		switch line {
+		case "":
+		case "[Interface]":
 			section = "i"
-		case line == "[Peer]":
+		case "[Peer]":
 			section = "p"
 			cur = &wgPeer{}
 			peers = append(peers, cur)

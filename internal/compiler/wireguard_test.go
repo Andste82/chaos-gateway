@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"os"
+
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/model"
-	"os"
 )
 
 const (

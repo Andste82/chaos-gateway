@@ -103,11 +103,7 @@ func (c *Client) TestConfig(ctx context.Context, doc map[string]any) error {
 // `config-set` can leave the server without its lease database, a failed check changes nothing.
 func (c *Client) Apply(ctx context.Context, doc map[string]any) error {
 	if err := c.TestConfig(ctx, doc); err != nil {
-		// config-test checks the interfaces against the list Kea read at its start; a bridge that came
-		// later is found by `config-set` (re-detect), which is the only way to learn about it
-		if !strings.Contains(err.Error(), "is not present in the system") {
-			return err
-		}
+		return err
 	}
 	return c.SetConfig(ctx, doc)
 }
@@ -199,4 +195,10 @@ func (c *Client) DeleteLease(ctx context.Context, ip string) error {
 		return nil
 	}
 	return err
+}
+
+// ErrNoInterface is the error of a configuration that names an interface Kea does not know: one
+// that was created after Kea started. Kea learns about it with a configuration that re-detects.
+func ErrNoInterface(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "is not present in the system")
 }

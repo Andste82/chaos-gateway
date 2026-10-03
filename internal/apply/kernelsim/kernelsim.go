@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,6 +92,8 @@ type Kernel struct {
 	sysctl   map[string]int
 	features map[string]map[string]bool // dev → feature → on
 	// docker
+	neighbors   []linux.Neighbor
+	conntrack   string
 	birdShow    string // output of `show protocols all` set by a test
 	birdRunning bool   // a configure has reached the simulated BIRD
 	dockerChain bool
@@ -344,6 +347,8 @@ func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, 
 		return executor.Result{}, nil
 	case executor.ToolBird, executor.ToolBirdc:
 		return k.birdCmd(c)
+	case executor.ToolConntrack:
+		return okr(k.conntrack)
 	}
 	return executor.Result{Exit: 127, Stderr: "unknown tool"}, nil
 }
@@ -423,6 +428,19 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 				infos = append(infos, map[string]any{"family": "inet", "local": ip, "prefixlen": n})
 			}
 			out = append(out, map[string]any{"ifindex": l.index, "ifname": l.name, "addr_info": infos})
+		}
+		return jsonOut(out)
+	case len(a) >= 2 && a[0] == "neigh" && a[1] == "show":
+		out := []map[string]any{}
+		for _, n := range k.neighbors {
+			if len(a) >= 4 && a[2] == "dev" && n.Dev != a[3] {
+				continue
+			}
+			m := map[string]any{"dst": n.Dst, "dev": n.Dev, "state": n.State}
+			if n.LLAddr != "" {
+				m["lladdr"] = n.LLAddr
+			}
+			out = append(out, m)
 		}
 		return jsonOut(out)
 	case len(a) >= 2 && a[0] == "rule" && a[1] == "show":

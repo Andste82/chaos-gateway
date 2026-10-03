@@ -186,7 +186,7 @@ func TestDecodeRejects(t *testing.T) {
 		{"assign docker0", `{"type":"assign_interfaces","devs":["wan0","docker0"]}`},
 		{"assign docker network bridge", `{"type":"assign_interfaces","devs":["br-0123456789ab"]}`},
 		{"assign docker veth", `{"type":"assign_interfaces","devs":["veth0123abc"]}`},
-		{"read unknown", `{"type":"read","what":"conntrack"}`},
+		{"read unknown", `{"type":"read","what":"bridges"}`},
 		{"read offloads without dev", `{"type":"read","what":"offloads"}`},
 		{"read table of links", `{"type":"read","what":"links","table":"main"}`},
 		{"read table injection", `{"type":"read","what":"routes","table":"main dev lo"}`},

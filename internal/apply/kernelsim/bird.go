@@ -1,6 +1,7 @@
 package kernelsim
 
 import (
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"os"
 	"strings"
 
@@ -40,4 +41,18 @@ func (k *Kernel) SetBirdProtocols(out string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.birdShow = out
+}
+
+// SetNeighbors makes `ip neigh show` answer with the given entries.
+func (k *Kernel) SetNeighbors(n []linux.Neighbor) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.neighbors = append([]linux.Neighbor(nil), n...)
+}
+
+// SetConntrack makes `conntrack -L` print the given text.
+func (k *Kernel) SetConntrack(text string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.conntrack = text
 }

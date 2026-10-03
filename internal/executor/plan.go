@@ -13,15 +13,16 @@ type Tool string
 
 // The tools the executor runs.
 const (
-	ToolIP       Tool = "ip"
-	ToolNft      Tool = "nft"
-	ToolTC       Tool = "tc"
-	ToolEthtool  Tool = "ethtool"
-	ToolIptables Tool = "iptables"
-	ToolSysctl   Tool = "sysctl"
-	ToolWg       Tool = "wg"
-	ToolBird     Tool = "bird"
-	ToolBirdc    Tool = "birdc"
+	ToolIP        Tool = "ip"
+	ToolNft       Tool = "nft"
+	ToolTC        Tool = "tc"
+	ToolEthtool   Tool = "ethtool"
+	ToolIptables  Tool = "iptables"
+	ToolSysctl    Tool = "sysctl"
+	ToolWg        Tool = "wg"
+	ToolBird      Tool = "bird"
+	ToolBirdc     Tool = "birdc"
+	ToolConntrack Tool = "conntrack"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard
@@ -283,6 +284,13 @@ func ReadCommand(o *Read) Command {
 		c.Tool, c.Args = ToolEthtool, []string{"-k", o.Dev}
 	case ReadWireGuard:
 		c.Tool, c.Args = ToolWg, []string{"show", o.Dev, "dump"}
+	case ReadNeighbors:
+		c.Tool, c.Args = ToolIP, []string{"-j", "-4", "neigh", "show"}
+		if o.Dev != "" {
+			c.Args = append(c.Args, "dev", o.Dev)
+		}
+	case ReadConntrack:
+		c.Tool, c.Args = ToolConntrack, []string{"-L", "-f", "ipv4"}
 	case ReadSysctl:
 		c.Tool, c.Args = ToolSysctl, []string{"-n", sysctlPath(o.Name, o.Dev)}
 	case ReadDockerUser:

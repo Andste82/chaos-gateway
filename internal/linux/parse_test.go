@@ -1,7 +1,9 @@
 package linux
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -192,5 +194,34 @@ func TestParseDockerUser(t *testing.T) {
 	late := ParseDockerUser("-N DOCKER-USER\n-A DOCKER-USER -j RETURN\n-A DOCKER-USER -i br-lan0 -m comment --comment \"chaosgw\" -j ACCEPT\n")
 	if late.OursFirst || len(late.In) != 1 {
 		t.Fatalf("a rule behind Docker's RETURN is ineffective: %+v", late)
+	}
+}
+
+func TestParseWGDump(t *testing.T) {
+	dump := "PRIVATEKEYPRIVATEKEYPRIVATEKEYPRIVATEKEYAA=\tFHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=\t51820\toff\n" +
+		"peerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\tPSKPSKPSKPSKPSKPSKPSKPSKPSKPSKPSKPSKPSKPSK=\t203.0.113.30:51820\t10.99.0.2/32,10.50.0.0/24\t1760000000\t1234\t5678\t25\n" +
+		"peerBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=\t(none)\t(none)\t(none)\t0\t0\t0\toff\n"
+	info, err := ParseWGDump(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PublicKey != "FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=" || info.ListenPort != 51820 || len(info.Peers) != 2 {
+		t.Fatalf("%+v", info)
+	}
+	a, b := info.Peers[0], info.Peers[1]
+	if !a.HasPresharedKey || a.Endpoint != "203.0.113.30:51820" || len(a.AllowedIPs) != 2 || a.LatestHandshake != 1760000000 || a.RxBytes != 1234 || a.TxBytes != 5678 || a.Keepalive != 25 {
+		t.Errorf("%+v", a)
+	}
+	if b.HasPresharedKey || b.Endpoint != "" || len(b.AllowedIPs) != 0 || b.LatestHandshake != 0 || b.Keepalive != 0 {
+		t.Errorf("%+v", b)
+	}
+	// neither secret is in what the parser keeps
+	if s := fmt.Sprintf("%+v", info); strings.Contains(s, "PRIVATEKEY") || strings.Contains(s, "PSKPSK") {
+		t.Errorf("a secret survived the parser: %s", s)
+	}
+	for _, bad := range []string{"", "x\ty", "a\tb\tnotaport\toff", "a\tb\t1\toff\nshort"} {
+		if _, err := ParseWGDump(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }

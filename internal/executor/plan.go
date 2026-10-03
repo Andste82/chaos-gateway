@@ -19,6 +19,7 @@ const (
 	ToolEthtool  Tool = "ethtool"
 	ToolIptables Tool = "iptables"
 	ToolSysctl   Tool = "sysctl"
+	ToolWg       Tool = "wg"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard
@@ -42,6 +43,9 @@ func (c Command) String() string {
 // Step is one command of a plan. A step with a probe runs the probe first and then the command
 // only if the probe's success matches RunIfProbeOK (idempotent ensure/remove).
 type Step struct {
+	// NeedsConfig marks the `wg syncconf` step: the executor fills in its standard input from the
+	// key provider when it runs, so the plan itself never holds a secret.
+	NeedsConfig bool
 	// Guard, when set, runs first; the step is skipped unless the guard succeeds.
 	Guard *Command
 	// Idempotent runs the command with the tool's "continue on error" mode and treats "already
@@ -72,6 +76,8 @@ func Plan(op Operation) ([]Step, error) {
 		return steps, nil
 	case *DockerUser:
 		return planDockerUser(o), nil
+	case *WireGuard:
+		return planWireGuard(o), nil
 	case *Links:
 		return planLinks(o), nil
 	case *Sysctl:
@@ -269,6 +275,8 @@ func ReadCommand(o *Read) Command {
 		}
 	case ReadOffloads:
 		c.Tool, c.Args = ToolEthtool, []string{"-k", o.Dev}
+	case ReadWireGuard:
+		c.Tool, c.Args = ToolWg, []string{"show", o.Dev, "dump"}
 	case ReadSysctl:
 		c.Tool, c.Args = ToolSysctl, []string{"-n", sysctlPath(o.Name, o.Dev)}
 	case ReadDockerUser:
@@ -309,4 +317,23 @@ func planLinks(o *Links) []Step {
 		}
 	}
 	return steps
+}
+
+func planWireGuard(o *WireGuard) []Step {
+	ip := func(args ...string) Command { return Command{Tool: ToolIP, Args: args, NS: o.NS} }
+	exists := ip("link", "show", "dev", o.Name)
+	if o.Action == "delete" {
+		// the kind is checked by the executor first: `type wireguard` does not stop ip from deleting
+		// a device of another kind
+		return []Step{{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.Name, "type", "wireguard")}}
+	}
+	mtu := o.MTU
+	if mtu == 0 {
+		mtu = 1420
+	}
+	return []Step{
+		{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", "dev", o.Name, "type", "wireguard")},
+		{Cmd: ip("link", "set", "dev", o.Name, "mtu", strconv.Itoa(mtu))},
+		{NeedsConfig: true, Cmd: Command{Tool: ToolWg, Args: []string{"syncconf", o.Name, "/dev/stdin"}, NS: o.NS}},
+	}
 }

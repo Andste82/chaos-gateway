@@ -336,26 +336,6 @@ func TestCompileIsDeterministicAndTheHashIgnoresTheGeneration(t *testing.T) {
 	}
 }
 
-func TestWireGuardNetworksAreReportedNotCompiled(t *testing.T) {
-	cfg := loadConfig(t, "gateway.yaml")
-	raw, _ := os.ReadFile("../../api/examples/configuration.yaml")
-	ex, err := domain.DecodeConfiguration(raw, domain.FormatYAML)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Networks = ex.Networks
-	tg := Compile(Input{Config: cfg, Host: Host{Links: append(testbedHost().Links, HostLink{Name: "lan9", MAC: "52:54:00:12:34:01"})}})
-	var wg int
-	for _, p := range tg.Problems {
-		if p.Code == CodeUnsupported {
-			wg++
-		}
-	}
-	if wg == 0 {
-		t.Errorf("no problem reported for the WireGuard networks: %+v", tg.Problems)
-	}
-}
-
 func contains(l []string, s string) bool {
 	for _, x := range l {
 		if x == s {

@@ -134,7 +134,7 @@ func TestIPv6IsDroppedInBothDirectionsOfTestNetworks(t *testing.T) {
 		if strings.Contains(s, `"nfproto"`) {
 			in = in || strings.Contains(s, `"iifname"`)
 			out = out || strings.Contains(s, `"oifname"`)
-			if !strings.Contains(s, "ifs_test") {
+			if !strings.Contains(s, "ifs_cg") {
 				t.Errorf("the IPv6 drop must stay on test interfaces: %s", s)
 			}
 		}
@@ -234,7 +234,7 @@ func TestExplicitMatrixEntriesComeBeforeTheDefaults(t *testing.T) {
 		if strings.Contains(s, `"br-iot"`) || strings.Contains(s, `"br-lab"`) || strings.Contains(s, `"mgmt0"`) {
 			explicit = append(explicit, s)
 		}
-		if strings.Contains(s, "ifs_test") && strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept") {
+		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept") {
 			defaultAt = i
 		}
 	}
@@ -277,7 +277,7 @@ func TestTwoPortTopologyDeniesTestToManagementByDefault(t *testing.T) {
 	var guard, accept = -1, -1
 	for i, r := range chainOf(t, tg, "forward").Rules {
 		s := js(r.Expr)
-		if strings.Contains(s, "ifs_test") && strings.Contains(s, `"wan0"`) {
+		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) {
 			if strings.Contains(s, "mgmt_src") && strings.Contains(s, "drop") {
 				guard = i
 			} else if strings.Contains(s, "accept") {

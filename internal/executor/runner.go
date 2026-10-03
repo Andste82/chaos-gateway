@@ -33,6 +33,7 @@ var candidates = map[Tool][]string{
 	ToolEthtool:  {"/usr/sbin/ethtool", "/sbin/ethtool", "/usr/bin/ethtool"},
 	ToolIptables: {"/usr/sbin/iptables", "/sbin/iptables", "/usr/bin/iptables"},
 	ToolSysctl:   {"/usr/sbin/sysctl", "/sbin/sysctl", "/usr/bin/sysctl"},
+	ToolWg:       {"/usr/bin/wg", "/usr/sbin/wg", "/bin/wg"},
 }
 
 const (

@@ -1,0 +1,60 @@
+# The routed gateway with WireGuard (plan §4.2): a local test network, a hub with a client that has a
+# client network, a management hub, and a link to a remote site with a static route.
+schema_version: 1
+uplink:
+  interface: {name: wan0}
+  gateway: 203.0.113.10
+management:
+  interface: {name: mgmt0}
+  allowed_sources: [192.168.56.0/24]
+networks:
+  0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21:
+    type: lan
+    name: IoT
+    interfaces: [{name: lan0, mac: '02:00:00:00:00:01'}]
+    address: 10.10.0.1/24
+  4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54:
+    type: wireguard
+    kind: hub
+    name: lab-hub
+    role: test
+    address: 10.99.0.1/24
+    listen_port: 51820
+    clients:
+      9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d:
+        name: rA
+        address: 10.99.0.2
+        client_networks: [10.50.0.0/24]
+        reachable:
+          - network: IoT
+          - uplink: true
+        key: {mode: provided, public_key: 'FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=', preshared_key: true}
+      5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f:
+        name: rB
+        address: 10.99.0.3
+        enabled: false
+        key: {mode: provided, public_key: 'cFTvlxJ49hG8zsQ91QN8ATdE5+4QELIulw1yJEvpdGY='}
+  7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d:
+    type: wireguard
+    kind: hub
+    name: admin
+    role: management
+    address: 10.98.0.1/24
+    listen_port: 51822
+  c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f:
+    type: wireguard
+    kind: link
+    name: site-b
+    address: 10.255.0.0/31
+    listen_port: 51821
+    mtu: 1380
+    routes: [10.60.0.0/24]
+    peer:
+      address: 10.255.0.1
+      endpoint: 203.0.113.40:51821
+      key: {mode: provided, public_key: 'sckuQf8RqKUj8wQ5b3zY+eRVCD0nfD1C6ns80SJSqxM='}
+access_matrix:
+  entries:
+    - from: {network: IoT}
+      to: {network: lab-hub}
+      policy: allow

@@ -144,6 +144,15 @@ func targetHostLines(t *compiler.Target) []line {
 			add("  port " + p)
 		}
 	}
+	for _, w := range t.WireGuard {
+		add(fmt.Sprintf("wireguard %s up", w.Name))
+		add(fmt.Sprintf("  address %s mtu %d port %d", w.Address, w.MTU, w.ListenPort))
+		peers := append([]compiler.WGPeer(nil), w.Peers...)
+		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+		for _, p := range peers {
+			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, p.Endpoint, p.PresharedKeyRef != ""))
+		}
+	}
 	for _, e := range t.Sysctls {
 		if e.Dev != "" {
 			add(fmt.Sprintf("sysctl %s:%s=%d", e.Name, e.Dev, e.Value))
@@ -208,6 +217,35 @@ func hostLines(s *State, t *compiler.Target) []line {
 		sort.Strings(ports)
 		for _, p := range ports {
 			add("  port " + p)
+		}
+	}
+	for _, w := range t.WireGuard {
+		l, ok := s.Links[w.Name]
+		info := s.WireGuard[w.Name]
+		if !ok || info == nil {
+			continue
+		}
+		state := "down"
+		if l.Up() {
+			state = "up"
+		}
+		add(fmt.Sprintf("wireguard %s %s", w.Name, state))
+		for _, a := range s.Addrs[w.Name] {
+			if a.Family == "inet" {
+				add(fmt.Sprintf("  address %s/%d mtu %d port %d", a.Local, a.PrefixLen, l.MTU, info.ListenPort))
+			}
+		}
+		peers := append([]linux.WGPeerInfo(nil), info.Peers...)
+		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+		for _, p := range peers {
+			// the kernel knows a roaming peer's endpoint: it is part of the diff only when the target names one
+			ep := p.Endpoint
+			for _, wp := range w.Peers {
+				if wp.PublicKey == p.PublicKey && wp.Endpoint == "" {
+					ep = ""
+				}
+			}
+			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, ep, p.HasPresharedKey))
 		}
 	}
 	for _, e := range t.Sysctls {
@@ -339,4 +377,20 @@ func lcsDiff(a, b []line) []diffOp {
 		ops = append(ops, diffOp{'+', b[j].Text})
 	}
 	return ops
+}
+
+func peerLine(pub string, allowed []string, keepalive int, endpoint string, psk bool) string {
+	a := append([]string(nil), allowed...)
+	sort.Strings(a)
+	line := fmt.Sprintf("  peer %s allowed %s", pub[:8], strings.Join(a, ","))
+	if keepalive > 0 {
+		line += fmt.Sprintf(" keepalive %d", keepalive)
+	}
+	if endpoint != "" {
+		line += " endpoint " + endpoint
+	}
+	if psk {
+		line += " psk"
+	}
+	return line
 }

@@ -33,6 +33,8 @@ type State struct {
 	// Sysctl holds "ip_forward" and "accept_ra:<dev>" for the interfaces that exist.
 	Sysctl     map[string]int
 	DockerUser linux.DockerUserState
+	// WireGuard holds the interfaces of kind wireguard with their peers (no secret).
+	WireGuard map[string]*linux.WGInfo
 }
 
 // Want names what to read besides the basics: sysctls and offloads exist per interface.
@@ -106,6 +108,30 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		return nil, err
 	}
 	s.DockerUser = du
+
+	// WireGuard interfaces and their peers
+	s.WireGuard = map[string]*linux.WGInfo{}
+	var wgDevs []string
+	var wgOps []executor.Operation
+	for _, n := range sortedNames(s.Links) {
+		if s.Links[n].Kind() == "wireguard" {
+			wgDevs = append(wgDevs, n)
+			wgOps = append(wgOps, read(ns, executor.ReadWireGuard, n))
+		}
+	}
+	if len(wgOps) > 0 {
+		wout, err := ex.Do(ctx, wgOps...)
+		if err != nil {
+			return nil, fmt.Errorf("read the WireGuard interfaces: %w", err)
+		}
+		for i, n := range wgDevs {
+			info, err := decode[*linux.WGInfo](wout, i, "wireguard "+n)
+			if err != nil {
+				return nil, err
+			}
+			s.WireGuard[n] = info
+		}
+	}
 
 	// per-interface reads only for interfaces that exist
 	var ops []executor.Operation
@@ -228,4 +254,13 @@ type Local struct{ E *executor.Executor }
 // Do runs the operations as one request.
 func (l Local) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
 	return l.E.DoBatch(ctx, ops)
+}
+
+func sortedNames(m map[string]linux.Link) []string {
+	out := make([]string, 0, len(m))
+	for n := range m {
+		out = append(out, n)
+	}
+	sortStrings(out)
+	return out
 }

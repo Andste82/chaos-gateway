@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,3 +40,5 @@ func (f *fakeRunner) commands() []Command {
 	defer f.mu.Unlock()
 	return append([]Command(nil), f.cmds...)
 }
+
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

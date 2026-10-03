@@ -48,6 +48,26 @@
       "add": {
         "set": {
           "family": "inet",
+          "name": "ifs_cg_bf4feb",
+          "table": "chaosgw",
+          "type": "ifname"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "name": "ifs_lan_bf4feb",
+          "table": "chaosgw",
+          "type": "ifname"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
           "name": "ifs_test_bf4feb",
           "table": "chaosgw",
           "type": "ifname"
@@ -147,6 +167,50 @@
         "chain": {
           "family": "inet",
           "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "ifs_cg_bf4feb",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            "br-iot",
+            "br-lab"
+          ],
+          "family": "inet",
+          "name": "ifs_cg_bf4feb",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "ifs_lan_bf4feb",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            "br-iot",
+            "br-lab"
+          ],
+          "family": "inet",
+          "name": "ifs_lan_bf4feb",
           "table": "chaosgw"
         }
       }
@@ -306,7 +370,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "1ac1a8df8489",
+          "comment": "66bd7b6b2457",
           "expr": [
             {
               "match": {
@@ -316,7 +380,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {
@@ -345,7 +409,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "fc5d413532fb",
+          "comment": "95073f739c32",
           "expr": [
             {
               "match": {
@@ -355,7 +419,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {
@@ -384,7 +448,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "74bbeb198e5e",
+          "comment": "ce9534dfbfb3",
           "expr": [
             {
               "match": {
@@ -394,7 +458,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {
@@ -424,7 +488,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "f0b5497d39ac",
+          "comment": "e485c9ec98bd",
           "expr": [
             {
               "match": {
@@ -434,7 +498,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {
@@ -464,7 +528,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "58af70301e4d",
+          "comment": "b2f96a069b8e",
           "expr": [
             {
               "match": {
@@ -474,7 +538,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_lan_bf4feb"
               }
             },
             {
@@ -501,7 +565,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "d397fd720236",
+          "comment": "e0d65f81fe3a",
           "expr": [
             {
               "match": {
@@ -511,7 +575,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {
@@ -530,7 +594,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "3aaef70e2ce3",
+          "comment": "4159606cfb8d",
           "expr": [
             {
               "match": {
@@ -540,7 +604,7 @@
                   }
                 },
                 "op": "==",
-                "right": "@ifs_test_bf4feb"
+                "right": "@ifs_cg_bf4feb"
               }
             },
             {

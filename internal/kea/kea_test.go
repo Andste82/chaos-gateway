@@ -301,9 +301,9 @@ func TestAMissingSocketIsAnError(t *testing.T) {
 }
 
 func TestACommittedHookCarriesEveryLease(t *testing.T) {
-	env := map[string]string{"KEA_LEASES4_SIZE": "2",
-		"KEA_LEASES4_AT0_ADDRESS": "10.0.0.5", "KEA_LEASES4_AT0_HWADDR": "02:00:00:00:00:AA", "KEA_LEASES4_AT0_SUBNET_ID": "7",
-		"KEA_LEASES4_AT1_ADDRESS": "10.0.0.6", "KEA_LEASES4_AT1_HWADDR": "02:00:00:00:00:bb"}
+	env := map[string]string{"LEASES4_SIZE": "2",
+		"LEASES4_AT0_ADDRESS": "10.0.0.5", "LEASES4_AT0_HWADDR": "02:00:00:00:00:AA", "LEASES4_AT0_SUBNET_ID": "7",
+		"LEASES4_AT1_ADDRESS": "10.0.0.6", "LEASES4_AT1_HWADDR": "02:00:00:00:00:bb"}
 	evs, err := EventsFromHook("leases4_committed", func(k string) string { return env[k] })
 	if err != nil || len(evs) != 2 || evs[0].IP.String() != "10.0.0.5" || evs[0].MAC != "02:00:00:00:00:aa" || evs[0].SubnetID != 7 || evs[1].IP.String() != "10.0.0.6" {
 		t.Fatalf("%+v %v", evs, err)

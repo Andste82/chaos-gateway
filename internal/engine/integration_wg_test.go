@@ -193,6 +193,20 @@ s.sendto(b"x", ("`+dst+`", 9100))
 	return ""
 }
 
+// waitHandshake waits until a peer of the gateway's interface has handshaken.
+func (g *wgGW) waitHandshake(dev string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(g.wgShow(dev, "latest-handshakes"), "\n") {
+			if f := strings.Fields(line); len(f) == 2 && f[1] != "0" {
+				return true
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
+}
+
 func pingOK(from *testbed.Namespace, src, dst string) bool {
 	args := []string{"-c", "2", "-W", "1", "-n"}
 	if src != "" {
@@ -277,6 +291,11 @@ func TestALinkWithStaticRoutesCarriesTrafficToTheRemoteSite(t *testing.T) {
 	g.up(g.top.Site, "wgsite", remote.Conf)
 	// the remote side routes the gateway's networks through the link (Table = off leaves it to us)
 	g.top.Site.Must("ip", "route", "add", "10.10.0.0/24", "via", "10.255.0.0", "dev", "wgsite")
+	// the gateway initiates: it retries every few seconds, so the handshake follows the remote side
+	// coming up after a moment
+	if !g.waitHandshake("wg-site-b", 30*time.Second) {
+		t.Fatalf("the link did not come up\n%s\n%s", g.wgShow(), g.top.Site.Must("wg", "show"))
+	}
 	if !pingOK(g.top.A, "", testbed.SiteNetHost) {
 		t.Fatalf("A cannot reach the remote site's network\n%s\n%s", g.wgShow(), g.top.Site.Must("wg", "show"))
 	}
@@ -484,6 +503,16 @@ func TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel(t *te
 	if len(secretsText) < 6 {
 		t.Fatalf("keys %d", len(secretsText))
 	}
+	// an error path writes to the logs: a revision whose interface key has gone missing fails to apply
+	failing := g.revision(func(c *model.Configuration) { c.Uplink.Gateway = &[]string{"203.0.113.20"}[0] })
+	if err := g.sec.DeleteWireGuard(tAdmin); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel2 := context.WithTimeout(context.Background(), 2*time.Minute)
+	if _, err := g.e.Apply(ctx, failing, engine.ApplyOptions{SkipConfirm: true}); err == nil {
+		t.Fatal("an apply without an interface key must fail")
+	}
+	cancel2()
 	check := func(what, text string) {
 		for _, s := range secretsText {
 			if s != "" && strings.Contains(text, s) {

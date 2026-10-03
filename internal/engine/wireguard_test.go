@@ -309,10 +309,10 @@ func TestACandidateKeepsItsKeysWhenAnotherRevisionIsCommitted(t *testing.T) {
 	_ = rotated
 }
 
-func TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesNothing(t *testing.T) {
+func TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesWhatIsOnline(t *testing.T) {
 	h, _ := newWGHarness(t)
 	h.mustApply(h.revision(nil))
-	// a peer that is online already when the polling starts is not "new"
+	// a peer that is online already when the polling starts is announced once
 	var hubIf, peerPub string
 	for _, w := range h.e.Snapshot().WireGuardInterfaces {
 		if w.NetworkID == wgHub {
@@ -331,7 +331,13 @@ func TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesNothing(t *testing.T) {
 	h.clk.BlockUntil(1)
 	h.clk.Advance(5 * time.Second)
 	waitStatus(t, h, func(s *engine.Snapshot) bool { return s.WireGuard[wgClient].Online })
-	if ev := collect(ch, engine.EventPeerOnline); len(ev) != 0 {
+	if ev := collect(ch, engine.EventPeerOnline); len(ev) != 1 {
 		t.Errorf("the first poll announced %+v", ev)
+	}
+	// and nothing is announced for a peer that is offline from the start
+	h.clk.Advance(5 * time.Second)
+	waitStatus(t, h, func(s *engine.Snapshot) bool { return s.WireGuard[wgClient].Online })
+	if ev := collect(ch, engine.EventPeerOnline); len(ev) != 0 {
+		t.Errorf("a second announcement: %+v", ev)
 	}
 }

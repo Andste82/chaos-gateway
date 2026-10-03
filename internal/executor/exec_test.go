@@ -67,11 +67,14 @@ func TestOperationsAreSerialized(t *testing.T) {
 func TestQueueKeepsArrivalOrder(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var first sync.Once
 	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		first.Do(func() { close(started); <-release }) // hold the first job until all others are queued
 		mu.Lock()
 		order = append(order, c.Stdin)
 		mu.Unlock()
-		time.Sleep(2 * time.Millisecond)
 		return Result{}, nil
 	}}
 	e := newExec(t, fr)
@@ -83,8 +86,15 @@ func TestQueueKeepsArrivalOrder(t *testing.T) {
 		op := mustDecode(t, `{"type":"nft_apply","ruleset":{"nftables":[{"add":{"table":{"family":"inet","name":"chaosgw","handle":`+string(rune('0'+i))+`}}}]}}`)
 		want = append(want, planStdin(t, op))
 		go func() { _, _ = e.Do(context.Background(), op); close(ch) }()
-		time.Sleep(time.Millisecond) // submit in a known order
+		// submit in a known order: wait until this request sits in the queue (the first is running)
+		if i == 0 {
+			<-started
+		}
+		for len(e.jobs) < i {
+			time.Sleep(100 * time.Microsecond)
+		}
 	}
+	close(release)
 	for _, ch := range done {
 		<-ch
 	}

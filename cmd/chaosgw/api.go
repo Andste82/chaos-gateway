@@ -357,7 +357,7 @@ func apiHealth(port int, listen string, stdout, stderr io.Writer) int {
 }
 
 func engineConfig(st *store.Store, ex apply.Exec, o apiOptions, sec *secrets.Store, log *slog.Logger, dhcp engine.DHCP) engine.Config {
-	cfg := engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp, ServiceNS: o.serviceNS}
+	cfg := engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp, ServiceNS: o.serviceNS, DefaultUIPort: o.port}
 	if o.holderPIDFile != "" {
 		cfg.ServiceHolderPID = func() int {
 			raw, err := os.ReadFile(o.holderPIDFile)

@@ -148,7 +148,7 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 
 	// the API listens on the gateway's end of the link, as in the container deployment
 	// on the port of the management interface: the gateway's input rules let the services reach that one
-	port := 8443
+	port := 443 // the compiler's default
 	if cfg := g.e.Snapshot().Config; cfg != nil && cfg.Management.UiPort != nil && *cfg.Management.UiPort > 0 {
 		port = *cfg.Management.UiPort
 	}

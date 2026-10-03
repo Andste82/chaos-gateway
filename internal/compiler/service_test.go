@@ -208,3 +208,21 @@ func ruleLine(r executor.Rule) string {
 	}
 	return s + " lookup " + strconv.Itoa(r.Table)
 }
+
+func TestTheServicesAndTheManagementNetworkReachThePortTheAPIListensOn(t *testing.T) {
+	// the configuration names no ui_port: the port of the API stands in
+	tg := compileWG(t, func(c *model.Configuration, in *Input) { in.ServiceNS = "cgsvc"; in.DefaultUIPort = 8443; c.Management.UiPort = nil })
+	if tg.Management.UIPort != 8443 {
+		t.Errorf("ui port %d", tg.Management.UIPort)
+	}
+	raw, _ := json.Marshal(chainByName(t, tg, "input").Rules)
+	if !strings.Contains(string(raw), "8443") || strings.Contains(string(raw), `"dport"},"right":443`) {
+		t.Errorf("%s", raw)
+	}
+	// a configured port wins
+	port := 9443
+	tg = compileWG(t, func(c *model.Configuration, in *Input) { in.DefaultUIPort = 8443; c.Management.UiPort = &port })
+	if tg.Management.UIPort != 9443 {
+		t.Errorf("ui port %d", tg.Management.UIPort)
+	}
+}

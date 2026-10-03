@@ -54,6 +54,9 @@ type Input struct {
 	// ServiceHolderPID is the process whose namespace is attached as the service namespace when it
 	// has to be created.
 	ServiceHolderPID int
+	// DefaultUIPort is the port the API listens on; it stands in for `management.ui_port` when the
+	// configuration names none (0: DefaultUIPort).
+	DefaultUIPort int
 }
 
 // Severity of a Problem.
@@ -193,7 +196,7 @@ func Compile(in Input) *Target {
 	// ---- uplink and management -------------------------------------------------------
 	t.compileUplink(cfg, in.Host)
 	t.compileService(in)
-	t.compileManagement(cfg, in.Host)
+	t.compileManagement(cfg, in.Host, in.DefaultUIPort)
 
 	// ---- test networks -------------------------------------------------------------------
 	ids := make([]string, 0, len(idx.Networks))
@@ -300,9 +303,12 @@ func (t *Target) compileUplink(cfg *model.Configuration, h Host) {
 	}
 }
 
-func (t *Target) compileManagement(cfg *model.Configuration, h Host) {
+func (t *Target) compileManagement(cfg *model.Configuration, h Host, defaultPort int) {
 	m := &t.Management
 	m.UIPort = DefaultUIPort
+	if defaultPort > 0 {
+		m.UIPort = defaultPort // the port the API actually listens on, when the configuration names none
+	}
 	if cfg.Management.UiPort != nil {
 		m.UIPort = *cfg.Management.UiPort
 	}

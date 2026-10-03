@@ -80,7 +80,7 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 	}
 	sock, leases := filepath.Join(dir, "ctrl.sock"), filepath.Join(dir, "leases.csv")
 	// the hook script of the product is `chaosgw kea-hook`; here it only records the calls
-	script := "#!/bin/sh\necho \"$1 $KEA_LEASE4_ADDRESS $KEA_LEASE4_HWADDR $KEA_SUBNET_ID\" >> " + hookLog + "\n"
+	script := "#!/bin/sh\necho \"$1 $KEA_LEASE4_ADDRESS $KEA_LEASE4_HWADDR $KEA_SUBNET_ID $KEA_LEASES4_AT0_ADDRESS $KEA_LEASES4_AT0_HWADDR\" >> " + hookLog + "\nenv | grep '^KEA_' | sort >> " + hookLog + "\n"
 	if err := os.MkdirAll(filepath.Dir(kea.HookScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestAClientGetsALeaseAndAppearsAsADiscoveredDevice(t *testing.T) {
 	// the hook called our script for the lease
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if raw, _ := os.ReadFile(hookLog); strings.Contains(string(raw), "lease4_select "+ip+" "+testbed.ClientAMAC) {
+		if raw, _ := os.ReadFile(hookLog); strings.Contains(string(raw), ip+" "+testbed.ClientAMAC) {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)

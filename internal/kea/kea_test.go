@@ -299,3 +299,16 @@ func TestAMissingSocketIsAnError(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+func TestACommittedHookCarriesEveryLease(t *testing.T) {
+	env := map[string]string{"KEA_LEASES4_SIZE": "2",
+		"KEA_LEASES4_AT0_ADDRESS": "10.0.0.5", "KEA_LEASES4_AT0_HWADDR": "02:00:00:00:00:AA", "KEA_LEASES4_AT0_SUBNET_ID": "7",
+		"KEA_LEASES4_AT1_ADDRESS": "10.0.0.6", "KEA_LEASES4_AT1_HWADDR": "02:00:00:00:00:bb"}
+	evs, err := EventsFromHook("leases4_committed", func(k string) string { return env[k] })
+	if err != nil || len(evs) != 2 || evs[0].IP.String() != "10.0.0.5" || evs[0].MAC != "02:00:00:00:00:aa" || evs[0].SubnetID != 7 || evs[1].IP.String() != "10.0.0.6" {
+		t.Fatalf("%+v %v", evs, err)
+	}
+	if _, err := EventsFromHook("leases4_committed", func(string) string { return "" }); err == nil {
+		t.Error("no size")
+	}
+}

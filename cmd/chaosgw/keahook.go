@@ -24,7 +24,7 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: chaosgw kea-hook <hook point> (called by Kea's run_script hook)")
 		return 2
 	}
-	ev, err := kea.EventFromHook(args[0], os.Getenv)
+	evs, err := kea.EventsFromHook(args[0], os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
 		return 1
@@ -36,31 +36,39 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw kea-hook: cannot read the service token: %v\n", err)
 		return 1
 	}
+	// the API is on the host's loopback with a self-signed certificate
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // the loopback
+	status := 0
+	for _, ev := range evs {
+		if err := postLeaseEvent(client, strings.TrimRight(api, "/"), strings.TrimSpace(string(raw)), ev); err != nil {
+			fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
+			status = 1
+		}
+	}
+	return status
+}
+
+func postLeaseEvent(client *http.Client, api, token string, ev kea.Event) error {
 	body, _ := json.Marshal(map[string]any{"event": ev.Name, "ip": ev.IP.String(), "mac": ev.MAC, "subnet_id": ev.SubnetID,
 		"valid_lifetime": ev.ValidLifetime, "hostname": ev.Hostname, "client_id": ev.ClientID})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(api, "/")+"/api/v1/internal/dhcp/lease-events", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/api/v1/internal/dhcp/lease-events", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
-		return 1
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(raw)))
-	// the API is on the host's loopback with a self-signed certificate
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // the loopback
+	req.Header.Set("Authorization", "Bearer "+token)
 	res, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
-		return 1
+		return err
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-		fmt.Fprintf(stderr, "chaosgw kea-hook: the API answered %d: %s\n", res.StatusCode, strings.TrimSpace(string(b)))
-		return 1
+		return fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
 	}
-	return 0
+	return nil
 }
 
 // runKeaConfig is `chaosgw kea-config`: the configuration Kea starts with, before the API has sent

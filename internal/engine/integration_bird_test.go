@@ -95,10 +95,15 @@ type bgpGW struct {
 
 func newBGP(t *testing.T, maxPrefixes int, siteRoutes ...string) *bgpGW {
 	t.Helper()
+	return newBGPWith(t, routingMod(maxPrefixes, ""), siteRoutes...)
+}
+
+func newBGPWith(t *testing.T, mod func(*model.Configuration), siteRoutes ...string) *bgpGW {
+	t.Helper()
 	g := &bgpGW{wgGW: newWGGW(t)}
 	// the instance the executor manages starts with an idle configuration
 	g.gwSock = startBird(t, g.top.GW, g.bird, compiler.BirdInstance, "router id 127.0.0.1;\nprotocol device { }\n")
-	g.apply(routingMod(maxPrefixes, ""))
+	g.apply(mod)
 
 	g.siteSock = g.remoteSite(g.top.Site, tLink, "wgsite", "site", siteRoutes...)
 	return g
@@ -257,25 +262,46 @@ func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {
 	}
 }
 
-// M4c test: a prefix limit that is exceeded takes the session down instead of flooding table 100.
+// M4c test: a prefix limit that is exceeded takes the session down instead of flooding table 100. The
+// session comes up (or routes arrive) first; then the limit fires and the routes leave.
 func TestMoreRoutesThanTheLimitDisableTheSession(t *testing.T) {
 	g := newBGP(t, 2, "10.60.0.0/24", "10.60.1.0/24", "10.60.2.0/24", "10.60.3.0/24")
-	deadline := time.Now().Add(120 * time.Second)
-	var limited bool
-	for time.Now().Before(deadline) && !limited {
-		ps, _ := bird.ParseProtocols(birdc(t, g.gwSock, "show", "protocols", "all"))
-		for _, p := range ps {
-			if p.Proto == "BGP" && !p.Established() && (strings.Contains(p.Info, "limit") || strings.Contains(p.LastError, "limit") || p.State == "start") {
-				limited = p.Info != "" && p.State != "up"
-			}
+	sawUp := false
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) && !sawUp {
+		sawUp = strings.Contains(g.table100(), "10.60.") || g.established(0)
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !sawUp {
+		t.Fatalf("the session never came up\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	deadline = time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if !g.established(0) && !strings.Contains(g.table100(), "10.60.") {
+			return
 		}
-		time.Sleep(time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
-	if !limited {
-		t.Fatalf("the session is not taken down\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	t.Fatalf("the limit of 2 did not take the session down\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), g.table100())
+}
+
+// M4c test: without an allowed list the filters of the product alone keep a default route, the
+// management prefix and the gateway's own prefix out.
+func TestProtectedPrefixesAndTheDefaultRouteAreFilteredWithoutAnAllowedList(t *testing.T) {
+	g := newBGPWith(t, func(c *model.Configuration) {
+		routingMod(10, "")(c)
+		p := (*c.Routing.Protocols)[birdProtoID]
+		p.Import = nil
+		(*c.Routing.Protocols)[birdProtoID] = p
+	}, "10.60.0.0/24", "0.0.0.0/0", "192.168.56.0/24", "10.10.0.0/24", "10.50.0.0/25")
+	if !g.established(90*time.Second) || !g.waitRoute("10.60.0.0/24 via 10.255.0.1", true, 30*time.Second) {
+		t.Fatalf("no session or no route\n%s", g.table100())
 	}
-	if n := strings.Count(g.table100(), "10.60."); n > 2 {
-		t.Errorf("%d routes of the remote site are in table 100 although the limit is 2\n%s", n, g.table100())
+	time.Sleep(5 * time.Second)
+	for _, bad := range []string{"default via", "192.168.56.0/24 via", "10.10.0.0/24 via", "10.50.0.0/25 via"} {
+		if strings.Contains(g.table100(), bad) {
+			t.Errorf("the filter let %q through\n%s", bad, g.table100())
+		}
 	}
 }
 

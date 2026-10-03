@@ -116,8 +116,14 @@ func CheckText(text string, allowedTables []int) error {
 	if err := balanced(code); err != nil {
 		return err
 	}
-	if regexp.MustCompile(`\binclude\b`).MatchString(code) {
-		return errors.New("`include` is not allowed")
+	// include reads any file; define could hide a table number; log, mrtdump write files
+	for _, kw := range []string{"include", "define", "log", "mrtdump", "function", "watchdog"} {
+		if regexp.MustCompile(`\b` + kw + `\b`).MatchString(code) {
+			return fmt.Errorf("`%s` is not allowed", kw)
+		}
+	}
+	if n := len(regexp.MustCompile(`\bkernel\s+table\b`).FindAllString(code, -1)); n != len(kernelTableRE.FindAllString(code, -1)) {
+		return errors.New("`kernel table` has to name the table by its number")
 	}
 	for _, m := range kernelTableRE.FindAllStringSubmatch(code, -1) {
 		n, _ := strconv.Atoi(m[1])

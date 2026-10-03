@@ -288,6 +288,12 @@ configuration at start when there is none.
 - **Remote side.** `chaosgw wg export ... --link --bird [--remote-interface wg0]` prints the BIRD
   configuration for the other end of the link: roles swapped, same timers, a static protocol for the
   remote site's own prefixes.
+- **Protected prefixes** also contain the networks the executor routes itself (behind clients, links
+  and routers): a more specific prefix from a neighbor would win over them in the kernel.
+- **Known limits.** A BIRD that is down fails every apply that has to configure it (the previous
+  target is restored the same way). A protocol disabled by `import limit` stays disabled until its
+  configuration changes. Babel and the external mode are covered by configuration tests only, not by
+  a session in the testbed.
 - **Testbed.** `WithRemotes` adds a second remote site (`site2`, 203.0.113.50, network 10.70.0.10).
   The tests in `internal/engine/integration_bird_test.go` run BIRD in the gateway's namespace and in
   the remote ones.

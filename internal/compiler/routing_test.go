@@ -65,8 +65,9 @@ func TestTheBirdConfigurationFollowsTheModel(t *testing.T) {
 	if p.Import.MaxPrefixes != 10 || len(p.Import.Allowed) != 1 || p.Import.Allowed[0].MaxLength != 24 {
 		t.Errorf("%+v", p.Import)
 	}
-	// the protected prefixes: management, uplink, local networks, tunnel subnets
-	want := "10.10.0.0/24,10.255.0.0/31,10.98.0.0/24,10.99.0.0/24,192.168.56.0/24,203.0.113.0/24"
+	// the protected prefixes: management, uplink, local networks, tunnel subnets and the networks the
+	// executor routes itself (behind clients and links)
+	want := "10.10.0.0/24,10.255.0.0/31,10.50.0.0/24,10.60.0.0/24,10.98.0.0/24,10.99.0.0/24,192.168.56.0/24,203.0.113.0/24"
 	if got := strings.Join(c.Protected, ","); got != want {
 		t.Errorf("protected %s, want %s", got, want)
 	}

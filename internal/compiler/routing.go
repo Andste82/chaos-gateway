@@ -287,6 +287,17 @@ func (t *Target) protectedPrefixes() []string {
 	for _, w := range t.WireGuard {
 		out = append(out, w.Address.Masked().String())
 	}
+	// what the executor routes itself: the networks behind clients, links and routers. A more
+	// specific prefix from a neighbor would win over them in the kernel.
+	for _, r := range t.Routes {
+		if r.Table == PolicyTable && r.Dst != "" && r.Dst != "default" {
+			if p, err := netip.ParsePrefix(r.Dst); err == nil {
+				out = append(out, p.Masked().String())
+			} else if a, err := netip.ParseAddr(r.Dst); err == nil {
+				out = append(out, netip.PrefixFrom(a, a.BitLen()).String())
+			}
+		}
+	}
 	return dedupeStrings(out)
 }
 

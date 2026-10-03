@@ -164,7 +164,7 @@ func (f Filter) match(e Entry) bool {
 // List returns up to limit entries, newest first. cursor is the id of the last entry of the
 // previous page ("" for the first); next is the cursor of the following page, "" at the end.
 func (l *Log) List(f Filter, cursor string, limit int) (items []Entry, next string, err error) {
-	var before uint64 = ^uint64(0)
+	before := ^uint64(0)
 	if cursor != "" {
 		before, err = strconv.ParseUint(cursor, 10, 64)
 		if err != nil {

@@ -2,10 +2,11 @@ package api
 
 import (
 	"errors"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 	"net/http"
 	"strconv"
 	"time"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/gin-gonic/gin"
 

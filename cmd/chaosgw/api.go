@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -184,8 +185,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 func uiPort(eng *engine.Engine, def int, listen string) int {
 	if listen != "" {
 		if _, p, err := net.SplitHostPort(listen); err == nil {
-			var n int
-			if _, err := fmt.Sscanf(p, "%d", &n); err == nil && n > 0 {
+			if n, err := strconv.Atoi(p); err == nil && n > 0 {
 				return n
 			}
 		}
@@ -303,7 +303,9 @@ func apiHealth(port int, listen string, stdout, stderr io.Writer) int {
 	if listen != "" {
 		if h, p, err := net.SplitHostPort(listen); err == nil {
 			host = h
-			fmt.Sscanf(p, "%d", &port)
+			if n, err := strconv.Atoi(p); err == nil {
+				port = n
+			}
 		}
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // the loopback, a self-signed certificate

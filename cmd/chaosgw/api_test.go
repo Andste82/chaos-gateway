@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/Andste82/chaos-gateway/internal/domain"
 	"io"
 	"log/slog"
 	"net"
@@ -19,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/domain"
 )
 
 type syncBuf struct {
@@ -92,7 +93,7 @@ func TestTheAPIServerRunsFromSetupToPasswordReset(t *testing.T) {
 	for {
 		if res, err := client.Get(base + "/system/health"); err == nil {
 			_ = res.Body.Close()
-			if res.StatusCode == 200 {
+			if res.StatusCode == http.StatusOK {
 				break
 			}
 		}

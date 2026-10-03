@@ -35,7 +35,7 @@ func runAdmin(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		fmt.Fprintln(stderr, "chaosgw admin reset-password: give exactly one of --password-stdin and --password-file")
 		return 2
 	}
-	var r io.Reader = stdin
+	r := stdin
 	if *file != "" {
 		f, err := os.Open(*file)
 		if err != nil {

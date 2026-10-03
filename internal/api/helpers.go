@@ -5,16 +5,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"github.com/Andste82/chaos-gateway/internal/audit"
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/Andste82/chaos-gateway/internal/audit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
-	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
 // ptr returns a pointer to v.
@@ -175,8 +175,6 @@ func findByRef[T any](m *map[string]T, ref string, name func(T) string) (string,
 func notFound(what, ref string) *problem {
 	return newProblem(model.ErrorCodeNotFound, "no %s %q", what, ref)
 }
-
-var errNoActive = store.ErrNotFound
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 

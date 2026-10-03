@@ -19,6 +19,7 @@ type service struct {
 	Command     []string `yaml:"command"`
 	Tmpfs       []string `yaml:"tmpfs"`
 	CapAdd      []string `yaml:"cap_add"`
+	CapDrop     []string `yaml:"cap_drop"`
 	Healthcheck struct {
 		Test []string `yaml:"test"`
 	} `yaml:"healthcheck"`
@@ -157,4 +158,79 @@ func TestBirdContainerHardeningProfile(t *testing.T) {
 	if len(s.Volumes) != 1 {
 		t.Errorf("volumes %v", s.Volumes)
 	}
+}
+
+// The API container is unprivileged: the user the executor lets through, no capabilities, a
+// read-only root and exactly the volumes it needs.
+func TestApiContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.api.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := doc.Services["api"]
+	if len(doc.Services) != 1 || !ok {
+		t.Fatalf("services %v", doc.Services)
+	}
+	if s.Privileged || !s.ReadOnly || !contains(s.SecurityOpt, "no-new-privileges:true") {
+		t.Errorf("%+v", s)
+	}
+	if len(s.CapAdd) != 0 {
+		t.Errorf("the API container needs no capability: %v", s.CapAdd)
+	}
+	if !contains(s.CapDrop, "ALL") {
+		t.Errorf("cap_drop %v", s.CapDrop)
+	}
+	// the user is the one the executor's socket lets through (compose.executor.yaml: --allow-uid)
+	if s.User != "65532:65532" {
+		t.Errorf("user %q", s.User)
+	}
+	if s.NetworkMode != "host" {
+		t.Errorf("network_mode %q: the API listens on the management network of the host", s.NetworkMode)
+	}
+	if len(s.Command) < 1 || s.Command[0] != "api" {
+		t.Fatalf("command %v", s.Command)
+	}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true}
+	for _, a := range s.Command[1:] {
+		if strings.HasPrefix(a, "--") && !known[a] {
+			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
+		}
+	}
+	if len(s.Volumes) != 4 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets and the audit log", len(s.Volumes))
+	}
+	if len(s.Healthcheck.Test) < 4 || s.Healthcheck.Test[1] != "chaosgw" || !contains(s.Healthcheck.Test, "--health") {
+		t.Errorf("health check: %v", s.Healthcheck.Test)
+	}
+
+	// the executor accepts exactly that user
+	exec, err := os.ReadFile("../../deploy/compose.executor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edoc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(exec, &edoc); err != nil {
+		t.Fatal(err)
+	}
+	cmd := edoc.Services["exec"].Command
+	if !containsPair(cmd, "--allow-uid", "65532") {
+		t.Errorf("the executor does not allow uid 65532: %v", cmd)
+	}
+}
+
+func containsPair(l []string, k, v string) bool {
+	for i := 0; i+1 < len(l); i++ {
+		if l[i] == k && l[i+1] == v {
+			return true
+		}
+	}
+	return false
 }

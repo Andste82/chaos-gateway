@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -32,7 +33,7 @@ type sseEvent struct {
 func (g *gw) openStream(lastID, query string) *stream {
 	g.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, _ := http.NewRequestWithContext(ctx, "GET", g.ts.URL+"/api/v1/events"+query, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, g.ts.URL+"/api/v1/events"+query, nil)
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	if lastID != "" {
 		req.Header.Set("Last-Event-ID", lastID)
@@ -256,7 +257,8 @@ func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testi
 	r := bufio.NewReader(conn)
 	for {
 		if _, err := r.ReadByte(); err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
 				t.Fatal("the connection of a client that does not read stays open")
 			}
 			break

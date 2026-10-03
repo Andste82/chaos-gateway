@@ -28,7 +28,7 @@ type view struct {
 func (s *Server) viewOf(c *gin.Context, q *model.RevisionQuery) (view, bool) {
 	var rev *int64
 	if q != nil {
-		v := int64(*q)
+		v := *q
 		rev = &v
 	}
 	r, cfg, ok := s.configAt(c, rev)

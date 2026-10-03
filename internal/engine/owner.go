@@ -89,6 +89,10 @@ type cmdObserve struct {
 
 type cmdBarrier struct{ reply chan *Snapshot }
 
+// cmdResync makes a new desired state of the current revision: the kernel has drifted in a way no
+// event announces (the holder of the service namespace changed).
+type cmdResync struct{}
+
 type cmdTimeout struct{ rev int64 }
 
 type cmdWGStatus struct{ status map[string]PeerStatus }
@@ -113,6 +117,7 @@ func (cmdApply) command()         {}
 func (cmdConfirm) command()       {}
 func (cmdRollback) command()      {}
 func (cmdObserve) command()       {}
+func (cmdResync) command()        {}
 func (cmdBarrier) command()       {}
 func (cmdTimeout) command()       {}
 func (cmdWGStatus) command()      {}
@@ -362,6 +367,10 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.publish()
 	case cmdRoutingStatus:
 		o.routingStatus(c.status)
+	case cmdResync:
+		if o.current != nil {
+			o.converge(o.nextDesired(o.current.Config, o.current.Revision))
+		}
 	case cmdObserve:
 		o.observe(c.host)
 		o.later(func() { c.reply <- struct{}{} })

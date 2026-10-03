@@ -154,6 +154,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opt.Timeout)
 	defer cancel()
 	resp, e := s.answer(ctx, r, client)
+	fitEDNS(resp, r)
 	if !isTCP {
 		resp.Truncate(udpSize(r))
 	}
@@ -185,12 +186,57 @@ func clientAddr(a net.Addr) netip.Addr {
 	return netip.Addr{}
 }
 
-// udpSize is the largest answer the client takes over UDP: its EDNS0 size, else 512.
+// maxUDP caps what the proxy sends over UDP whatever the client advertises: a larger datagram is
+// fragmented on the tunnel's and the veth's MTUs (the DNS flag day 2020 size).
+const maxUDP = 1232
+
+// udpSize is the largest answer the client takes over UDP: its EDNS0 size (capped), else 512.
 func udpSize(r *dns.Msg) int {
 	if o := r.IsEdns0(); o != nil && int(o.UDPSize()) > 512 {
-		return int(o.UDPSize())
+		if s := int(o.UDPSize()); s < maxUDP {
+			return s
+		}
+		return maxUDP
 	}
 	return dns.MinMsgSize
+}
+
+// fitEDNS makes the reply's OPT record the one this client is owed: none for a client without EDNS
+// (RFC 6891: a reply has an OPT only when the query had one), ours for a client with it. DNSSEC
+// records go to a client that did not set the DO bit never.
+func fitEDNS(resp, r *dns.Msg) {
+	resp.Extra = dropType(resp.Extra, dns.TypeOPT)
+	o := r.IsEdns0()
+	if o == nil {
+		resp.Answer = dropType(resp.Answer, dns.TypeRRSIG)
+		resp.Ns = dropType(resp.Ns, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3)
+		return
+	}
+	resp.SetEdns0(uint16(udpSize(r)), o.Do())
+	if !o.Do() {
+		resp.Answer = dropType(resp.Answer, dns.TypeRRSIG)
+		resp.Ns = dropType(resp.Ns, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3)
+	}
+}
+
+func dropType(rrs []dns.RR, types ...uint16) []dns.RR {
+	out := rrs[:0:0]
+	for _, rr := range rrs {
+		drop := false
+		for _, t := range types {
+			drop = drop || rr.Header().Rrtype == t
+		}
+		if !drop {
+			out = append(out, rr)
+		}
+	}
+	return out
+}
+
+// doBit reports whether the query asks for DNSSEC records.
+func doBit(r *dns.Msg) bool {
+	o := r.IsEdns0()
+	return o != nil && o.Do()
 }
 
 const (
@@ -246,7 +292,7 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 		e.Answers = answers(m)
 		return m, e
 	}
-	key := cacheKey(name, q.Qtype)
+	key := cacheKey(name, q.Qtype, doBit(r))
 	if m, ok := s.cache.get(key, r); ok {
 		c := true
 		e.Cached = &c
@@ -359,10 +405,12 @@ func (s *Server) forward(ctx context.Context, cfg *model.DnsServiceConfig, r *dn
 		s.upstreamQueries.Add(1)
 		uctx, cancel := context.WithTimeout(ctx, s.opt.Timeout)
 		resp, err := s.opt.Upstream.Exchange(uctx, q, "udp", server)
-		if err == nil && resp.Truncated {
-			resp, err = s.opt.Upstream.Exchange(uctx, q, "tcp", server)
-		}
 		cancel()
+		if err == nil && resp.Truncated {
+			tctx, tcancel := context.WithTimeout(ctx, s.opt.Timeout) // the TCP attempt has a time of its own
+			resp, err = s.opt.Upstream.Exchange(tctx, q, "tcp", server)
+			tcancel()
+		}
 		if err != nil {
 			last = err
 			continue

@@ -31,7 +31,9 @@ type queryLog struct {
 	mu      sync.Mutex
 	pending []model.DnsQueryLogEntry
 	dropped int64
-	wake    chan struct{}
+	// base counts the entries that left the head of pending without being sent (dropped)
+	base int64
+	wake chan struct{}
 }
 
 func newQueryLog(s Sink, c clock.Clock, l *slog.Logger) *queryLog {
@@ -46,6 +48,7 @@ func (q *queryLog) add(e model.DnsQueryLogEntry) {
 	if len(q.pending) >= logBuffer {
 		q.pending = q.pending[1:]
 		q.dropped++
+		q.base++
 	}
 	q.pending = append(q.pending, e)
 	full := len(q.pending) >= logBatch
@@ -95,6 +98,7 @@ func (q *queryLog) flush(ctx context.Context) {
 			n = logBatch * 5
 		}
 		batch := append([]model.DnsQueryLogEntry(nil), q.pending[:n]...)
+		startBase := q.base
 		q.mu.Unlock()
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := q.sink.Post(pctx, batch)
@@ -104,8 +108,9 @@ func (q *queryLog) flush(ctx context.Context) {
 			return // the entries stay; the next tick tries again
 		}
 		q.mu.Lock()
-		if len(q.pending) >= n {
-			q.pending = q.pending[n:]
+		// entries dropped from the head while the batch was on its way were part of it
+		if gone := n - int(q.base-startBase); gone > 0 && len(q.pending) >= gone {
+			q.pending = q.pending[gone:]
 		}
 		q.mu.Unlock()
 	}

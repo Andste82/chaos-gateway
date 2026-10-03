@@ -468,12 +468,16 @@ proxy; the TLS responder (M21) joins it later.
   gateway (input chain).
 - **Apply and verify.** The plan creates the pair before routes and nftables; verify reads the namespace
   (peer address, state, default route, holder). A holder that restarted leaves the old namespace behind
-  (the name keeps it alive): the executor deletes the pair and the name and attaches the new one. The
-  next apply after the pair vanished (the host watcher notices the link) creates it again.
+  (the name keeps it alive): the executor deletes the pair and the name and attaches the new one. No
+  netlink event announces that, so `Engine.WatchService` (every 2 s) reads the namespace and the PID
+  file and applies again when the holder changed or the namespace is wrong (a persistent failure is
+  retried every 30 s); a vanished pair is noticed by the host watcher. The executor refuses a holder
+  that does not exist or sits in its own network namespace, and the operation is pinned to `svc0`/`svc1`
+  and `169.254.100.0/24`.
 - **DNS proxy** (`internal/dnsproxy`, `chaosgw dns`). `miekg/dns`, UDP and TCP, in the namespace. It
   forwards to the upstream resolvers in order (a truncated UDP answer is asked again over TCP; a UDP
   client gets the truncation it asks for), caches until the TTL ends (negative answers 30 s, errors not;
-  bounded), answers the static entries of a network (`dns.static_entries`), never forwards `.invalid`,
+  bounded; the key includes the DO bit and the OPT record is added per client), answers the static entries of a network (`dns.static_entries`), never forwards `.invalid`,
   and answers AAAA queries with no data and removes AAAA records from other answers (the V1 networks
   are IPv4 only). Until it has a configuration it answers SERVFAIL. The upstream resolvers are the
   uplink's `dns_upstream`, else the host's: `/run/systemd/resolve/resolv.conf` first (the stub
@@ -496,6 +500,13 @@ proxy; the TLS responder (M21) joins it later.
   service namespace with `dnsmasq` as the upstream: clients of a test network and a WireGuard client
   resolve over UDP and TCP, the log shows the queries, a restarted proxy resolves again, and without
   the namespace the redirected queries are dropped by the guard.
+- **Limits.** An AAAA query for a name that does not exist gets an empty answer, not NXDOMAIN (the
+  reply is made before the upstream is asked); SVCB/HTTPS `ipv6hint` records are not removed; the
+  proxy trusts the API's certificate unchecked unless `--api-cert-file` is given (it talks to the
+  gateway over the private link only); a failure of the service namespace step fails the apply (a
+  dead holder blocks other revisions until the holder is back). `/run/systemd/resolve` is mounted
+  read-only into the API container so that the proxy finds the real resolvers of a systemd-resolved
+  host.
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
   `/internal/dns/resolutions` (M20), per-device query statistics.
 

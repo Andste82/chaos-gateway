@@ -12,8 +12,8 @@ import (
 // traffic.
 const (
 	// ServiceHostIf is the gateway's end of the pair, ServicePeerIf the end in the namespace.
-	ServiceHostIf = "svc0"
-	ServicePeerIf = "svc1"
+	ServiceHostIf = executor.ServiceHostIf
+	ServicePeerIf = executor.ServicePeerIf
 	// ServiceTable routes selected traffic into the namespace, with a prohibit route as the fallback
 	// so that selected traffic fails closed when the namespace is missing.
 	ServiceTable = 102

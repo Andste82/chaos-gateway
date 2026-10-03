@@ -28,7 +28,14 @@ func newCache(max int, c clock.Clock) *cache {
 	return &cache{max: max, clock: c, m: map[string]*entry{}}
 }
 
-func cacheKey(name string, qtype uint16) string { return name + "/" + strconv.Itoa(int(qtype)) }
+// cacheKey includes the DO bit: an answer with DNSSEC records is another answer.
+func cacheKey(name string, qtype uint16, do bool) string {
+	k := name + "/" + strconv.Itoa(int(qtype))
+	if do {
+		k += "/do"
+	}
+	return k
+}
 
 func (c *cache) flush() {
 	c.mu.Lock()
@@ -67,6 +74,7 @@ func (c *cache) put(key string, m *dns.Msg) {
 		return
 	}
 	cp := m.Copy()
+	cp.Extra = dropType(cp.Extra, dns.TypeOPT) // the OPT record belongs to the client, not to the answer
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.m[key]; !ok {

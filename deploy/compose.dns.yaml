@@ -9,7 +9,8 @@
 # network. Queries to each test network's gateway address are redirected into it by the gateway's
 # nftables; it fetches its configuration from the API at 169.254.100.1 and posts its query log. It
 # keeps no state: restarting it costs nothing, restarting the holder is healed by the next apply
-# (the pair is created again) followed by a restart of `dns`, which re-joins the new namespace.
+# (the pair is created again), and Compose restarts `dns` with it (`depends_on ... restart: true`), which
+# re-joins the new namespace.
 services:
   svcns:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
@@ -49,7 +50,10 @@ services:
         target: /var/lib/chaosgw/service
         read_only: true
     depends_on:
-      - svcns
+      svcns:
+        condition: service_started
+        # a recreated holder has a new namespace: the proxy has to join it again
+        restart: true
     restart: unless-stopped
     stop_grace_period: 10s
     healthcheck:

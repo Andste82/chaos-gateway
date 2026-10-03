@@ -107,6 +107,12 @@ type NftDelElements struct {
 	Elements []string `json:"elements"`
 }
 
+// The interfaces of the pair are fixed: the operation cannot touch any other interface.
+const (
+	ServiceHostIf = "svc0"
+	ServicePeerIf = "svc1"
+)
+
 // ServiceNS sets up the service namespace (plan §3.3, D29): the named namespace the gateway
 // services (DNS proxy, TLS responder) run in, and the veth pair that connects it to the gateway.
 // `ensure` creates the namespace when it is missing (or attaches the namespace of the holder

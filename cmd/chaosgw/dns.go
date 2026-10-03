@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/dnsproxy"
 )
@@ -35,11 +36,16 @@ func runDNS(args []string, stdout, stderr io.Writer) int {
 	c := &dnsproxy.APIClient{Base: *api, TokenFile: *tokenFile, CertFile: *certFile}
 	srv := dnsproxy.New(dnsproxy.Options{Log: log, Sink: c})
 	go srv.Follow(ctx, c, log)
-	go srv.RunLog(ctx)
+	logDone := make(chan struct{})
+	go func() { srv.RunLog(ctx); close(logDone) }()
 	log.Info("the DNS proxy starts", "listen", *listen, "api", *api)
 	if err := srv.Serve(ctx, *listen); err != nil {
 		fmt.Fprintf(stderr, "chaosgw dns: %v\n", err)
 		return 1
+	}
+	select {
+	case <-logDone: // the last entries are sent
+	case <-time.After(6 * time.Second):
 	}
 	log.Info("the DNS proxy stopped")
 	return 0

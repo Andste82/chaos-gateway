@@ -30,6 +30,9 @@ type dnsState struct {
 	hash string
 	cur  *model.DnsServiceConfig
 
+	resolvers   []string
+	resolversAt time.Time
+
 	logMu   sync.Mutex
 	seq     int64
 	entries []loggedQuery // oldest first, bounded
@@ -73,13 +76,7 @@ func (s *Server) dnsConfig() *model.DnsServiceConfig {
 		upstream = append(upstream, *snap.Config.Uplink.DnsUpstream...)
 	}
 	if len(upstream) == 0 {
-		resolvers := s.cfg.Resolvers
-		if resolvers == nil {
-			resolvers = func() []netip.Addr { return dnsproxy.HostResolvers() }
-		}
-		for _, a := range resolvers() {
-			upstream = append(upstream, a.String())
-		}
+		upstream = append(upstream, s.hostResolvers()...)
 	}
 	doc := map[string]any{"upstream": upstream, "strip_aaaa": true, "networks": nets, "faults": []any{}, "hostname_sets": []any{}}
 	raw, _ := json.Marshal(doc)
@@ -103,6 +100,26 @@ func (s *Server) dnsConfig() *model.DnsServiceConfig {
 		s.dns.cur, s.dns.hash = &cfg, sum
 	}
 	return s.dns.cur
+}
+
+// hostResolvers are the host's resolvers; the files are read at most every 5 s (a long poll asks
+// every few hundred milliseconds).
+func (s *Server) hostResolvers() []string {
+	s.dns.mu.Lock()
+	defer s.dns.mu.Unlock()
+	if !s.dns.resolversAt.IsZero() && time.Since(s.dns.resolversAt) < 5*time.Second {
+		return s.dns.resolvers
+	}
+	read := s.cfg.Resolvers
+	if read == nil {
+		read = func() []netip.Addr { return dnsproxy.HostResolvers() }
+	}
+	var out []string
+	for _, a := range read() {
+		out = append(out, a.String())
+	}
+	s.dns.resolvers, s.dns.resolversAt = out, time.Now()
+	return out
 }
 
 // GetDnsServiceConfig implements GET /internal/dns/config: the configuration at once when its

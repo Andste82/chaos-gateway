@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"go.uber.org/goleak"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// The commands start the executor, the engine and their goroutines: none may outlive a test.
+func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
 
 func runCmd(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer

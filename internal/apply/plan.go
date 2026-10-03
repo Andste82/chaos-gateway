@@ -62,6 +62,7 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	// Stale routes and rules go before the links they refer to are removed (deleting a route of a
 	// device that is gone fails); new ones come after the links exist.
 	stale := &executor.Routing{Target: tg}
+	late := &executor.Routing{Target: tg}
 	fresh := &executor.Routing{Target: tg}
 	wantRoutes := map[string]executor.Route{}
 	for _, r := range t.Routes {
@@ -77,7 +78,13 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		haveRoutes[k] = true
 		if _, ok := wantRoutes[k]; !ok {
 			er.Action = "delete"
-			stale.Routes = append(stale.Routes, er)
+			// a route of a device that is about to go is deleted first (deleting it afterwards
+			// fails); every other stale route goes after the new ones exist
+			if contains(removed, er.Dev) {
+				stale.Routes = append(stale.Routes, er)
+			} else {
+				late.Routes = append(late.Routes, er)
+			}
 			note("route delete %s table %s", r.Dst, r.Table)
 		}
 	}
@@ -104,7 +111,11 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		haveRules[k] = true
 		if _, ok := wantRules[k]; !ok {
 			er.Action = "delete"
-			stale.Rules = append(stale.Rules, er)
+			if contains(removed, er.Iif) || contains(removed, er.Oif) {
+				stale.Rules = append(stale.Rules, er)
+			} else {
+				late.Rules = append(late.Rules, er)
+			}
 			note("rule delete priority %d table %d", er.Priority, er.Table)
 		}
 	}
@@ -119,7 +130,7 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	}
 
 	// ---- links ---------------------------------------------------------------------------
-	var links []executor.LinkEntry
+	var links, ups []executor.LinkEntry
 	wantBridge := map[string]bool{}
 	for _, b := range t.Bridges {
 		wantBridge[b.Name] = true
@@ -142,6 +153,9 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		if exists && bl.Kind() != "bridge" {
 			return nil, fmt.Errorf("%s exists but is not a bridge: refusing to touch it", b.Name)
 		}
+		if exists && !contains(oldAssigned, b.Name) {
+			return nil, fmt.Errorf("the bridge %s exists but does not belong to Chaos Gateway: refusing to take it over", b.Name)
+		}
 		if !exists {
 			links = append(links, executor.LinkEntry{Action: "add_bridge", Name: b.Name})
 		}
@@ -151,7 +165,8 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 			}
 		}
 		for _, l := range sortedLinks(s) {
-			if l.Master == b.Name && !contains(b.Ports, l.Name) && contains(both, l.Name) {
+			// a port that another bridge of the target wants is moved by enslaving it there
+			if l.Master == b.Name && !contains(b.Ports, l.Name) && contains(both, l.Name) && !inAnyBridge(t, l.Name) {
 				links = append(links, executor.LinkEntry{Action: "release", Name: l.Name})
 			}
 		}
@@ -172,7 +187,7 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		}
 		for _, d := range append([]string{b.Name}, b.Ports...) {
 			if l, ok := s.Links[d]; !ok || !l.Up() {
-				links = append(links, executor.LinkEntry{Action: "up", Name: d})
+				ups = append(ups, executor.LinkEntry{Action: "up", Name: d})
 			}
 		}
 	}
@@ -208,7 +223,19 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	if len(offloads) > 0 {
 		add("offloads off: "+strings.Join(offloads, ", "), &executor.Offloads{Target: tg, Devs: offloads})
 	}
+	// links come up last: no router advertisement is accepted in the time between a new bridge
+	// and its sysctls
+	if len(ups) > 0 {
+		var words []string
+		for _, e := range ups {
+			words = append(words, "up "+e.Name)
+		}
+		add("links: "+strings.Join(words, "; "), &executor.Links{Target: tg, Entries: ups})
+	}
 
+	// the executor adds before it deletes within one operation: no gap between old and new
+	fresh.Routes = append(fresh.Routes, late.Routes...)
+	fresh.Rules = append(fresh.Rules, late.Rules...)
 	if len(fresh.Routes)+len(fresh.Rules) > 0 {
 		p.Ops = append(p.Ops, fresh)
 	}
@@ -228,6 +255,10 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 			if !contains(s.DockerUser.In, d) || !contains(s.DockerUser.Out, d) {
 				missing = append(missing, d)
 			}
+		}
+		if !s.DockerUser.OursFirst {
+			// a rule of Docker's stands in front of ours: take ours out and put them in front again
+			add("DOCKER-USER remove (to reposition): "+strings.Join(t.DockerUser, ", "), &executor.DockerUser{Target: tg, Action: "remove", Devs: t.DockerUser, OptionalChain: true})
 		}
 		if len(missing) > 0 || !s.DockerUser.OursFirst {
 			add("DOCKER-USER accept: "+strings.Join(t.DockerUser, ", "), &executor.DockerUser{Target: tg, Action: "ensure", Devs: t.DockerUser, OptionalChain: true})
@@ -305,7 +336,17 @@ func routeKey(r executor.Route) string {
 	if typ == "unicast" {
 		typ = ""
 	}
-	return fmt.Sprintf("%d|%s|%s|%s|%s", r.Table, r.Dst, r.Via, r.Dev, typ)
+	// `ip -j` prints a host route as the bare address
+	return fmt.Sprintf("%d|%s|%s|%s|%s", r.Table, strings.TrimSuffix(r.Dst, "/32"), r.Via, r.Dev, typ)
+}
+
+func inAnyBridge(t *compiler.Target, port string) bool {
+	for _, b := range t.Bridges {
+		if contains(b.Ports, port) {
+			return true
+		}
+	}
+	return false
 }
 
 func stateRoute(r linux.Route) executor.Route {

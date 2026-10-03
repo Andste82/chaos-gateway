@@ -79,12 +79,18 @@ type cmdBarrier struct{ reply chan *Snapshot }
 
 type cmdTimeout struct{ rev int64 }
 
+type cmdRetry struct{}
+
+// retryDelay is how long the owner waits before it tries a failed apply or rollback again.
+const retryDelay = 10 * time.Second
+
 func (cmdApply) command()    {}
 func (cmdConfirm) command()  {}
 func (cmdRollback) command() {}
 func (cmdObserve) command()  {}
 func (cmdBarrier) command()  {}
 func (cmdTimeout) command()  {}
+func (cmdRetry) command()    {}
 
 // applyResult is what the apply loop reports about one desired state.
 type applyResult struct {
@@ -100,8 +106,10 @@ type inflight struct {
 	d       *desired
 	started time.Time
 	cfg     *model.Configuration
-	// failure is set when the apply failed and the previous revision is being restored.
-	failure error
+	// failure is set when the apply failed and the previous revision is being restored;
+	// restoreGen is the generation of that restore.
+	failure    error
+	restoreGen uint64
 }
 
 type owner struct {
@@ -123,7 +131,8 @@ type owner struct {
 
 	// outbox holds replies that are sent after the snapshot is published: a caller that gets its
 	// answer must see the state it describes
-	outbox []func()
+	outbox   []func()
+	retrying bool
 	// settled is the highest generation the apply loop has reported on, successfully or not
 	settled uint64
 	snap    Snapshot
@@ -171,6 +180,46 @@ func (o *owner) shutdown() {
 	if o.timer != nil {
 		o.timer.Stop()
 	}
+}
+
+// armTimeout makes the owner roll the revision back when the confirmation window runs out. The
+// timer's callback hands the command over from a goroutine of its own, so it is never lost when the
+// owner is busy.
+func (o *owner) armTimeout(rev int64, d time.Duration) {
+	e := o.e
+	o.timer = e.cfg.Clock.AfterFunc(d, func() {
+		go func() {
+			select {
+			case e.cmds <- cmdTimeout{rev: rev}:
+			case <-e.ctx.Done():
+			}
+		}()
+	})
+}
+
+// retry applies the desired state again after a failure that nobody is waiting for.
+func (o *owner) retry() {
+	o.retrying = false
+	if o.snap.LastError == "" || o.running != nil || o.current == nil {
+		return
+	}
+	o.converge(o.nextDesired(o.current.Config, o.current.Revision))
+}
+
+func (o *owner) scheduleRetry() {
+	if o.retrying {
+		return
+	}
+	o.retrying = true
+	e := o.e
+	o.e.cfg.Clock.AfterFunc(retryDelay, func() {
+		go func() {
+			select {
+			case e.cmds <- cmdRetry{}:
+			case <-e.ctx.Done():
+			}
+		}()
+	})
 }
 
 func (o *owner) later(f func()) { o.outbox = append(o.outbox, f) }
@@ -228,8 +277,14 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.later(func() { c.reply <- err })
 	case cmdTimeout:
 		if o.pending != nil && o.pending.d.Revision == c.rev {
-			_ = o.rollback(c.rev, "confirmation timeout")
+			if err := o.rollback(c.rev, "confirmation timeout"); err != nil {
+				// the rollback must happen: try again shortly
+				o.e.cfg.Log.Error("cannot roll back the unconfirmed revision", "revision", c.rev, "error", err)
+				o.armTimeout(c.rev, retryDelay)
+			}
 		}
+	case cmdRetry:
+		o.retry()
 	case cmdObserve:
 		o.observe(c.host)
 		o.later(func() { c.reply <- struct{}{} })
@@ -320,14 +375,17 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 			// the apply failed: restore the committed revision, then tell the caller
 			if o.committed == nil {
 				o.running = nil
+				o.current = nil // nothing committed: later host changes must not apply the failed candidate
+				o.e.desired.Store(nil)
 				o.later(func() { run.cmd.reply <- applyReply{err: &ErrApplyFailed{Revision: run.cmd.rev, Cause: r.err}} })
 				o.startQueued()
 				break
 			}
 			run.failure = r.err
 			rd := o.nextDesired(o.committed.Config, o.committed.Revision)
+			run.restoreGen = rd.Generation
 			o.converge(rd)
-		case run.failure != nil && r.d.Generation > run.d.Generation:
+		case run.failure != nil && r.d.Generation >= run.restoreGen:
 			// the restore has been applied (or failed too): the caller gets the original error
 			o.running = nil
 			o.later(func() {
@@ -335,6 +393,9 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 			})
 			o.startQueued()
 		}
+	}
+	if r.err != nil && o.running == nil && o.pending == nil {
+		o.scheduleRetry()
 	}
 	o.publish()
 	o.releaseBarriers()
@@ -372,18 +433,15 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 		deadline := o.now().Add(timeout)
 		prev := e.cfg.Store.ActiveID()
 		if _, err := e.cfg.Store.BeginConfirm(run.cmd.rev, o.now(), deadline); err != nil {
+			// the kernel runs a revision the store cannot hold in confirmation: restore the committed one
 			o.running = nil
+			o.converge(o.nextDesired(o.committed.Config, o.committed.Revision))
 			o.fail(c, err)
 			return
 		}
 		o.pending = &pendingState{d: run.d, previous: prev, deadline: deadline}
 		rev := run.cmd.rev
-		o.timer = e.cfg.Clock.AfterFunc(timeout, func() {
-			select {
-			case e.cmds <- cmdTimeout{rev: rev}:
-			default: // the owner is saturated; the next timeout check of Confirm still catches it
-			}
-		})
+		o.armTimeout(rev, timeout)
 		o.event(EventConfirmPending, map[string]any{"revision": rev, "deadline": deadline})
 		o.running = nil
 		res := Applied{Revision: rev, Generation: r.d.Generation, Status: "pending_confirm", ConfirmDeadline: deadline, Duration: took}

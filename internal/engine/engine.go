@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -81,8 +82,11 @@ type Engine struct {
 	events  *bus
 	sup     *supervisor.Supervisor
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	core    sync.WaitGroup // the state owner and the apply loop
+	done    chan struct{}  // closed when both have returned
+	started bool
 }
 
 // ErrClosed is returned by commands after Close.
@@ -115,7 +119,15 @@ func New(cfg Config) (*Engine, error) {
 	e := &Engine{cfg: cfg, cmds: make(chan command, 64), wake: make(chan struct{}, 1), results: make(chan applyResult, 8),
 		events: newBus(), sup: cfg.Supervisor, done: make(chan struct{})}
 	if e.sup == nil {
-		e.sup = supervisor.New(cfg.Log, nil)
+		// a panic in the state owner or the apply loop stops the engine: the commands that wait
+		// get ErrClosed, and the process (which watches Done) restarts and recompiles from the
+		// committed revision (plan §3.11)
+		e.sup = supervisor.New(cfg.Log, func(name string, v any) {
+			cfg.Log.Error("the engine stops", "goroutine", name, "reason", fmt.Sprint(v))
+			if e.cancel != nil {
+				e.cancel()
+			}
+		})
 	}
 	e.snap.Store(&Snapshot{})
 	return e, nil
@@ -134,24 +146,35 @@ func (e *Engine) Health() []supervisor.Health { return e.sup.Health() }
 // confirmation when the process stopped is rolled back: a restart inside the confirmation window
 // boots the previous revision (plan §2.1.1). The active revision is applied.
 func (e *Engine) Start(ctx context.Context) error {
-	ctx, e.cancel = context.WithCancel(ctx)
+	if e.started {
+		return errors.New("engine: already started")
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	init, err := e.initialState(ctx)
 	if err != nil {
-		e.cancel()
+		cancel()
 		return err
 	}
-	e.sup.Critical(ctx, "engine.owner", func(ctx context.Context) error { return e.runOwner(ctx, init) })
-	e.sup.Critical(ctx, "engine.apply", func(ctx context.Context) error { return e.runApplyLoop(ctx) })
-	go func() { e.sup.Wait(); close(e.done) }()
+	e.ctx, e.cancel, e.started = ctx, cancel, true
+	e.core.Add(2)
+	e.sup.Critical(ctx, "engine.owner", func(ctx context.Context) error { defer e.core.Done(); return e.runOwner(ctx, init) })
+	e.sup.Critical(ctx, "engine.apply", func(ctx context.Context) error { defer e.core.Done(); return e.runApplyLoop(ctx) })
+	go func() { e.core.Wait(); close(e.done) }()
 	return nil
 }
 
-// Close stops the engine and waits for its goroutines.
+// Done is closed when the state owner and the apply loop have stopped: after Close, or because one
+// of them panicked. A process that sees it restarts.
+func (e *Engine) Done() <-chan struct{} { return e.done }
+
+// Close stops the engine and waits for its core goroutines.
 func (e *Engine) Close() {
-	if e.cancel != nil {
-		e.cancel()
-		<-e.done
+	if !e.started {
+		return
 	}
+	e.cancel()
+	<-e.done
+	e.sup.Wait()
 }
 
 func (e *Engine) initialState(ctx context.Context) (*ownerInit, error) {

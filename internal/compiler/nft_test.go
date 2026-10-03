@@ -51,8 +51,8 @@ func TestGatewayProtectionOnlyAnswersDHCPDNSAndPing(t *testing.T) {
 	allowed := map[string]bool{}
 	for _, r := range in.Rules {
 		s := js(r.Expr)
-		if !strings.Contains(s, "ifs_test") || !strings.Contains(s, "accept") {
-			continue
+		if !strings.Contains(s, "ifs_test") || !strings.Contains(s, "accept") || strings.Contains(s, `"op":"!="`) {
+			continue // the anti-lockout rule names the test interfaces only to exclude them
 		}
 		switch {
 		case strings.Contains(s, `"echo-request"`):
@@ -92,6 +92,8 @@ func TestForwardingDefaultsDropEverythingButTestToUplink(t *testing.T) {
 	for _, r := range fw.Rules {
 		s := js(r.Expr)
 		switch {
+		case sameBridge(s):
+			order = append(order, "same-bridge")
 		case strings.Contains(s, `"established"`):
 			order = append(order, "established")
 		case strings.Contains(s, `"invalid"`):
@@ -108,10 +110,20 @@ func TestForwardingDefaultsDropEverythingButTestToUplink(t *testing.T) {
 			order = append(order, "?"+s)
 		}
 	}
-	want := "established invalid invalid ipv6 ipv6 test->uplink drop-from-test drop-to-test"
+	want := "established same-bridge same-bridge invalid invalid ipv6 ipv6 test->uplink drop-from-test drop-to-test"
 	if strings.Join(order, " ") != want {
 		t.Errorf("forward chain order:\n%s\nwant\n%s", strings.Join(order, " "), want)
 	}
+}
+
+// sameBridge reports whether a rule accepts traffic that enters and leaves through the same bridge.
+func sameBridge(s string) bool {
+	for _, b := range []string{"br-iot", "br-lab"} {
+		if strings.Count(s, `"right":"`+b+`"`) == 2 {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIPv6IsDroppedInBothDirectionsOfTestNetworks(t *testing.T) {
@@ -216,6 +228,9 @@ func TestExplicitMatrixEntriesComeBeforeTheDefaults(t *testing.T) {
 	defaultAt := -1
 	for i, r := range fw.Rules {
 		s := js(r.Expr)
+		if sameBridge(s) {
+			continue
+		}
 		if strings.Contains(s, `"br-iot"`) || strings.Contains(s, `"br-lab"`) || strings.Contains(s, `"mgmt0"`) {
 			explicit = append(explicit, s)
 		}
@@ -226,15 +241,7 @@ func TestExplicitMatrixEntriesComeBeforeTheDefaults(t *testing.T) {
 	if len(explicit) != 4 {
 		t.Fatalf("%d explicit rules:\n%s", len(explicit), strings.Join(explicit, "\n"))
 	}
-	for i, r := range fw.Rules {
-		if i >= defaultAt {
-			break
-		}
-		s := js(r.Expr)
-		if strings.Contains(s, `"br-iot"`) || strings.Contains(s, `"br-lab"`) || strings.Contains(s, `"mgmt0"`) {
-			continue
-		}
-	}
+	_ = defaultAt
 	// the management endpoint is told apart by address: it carries the set
 	for _, s := range explicit {
 		if strings.Contains(s, `"mgmt0"`) && !strings.Contains(s, "mgmt_src") {
@@ -441,5 +448,80 @@ func TestTransactionStaysInsideTheExecutorsScope(t *testing.T) {
 	tx, _ := tg.Nft.Transaction(parseRuleset(t, currentTable))
 	if err := executorCheck(tx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAManagementAddressOnATestNetworkDoesNotReachTheControlPlane(t *testing.T) {
+	in := chainOf(t, compileBasic(t, nil), "input")
+	var anti Rule
+	for _, r := range in.Rules {
+		s := js(r.Expr)
+		if strings.Contains(s, "mgmt_src") && strings.Contains(s, `"accept"`) {
+			anti = r
+		}
+	}
+	s := js(anti.Expr)
+	if !strings.Contains(s, `"op":"!="`) || !strings.Contains(s, "ifs_test") {
+		t.Errorf("the anti-lockout rule must exclude the test interfaces, a device there could spoof a management address: %s", s)
+	}
+}
+
+func TestTheUIPortIsOnlyOpenToTheManagementSources(t *testing.T) {
+	in := chainOf(t, compileBasic(t, nil), "input")
+	anti, uiDrop, testDrop := -1, -1, -1
+	for i, r := range in.Rules {
+		s := js(r.Expr)
+		switch {
+		case strings.Contains(s, "mgmt_src") && strings.Contains(s, `"accept"`):
+			anti = i
+		case strings.Contains(s, `"right":443`) && strings.Contains(s, `"drop"`) && !strings.Contains(s, "ifs_test"):
+			uiDrop = i
+		case strings.Contains(s, "input_drop") && strings.Contains(s, "ifs_test"):
+			testDrop = i
+		}
+	}
+	if anti < 0 || uiDrop < anti || testDrop < uiDrop {
+		t.Fatalf("anti-lockout %d, UI drop %d, test drop %d: the management sources are accepted first, the UI port is closed for everyone else, then test networks", anti, uiDrop, testDrop)
+	}
+	// SSH is left to the operating system: nothing drops it
+	for _, r := range in.Rules {
+		if s := js(r.Expr); strings.Contains(s, `"right":22`) && strings.Contains(s, `"drop"`) {
+			t.Errorf("SSH is not ours to close: %s", s)
+		}
+	}
+}
+
+func TestSSHAsUIPortIsOneValueNotASet(t *testing.T) {
+	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) { cfg.Management.UiPort = ptr(22) })
+	for _, r := range chainOf(t, tg, "input").Rules {
+		if s := js(r.Expr); strings.Contains(s, `{"set":[22,22]}`) {
+			t.Errorf("an anonymous set with a duplicate: %s", s)
+		}
+	}
+}
+
+func TestTrafficSwitchedInsideOneTestNetworkIsAcceptedEvenWithBrNetfilter(t *testing.T) {
+	fw := chainOf(t, compileBasic(t, nil), "forward")
+	var n int
+	for _, r := range fw.Rules {
+		if sameBridge(js(r.Expr)) {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d same-bridge accepts, want one per test network", n)
+	}
+}
+
+func TestAHostSourceIsNormalizedTheWayNftPrintsIt(t *testing.T) {
+	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
+		cfg.Management.AllowedSources = &[]string{"192.168.56.0/24", "10.0.0.5/32"}
+	})
+	for _, s := range tg.Nft.Sets {
+		if strings.HasPrefix(s.Name, "mgmt_src") {
+			if strings.Join(s.Elements, ",") != "10.0.0.5,192.168.56.0/24" {
+				t.Errorf("elements %v", s.Elements)
+			}
+		}
 	}
 }

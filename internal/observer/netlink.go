@@ -48,9 +48,17 @@ func Watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Durat
 				default: // an event is already waiting for the debouncer
 				}
 			case errors.Is(err, unix.EAGAIN), errors.Is(err, unix.EINTR):
+			case errors.Is(err, unix.ENOBUFS):
+				// events were lost in a burst: something changed, the consumer reads the state again
+				select {
+				case events <- struct{}{}:
+				default:
+				}
 			case err == nil:
+			case errors.Is(err, unix.EBADF), errors.Is(err, unix.ENOTSOCK), errors.Is(err, unix.EINVAL):
+				return // the socket is gone; the consumer sees the closed channel
 			default:
-				return // the socket was closed or broke; the consumer sees the closed channel
+				time.Sleep(100 * time.Millisecond) // a transient error: keep listening
 			}
 		}
 	}()
@@ -138,6 +146,8 @@ func newSocket() (int, error) {
 		_ = unix.Close(fd)
 		return -1, fmt.Errorf("bind netlink socket: %w", err)
 	}
+	// a burst of events (Docker, routing daemons) must not overflow the receive buffer
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20)
 	// wake up regularly to look at the context
 	tv := unix.NsecToTimeval(int64(500 * time.Millisecond))
 	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv); err != nil {

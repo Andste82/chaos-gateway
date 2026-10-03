@@ -30,7 +30,7 @@ func TestTheLinuxDiffOfTheFirstApplyShowsEverythingAsNew(t *testing.T) {
 	if !strings.Contains(d.Nftables, `"masquerade"`) || !strings.Contains(d.Nftables, "+  rule ") {
 		t.Errorf("new rules show their expression:\n%s", d.Nftables)
 	}
-	for _, want := range []string{"+bridge br-iot up", "+  address 10.10.0.1/24", "+  port lan0", "+route table 100 default via 203.0.113.10 dev wan0", "+rule 1000 iif br-iot lookup 100", "+offloads off wan0", "+docker-user accept wan0"} {
+	for _, want := range []string{"+bridge br-iot up", "+  address 10.10.0.1/24", "+  port lan0", "+route table 100 default via 203.0.113.10 dev wan0", "+rule 1000 iif br-iot lookup 100", "+offloads off wan0", "+docker-user accept br-iot"} {
 		if !strings.Contains(d.Routes, want) {
 			t.Errorf("routes diff lacks %q:\n%s", want, d.Routes)
 		}

@@ -245,7 +245,7 @@ func TestPolicyRoutingTable100(t *testing.T) {
 	if strings.Join(got, "; ") != strings.Join(want, "; ") {
 		t.Errorf("routes:\n%v\nwant\n%v", got, want)
 	}
-	if len(tg.Rules) != 2 || tg.Rules[0].Iif != "br-iot" || tg.Rules[1].Iif != "br-lab" || tg.Rules[0].Priority != 1000 || tg.Rules[1].Priority != 1001 || tg.Rules[0].Table != 100 {
+	if len(tg.Rules) != 2 || tg.Rules[0].Iif != "br-iot" || tg.Rules[1].Iif != "br-lab" || tg.Rules[0].Priority != 1000 || tg.Rules[1].Priority != 1000 || tg.Rules[0].Table != 100 {
 		t.Errorf("rules %+v", tg.Rules)
 	}
 	for _, r := range tg.Rules {
@@ -260,8 +260,8 @@ func TestHostStateOfTheTarget(t *testing.T) {
 	if strings.Join(tg.Interfaces, ",") != "br-iot,br-lab,lan0,lan1,wan0" {
 		t.Errorf("interfaces %v", tg.Interfaces)
 	}
-	if strings.Join(tg.DockerUser, ",") != "br-iot,br-lab,wan0" {
-		t.Errorf("DOCKER-USER interfaces %v: bridges and the uplink", tg.DockerUser)
+	if strings.Join(tg.DockerUser, ",") != "br-iot,br-lab" {
+		t.Errorf("DOCKER-USER interfaces %v: the bridges of the test networks (a packet to or from the uplink has a bridge on its other side)", tg.DockerUser)
 	}
 	if strings.Join(tg.Offloads, ",") != "br-iot,br-lab,lan0,lan1,wan0" {
 		t.Errorf("offloads %v", tg.Offloads)

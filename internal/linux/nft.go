@@ -117,11 +117,15 @@ func ParseNft(data []byte) (*Ruleset, error) {
 func (s *NftSet) Elements() []string {
 	out := make([]string, 0, len(s.Elem))
 	for _, raw := range s.Elem {
-		out = append(out, normalizeElem(raw))
+		out = append(out, NormalizeElement(normalizeElem(raw)))
 	}
 	sort.Strings(out)
 	return out
 }
+
+// NormalizeElement brings an element into the form nft prints: an address set shows a /32 prefix
+// as the plain address. Verify normalizes both sides with it.
+func NormalizeElement(e string) string { return strings.TrimSuffix(e, "/32") }
 
 func normalizeElem(raw json.RawMessage) string {
 	var v any

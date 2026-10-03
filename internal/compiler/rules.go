@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"sort"
 
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -54,7 +55,7 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 	ifsTest.Name = hashName("ifs_test", ifsTest.Type, ifsTest.Flags)
 	var srcs []string
 	for _, p := range t.Management.Sources {
-		srcs = append(srcs, p.String())
+		srcs = append(srcs, linux.NormalizeElement(p.String()))
 	}
 	mgmtSrc := SetDef{Type: "ipv4_addr", Flags: []string{"interval"}, Elements: srcs}
 	mgmtSrc.Name = hashName("mgmt_src", mgmtSrc.Type, mgmtSrc.Flags)
@@ -70,8 +71,12 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 		newRule(ctState("established", "related"), verdict("accept")),
 		newRule(iifname("lo"), verdict("accept")),
 		// anti-lockout: the management sources always reach the control plane; nothing below
-		// and no access rule can take this away
-		newRule(eq(payload("ip", "saddr"), setRef(mgmtSrc.Name)), eq(payload("tcp", "dport"), anon(22, t.Management.UIPort)), verdict("accept")),
+		// and no access rule can take this away. A device on a test network that claims a
+		// management address does not count: the rule is for what does not come from there.
+		newRule(match(meta("iifname"), "!=", setRef(ifsTest.Name)), eq(payload("ip", "saddr"), setRef(mgmtSrc.Name)), eq(payload("tcp", "dport"), controlPorts(t.Management.UIPort)), verdict("accept")),
+		// the UI and API are reachable from the management network only (plan §2.2); SSH is left to
+		// the operating system
+		newRule(eq(payload("tcp", "dport"), t.Management.UIPort), counter("input_drop"), verdict("drop")),
 		// test networks: only DHCP, DNS and ICMP echo are answered
 		newRule(iifSet(ifsTest.Name), eq(payload("ip", "protocol"), "icmp"), eq(payload("icmp", "type"), "echo-request"), verdict("accept")),
 		newRule(iifSet(ifsTest.Name), eq(payload("udp", "dport"), 67), verdict("accept")),
@@ -84,6 +89,13 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 	forward := Chain{Name: "forward", Base: &BaseChain{Type: "filter", Hook: "forward", Prio: 0, Policy: "accept"}}
 	forward.Rules = append(forward.Rules,
 		newRule(ctState("established", "related"), verdict("accept")),
+	)
+	// with br_netfilter loaded, traffic that is switched inside one test network passes the
+	// forward hook with the same interface in and out: it is never ours to impair or drop (plan §2.2)
+	for _, b := range t.Bridges {
+		forward.Rules = append(forward.Rules, newRule(iifname(b.Name), oifname(b.Name), verdict("accept")))
+	}
+	forward.Rules = append(forward.Rules,
 		newRule(iifSet(ifsTest.Name), ctState("invalid"), verdict("drop")),
 		newRule(oifSet(ifsTest.Name), ctState("invalid"), verdict("drop")),
 		// the V1 test networks are IPv4 only: forwarded IPv6 is dropped (plan §2.2.2)
@@ -120,6 +132,15 @@ func (t *Target) compileNft(cfg *model.Configuration, nets map[string]*Bridge, d
 	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
+}
+
+// controlPorts is SSH and the UI port as one match value: a set, or the port alone when they are
+// the same.
+func controlPorts(ui int) any {
+	if ui == 22 {
+		return 22
+	}
+	return anon(22, ui)
 }
 
 func shortID(id string) string {

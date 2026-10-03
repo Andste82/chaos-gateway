@@ -628,15 +628,23 @@ func (e *Executor) runBird(ctx context.Context, o *Bird) error {
 	if o.Action == "check" {
 		return nil
 	}
+	previous, readErr := os.ReadFile(conf)
 	if err := os.Rename(tmpName, conf); err != nil {
 		return err
 	}
 	out, exit, err = e.birdOutput(ctx, ToolBirdc, "-s", sock, "configure")
-	if err != nil {
-		return err
+	if err == nil && (exit != 0 || (!strings.Contains(out, "Reconfigured") && !strings.Contains(out, "Reconfiguration in progress"))) {
+		err = &BirdError{Message: strings.TrimSpace(out)}
 	}
-	if exit != 0 || (!strings.Contains(out, "Reconfigured") && !strings.Contains(out, "Reconfiguration in progress")) {
-		return &BirdError{Message: strings.TrimSpace(out)}
+	if err != nil {
+		// the daemon keeps what it runs: the file has to say the same, or a retry would find the
+		// target in place and plan nothing
+		if readErr == nil {
+			_ = os.WriteFile(conf, previous, 0o644)
+		} else {
+			_ = os.Remove(conf)
+		}
+		return err
 	}
 	return nil
 }

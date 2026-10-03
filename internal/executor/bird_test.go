@@ -24,6 +24,9 @@ func TestDecodeBirdRejects(t *testing.T) {
 		"no config":           `{"type":"bird","action":"check","instance":"chaosgw"}`,
 		"a namespace":         `{"type":"bird","action":"check","instance":"chaosgw","config":"x","ns":"gw"}`,
 		"include":             birdOp("apply", "include \"/etc/shadow\";\n"),
+		"define hides table":  birdOp("apply", "define T = 254;\nprotocol kernel k { kernel table T; }\n"),
+		"log to a file":       birdOp("apply", "log \"/etc/x\" all;\n"),
+		"mrtdump":             birdOp("apply", "mrtdump \"/x\";\n"),
 		"foreign table":       birdOp("apply", "protocol kernel { kernel table 254; ipv4; }\n"),
 		"import table in own": `{"type":"bird","action":"check","instance":"chaosgw","config":"x","import_tables":[100]}`,
 		"import table 0":      `{"type":"bird","action":"check","instance":"chaosgw","config":"x","import_tables":[0]}`,
@@ -40,6 +43,28 @@ func TestDecodeBirdRejects(t *testing.T) {
 	}
 	if _, err := Decode([]byte(`{"type":"read","what":"routes","instance":"chaosgw"}`)); err == nil {
 		t.Error("an instance on another read")
+	}
+}
+
+func TestAFailedReconfigureRestoresTheFile(t *testing.T) {
+	e, _, dir := birdExec(t, func(c Command) (Result, error) {
+		if c.Tool == ToolBirdc {
+			return Result{Exit: 1, Stderr: "Unable to connect\n"}, nil
+		}
+		return Result{}, nil
+	})
+	f := filepath.Join(dir, "chaosgw.conf")
+	_ = os.WriteFile(f, []byte("old"), 0o644)
+	if _, err := e.Do(context.Background(), mustDecode(t, birdOp("apply", birdText))); err == nil {
+		t.Fatal("no error")
+	}
+	if b, _ := os.ReadFile(f); string(b) != "old" {
+		t.Errorf("the file says something the daemon does not run: %q", b)
+	}
+	_ = os.Remove(f)
+	_, _ = e.Do(context.Background(), mustDecode(t, birdOp("apply", birdText)))
+	if _, err := os.Stat(f); err == nil {
+		t.Error("a file without a daemon behind it stays")
 	}
 }
 

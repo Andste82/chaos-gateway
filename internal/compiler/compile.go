@@ -45,6 +45,9 @@ type Input struct {
 	// DynamicSets are sets that are filled at run time and survive every apply (later: the
 	// DNS-derived address sets). They are part of the layout, never flushed.
 	DynamicSets []SetDef
+	// Identity is which addresses belong to which device right now (observed state); nil before
+	// anything was observed.
+	Identity *domain.Identity
 }
 
 // Severity of a Problem.
@@ -109,11 +112,16 @@ type Target struct {
 	// need no apply.
 	Hash string `json:"hash"`
 
-	Uplink     Uplink                 `json:"uplink"`
-	Management Management             `json:"management"`
-	Bridges    []Bridge               `json:"bridges"`
-	WireGuard  []WGInterface          `json:"wireguard,omitempty"`
-	Bird       *BirdTarget            `json:"bird,omitempty"`
+	Uplink     Uplink        `json:"uplink"`
+	Management Management    `json:"management"`
+	Bridges    []Bridge      `json:"bridges"`
+	WireGuard  []WGInterface `json:"wireguard,omitempty"`
+	Bird       *BirdTarget   `json:"bird,omitempty"`
+	// Kea is the DHCP configuration; nil when no network has DHCP switched on.
+	Kea *KeaTarget `json:"kea,omitempty"`
+	// DeviceSets maps a device (configured or discovered) to its nftables set of addresses.
+	DeviceSets map[string]string `json:"device_sets,omitempty"`
+	deviceSets []SetDef
 	Interfaces []string               `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
 	Sysctls    []executor.SysctlEntry `json:"sysctls"`
 	Offloads   []string               `json:"offloads"`
@@ -227,6 +235,8 @@ func Compile(in Input) *Target {
 	t.compileHostState()
 	t.compileRouting(cfg, idx)
 	t.compileBird(cfg, idx)
+	t.compileKea(cfg, idx)
+	t.compileDeviceSets(idx, in.Identity)
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.finish()
 	return t

@@ -72,6 +72,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		t.Nft.Sets = append(t.Nft.Sets, ifsWG)
 	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
+	t.Nft.Sets = append(t.Nft.Sets, t.deviceSets...)
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
 	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop"}
 

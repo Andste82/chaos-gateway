@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "bc157d2c61af5385",
+  "hash": "fcde3a6290745e48",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -101,6 +101,10 @@
       ]
     }
   ],
+  "device_sets": {
+    "5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f": "dev_5d6e7f80_1ebce2",
+    "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d": "dev_9a1b2c3d_1ebce2"
+  },
   "interfaces": [
     "br-iot",
     "lan0",
@@ -256,6 +260,14 @@
   ],
   "nft": {
     "sets": [
+      {
+        "name": "dev_5d6e7f80_1ebce2",
+        "type": "ipv4_addr"
+      },
+      {
+        "name": "dev_9a1b2c3d_1ebce2",
+        "type": "ipv4_addr"
+      },
       {
         "name": "ifs_cg_bf4feb",
         "type": "ifname",

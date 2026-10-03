@@ -25,3 +25,55 @@ jobs:
           name: fuzz-crashers
           path: internal/executor/testdata/fuzz
           if-no-files-found: ignore
+
+  # Level 2 (plan §4.5, M5b): the gateway in a QEMU VM from the Ubuntu cloud image, host setup, Docker
+  # and the executor container inside, traffic from a client namespace through the VM. Hosted
+  # runners offer /dev/kvm (plan Q1). Run it by hand on a branch with
+  # `gh workflow run nightly.yml --ref <branch>`.
+  appliance:
+    name: appliance (level 2, Ubuntu ${{ matrix.release }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['24.04', '26.04']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install QEMU and the tools of the harness
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables
+      - name: Allow access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Build the container image
+        run: |
+          docker build -f deploy/Dockerfile -t chaos-gateway:appliance .
+          docker save chaos-gateway:appliance | gzip > "$RUNNER_TEMP/image.tar.gz"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/chaosgw-appliance
+          key: appliance-images-${{ matrix.release }}-${{ github.run_id }}
+          restore-keys: appliance-images-${{ matrix.release }}-
+      - name: Run the smoke tests
+        env:
+          CHAOSGW_APPLIANCE_IMAGE_TAR: ${{ runner.temp }}/image.tar.gz
+          CHAOSGW_APPLIANCE_RELEASES: ${{ matrix.release }}
+          CHAOSGW_APPLIANCE_CACHE: ~/.cache/chaosgw-appliance
+          CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
+        run: |
+          export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
+          go test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appliance-logs-${{ matrix.release }}
+          path: ${{ runner.temp }}/appliance-logs
+          if-no-files-found: ignore

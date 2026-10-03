@@ -72,15 +72,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		opts = append(opts, executor.WithBirdDir(*birdDir))
 	}
 	if *secretsDir != "" {
-		sec, err := secrets.OpenReadOnly(*secretsDir)
-		if err != nil {
-			fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
-			return 1
-		}
-		opts = append(opts, executor.WithKeys(func(id string) (string, string, error) {
-			k, err := sec.WireGuard(id)
-			return k.PrivateKey, k.PresharedKey, err
-		}))
+		// the secrets volume may still be empty when the executor starts (the API creates its
+		// content): the keys are looked up when an operation needs one, not at start
+		opts = append(opts, executor.WithKeys(lazyKeys(*secretsDir)))
 	}
 	ex, err := executor.New(executor.NewExecRunner(), opts...)
 	if err != nil {
@@ -125,4 +119,16 @@ func execHealth(socket string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "ok protocol=%d generation=%d\n", executor.ProtocolVersion, gen)
 	return 0
+}
+
+// lazyKeys looks a WireGuard key up in the secrets directory when an operation needs it.
+func lazyKeys(dir string) executor.KeyProvider {
+	return func(id string) (string, string, error) {
+		sec, err := secrets.OpenReadOnly(dir)
+		if err != nil {
+			return "", "", fmt.Errorf("the WireGuard keys are not available: %w", err)
+		}
+		k, err := sec.WireGuard(id)
+		return k.PrivateKey, k.PresharedKey, err
+	}
 }

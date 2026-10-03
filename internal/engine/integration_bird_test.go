@@ -206,8 +206,7 @@ func (g *bgpGW) waitRoute(want string, present bool, d time.Duration) bool {
 }
 
 // M4c test: a BGP session over the WireGuard link comes up, the gateway learns the remote site's
-// networks into table 100 and announces its own, traffic flows, and a prefix of the gateway's own
-// networks announced by the remote side is not accepted.
+// networks into table 100 and announces its own, and traffic flows both ways.
 func TestBGPOverAWireGuardLinkExchangesRoutes(t *testing.T) {
 	g := newBGP(t, 10, "10.60.0.0/24")
 	ch, cancel := g.e.Subscribe()

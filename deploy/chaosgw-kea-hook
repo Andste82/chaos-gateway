@@ -1,0 +1,4 @@
+#!/bin/sh
+# Kea's run_script hook (plan §2.7): Kea calls this with the hook point as its first argument and the
+# lease in KEA_* environment variables; the script hands the event to the API.
+exec /usr/local/bin/chaosgw kea-hook "$@"

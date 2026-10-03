@@ -13,7 +13,7 @@ const (
 	ControlSocket = "/run/kea/kea4-ctrl.sock"
 	LeaseFile     = "/var/lib/kea/kea-leases4.csv"
 	// HookScript is the script the run_script hook calls; it notifies the API.
-	HookScript = "/usr/local/bin/chaosgw-kea-hook"
+	HookScript = "/usr/share/kea/scripts/chaosgw-kea-hook"
 )
 
 // Pool is an address range.

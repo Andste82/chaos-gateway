@@ -153,6 +153,35 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	return p, nil
 }
 
+// FollowNeighbors makes the engine read the observed state when the neighbor table changes (a device
+// appeared, changed its address or went): after a burst of events the poller reads once (plan §2.3,
+// identity changes take a second at most). It runs until ctx ends.
+func (e *Engine) FollowNeighbors(ctx context.Context, debounce time.Duration) error {
+	if !e.started {
+		return errors.New("engine: not started")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-e.ctx.Done():
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+	trigger, err := observer.WatchNeighbors(ctx, e.cfg.Namespace, e.cfg.Clock, debounce)
+	if err != nil {
+		cancel()
+		return err
+	}
+	e.sup.Go(ctx, "engine.follow-neighbors", func(ctx context.Context) error {
+		for range trigger {
+			e.TriggerObserve()
+		}
+		return nil
+	})
+	return nil
+}
+
 // FollowHost makes the engine follow changes of the host (the uplink's address and gateway, the
 // interfaces behind the configured MACs and names) through netlink events: after a burst of
 // events the host is read and handed to the state owner (plan §2.2). It runs until ctx ends.

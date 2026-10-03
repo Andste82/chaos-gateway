@@ -268,3 +268,53 @@ func TestLoginIsRateLimitedPerClient(t *testing.T) {
 		t.Errorf("the wait does not grow: %v", e2)
 	}
 }
+
+func TestTheServiceTokenIsForTheServicesOnly(t *testing.T) {
+	s, _, dir := open(t)
+	file := filepath.Join(t.TempDir(), "service", "token")
+	if err := s.EnsureServiceToken(file); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := strings.TrimSpace(string(raw))
+	tok, ok := s.AuthenticateToken(value)
+	if !ok || tok.Scope != ScopeService || tok.ID != ServiceTokenID {
+		t.Fatalf("%+v %v", tok, ok)
+	}
+	// the service scope reaches nothing but the internal API, and no user scope reaches that
+	for _, need := range []Scope{ScopeRead, ScopeOverlays, ScopeFull} {
+		if tok.Scope.Allows(need) {
+			t.Errorf("the service token allows %s", need)
+		}
+	}
+	if !tok.Scope.Allows(ScopeService) || ScopeFull.Allows(ScopeService) {
+		t.Error("only the service token reaches /internal")
+	}
+	// it is not in the list of tokens and not stored in clear
+	if l := s.ListTokens(); len(l) != 0 {
+		t.Errorf("%+v", l)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "auth.json")); strings.Contains(string(b), value) {
+		t.Error("the service token is stored in clear")
+	}
+	// an unchanged file is left alone, a lost file gets a new token and the old one stops working
+	if err := s.EnsureServiceToken(file); err != nil {
+		t.Fatal(err)
+	}
+	if raw2, _ := os.ReadFile(file); strings.TrimSpace(string(raw2)) != value {
+		t.Error("the token was replaced although the file matches")
+	}
+	_ = os.Remove(file)
+	if err := s.EnsureServiceToken(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.AuthenticateToken(value); ok {
+		t.Error("the old service token still works")
+	}
+	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o644 {
+		t.Errorf("mode %v", fi.Mode())
+	}
+}

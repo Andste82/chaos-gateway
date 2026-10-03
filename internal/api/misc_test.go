@@ -118,7 +118,7 @@ func specOps(t *testing.T) (m5, later []struct {
 				Method, Path, Milestone string
 				Internal                bool
 			}{m, path, o.Milestone, o.Internal}
-			if o.Milestone == "M5" {
+			if o.Milestone == "M5" || o.Milestone == "M6a" { // implemented in this build
 				m5 = append(m5, e)
 			} else {
 				later = append(later, e)
@@ -161,7 +161,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 41 {
+	if len(m5) != 46 {
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	for _, o := range m5 {

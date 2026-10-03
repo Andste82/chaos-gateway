@@ -27,6 +27,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/kea"
 	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
@@ -51,6 +52,8 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	port := fs.Int("port", defaultPort, "port of the UI and the API when the configuration names none")
 	listen := fs.String("listen", "", "listen on exactly this address instead of the management network (development, tests)")
 	poll := fs.Duration("poll-interval", 5*time.Second, "how often WireGuard and routing state are read")
+	keaSocket := fs.String("kea-socket", kea.ControlSocket, "Kea's control socket; empty runs without DHCP")
+	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
 	if err := fs.Parse(args); err != nil {
@@ -67,7 +70,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
-		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm}); err != nil {
+		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, serviceToken: *serviceToken}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -76,16 +79,18 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 }
 
 type apiOptions struct {
-	socket     string
-	execUID    uint32
-	namespace  string
-	stateDir   string
-	secretsDir string
-	dataDir    string
-	port       int
-	listen     string
-	poll       time.Duration
-	confirm    time.Duration
+	socket       string
+	execUID      uint32
+	namespace    string
+	stateDir     string
+	secretsDir   string
+	dataDir      string
+	port         int
+	listen       string
+	poll         time.Duration
+	confirm      time.Duration
+	keaSocket    string
+	serviceToken string
 }
 
 func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOptions) error {
@@ -110,7 +115,11 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 
 	ex := executor.NewRedialing(o.socket, executor.DialOptions{Auth: executor.AllowUIDs(o.execUID)})
 	defer func() { _ = ex.Close() }()
-	eng, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log})
+	var dhcp engine.DHCP
+	if o.keaSocket != "" {
+		dhcp = &engine.KeaDHCP{Client: &kea.Client{Socket: o.keaSocket}}
+	}
+	eng, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp})
 	if err != nil {
 		return err
 	}
@@ -126,7 +135,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 			return nil
 		case <-time.After(2 * time.Second):
 		}
-		if eng, err = engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log}); err != nil {
+		if eng, err = engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp}); err != nil {
 			return err
 		}
 	}
@@ -136,6 +145,17 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	}
 	_ = eng.PollWireGuard(ctx, o.poll)
 	_ = eng.PollRouting(ctx, o.poll)
+	if err := eng.PollObserved(ctx, time.Second); err != nil {
+		log.Warn("the observed state is not polled", "error", err)
+	}
+	if err := eng.FollowNeighbors(ctx, 100*time.Millisecond); err != nil {
+		log.Warn("the neighbor table is not followed", "error", err)
+	}
+	if o.serviceToken != "" {
+		if err := au.EnsureServiceToken(o.serviceToken); err != nil {
+			return fmt.Errorf("the service token: %w", err)
+		}
+	}
 
 	var report atomic.Pointer[api.PreflightReport]
 	go func() { report.Store(buildPreflight()) }()

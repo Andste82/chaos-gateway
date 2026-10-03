@@ -26,24 +26,17 @@ func (s *Server) GetAccessRule(c *gin.Context, _ model.Ref, _ model.GetAccessRul
 func (s *Server) GetBusy(c *gin.Context)                       { s.unsupported(c) }
 func (s *Server) GetCapture(c *gin.Context, _ model.CaptureId) { s.unsupported(c) }
 func (s *Server) GetCertificate(c *gin.Context)                { s.unsupported(c) }
-func (s *Server) GetDevice(c *gin.Context, _ model.DeviceId, _ model.GetDeviceParams) {
-	s.unsupported(c)
-}
 func (s *Server) GetDnsServiceConfig(c *gin.Context, _ model.GetDnsServiceConfigParams) {
 	s.unsupported(c)
 }
-func (s *Server) GetFault(c *gin.Context, _ model.Ref, _ model.GetFaultParams) {
-	s.unsupported(c)
-}
-func (s *Server) GetMetrics(c *gin.Context)                       { s.unsupported(c) }
-func (s *Server) GetOverlay(c *gin.Context, _ openapi_types.UUID) { s.unsupported(c) }
-func (s *Server) GetProfile(c *gin.Context, _ model.Ref, _ model.GetProfileParams) {
-	s.unsupported(c)
-}
-func (s *Server) GetRun(c *gin.Context, _ model.RunId)            { s.unsupported(c) }
-func (s *Server) GetRunEvents(c *gin.Context, _ model.RunId)      { s.unsupported(c) }
-func (s *Server) GetRunReportJson(c *gin.Context, _ model.RunId)  { s.unsupported(c) }
-func (s *Server) GetRunReportJunit(c *gin.Context, _ model.RunId) { s.unsupported(c) }
+func (s *Server) GetFault(c *gin.Context, _ model.Ref, _ model.GetFaultParams)     { s.unsupported(c) }
+func (s *Server) GetMetrics(c *gin.Context)                                        { s.unsupported(c) }
+func (s *Server) GetOverlay(c *gin.Context, _ openapi_types.UUID)                  { s.unsupported(c) }
+func (s *Server) GetProfile(c *gin.Context, _ model.Ref, _ model.GetProfileParams) { s.unsupported(c) }
+func (s *Server) GetRun(c *gin.Context, _ model.RunId)                             { s.unsupported(c) }
+func (s *Server) GetRunEvents(c *gin.Context, _ model.RunId)                       { s.unsupported(c) }
+func (s *Server) GetRunReportJson(c *gin.Context, _ model.RunId)                   { s.unsupported(c) }
+func (s *Server) GetRunReportJunit(c *gin.Context, _ model.RunId)                  { s.unsupported(c) }
 func (s *Server) GetScenario(c *gin.Context, _ model.Ref, _ model.GetScenarioParams) {
 	s.unsupported(c)
 }
@@ -53,28 +46,22 @@ func (s *Server) GetTlsServiceConfig(c *gin.Context, _ model.GetTlsServiceConfig
 }
 func (s *Server) ListAccessRules(c *gin.Context, _ model.ListAccessRulesParams) { s.unsupported(c) }
 func (s *Server) ListCaptures(c *gin.Context, _ model.ListCapturesParams)       { s.unsupported(c) }
-func (s *Server) ListDevices(c *gin.Context, _ model.ListDevicesParams)         { s.unsupported(c) }
 func (s *Server) ListDnsQueries(c *gin.Context, _ model.ListDnsQueriesParams)   { s.unsupported(c) }
 func (s *Server) ListFaults(c *gin.Context, _ model.ListFaultsParams)           { s.unsupported(c) }
-func (s *Server) ListFlows(c *gin.Context, _ model.ListFlowsParams)             { s.unsupported(c) }
-func (s *Server) ListLeases(c *gin.Context, _ model.NetworkId, _ model.ListLeasesParams) {
-	s.unsupported(c)
-}
-func (s *Server) ListOverlays(c *gin.Context, _ model.ListOverlaysParams)   { s.unsupported(c) }
-func (s *Server) ListProbes(c *gin.Context, _ model.ListProbesParams)       { s.unsupported(c) }
-func (s *Server) ListProfiles(c *gin.Context, _ model.ListProfilesParams)   { s.unsupported(c) }
-func (s *Server) ListRuns(c *gin.Context, _ model.ListRunsParams)           { s.unsupported(c) }
-func (s *Server) ListScenarios(c *gin.Context, _ model.ListScenariosParams) { s.unsupported(c) }
-func (s *Server) PostDnsQueries(c *gin.Context)                             { s.unsupported(c) }
-func (s *Server) PostDnsResolutions(c *gin.Context)                         { s.unsupported(c) }
-func (s *Server) PostLeaseEvent(c *gin.Context)                             { s.unsupported(c) }
-func (s *Server) PostTlsHandshakes(c *gin.Context)                          { s.unsupported(c) }
-func (s *Server) RegenerateTestCa(c *gin.Context)                           { s.unsupported(c) }
-func (s *Server) RenewOverlay(c *gin.Context, _ openapi_types.UUID)         { s.unsupported(c) }
-func (s *Server) RenewRun(c *gin.Context, _ model.RunId)                    { s.unsupported(c) }
-func (s *Server) ReplaceCertificate(c *gin.Context)                         { s.unsupported(c) }
-func (s *Server) Reset(c *gin.Context, _ model.ResetParams)                 { s.unsupported(c) }
-func (s *Server) RunDiagnostic(c *gin.Context)                              { s.unsupported(c) }
+func (s *Server) ListOverlays(c *gin.Context, _ model.ListOverlaysParams)       { s.unsupported(c) }
+func (s *Server) ListProbes(c *gin.Context, _ model.ListProbesParams)           { s.unsupported(c) }
+func (s *Server) ListProfiles(c *gin.Context, _ model.ListProfilesParams)       { s.unsupported(c) }
+func (s *Server) ListRuns(c *gin.Context, _ model.ListRunsParams)               { s.unsupported(c) }
+func (s *Server) ListScenarios(c *gin.Context, _ model.ListScenariosParams)     { s.unsupported(c) }
+func (s *Server) PostDnsQueries(c *gin.Context)                                 { s.unsupported(c) }
+func (s *Server) PostDnsResolutions(c *gin.Context)                             { s.unsupported(c) }
+func (s *Server) PostTlsHandshakes(c *gin.Context)                              { s.unsupported(c) }
+func (s *Server) RegenerateTestCa(c *gin.Context)                               { s.unsupported(c) }
+func (s *Server) RenewOverlay(c *gin.Context, _ openapi_types.UUID)             { s.unsupported(c) }
+func (s *Server) RenewRun(c *gin.Context, _ model.RunId)                        { s.unsupported(c) }
+func (s *Server) ReplaceCertificate(c *gin.Context)                             { s.unsupported(c) }
+func (s *Server) Reset(c *gin.Context, _ model.ResetParams)                     { s.unsupported(c) }
+func (s *Server) RunDiagnostic(c *gin.Context)                                  { s.unsupported(c) }
 func (s *Server) RunScenario(c *gin.Context, _ model.Ref, _ model.RunScenarioParams) {
 	s.unsupported(c)
 }

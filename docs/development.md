@@ -444,6 +444,61 @@ learns what the gateway sees and works out which device has which address (plan 
   and in the testbed (`integration_dhcp_test.go`: udhcpc clients get a lease, a reservation is honored,
   DHCP off leaves a network silent, identity events within a second, a burst of neighbor changes, flows).
 
+## DNS proxy and the service namespace (M6b)
+
+The gateway services run in a **service namespace** of their own (plan §3.3, D29), so that the faults of
+a device apply to its connections to them like to any other traffic. M6b adds the namespace and the DNS
+proxy; the TLS responder (M21) joins it later.
+
+- **The pair.** The executor operation `service_ns` (closed, link-local only: `169.254.100.0/30`) creates
+  the named namespace when it is missing, or attaches the namespace of the holder process with
+  `ip netns attach NAME PID`, then creates the veth pair `svc0` (gateway, `169.254.100.1`) and `svc1`
+  (namespace, `169.254.100.2`), brings both up and points the namespace's default route at the gateway.
+  `svc0` is an assigned interface; the operation refuses any other. `Read service_ns` tells whether the
+  namespace exists and whether it is the holder's (same inode as `/proc/PID/ns/net`).
+- **Compiler.** With `Input.ServiceNS` set, `Target.Service` holds the pair; routes and rules follow:
+  `169.254.100.0/30 dev svc0` and `iif svc0` use table 100 (what the services send upstream leaves
+  through the uplink, masqueraded), table 102 has `default via 169.254.100.2 dev svc0` and a `prohibit
+  default` fallback with the higher metric, and the rule `fwmark 0x100000/0x100000 lookup 102` stands
+  before the policy rules (the classification of M7 sets the mark). Queries to a network's or a
+  WireGuard network's gateway address (UDP and TCP 53) are DNAT-ed to `169.254.100.2:53` in a
+  `prerouting` chain; the client's address stays, so the proxy sees the device. **Fail closed:** a
+  packet for `169.254.100.0/30` that does not leave through `svc0` is dropped in the forward chain, never
+  routed to the uplink. The services reach the API's port on `169.254.100.1` and nothing else of the
+  gateway (input chain).
+- **Apply and verify.** The plan creates the pair before routes and nftables; verify reads the namespace
+  (peer address, state, default route, holder). A holder that restarted leaves the old namespace behind
+  (the name keeps it alive): the executor deletes the pair and the name and attaches the new one. The
+  next apply after the pair vanished (the host watcher notices the link) creates it again.
+- **DNS proxy** (`internal/dnsproxy`, `chaosgw dns`). `miekg/dns`, UDP and TCP, in the namespace. It
+  forwards to the upstream resolvers in order (a truncated UDP answer is asked again over TCP; a UDP
+  client gets the truncation it asks for), caches until the TTL ends (negative answers 30 s, errors not;
+  bounded), answers the static entries of a network (`dns.static_entries`), never forwards `.invalid`,
+  and answers AAAA queries with no data and removes AAAA records from other answers (the V1 networks
+  are IPv4 only). Until it has a configuration it answers SERVFAIL. The upstream resolvers are the
+  uplink's `dns_upstream`, else the host's: `/run/systemd/resolve/resolv.conf` first (the stub
+  `127.0.0.53` of systemd-resolved is not reachable from the namespace, and the proxy binds nothing on
+  the host), then `/etc/resolv.conf`, loopback addresses left out.
+- **API.** The proxy keeps no state: `GET /internal/dns/config` (long poll, `after` = generation) gives
+  the networks (gateway, client range, static entries), the upstream and the strip flag; the generation
+  starts at the boot time in milliseconds and moves with the content. `POST /internal/dns/queries` takes
+  its query log in batches (the API adds the device from the observed state); `GET /dns/queries` lists
+  them newest first (filters `device`, `name` with `*.suffix`, `since`; the last 20000 are kept in
+  memory). The API listens on `169.254.100.1` too once the pair exists.
+- **Containers.** `deploy/compose.dns.yaml`: `svcns` (`chaosgw svcns`: no network, the host's PID
+  namespace, writes its PID) and `dns` (`network_mode: service:svcns`, `NET_BIND_SERVICE`, the service
+  token read-only). The executor runs in the host's PID namespace to attach the holder; the API reads
+  the holder's PID file (`--service-holder-pid-file`) and the namespace name (`--service-ns`). After the
+  holder container was recreated, `dns` has to be restarted to join the new namespace.
+- **Tests.** The operation, the compiler, apply and verify (over the simulated kernel, including the
+  holder that dies and the holder that restarts), the proxy (fake upstream, real sockets), the API and
+  the commands are unit-tested. The testbed test `TestDNSThroughTheServiceNamespace` runs the proxy inside a real
+  service namespace with `dnsmasq` as the upstream: clients of a test network and a WireGuard client
+  resolve over UDP and TCP, the log shows the queries, a restarted proxy resolves again, and without
+  the namespace the redirected queries are dropped by the guard.
+- **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
+  `/internal/dns/resolutions` (M20), per-device query statistics.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

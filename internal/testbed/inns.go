@@ -2,6 +2,7 @@ package testbed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -46,7 +47,7 @@ func InNamedNS(name string, fn func() error) error {
 		}
 		ferr := fn()
 		if rerr := unix.Setns(int(orig.Fd()), unix.CLONE_NEWNET); rerr != nil {
-			ch <- fmt.Errorf("leave namespace %s: %w (fn: %v)", name, rerr, ferr)
+			ch <- errors.Join(fmt.Errorf("leave namespace %s: %w", name, rerr), ferr)
 			return // the thread stays locked
 		}
 		runtime.UnlockOSThread()

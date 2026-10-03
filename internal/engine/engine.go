@@ -46,6 +46,9 @@ type Config struct {
 	// ServiceHolderPID returns the process whose network namespace becomes the service namespace
 	// when it has to be created (the holder container); nil or 0 creates an empty namespace.
 	ServiceHolderPID func() int
+	// DefaultUIPort is the port the API listens on when the configuration names no `ui_port`: the
+	// gateway's input rules let the management network and the services reach exactly this port.
+	DefaultUIPort int
 }
 
 // Snapshot is an immutable view of the engine. Nothing in a published snapshot is modified

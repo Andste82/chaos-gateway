@@ -32,6 +32,17 @@ func Ident(s string) string {
 	return out
 }
 
+// Idle is the configuration of an instance with nothing to do: no protocol, and the kernel table the
+// instance exports to. The executor writes it when it starts, so BIRD has a file to start from, and
+// apply writes it when routing is switched off.
+func Idle(kernelTable int) string {
+	t, err := Config{RouterID: "127.0.0.1", KernelTable: kernelTable}.Render()
+	if err != nil {
+		panic(err) // a constant configuration
+	}
+	return t
+}
+
 // Check validates a Config before it is rendered: everything that ends up in the text is an
 // identifier, an address, a prefix or a number, and the custom snippets pass the lexical checks.
 func (c Config) Check() error {

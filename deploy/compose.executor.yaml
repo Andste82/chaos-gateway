@@ -12,7 +12,7 @@
 services:
   exec:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--allow-uid", "65532", "--socket-owner", "65532"]
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw/bird", "--allow-uid", "65532", "--socket-owner", "65532"]
     user: "0:0"
     privileged: true
     network_mode: host
@@ -26,6 +26,8 @@ services:
     volumes:
       # the socket the API container connects to
       - chaosgw-run:/run/chaosgw
+      # BIRD's configuration file and control socket, shared with the BIRD container (compose.bird.yaml)
+      - chaosgw-bird:/run/chaosgw/bird
       # the interfaces assigned to Chaos Gateway; nothing else is stored
       - chaosgw-exec-state:/var/lib/chaosgw/exec
       # the WireGuard keys: the executor only reads them (the API container writes)
@@ -63,3 +65,4 @@ volumes:
   chaosgw-run:
   chaosgw-exec-state:
   chaosgw-secrets:
+  chaosgw-bird:

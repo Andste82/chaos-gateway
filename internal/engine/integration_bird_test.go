@@ -1,0 +1,394 @@
+//go:build testbed
+
+package engine_test
+
+import (
+	"context"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/testbed"
+	"github.com/Andste82/chaos-gateway/internal/wireguard"
+)
+
+const birdProtoID = "11111111-2222-4333-8444-555555555555"
+
+// routingMod switches the link to BGP: the static route of the fixture goes (BIRD learns the
+// remote network instead), the import filter allows the remote site's /22 up to /24 with the given
+// limit.
+func routingMod(maxPrefixes int, snippet string) func(*model.Configuration) {
+	return func(c *model.Configuration) {
+		n := (*c.Networks)[tLink]
+		wg, _ := n.AsWireGuardNetwork()
+		wg.Routes = nil
+		_ = n.FromWireGuardNetwork(wg)
+		(*c.Networks)[tLink] = n
+		asn := int64(65001)
+		hold, ka := "9s", "3s"
+		iot := tIoT
+		max24 := 24
+		p := model.RoutingProtocol{
+			Name: "site-b", Type: model.RoutingProtocolTypeBgp, Link: tLink,
+			Bgp:      &model.BgpSettings{NeighborAsn: 65002, HoldTime: &hold, KeepaliveTime: &ka},
+			Announce: &[]model.AnnounceEntry{{Network: &iot}},
+			Import:   &model.ImportFilter{MaxPrefixes: &maxPrefixes, AllowedPrefixes: &[]model.PrefixFilterEntry{{Prefix: "10.60.0.0/22", MaxLength: &max24}}},
+		}
+		if snippet != "" {
+			p.CustomSnippet = &snippet
+		}
+		c.Routing = &model.Routing{Asn: &asn, Protocols: &map[string]model.RoutingProtocol{birdProtoID: p}}
+	}
+}
+
+// startBird starts a BIRD in a namespace with the given configuration and returns the control socket.
+func startBird(t *testing.T, ns *testbed.Namespace, dir, name, conf string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cf, sock := filepath.Join(dir, name+".conf"), filepath.Join(dir, name+".ctl")
+	if err := os.WriteFile(cf, []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := ns.Start("bird", "-f", "-c", cf, "-s", sock)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			return sock
+		}
+		select {
+		case <-p.Done():
+			t.Fatalf("bird exited: %s", p.Output())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatalf("bird has no control socket: %s", p.Output())
+	return ""
+}
+
+func birdc(t *testing.T, sock string, args ...string) string {
+	t.Helper()
+	b, err := osexec.Command("birdc", append([]string{"-s", sock}, args...)...).CombinedOutput()
+	out := string(b)
+	if err != nil {
+		t.Fatalf("birdc %v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
+// bgpGW is the testbed with the BGP link: BIRD in the gateway's namespace (the executor writes its
+// configuration and reconfigures it) and BIRD at the remote site with the configuration the product
+// exports for it.
+type bgpGW struct {
+	*wgGW
+	gwSock, siteSock string
+	siteConf         string
+}
+
+func newBGP(t *testing.T, maxPrefixes int, siteRoutes ...string) *bgpGW {
+	t.Helper()
+	g := &bgpGW{wgGW: newWGGW(t)}
+	// the instance the executor manages starts with an idle configuration
+	g.gwSock = startBird(t, g.top.GW, g.bird, compiler.BirdInstance, "router id 127.0.0.1;\nprotocol device { }\n")
+	g.apply(routingMod(maxPrefixes, ""))
+
+	g.siteSock = g.remoteSite(g.top.Site, tLink, "wgsite", "site", siteRoutes...)
+	return g
+}
+
+// remoteSite brings up the remote side of a link in a namespace: its WireGuard tunnel from the export
+// and BIRD with the configuration `chaosgw wg export --bird` renders, announcing the given routes.
+// It returns the control socket.
+func (g *bgpGW) remoteSite(ns *testbed.Namespace, linkID, iface, name string, routes ...string) string {
+	g.t.Helper()
+	remote, err := wireguard.LinkRemoteConfig(g.export(), linkID)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	g.up(ns, iface, remote.Conf)
+	tg := compiler.Compile(compiler.Input{Config: g.activeConfig(), Generation: compiler.Generation{Seq: 1}, Keys: g.publicKeys()})
+	var proto *bird.Protocol
+	if tg.Bird != nil {
+		for _, w := range tg.WireGuard {
+			if w.NetworkID != linkID {
+				continue
+			}
+			for i, p := range tg.Bird.Config.Protocols {
+				if p.Interface == w.Name {
+					proto = &tg.Bird.Config.Protocols[i]
+				}
+			}
+		}
+	}
+	if proto == nil {
+		g.t.Fatalf("no routing protocol on the link %s: %+v", linkID, tg.Problems)
+	}
+	conf, err := bird.RenderRemote(tg.Bird.Config, *proto, iface)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, r := range routes {
+		b.WriteString("  route " + r + " unreachable;\n")
+	}
+	g.siteConf = strings.Replace(conf, "  # route 192.0.2.0/24 unreachable;\n", b.String(), 1)
+	return startBird(g.t, ns, filepath.Join(g.dir, name), name, g.siteConf)
+}
+
+func (g *bgpGW) activeConfig() *model.Configuration {
+	g.t.Helper()
+	_, cfg, err := g.st.Active()
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return cfg
+}
+
+func (g *bgpGW) publicKeys() map[string]string {
+	g.t.Helper()
+	k, err := wireguard.InterfaceKeys(g.activeConfig(), g.sec)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return k
+}
+
+func (g *bgpGW) established(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if ps, err := bird.ParseProtocols(birdc(g.t, g.gwSock, "show", "protocols", "all")); err == nil {
+			for _, p := range ps {
+				if p.Proto == "BGP" && p.Established() {
+					return true
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	return false
+}
+
+func (g *bgpGW) table100() string { return g.top.GW.Must("ip", "route", "show", "table", "100") }
+
+func (g *bgpGW) waitRoute(want string, present bool, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if strings.Contains(g.table100(), want) == present {
+			return true
+		}
+		time.Sleep(time.Second)
+	}
+	return false
+}
+
+// M4c test: a BGP session over the WireGuard link comes up, the gateway learns the remote site's
+// networks into table 100 and announces its own, traffic flows, and a prefix of the gateway's own
+// networks announced by the remote side is not accepted.
+func TestBGPOverAWireGuardLinkExchangesRoutesAndProtectsTheOwnNetworks(t *testing.T) {
+	g := newBGP(t, 10, "10.60.0.0/24", "10.10.0.0/24")
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	if err := g.e.PollRouting(context.Background(), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !g.established(90 * time.Second) {
+		t.Fatalf("the BGP session did not come up\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"))
+	}
+	if _, ok := waitEvent(ch, engine.EventRoutingUp, 30*time.Second); !ok {
+		t.Error("no routing_session_up event")
+	}
+	if !g.waitRoute("10.60.0.0/24 via 10.255.0.1 dev wg-site-b", true, 30*time.Second) {
+		t.Fatalf("the learned route is not in table 100\n%s", g.table100())
+	}
+	if strings.Contains(g.table100(), "10.10.0.0/24 via") {
+		t.Errorf("the remote side's announcement of a protected prefix was accepted\n%s", g.table100())
+	}
+	// the gateway's network is announced to the remote side
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(g.top.Site.Must("ip", "route", "show"), "10.10.0.0/24") && time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+	}
+	if !pingOK(g.top.A, "", testbed.SiteNetHost) {
+		t.Errorf("A cannot reach the remote site's network\n%s", g.table100())
+	}
+	if !pingOK(g.top.Site, testbed.SiteNetHost, testbed.ClientAAddr) {
+		t.Errorf("the site cannot reach A\n%s", g.top.Site.Must("ip", "route", "show"))
+	}
+	// the snapshot shows the session
+	if st := g.e.Snapshot().Routing; len(st) == 0 {
+		t.Errorf("%+v", st)
+	}
+}
+
+// M4c test: when the link goes down the session ends and the learned routes leave table 100; when it
+// comes back the session is re-established.
+func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {
+	g := newBGP(t, 10, "10.60.0.0/24")
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	if err := g.e.PollRouting(context.Background(), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !g.established(90*time.Second) || !g.waitRoute("10.60.0.0/24", true, 30*time.Second) {
+		t.Fatalf("no session\n%s", g.table100())
+	}
+	g.top.Site.Must("ip", "link", "set", "wgsite", "down")
+	// the hold time of the fixture is 9 s: the session ends within it, plus the poll interval
+	if _, ok := waitEvent(ch, engine.EventRoutingDown, 30*time.Second); !ok {
+		t.Fatalf("no routing_session_down event\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	if !g.waitRoute("10.60.0.0/24", false, 30*time.Second) {
+		t.Errorf("the learned route stays in table 100\n%s", g.table100())
+	}
+	g.top.Site.Must("ip", "link", "set", "wgsite", "up")
+	if !g.established(120 * time.Second) {
+		t.Fatalf("the session does not come back\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	if !g.waitRoute("10.60.0.0/24", true, 30*time.Second) {
+		t.Errorf("the route does not come back\n%s", g.table100())
+	}
+}
+
+// M4c test: a prefix limit that is exceeded takes the session down instead of flooding table 100.
+func TestMoreRoutesThanTheLimitDisableTheSession(t *testing.T) {
+	g := newBGP(t, 2, "10.60.0.0/24", "10.60.1.0/24", "10.60.2.0/24", "10.60.3.0/24")
+	deadline := time.Now().Add(120 * time.Second)
+	var limited bool
+	for time.Now().Before(deadline) && !limited {
+		ps, _ := bird.ParseProtocols(birdc(t, g.gwSock, "show", "protocols", "all"))
+		for _, p := range ps {
+			if p.Proto == "BGP" && !p.Established() && (strings.Contains(p.Info, "limit") || strings.Contains(p.LastError, "limit") || p.State == "start") {
+				limited = p.Info != "" && p.State != "up"
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	if !limited {
+		t.Fatalf("the session is not taken down\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	if n := strings.Count(g.table100(), "10.60."); n > 2 {
+		t.Errorf("%d routes of the remote site are in table 100 although the limit is 2\n%s", n, g.table100())
+	}
+}
+
+// M4c test: changing the configuration reconfigures BIRD without ending the session, and an invalid
+// custom snippet is rejected by BIRD's own parser in the preview, leaving the running state alone.
+func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *testing.T) {
+	g := newBGP(t, 10, "10.60.0.0/24")
+	if !g.established(90 * time.Second) {
+		t.Fatal("no session")
+	}
+	since := func() string {
+		ps, _ := bird.ParseProtocols(birdc(t, g.gwSock, "show", "protocols", "all"))
+		for _, p := range ps {
+			if p.Proto == "BGP" {
+				return p.Since
+			}
+		}
+		return ""
+	}
+	before := since()
+	// a different timer in the announce list: BIRD reconfigures, the session stays
+	g.apply(func(c *model.Configuration) {
+		routingMod(10, "")(c)
+		p := (*c.Routing.Protocols)[birdProtoID]
+		p.Announce = &[]model.AnnounceEntry{{Cidr: ptrS("10.77.0.0/24")}}
+		(*c.Routing.Protocols)[birdProtoID] = p
+	})
+	if got := since(); got != before {
+		t.Errorf("the session restarted: since %s, was %s", got, before)
+	}
+	if !g.established(30 * time.Second) {
+		t.Error("the session is gone after the change")
+	}
+
+	rev := g.revision(routingMod(10, "this is not valid bird"))
+	p, err := g.e.Preview(context.Background(), rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg string
+	for _, pr := range p.Problems {
+		if pr.Code == compiler.CodeRouting && pr.Severity == compiler.SevError {
+			msg = pr.Message
+		}
+	}
+	if msg == "" {
+		t.Fatalf("the preview does not show BIRD's message: %+v", p.Problems)
+	}
+	if got := since(); got != before {
+		t.Errorf("the preview changed the running instance: %s", got)
+	}
+}
+
+func ptrS(s string) *string { return &s }
+
+const siteCLink = `{"type":"wireguard","kind":"link","name":"site-c","address":"10.255.1.0/31","listen_port":51823,"mtu":1380,
+"peer":{"address":"10.255.1.1","endpoint":"203.0.113.50:51821","keepalive":"1s","key":{"mode":"generated"}}}`
+
+// M4c test: three sites. The gateway runs BGP towards one remote site and OSPF towards another, each
+// with BIRD in a namespace of its own over its own WireGuard link. Learned routes appear in table
+// 100 and never in the main table; a neighbor that announces a default route or the management
+// prefix is filtered, and the gateway's own default route stays.
+func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
+	g := &bgpGW{wgGW: newWGGW(t)}
+	g.gwSock = startBird(t, g.top.GW, g.bird, compiler.BirdInstance, "router id 127.0.0.1;\nprotocol device { }\n")
+	const ospfID = "22222222-3333-4444-8555-666666666666"
+	const linkC = "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f"
+	g.apply(func(c *model.Configuration) {
+		routingMod(10, "")(c)
+		var n model.Network
+		if err := n.UnmarshalJSON([]byte(siteCLink)); err != nil {
+			t.Fatal(err)
+		}
+		(*c.Networks)[linkC] = n
+		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}}
+	})
+	// the BGP neighbor announces a default route, the management prefix, a prefix of the gateway
+	// and the remote network
+	g.remoteSite(g.top.Site, tLink, "wgsite", "site", "10.60.0.0/24", "0.0.0.0/0", "192.168.56.0/24", "10.10.0.0/24")
+	siteC := g.remoteSite(g.top.Site2, linkC, "wgsite2", "site2", "10.70.0.0/24")
+	if !g.established(90 * time.Second) {
+		t.Fatalf("no BGP session\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	if !g.waitRoute("10.60.0.0/24 via 10.255.0.1 dev wg-site-b", true, 30*time.Second) {
+		t.Fatalf("the BGP route is not in table 100\n%s", g.table100())
+	}
+	if !g.waitRoute("10.70.0.0/24 via 10.255.1.1 dev wg-site-c", true, 90*time.Second) {
+		t.Fatalf("the OSPF route is not in table 100\n%s\n%s\n%s", g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, siteC, "show", "protocols", "all"))
+	}
+	for _, bad := range []string{"default via", "192.168.56.0/24 via", "10.10.0.0/24 via"} {
+		if strings.Contains(g.table100(), bad) {
+			t.Errorf("the filter let %q through\n%s", bad, g.table100())
+		}
+	}
+	main := g.top.GW.Must("ip", "route", "show", "table", "main")
+	for _, learned := range []string{"10.60.0.0/24", "10.70.0.0/24"} {
+		if strings.Contains(main, learned) {
+			t.Errorf("%s was learned into the main table\n%s", learned, main)
+		}
+	}
+	if !strings.Contains(main, "default via 192.168.56.254") {
+		t.Errorf("the management default route is gone\n%s", main)
+	}
+	if !pingOK(g.top.A, "", testbed.SiteNetHost) || !pingOK(g.top.A, "", testbed.Site2NetHost) {
+		t.Errorf("A cannot reach the remote networks\n%s", g.table100())
+	}
+	// taking the OSPF link down withdraws its routes within the dead interval
+	g.top.Site2.Must("ip", "link", "set", "wgsite2", "down")
+	if !g.waitRoute("10.70.0.0/24", false, 60*time.Second) {
+		t.Errorf("the OSPF route stays after the link went down\n%s", g.table100())
+	}
+	g.top.Site2.Must("ip", "link", "set", "wgsite2", "up")
+	if !g.waitRoute("10.70.0.0/24 via 10.255.1.1", true, 120*time.Second) {
+		t.Errorf("the OSPF route does not return\n%s", g.table100())
+	}
+}

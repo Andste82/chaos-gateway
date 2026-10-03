@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/Andste82/chaos-gateway/internal/bird"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/clock"

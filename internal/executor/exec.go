@@ -548,6 +548,23 @@ func (e *Executor) saveState() error {
 	return os.Rename(tmp, e.state)
 }
 
+// EnsureBirdConfig writes the idle configuration of the instance when there is no file yet: BIRD
+// needs one to start, and from then on every apply replaces it. It does nothing without a BIRD
+// directory.
+func (e *Executor) EnsureBirdConfig(instance string) error {
+	if e.birdDir == "" {
+		return nil
+	}
+	conf, _, err := e.birdPaths(instance)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(conf); err == nil {
+		return nil
+	}
+	return os.WriteFile(conf, []byte(bird.Idle(OwnTableFirst)), 0o644)
+}
+
 // BirdState is what a bird read returns.
 type BirdState struct {
 	// Running reports whether the instance answers on its control socket.

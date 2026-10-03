@@ -1,9 +1,10 @@
 package compiler
 
 import (
-	"github.com/Andste82/chaos-gateway/internal/bird"
 	"net/netip"
 	"sort"
+
+	"github.com/Andste82/chaos-gateway/internal/bird"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"

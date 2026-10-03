@@ -63,6 +63,7 @@ type wgGW struct {
 	logs  *lockedBuffer
 	state string
 	dir   string // where configuration files for wg-quick go
+	bird  string // the directory shared with BIRD: <instance>.conf and .ctl
 }
 
 func newWGGW(t *testing.T) *wgGW {
@@ -74,7 +75,8 @@ func newWGGW(t *testing.T) *wgGW {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(executor.NewExecRunner(), executor.WithLogger(log), executor.WithKeys(func(id string) (string, string, error) {
+	birdDir := t.TempDir()
+	ex, err := executor.New(executor.NewExecRunner(), executor.WithLogger(log), executor.WithBirdDir(birdDir), executor.WithKeys(func(id string) (string, string, error) {
 		k, err := sec.WireGuard(id)
 		return k.PrivateKey, k.PresharedKey, err
 	}))
@@ -108,7 +110,7 @@ func newWGGW(t *testing.T) *wgGW {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	return &wgGW{t: t, top: top, st: st, sec: sec, e: e, base: cfg, logs: logs, state: stateDir, dir: t.TempDir()}
+	return &wgGW{t: t, top: top, st: st, sec: sec, e: e, base: cfg, logs: logs, state: stateDir, dir: t.TempDir(), bird: birdDir}
 }
 
 func (g *wgGW) revision(mod func(*model.Configuration)) int64 {

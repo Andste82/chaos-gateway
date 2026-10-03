@@ -15,13 +15,7 @@ import (
 
 // idleText is the configuration of an instance that has nothing to do: it is applied when routing
 // is switched off, so the routes BIRD learned leave table 100 and the neighbors see the sessions end.
-var idleText = func() string {
-	t, err := bird.Config{RouterID: "127.0.0.1", KernelTable: compiler.PolicyTable}.Render()
-	if err != nil {
-		panic(err)
-	}
-	return t
-}()
+var idleText = bird.Idle(compiler.PolicyTable)
 
 // TextHash is the hash by which the state recognizes a configuration file.
 func TextHash(text string) string {

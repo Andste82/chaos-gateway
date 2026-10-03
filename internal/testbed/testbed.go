@@ -70,7 +70,7 @@ func WithGatewayBridges(on bool) Option { return func(c *config) { c.gatewayBrid
 
 // WithRemotes adds the remote machines of the WireGuard tests (plan §4.2): a switch on the uplink
 // side that joins the gateway, the server, a remote client (203.0.113.30) with a network behind it
-// (10.50.0.10) and a remote site (203.0.113.40) with its own network (10.60.0.10). They are an
+// (10.50.0.10) and a remote site (203.0.113.40) with its own network (10.60.0.10), and a second remote site (203.0.113.50, network 10.70.0.10). They are an
 // option because every namespace costs time under emulation.
 func WithRemotes(on bool) Option { return func(c *config) { c.remotes = on } }
 

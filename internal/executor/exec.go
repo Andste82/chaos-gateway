@@ -333,6 +333,15 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, e.runBird(ctx, b)
 	}
 	if s, ok := op.(*ServiceNS); ok && s.Action == "ensure" && s.HolderPID > 0 {
+		// a stale PID file can name any process: its namespace must exist and must not be the
+		// executor's own (the pair would end up in one namespace, with a route in the host's)
+		want, ok := e.inode("/proc/" + strconv.Itoa(s.HolderPID) + "/ns/net")
+		if !ok {
+			return nil, fmt.Errorf("the holder process %d of the service namespace does not exist", s.HolderPID)
+		}
+		if own, ok := e.inode("/proc/self/ns/net"); ok && own == want {
+			return nil, fmt.Errorf("process %d is in the executor's own network namespace: not a holder", s.HolderPID)
+		}
 		st := e.serviceNSState(s.Name, s.HolderPID)
 		if st.Exists && !st.HolderMatches {
 			s.recreate = true

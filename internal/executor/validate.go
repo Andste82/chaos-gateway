@@ -659,8 +659,8 @@ func (o ServiceNS) validate() error {
 			return err
 		}
 	}
-	if o.HostIf == o.PeerIf {
-		return errors.New("the two ends of the pair need different names")
+	if o.HostIf != ServiceHostIf || o.PeerIf != ServicePeerIf {
+		return fmt.Errorf("the pair is %s and %s", ServiceHostIf, ServicePeerIf)
 	}
 	if o.HolderPID < 0 || o.HolderPID > 1<<22 {
 		return fmt.Errorf("holder_pid %d out of range", o.HolderPID)
@@ -673,10 +673,10 @@ func (o ServiceNS) validate() error {
 	if err != nil {
 		return fmt.Errorf("peer_cidr: %w", err)
 	}
-	ll := netip.MustParsePrefix("169.254.0.0/16")
+	ll := netip.MustParsePrefix("169.254.100.0/24")
 	for _, a := range []netip.Prefix{h, p} {
 		if !a.Addr().Is4() || !ll.Contains(a.Addr()) || a.Bits() < 24 || a.Bits() > 30 {
-			return fmt.Errorf("%s is not a link-local IPv4 address with a prefix of /24 to /30", a)
+			return fmt.Errorf("%s is not an address of 169.254.100.0/24 with a prefix of /24 to /30", a)
 		}
 	}
 	if h.Masked() != p.Masked() || h.Addr() == p.Addr() {

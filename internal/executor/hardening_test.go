@@ -207,8 +207,8 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 7 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the service token and the holder's PID", len(s.Volumes))
+	if len(s.Volumes) != 8 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
 	}
 	if len(s.Healthcheck.Test) < 4 || s.Healthcheck.Test[1] != "chaosgw" || !contains(s.Healthcheck.Test, "--health") {
 		t.Errorf("health check: %v", s.Healthcheck.Test)

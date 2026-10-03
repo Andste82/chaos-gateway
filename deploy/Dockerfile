@@ -36,4 +36,6 @@ COPY deploy/host-setup.sh /usr/local/share/chaosgw/host-setup.sh
 # Kea: the run_script hook (in the directory Kea allows scripts from) and the start script
 COPY deploy/chaosgw-kea-hook /usr/share/kea/scripts/chaosgw-kea-hook
 COPY deploy/kea-start.sh /usr/local/bin/chaosgw-kea-start
+# the directory of the service namespace holder's PID file: a named volume takes its owner from here
+RUN mkdir -p /run/chaosgw-svcns && chown 65532:65532 /run/chaosgw-svcns
 ENTRYPOINT ["chaosgw"]

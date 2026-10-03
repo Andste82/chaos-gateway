@@ -518,3 +518,102 @@ func TestHostResolversSkipTheLocalStub(t *testing.T) {
 }
 
 func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+func TestTheCacheKeepsNothingOfTheFirstClientsEDNS(t *testing.T) {
+	up := &fakeUpstream{answer: func(_, _ string, q dns.Question) (*dns.Msg, error) {
+		m := new(dns.Msg)
+		m.Answer = []dns.RR{aRecord("sec.test.", "203.0.113.10", 300)}
+		sig, _ := dns.NewRR("sec.test. 300 IN RRSIG A 13 2 300 20300101000000 20200101000000 12345 test. AAAA")
+		m.Answer = append(m.Answer, sig)
+		m.SetEdns0(4096, true)
+		return m, nil
+	}}
+	_, addr := running(t, up, baseConfig(), nil)
+	// a client with EDNS and DO gets the signature and an OPT record
+	m := new(dns.Msg)
+	m.SetQuestion("sec.test.", dns.TypeA)
+	m.SetEdns0(4096, true)
+	r, _, err := (&dns.Client{Net: "udp", Timeout: 3 * time.Second}).Exchange(m, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawSig := false
+	for _, rr := range r.Answer {
+		sawSig = sawSig || rr.Header().Rrtype == dns.TypeRRSIG
+	}
+	if !sawSig || r.IsEdns0() == nil {
+		t.Errorf("a DO client gets the signature and an OPT record: %v", r)
+	}
+	if o := r.IsEdns0(); o != nil && o.UDPSize() > maxUDP {
+		t.Errorf("advertised size %d", o.UDPSize())
+	}
+	// a client without EDNS gets neither, from the cache or not
+	plain := new(dns.Msg)
+	plain.SetQuestion("sec.test.", dns.TypeA)
+	r, _, err = (&dns.Client{Net: "udp", Timeout: 3 * time.Second}).Exchange(plain, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rr := range append(r.Answer, r.Extra...) {
+		if rr.Header().Rrtype == dns.TypeRRSIG || rr.Header().Rrtype == dns.TypeOPT {
+			t.Errorf("a client without EDNS got %v", rr)
+		}
+	}
+	if len(r.Answer) != 1 {
+		t.Errorf("%v", r.Answer)
+	}
+}
+
+func TestTheQueryLogDoesNotLoseTheWrongEntriesWhenItOverflowsDuringAPost(t *testing.T) {
+	block := make(chan struct{})
+	release := make(chan struct{})
+	sink := &blockingSink{started: block, release: release}
+	q := newQueryLog(sink, clock.NewFake(time.Now()), nil)
+	for i := 0; i < 10; i++ {
+		q.add(model.DnsQueryLogEntry{Name: "old" + itoa(uint32(i))})
+	}
+	done := make(chan struct{})
+	go func() { q.flush(context.Background()); close(done) }()
+	<-block // the batch is on its way
+	// the buffer overflows meanwhile: the oldest entries (part of the batch) are dropped
+	for i := 0; i < logBuffer; i++ {
+		q.add(model.DnsQueryLogEntry{Name: "new"})
+	}
+	close(release)
+	<-done
+	// the entries of the first batch were sent once and are not sent again
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.batches) < 2 {
+		t.Fatalf("%d batches", len(sink.batches))
+	}
+	for _, batch := range sink.batches[1:] {
+		for _, e := range batch {
+			if strings.HasPrefix(e.Name, "old") {
+				t.Fatalf("an entry of the sent batch is sent again: %s", e.Name)
+			}
+		}
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.pending) != 0 {
+		t.Errorf("%d entries stay", len(q.pending))
+	}
+}
+
+type blockingSink struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	batches [][]model.DnsQueryLogEntry
+}
+
+func (b *blockingSink) Post(_ context.Context, e []model.DnsQueryLogEntry) error {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	b.mu.Lock()
+	b.batches = append(b.batches, e)
+	b.mu.Unlock()
+	return nil
+}

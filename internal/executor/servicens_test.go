@@ -15,7 +15,7 @@ func serviceOps(t *testing.T, tail string) []Operation {
 
 func TestAServiceNamespaceTouchesOnlyAssignedInterfaces(t *testing.T) {
 	e := newExec(t, &fakeRunner{})
-	_, err := e.DoBatch(context.Background(), ops(t, `{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"wan0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`))
+	_, err := e.DoBatch(context.Background(), ops(t, `{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`))
 	if err == nil || !strings.Contains(err.Error(), "not assigned") {
 		t.Fatalf("%v", err)
 	}
@@ -103,5 +103,25 @@ func TestAnOldNamespaceIsReplacedWhenItsHolderIsGone(t *testing.T) {
 		if strings.Contains(c.String(), "netns delete") || strings.Contains(c.String(), "link delete") {
 			t.Errorf("the right namespace is deleted: %s", c)
 		}
+	}
+}
+
+func TestAHolderMustBeAnotherNamespaceThanTheExecutors(t *testing.T) {
+	inodes := map[string]uint64{"/proc/self/ns/net": 5, "/proc/42/ns/net": 5, "/proc/43/ns/net": 9}
+	r := &fakeRunner{}
+	e := newExec(t, r, WithNetnsInode(func(p string) (uint64, bool) { i, ok := inodes[p]; return i, ok }))
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":42`)); err == nil || !strings.Contains(err.Error(), "own network namespace") {
+		t.Errorf("a process in the executor's namespace is no holder: %v", err)
+	}
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":99`)); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("a process that is gone is no holder: %v", err)
+	}
+	for _, c := range r.commands() {
+		if strings.Contains(c.String(), "netns") {
+			t.Errorf("a namespace was touched for a bad holder: %s", c)
+		}
+	}
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":43`)); err != nil {
+		t.Errorf("a good holder: %v", err)
 	}
 }

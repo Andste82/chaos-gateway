@@ -358,6 +358,9 @@ func planServiceNS(o *ServiceNS) []Step {
 		mk = Command{Tool: ToolIP, Args: []string{"netns", "attach", o.Name, strconv.Itoa(o.HolderPID)}}
 	}
 	return append(steps, []Step{
+		// a pair whose namespace is gone (the name was lost, the holder's namespace lives on elsewhere) is
+		// replaced: it would lead into the wrong namespace
+		{Guard: &exists, Probe: &nsThere, RunIfProbeOK: false, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
 		{Probe: &nsThere, RunIfProbeOK: false, Cmd: mk},
 		{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", o.HostIf, "type", "veth", "peer", "name", o.PeerIf, "netns", o.Name)},
 		{Cmd: ip("addr", "replace", o.HostCIDR, "dev", o.HostIf)},

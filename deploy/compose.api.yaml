@@ -33,6 +33,13 @@ services:
       - chaosgw-kea-run:/run/kea
       # the token of the service containers: written here, read by Kea's hook
       - chaosgw-service:/var/lib/chaosgw/service
+      # the resolvers of a host with systemd-resolved (its stub 127.0.0.53 is no use to the DNS proxy)
+      - type: bind
+        source: /run/systemd/resolve
+        target: /run/systemd/resolve
+        read_only: true
+        bind:
+          create_host_path: true
       # the PID of the service namespace's holder, written by the svcns container (compose.dns.yaml)
       - type: volume
         source: chaosgw-svcns

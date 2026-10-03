@@ -146,6 +146,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		}
 	}
 	defer eng.Close()
+	eng.WatchService(ctx, 2*time.Second)
 	if err := eng.FollowHost(ctx, 500*time.Millisecond); err != nil {
 		log.Warn("the host is not followed", "error", err)
 	}

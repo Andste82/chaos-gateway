@@ -928,7 +928,7 @@ Docker volumes (bind mounts on the host, backed up like any directory):
 | CLI | `chaosctl` with Cobra |
 | WireGuard | `golang.zx2c4.com/wireguard/wgctrl` (netlink) for peers and status; keys via `wgtypes`; QR codes generated in the backend (`skip2/go-qrcode`, PNG/SVG) |
 | Routing | BIRD 2 (`bird2` package), own instance; configuration generated from `text/template`, status via the BIRD control socket |
-| Tests | `go test` (unit, compiler golden files, Linux integration against the testbed) |
+| Tests | `go test` with `-race` (unit, compiler golden files, Linux integration against the testbed); `go.uber.org/goleak` for goroutine leaks |
 
 **Frontend (Vue)**
 
@@ -1008,10 +1008,77 @@ chaos-gateway/
 | Devices | 50 | 250 |
 | Simultaneous faults | 50 | 250 |
 | Overlay apply latency (API call → active) | ≤ 200 ms | ≤ 100 ms |
+| Overlay writes, concurrent burst (coalesced, §3.11) | 100 writes ≤ 2 s | 100 writes ≤ 1 s |
+| Added DNS answer latency for hostname-set names | ≤ 20 ms | ≤ 5 ms |
 | Capture without loss | 50 Mbit/s | 500 Mbit/s |
 
 - The packet plane stays in the kernel; only proxied traffic goes through user space.
 - No flow offloading, because it would bypass rules, faults, counters and capture.
+
+## 3.11 Concurrency Model
+
+Goals: no data races; results that do not depend on the timing of concurrent API calls, observer events and scenario steps; bounded latency for test steps and DNS answers. Packet processing is the kernel's job and parallel by itself; this section is about Chaos Gateway's own processes (D32).
+
+**Between processes.** Each container is its own process (§3.8). They share no memory and communicate only through the API (public and `/internal`, §2.15) and the executor socket. The executor is the **only writer** of kernel state.
+
+**Inside the API process (`chaosgw api`)**
+
+| Goroutine | Owns | Interaction |
+|---|---|---|
+| **State owner** (exactly one) | the desired state: active revision, overlay store, observed state, generation counter, pending commit-confirm | receives commands over a channel, publishes snapshots, hands work to the apply loop |
+| **Apply loop** (exactly one) | the apply in flight | compiles a snapshot (pure, `internal/domain` + compiler), sends the execution plan to the executor, verifies, reports the applied generation back |
+| HTTP handlers (one per request, Gin) | nothing | read snapshots; send commands and wait for the reply |
+| Observers (one per source): netlink monitor, conntrack events, Kea lease events, WireGuard status, BIRD status, counter poller | their source | send debounced observations to the state owner |
+| Scheduler (one) and one goroutine per run | TTL, lease and commit-confirm timers; a run's timeline | send commands to the state owner; use the injectable clock |
+| Event bus (one) | replay ring buffer (≥ 10 min), subscriber list | receives events from everyone, fans them out |
+| Writers (one per file kind) | `audit.jsonl`, `runs/<id>/events.jsonl` | receive records from the event bus |
+
+Rules:
+
+1. **Single owner.** Only the state owner mutates the desired state. Everyone else sends a command (operation plus reply channel). There is no mutex around domain state.
+2. **Immutable snapshots.** After each change the state owner publishes a snapshot through an `atomic.Pointer`. Readers — GET handlers, `explain`, preview, the compiler — never lock and never see a half-applied change. Snapshots are copy-on-write: unchanged parts are shared, and nothing in a published snapshot is modified afterwards.
+3. **Validation before acceptance.** A command is validated against the current snapshot, including a dry compile for compile-time limits (`capacity_exceeded`, PMTU tables). An invalid command is rejected immediately and changes nothing. A valid one changes the state at once and gets the next generation.
+4. **Coalescing apply (group commit).** The apply loop always compiles the **latest** snapshot. Commands accepted while an apply is in flight go into the next apply together, so a burst of N overlay writes costs one or two applies instead of N. A writer's request returns when an apply containing its generation is verified (§2.15 "writes return after verification"); the response carries the generation actually applied (≥ its own). Upper bound for a single write: two apply durations plus queue time.
+5. **Failure of an apply.** If the executor fails, the previous kernel state is restored (§2.14). The state owner reverts the overlay changes of that batch, and every waiting writer gets `apply_failed`. A failed revision apply leaves the previous revision active. Executor failures are system errors; user errors were rejected in step 3.
+6. **Store.** `internal/store` is safe for concurrent use (its own mutex), but only the state owner writes revisions, so the lock is never contended in practice.
+
+**Inside the executor (`chaosgw exec`)**
+
+- **One writer goroutine** processes write operations strictly one at a time, in priority order:
+  1. updates of DNS-derived address sets (tiny; they hold back a DNS answer, §2.6),
+  2. identity updates (device addresses in the compiled maps, §2.3),
+  3. execution plans from the apply loop (overlay changes and revision applies; there is at most one in flight, because there is one apply loop).
+
+  A running operation is never interrupted; a revision apply is one operation (§2.14 consistency model).
+- **Status:** M3 implements the single writer as one FIFO queue in which reads run too. Priorities between identity updates and plans follow with M6a, the reader pool and operation time stamps with M8a, the concurrent DNS-set path (persistent netlink connection) with M20.
+- **DNS-derived set updates** use their own persistent netlink connection and may run *concurrently* with a plan: the kernel serializes nftables transactions, and applies never flush DNS-derived sets (S11). Exception: if the running plan replaces a set (changed definition, hashed name, §3.2), updates for that set wait for the plan and then go into the new set.
+- **Identity updates are never concurrent with a plan**, because a plan flushes and rewrites the compiled maps; a plan always uses the latest observed state (§2.3).
+- **Reads** (counters, `nft -j list`, `tc -s`, `wg show`, `birdc`) run in a small pool of reader goroutines in parallel to the writer. Reads that are part of verify belong to the write operation.
+- Every operation carries its enqueue and start time stamps, so waiting is visible: a scenario step records its queue wait, and a step that starts more than 100 ms late gets the run warning `step_late` (§2.10).
+
+**Event bus.** Publishing never blocks: publishers write into the bus goroutine's buffered channel. The bus assigns ids, keeps the replay buffer and gives every subscriber (SSE connection, run recorder, file writer) its own bounded buffer. A subscriber whose buffer overflows is disconnected; an SSE client reconnects with `Last-Event-ID` and gets the missed events from the replay buffer. Writers of audit and run files never drop records: their buffer is large, and an overflow is an error that marks the component unhealthy.
+
+**Observers** debounce bursts (e.g. neighbor-table flapping) and send changes as commands. The state owner coalesces them like any other command. A full apply always reads the latest observed state.
+
+**Service containers.** The DNS proxy (`miekg/dns`) and the TLS responder handle each query or connection in its own goroutine. Their configuration is a snapshot behind an `atomic.Pointer`, replaced by one long-poll goroutine (`/internal/…/config`). The DNS proxy collects resolutions for hostname sets in a short batch window (≤ 2 ms) and makes one synchronous call; the answers wait for that call (§2.6).
+
+**Cancellation and shutdown.** Every goroutine gets a `context.Context` derived from the process root context; nothing blocks without a context or a timeout. Shutdown order of the API process: stop accepting requests → abort runs (their overlays are removed through the state owner) → a final apply without overlays → stop observers and the scheduler → flush the event bus and writers → close the executor connection. The executor finishes the running operation before it exits; on the stop path it removes all overlays first (§2.1.1).
+
+**Panics.** Goroutines are started through a small supervisor helper that recovers a panic, logs it with the stack and marks the component unhealthy (`/system/health`). A panic in the state owner or the apply loop ends the process; the container restarts and recompiles from the committed revision, exactly as after a restart (§2.1.1).
+
+**Code rules** (enforced by review and linters):
+
+- No mutable package-level state.
+- Mutexes only inside leaf components that protect their own data (store, caches). Never hold one while sending on a channel or calling another component.
+- Channels are bounded. Every blocking send or receive also selects on `ctx.Done()`.
+- No `time.Now`, `time.Sleep` or `time.After` outside `internal/clock`; tests use the fake clock.
+
+**Tests.**
+
+- `go test -race` is mandatory in CI for all packages from M3 on (CI has a C compiler; locally the Makefile adds `-race` when one exists).
+- `go.uber.org/goleak` runs in the test main of every package that starts goroutines.
+- The state owner, apply loop and executor queue are tested deterministically with a fake executor and the fake clock: ordering, coalescing, priorities, failure handling.
+- A nightly stress test runs concurrent overlay writers, observer events and a scenario against the testbed. The final kernel state must equal the compile of the final snapshot, and verify must pass.
 
 ---
 
@@ -1224,8 +1291,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M1.
 
 **M4 — Compiler v1, preview, safe apply: routed gateway** (L)
-- Scope: uplink selection (OS-configured; address and gateway read and followed via netlink), test networks as bridges with physical ports, policy routing table 100 with its full contents (§2.2), forwarding, masquerade per network, gateway protection (input policy, §2.2), access matrix default, IPv6 blocked and RA acceptance off, offloads off (§3.4); the `DOCKER-USER` accept rule for Chaos Gateway's interfaces (§3.4); nftables layout that keeps dynamic sets and counters, deletes removed objects and hashes set definitions (§3.2); generation chain and verify (§2.14); observed state as compiler input; target state, diff, preview, apply, rollback on failure; commit-confirm (configurable timeout) and anti-lockout for the management network; interface assignment by MAC and name; `chaosgw apply --file` to apply a configuration without the API (bootstrap for tests and M5b).
-- Tests: golden tests; integration — client reaches server through the gateway; a test-network client reaches ICMP and test listeners on UDP 67 and 53 of the gateway, but not a listener on the UI/API port or SSH; a management default route in the main table does not attract test traffic; preview matches applied state; verify detects a manipulated element; an injected executor failure leaves the previous state active; an unconfirmed lockout-relevant change rolls back after the timeout (fake clock); an apply that changes a set's definition succeeds (hashed names) and a removed rule's chain is gone; a changed uplink address keeps NAT working and emits an event.
+- Scope: uplink selection (OS-configured; address and gateway read and followed via netlink), test networks as bridges with physical ports, policy routing table 100 with its full contents (§2.2), forwarding, masquerade per network, gateway protection (input policy, §2.2), access matrix default, IPv6 blocked and RA acceptance off, offloads off (§3.4); the `DOCKER-USER` accept rule for Chaos Gateway's interfaces (§3.4); nftables layout that keeps dynamic sets and counters, deletes removed objects and hashes set definitions (§3.2); generation chain and verify (§2.14); observed state as compiler input; target state, diff, preview, apply, rollback on failure; commit-confirm (configurable timeout) and anti-lockout for the management network; interface assignment by MAC and name; `chaosgw apply --file` to apply a configuration without the API (bootstrap for tests and M5b); state owner, immutable snapshots and the apply loop of §3.11; supervisor helper for goroutines; from here on goleak runs in every package that starts goroutines (`-race` already runs in CI).
+- Tests: golden tests; integration — client reaches server through the gateway; a test-network client reaches ICMP and test listeners on UDP 67 and 53 of the gateway, but not a listener on the UI/API port or SSH; a management default route in the main table does not attract test traffic; preview matches applied state; verify detects a manipulated element; an injected executor failure leaves the previous state active; an unconfirmed lockout-relevant change rolls back after the timeout (fake clock); an apply that changes a set's definition succeeds (hashed names) and a removed rule's chain is gone; a changed uplink address keeps NAT working and emits an event; a published snapshot is never modified (test with the race detector and a deep-equality check after later changes); an observer event during an apply is contained in the next apply.
 - Depends on: M2, M3.
 
 **M4b — WireGuard networks and clients** (L)
@@ -1242,7 +1309,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M5 — REST API v1** (L)
 - Scope: API conventions of §2.15 incl. the normative details table (problem+json, UUID + name, pagination, ETag/If-Match, JSON Merge Patch, idempotency keys, SSE with ids and replay); generation (`state`, SSE `applied`) and `capabilities`; candidate-revision model with preview, apply, confirm, `409 revision_conflict` and `409 confirm_pending` (§2.1.1); sessions with CSRF, hashed API tokens with scopes, first-start setup token, admin password reset (§2.16); UI/API bound to the management network after setup; audit log.
-- Tests: API contract tests against the spec; generated clients compile; E2E through the testbed (configure via API → traffic flows, including creating a WireGuard client and downloading its configuration); a conflicting candidate is rejected with `revision_conflict`; a second apply during a confirmation window gets `confirm_pending`; SSE reconnect with `Last-Event-ID` gets the missed events.
+- Tests: API contract tests against the spec; generated clients compile; E2E through the testbed (configure via API → traffic flows, including creating a WireGuard client and downloading its configuration); a conflicting candidate is rejected with `revision_conflict`; a second apply during a confirmation window gets `confirm_pending`; SSE reconnect with `Last-Event-ID` gets the missed events; a subscriber that stops reading is disconnected without delaying other subscribers or publishers; concurrent candidate applies from two clients: exactly one succeeds, the other gets `revision_conflict`.
 - Depends on: M4, M4b, M4c.
 
 **M5b — Appliance VM harness (test level 2)** (M)
@@ -1252,7 +1319,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M6a — DHCP and device discovery** (M)
 - Scope: Kea container (pinned version) with one subnet per network, pools and reservations via `config-set`, DHCP on/off per network; lease events via Kea's `run_script` hook; flow observer on conntrack events and flows API; device discovery from leases, neighbor table, conntrack and WireGuard clients; identity events into the observed state (§2.3); manual device merge; devices API.
-- Tests: client namespace gets a lease; device appears with MAC/IP; reservation honored; DHCP off on one network leaves it silent; discovered vs. configured devices; an address change emits an identity event within 1 s; flows of a device are listed.
+- Tests: client namespace gets a lease; device appears with MAC/IP; reservation honored; DHCP off on one network leaves it silent; discovered vs. configured devices; an address change emits an identity event within 1 s; a burst of neighbor-table changes is debounced into one identity update; the executor takes queued identity updates before a queued plan (§3.11 priorities, extending the FIFO queue of M3) and never runs one concurrently with a plan; flows of a device are listed.
 - Depends on: M5.
 
 **M6b — DNS proxy** (M)
@@ -1270,8 +1337,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M6a, M6b, S2, S10, S11, S16.
 
 **M8a — Overlays** (M)
-- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint.
-- Tests: golden tests for precedence (E1–E8, E12; E9 and E10 follow in M10, E11 in M21) and tc output; TTL and lease expiry remove overlays and emit events (fake clock); writing an overlay with an existing key replaces it and keeps the id; `reset` only touches the caller's overlays; a restart drops overlays; `explain` returns the expected winner per family.
+- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint; coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start).
+- Tests: golden tests for precedence (E1–E8, E12; E9 and E10 follow in M10, E11 in M21) and tc output; TTL and lease expiry remove overlays and emit events (fake clock); writing an overlay with an existing key replaces it and keeps the id; `reset` only touches the caller's overlays; a restart drops overlays; `explain` returns the expected winner per family; coalescing (§3.11): 200 concurrent overlay writes need far fewer applies than writes, every writer gets a generation that contains its change, and the final kernel state equals the compile of the final snapshot; an injected executor failure reverts the batch and every waiting writer gets `apply_failed`; an invalid write (e.g. `capacity_exceeded`) is rejected without affecting concurrent valid writes; a counter read completes while a long plan runs.
 - Depends on: M7.
 
 **M8b — Fault engine: latency, jitter, loss** (M)
@@ -1324,7 +1391,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M15 — Scenario engine and runs** (L)
 - Scope: scenarios as defined in §2.10 (step semantics, remove/restore, narrowing targets), inline scenarios with parameters in `POST /api/v1/runs`, preconditions, scheduler on the injectable monotonic clock, step types profile, fault, rule, WireGuard action, wait, remove, restore (further step types arrive with M17, M20–M23); runs with lifecycle, owner, one run per target, queue, explicit abort, optional lease, scenario snapshot and generation per step; JSON/JUnit report.
-- Tests: step order and semantics with the fake clock; step timing within ±100 ms on a machine with KVM; abort removes the run's overlays; a disconnecting client does not stop a run, an expired lease does; a restart ends a running run as `aborted`; a second run on the same target waits in `queued`; a failed precondition ends the run as `error`; an inline scenario runs without changing the active revision; the report contains all steps.
+- Tests: step order and semantics with the fake clock; step timing within ±100 ms on a machine with KVM; abort removes the run's overlays; a disconnecting client does not stop a run, an expired lease does; a restart ends a running run as `aborted`; a second run on the same target waits in `queued`; a failed precondition ends the run as `error`; an inline scenario runs without changing the active revision; the report contains all steps with their queue wait (`RunStep.queue_wait_ms`, added to the spec with this milestone); a step that waits behind a revision apply for more than 100 ms gets the warning `step_late`.
 - Depends on: M11.
 
 **M16 — Checks** (M)
@@ -1352,8 +1419,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 5 — Application Layer
 
 **M20 — DNS faults and hostname selectors** (M)
-- Scope: NXDOMAIN, SERVFAIL, timeout, delay, wrong answer, truncation (with TCP fallback), short TTL, per device/group/pattern; DNS-derived address sets with the lifetime rule of §2.6; redirect of hardcoded DNS; DoT blocking; hostname selectors for rules and faults; "DNS broken" profile; DNS scenario step type.
-- Tests: `dig` from clients shows each fault; a hostname-selector fault affects only traffic to the resolved IPs; a long-lived connection keeps its hostname fault past a 1 s TTL; the set survives 10 overlay changes; hardcoded DNS is redirected; download and upload latency apply to queries of a device (service namespace, S16).
+- Scope: NXDOMAIN, SERVFAIL, timeout, delay, wrong answer, truncation (with TCP fallback), short TTL, per device/group/pattern; DNS-derived address sets with the lifetime rule of §2.6, updated through the executor's persistent netlink connection with top priority and concurrently to running plans (§3.11); redirect of hardcoded DNS; DoT blocking; hostname selectors for rules and faults; "DNS broken" profile; DNS scenario step type.
+- Tests: `dig` from clients shows each fault; a hostname-selector fault affects only traffic to the resolved IPs; a long-lived connection keeps its hostname fault past a 1 s TTL; the set survives 10 overlay changes; hardcoded DNS is redirected; download and upload latency apply to queries of a device (service namespace, S16); a set update during a long plan is applied without waiting for it, and one for a set the plan replaces lands in the new set; the added answer latency for hostname-set names meets §3.10.
 - Depends on: M8b, M9, M15, S5, S16.
 
 **M21 — TLS responder: certificate cases** (M)
@@ -1392,7 +1459,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M27 — Recovery** (M)
 - Scope: last-known-good at start, safe mode, recompile after interrupted apply, verify at start (§2.14), overlay removal on stop, `chaosgw teardown`, degraded networks on missing interfaces.
-- Tests: a broken revision at start leads to last-known-good (level 2); killing the executor mid-apply is recovered; stopping the containers leaves no fault active; unplugging a test interface (link removal in the testbed) marks its network degraded without safe mode.
+- Tests: a broken revision at start leads to last-known-good (level 2); killing the executor mid-apply is recovered; stopping the containers leaves no fault active and follows the shutdown order of §3.11; a panic in the state owner restarts the process and recompiles from the committed revision; unplugging a test interface (link removal in the testbed) marks its network degraded without safe mode.
 - Depends on: M5b, M8b.
 
 **M28 — Container deployment** (M)
@@ -1469,6 +1536,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | 33 | No hardware and no ARM64 machine in V1 | ARM64 timing and throughput, real NIC behavior and offload costs are not measured | functional ARM64 tests under emulation; x86 measurements with KVM; H1 when hardware exists; release notes mark unvalidated targets |
 | 34 | NIC offloads | with GRO/GSO/TSO, netem acts on 64 KB aggregates, so loss and duplication are far off | offloads switched off on owned interfaces and the uplink (§3.4); cost measured in H1 |
 | 35 | Service namespace missing | redirected traffic could silently reach the real server (fail open), which would pass a TLS test that should fail | `prohibit` fallback in table 102 (S16 C4); executor re-attaches on holder restart; services exit when their namespace is stale |
+| 36 | One qdisc lock per interface | the HTB root qdisc of an interface is processed under one lock, so tc work on one interface does not scale across CPU cores; on a Raspberry Pi this may cap throughput with many active faults | measured in H1 with 50/250 faults; faults are spread over the interfaces they leave through anyway (upload on the uplink, download on the test interface); multi-queue alternatives only if H1 shows the need |
 
 ---
 
@@ -1509,6 +1577,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D29 | Gateway services and faults | DNS proxy, TLS responder and TLS proxy run in a **service namespace** reached by policy routing; no IFB/flower for services (§3.3) | S16 |
 | D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); configured faults only for impairment/MTU/tunnel, everything else as overlays | spec draft 1, independent review 2026-10-02 |
 | D31 | Persistent faults | **V1: only the impairment, MTU and tunnel families are persistent** (configuration); DNS faults, TLS cases, DHCP actions and profile activations exist only as overlays. **After V1 (M39):** every family and profile activations can be persistent. Reason: persistent faults serve a permanent test environment, not the CI use case, and they weaken the clean baseline (`reset` does not remove them; D27 keeps V1 small) | maintainer |
+| D32 | Concurrency model | one state-owner goroutine with immutable snapshots, one coalescing apply loop, executor as single writer with priorities (DNS-set updates, identity updates, plans), non-blocking event bus with bounded subscriber buffers, `context` everywhere, `-race` and goleak in CI (§3.11) | maintainer request 2026-10-03 |
 
 ## 7.2 Open
 

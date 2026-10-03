@@ -136,6 +136,22 @@ sudo go run ./cmd/chaosgw exec -socket /tmp/e.sock -state /tmp/e-state.json &
 go run ./cmd/chaosgw exec -health -socket /tmp/e.sock
 ```
 
+## Concurrency
+
+The model is plan §3.11 (D32). In short, for code from M3 on:
+
+- One state-owner goroutine changes the desired state; everyone else sends it commands and reads
+  immutable snapshots (`atomic.Pointer`). No mutex around domain state.
+- One apply loop compiles the latest snapshot and coalesces concurrent writes into one apply.
+- The executor is the only writer of kernel state: one writer goroutine with priorities, reads in
+  parallel.
+- No mutable package-level state. Mutexes only in leaf components (like `internal/store`), never
+  held while sending on a channel or calling another component.
+- Bounded channels; every blocking send or receive also selects on `ctx.Done()`.
+- Time only through `internal/clock`.
+- Start goroutines through the supervisor helper (recovers panics, reports health).
+- CI runs `go test -race`; packages that start goroutines run `goleak` in their `TestMain`.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

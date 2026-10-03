@@ -29,6 +29,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/auth` | the admin password (argon2id), API tokens (hashes only), sessions with CSRF tokens, the one-time setup token, the login rate limit |
 | `internal/audit` | the append-only audit log (JSON lines) |
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
+| `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
@@ -357,6 +358,47 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
   decode the YAML export and SVG bodies; those calls skip the check.) The testbed test
   (`e2e_test.go`) configures a real gateway only through the API and brings up a tunnel from a
   downloaded client configuration.
+
+## Appliance VMs (test level 2)
+
+Level 2 (plan §4.5) tests what only a whole machine has: the host setup, Docker, the compose
+deployment, the interfaces the operating system owns. `internal/appliance` boots a gateway VM from
+the Ubuntu 24.04 or 26.04 cloud image and drives it over SSH; the tests are
+`internal/appliance/appliance_test.go` (build tag `appliance`).
+
+```
+three ports:  server ns ── br-up ── [uplink NIC]  VM  [test NIC] ── br-lan ── client ns
+                                                      [mgmt NIC] ── br-mgmt ── host (SSH, NAT to the Internet)
+two ports:    the management network lives behind the uplink interface; there is no management NIC
+```
+
+- **The VM.** Three (or two) virtio NICs on tap devices. cloud-init (NoCloud seed, built with
+  `cloud-localds`) creates the user with a throw-away SSH key and writes netplan for the uplink
+  (`203.0.113.1/24`) and the management interface (`192.168.56.1/24` with the default route through
+  the host, which masquerades towards the Internet). The test port has no address: Chaos Gateway
+  assigns it. Images are downloaded and verified against Ubuntu's `SHA256SUMS`, and kept in a cache.
+- **The smoke test** boots the VM, checks that netplan configured the OS-owned interfaces, runs
+  `deploy/host-setup.sh` (Docker, modules, forwarding; a second run must change nothing), loads the
+  current image, starts the executor with `deploy/compose.executor.yaml` until it is healthy, applies
+  a configuration with `chaosgw apply --file` through the executor's socket, checks the rule in
+  `DOCKER-USER`, and passes ping and HTTP from the client namespace through the VM to the server
+  namespace (the server sees the gateway's uplink address: NAT). The same in the two-port topology.
+  Logs (cloud-init, journal, Docker, nftables, console, QEMU) are collected into the artifacts
+  directory even when the test fails.
+- **Running it.** It needs root (taps, bridges, namespaces; the harness uses `sudo -n`), QEMU, `/dev/kvm`
+  (without it the tests skip; `CHAOSGW_APPLIANCE_ALLOW_TCG=1` runs them emulated and very slowly) and
+  the image as `docker save | gzip` in `CHAOSGW_APPLIANCE_IMAGE_TAR`. The nightly workflow's job
+  `appliance` does all of that on a hosted runner (plan Q1: they offer `/dev/kvm`); run it on a branch
+  with `gh workflow run nightly.yml --ref <branch>`. `make test-appliance` is the same on a machine
+  that has the prerequisites. The development VPS has no KVM: everything that needs none is unit-tested
+  there (image verification, the cloud-init documents, the QEMU arguments, the topology plan).
+- **Host setup.** `deploy/host-setup.sh` is shipped in the image
+  (`/usr/local/share/chaosgw/host-setup.sh`): it installs Docker and the compose plugin when missing
+  (Ubuntu's packages), writes `/etc/modules-load.d/chaos-gateway.conf` and
+  `/etc/sysctl.d/90-chaos-gateway.conf`, loads the modules and enables forwarding now, tries
+  `linux-modules-extra` when modules are missing, and prints the netplan hints. It never touches the
+  uplink or management configuration. `internal/preflight` tests that its module list equals the
+  preflight's.
 
 ## Generated code
 

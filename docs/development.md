@@ -18,6 +18,11 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
+| `internal/compiler` | the pure function from configuration + observed host + generation to the target state: bridges, addresses, sysctls, routes and rules, the nftables layout; golden tests |
+| `internal/apply` | reads the kernel state through the executor, plans the difference, applies it in one request and verifies it; `kernelsim` simulates the kernel's tools for tests |
+| `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus |
+| `internal/observer` | netlink events (links, addresses, routes, rules) debounced into triggers |
+| `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
 | `web/` | Vue 3 app (Vite, Tailwind 4, TanStack Query, Pinia, Reka UI) |
@@ -151,6 +156,38 @@ The model is plan §3.11 (D32). In short, for code from M3 on:
 - Time only through `internal/clock`.
 - Start goroutines through the supervisor helper (recovers panics, reports health).
 - CI runs `go test -race`; packages that start goroutines run `goleak` in their `TestMain`.
+
+## Compiler, apply and engine
+
+Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.11):
+
+- **`compiler.Compile`** is pure: the same configuration, host and generation give the same target,
+  byte for byte. Everything the kernel needs is in `compiler.Target`; what it cannot build is a
+  `Problem` (an error stops the apply, a warning degrades one network). Golden files live in
+  `internal/compiler/testdata`; `go test ./internal/compiler -update` rewrites them.
+- **`apply.Apply`** reads the state (`ip -j`, `nft -j list`, sysctls, offloads, DOCKER-USER),
+  plans the difference in a fixed order, runs it as one executor request and verifies by reading
+  back. Stale routes and rules go before the links they refer to, new ones after. nftables is one
+  atomic transaction that re-creates the structure, flushes the compiled chains and sets, refills
+  them and deletes what the target no longer names; dynamic sets and named counters are never
+  flushed. Verify recognizes a rule by the hash of its expression in the rule's comment, a set by
+  its elements, the generation by the comment of the one rule in the chain `generation`.
+- **`engine.Engine`** owns the desired state: commands go to one goroutine, readers use
+  `Snapshot()`. A failed apply restores the committed revision, a change that could lock the
+  administrator out (`LockoutRelevant`) waits for `Confirm` and is rolled back when the window runs
+  out, host changes from the netlink observer go into the next apply. `Preview` compares a
+  candidate with the kernel and returns the domain diff, the plan and unified diffs per subsystem
+  (the `routes` diff also covers bridges, addresses, sysctls and offloads).
+
+Tests of these layers do not need privileges: `internal/apply/kernelsim` implements the executor's
+`Runner` and answers like the real tools (an nftables transaction is atomic, a set that a rule
+uses cannot be deleted, `add set` of another type fails). The real executor with its decoder and
+scope checks sits on top of it. The same scenarios run against the real kernel in the testbed
+(`integration_test.go` in `internal/apply`, `internal/engine` and `internal/executor`).
+
+`chaosgw apply --file config.yaml --socket /run/chaosgw/exec.sock` applies a configuration without
+the API; `--dry-run` shows the plan and the diffs, `--state-dir` also stores the configuration as the
+active revision. In the testbed `--namespace` points it at the gateway namespace.
 
 ## Generated code
 

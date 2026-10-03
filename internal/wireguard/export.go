@@ -427,3 +427,29 @@ func safeFileName(s string) string {
 	}
 	return name
 }
+
+// DeletePrivateKey deletes the stored private key of a client whatever its key settings say: later
+// exports carry a placeholder. It reports whether there was a key.
+func DeletePrivateKey(in ExportInput, networkID, clientID string) (bool, error) {
+	hub, err := findNetwork(in.Config, networkID)
+	if err != nil || hub.Clients == nil {
+		return false, err
+	}
+	c, ok := (*hub.Clients)[clientID]
+	if !ok {
+		return false, nil
+	}
+	rid := KeyID(clientID, generationOf(c.Key))
+	k, err := in.Secrets.WireGuard(rid)
+	if errors.Is(err, secrets.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if k.PrivateKey == "" {
+		return false, nil
+	}
+	k.PrivateKey = ""
+	return true, in.Secrets.PutWireGuard(rid, k)
+}

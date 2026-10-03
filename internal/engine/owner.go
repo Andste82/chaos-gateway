@@ -400,7 +400,8 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.LastError = ""
 		o.snap.Problems = r.target.Problems
 		o.snap.WireGuardInterfaces = r.target.WireGuard
-		o.snap.Bird = birdOf(r.target)
+		o.snap.Bird = r.target.Bird
+		o.snap.Bridges = r.target.Bridges
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})

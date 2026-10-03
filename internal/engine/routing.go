@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
-	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
@@ -111,12 +110,4 @@ func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 	}
 	o.snap.Routing = next
 	o.publish()
-}
-
-// birdOf is the part of a target the snapshot keeps: the instance to poll.
-func birdOf(t *compiler.Target) *compiler.BirdTarget {
-	if t.Bird == nil {
-		return nil
-	}
-	return &compiler.BirdTarget{Instance: t.Bird.Instance}
 }

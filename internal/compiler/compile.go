@@ -319,12 +319,10 @@ func dedupePrefixes(p []netip.Prefix) []netip.Prefix {
 // compileHostState derives the interface set, sysctls, offloads, links and DOCKER-USER interfaces.
 func (t *Target) compileHostState() {
 	owned := map[string]bool{}
-	var ports []string
 	for _, b := range t.Bridges {
 		owned[b.Name] = true
 		for _, p := range b.Ports {
 			owned[p] = true
-			ports = append(ports, p)
 		}
 	}
 	// the uplink is OS-owned: assigned (routes, offloads, DOCKER-USER) but its sysctls stay alone

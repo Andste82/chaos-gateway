@@ -125,7 +125,7 @@ func (e *Engine) pollWireGuardOnce(ctx context.Context) error {
 // gone from the interface (a disabled client) is offline.
 func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 	prev := o.snap.WireGuard
-	first := !o.wgSeen // the first poll announces nothing: the peers are not "new", they were there
+	first := !o.wgSeen // the first poll announces what is online, but nothing that is offline
 	o.wgSeen = true
 	ids := make([]string, 0, len(next)+len(prev))
 	for id := range next {
@@ -142,7 +142,7 @@ func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 		now, has := next[id]
 		wasOnline := had && was.Online
 		isOnline := has && now.Online
-		if wasOnline == isOnline || first {
+		if wasOnline == isOnline || (first && !isOnline) {
 			continue
 		}
 		st := now

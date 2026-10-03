@@ -323,10 +323,7 @@ func TestLeasesGiveDevicesTheirAddressAndLeaseEventsAreForwarded(t *testing.T) {
 	}
 	// the hook's event becomes an event of the stream
 	h.e.LeaseEvent(kea.Event{Name: "renew", IP: netip.MustParseAddr("10.10.0.150"), MAC: macCfg, SubnetID: sid, ValidLifetime: 600})
-	var got []engine.Event
-	for _, e := range collect(ch, engine.EventDHCPLease) {
-		got = append(got, e)
-	}
+	got := collect(ch, engine.EventDHCPLease)
 	if len(got) != 1 || got[0].Data["event"] != "renew" || got[0].Data["network"] != iotID || got[0].Data["ip"] != "10.10.0.150" {
 		t.Errorf("%+v", got)
 	}

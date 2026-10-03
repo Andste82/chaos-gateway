@@ -30,6 +30,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/audit` | the append-only audit log (JSON lines) |
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
+| `internal/kea` | the Kea DHCPv4 server: configuration renderer (one subnet per network on its bridge, reservations), control socket client (`config-test`, `config-set`, leases), the `run_script` hook's environment as a lease event |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
@@ -399,6 +400,49 @@ two ports:    the management network lives behind the uplink interface; there is
   `linux-modules-extra` when modules are missing, and prints the netplan hints. It never touches the
   uplink or management configuration. `internal/preflight` tests that its module list equals the
   preflight's.
+
+## DHCP and devices (M6a)
+
+Kea (plan §2.7) runs in its own container (`deploy/compose.kea.yaml`: host network, `NET_RAW` and
+`NET_BIND_SERVICE`, read-only root; `kea-start.sh` prepares the restricted paths `/run/kea` and
+`/var/lib/kea` and starts it from a configuration without scopes). The API configures it; the engine
+learns what the gateway sees and works out which device has which address (plan §2.3).
+
+- **Compiler.** `Target.Kea` has one subnet per network with `dhcp` switched on, bound to the network's
+  bridge: pools (default: the second half of the subnet), lease time (default 1 h), router and DNS
+  (default: the gateway), NTP, domain, custom options, and reservations from devices with `fixed_ip` and a
+  MAC. A subnet id is derived from the network's UUID, so it does not change when other networks come
+  and go (Kea keys its leases by it). Every device, configured or discovered, also has a nftables set
+  `dev_<id>` with its current addresses (`Target.DeviceSets`); the rules of the fault milestones will
+  match them.
+- **Kea.** `kea.Client` speaks the control socket; `Apply` runs `config-test` before `config-set`
+  (a failed `config-set` can leave Kea without its lease database). `engine.KeaDHCP` sends the
+  configuration after the kernel state is verified; a Kea that is down does not fail the apply: the
+  problem is in the snapshot (`DHCPError`) and the configuration is sent again every 5 s, also after Kea
+  restarted (its configuration hash changed).
+- **Observation.** `Engine.PollObserved` reads the neighbor table, conntrack and Kea's leases every
+  second and when asked (`TriggerObserve`: netlink neighbor events through `FollowNeighbors`, lease
+  events); a burst of triggers is one reading. The state owner's `tracker` (`devices.go`, a pure state
+  machine with unit tests) keeps the registry of discovered devices (the UUID is a hash of the MAC, so it
+  is stable across restarts), resolves identity with `domain.ResolveIdentity`, sets online state and
+  emits `device_discovered`, `device_online`, `device_offline` and `device_identity_changed`.
+- **Identity updates.** A change of the addresses of known devices makes a desired state flagged
+  `IdentityOnly`; the apply loop then sends `NftAddElements` and `NftDelElements` for the changed sets
+  instead of rebuilding the ruleset, and verifies. A device that has no set yet (a new one) needs a full
+  apply. The executor takes such requests before queued plans (a second queue class) and never runs two
+  requests at once. The generation rule in the kernel keeps naming the last full apply.
+- **Lease events.** Kea's `run_script` hook starts `chaosgw-kea-hook`, which runs `chaosgw kea-hook`: it
+  posts the event to `/api/v1/internal/dhcp/lease-events` with the service token (scope `service`, the
+  only scope that reaches `/internal`; written by the API to the `chaosgw-service` volume, which Kea
+  mounts read-only). The event is published as `dhcp_lease` and makes the poller read at once.
+- **API.** `GET /devices`, `/devices/{id}` (configured, WireGuard clients, probes and discovered devices
+  with their observed state), `GET /networks/{id}/leases`, `GET /flows` (from conntrack, with the device
+  of each flow). Adopting a discovered device and merging two devices are revisions (the spec's
+  `Device`).
+- **Tests.** The tracker, the engine (with a fake DHCP server) and the API are unit-tested; the real
+  Kea is exercised against the loopback (`internal/kea`, root and `kea-dhcp4` needed, otherwise skipped)
+  and in the testbed (`integration_dhcp_test.go`: udhcpc clients get a lease, a reservation is honored,
+  DHCP off leaves a network silent, identity events within a second, a burst of neighbor changes, flows).
 
 ## Generated code
 

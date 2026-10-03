@@ -2,10 +2,11 @@ package compiler
 
 import (
 	"bytes"
-	"github.com/Andste82/chaos-gateway/internal/model"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
 // nft parses and evaluates a ruleset before it talks to the kernel: a JSON expression it does not

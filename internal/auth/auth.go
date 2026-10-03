@@ -115,9 +115,11 @@ type Store struct {
 	params   HashParams
 	lifetime time.Duration
 
+	loginMu  sync.Mutex
 	mu       sync.Mutex
 	st       fileState
 	mtime    time.Time
+	size     int64
 	sessions map[string]*Session
 	lastUsed map[string]time.Time
 	limiter  *limiter
@@ -157,7 +159,7 @@ func (s *Store) load() error {
 		return fmt.Errorf("auth: %s is corrupt: %w", s.path, err)
 	}
 	if fi, err := os.Stat(s.path); err == nil {
-		s.mtime = fi.ModTime()
+		s.mtime, s.size = fi.ModTime(), fi.Size()
 	}
 	s.st = st
 	return nil
@@ -166,7 +168,7 @@ func (s *Store) load() error {
 // refresh reloads the file when another process (the password reset) changed it. The caller holds mu.
 func (s *Store) refresh() {
 	fi, err := os.Stat(s.path)
-	if err != nil || !fi.ModTime().After(s.mtime) {
+	if err != nil || (fi.ModTime().Equal(s.mtime) && fi.Size() == s.size) {
 		return
 	}
 	prev := s.st.Epoch
@@ -206,7 +208,7 @@ func (s *Store) save() error {
 		return err
 	}
 	if fi, err := os.Stat(s.path); err == nil {
-		s.mtime = fi.ModTime()
+		s.mtime, s.size = fi.ModTime(), fi.Size()
 	}
 	return nil
 }
@@ -296,9 +298,18 @@ func (s *Store) VerifyPassword(p string) bool {
 // ChangePassword sets a new password after the current one was checked and ends every session
 // except keep (the caller's own).
 func (s *Store) ChangePassword(current, next, keep string) error {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	if wait := s.limiter.blocked("password-change"); wait > 0 {
+		return &RateLimited{RetryAfter: wait}
+	}
 	if !s.VerifyPassword(current) {
+		if wait := s.limiter.fail("password-change"); wait > 0 {
+			return &RateLimited{RetryAfter: wait}
+		}
 		return ErrBadCredentials
 	}
+	s.limiter.succeed("password-change")
 	return s.setPassword(next, keep)
 }
 
@@ -400,4 +411,18 @@ func (s *Store) AuthenticateToken(value string) (Token, bool) {
 		return t, true
 	}
 	return Token{}, false
+}
+
+// TokenValid reports whether the token with this id still exists and has not expired.
+func (s *Store) TokenValid(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	now := s.clk.Now()
+	for _, r := range s.st.Tokens {
+		if r.ID == id {
+			return r.ExpiresAt == nil || now.Before(*r.ExpiresAt)
+		}
+	}
+	return false
 }

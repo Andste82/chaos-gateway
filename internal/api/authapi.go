@@ -59,7 +59,6 @@ func (s *Server) Login(c *gin.Context) {
 	var rl *auth.RateLimited
 	switch {
 	case errors.As(err, &rl):
-		s.audit(c, "auth.login_blocked", nil, "")
 		s.write(c, newProblem(model.ErrorCodeRateLimited, "too many failed logins; try again in %d seconds", int(rl.RetryAfter.Seconds())+1).
 			withHeader("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())+1)))
 		return
@@ -128,6 +127,12 @@ func (s *Server) ChangePassword(c *gin.Context) {
 		keep = p.SessionID
 	}
 	if err := s.cfg.Auth.ChangePassword(body.Current, body.New, keep); err != nil {
+		var rl *auth.RateLimited
+		if errors.As(err, &rl) {
+			s.write(c, newProblem(model.ErrorCodeRateLimited, "too many wrong passwords; try again in %d seconds", int(rl.RetryAfter.Seconds())+1).
+				withHeader("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())+1)))
+			return
+		}
 		if errors.Is(err, auth.ErrBadCredentials) {
 			errs := []model.ValidationError{{Path: "/current", Code: "wrong_password", Message: "the current password is wrong"}}
 			s.write(c, newProblem(model.ErrorCodeValidationFailed, "the current password is wrong").with(func(b *model.Problem) { b.Errors = &errs }))

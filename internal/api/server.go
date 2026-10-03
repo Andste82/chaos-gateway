@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +54,9 @@ type Server struct {
 	clk  clock.Clock
 	ops  map[string]*op
 	idem *idempotency
+	// setupMu serializes POST /setup: two requests with the token must not run the setup twice.
+	setupMu sync.Mutex
+	streams atomic.Int64
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -159,13 +164,6 @@ func (s *Server) record(c *gin.Context, action string, obj *audit.Object, rev in
 	if _, err := s.cfg.Audit.Append(e); err != nil {
 		s.log.Error("cannot write the audit log", "action", action, "error", err)
 	}
-}
-
-func (s *Server) generation() int64 { return int64(s.cfg.Engine.Snapshot().Generation) }
-
-// setGeneration adds the Chaos-Generation header of a write.
-func (s *Server) setGeneration(c *gin.Context) {
-	c.Header("Chaos-Generation", itoa(s.generation()))
 }
 
 func contextOf(c *gin.Context) context.Context { return c.Request.Context() }

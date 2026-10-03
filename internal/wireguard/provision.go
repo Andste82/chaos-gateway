@@ -307,16 +307,19 @@ func ExportSecrets(cfg *model.Configuration, sec *secrets.Store) (*model.Configu
 	return &model.ConfigurationSecrets{Wireguard: &out}, nil
 }
 
-// ImportSecrets stores the keys of the secrets block of an imported configuration. Every key has
-// to be a valid WireGuard key and every id a UUID; nothing is stored when one is not.
-func ImportSecrets(sec *secrets.Store, in *model.ConfigurationSecrets) error {
+// ImportSecrets stores the keys of the secrets block of an imported configuration and returns the
+// ids it created. Every key has to be a valid WireGuard key and every id a UUID; nothing is stored
+// when one is not. A key that is in the store already is never replaced: the same key is fine, a
+// different one is an error (it could belong to the active revision, and replacing it would change
+// a live tunnel without a revision).
+func ImportSecrets(sec *secrets.Store, in *model.ConfigurationSecrets) (created []string, err error) {
 	if in == nil || in.Wireguard == nil {
-		return nil
+		return nil, nil
 	}
 	for id, k := range *in.Wireguard {
 		for _, v := range []*string{k.PrivateKey, k.PresharedKey} {
 			if v != nil && !ValidKey(*v) {
-				return fmt.Errorf("secrets.wireguard.%s: not a valid WireGuard key", id)
+				return nil, fmt.Errorf("secrets.wireguard.%s: not a valid WireGuard key", id)
 			}
 		}
 	}
@@ -328,11 +331,22 @@ func ImportSecrets(sec *secrets.Store, in *model.ConfigurationSecrets) error {
 		if k.PresharedKey != nil {
 			keys.PresharedKey = *k.PresharedKey
 		}
-		if err := sec.PutWireGuard(id, keys); err != nil {
-			return err
+		have, gerr := sec.WireGuard(id)
+		switch {
+		case gerr == nil:
+			if have.PrivateKey != keys.PrivateKey || have.PresharedKey != keys.PresharedKey {
+				return created, fmt.Errorf("secrets.wireguard.%s: a different key is stored already", id)
+			}
+			continue
+		case !errors.Is(gerr, secrets.ErrNotFound):
+			return created, gerr
 		}
+		if err := sec.PutWireGuard(id, keys); err != nil {
+			return created, err
+		}
+		created = append(created, id)
 	}
-	return nil
+	return created, nil
 }
 
 // PeerKeyID is the id of the secret record of a client or a link peer with the given key settings

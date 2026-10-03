@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -97,20 +98,24 @@ func fingerprint(parts ...any) string {
 // begin claims a key. A key whose first request is still running makes the second wait for it, so
 // two concurrent requests with the same key do one thing. release stores the result of a request
 // that claimed the key (only a success is kept: a retry after an error runs again).
-func (i *idempotency) begin(key, fp string) (release func(*stored, string), replay *stored, conflict bool) {
+func (i *idempotency) begin(ctx context.Context, key, fp string) (release func(*stored, string), replay *stored, conflict bool, err error) {
 	for {
 		i.mu.Lock()
 		i.expire()
 		if e, ok := i.entries[key]; ok {
 			i.mu.Unlock()
 			if e.Fingerprint != fp {
-				return nil, nil, true
+				return nil, nil, true, nil
 			}
-			return nil, e, false
+			return nil, e, false, nil
 		}
 		if ch, ok := i.inflight[key]; ok {
 			i.mu.Unlock()
-			<-ch
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return nil, nil, false, ctx.Err()
+			}
 			continue
 		}
 		ch := make(chan struct{})
@@ -126,7 +131,7 @@ func (i *idempotency) begin(key, fp string) (release func(*stored, string), repl
 				i.entries[key] = res
 				i.persist()
 			}
-		}, nil, false
+		}, nil, false, nil
 	}
 }
 

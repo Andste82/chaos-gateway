@@ -84,6 +84,11 @@ func (b *Binder) Reconcile() {
 			}
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				b.Log.Error("the API listener ended", "address", ap.String(), "error", err)
+				b.mu.Lock()
+				if b.servers[ap] == srv {
+					delete(b.servers, ap) // the next reconcile listens again
+				}
+				b.mu.Unlock()
 			}
 		}()
 	}

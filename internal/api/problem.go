@@ -158,6 +158,11 @@ func (s *Server) problemFor(err error) *problem {
 		return newProblem(model.ErrorCodeNotFound, "no such revision")
 	case errors.As(err, &ve):
 		errs := validationErrors(ve)
+		for _, e := range ve {
+			if e.Code == domain.CodeDuplicateName {
+				return newProblem(model.ErrorCodeNameTaken, "%s", e.Message).with(func(b *model.Problem) { b.Errors = &errs })
+			}
+		}
 		return newProblem(model.ErrorCodeValidationFailed, "the configuration is not valid (%d problems)", len(errs)).with(func(b *model.Problem) { b.Errors = &errs })
 	case errors.As(err, &pe):
 		return newProblem(model.ErrorCodeBadRequest, "%s", err)

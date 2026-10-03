@@ -1,6 +1,6 @@
 # Open items, M0 to M6a
 
-Date: 2026-10-03. Status checked against `main` at commit `2d3ad34c0ebca891ffeea71b9bc00cbfdc0fc195` (M6a merged).
+Date: 2026-10-03. Status of M0 to M6a checked against `main` at commit `2d3ad34c0ebca891ffeea71b9bc00cbfdc0fc195` (M6a merged); the M6b section was added after M6b was merged (`c4d51d3`).
 
 This file lists what was left open or deferred from milestone M0 to M6a and is **not** scheduled in a later milestone of `docs/plan.md` §5 (including "After V1"). Items that a later milestone does cover are only listed in the last section.
 
@@ -29,7 +29,7 @@ Pure style nits and statements about what could not be run in review were left o
 
 | Title | Description | Where | Sev | Why not covered later |
 |---|---|---|---|---|
-| KVM mode of CI not asserted | The unprivileged KVM CI step is best effort (`|| true`); a runner silently falling back to emulation is visible only in the log. | `.github/workflows/ci.yml` | low | Q1 is only about where KVM tests run. |
+| KVM mode of CI not asserted | The unprivileged KVM CI step is best effort (`\|\| true`); a runner silently falling back to emulation is visible only in the log. | `.github/workflows/ci.yml` | low | Q1 is only about where KVM tests run. |
 | Netem test tolerances | `TestNetemDelayIsVisible` asserts unaffected paths are within reference + 20/25 ms; this can flake under TCG emulation. | `internal/testbed/topology_integration_test.go:184,191` | low | Nothing in the plan on test flakiness. |
 | Runner does not return the tests' exit code | `testvm` in VM mode returns 0, 1 or 2; plan M1 says "returns the tests' exit code". Documented deviation. | `tools/testvm/main.go`, `docs/development.md:78` | low | No later milestone. |
 | Leaked namespaces after crashed direct run | `Process.Wait` can hang on a grandchild; namespaces of a crashed or timed-out level 1 run are never swept. | `internal/testbed/testbed.go` | low | M27 is product recovery, not the testbed. |
@@ -156,6 +156,23 @@ Pure style nits and statements about what could not be run in review were left o
 | Kea version not pinned | The Dockerfile installs the distro `kea-dhcp4-server` unpinned; plan M6a, S6 and risk 25 promise a pinned version (spikes ran 2.4.1, devcontainer has 3.0.3). | `deploy/Dockerfile:31`, `.devcontainer/Dockerfile:39` | medium | M6a promised it; M28 does not name pinning. |
 | Kea container path untested | Directory permissions of `/var/lib/kea` and `/run/kea` in the real image, `kea-start.sh` and the real hook binary with a real token are never exercised (the testbed does not use the compose file); `DAC_OVERRIDE` was added but the effect is unverified. | `deploy/compose.kea.yaml`, `deploy/kea-start.sh` | medium | M28 level-2 smoke may cover it but does not name Kea. |
 
+## M6b (DNS proxy, service namespace)
+
+| Title | Description | Where | Sev | Why not covered later |
+|---|---|---|---|---|
+| Service step failure fails the whole apply | The `service_ns` step is part of every plan. A dead holder (attach to a missing PID) or a broken namespace makes unrelated revisions fail until the holder is back; the error is not reported as a state of its own. | `internal/apply/plan.go` (`serviceOp`), `internal/executor/exec.go` | medium | M27 covers executor kills and safe mode, not a failing optional service. |
+| AAAA for a missing name | An AAAA query is answered with an empty NOERROR before the upstream is asked, so a name that does not exist gets NODATA instead of NXDOMAIN. SVCB/HTTPS `ipv6hint` records are not removed. | `internal/dnsproxy/proxy.go` | low | M20 adds DNS faults, not this. |
+| Proxy trusts the API certificate unchecked | `chaosgw dns` skips verification unless `--api-cert-file` is given; the compose file passes none. The link is private, but the bearer token goes to whoever listens on `169.254.100.1`. | `internal/dnsproxy/apiclient.go`, `deploy/compose.dns.yaml` | low | M29 covers the replaceable certificate, not pinning for the services. |
+| Table 102 and the `prohibit` fallback are never exercised | Nothing sets mark bit 20 before M7, so no real packet uses the table; no test sends a marked packet with `svc0` present and absent (`ip route get mark`). | `internal/compiler/service.go`, testbed tests | medium | M7/M20/M21 use the mark, but none lists a fail-closed test for the prohibit path. |
+| No test with a real holder process | The testbed test uses a PID-less namespace and a manual `Refresh()`. Attach by PID, a killed and restarted holder, healing without a manual trigger (`WatchService`) and the first-boot order (holder starts after the API) run only over the simulated kernel. | `internal/api/e2e_dns_test.go`, `internal/engine/service_test.go` | medium | M28 level-2 smoke tests deploy the containers but do not name this. |
+| Coexistence with systemd-resolved is not tested | The test only shows that nothing listens on port 53 in the gateway namespace. No stub-only `/etc/resolv.conf` plus a mounted `/run/systemd/resolve`, no check of 127.0.0.53. | `internal/api/e2e_dns_test.go`, `deploy/compose.api.yaml` | low | M28 smoke tests run on Ubuntu hosts with resolved but do not name this. |
+| `dns` must join the holder's new namespace | After the holder container was recreated, `dns` stays in the old namespace; `depends_on ... restart: true` handles a Compose-driven recreate only. The health check probes only the local socket, not the API. | `deploy/compose.dns.yaml` | medium | M28 names health checks and start order generally. |
+| Volume ownership and the PID file | `/run/chaosgw-svcns` is created in the image owned by 65532; whether a named volume keeps that on every Docker version and whether a stale PID file can name a reused PID of another process on the host (the executor refuses only the executor's own namespace) is untested in the real deployment. | `deploy/Dockerfile`, `deploy/compose.dns.yaml`, `internal/executor/exec.go` | low | M28 deployment tests. |
+| Direct access to the proxy without DNAT | The forward chain accepts any `ifs_cg` client to `169.254.100.2:53`; the route into the pair exists in table 100. An access rule "drop UDP 53" (M9) must cover this path. | `internal/compiler/service.go` (`serviceForward`) | low | Note for M9; not in its scope text. |
+| Query log in memory only | The last 20000 entries are kept in the API process and lost on restart; no statistics per device, no export. | `internal/api/dns.go` | low | M26 names flows and metrics, not the DNS log. |
+| Host resolver files read in the API container | The proxy's upstream comes from `/run/systemd/resolve/resolv.conf` or `/etc/resolv.conf` as the API container sees them; a per-link resolver (resolvectl) or a change of the files is noticed only after 5 s. | `internal/dnsproxy/hostresolv.go`, `internal/api/dns.go` | low | No milestone. |
+| Pre-existing: UI port default | Before M6b the compiler's default `ui_port` (443) and the API's `--port` default (8443) disagreed, so the gateway's input rules protected another port than the API listens on when the configuration named none. M6b makes the API's port the default (`Engine.Config.DefaultUIPort`); the spec still says `default: 443`. | `internal/compiler/compile.go`, `api/openapi.yaml` (`ui_port`) | low | Spec text and the unprivileged-port question (M28) remain. |
+
 ## Covered later
 
 | Item | Milestone |
@@ -187,9 +204,12 @@ Pure style nits and statements about what could not be run in review were left o
 | M0: `image.yml` has never run (ghcr push, release tags) | M28 |
 | M0: persistent faults for DNS, TLS, DHCP and profile activations (D31) | M39 |
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
-| Stubs: `chaosgw dns` / `chaosgw tls`, `chaosctl` beyond `version` | M6b, M21, M18 |
+| Stubs: `chaosgw tls`, `chaosctl` beyond `version` | M21, M18 |
 | Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
 | WireGuard endpoints in matrix, `nft_add_elements` per-call spawn, identity maps and faults not compiled yet | M7, M6b, M8a |
 | `?force` / `references[]`, `lockout_protected`, `capacity_exceeded`, setup without confirm window (M5 deviations) | M8a, M10 |
 | `expires_at` of overlays and secrets store (M2 "not done") | M8a, M4b (done) |
 | Supervisor helper, overlay removal on stop, reader pool and time stamps (M3 deferrals) | M8a |
+| M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
+| M6b: classification sets the service mark (bit 20) that table 102 routes on | M7 |
+| M6b: TLS responder joins the service namespace | M21 |

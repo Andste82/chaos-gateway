@@ -1,0 +1,21 @@
+# The testbed gateway (plan §4.2) as a configuration: two test networks behind lan0 and lan1
+# (found by their fixed MACs), the uplink wan0 with the server as next hop, and the management
+# interface mgmt0.
+schema_version: 1
+uplink:
+  interface: {name: wan0}
+  gateway: 203.0.113.10
+management:
+  interface: {name: mgmt0}
+  allowed_sources: [192.168.56.0/24]
+networks:
+  0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21:
+    type: lan
+    name: IoT
+    interfaces: [{name: lan0, mac: '02:00:00:00:00:01'}]
+    address: 10.10.0.1/24
+  1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32:
+    type: lan
+    name: Lab
+    interfaces: [{name: lan1, mac: '02:00:00:00:01:01'}]
+    address: 10.20.0.1/24

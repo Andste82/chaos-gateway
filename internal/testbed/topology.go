@@ -74,15 +74,19 @@ func NewDefault(t testing.TB, opts ...Option) *Topology {
 	for _, sw := range []*Namespace{top.Switch0, top.Switch1} {
 		sw.Bridge("br0", "")
 	}
-	top.GW.Bridge("br-lan0", LAN0Gateway+"/24")
-	top.GW.Bridge("br-lan1", LAN1Gateway+"/24")
+	master0, master1 := "", ""
+	if b.cfg.gatewayBridges {
+		top.GW.Bridge("br-lan0", LAN0Gateway+"/24")
+		top.GW.Bridge("br-lan1", LAN1Gateway+"/24")
+		master0, master1 = "br-lan0", "br-lan1"
+	}
 
 	// test network 0: gateway port, devices A and B
-	b.Link(End{NS: top.GW, If: "lan0", MAC: GWLan0MAC, Master: "br-lan0"}, End{NS: top.Switch0, If: "p1", Master: "br0"})
+	b.Link(End{NS: top.GW, If: "lan0", MAC: GWLan0MAC, Master: master0}, End{NS: top.Switch0, If: "p1", Master: "br0"})
 	b.Link(End{NS: top.A, If: "eth0", MAC: ClientAMAC, Addr: ClientAAddr + "/24"}, End{NS: top.Switch0, If: "p11", Master: "br0"})
 	b.Link(End{NS: top.B, If: "eth0", MAC: ClientBMAC, Addr: ClientBAddr + "/24"}, End{NS: top.Switch0, If: "p12", Master: "br0"})
 	// test network 1: gateway port, device C
-	b.Link(End{NS: top.GW, If: "lan1", MAC: GWLan1MAC, Master: "br-lan1"}, End{NS: top.Switch1, If: "q1", Master: "br0"})
+	b.Link(End{NS: top.GW, If: "lan1", MAC: GWLan1MAC, Master: master1}, End{NS: top.Switch1, If: "q1", Master: "br0"})
 	b.Link(End{NS: top.C, If: "eth0", MAC: ClientCMAC, Addr: ClientCAddr + "/24"}, End{NS: top.Switch1, If: "q13", Master: "br0"})
 	top.A.Route("default", "via", LAN0Gateway)
 	top.B.Route("default", "via", LAN0Gateway)

@@ -501,3 +501,63 @@ func TestConcurrentClientsAreSerialized(t *testing.T) {
 		t.Errorf("generation %d, want %d: every update counts once", got, gen+n*5)
 	}
 }
+
+// M4 additions: bridges, ports, addresses, sysctls on a real kernel.
+func TestLinksAndSysctlsOnARealKernel(t *testing.T) {
+	g := startGateway(t)
+	g.must(&executor.AssignInterfaces{Devs: []string{"wan0", "lan0", "lan1", "br-lan0", "br-lan1", "br-x"}})
+	g.must(&executor.Links{Target: tgt(g.ns), Entries: []executor.LinkEntry{
+		{Action: "add_bridge", Name: "br-x"},
+		{Action: "add_bridge", Name: "br-x"}, // idempotent
+		{Action: "enslave", Name: "lan1", Master: "br-x"},
+		{Action: "addr_replace", Name: "br-x", CIDR: "10.77.0.1/24"},
+		{Action: "addr_replace", Name: "br-x", CIDR: "10.77.0.1/24"},
+		{Action: "up", Name: "br-x"},
+	}})
+	if out := g.top.GW.Must("ip", "-o", "link", "show", "dev", "lan1"); !strings.Contains(out, "master br-x") {
+		t.Errorf("lan1: %s", out)
+	}
+	if out := g.top.GW.Must("ip", "-o", "addr", "show", "dev", "br-x"); !strings.Contains(out, "10.77.0.1/24") {
+		t.Errorf("br-x: %s", out)
+	}
+	g.must(&executor.Sysctl{Target: tgt(g.ns), Entries: []executor.SysctlEntry{
+		{Name: "ip_forward", Value: 1}, {Name: "accept_ra", Dev: "br-x", Value: 0}, {Name: "disable_ipv6", Dev: "br-x", Value: 0},
+	}})
+	var fwd, ra int
+	if _, err := g.c.Read(tctx(t), executor.Read{Target: tgt(g.ns), What: executor.ReadSysctl, Name: "ip_forward"}, &fwd); err != nil || fwd != 1 {
+		t.Errorf("ip_forward %d %v", fwd, err)
+	}
+	ra = 9
+	if _, err := g.c.Read(tctx(t), executor.Read{Target: tgt(g.ns), What: executor.ReadSysctl, Name: "accept_ra", Dev: "br-x"}, &ra); err != nil || ra != 0 {
+		t.Errorf("accept_ra %d %v", ra, err)
+	}
+	if out := g.top.GW.Must("cat", "/proc/sys/net/ipv4/ip_forward"); out != "1" {
+		t.Errorf("ip_forward %q", out)
+	}
+	// deleting what is gone is fine; addresses can be removed; the port can be released
+	g.must(&executor.Links{Target: tgt(g.ns), Entries: []executor.LinkEntry{
+		{Action: "addr_delete", Name: "br-x", CIDR: "10.77.0.1/24"},
+		{Action: "addr_delete", Name: "br-x", CIDR: "10.77.0.1/24"},
+		{Action: "release", Name: "lan1"},
+		{Action: "delete_bridge", Name: "br-x"},
+		{Action: "delete_bridge", Name: "br-x"},
+	}})
+	if out, err := g.top.GW.Run(tctx(t), "ip", "link", "show", "dev", "br-x"); err == nil {
+		t.Errorf("br-x still exists: %s", out)
+	}
+	// delete_bridge never deletes anything but a bridge
+	if _, err := g.c.Do(tctx(t), &executor.Links{Target: tgt(g.ns), Entries: []executor.LinkEntry{{Action: "delete_bridge", Name: "wan0"}}}); err == nil {
+		t.Error("a veth was deleted as a bridge")
+	}
+	if out := g.top.GW.Must("ip", "-o", "link", "show", "dev", "wan0"); out == "" {
+		t.Error("wan0 is gone")
+	}
+	// an interface that is not assigned cannot be touched
+	if _, err := g.c.Do(tctx(t), &executor.Links{Target: tgt(g.ns), Entries: []executor.LinkEntry{{Action: "down", Name: "mgmt0"}}}); err == nil {
+		t.Error("mgmt0 is not assigned")
+	}
+	var assigned []string
+	if _, err := g.c.Read(tctx(t), executor.Read{Target: tgt(g.ns), What: executor.ReadAssigned}, &assigned); err != nil || len(assigned) != 6 {
+		t.Errorf("assigned %v %v", assigned, err)
+	}
+}

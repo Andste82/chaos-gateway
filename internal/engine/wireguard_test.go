@@ -31,7 +31,7 @@ func newWGHarness(t *testing.T) (*harness, *secrets.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(h.k, executor.WithKeys(func(id string) (string, string, error) {
+	ex, err := executor.New(h.k, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
 		k, err := sec.WireGuard(id)
 		return k.PrivateKey, k.PresharedKey, err
 	}))

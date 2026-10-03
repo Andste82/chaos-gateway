@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Andste82/chaos-gateway/internal/bird"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,10 @@ type Snapshot struct {
 	// WireGuard is the state of every peer, by the id of the client (or of the link): the last
 	// poll's result.
 	WireGuard map[string]PeerStatus
+	// Bird is set while the last applied target runs dynamic routing; it names the instance.
+	Bird *compiler.BirdTarget
+	// Routing is the state of every routing protocol by name: the last poll's result.
+	Routing map[string]bird.ProtocolStatus
 }
 
 // PendingInfo describes a revision waiting for confirmation.
@@ -91,12 +96,13 @@ type Engine struct {
 	events  *bus
 	sup     *supervisor.Supervisor
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	core    sync.WaitGroup // the state owner and the apply loop
-	done    chan struct{}  // closed when both have returned
-	started bool
-	polling atomic.Bool
+	ctx            context.Context
+	cancel         context.CancelFunc
+	core           sync.WaitGroup // the state owner and the apply loop
+	done           chan struct{}  // closed when both have returned
+	started        bool
+	polling        atomic.Bool
+	pollingRouting atomic.Bool
 }
 
 // ErrClosed is returned by commands after Close.

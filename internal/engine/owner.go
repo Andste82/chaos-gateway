@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"github.com/Andste82/chaos-gateway/internal/bird"
 	"reflect"
 	"time"
 
@@ -82,20 +83,24 @@ type cmdBarrier struct{ reply chan *Snapshot }
 type cmdTimeout struct{ rev int64 }
 
 type cmdWGStatus struct{ status map[string]PeerStatus }
+type cmdRoutingStatus struct {
+	status map[string]bird.ProtocolStatus
+}
 
 type cmdRetry struct{}
 
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
 const retryDelay = 10 * time.Second
 
-func (cmdApply) command()    {}
-func (cmdConfirm) command()  {}
-func (cmdRollback) command() {}
-func (cmdObserve) command()  {}
-func (cmdBarrier) command()  {}
-func (cmdTimeout) command()  {}
-func (cmdWGStatus) command() {}
-func (cmdRetry) command()    {}
+func (cmdApply) command()         {}
+func (cmdConfirm) command()       {}
+func (cmdRollback) command()      {}
+func (cmdObserve) command()       {}
+func (cmdBarrier) command()       {}
+func (cmdTimeout) command()       {}
+func (cmdWGStatus) command()      {}
+func (cmdRoutingStatus) command() {}
+func (cmdRetry) command()         {}
 
 // applyResult is what the apply loop reports about one desired state.
 type applyResult struct {
@@ -136,9 +141,10 @@ type owner struct {
 
 	// outbox holds replies that are sent after the snapshot is published: a caller that gets its
 	// answer must see the state it describes
-	outbox   []func()
-	retrying bool
-	wgSeen   bool
+	outbox      []func()
+	retrying    bool
+	wgSeen      bool
+	routingSeen bool
 	// settled is the highest generation the apply loop has reported on, successfully or not
 	settled uint64
 	snap    Snapshot
@@ -319,6 +325,8 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.retry()
 	case cmdWGStatus:
 		o.wireguardStatus(c.status)
+	case cmdRoutingStatus:
+		o.routingStatus(c.status)
 	case cmdObserve:
 		o.observe(c.host)
 		o.later(func() { c.reply <- struct{}{} })
@@ -391,6 +399,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.LastError = ""
 		o.snap.Problems = r.target.Problems
 		o.snap.WireGuardInterfaces = r.target.WireGuard
+		o.snap.Bird = birdOf(r.target)
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})

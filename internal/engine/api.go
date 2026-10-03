@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/observer"
@@ -11,6 +12,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -126,7 +128,18 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	if tg.HasErrors() {
 		return p, nil
 	}
-	state, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
+	if tg.Bird != nil {
+		// BIRD's own parser has the last word on the configuration, and the preview shows its message
+		_, err := e.cfg.Exec.Do(ctx, &executor.Bird{Action: "check", Instance: tg.Bird.Instance, Config: tg.Bird.Text, ImportTables: tg.Bird.ImportTables})
+		var be *executor.BirdError
+		if err != nil && (errors.As(err, &be) || strings.Contains(err.Error(), "bird: ")) {
+			p.Problems = append(p.Problems, compiler.Problem{Severity: compiler.SevError, Code: compiler.CodeRouting, Message: err.Error()})
+			return p, nil
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	state, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads, BirdInstance: compiler.BirdInstance})
 	if err != nil {
 		return nil, err
 	}

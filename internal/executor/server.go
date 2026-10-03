@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/version"
 )
 
@@ -118,6 +120,12 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 func (s *Server) handle(ctx context.Context, c net.Conn) {
 	log := s.logger()
+	// a bug in the decoder or the protocol must not take the executor down: close that connection
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("panic in a connection handler", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	cred, err := PeerCred(c)
 	if err == nil {
 		auth := s.Auth
@@ -139,7 +147,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	_ = c.SetReadDeadline(time.Now().Add(timeout))
+	_ = c.SetReadDeadline((&clock.Real{}).Now().Add(timeout))
 	f, err := cc.read()
 	_ = c.SetReadDeadline(time.Time{})
 	if err != nil || f.Hello == nil {
@@ -178,7 +186,9 @@ func (s *Server) serve(ctx context.Context, req *Request) *Response {
 		}
 		ops = append(ops, op)
 	}
-	out, err := s.Exec.DoBatch(ctx, ops)
+	// shutdown does not interrupt a running operation: it finishes, and so does a request that was
+	// accepted before the shutdown began
+	out, err := s.Exec.DoBatch(context.WithoutCancel(ctx), ops)
 	resp.Outcome = out
 	if err == nil {
 		resp.OK = true

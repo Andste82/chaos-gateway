@@ -57,7 +57,11 @@ type real struct {
 	exec apply.Exec
 }
 
-func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec) *real {
+// realClock makes the engine use the real clock: the netlink debounce needs it, the confirmation
+// tests want the fake one.
+const realClock = true
+
+func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec, opts ...bool) *real {
 	t.Helper()
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false))
 	ex, err := executor.New(executor.NewExecRunner())
@@ -83,7 +87,11 @@ func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec) *real {
 		x = wrap(x)
 	}
 	r := &real{t: t, top: top, ex: ex, st: st, clk: clock.NewFake(time.Now()), base: cfg, exec: x}
-	e, err := engine.New(engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: r.clk})
+	var clk clock.Clock = r.clk
+	if len(opts) > 0 && opts[0] {
+		clk = &clock.Real{}
+	}
+	e, err := engine.New(engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: clk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +177,7 @@ s.sendto(b"x", ("`+testbed.ServerAddr+`", 9000))
 
 // M4 test: a changed uplink address keeps NAT working and emits an event, found through netlink.
 func TestTheEngineFollowsTheUplinkThroughNetlinkEvents(t *testing.T) {
-	r := newReal(t, nil)
+	r := newReal(t, nil, realClock)
 	if _, err := r.apply(r.revision(nil), engine.ApplyOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -218,13 +226,15 @@ func TestAnUnconfirmedChangeIsRolledBackOnARealKernel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// management access is allowed from the whole 10.0.0.0/8 now: lockout relevant
-	rev := r.revision(func(c *model.Configuration) { c.Management.AllowedSources = &[]string{"192.168.56.0/24", "10.0.0.0/8"} })
+	// management access is allowed from the whole 172.16.0.0/12 now: lockout relevant
+	rev := r.revision(func(c *model.Configuration) {
+		c.Management.AllowedSources = &[]string{"192.168.56.0/24", "172.16.0.0/12"}
+	})
 	a, err := r.apply(rev, engine.ApplyOptions{ConfirmTimeout: 20 * time.Second})
 	if err != nil || a.Status != "pending_confirm" {
 		t.Fatalf("%+v %v", a, err)
 	}
-	if !strings.Contains(r.nft(), "10.0.0.0/8") {
+	if !strings.Contains(r.nft(), "172.16.0.0/12") {
 		t.Fatal("the change is not in the kernel")
 	}
 	r.clk.Advance(21 * time.Second)

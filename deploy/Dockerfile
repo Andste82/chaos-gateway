@@ -15,6 +15,7 @@ ARG DATE=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+COPY api ./api
 COPY cmd ./cmd
 COPY internal ./internal
 # cross-compiled on the build platform: no emulation needed for the Go build

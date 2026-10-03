@@ -250,6 +250,10 @@ const (
 	ReadSysctl = "sysctl"
 	// ReadAssigned returns the interfaces assigned to Chaos Gateway; ReadDockerUser the accept
 	// rules of Chaos Gateway in DOCKER-USER (linux.DockerUserState).
+	// ReadNeighbors returns the IPv4 neighbor table (ARP), optionally of one interface.
+	ReadNeighbors = "neighbors"
+	// ReadConntrack returns the tracked IPv4 connections.
+	ReadConntrack = "conntrack"
 	// ReadBird returns the state of the BIRD instance Instance (BirdState): whether it runs, the hash
 	// of its configuration file and its protocols.
 	ReadBird = "bird"

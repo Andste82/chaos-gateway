@@ -560,6 +560,10 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		v = n
 	case ReadDockerUser:
 		v = linux.ParseDockerUser(r.Stdout)
+	case ReadNeighbors:
+		v, err = linux.ParseNeighbors([]byte(r.Stdout))
+	case ReadConntrack:
+		v = linux.ParseConntrack(r.Stdout)
 	case ReadWireGuard:
 		// the dump starts with the private key: the parser drops it, and the output goes no further
 		v, err = linux.ParseWGDump(r.Stdout)

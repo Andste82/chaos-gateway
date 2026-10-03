@@ -120,7 +120,7 @@ func (v *VM) WaitSSH(ctx context.Context, d time.Duration) error {
 		last = err
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("appliance: the VM does not accept SSH within %v: %v", d, last)
+	return fmt.Errorf("appliance: the VM does not accept SSH within %v: %w", d, last)
 }
 
 // Result is the outcome of a command in the VM.

@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/api"
+	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
 	"github.com/Andste82/chaos-gateway/internal/clock"
@@ -53,6 +54,8 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	listen := fs.String("listen", "", "listen on exactly this address instead of the management network (development, tests)")
 	poll := fs.Duration("poll-interval", 5*time.Second, "how often WireGuard and routing state are read")
 	keaSocket := fs.String("kea-socket", kea.ControlSocket, "Kea's control socket; empty runs without DHCP")
+	serviceNS := fs.String("service-ns", "", "name of the service namespace of the gateway services (the DNS proxy); empty runs without one")
+	holderPID := fs.String("service-holder-pid-file", "", "file with the PID (as the executor sees it) of the process whose network namespace becomes the service namespace")
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
@@ -70,7 +73,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
-		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, serviceToken: *serviceToken}); err != nil {
+		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, serviceToken: *serviceToken, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -91,6 +94,9 @@ type apiOptions struct {
 	confirm      time.Duration
 	keaSocket    string
 	serviceToken string
+	// serviceNS and holderPIDFile configure the service namespace (plan §3.3)
+	serviceNS     string
+	holderPIDFile string
 }
 
 func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOptions) error {
@@ -119,7 +125,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	if o.keaSocket != "" {
 		dhcp = &engine.KeaDHCP{Client: &kea.Client{Socket: o.keaSocket}, Base: kea.Config{Script: kea.HookScript}}
 	}
-	eng, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp})
+	eng, err := engine.New(engineConfig(st, ex, o, sec, log, dhcp))
 	if err != nil {
 		return err
 	}
@@ -135,7 +141,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 			return nil
 		case <-time.After(2 * time.Second):
 		}
-		if eng, err = engine.New(engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp}); err != nil {
+		if eng, err = engine.New(engineConfig(st, ex, o, sec, log, dhcp)); err != nil {
 			return err
 		}
 	}
@@ -231,6 +237,10 @@ func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip
 		return nil
 	}
 	out := []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	// the gateway services in the service namespace reach the API on the gateway's end of the pair
+	if snap.Service != nil && snap.Service.HostCIDR.IsValid() {
+		out = append(out, snap.Service.HostCIDR.Addr())
+	}
 	if !setupDone {
 		for _, l := range snap.Host.Links {
 			if l.Name == "lo" {
@@ -343,4 +353,22 @@ func apiHealth(port int, listen string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "API healthy")
 	return 0
+}
+
+func engineConfig(st *store.Store, ex apply.Exec, o apiOptions, sec *secrets.Store, log *slog.Logger, dhcp engine.DHCP) engine.Config {
+	cfg := engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp, ServiceNS: o.serviceNS}
+	if o.holderPIDFile != "" {
+		cfg.ServiceHolderPID = func() int {
+			raw, err := os.ReadFile(o.holderPIDFile)
+			if err != nil {
+				return 0
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil || n < 0 {
+				return 0
+			}
+			return n
+		}
+	}
+	return cfg
 }

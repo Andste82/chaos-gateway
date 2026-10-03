@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -135,7 +136,8 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(e.Close)
 	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm})
+		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm,
+		Resolvers: func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("192.0.2.53")} }})
 	if err != nil {
 		t.Fatal(err)
 	}

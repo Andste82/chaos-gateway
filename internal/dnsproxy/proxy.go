@@ -153,6 +153,9 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	e.Protocol = &proto
 	ms := float32(float64(s.opt.Clock.Now().Sub(start)) / float64(time.Millisecond))
 	e.DurationMs = &ms
+	if e.Name == probeName {
+		return // the container's health check is not a query of a device
+	}
 	s.log.add(e)
 }
 
@@ -209,6 +212,9 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 	}
 	if q.Qclass != dns.ClassINET {
 		return fail(dns.RcodeNotImplemented), e
+	}
+	if strings.HasSuffix(name, ".invalid.") || name == "invalid." {
+		return fail(dns.RcodeNameError), e // RFC 6761: never forwarded
 	}
 	strip := cfg.StripAaaa == nil || *cfg.StripAaaa
 	if q.Qtype == dns.TypeAAAA && strip {
@@ -384,4 +390,16 @@ func (c *client) Exchange(ctx context.Context, m *dns.Msg, network, server strin
 	cl := &dns.Client{Net: network}
 	resp, _, err := cl.ExchangeContext(ctx, m, server)
 	return resp, err
+}
+
+const probeName = "health.invalid"
+
+// Probe sends a query for a reserved name to the proxy at addr and succeeds when it answers in any
+// way (the health check of the container: a proxy without a configuration answers SERVFAIL).
+func Probe(addr string) error {
+	m := new(dns.Msg)
+	m.SetQuestion(probeName+".", dns.TypeA)
+	c := &dns.Client{Net: "udp", Timeout: 2 * time.Second}
+	_, _, err := c.Exchange(m, addr)
+	return err
 }

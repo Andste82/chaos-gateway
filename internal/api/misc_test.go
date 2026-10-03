@@ -118,7 +118,7 @@ func specOps(t *testing.T) (m5, later []struct {
 				Method, Path, Milestone string
 				Internal                bool
 			}{m, path, o.Milestone, o.Internal}
-			if o.Milestone == "M5" || o.Milestone == "M6a" { // implemented in this build
+			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" { // implemented in this build
 				m5 = append(m5, e)
 			} else {
 				later = append(later, e)

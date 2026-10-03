@@ -82,7 +82,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 // input builds the compiler's input. The public keys of the WireGuard interfaces come from the
 // secrets store; a network without one is reported by the compiler.
 func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity) compiler.Input {
-	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id}
+	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS}
+	if e.cfg.ServiceHolderPID != nil {
+		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
+	}
 	if e.cfg.Secrets != nil {
 		keys, err := wireguard.InterfaceKeys(cfg, e.cfg.Secrets)
 		if err != nil {

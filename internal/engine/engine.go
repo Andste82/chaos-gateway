@@ -40,6 +40,12 @@ type Config struct {
 	Secrets *secrets.Store
 	// DHCP is the DHCP server (Kea); nil leaves DHCP out: nothing is configured, no leases are read.
 	DHCP DHCP
+	// ServiceNS is the service namespace of the gateway services (the DNS proxy); empty runs
+	// without one: no DNS redirect, no veth pair.
+	ServiceNS string
+	// ServiceHolderPID returns the process whose network namespace becomes the service namespace
+	// when it has to be created (the holder container); nil or 0 creates an empty namespace.
+	ServiceHolderPID func() int
 }
 
 // Snapshot is an immutable view of the engine. Nothing in a published snapshot is modified
@@ -82,6 +88,8 @@ type Snapshot struct {
 	Leases []model.DhcpLease
 	// KeaNetworks maps a Kea subnet id to the UUID of its network (last applied target).
 	KeaNetworks map[int]string
+	// Service is the service namespace of the last applied target; nil when there is none.
+	Service *compiler.ServiceNS
 	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
 	DHCPError string
 }

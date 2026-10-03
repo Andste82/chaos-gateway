@@ -180,7 +180,8 @@ func TestServerRefusesAClientWithAnotherProtocolVersion(t *testing.T) {
 	rc2 := rawDial(t, path)
 	rc2.frame(t)
 	rc2.send(t, `{"hello":{"protocol":99,"role":"client"}}`)
-	rc2.send(t, `{"request":{"id":1,"ops":[`+nftOp+`]}}`)
+	// the server may already have closed the connection: a failing write is the expected outcome
+	_, _ = rc2.Write([]byte(`{"request":{"id":1,"ops":[` + nftOp + `]}}` + "\n"))
 	rc2.frame(t)
 	if len(fr.commands()) != 0 || e.Generation() != 0 {
 		t.Fatal("a refused client got an operation executed")

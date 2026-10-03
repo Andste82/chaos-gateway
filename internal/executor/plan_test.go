@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -207,6 +208,67 @@ func TestPlannedCommandsAreInert(t *testing.T) {
 					t.Errorf("argument %q of %s is not inert", a, c)
 				}
 			}
+		}
+	}
+}
+
+func TestPlanLinksGolden(t *testing.T) {
+	steps := mustPlan(t, `{"type":"links","namespace":"gw","entries":[
+	  {"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},
+	  {"action":"up","name":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"},
+	  {"action":"addr_delete","name":"br-lan0","cidr":"10.9.0.1/24"},{"action":"release","name":"lan1"},
+	  {"action":"down","name":"lan1"},{"action":"delete_bridge","name":"br-old"}]}`)
+	var got []string
+	for _, s := range steps {
+		line := s.Cmd.String()
+		if s.Probe != nil {
+			line = fmt.Sprintf("if %v %s: %s", s.RunIfProbeOK, s.Probe, line)
+		}
+		got = append(got, line)
+	}
+	want := []string{
+		"if false [gw] ip link show dev br-lan0: [gw] ip link add name br-lan0 type bridge",
+		"[gw] ip link set dev lan0 master br-lan0",
+		"[gw] ip link set dev br-lan0 up",
+		"[gw] ip addr replace 10.10.0.1/24 dev br-lan0",
+		"[gw] ip addr delete 10.9.0.1/24 dev br-lan0",
+		"[gw] ip link set dev lan1 nomaster",
+		"[gw] ip link set dev lan1 down",
+		"if true [gw] ip link show dev br-old: [gw] ip link delete dev br-old type bridge",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if !steps[4].Idempotent {
+		t.Error("deleting an address that is gone must not fail")
+	}
+}
+
+func TestPlanSysctlAndReads(t *testing.T) {
+	steps := mustPlan(t, `{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"br.1","value":0}]}`)
+	if len(steps) != 2 || strings.Join(steps[0].Cmd.Args, " ") != "-w net/ipv4/ip_forward=1" || strings.Join(steps[1].Cmd.Args, " ") != "-w net/ipv6/conf/br.1/accept_ra=0" {
+		t.Fatalf("%+v", steps)
+	}
+	for in, want := range map[string]string{
+		`{"type":"read","what":"sysctl","name":"accept_ra","dev":"br-lan0"}`: "sysctl -n net/ipv6/conf/br-lan0/accept_ra",
+		`{"type":"read","what":"docker_user"}`:                               "iptables -w 5 -S DOCKER-USER",
+	} {
+		if got := ReadCommand(mustDecode(t, in).(*Read)).String(); got != want {
+			t.Errorf("%s: %q", in, got)
+		}
+	}
+}
+
+func TestOptionalDockerChainIsGuarded(t *testing.T) {
+	steps := mustPlan(t, `{"type":"docker_user","action":"ensure","devs":["lan0"],"optional_chain":true}`)
+	for _, s := range steps {
+		if s.Guard == nil || strings.Join(s.Guard.Args, " ") != "-w 5 -S DOCKER-USER" {
+			t.Fatalf("step without a guard: %+v", s)
+		}
+	}
+	for _, s := range mustPlan(t, `{"type":"docker_user","action":"ensure","devs":["lan0"]}`) {
+		if s.Guard != nil {
+			t.Fatal("a required chain has no guard")
 		}
 	}
 }

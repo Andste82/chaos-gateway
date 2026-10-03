@@ -19,6 +19,8 @@ var fuzzSeeds = []string{
 	`{"type":"routing","rules":[{"action":"delete","family":4,"priority":32766,"table":254}]}`,
 	`{"type":"tc","entries":[{"object":"qdisc","action":"add","dev":"wan0\n","parent":"root","args":["netem;id"]}]}`,
 	`{"type":"offloads","devs":["a"],"devs":["b"]}`,
+	`{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"}]}`,
+	`{"type":"sysctl","entries":[{"name":"accept_ra","dev":"br-lan0","value":0}]}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"table":{"family":"ip","name":"nat","Family":"inet","Name":"chaosgw"}}}]}}`,
 	`{"type":"tc","entries":[{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]}]}`,
 	``, `{}`, `[]`, `null`, `{"type":null}`, `{"type":"read"`, "\x00",
@@ -86,6 +88,9 @@ func checkStdin(t *testing.T, op Operation, c Command) {
 		}
 		nftOracle(t, c.Stdin)
 	case ToolIP, ToolTC:
+		if c.Stdin == "" {
+			return // single-command steps (links) carry no batch
+		}
 		verbs := map[string]bool{"route": true, "rule": true, "qdisc": true, "class": true, "filter": true}
 		lines := strings.Split(strings.TrimSuffix(c.Stdin, "\n"), "\n")
 		for _, l := range lines {

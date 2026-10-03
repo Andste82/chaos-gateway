@@ -476,6 +476,89 @@ func (o DockerUser) validate() error {
 	return checkDevs(o.Devs, false)
 }
 
+var sysctlLimits = map[string]struct {
+	perDev bool
+	max    int
+}{"ip_forward": {false, 1}, "accept_ra": {true, 2}, "disable_ipv6": {true, 1}}
+
+func checkSysctl(name, dev string) error {
+	lim, ok := sysctlLimits[name]
+	if !ok {
+		return fmt.Errorf("sysctl %q is not one the executor sets", name)
+	}
+	if lim.perDev != (dev != "") {
+		return fmt.Errorf("sysctl %s: dev is %s", name, map[bool]string{true: "required", false: "not allowed"}[lim.perDev])
+	}
+	if dev != "" {
+		return checkDev(dev)
+	}
+	return nil
+}
+
+func (o Sysctl) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if len(o.Entries) == 0 || len(o.Entries) > maxEntries {
+		return fmt.Errorf("%d entries, want 1..%d", len(o.Entries), maxEntries)
+	}
+	for i, e := range o.Entries {
+		if err := checkSysctl(e.Name, e.Dev); err != nil {
+			return fmt.Errorf("entries[%d]: %w", i, err)
+		}
+		if e.Value < 0 || e.Value > sysctlLimits[e.Name].max {
+			return fmt.Errorf("entries[%d]: value %d out of range for %s", i, e.Value, e.Name)
+		}
+	}
+	return nil
+}
+
+func (o Links) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if len(o.Entries) == 0 || len(o.Entries) > maxEntries {
+		return fmt.Errorf("%d entries, want 1..%d", len(o.Entries), maxEntries)
+	}
+	for i, e := range o.Entries {
+		if err := e.validate(); err != nil {
+			return fmt.Errorf("entries[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (e LinkEntry) validate() error {
+	if err := oneOf("action", e.Action, "add_bridge", "delete_bridge", "enslave", "release", "up", "down", "addr_replace", "addr_delete"); err != nil {
+		return err
+	}
+	if err := checkDev(e.Name); err != nil {
+		return err
+	}
+	if (e.Action == "enslave") != (e.Master != "") {
+		return errors.New("master is given for enslave and only for it")
+	}
+	if e.Master != "" {
+		if err := checkDev(e.Master); err != nil {
+			return err
+		}
+		if e.Master == e.Name {
+			return errors.New("an interface cannot be its own master")
+		}
+	}
+	isAddr := e.Action == "addr_replace" || e.Action == "addr_delete"
+	if isAddr != (e.CIDR != "") {
+		return errors.New("cidr is given for addr_replace and addr_delete and only for them")
+	}
+	if isAddr {
+		p, err := netip.ParsePrefix(e.CIDR)
+		if err != nil || p.Addr().Zone() != "" || !p.Addr().Is4() {
+			return fmt.Errorf("%q is not an IPv4 address with prefix length", e.CIDR)
+		}
+	}
+	return nil
+}
+
 func (o AssignInterfaces) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
@@ -495,13 +578,20 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser); err != nil {
 		return err
 	}
 	if o.Dev != "" {
 		if err := checkDev(o.Dev); err != nil {
 			return err
 		}
+	}
+	if o.What == ReadSysctl {
+		if err := checkSysctl(o.Name, o.Dev); err != nil {
+			return err
+		}
+	} else if o.Name != "" {
+		return errors.New("name is only for sysctl reads")
 	}
 	if (o.What == ReadOffloads) && o.Dev == "" {
 		return errors.New("offloads need a dev")

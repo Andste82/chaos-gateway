@@ -18,6 +18,8 @@ func TestDecodeAcceptsEveryOperationType(t *testing.T) {
 		TypeDockerUser:     `{"type":"docker_user","action":"ensure","devs":["br-lan0"]}`,
 		TypeAssign:         `{"type":"assign_interfaces","devs":["wan0","lan0","br-lan0"]}`,
 		TypeRead:           `{"type":"read","what":"routes","table":"100","dev":"wan0"}`,
+		TypeLinks:          `{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"up","name":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"},{"action":"addr_delete","name":"br-lan0","cidr":"10.9.0.1/24"},{"action":"release","name":"lan1"},{"action":"down","name":"lan1"},{"action":"delete_bridge","name":"br-old"}]}`,
+		TypeSysctl:         `{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"br-lan0","value":0},{"name":"disable_ipv6","dev":"lan0","value":1}]}`,
 	} {
 		op, err := Decode([]byte(in))
 		if err != nil {
@@ -101,6 +103,25 @@ func TestDecodeRejects(t *testing.T) {
 		{"tc classid keyword in args", tc(`{"object":"class","action":"add","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","classid","1:11"]}`)},
 		{"tc path traversal token", tc(`{"object":"qdisc","action":"add","dev":"wan0","parent":"root","args":["netem","distribution","a/../b"]}`)},
 		{"rule fwmark with underscore", rule(`,"fwmark":"1_0"`)},
+
+		{"links unknown action", `{"type":"links","entries":[{"action":"delete","name":"eth0"}]}`},
+		{"links enslave without master", `{"type":"links","entries":[{"action":"enslave","name":"lan0"}]}`},
+		{"links master on another action", `{"type":"links","entries":[{"action":"up","name":"lan0","master":"br0"}]}`},
+		{"links own master", `{"type":"links","entries":[{"action":"enslave","name":"lan0","master":"lan0"}]}`},
+		{"links address without cidr", `{"type":"links","entries":[{"action":"addr_replace","name":"br0"}]}`},
+		{"links cidr on up", `{"type":"links","entries":[{"action":"up","name":"br0","cidr":"10.0.0.1/24"}]}`},
+		{"links v6 address", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"fe80::1/64"}]}`},
+		{"links bare address", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"10.0.0.1"}]}`},
+		{"links bad name", `{"type":"links","entries":[{"action":"up","name":"br0 x"}]}`},
+		{"links none", `{"type":"links","entries":[]}`},
+		{"sysctl unknown name", `{"type":"sysctl","entries":[{"name":"rp_filter","dev":"br0","value":0}]}`},
+		{"sysctl forward with dev", `{"type":"sysctl","entries":[{"name":"ip_forward","dev":"br0","value":1}]}`},
+		{"sysctl accept_ra without dev", `{"type":"sysctl","entries":[{"name":"accept_ra","value":0}]}`},
+		{"sysctl value too large", `{"type":"sysctl","entries":[{"name":"ip_forward","value":2}]}`},
+		{"sysctl negative", `{"type":"sysctl","entries":[{"name":"accept_ra","dev":"br0","value":-1}]}`},
+		{"sysctl path in dev", `{"type":"sysctl","entries":[{"name":"accept_ra","dev":"../../x","value":0}]}`},
+		{"read sysctl without name", `{"type":"read","what":"sysctl"}`},
+		{"read name on links", `{"type":"read","what":"links","name":"ip_forward"}`},
 
 		// set elements
 		{"element is a command", `{"type":"nft_add_elements","set":"s","elements":["1.2.3.4; flush ruleset"]}`},

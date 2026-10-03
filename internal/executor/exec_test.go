@@ -552,3 +552,76 @@ func TestPanicInAnOperationIsAFailedRequestNotACrash(t *testing.T) {
 		t.Fatalf("the executor must keep working: %v", err)
 	}
 }
+
+func TestLinksSysctlScopeAndReads(t *testing.T) {
+	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		switch {
+		case c.Tool == ToolSysctl && c.Args[0] == "-n":
+			return Result{Stdout: "1\n"}, nil
+		case c.Tool == ToolIptables && c.Args[len(c.Args)-1] == "DOCKER-USER" && c.Args[2] == "-S":
+			return Result{Stdout: "-N DOCKER-USER\n-A DOCKER-USER -i br-lan0 -m comment --comment chaosgw -j ACCEPT\n-A DOCKER-USER -o br-lan0 -m comment --comment chaosgw -j ACCEPT\n-A DOCKER-USER -j RETURN\n"}, nil
+		}
+		return Result{}, nil
+	}}
+	e := newExec(t, fr)
+	ctx := context.Background()
+	for name, in := range map[string]string{
+		"links name":   `{"type":"links","entries":[{"action":"delete_bridge","name":"docker0x"}]}`,
+		"links master": `{"type":"links","entries":[{"action":"enslave","name":"lan0","master":"br-x"}]}`,
+		"sysctl dev":   `{"type":"sysctl","entries":[{"name":"accept_ra","dev":"eth0","value":0}]}`,
+	} {
+		if _, err := e.DoBatch(ctx, ops(t, assignWan, in)); !errors.Is(err, ErrOutOfScope) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := e.DoBatch(ctx, ops(t, assignWan,
+		`{"type":"links","entries":[{"action":"add_bridge","name":"wan0"},{"action":"enslave","name":"lan0","master":"wan0"}]}`,
+		`{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"lan0","value":0}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := e.DoBatch(ctx, ops(t, `{"type":"read","what":"assigned"}`, `{"type":"read","what":"sysctl","name":"ip_forward"}`, `{"type":"read","what":"docker_user"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assigned []string
+	_ = json.Unmarshal(out.Data[0], &assigned)
+	if strings.Join(assigned, ",") != "lan0,wan0" {
+		t.Errorf("assigned %v", assigned)
+	}
+	if string(out.Data[1]) != "1" {
+		t.Errorf("sysctl %s", out.Data[1])
+	}
+	var du linux.DockerUserState
+	_ = json.Unmarshal(out.Data[2], &du)
+	if !du.ChainExists || len(du.In) != 1 || du.In[0] != "br-lan0" || len(du.Out) != 1 || !du.OursFirst {
+		t.Errorf("docker %+v", du)
+	}
+}
+
+func TestOptionalDockerChainMissingIsNoError(t *testing.T) {
+	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		if c.Tool == ToolIptables {
+			return Result{Exit: 1, Stderr: "iptables: No chain/target/match by that name.\n"}, nil
+		}
+		return Result{}, nil
+	}}
+	e := newExec(t, fr)
+	ctx := context.Background()
+	if _, err := e.DoBatch(ctx, ops(t, assignWan, `{"type":"docker_user","action":"ensure","devs":["lan0"],"optional_chain":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fr.commands() {
+		if c.Tool == ToolIptables && (strings.Contains(strings.Join(c.Args, " "), " -I ") || strings.Contains(strings.Join(c.Args, " "), " -C ")) {
+			t.Errorf("a missing chain must stop the step: %s", c)
+		}
+	}
+	if _, err := e.DoBatch(ctx, ops(t, `{"type":"docker_user","action":"ensure","devs":["lan0"]}`)); err == nil {
+		t.Error("a required chain that is missing must fail")
+	}
+	out, err := e.Do(ctx, mustDecode(t, `{"type":"read","what":"docker_user"}`))
+	var du linux.DockerUserState
+	_ = json.Unmarshal(out.Data[0], &du)
+	if err != nil || du.ChainExists {
+		t.Fatalf("%+v %v", du, err)
+	}
+}

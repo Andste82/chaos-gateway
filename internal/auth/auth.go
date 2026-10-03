@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,8 @@ type fileState struct {
 	// SetupTokenHash is the hash of the one-time setup token while setup is open.
 	SetupTokenHash string        `json:"setup_token_hash,omitempty"`
 	Tokens         []tokenRecord `json:"tokens,omitempty"`
+	// ServiceTokenHash is the hash of the token the service containers use for /internal.
+	ServiceTokenHash string `json:"service_token_hash,omitempty"`
 }
 
 // Errors of the store.
@@ -390,12 +393,58 @@ func (s *Store) DeleteToken(id string) error {
 	return ErrNoSuchToken
 }
 
-// AuthenticateToken finds the token with the given value; an expired one does not count.
+// ServiceTokenID identifies the service token in Token and in the audit log.
+const ServiceTokenID = "service"
+
+// EnsureServiceToken makes sure the token of the service containers (the DNS proxy, the TLS
+// responder, Kea's hook: scope `service`, only /internal) exists and that its value is in the file at
+// path, which the services mount read-only. The token is never created by a user and not listed. A
+// token that matches the file is left alone; otherwise a new one replaces it.
+func (s *Store) EnsureServiceToken(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	if raw, err := os.ReadFile(path); err == nil && s.st.ServiceTokenHash != "" && equalHash(s.st.ServiceTokenHash, hashSecret(strings.TrimSpace(string(raw)))) {
+		return nil
+	}
+	value := TokenPrefix + "svc_" + randomString(32)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".service-token-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	// readable by the service containers' users, which differ from ours
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(value + "\n"); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	s.st.ServiceTokenHash = hashSecret(value)
+	if err := s.save(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// AuthenticateToken finds the token with the given value; an expired one does not count. The
+// service token authenticates with the scope `service`.
 func (s *Store) AuthenticateToken(value string) (Token, bool) {
 	h := hashSecret(value)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refresh()
+	if s.st.ServiceTokenHash != "" && equalHash(s.st.ServiceTokenHash, h) {
+		return Token{ID: ServiceTokenID, Name: "service", Scope: ScopeService}, true
+	}
 	now := s.clk.Now()
 	for _, r := range s.st.Tokens {
 		if !equalHash(r.Hash, h) {

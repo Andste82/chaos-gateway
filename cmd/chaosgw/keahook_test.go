@@ -1,0 +1,58 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestTheKeaHookPostsTheLeaseEventWithTheServiceToken(t *testing.T) {
+	var got map[string]any
+	var auth string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		if r.URL.Path != "/api/v1/internal/dhcp/lease-events" || r.Method != http.MethodPost {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	tok := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tok, []byte("cgw_svc_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAOSGW_API", srv.URL)
+	t.Setenv("CHAOSGW_SERVICE_TOKEN_FILE", tok)
+	for k, v := range map[string]string{"KEA_LEASE4_ADDRESS": "10.10.0.150", "KEA_LEASE4_HWADDR": "02:00:00:00:00:AA", "KEA_SUBNET_ID": "7", "KEA_LEASE4_VALID_LIFETIME": "600", "KEA_LEASE4_HOSTNAME": "esp32"} {
+		t.Setenv(k, v)
+	}
+	var out, errOut bytes.Buffer
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 0 {
+		t.Fatalf("%d %s", code, errOut.String())
+	}
+	if auth != "Bearer cgw_svc_secret" || got["event"] != "select" || got["ip"] != "10.10.0.150" || got["mac"] != "02:00:00:00:00:aa" || got["subnet_id"] != float64(7) || got["valid_lifetime"] != float64(600) || got["hostname"] != "esp32" {
+		t.Errorf("%q %v", auth, got)
+	}
+	// what it cannot do is reported
+	if code := runKeaHook([]string{"lease4_bogus"}, &out, &errOut); code != 1 {
+		t.Errorf("an unknown hook point: %d", code)
+	}
+	if code := runKeaHook(nil, &out, &errOut); code != 2 {
+		t.Errorf("no argument: %d", code)
+	}
+	t.Setenv("CHAOSGW_SERVICE_TOKEN_FILE", filepath.Join(t.TempDir(), "none"))
+	errOut.Reset()
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 1 || errOut.Len() == 0 {
+		t.Errorf("a missing token file: %d %s", code, errOut.String())
+	}
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	t.Setenv("CHAOSGW_SERVICE_TOKEN_FILE", tok)
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 1 {
+		t.Errorf("a refusal by the API: %d", code)
+	}
+}

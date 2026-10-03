@@ -54,6 +54,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeRevisionApplied, model.EventTypeRevisionConfirmed, model.EventTypeRevisionRolledBack,
 		model.EventTypeNetworkDegraded, model.EventTypeNetworkRestored, model.EventTypeUplinkChanged,
 		model.EventTypeWireguardPeerOnline, model.EventTypeWireguardPeerOffline, model.EventTypeRoutingSessionChanged,
+		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
 	} {
 		m[string(t)] = true
 	}
@@ -106,6 +107,16 @@ func describe(ev engine.Event) string {
 		return "WireGuard peer " + str("peer") + " offline"
 	case "routing_session_changed":
 		return "routing session " + str("protocol") + " " + str("state")
+	case "device_discovered":
+		return "device " + str("name") + " discovered"
+	case "device_online":
+		return "device " + str("name") + " online"
+	case "device_offline":
+		return "device " + str("name") + " offline"
+	case "device_identity_changed":
+		return "device " + str("name") + " has a new address"
+	case "dhcp_lease":
+		return "DHCP " + str("event") + " " + str("ip") + " for " + str("mac")
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

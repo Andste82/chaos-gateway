@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/kea"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +62,7 @@ type gw struct {
 	// token is the bearer token of the default requests, "" for none
 	token    string
 	authPath string
+	dhcp     *fakeDHCP
 	// noContract turns the response check off for a call that is known to be outside the spec
 	noContract bool
 }
@@ -120,7 +124,8 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lg.Close() })
-	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec})
+	fd := &fakeDHCP{}
+	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec, DHCP: fd})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +153,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	jar, _ := cookiejar.New(nil)
-	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, authPath: authPath}
+	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, authPath: authPath, dhcp: fd}
 	if o.done {
 		g.completeSetupDirectly()
 	} else {
@@ -413,4 +418,25 @@ func toMap(t *testing.T, v any) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
 	return m
+}
+
+// fakeDHCP is the DHCP server of the API tests: it accepts every configuration and has the leases
+// the test gives it.
+type fakeDHCP struct {
+	mu     sync.Mutex
+	leases []kea.Lease
+}
+
+func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error { return nil }
+
+func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]kea.Lease(nil), f.leases...), nil
+}
+
+func (f *fakeDHCP) set(l ...kea.Lease) { f.mu.Lock(); f.leases = l; f.mu.Unlock() }
+
+func context_(d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), d)
 }

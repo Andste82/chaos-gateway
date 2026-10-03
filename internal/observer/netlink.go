@@ -18,14 +18,27 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 )
 
-const groups = unix.RTMGRP_LINK | unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE
+const (
+	hostGroups  = unix.RTMGRP_LINK | unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE
+	neighGroups = unix.RTMGRP_NEIGH
+)
 
 // Watch listens for network changes in the named network namespace ns ("" for the current one)
 // and sends on the returned channel once per burst: after `debounce` without further events. The
 // channel closes when ctx ends. Opening a socket in another namespace needs privileges; the
 // current namespace needs none.
 func Watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Duration) (<-chan struct{}, error) {
-	fd, err := openSocket(ns)
+	return watch(ctx, ns, clk, debounce0, hostGroups)
+}
+
+// WatchNeighbors is Watch for the neighbor table (ARP): it triggers when an entry appears, changes
+// or goes. The consumer reads the table and decides what it means (plan §2.3).
+func WatchNeighbors(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Duration) (<-chan struct{}, error) {
+	return watch(ctx, ns, clk, debounce0, neighGroups)
+}
+
+func watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Duration, groups int) (<-chan struct{}, error) {
+	fd, err := openSocket(ns, groups)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +95,7 @@ func Watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Durat
 // namespace changes the calling thread: the work happens in a goroutine of its own that is locked
 // to its thread, and when the thread cannot be restored it is left locked so it ends with the
 // goroutine instead of going back into the pool in the wrong namespace.
-func openSocket(ns string) (int, error) {
+func openSocket(ns string, groups int) (int, error) {
 	type result struct {
 		fd  int
 		err error
@@ -113,7 +126,7 @@ func openSocket(ns string) (int, error) {
 				return
 			}
 		}
-		fd, err := newSocket()
+		fd, err := newSocket(groups)
 		if orig != nil {
 			if rerr := unix.Setns(int(orig.Fd()), unix.CLONE_NEWNET); rerr != nil {
 				// the thread stays in the other namespace: do not unlock it, let it die
@@ -137,12 +150,12 @@ func openNS(ns string) (*os.File, error) {
 	return nil, fmt.Errorf("network namespace %q not found", ns)
 }
 
-func newSocket() (int, error) {
+func newSocket(groups int) (int, error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
 	if err != nil {
 		return -1, fmt.Errorf("netlink socket: %w", err)
 	}
-	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Groups: groups}); err != nil {
+	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Groups: uint32(groups)}); err != nil {
 		_ = unix.Close(fd)
 		return -1, fmt.Errorf("bind netlink socket: %w", err)
 	}

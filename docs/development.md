@@ -25,6 +25,10 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
 | `internal/secrets` | the protected store for key material (mode 0600/0700, atomic writes); WireGuard keys by UUID |
 | `internal/bird` | the BIRD 2 configuration: renderer (BGP, OSPFv2, Babel, static announcements, import filters, external mode), lexical checks of custom snippets, parsers for `birdc show protocols all`, the remote side's snippet |
+| `internal/api` | the REST API server (M5): the handlers of the spec operations that exist, the guard (authentication, scopes, CSRF), problem+json, idempotency keys, Server-Sent Events, the HTTPS certificate and the listener binder |
+| `internal/auth` | the admin password (argon2id), API tokens (hashes only), sessions with CSRF tokens, the one-time setup token, the login rate limit |
+| `internal/audit` | the append-only audit log (JSON lines) |
+| `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
@@ -297,6 +301,62 @@ configuration at start when there is none.
 - **Testbed.** `WithRemotes` adds a second remote site (`site2`, 203.0.113.50, network 10.70.0.10).
   The tests in `internal/engine/integration_bird_test.go` run BIRD in the gateway's namespace and in
   the remote ones.
+
+## REST API
+
+`chaosgw api` (plan §2.15, §2.16, M5) is the unprivileged API container. It owns the engine, which
+applies through the executor's socket (`executor.Redialing` finds an executor that restarts), and the
+stores: revisions (`--state-dir`), secrets and credentials (`--secrets-dir`, the executor mounts it
+read-only), the audit log and the idempotency keys (`--data-dir`). `internal/api` implements the
+generated `ServerInterface` of `api/openapi.yaml`; the 41 operations with `x-milestone: M5` have
+handlers, every other operation answers `422 unsupported_feature` and names its milestone
+(`internal/api/unsupported.go`; a test reads the spec and checks both lists).
+
+- **Guard.** One middleware looks the operation up in the embedded spec (`x-required-scope`,
+  `security`) and decides: a bearer token (`cgw_…`, only its hash is stored) or the session cookie
+  (`chaosgw_session`, HttpOnly, SameSite=Strict, Secure on TLS), the scope (`full` includes `overlays`
+  includes `read`), the `X-CSRF-Token` of a session on every unsafe method, and `If-Match` on
+  `POST /revisions` (`428` instead of the generated binding's `400`). Until the setup is finished only
+  `GET/POST /setup` and the health check answer; everything else is `503 unavailable`. A wrong
+  credential is `401`, never "anonymous". The login is rate-limited per client address (5 failures,
+  then 5 s doubling to 15 min, `429` with `Retry-After`).
+- **Setup.** The first start prints `Setup token: …` to the log (only its hash is stored; every start
+  of an unfinished setup prints a new one). `POST /setup` validates the configuration, provisions the
+  WireGuard keys, creates revision 1, applies it and only then sets the admin password: a failed apply
+  leaves the setup open. Until then the server listens on every address of the host, afterwards on the
+  management interface, the tunnel addresses of management-role WireGuard networks and the loopback
+  (`api.Binder` follows the configuration without a restart).
+- **Revisions.** A candidate is a complete configuration (`application/json`, also the import) or a
+  JSON Merge Patch (`application/merge-patch+json`) against the revision named in `If-Match`;
+  `domain.NewCandidate` merges, resolves names to UUIDs, validates; a candidate that fails is not
+  stored (`422` with JSON pointers). An import with a `secrets` block stores the keys
+  (`wireguard.ImportSecrets`); the export with `include_secrets=true` needs the scope `full` and is
+  audit-logged. Apply compiles first (compiler errors are `422`), then hands over to the engine:
+  `409 revision_conflict` for a stale base, `409 confirm_pending` while another revision waits,
+  `409 not_a_candidate`, `500 apply_failed` / `verify_failed`; a lockout-relevant change is
+  `pending_confirm` until `…/confirm` or the window runs out. Writes return `Chaos-Generation`;
+  configuration reads carry the active revision as `ETag`.
+- **Views.** `/uplink`, `/networks`, `/networks/{id}/clients`, `/groups`, `/routing` are read-only
+  views of the active revision (or of a candidate with `?revision=`, whose runtime state is
+  `pending`), joined with the engine's snapshot: bridges and ports, WireGuard peers, BIRD protocols.
+  Ids in paths are UUIDs or names. `/routing/routes` reads table 100 and classifies the routes
+  (`connected`, `static`, `learned`).
+- **Idempotency.** `Idempotency-Key` on `POST /revisions`, kept 24 h (persisted): a retry gets the
+  recorded response (`Idempotent-Replay: true`), the same key with another request is `422
+  idempotency_conflict`, concurrent requests with one key do one thing, an error is not recorded.
+- **Events.** `GET /events` is SSE. The engine's bus keeps 15 minutes (at most 20 000 events) for
+  `Last-Event-ID`; replay and live stream are joined atomically. A client whose writes block is
+  closed after the write timeout (and the bus drops a subscriber whose buffer is full), neither delays
+  the publisher or the other subscribers. Event names are the spec's (`EventType`).
+- **Audit.** Every write is an entry (who, through which channel — `ui` for a session, `api` for a
+  token —, what, which revision); reads are not. Secrets never enter it.
+- **Password reset.** `chaosgw admin reset-password --secrets-dir D --password-stdin` changes the
+  password from the host; the running API notices the new epoch in the file and ends all sessions.
+- **Contract tests.** `internal/api/harness_test.go` validates every response of every test against
+  `api/openapi.yaml` (kin-openapi): status, headers, content type, body schema. (kin-openapi cannot
+  decode the YAML export and SVG bodies; those calls skip the check.) The testbed test
+  (`e2e_test.go`) configures a real gateway only through the API and brings up a tunnel from a
+  downloaded client configuration.
 
 ## Generated code
 

@@ -64,7 +64,10 @@ type gw struct {
 }
 
 type options struct {
-	confirm time.Duration
+	// runner and namespace replace the simulated kernel (the testbed tests)
+	runner    executor.Runner
+	namespace string
+	confirm   time.Duration
 	// done skips the setup: the admin exists with adminPassword and revision 1 is the fixture
 	done bool
 }
@@ -75,21 +78,26 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	for _, f := range opts {
 		f(&o)
 	}
-	k := kernelsim.New()
-	k.AddLink("lan0", "02:00:00:00:00:01", "veth", true)
-	k.AddLink("lan1", "02:00:00:00:01:01", "veth", true)
-	k.AddLink("wan0", "02:00:00:00:02:01", "veth", true)
-	k.SetAddr("wan0", "203.0.113.1/24")
-	k.AddLink("mgmt0", "02:00:00:00:03:01", "veth", true)
-	k.SetAddr("mgmt0", "192.168.56.1/24")
-	k.SetMainDefault("192.168.56.254", "mgmt0")
-	k.AddDockerChain()
+	var k *kernelsim.Kernel
+	runner := o.runner
+	if runner == nil {
+		k = kernelsim.New()
+		k.AddLink("lan0", "02:00:00:00:00:01", "veth", true)
+		k.AddLink("lan1", "02:00:00:00:01:01", "veth", true)
+		k.AddLink("wan0", "02:00:00:00:02:01", "veth", true)
+		k.SetAddr("wan0", "203.0.113.1/24")
+		k.AddLink("mgmt0", "02:00:00:00:03:01", "veth", true)
+		k.SetAddr("mgmt0", "192.168.56.1/24")
+		k.SetMainDefault("192.168.56.254", "mgmt0")
+		k.AddDockerChain()
+		runner = k
+	}
 	root := t.TempDir()
 	sec, err := secrets.Open(filepath.Join(root, "secrets"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(k, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
+	ex, err := executor.New(runner, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
 		kk, err := sec.WireGuard(id)
 		return kk.PrivateKey, kk.PresharedKey, err
 	}))
@@ -112,7 +120,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lg.Close() })
-	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Secrets: sec})
+	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +128,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, StateDir: filepath.Join(root, "api"),
+	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
 		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm})
 	if err != nil {
 		t.Fatal(err)
@@ -365,8 +373,6 @@ func (g *gw) apply(id int64) resp {
 	return g.do("POST", "/revisions/"+itoa(id)+"/apply", nil, nil, nil)
 }
 
-func tempDirFile(t *testing.T, name string) string { return filepath.Join(t.TempDir(), name) }
-
 func auditFilter() audit.Filter { return audit.Filter{} }
 
 // resetPasswordFromOutside does what `chaosgw admin reset-password` does: it opens the auth
@@ -396,4 +402,15 @@ func (g *gw) pollWireGuardOnce() {
 		return // already polling
 	}
 	time.Sleep(300 * time.Millisecond)
+}
+
+func toMap(t *testing.T, v any) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	return m
 }

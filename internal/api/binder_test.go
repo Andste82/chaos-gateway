@@ -46,10 +46,16 @@ func TestTheCertificateIsCreatedOnceAndTrustable(t *testing.T) {
 	leaf, _ := x509.ParseCertificate(c1.Certificate[0])
 	pool := x509.NewCertPool()
 	pool.AddCert(leaf)
-	if err := func() error { _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "gw.example"}); return err }(); err != nil {
+	if err := func() error {
+		_, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "gw.example"})
+		return err
+	}(); err != nil {
 		t.Errorf("the host name: %v", err)
 	}
-	if err := func() error { _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "192.168.56.1"}); return err }(); err != nil {
+	if err := func() error {
+		_, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "192.168.56.1"})
+		return err
+	}(); err != nil {
 		t.Errorf("the management address: %v", err)
 	}
 	if leaf.NotAfter.Before(time.Now().AddDate(9, 0, 0)) {

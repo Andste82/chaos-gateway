@@ -103,8 +103,6 @@ func (s *Server) Close() error { return s.idem.close() }
 
 // ---- the principal
 
-type principalKey struct{}
-
 // Principal is who a request is made by.
 type Principal struct {
 	// Kind is "session", "token" or "setup".

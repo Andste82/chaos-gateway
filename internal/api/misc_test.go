@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -135,7 +136,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 	}
 	for _, o := range later {
 		var body any
-		if o.Method == "POST" || o.Method == "PUT" || o.Method == "PATCH" {
+		if o.Method == http.MethodPost || o.Method == http.MethodPut || o.Method == http.MethodPatch {
 			body = map[string]any{}
 		}
 		r := g.do(o.Method, fill(o.Path), body, nil, nil)
@@ -165,11 +166,11 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	}
 	for _, o := range m5 {
 		var body any
-		if o.Method == "POST" || o.Method == "PUT" || o.Method == "PATCH" {
+		if o.Method == http.MethodPost || o.Method == http.MethodPut || o.Method == http.MethodPatch {
 			body = map[string]any{}
 		}
 		path := fill(o.Path)
-		if o.Method == "GET" && o.Path == "/events" {
+		if o.Method == http.MethodGet && o.Path == "/events" {
 			continue // a stream: tested on its own
 		}
 		hdr := map[string]string{"If-Match": `"1"`}

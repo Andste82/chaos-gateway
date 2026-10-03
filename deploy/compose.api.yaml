@@ -1,0 +1,53 @@
+# The API container (plan §2.15, §2.16, §3.8): the REST API, and later the web UI and the scheduler.
+# It is unprivileged: it runs as the user the executor lets through its socket, drops every
+# capability and has a read-only root file system. It owns the engine: it compiles revisions and has
+# the executor apply them, it keeps the revisions, the credentials and the audit log, and it writes
+# the WireGuard keys the executor reads.
+#
+# It runs in the host's network namespace to listen on the management network (and, until the setup is
+# finished, on every address of the host) and to watch the interfaces; the port is above 1024, so it
+# needs no capability for that. The first start prints a one-time setup token to its log
+# (`docker compose logs api`).
+services:
+  api:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api"]
+    user: "65532:65532"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+    volumes:
+      # the executor's socket
+      - chaosgw-run:/run/chaosgw
+      # the revisions
+      - chaosgw-state:/var/lib/chaosgw/state
+      # WireGuard keys, credentials, the HTTPS key: the executor mounts this volume read-only
+      - chaosgw-secrets:/var/lib/chaosgw/secrets
+      # the audit log and the idempotency keys
+      - chaosgw-api:/var/lib/chaosgw/api
+    depends_on:
+      exec:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "chaosgw", "api", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  chaosgw-run:
+  chaosgw-state:
+  chaosgw-secrets:
+  chaosgw-api:

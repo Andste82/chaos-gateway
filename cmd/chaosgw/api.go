@@ -163,7 +163,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		return err
 	}
 	b := &api.Binder{
-		Addrs:   func() []netip.Addr { return listenAddrs(eng, au, o.listen) },
+		Addrs:   func() []netip.Addr { return listenAddrs(eng.Snapshot(), au.SetupCompleted(), o.listen) },
 		Port:    func() int { return uiPort(eng, o.port, o.listen) },
 		Handler: srv.Handler(),
 		TLS:     &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
@@ -199,7 +199,7 @@ func uiPort(eng *engine.Engine, def int, listen string) int {
 // listenAddrs are the addresses to serve on (plan §2.16): the loopback for the health check, and
 // until the setup is finished every address of the host, afterwards the management network's: the
 // management interface and the tunnel addresses of WireGuard networks with the role management.
-func listenAddrs(eng *engine.Engine, au *auth.Store, explicit string) []netip.Addr {
+func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip.Addr {
 	if explicit != "" {
 		host, _, err := net.SplitHostPort(explicit)
 		if err != nil {
@@ -211,8 +211,7 @@ func listenAddrs(eng *engine.Engine, au *auth.Store, explicit string) []netip.Ad
 		return nil
 	}
 	out := []netip.Addr{netip.MustParseAddr("127.0.0.1")}
-	snap := eng.Snapshot()
-	if !au.SetupCompleted() || snap.Config == nil {
+	if !setupDone {
 		for _, l := range snap.Host.Links {
 			if l.Name == "lo" {
 				continue
@@ -224,6 +223,9 @@ func listenAddrs(eng *engine.Engine, au *auth.Store, explicit string) []netip.Ad
 			}
 		}
 		return out
+	}
+	if snap.Config == nil {
+		return out // set up but nothing active (yet): the loopback only, never the test networks
 	}
 	if l, ok := snap.Host.Resolve(snap.Config.Management.Interface); ok {
 		for _, p := range l.Addrs {

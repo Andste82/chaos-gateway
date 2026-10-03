@@ -3,6 +3,7 @@ package api_test
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -112,4 +113,40 @@ func TestAFailedApplyLeavesTheSetupOpen(t *testing.T) {
 		t.Errorf("%d", r.Status)
 	}
 	_ = strings.TrimSpace
+}
+
+func TestTwoSetupRequestsRunTheSetupOnce(t *testing.T) {
+	g := newGW(t)
+	var wg sync.WaitGroup
+	res := make([]resp, 2)
+	for i := range res {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res[i] = g.do("POST", "/setup", fixtureJSON(t), map[string]string{"X-Setup-Token": g.setup}, nil)
+		}()
+	}
+	wg.Wait()
+	ok, done := 0, 0
+	for _, r := range res {
+		switch r.Status {
+		case 200:
+			ok++
+		case 409:
+			done++
+		default:
+			t.Errorf("%d %s", r.Status, r.Body)
+		}
+	}
+	if ok != 1 || done != 1 || g.activeID() != 1 {
+		t.Errorf("%d setups, %d refused, active revision %d", ok, done, g.activeID())
+	}
+	if n := len(g.mintAndList()); n != 1 {
+		t.Errorf("%d revisions", n)
+	}
+}
+
+func (g *gw) mintAndList() []any {
+	g.mintToken("read")
+	return g.do("GET", "/revisions", nil, nil, nil).json(g.t)["items"].([]any)
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -146,18 +147,42 @@ func (s *Server) createCandidate(c *gin.Context, base *model.Configuration, raw 
 	if err != nil {
 		return model.Revision{}, err
 	}
-	// an import brings its keys with it
+	cfg, undo, err := s.importAndProvision(cfg)
+	if err != nil {
+		return model.Revision{}, err
+	}
+	rev, err := s.storeCandidate(c, cfg, ifMatch, message, now)
+	if err != nil {
+		undo() // a rejected candidate leaves no imported keys behind
+		return model.Revision{}, err
+	}
+	return rev, nil
+}
+
+// importAndProvision stores the keys an import brings (never replacing a key that is stored: see
+// wireguard.ImportSecrets) and generates the keys that are still missing. undo removes the keys the
+// import created.
+func (s *Server) importAndProvision(cfg *model.Configuration) (*model.Configuration, func(), error) {
+	undo := func() {}
 	if cfg.Secrets != nil {
-		if err := wireguard.ImportSecrets(s.cfg.Secrets, cfg.Secrets); err != nil {
-			errs := domain.ValidationErrors{{Path: "/secrets", Code: "invalid_secrets", Message: err.Error()}}
-			return model.Revision{}, errs
+		created, err := wireguard.ImportSecrets(s.cfg.Secrets, cfg.Secrets)
+		undo = func() {
+			for _, id := range created {
+				_ = s.cfg.Secrets.DeleteWireGuard(id)
+			}
+		}
+		if err != nil {
+			undo()
+			return nil, func() {}, domain.ValidationErrors{{Path: "/secrets", Code: "invalid_secrets", Message: err.Error()}}
 		}
 		cfg.Secrets = nil
 	}
-	if cfg, err = wireguard.Provision(cfg, s.cfg.Secrets); err != nil {
-		return model.Revision{}, err
+	out, err := wireguard.Provision(cfg, s.cfg.Secrets)
+	if err != nil {
+		undo()
+		return nil, func() {}, err
 	}
-	return s.storeCandidate(c, cfg, ifMatch, message, now)
+	return out, undo, nil
 }
 
 func (s *Server) storeCandidate(c *gin.Context, cfg *model.Configuration, ifMatch int64, message string, now time.Time) (model.Revision, error) {
@@ -278,7 +303,8 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 		s.write(c, perr)
 		return
 	}
-	res, err := s.cfg.Engine.Apply(contextOf(c), revisionId, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
+	// the apply is not the client's to cancel: the engine goes on, and so does the record of it
+	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), revisionId, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
 	if err != nil {
 		s.record(c, "revision.apply_failed", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, firstLine(err.Error()))
 		s.fail(c, err)
@@ -286,7 +312,7 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 	}
 	s.record(c, "revision.apply", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, res.Status)
 	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": revisionId, "status": res.Status})
-	s.setGeneration(c)
+	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
 	c.JSON(200, applyResult(res))
 }
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,7 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
 type syncBuf struct {
@@ -196,3 +200,45 @@ func yamlToJSON(t *testing.T, raw []byte) any {
 	_ = json.Unmarshal(b, &m)
 	return m
 }
+
+func TestTheAPIListensOnTheManagementNetworkOnly(t *testing.T) {
+	host := compiler.Host{Links: []compiler.HostLink{
+		{Name: "lo", Addrs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/8")}},
+		{Name: "mgmt0", Addrs: []netip.Prefix{netip.MustParsePrefix("192.168.56.1/24")}},
+		{Name: "wan0", Addrs: []netip.Prefix{netip.MustParsePrefix("203.0.113.1/24")}},
+		{Name: "br-lan0", Addrs: []netip.Prefix{netip.MustParsePrefix("10.10.0.1/24")}},
+	}}
+	cfg := &model.Configuration{Management: model.Management{Interface: model.InterfaceRef{Name: ptrOf("mgmt0")}}}
+	strs := func(a []netip.Addr) string {
+		var s []string
+		for _, x := range a {
+			s = append(s, x.String())
+		}
+		return strings.Join(s, ",")
+	}
+	// before the setup: every address of the host
+	if got := strs(listenAddrs(&engine.Snapshot{Host: host}, false, "")); got != "127.0.0.1,192.168.56.1,203.0.113.1,10.10.0.1" {
+		t.Errorf("before the setup: %s", got)
+	}
+	// after: the management interface, nothing of the uplink or the test networks
+	if got := strs(listenAddrs(&engine.Snapshot{Host: host, Config: cfg}, true, "")); got != "127.0.0.1,192.168.56.1" {
+		t.Errorf("after the setup: %s", got)
+	}
+	// set up but no active configuration (yet): fail closed, the loopback only
+	if got := strs(listenAddrs(&engine.Snapshot{Host: host}, true, "")); got != "127.0.0.1" {
+		t.Errorf("without a configuration: %s", got)
+	}
+	// a management-role WireGuard network adds its tunnel address
+	snap := &engine.Snapshot{Host: host, Config: cfg, WireGuardInterfaces: []compiler.WGInterface{
+		{Name: "wg-admin", Role: "management", Address: netip.MustParsePrefix("10.98.0.1/24")},
+		{Name: "wg-lab", Role: "test", Address: netip.MustParsePrefix("10.99.0.1/24")},
+	}}
+	if got := strs(listenAddrs(snap, true, "")); got != "127.0.0.1,192.168.56.1,10.98.0.1" {
+		t.Errorf("with a management tunnel: %s", got)
+	}
+	if got := strs(listenAddrs(snap, true, "127.0.0.5:9000")); got != "127.0.0.5" {
+		t.Errorf("explicit: %s", got)
+	}
+}
+
+func ptrOf[T any](v T) *T { return &v }

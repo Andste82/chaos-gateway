@@ -15,6 +15,10 @@ type Session struct {
 // Login checks the admin password and starts a session. remote identifies the client for the rate
 // limit; after repeated failures the answer is *RateLimited.
 func (s *Store) Login(password, remote string) (*Session, error) {
+	// one attempt at a time: a burst of parallel guesses must not pass the limiter before the first
+	// failure is recorded, and the hashes (32 MiB each) must not pile up
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
 	if wait := s.limiter.blocked(remote); wait > 0 {
 		return nil, &RateLimited{RetryAfter: wait}
 	}

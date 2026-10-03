@@ -13,6 +13,23 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
+// maxStreams bounds the open event streams: each holds a goroutine and a buffer.
+const maxStreams = 256
+
+// credentialValid reports whether the session or token of a long-lived request is still good.
+func (s *Server) credentialValid(p *Principal) bool {
+	switch {
+	case p == nil:
+		return true
+	case p.Kind == "session":
+		_, ok := s.cfg.Auth.LookupSession(p.SessionID)
+		return ok
+	case p.Kind == "token":
+		return s.cfg.Auth.TokenValid(p.TokenID)
+	}
+	return true
+}
+
 // keepalive is how often an idle stream gets a comment line (plan §2.15).
 var keepalive = 15 * time.Second
 
@@ -132,6 +149,13 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 		}
 		last, hasLast = n, true
 	}
+	if n := s.streams.Add(1); n > maxStreams {
+		s.streams.Add(-1)
+		s.write(c, newProblem(model.ErrorCodeUnavailable, "too many event streams are open"))
+		return
+	}
+	defer s.streams.Add(-1)
+	p := principalOf(c)
 	rc := http.NewResponseController(c.Writer)
 	var replay []engine.Event
 	var live <-chan engine.Event
@@ -188,6 +212,10 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 				return
 			}
 		case <-tick.C:
+			// a stream ends with its credential: logout, a revoked or expired token, a password reset
+			if !s.credentialValid(p) {
+				return
+			}
 			if !send(": keepalive\n\n") {
 				return
 			}

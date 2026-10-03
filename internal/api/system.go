@@ -21,7 +21,6 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/store"
-	"github.com/Andste82/chaos-gateway/internal/wireguard"
 )
 
 type lastApply struct {
@@ -361,6 +360,12 @@ const minPassword = 12
 // CompleteSetup implements POST /setup: revision 1 from the request, applied, then the admin
 // password; only then the setup is done (a failed apply leaves it open).
 func (s *Server) CompleteSetup(c *gin.Context) {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	if s.cfg.Auth.SetupCompleted() { // another request finished it while this one waited
+		s.write(c, newProblem(model.ErrorCodeSetupCompleted, "the setup is completed"))
+		return
+	}
 	var body struct {
 		AdminPassword string          `json:"admin_password"`
 		Configuration json.RawMessage `json:"configuration"`
@@ -384,18 +389,21 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	if cfg, err = wireguard.Provision(cfg, s.cfg.Secrets); err != nil {
+	cfg, undo, err := s.importAndProvision(cfg)
+	if err != nil {
 		s.fail(c, err)
 		return
 	}
 	rev, err := s.cfg.Store.Create(cfg, store.CreateOptions{IfMatch: s.cfg.Store.ActiveID(), Message: "first-start setup", By: actorOf(principalOf(c)), Now: now})
 	if err != nil {
+		undo()
 		s.fail(c, err)
 		return
 	}
-	res, err := s.cfg.Engine.Apply(contextOf(c), rev.Id, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
+	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), rev.Id, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
 	if err != nil {
 		_ = s.cfg.Store.Discard(rev.Id) // the setup stays open: the candidate is of no use
+		undo()
 		s.fail(c, err)
 		return
 	}
@@ -405,6 +413,6 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 	}
 	s.record(c, "setup.complete", nil, rev.Id, "")
 	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": rev.Id, "setup": true})
-	s.setGeneration(c)
+	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
 	c.JSON(200, applyResult(res))
 }

@@ -160,10 +160,16 @@ func (s *Server) idempotent() gin.HandlerFunc {
 		who := ""
 		if p != nil {
 			who = p.Kind + ":" + p.TokenID
+			if p.Kind == "session" {
+				who = "admin"
+			}
 		}
 		fp := fingerprint(c.Request.Method, c.Request.URL.RequestURI(), who, c.GetHeader("If-Match"), c.ContentType(), body)
-		release, replay, conflict := s.idem.begin(who+"|"+key, fp)
+		release, replay, conflict, cerr := s.idem.begin(c.Request.Context(), who+"|"+key, fp)
 		switch {
+		case cerr != nil:
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "the request was cancelled while waiting for an earlier one with the same Idempotency-Key"))
+			return
 		case conflict:
 			s.write(c, newProblem(model.ErrorCodeIdempotencyConflict, "the Idempotency-Key was used with a different request"))
 			return
@@ -174,8 +180,10 @@ func (s *Server) idempotent() gin.HandlerFunc {
 		}
 		rec := &recorder{ResponseWriter: c.Writer}
 		c.Writer = rec
+		var res *stored
+		defer func() { release(res, fp) }() // also after a panic: the key must not stay claimed
 		c.Next()
-		release(rec.result(c), fp)
+		res = rec.result(c)
 	}
 }
 

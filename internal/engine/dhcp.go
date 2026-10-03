@@ -74,7 +74,16 @@ func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
 	if err != nil {
 		return err
 	}
-	if err := k.Client.Apply(ctx, doc); err != nil {
+	err = k.Client.Apply(ctx, doc)
+	if kea.ErrNoInterface(err) {
+		// the bridge came after Kea started: a configuration without subnets makes Kea detect the
+		// interfaces again, then the real one finds it
+		base, berr := k.Base.Document()
+		if berr == nil && k.Client.SetConfig(ctx, base) == nil {
+			err = k.Client.Apply(ctx, doc)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	running, err := k.Client.Hash(ctx)

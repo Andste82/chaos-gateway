@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -229,6 +230,15 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, err
 	}
 	for _, s := range steps {
+		if s.Guard != nil {
+			r, err := e.run.Run(ctx, *s.Guard)
+			if err != nil {
+				return nil, err
+			}
+			if r.Exit != 0 {
+				continue
+			}
+		}
 		if s.Probe != nil {
 			r, err := e.run.Run(ctx, *s.Probe)
 			if err != nil {
@@ -260,7 +270,7 @@ func onlyBenign(stderr string) bool {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "", strings.HasPrefix(line, "Command failed"):
-		case strings.HasSuffix(line, "File exists"), strings.HasSuffix(line, "No such process"), strings.HasSuffix(line, "No such file or directory"):
+		case strings.HasSuffix(line, "File exists"), strings.HasSuffix(line, "No such process"), strings.HasSuffix(line, "No such file or directory"), strings.HasSuffix(line, "Cannot assign requested address"):
 		default:
 			return false
 		}
@@ -287,6 +297,9 @@ func (e *Executor) verifyOffloads(ctx context.Context, o *Offloads) error {
 }
 
 func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
+	if o.What == ReadAssigned {
+		return json.Marshal(e.scope.Devs())
+	}
 	cmd := ReadCommand(o)
 	r, err := e.run.Run(ctx, cmd)
 	if err != nil {
@@ -294,6 +307,9 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	}
 	if r.Exit != 0 {
 		// a missing table is an empty state, not a failure: the ruleset is created on the first apply
+		if o.What == ReadDockerUser && strings.Contains(r.Stderr, "No chain/target/match by that name") {
+			return json.Marshal(&linux.DockerUserState{})
+		}
 		if o.What == ReadNft && r.Exit == 1 && strings.Contains(r.Stderr, "No such file or directory") && !strings.Contains(r.Stderr, "network namespace") {
 			return json.Marshal(&linux.Ruleset{})
 		}
@@ -319,6 +335,12 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		v, err = linux.ParseFilters([]byte(r.Stdout))
 	case ReadOffloads:
 		v = linux.ParseEthtoolFeatures(r.Stdout)
+	case ReadSysctl:
+		var n int
+		n, err = strconv.Atoi(strings.TrimSpace(r.Stdout))
+		v = n
+	case ReadDockerUser:
+		v = linux.ParseDockerUser(r.Stdout)
 	}
 	if err != nil {
 		return nil, err

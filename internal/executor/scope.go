@@ -100,6 +100,25 @@ func (s *Scope) Check(op Operation) error {
 				}
 			}
 		}
+	case *Links:
+		for i, e := range o.Entries {
+			if err := s.need(e.Name); err != nil {
+				return fmt.Errorf("entries[%d]: %w", i, err)
+			}
+			if e.Master != "" {
+				if err := s.need(e.Master); err != nil {
+					return fmt.Errorf("entries[%d]: %w", i, err)
+				}
+			}
+		}
+	case *Sysctl:
+		for i, e := range o.Entries {
+			if e.Dev != "" {
+				if err := s.need(e.Dev); err != nil {
+					return fmt.Errorf("entries[%d]: %w", i, err)
+				}
+			}
+		}
 	case *Offloads:
 		return s.needAll(o.Devs)
 	case *DockerUser:

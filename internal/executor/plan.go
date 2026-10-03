@@ -18,6 +18,7 @@ const (
 	ToolTC       Tool = "tc"
 	ToolEthtool  Tool = "ethtool"
 	ToolIptables Tool = "iptables"
+	ToolSysctl   Tool = "sysctl"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard
@@ -41,6 +42,8 @@ func (c Command) String() string {
 // Step is one command of a plan. A step with a probe runs the probe first and then the command
 // only if the probe's success matches RunIfProbeOK (idempotent ensure/remove).
 type Step struct {
+	// Guard, when set, runs first; the step is skipped unless the guard succeeds.
+	Guard *Command
 	// Idempotent runs the command with the tool's "continue on error" mode and treats "already
 	// exists" and "does not exist" answers as success (ip -batch -force).
 	Idempotent   bool
@@ -69,6 +72,14 @@ func Plan(op Operation) ([]Step, error) {
 		return steps, nil
 	case *DockerUser:
 		return planDockerUser(o), nil
+	case *Links:
+		return planLinks(o), nil
+	case *Sysctl:
+		var steps []Step
+		for _, e := range o.Entries {
+			steps = append(steps, Step{Cmd: Command{Tool: ToolSysctl, Args: []string{"-w", sysctlPath(e.Name, e.Dev) + "=" + strconv.Itoa(e.Value)}, NS: o.NS}})
+		}
+		return steps, nil
 	case *AssignInterfaces:
 		return nil, nil // changes the executor's own scope, not the kernel
 	}
@@ -195,6 +206,17 @@ func planTC(o *TC) []Step {
 }
 
 func planDockerUser(o *DockerUser) []Step {
+	steps := dockerUserSteps(o)
+	if o.OptionalChain {
+		g := Command{Tool: ToolIptables, Args: []string{"-w", "5", "-S", DockerUserChain}, NS: o.NS}
+		for i := range steps {
+			steps[i].Guard = &g
+		}
+	}
+	return steps
+}
+
+func dockerUserSteps(o *DockerUser) []Step {
 	var steps []Step
 	for _, d := range o.Devs {
 		for _, dir := range []string{"-i", "-o"} {
@@ -247,6 +269,44 @@ func ReadCommand(o *Read) Command {
 		}
 	case ReadOffloads:
 		c.Tool, c.Args = ToolEthtool, []string{"-k", o.Dev}
+	case ReadSysctl:
+		c.Tool, c.Args = ToolSysctl, []string{"-n", sysctlPath(o.Name, o.Dev)}
+	case ReadDockerUser:
+		c.Tool, c.Args = ToolIptables, []string{"-w", "5", "-S", DockerUserChain}
 	}
 	return c
+}
+
+func sysctlPath(name, dev string) string {
+	if name == "ip_forward" {
+		return "net/ipv4/ip_forward"
+	}
+	return "net/ipv6/conf/" + dev + "/" + name
+}
+
+func planLinks(o *Links) []Step {
+	ip := func(args ...string) Command { return Command{Tool: ToolIP, Args: args, NS: o.NS} }
+	var steps []Step
+	for _, e := range o.Entries {
+		switch e.Action {
+		case "add_bridge":
+			exists := ip("link", "show", "dev", e.Name)
+			steps = append(steps, Step{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", "name", e.Name, "type", "bridge")})
+		case "delete_bridge":
+			exists := ip("link", "show", "dev", e.Name)
+			// `type bridge` makes ip refuse any other kind of device
+			steps = append(steps, Step{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", e.Name, "type", "bridge")})
+		case "enslave":
+			steps = append(steps, Step{Cmd: ip("link", "set", "dev", e.Name, "master", e.Master)})
+		case "release":
+			steps = append(steps, Step{Cmd: ip("link", "set", "dev", e.Name, "nomaster")})
+		case "up", "down":
+			steps = append(steps, Step{Cmd: ip("link", "set", "dev", e.Name, e.Action)})
+		case "addr_replace":
+			steps = append(steps, Step{Cmd: ip("addr", "replace", e.CIDR, "dev", e.Name)})
+		case "addr_delete":
+			steps = append(steps, Step{Idempotent: true, Cmd: ip("addr", "delete", e.CIDR, "dev", e.Name)})
+		}
+	}
+	return steps
 }

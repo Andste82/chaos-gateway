@@ -13,10 +13,7 @@ import (
 )
 
 // Event types of the routing protocols.
-const (
-	EventRoutingUp   = "routing_session_up"
-	EventRoutingDown = "routing_session_down"
-)
+const EventRoutingChanged = "routing_session_changed"
 
 // PollRouting reads the protocols of the BIRD instance every interval and tells the state owner,
 // which publishes them in the snapshot and emits an event when an adjacency comes up or goes down.
@@ -103,14 +100,14 @@ func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 			continue
 		}
 		st := next[n]
-		typ := EventRoutingUp
+		state := "up"
 		if !now {
-			typ = EventRoutingDown
+			state = "down"
 			if _, ok := next[n]; !ok {
 				st = prev[n]
 			}
 		}
-		o.event(typ, map[string]any{"protocol": n, "type": st.Proto, "neighbor": st.Neighbor, "info": st.Info, "last_error": st.LastError})
+		o.event(EventRoutingChanged, map[string]any{"state": state, "protocol": n, "type": st.Proto, "neighbor": st.Neighbor, "info": st.Info, "last_error": st.LastError})
 	}
 	o.snap.Routing = next
 	o.publish()

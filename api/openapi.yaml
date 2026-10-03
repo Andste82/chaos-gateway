@@ -4662,6 +4662,8 @@ components:
       type: string
       enum:
         - applied
+        - apply_failed
+        - confirm_pending
         - revision_created
         - revision_applied
         - revision_confirmed

@@ -39,21 +39,21 @@ func TestRoutingSessionsAreReportedWithEvents(t *testing.T) {
 	h.clk.BlockUntil(1)
 	h.clk.Advance(5 * time.Second)
 	waitStatus(t, h, func(s *engine.Snapshot) bool { return len(s.Routing) == 1 })
-	if got := events(ch); has(got, engine.EventRoutingUp) || has(got, engine.EventRoutingDown) {
+	if got := events(ch); has(got, engine.EventRoutingChanged) {
 		t.Fatalf("a session that never was up is not announced: %v", got)
 	}
 
 	h.k.SetBirdProtocols(strings.Replace(bgpTable, "%s", "up     08:02:00.021  Established", 1))
 	h.clk.Advance(5 * time.Second)
 	waitStatus(t, h, func(s *engine.Snapshot) bool { return s.Routing["bgp_site_b"].Established() })
-	if ev := collect(ch, engine.EventRoutingUp); len(ev) != 1 || ev[0].Data["protocol"] != "bgp_site_b" {
+	if ev := routingEvents(ch, "up"); len(ev) != 1 || ev[0].Data["protocol"] != "bgp_site_b" {
 		t.Fatalf("%+v", ev)
 	}
 
 	h.k.SetBirdProtocols(strings.Replace(bgpTable, "%s", "start  08:02:00.021  Active", 1))
 	h.clk.Advance(5 * time.Second)
 	waitStatus(t, h, func(s *engine.Snapshot) bool { return !s.Routing["bgp_site_b"].Established() })
-	if ev := collect(ch, engine.EventRoutingDown); len(ev) != 1 {
+	if ev := routingEvents(ch, "down"); len(ev) != 1 {
 		t.Fatalf("%+v", ev)
 	}
 }

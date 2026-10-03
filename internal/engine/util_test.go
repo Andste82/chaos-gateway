@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strconv"
 
+	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -28,4 +29,15 @@ func cloneCfg(t *testing.T, c *model.Configuration) *model.Configuration {
 		t.Fatal(err)
 	}
 	return &out
+}
+
+// routingEvents returns the routing_session_changed events with the given state (up or down).
+func routingEvents(ch <-chan engine.Event, state string) []engine.Event {
+	var out []engine.Event
+	for _, ev := range collect(ch, engine.EventRoutingChanged) {
+		if ev.Data["state"] == state {
+			out = append(out, ev)
+		}
+	}
+	return out
 }

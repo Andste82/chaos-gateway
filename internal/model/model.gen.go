@@ -746,76 +746,76 @@ func (e EffectState) Valid() bool {
 
 // Defines values for ErrorCode.
 const (
-	ApplyFailed          ErrorCode = "apply_failed"
-	BadRequest           ErrorCode = "bad_request"
-	CapacityExceeded     ErrorCode = "capacity_exceeded"
-	ConfirmPending       ErrorCode = "confirm_pending"
-	CsrfFailed           ErrorCode = "csrf_failed"
-	Forbidden            ErrorCode = "forbidden"
-	IdempotencyConflict  ErrorCode = "idempotency_conflict"
-	Internal             ErrorCode = "internal"
-	LockoutProtected     ErrorCode = "lockout_protected"
-	NameTaken            ErrorCode = "name_taken"
-	NotACandidate        ErrorCode = "not_a_candidate"
-	NotFound             ErrorCode = "not_found"
-	PreconditionRequired ErrorCode = "precondition_required"
-	RateLimited          ErrorCode = "rate_limited"
-	RevisionConflict     ErrorCode = "revision_conflict"
-	SetupCompleted       ErrorCode = "setup_completed"
-	TargetBusy           ErrorCode = "target_busy"
-	Unauthorized         ErrorCode = "unauthorized"
-	Unavailable          ErrorCode = "unavailable"
-	UnsupportedFeature   ErrorCode = "unsupported_feature"
-	ValidationFailed     ErrorCode = "validation_failed"
-	VerifyFailed         ErrorCode = "verify_failed"
+	ErrorCodeApplyFailed          ErrorCode = "apply_failed"
+	ErrorCodeBadRequest           ErrorCode = "bad_request"
+	ErrorCodeCapacityExceeded     ErrorCode = "capacity_exceeded"
+	ErrorCodeConfirmPending       ErrorCode = "confirm_pending"
+	ErrorCodeCsrfFailed           ErrorCode = "csrf_failed"
+	ErrorCodeForbidden            ErrorCode = "forbidden"
+	ErrorCodeIdempotencyConflict  ErrorCode = "idempotency_conflict"
+	ErrorCodeInternal             ErrorCode = "internal"
+	ErrorCodeLockoutProtected     ErrorCode = "lockout_protected"
+	ErrorCodeNameTaken            ErrorCode = "name_taken"
+	ErrorCodeNotACandidate        ErrorCode = "not_a_candidate"
+	ErrorCodeNotFound             ErrorCode = "not_found"
+	ErrorCodePreconditionRequired ErrorCode = "precondition_required"
+	ErrorCodeRateLimited          ErrorCode = "rate_limited"
+	ErrorCodeRevisionConflict     ErrorCode = "revision_conflict"
+	ErrorCodeSetupCompleted       ErrorCode = "setup_completed"
+	ErrorCodeTargetBusy           ErrorCode = "target_busy"
+	ErrorCodeUnauthorized         ErrorCode = "unauthorized"
+	ErrorCodeUnavailable          ErrorCode = "unavailable"
+	ErrorCodeUnsupportedFeature   ErrorCode = "unsupported_feature"
+	ErrorCodeValidationFailed     ErrorCode = "validation_failed"
+	ErrorCodeVerifyFailed         ErrorCode = "verify_failed"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
-	case ApplyFailed:
+	case ErrorCodeApplyFailed:
 		return true
-	case BadRequest:
+	case ErrorCodeBadRequest:
 		return true
-	case CapacityExceeded:
+	case ErrorCodeCapacityExceeded:
 		return true
-	case ConfirmPending:
+	case ErrorCodeConfirmPending:
 		return true
-	case CsrfFailed:
+	case ErrorCodeCsrfFailed:
 		return true
-	case Forbidden:
+	case ErrorCodeForbidden:
 		return true
-	case IdempotencyConflict:
+	case ErrorCodeIdempotencyConflict:
 		return true
-	case Internal:
+	case ErrorCodeInternal:
 		return true
-	case LockoutProtected:
+	case ErrorCodeLockoutProtected:
 		return true
-	case NameTaken:
+	case ErrorCodeNameTaken:
 		return true
-	case NotACandidate:
+	case ErrorCodeNotACandidate:
 		return true
-	case NotFound:
+	case ErrorCodeNotFound:
 		return true
-	case PreconditionRequired:
+	case ErrorCodePreconditionRequired:
 		return true
-	case RateLimited:
+	case ErrorCodeRateLimited:
 		return true
-	case RevisionConflict:
+	case ErrorCodeRevisionConflict:
 		return true
-	case SetupCompleted:
+	case ErrorCodeSetupCompleted:
 		return true
-	case TargetBusy:
+	case ErrorCodeTargetBusy:
 		return true
-	case Unauthorized:
+	case ErrorCodeUnauthorized:
 		return true
-	case Unavailable:
+	case ErrorCodeUnavailable:
 		return true
-	case UnsupportedFeature:
+	case ErrorCodeUnsupportedFeature:
 		return true
-	case ValidationFailed:
+	case ErrorCodeValidationFailed:
 		return true
-	case VerifyFailed:
+	case ErrorCodeVerifyFailed:
 		return true
 	default:
 		return false
@@ -825,8 +825,10 @@ func (e ErrorCode) Valid() bool {
 // Defines values for EventType.
 const (
 	EventTypeApplied               EventType = "applied"
+	EventTypeApplyFailed           EventType = "apply_failed"
 	EventTypeCaptureStarted        EventType = "capture_started"
 	EventTypeCaptureStopped        EventType = "capture_stopped"
+	EventTypeConfirmPending        EventType = "confirm_pending"
 	EventTypeCounterEpoch          EventType = "counter_epoch"
 	EventTypeDeviceDiscovered      EventType = "device_discovered"
 	EventTypeDeviceIdentityChanged EventType = "device_identity_changed"
@@ -867,9 +869,13 @@ func (e EventType) Valid() bool {
 	switch e {
 	case EventTypeApplied:
 		return true
+	case EventTypeApplyFailed:
+		return true
 	case EventTypeCaptureStarted:
 		return true
 	case EventTypeCaptureStopped:
+		return true
+	case EventTypeConfirmPending:
 		return true
 	case EventTypeCounterEpoch:
 		return true

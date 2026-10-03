@@ -26,6 +26,38 @@ var hookPoints = map[string]string{
 	"lease4_expire": "expire", "lease4_decline": "decline", "lease4_recover": "recover",
 }
 
+// EventsFromHook is EventFromHook for every hook point: leases4_committed carries the leases that
+// were handed out or renewed (KEA_LEASES4_SIZE, KEA_LEASES4_AT<i>_ADDRESS, ...), one event each;
+// the other points carry one lease.
+func EventsFromHook(point string, getenv func(string) string) ([]Event, error) {
+	if point != "leases4_committed" {
+		ev, err := EventFromHook(point, getenv)
+		if err != nil {
+			return nil, err
+		}
+		return []Event{ev}, nil
+	}
+	n, err := strconv.Atoi(getenv("KEA_LEASES4_SIZE"))
+	if err != nil || n < 0 || n > 64 {
+		return nil, fmt.Errorf("kea: %s without a usable KEA_LEASES4_SIZE", point)
+	}
+	var out []Event
+	for i := 0; i < n; i++ {
+		at := func(k string) string { return getenv(fmt.Sprintf("KEA_LEASES4_AT%d_%s", i, k)) }
+		ev, err := EventFromHook("lease4_select", func(k string) string {
+			if k == "KEA_SUBNET_ID" {
+				return at("SUBNET_ID")
+			}
+			return at(strings.TrimPrefix(k, "KEA_LEASE4_"))
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, nil
+}
+
 // EventFromHook reads the hook point (argv[1]) and the environment (as a lookup function) of a
 // run_script call. The variable names are Kea's: KEA_LEASE4_ADDRESS, KEA_LEASE4_HWADDR,
 // KEA_LEASE4_CLIENT_ID, KEA_LEASE4_HOSTNAME, KEA_LEASE4_VALID_LIFETIME and KEA_SUBNET_ID.

@@ -253,7 +253,7 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	body := gin.H{
 		"revision":         p.Revision,
 		"domain":           dom,
-		"linux":            gin.H{"nftables": p.Linux.Nftables, "routes": p.Linux.Routes},
+		"linux":            gin.H{"nftables": p.Linux.Nftables, "routes": p.Linux.Routes, "wireguard": p.Linux.WireGuard, "bird": p.Linux.Bird},
 		"requires_confirm": p.NeedsConfirmation,
 		"warnings":         warnings,
 	}

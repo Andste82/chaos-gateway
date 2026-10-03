@@ -391,13 +391,16 @@ func TestThePreviewShowsWireGuardChanges(t *testing.T) {
 	e := newWGEnv(t)
 	d := diffOf(t, e.env, e.compile())
 	for _, want := range []string{"+wireguard wg-lab-hub up", "+  address 10.99.0.1/24 mtu 1420 port 51820", "+  peer ", "keepalive 25 endpoint 203.0.113.40:51821", " psk"} {
-		if !strings.Contains(d.Routes, want) {
-			t.Errorf("the diff lacks %q:\n%s", want, d.Routes)
+		if !strings.Contains(d.WireGuard, want) {
+			t.Errorf("the diff lacks %q:\n%s", want, d.WireGuard)
 		}
 	}
+	if strings.Contains(d.Routes, "wireguard ") {
+		t.Errorf("WireGuard lines leaked into the routes diff:\n%s", d.Routes)
+	}
 	e.apply()
-	if d := diffOf(t, e.env, e.compile()); d.Routes != "" || d.Nftables != "" {
-		t.Errorf("a diff after the apply:\n%s\n%s", d.Routes, d.Nftables)
+	if d := diffOf(t, e.env, e.compile()); d.Routes != "" || d.Nftables != "" || d.WireGuard != "" {
+		t.Errorf("a diff after the apply:\n%s\n%s\n%s", d.Routes, d.Nftables, d.WireGuard)
 	}
 }
 

@@ -679,6 +679,8 @@ type BirdState struct {
 	Running bool `json:"running"`
 	// ConfigHash is the SHA-256 of the configuration file, empty when there is none.
 	ConfigHash string `json:"config_hash,omitempty"`
+	// Config is the text of the configuration file, empty when there is none.
+	Config string `json:"config,omitempty"`
 	// Protocols are the protocols of the running instance.
 	Protocols []bird.ProtocolStatus `json:"protocols,omitempty"`
 }
@@ -771,6 +773,7 @@ func (e *Executor) readBird(ctx context.Context, instance string) (*BirdState, e
 	if b, err := os.ReadFile(conf); err == nil {
 		sum := sha256.Sum256(b)
 		st.ConfigHash = hex.EncodeToString(sum[:])
+		st.Config = string(b)
 	}
 	out, exit, err := e.birdOutput(ctx, ToolBirdc, "-s", sock, "show", "protocols", "all")
 	if err != nil {

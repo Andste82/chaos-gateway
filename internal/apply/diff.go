@@ -19,6 +19,12 @@ type LinuxDiff struct {
 	// Routes covers what the plan sets up outside nftables: bridges, ports and addresses, sysctls,
 	// offloads, policy rules and the routes in Chaos Gateway's tables.
 	Routes string
+	// WireGuard covers the WireGuard interfaces: address, MTU, listen port and peers (without
+	// private keys).
+	WireGuard string
+	// Bird is the running BIRD configuration text against the target's (or, with routing switched
+	// off, the idle text); empty when the executor has no BIRD directory.
+	Bird string
 }
 
 // line is one line of a normalized rendering. Key decides equality; Text is what the diff shows
@@ -28,9 +34,36 @@ type line struct{ Key, Text string }
 // Diff compares the target with the state and renders both normalized.
 func Diff(t *compiler.Target, s *State) LinuxDiff {
 	return LinuxDiff{
-		Nftables: unified(nftLines(s.Nft), targetNftLines(t)),
-		Routes:   unified(hostLines(s, t), targetHostLines(t)),
+		Nftables:  unified(nftLines(s.Nft), targetNftLines(t)),
+		Routes:    unified(hostLines(s, t), targetHostLines(t)),
+		WireGuard: unified(wgLines(s, t), targetWGLines(t)),
+		Bird:      birdDiff(t, s),
 	}
+}
+
+// birdDiff compares the running BIRD configuration with the target's, or, when the target has no
+// routing, with the idle configuration that withdraws everything.
+func birdDiff(t *compiler.Target, s *State) string {
+	if s.Bird == nil {
+		return ""
+	}
+	want := idleText
+	if t.Bird != nil {
+		want = t.Bird.Text
+	}
+	return unified(textLines(s.Bird.Config), textLines(want))
+}
+
+func textLines(text string) []line {
+	if text == "" {
+		return nil
+	}
+	parts := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	out := make([]line, len(parts))
+	for i, p := range parts {
+		out[i] = line{p, p}
+	}
+	return out
 }
 
 func targetNftLines(t *compiler.Target) []line {
@@ -144,15 +177,6 @@ func targetHostLines(t *compiler.Target) []line {
 			add("  port " + p)
 		}
 	}
-	for _, w := range t.WireGuard {
-		add(fmt.Sprintf("wireguard %s up", w.Name))
-		add(fmt.Sprintf("  address %s mtu %d port %d", w.Address, w.MTU, w.ListenPort))
-		peers := append([]compiler.WGPeer(nil), w.Peers...)
-		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
-		for _, p := range peers {
-			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, p.Endpoint, p.PresharedKeyRef != ""))
-		}
-	}
 	for _, e := range t.Sysctls {
 		if e.Dev != "" {
 			add(fmt.Sprintf("sysctl %s:%s=%d", e.Name, e.Dev, e.Value))
@@ -175,6 +199,21 @@ func targetHostLines(t *compiler.Target) []line {
 	}
 	for _, d := range t.DockerUser { // sorted by the compiler
 		add("docker-user accept " + d)
+	}
+	return out
+}
+
+func targetWGLines(t *compiler.Target) []line {
+	var out []line
+	add := func(s string) { out = append(out, line{s, s}) }
+	for _, w := range t.WireGuard {
+		add(fmt.Sprintf("wireguard %s up", w.Name))
+		add(fmt.Sprintf("  address %s mtu %d port %d", w.Address, w.MTU, w.ListenPort))
+		peers := append([]compiler.WGPeer(nil), w.Peers...)
+		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+		for _, p := range peers {
+			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, p.Endpoint, p.PresharedKeyRef != ""))
+		}
 	}
 	return out
 }
@@ -219,35 +258,6 @@ func hostLines(s *State, t *compiler.Target) []line {
 			add("  port " + p)
 		}
 	}
-	for _, w := range t.WireGuard {
-		l, ok := s.Links[w.Name]
-		info := s.WireGuard[w.Name]
-		if !ok || info == nil {
-			continue
-		}
-		state := "down"
-		if l.Up() {
-			state = "up"
-		}
-		add(fmt.Sprintf("wireguard %s %s", w.Name, state))
-		for _, a := range s.Addrs[w.Name] {
-			if a.Family == "inet" {
-				add(fmt.Sprintf("  address %s/%d mtu %d port %d", a.Local, a.PrefixLen, l.MTU, info.ListenPort))
-			}
-		}
-		peers := append([]linux.WGPeerInfo(nil), info.Peers...)
-		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
-		for _, p := range peers {
-			// the kernel knows a roaming peer's endpoint: it is part of the diff only when the target names one
-			ep := p.Endpoint
-			for _, wp := range w.Peers {
-				if wp.PublicKey == p.PublicKey && wp.Endpoint == "" {
-					ep = ""
-				}
-			}
-			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, ep, p.HasPresharedKey))
-		}
-	}
 	for _, e := range t.Sysctls {
 		if e.Dev == "" {
 			continue
@@ -287,6 +297,41 @@ func hostLines(s *State, t *compiler.Target) []line {
 	sort.Strings(du)
 	for _, l := range du {
 		add(l)
+	}
+	return out
+}
+
+func wgLines(s *State, t *compiler.Target) []line {
+	var out []line
+	add := func(l string) { out = append(out, line{l, l}) }
+	for _, w := range t.WireGuard {
+		l, ok := s.Links[w.Name]
+		info := s.WireGuard[w.Name]
+		if !ok || info == nil {
+			continue
+		}
+		state := "down"
+		if l.Up() {
+			state = "up"
+		}
+		add(fmt.Sprintf("wireguard %s %s", w.Name, state))
+		for _, a := range s.Addrs[w.Name] {
+			if a.Family == "inet" {
+				add(fmt.Sprintf("  address %s/%d mtu %d port %d", a.Local, a.PrefixLen, l.MTU, info.ListenPort))
+			}
+		}
+		peers := append([]linux.WGPeerInfo(nil), info.Peers...)
+		sort.Slice(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+		for _, p := range peers {
+			// the kernel knows a roaming peer's endpoint: it is part of the diff only when the target names one
+			ep := p.Endpoint
+			for _, wp := range w.Peers {
+				if wp.PublicKey == p.PublicKey && wp.Endpoint == "" {
+					ep = ""
+				}
+			}
+			add(peerLine(p.PublicKey, p.AllowedIPs, p.Keepalive, ep, p.HasPresharedKey))
+		}
 	}
 	return out
 }

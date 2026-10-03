@@ -105,7 +105,7 @@ func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 		p, hadPrev := prev[n]
 		cur, hasNext := next[n]
 		wasUp, isUp := p.Established(), cur.Established()
-		if wasUp != isUp && !(first && !isUp) {
+		if wasUp != isUp && (!first || isUp) {
 			state := "up"
 			st := cur
 			if !isUp {

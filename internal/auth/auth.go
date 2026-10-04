@@ -468,7 +468,10 @@ func (s *Store) EnsureServiceToken(path string) error {
 		return nil
 	}
 	value := TokenPrefix + "svc_" + randomString(32)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// the directory and the file are owned by the api's own uid:gid (65532:65532 in the compose
+	// files); 0750/0640 keep them out of reach of anything outside that group, which Kea (0:65532)
+	// and the DNS proxy (65532:65532) both are, Kea besides holding DAC_OVERRIDE.
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".service-token-*")
@@ -476,8 +479,7 @@ func (s *Store) EnsureServiceToken(path string) error {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	// readable by the service containers' users, which differ from ours
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(0o640); err != nil {
 		_ = tmp.Close()
 		return err
 	}

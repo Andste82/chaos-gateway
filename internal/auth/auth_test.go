@@ -371,7 +371,11 @@ func TestTheServiceTokenIsForTheServicesOnly(t *testing.T) {
 	if _, ok := s.AuthenticateToken(value); ok {
 		t.Error("the old service token still works")
 	}
-	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o644 {
-		t.Errorf("mode %v", fi.Mode())
+	// M6a-21: readable by the service containers' shared group, nothing wider
+	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o640 {
+		t.Errorf("file mode %v", fi.Mode())
+	}
+	if fi, _ := os.Stat(filepath.Dir(file)); fi.Mode().Perm() != 0o750 {
+		t.Errorf("directory mode %v", fi.Mode())
 	}
 }

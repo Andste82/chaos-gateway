@@ -163,3 +163,74 @@ func TestAnUnbindableAddressLogsOnlyOnceAndOnRecovery(t *testing.T) {
 		t.Fatalf("logged the recovery %d times: %s", n, logBuf.String())
 	}
 }
+
+// M5-11 test: a client that trickles a request body is closed once the read timeout passes, but an
+// SSE-style handler that clears its read deadline is not.
+func TestTheReadTimeoutClosesAStalledUploadButNotAStream(t *testing.T) {
+	old := api.ReadTimeout
+	api.ReadTimeout = 150 * time.Millisecond
+	defer func() { api.ReadTimeout = old }()
+
+	port := freePort(t)
+	bodyErr := make(chan error, 1)
+	b := &api.Binder{
+		Addrs: func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("127.0.0.1")} },
+		Port:  func() int { return port },
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/stream" {
+				rc := http.NewResponseController(w)
+				_ = rc.SetReadDeadline(time.Time{})
+				w.WriteHeader(200)
+				_, _ = w.Write([]byte("a"))
+				_ = rc.Flush()
+				time.Sleep(3 * api.ReadTimeout)
+				_, _ = w.Write([]byte("b"))
+				return
+			}
+			_, err := io.Copy(io.Discard, r.Body)
+			bodyErr <- err
+		}),
+		Log: slog.New(slog.DiscardHandler),
+	}
+	defer b.Close()
+	b.Reconcile()
+	addr := net.JoinHostPort("127.0.0.1", itoa(int64(port)))
+
+	// a trickled upload: the handler's read of the body must not hang forever
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n12345"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-bodyErr:
+		if err == nil {
+			t.Error("the stalled body read did not fail")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stalled body read never returned")
+	}
+
+	// a streaming handler that clears its deadline must survive well past the read timeout
+	conn2, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	if _, err := io.WriteString(conn2, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var got []byte
+	buf2 := make([]byte, 256)
+	for !bytes.ContainsRune(got, 'b') {
+		n, err := conn2.Read(buf2)
+		if err != nil {
+			t.Fatalf("the stream's connection was closed early (got %q): %v", got, err)
+		}
+		got = append(got, buf2[:n]...)
+	}
+}

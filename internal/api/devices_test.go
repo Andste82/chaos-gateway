@@ -165,6 +165,34 @@ func TestFlowsOfADevice(t *testing.T) {
 	}
 }
 
+// M6a-03 test: a device's active flow count reaches the devices API, and a flow redirected into the
+// service namespace for DNS carries service "dns_proxy" in the flows API.
+func TestDeviceFlowsActiveAndFlowService(t *testing.T) {
+	g := dhcpGateway(t)
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31")})
+	g.observe()
+	g.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=45566 dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=45566 packets=4 bytes=500 [ASSURED] mark=0 use=1\n" +
+		"udp      17 25 src=10.10.0.31 dst=203.0.113.10 sport=1 dport=53 packets=1 bytes=60 src=169.254.100.2 dst=10.10.0.31 sport=53 dport=1 packets=1 bytes=90 [ASSURED] mark=0 use=1\n")
+	g.observe()
+
+	d := g.do("GET", "/devices/esp32-42", nil, nil, nil).json(t)
+	obs := d["observed"].(map[string]any)
+	if obs["flows_active"] != float64(2) {
+		t.Errorf("%v", obs)
+	}
+
+	flows := g.do("GET", "/flows?device=esp32-42", nil, nil, nil).json(t)["items"].([]any)
+	var dns bool
+	for _, raw := range flows {
+		if f := raw.(map[string]any); f["service"] == "dns_proxy" {
+			dns = true
+		}
+	}
+	if !dns {
+		t.Errorf("no dns_proxy flow in %v", flows)
+	}
+}
+
 func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 	g := dhcpGateway(t)
 	sid := 0

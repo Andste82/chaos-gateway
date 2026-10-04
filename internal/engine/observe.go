@@ -125,6 +125,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 		if json.Unmarshal(cout.Data[0], &flows) == nil {
 			behind := tunnelPrefixes(snap)
 			seen := map[netip.Addr]bool{}
+			obs.Traffic = map[netip.Addr]AddrTraffic{}
 			for _, f := range flows {
 				ip, err := netip.ParseAddr(f.Original.Src)
 				if err != nil {
@@ -134,6 +135,12 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 				if !seen[ip] && inAny(behind, ip) {
 					seen[ip] = true
 					obs.UnknownSources = append(obs.UnknownSources, ip)
+				}
+				up := Traffic{f.Original.Packets, f.Original.Bytes}
+				down := Traffic{f.Reply.Packets, f.Reply.Bytes}
+				addTraffic(obs.Traffic, ip, up, down)
+				if dst, err := netip.ParseAddr(f.Original.Dst); err == nil {
+					addTraffic(obs.Traffic, dst, down, up)
 				}
 			}
 			sort.Slice(obs.UnknownSources, func(i, j int) bool { return obs.UnknownSources[i].Less(obs.UnknownSources[j]) })
@@ -208,6 +215,36 @@ func tunnelPrefixes(s *Snapshot) []netip.Prefix {
 	return out
 }
 
+// addTraffic adds one flow's share of the traffic to the given address's running total: up is what
+// the address sent on this flow, down is what it received.
+func addTraffic(m map[netip.Addr]AddrTraffic, addr netip.Addr, up, down Traffic) {
+	t := m[addr]
+	t.Upload.Packets += up.Packets
+	t.Upload.Bytes += up.Bytes
+	t.Download.Packets += down.Packets
+	t.Download.Bytes += down.Bytes
+	t.Flows++
+	m[addr] = t
+}
+
+// wireGuardNetworkOf finds the WireGuard network an address belongs to: the interface's own subnet
+// (a hub's clients), or a peer's routed prefixes (a client network, a link's static routes).
+func wireGuardNetworkOf(ifaces []compiler.WGInterface, addr netip.Addr) string {
+	for _, w := range ifaces {
+		if w.Address.Masked().Contains(addr) {
+			return w.NetworkID
+		}
+		for _, p := range w.Peers {
+			for _, r := range p.Routes {
+				if pf, err := netip.ParsePrefix(r); err == nil && pf.Contains(addr) {
+					return w.NetworkID
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func inAny(ps []netip.Prefix, ip netip.Addr) bool {
 	for _, p := range ps {
 		if p.Contains(ip) {
@@ -247,6 +284,8 @@ type Flow struct {
 	State        string
 	Upload       Traffic
 	Download     Traffic
+	// Service is set when the flow is redirected into the service namespace (plan §3.3).
+	Service string
 }
 
 // Traffic is the volume of one direction of a flow.
@@ -289,6 +328,12 @@ func (e *Engine) Flows(ctx context.Context) ([]Flow, error) {
 			if b.Address.Masked().Contains(src) {
 				f.Network = b.NetworkID
 			}
+		}
+		if f.Network == "" {
+			f.Network = wireGuardNetworkOf(snap.WireGuardInterfaces, src)
+		}
+		if r, err := netip.ParseAddr(c.Reply.Src); err == nil && r == compiler.ServicePeerCIDR.Addr() {
+			f.Service = "dns_proxy"
 		}
 		if f.Device == "" && f.Network == "" {
 			continue // not a flow of a test network

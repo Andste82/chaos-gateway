@@ -137,6 +137,9 @@ func TestHealthReportsAPanickedEngineGoroutine(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	if r := g.do("GET", "/system/health", nil, nil, nil); r.Status != 503 {
+		t.Fatalf("status after the panic: %d %s", r.Status, r.Body)
+	}
 	comps, overall := healthComponents(t, g)
 	if comps["api"] != "unhealthy" {
 		t.Fatalf("api component after the panic: %v", comps)

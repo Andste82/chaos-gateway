@@ -84,3 +84,38 @@ jobs:
           name: appliance-logs-${{ matrix.release }}
           path: ${{ runner.temp }}/appliance-logs
           if-no-files-found: ignore
+
+  # Nightly kernel matrix (plan §4.4, M1-02): the same level 1b tests ci.yml's testbed-vm job
+  # runs on every commit, once per kernel the devcontainer carries. The kernel list must match
+  # .devcontainer/Dockerfile's ARG KERNELS. 26.04 has no HWE kernel of its own yet (plan §4.4); as
+  # of this writing 24.04's HWE kernel is version-identical to 26.04's GA kernel (both
+  # 7.0.0-38-generic), so there is no third, distinct kernel to add here today — once they
+  # diverge, add its version both here and to ARG KERNELS.
+  testbed-matrix:
+    name: testbed matrix (level 1b, ${{ matrix.kernel }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ['6.8.0-142-generic', '7.0.0-38-generic']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
+      - name: Enable KVM if the runner offers it
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi
+      - name: Run the testbed tests in a VM with this kernel
+        run: |
+          kvm=()
+          if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
+            make test-vm ARGS="-kernel ${{ matrix.kernel }}"

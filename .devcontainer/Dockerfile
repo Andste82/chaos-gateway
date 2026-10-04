@@ -63,6 +63,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # firmware, microcode and an initramfs that virtme-ng does not need):
 #   noble    — Ubuntu 24.04 GA kernel (minimum supported kernel, D1; used by spikes/vm.sh)
 #   resolute — Ubuntu 26.04 GA kernel
+# The nightly kernel matrix (plan §4.4, M1-02) runs level 1b once per kernel listed here, so keep
+# .github/workflows/nightly.yml's testbed-matrix job in sync with this list. 26.04 has no HWE
+# kernel of its own yet; 24.04's HWE kernel (linux-image-generic-hwe-24.04) is, as of this
+# writing, version-identical to 26.04's GA kernel (verified against the live archive: both
+# 7.0.0-38-generic), so it is not listed separately here — add it once the versions diverge.
 ARG KERNELS="noble:6.8.0-142-generic resolute:7.0.0-38-generic"
 RUN set -eux; \
     MIRROR=http://archive.ubuntu.com/ubuntu; \

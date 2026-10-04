@@ -98,6 +98,9 @@ type Bridge struct {
 	Ports       []string     `json:"ports"`
 	// NAT reports whether the network is masqueraded towards the uplink.
 	NAT bool `json:"nat"`
+	// Routes are the network's downstream routes (plan §2.3): prefixes reached through a router in
+	// the network, the LAN counterpart of a WireGuard peer's Routes.
+	Routes []string `json:"routes,omitempty"`
 }
 
 // Uplink is the interface towards the Internet with the address and gateway it has now.
@@ -461,7 +464,8 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 			add(executor.Route{Dst: "default", Via: t.Uplink.Gateway.String(), Dev: t.Uplink.Name})
 		}
 	}
-	for _, b := range t.Bridges {
+	for i := range t.Bridges {
+		b := &t.Bridges[i]
 		n := idx.Networks[b.NetworkID]
 		if n == nil || n.Lan == nil || n.Lan.Routes == nil {
 			continue
@@ -473,6 +477,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 			}
 			add(executor.Route{Dst: p.Masked().String(), Via: r.Via, Dev: b.Name})
 			addTo(p.Masked().String())
+			b.Routes = append(b.Routes, p.Masked().String())
 		}
 	}
 	t.serviceRouting(add)

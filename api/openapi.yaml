@@ -2361,6 +2361,7 @@ components:
         lease_time:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 1h
+          description: Must be at least 1s.
         options: {$ref: '#/components/schemas/DhcpOptions'}
     DhcpOptions:
       type: object
@@ -2585,6 +2586,9 @@ components:
     MatrixEntry:
       type: object
       required: [from, to, policy]
+      description: |
+        `from` and `to` must not name the same endpoint (`matrix_self_entry`), and the same pair
+        must not appear twice (`duplicate_matrix_entry`).
       properties:
         from: {$ref: '#/components/schemas/MatrixEndpoint'}
         to: {$ref: '#/components/schemas/MatrixEndpoint'}
@@ -2633,7 +2637,7 @@ components:
           enum: [bgp, ospf, babel]
         link:
           allOf: [{$ref: '#/components/schemas/Ref'}]
-          description: WireGuard link network the protocol runs on.
+          description: WireGuard link network the protocol runs on. One link runs at most one protocol of each `type` (`duplicate_protocol` otherwise).
         enabled:
           type: boolean
           default: true
@@ -2691,7 +2695,7 @@ components:
       properties:
         neighbor_address:
           allOf: [{$ref: '#/components/schemas/Ipv4'}]
-          description: Default - the link peer's address.
+          description: Default - the link peer's address. On a link, must be the peer itself (`outside_subnet` otherwise).
         neighbor_asn:
           type: integer
           format: int64
@@ -2700,9 +2704,11 @@ components:
         hold_time:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 90s
+          description: Must be at least three times `keepalive_time` (`invalid_timers` otherwise).
         keepalive_time:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 30s
+          description: Must be at least 1s.
         passive:
           type: boolean
           default: false
@@ -2716,9 +2722,11 @@ components:
         hello_interval:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 10s
+          description: Must be at least 1s.
         dead_interval:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 40s
+          description: Must be longer than `hello_interval` (`invalid_timers` otherwise).
         cost:
           type: integer
           minimum: 1
@@ -3079,7 +3087,7 @@ components:
           items: {$ref: '#/components/schemas/Ipv4'}
         ttl:
           allOf: [{$ref: '#/components/schemas/Duration'}]
-          description: Required for `short_ttl`.
+          description: Required for `short_ttl`. Must not be negative.
     TlsCase:
       description: |
         TLS family (plan §2.8). Selected new connections are redirected to the TLS responder

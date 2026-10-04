@@ -166,14 +166,20 @@ func (g *bgpGW) publicKeys() map[string]string {
 	return k
 }
 
+// establishedNow reports whether a dynamic routing session (BGP, OSPF or Babel) is up; the other
+// protocols BIRD lists (Kernel, Static, Device) are always "up" from the moment they start, which
+// is not the readiness this checks.
 func (g *bgpGW) establishedNow() bool {
 	ps, err := bird.ParseProtocols(birdc(g.t, g.gwSock, "show", "protocols", "all"))
 	if err != nil {
 		return false
 	}
 	for _, p := range ps {
-		if p.Proto == "BGP" && p.Established() {
-			return true
+		switch p.Proto {
+		case "BGP", "OSPF", "Babel":
+			if p.Established() {
+				return true
+			}
 		}
 	}
 	return false
@@ -263,7 +269,8 @@ func TestBabelOverAWireGuardLink(t *testing.T) {
 		t.Fatalf("the gateway's side of the link has no IPv6 link-local address\n%s", ll)
 	}
 	// the remote side is not Chaos Gateway's: the operator adds the address RenderRemote hints at
-	g.top.Site.Must("ip", "-6", "addr", "add", "fe80::1/64", "dev", "wgsite")
+	// (10.255.0.1, the site's own transfer address, in hex: see babelLinkLocal/remoteLinkLocal)
+	g.top.Site.Must("ip", "-6", "addr", "add", "fe80::aff:1/64", "dev", "wgsite")
 
 	if !g.established(90 * time.Second) {
 		t.Fatalf("the Babel session did not come up\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"))

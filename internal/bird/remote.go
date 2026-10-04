@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-// remoteLinkLocal is the remote side's own fe80::<last octet>/64, derived the same way the
-// compiler derives the gateway's (M4c-05), so the hint matches what the gateway side actually
-// gets without the two colliding.
+// remoteLinkLocal is the remote side's own fe80::<its IPv4 address, in hex>/64, derived the same
+// way the compiler derives the gateway's (M4c-05), so the hint matches what the gateway side
+// actually gets without the two colliding, and never fe80:: itself (see babelLinkLocal).
 func remoteLinkLocal(v4 string) (string, bool) {
 	addr, err := netip.ParseAddr(v4)
 	if err != nil || !addr.Is4() {
 		return "", false
 	}
 	b := addr.As4()
-	ll := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[3]})
+	ll := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[0], b[1], b[2], b[3]})
 	return netip.PrefixFrom(ll, 64).String(), true
 }
 

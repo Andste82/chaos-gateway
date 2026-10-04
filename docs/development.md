@@ -450,11 +450,14 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   and routers): a more specific prefix from a neighbor would win over them in the kernel.
 - **Babel (M4c-05).** Babel's wire protocol needs an IPv6 link-local address on the interface even
   for IPv4-only routing, which a WireGuard interface does not get on its own. For a link running
-  Babel the compiler adds `fe80::<last octet of the IPv4 transfer address>/64` to the gateway's
-  side (`WGInterface.LinkLocal`, applied as an ordinary `links addr_replace`; the executor's address
-  check accepts `fe80::/64` as the one IPv6 exception); `RenderRemote` prints the matching `ip -6
-  addr add` as a comment, since the remote side is not Chaos Gateway's to configure. Tested with a
-  real session in the testbed (`TestBabelOverAWireGuardLink`).
+  Babel the compiler adds `fe80::<the IPv4 transfer address, in hex>/64` to the gateway's side
+  (`WGInterface.LinkLocal`, applied as an ordinary `links addr_replace`; the executor's address
+  check accepts `fe80::/64` as the one IPv6 exception) — the whole address, not just its last
+  octet, so a transfer address ending in `.0` (the low end of a `/31`, as this link's own addressing
+  does) does not produce `fe80::` itself, the reserved subnet-router anycast address, which BIRD's
+  Babel silently refuses to exchange routes over even though the session still comes up; `RenderRemote`
+  prints the matching `ip -6 addr add` as a comment, since the remote side is not Chaos Gateway's to
+  configure. Tested with a real session in the testbed (`TestBabelOverAWireGuardLink`).
 - **A BIRD outage (M4c-02).** `runBird` probes the control socket with a harmless read before
   `configure`; when BIRD does not answer, it writes the new file anyway (BIRD reads it at its own
   start) and returns `BirdDownError` instead of restoring the previous one. `apply` and `verify`

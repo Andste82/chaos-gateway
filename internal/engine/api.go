@@ -143,6 +143,14 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 			return nil, err
 		}
 	}
+	if tg.Kea != nil && e.cfg.DHCP != nil {
+		// Kea's own config-test has the last word on a scope: a managed option code or bad option
+		// data would otherwise only surface as DHCPError after the apply.
+		if err := e.cfg.DHCP.Test(ctx, tg.Kea); err != nil {
+			p.Problems = append(p.Problems, compiler.Problem{Severity: compiler.SevError, Code: compiler.CodeDHCP, Message: err.Error()})
+			return p, nil
+		}
+	}
 	state, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.WantOf(tg))
 	if err != nil {
 		return nil, err

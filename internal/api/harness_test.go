@@ -548,6 +548,8 @@ func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error {
 
 func (f *fakeDHCP) setErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
 
+func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error { return nil }
+
 func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

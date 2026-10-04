@@ -23,6 +23,9 @@ type DHCP interface {
 	Apply(ctx context.Context, t *compiler.KeaTarget) error
 	// Leases returns the server's current leases.
 	Leases(ctx context.Context) ([]kea.Lease, error)
+	// Test checks a configuration with Kea's own config-test, without applying it, so the preview can
+	// show a rejection (a managed option code, bad option data) before an apply would hit it.
+	Test(ctx context.Context, t *compiler.KeaTarget) error
 }
 
 // KeaDHCP is the DHCP interface on Kea's control socket.
@@ -98,6 +101,25 @@ func (k *KeaDHCP) Apply(ctx context.Context, t *compiler.KeaTarget) error {
 
 // Leases returns the leases of the running server.
 func (k *KeaDHCP) Leases(ctx context.Context) ([]kea.Lease, error) { return k.Client.Leases(ctx) }
+
+// Test checks the target's configuration with Kea's config-test, without applying it.
+func (k *KeaDHCP) Test(ctx context.Context, t *compiler.KeaTarget) error {
+	cfg := k.Base
+	if t != nil {
+		cfg = t.Config
+		if k.Base.Socket != "" {
+			cfg.Socket = k.Base.Socket
+		}
+		if k.Base.Leases != "" {
+			cfg.Leases = k.Base.Leases
+		}
+	}
+	doc, err := cfg.Document()
+	if err != nil {
+		return err
+	}
+	return k.Client.TestConfig(ctx, doc)
+}
 
 // dhcpRetry is how often a configuration that Kea did not take is sent again.
 const dhcpRetry = 5 * time.Second

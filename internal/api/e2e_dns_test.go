@@ -150,6 +150,10 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 	if out := top.GW.Must("ip", "route", "show", "table", "102"); !strings.Contains(out, "prohibit default") || !strings.Contains(out, "default via 169.254.100.2 dev svc0") {
 		t.Errorf("table 102:\n%s", out)
 	}
+	// M6b-04: a redirected packet, not only the static table, actually resolves through svc0
+	if out, err := top.GW.Run(context.Background(), "ip", "route", "get", "203.0.113.10", "from", testbed.ClientAAddr, "iif", "br-iot", "mark", "0x100000"); err != nil || !strings.Contains(out, "dev svc0") {
+		t.Errorf("a marked packet does not resolve into svc0: %q %v", out, err)
+	}
 
 	// the API listens on the gateway's end of the link, as in the container deployment
 	// on the port of the management interface: the gateway's input rules let the services reach that one
@@ -266,6 +270,11 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		_, err := top.GW.Run(context.Background(), "ip", "link", "show", "dev", "svc0")
 		return err != nil
 	})
+	// M6b-04: without svc0, the same lookup hits the prohibit fallback instead of leaking out some
+	// other way
+	if _, err := top.GW.Run(context.Background(), "ip", "route", "get", "203.0.113.10", "from", testbed.ClientAAddr, "iif", "br-iot", "mark", "0x100000"); err == nil {
+		t.Errorf("a marked packet resolved although the service namespace is gone")
+	}
 	before := counterPackets(top, "forward_drop")
 	if out, err := digA(top, top.A, testbed.LAN0Gateway); err == nil && out != "" {
 		t.Errorf("answered without a service namespace: %q", out)

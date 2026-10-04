@@ -531,7 +531,12 @@ proxy; the TLS responder (M21) joins it later.
   namespace, writes its PID) and `dns` (`network_mode: service:svcns`, `NET_BIND_SERVICE`, the service
   token read-only). The executor runs in the host's PID namespace to attach the holder; the API reads
   the holder's PID file (`--service-holder-pid-file`) and the namespace name (`--service-ns`). After the
-  holder container was recreated, `dns` has to be restarted to join the new namespace.
+  holder container was recreated, `dns` has to be restarted to join the new namespace: it checks every
+  2s that its own namespace still carries the service address `169.254.100.2`
+  (`dnsproxy.WatchNamespace`, `--namespace-check`, on by default), and exits (code 3) once that address,
+  having been there, is gone on three checks in a row, or never showed up within 60s. Compose's
+  `depends_on … restart: true` then restarts `dns` and it joins the holder's current namespace; a plain
+  crash-only restart policy would leave it stuck in the old, now-empty one.
 - **Tests.** The operation, the compiler, apply and verify (over the simulated kernel, including the
   holder that dies and the holder that restarts), the proxy (fake upstream, real sockets), the API and
   the commands are unit-tested. The testbed test `TestDNSThroughTheServiceNamespace` runs the proxy inside a real

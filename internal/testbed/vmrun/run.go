@@ -45,6 +45,9 @@ type Config struct {
 	// AllowSkip allows skipped tests; otherwise Summary.OK reports a skip as a failure (CC-04:
 	// a skip must never pass silently).
 	AllowSkip bool
+	// NoKVM forces software emulation even where /dev/kvm is available (M1-03: a weekly check
+	// that the emulated branches, which the development VPS always runs, still work elsewhere).
+	NoKVM bool
 	// Stdout receives the guest's console and the summary; Stderr the host-side progress.
 	Stdout, Stderr io.Writer
 }
@@ -270,7 +273,7 @@ func run(ctx context.Context, c Config) (Summary, error) {
 		return Summary{}, err
 	}
 
-	kvm := HasKVM()
+	kvm := HasKVM() && !c.NoKVM
 	script := GuestScript(GuestOptions{
 		WorkDir: c.WorkDir, Emulated: !kvm, Run: c.Run, TestTimeout: c.TestTimeout.String(),
 	}, units)

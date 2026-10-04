@@ -139,7 +139,7 @@ func TestParseRunFlags(t *testing.T) {
 	cfg, mode, err := parseRunFlags([]string{
 		"-mode", "vm", "-kernel", "1.2.3-generic", "-mem", "4G", "-cpus", "4",
 		"-tags", "testbed,extra", "-run", "TestFoo", "-test-timeout", "5s", "-vm-timeout", "10s",
-		"-work", "/tmp/work", "-keep", "-allow-skip", "./a", "./b",
+		"-work", "/tmp/work", "-keep", "-allow-skip", "-no-kvm", "./a", "./b",
 	}, &errb)
 	if err != nil {
 		t.Fatalf("err = %v, stderr %q", err, errb.String())
@@ -151,7 +151,7 @@ func TestParseRunFlags(t *testing.T) {
 		Kernel: "1.2.3-generic", Memory: "4G", CPUs: 4,
 		Tags: []string{"testbed", "extra"}, Packages: []string{"./a", "./b"}, Run: "TestFoo",
 		TestTimeout: 5 * time.Second, VMTimeout: 10 * time.Second, WorkDir: "/tmp/work", Keep: true,
-		AllowSkip: true,
+		AllowSkip: true, NoKVM: true,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config = %+v\nwant   = %+v", cfg, want)

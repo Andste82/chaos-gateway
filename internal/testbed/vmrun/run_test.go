@@ -327,6 +327,37 @@ func TestRunWithFakeVMThatDiesEarlyFailsTheRun(t *testing.T) {
 	}
 }
 
+// M1-03 test: -no-kvm (Config.NoKVM) forces software emulation regardless of whether this
+// machine actually has /dev/kvm, both in the vng command line and in the guest's own flag.
+func TestNoKVMForcesEmulationAndDisablesKVMInTheVNGCommandLine(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "vng-args")
+	// capture the full command line before fakeVNG's own wrapper shifts it away, then run $cmd
+	// (set by that wrapper) as usual so the guest still produces results.
+	vngDir := t.TempDir()
+	script := "#!/bin/sh\necho \"$@\" > " + argsFile + "\n" +
+		"while [ $# -gt 0 ]; do\n  if [ \"$1\" = --exec ]; then cmd=\"$2\"; fi\n  shift\ndone\n" +
+		"sh -c \"$cmd\"\nexit $?\n"
+	if err := os.WriteFile(filepath.Join(vngDir, "vng"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", vngDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("VMRUN_FIXTURE_WANT_EMULATED", "1")
+	c, out := fixtureConfig(t)
+	c.NoKVM = true
+	s, err := Run(context.Background(), c)
+	if err != nil || !s.OK() {
+		t.Fatalf("emulation flag not seen by the guest: %v %v\n%s", err, s.Problems(), out)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--disable-kvm") {
+		t.Fatalf("vng command line lacks --disable-kvm: %s", args)
+	}
+}
+
 func TestRunPassesTheEmulationFlagWithoutKVM(t *testing.T) {
 	if HasKVM() {
 		t.Skip("this machine has KVM: the guest is not emulated")

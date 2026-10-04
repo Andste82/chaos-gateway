@@ -634,6 +634,10 @@ func (o *owner) confirm(rev int64, actor model.Actor) error {
 	o.event(EventConfirmed, map[string]any{"revision": rev, "actor": actor, "subject": Subject{Kind: "revision", ID: strconv.FormatInt(rev, 10)}})
 	o.publish()
 	o.startQueued()
+	// identity already used this configuration while it was pending (see observed); confirming it
+	// does not change what the kernel runs, but a fresh reading keeps the snapshot's identity in sync
+	// without waiting for the next poll.
+	o.e.TriggerObserve()
 	return nil
 }
 
@@ -696,7 +700,11 @@ func hostEqual(a, b compiler.Host) bool { return reflect.DeepEqual(a, b) }
 // state it leaves in the snapshot is what the API shows.
 func (o *owner) observed(obs observation) {
 	cfg := &model.Configuration{}
-	if o.committed != nil {
+	switch {
+	case o.current != nil:
+		// the kernel runs this one, confirmed or not: its devices should get their address at once.
+		cfg = o.current.Config
+	case o.committed != nil:
 		cfg = o.committed.Config
 	}
 	id, states, events := o.tracker.step(cfg, obs)

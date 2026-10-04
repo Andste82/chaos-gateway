@@ -87,7 +87,8 @@ func Apply(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Result
 	res := &Result{Plan: p}
 	out, err := ex.Do(ctx, p.Ops...)
 	res.Outcome = out
-	if err != nil {
+	var birdDown *executor.BirdDownError
+	if err != nil && !errors.As(err, &birdDown) {
 		return res, &Error{Stage: "execute", Err: err}
 	}
 	after, err := ReadState(ctx, ex, ns, want(t))

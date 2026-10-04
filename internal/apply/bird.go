@@ -64,7 +64,9 @@ func verifyBird(t *compiler.Target, s *State, bad func(string, string, ...any)) 
 		return
 	}
 	if s.Bird == nil || !s.Bird.Running {
-		bad("bird", "the BIRD instance %s is not running", t.Bird.Instance)
+		// best effort (M4c-02): BIRD being unreachable is reported through routing_session_changed
+		// (every adjacency the poller knew about goes "down") and the health check ("no routing
+		// protocol reported yet"), not as drift that would fail this apply or a restore.
 		return
 	}
 	if s.Bird.ConfigHash != TextHash(t.Bird.Text) {

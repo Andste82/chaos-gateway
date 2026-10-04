@@ -127,7 +127,10 @@ type dockerRule struct {
 
 // New returns a kernel with a loopback interface.
 func New() *Kernel {
-	k := &Kernel{links: map[string]*link{}, sysctl: map[string]int{}, features: map[string]map[string]bool{}}
+	// a real BIRD instance is already running, on whatever configuration EnsureBirdConfig wrote,
+	// before the executor ever sends it a configure (M4c-02): birdRunning starts true, not tied to
+	// a configure having happened yet.
+	k := &Kernel{links: map[string]*link{}, sysctl: map[string]int{}, features: map[string]map[string]bool{}, birdRunning: true}
 	k.AddLink("lo", "00:00:00:00:00:00", "", true)
 	return k
 }

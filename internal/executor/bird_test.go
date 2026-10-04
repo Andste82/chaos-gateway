@@ -48,7 +48,8 @@ func TestDecodeBirdRejects(t *testing.T) {
 
 func TestAFailedReconfigureRestoresTheFile(t *testing.T) {
 	e, _, dir := birdExec(t, func(c Command) (Result, error) {
-		if c.Tool == ToolBirdc {
+		// the probe (show protocols all) finds BIRD running; configure specifically is rejected
+		if c.Tool == ToolBirdc && c.Args[len(c.Args)-1] == "configure" {
 			return Result{Exit: 1, Stderr: "Unable to connect\n"}, nil
 		}
 		return Result{}, nil
@@ -98,7 +99,9 @@ func TestBirdApplyParsesThenWritesThenReconfigures(t *testing.T) {
 		t.Fatalf("%q %v", got, err)
 	}
 	cmds := fr.commands()
-	if len(cmds) != 2 || cmds[0].Tool != ToolBird || cmds[0].Args[0] != "-p" || cmds[1].Tool != ToolBirdc || cmds[1].Args[len(cmds[1].Args)-1] != "configure" {
+	if len(cmds) != 3 || cmds[0].Tool != ToolBird || cmds[0].Args[0] != "-p" ||
+		cmds[1].Tool != ToolBirdc || cmds[1].Args[len(cmds[1].Args)-1] != "all" || // the liveness probe
+		cmds[2].Tool != ToolBirdc || cmds[2].Args[len(cmds[2].Args)-1] != "configure" {
 		t.Fatalf("%+v", cmds)
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, ".check-*")); len(left) != 0 {
@@ -143,7 +146,8 @@ func TestBirdCheckLeavesTheFilesAlone(t *testing.T) {
 
 func TestBirdReconfigureFailureIsReported(t *testing.T) {
 	e, _, _ := birdExec(t, func(c Command) (Result, error) {
-		if c.Tool == ToolBirdc {
+		// the probe finds BIRD running; configure itself is rejected with a message of its own
+		if c.Tool == ToolBirdc && c.Args[len(c.Args)-1] == "configure" {
 			return Result{Exit: 1, Stderr: "Unable to connect to server control socket\n"}, nil
 		}
 		return Result{}, nil
@@ -151,6 +155,30 @@ func TestBirdReconfigureFailureIsReported(t *testing.T) {
 	_, err := e.Do(context.Background(), mustDecode(t, birdOp("apply", birdText)))
 	if err == nil || !strings.Contains(err.Error(), "control socket") {
 		t.Fatal(err)
+	}
+}
+
+// M4c-02 test: when BIRD itself is not reachable (the daemon down, not a rejected configuration),
+// the new file stays in place (BIRD reads it at its own start) and the executor reports a typed
+// BirdDownError instead of restoring the previous file.
+func TestRunBirdReturnsBirdDownErrorWhenTheDaemonIsUnreachable(t *testing.T) {
+	e, _, dir := birdExec(t, func(c Command) (Result, error) {
+		if c.Tool == ToolBirdc {
+			return Result{Exit: 1, Stderr: "birdc: Unable to connect to server control socket: No such file or directory\n"}, nil
+		}
+		return Result{}, nil
+	})
+	f := filepath.Join(dir, "chaosgw.conf")
+	if err := os.WriteFile(f, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Do(context.Background(), mustDecode(t, birdOp("apply", birdText)))
+	var down *BirdDownError
+	if !errors.As(err, &down) {
+		t.Fatalf("got %v, want a BirdDownError", err)
+	}
+	if b, _ := os.ReadFile(f); string(b) != birdText {
+		t.Errorf("the new file was not kept: %q", b)
 	}
 }
 

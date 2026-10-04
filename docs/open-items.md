@@ -330,16 +330,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 | Remote-side snippet in link exports | done | `bird/remote.go`, `internal/linkexport`, API `format=bird` |
 | T: three sites, learned only into own tables, filters (BGP and OSPF), max-prefix, link down, withdrawal, config change, invalid snippet, failed apply, confirm-timeout rollback | done | see the M4c test names in `internal/engine`, `internal/apply` |
 
-### M4c-02 A BIRD outage fails every apply, including rollbacks
-- Status: open
-- Severity: medium
-- Reason: needs-decision — `planBird` plans `birdc configure` whenever the daemon is not running, so unrelated revisions and restores fail.
-- Evidence: `internal/apply/bird.go:40-55`; `executor/exec.go:739-756`; docs/development.md:299.
-- Task: 1. In `executor.runBird`, when `birdc configure` fails because the socket is missing or refused, keep the new file (BIRD reads it at start) and return a typed `BirdDownError` instead of restoring. 2. `apply` treats `BirdDownError` as success with a warning `routing_daemon_down`. 3. `verifyBird` reports "not running" as a warning, not as drift. 4. Emit an event (`routing_session_changed` with state `daemon_down`, or add `routing_daemon_down` to the spec). 5. `TestABirdThatIsDownDoesNotFailTheApply` (kernelsim, BIRD not running).
-- Acceptance: unit tests in `internal/apply`, `internal/executor`.
-- Needs maintainer: decided 2026-10-04: (a) best effort: write the file, warn, do not fail.
-- Effort: M
-
 ### M4c-04 A protocol disabled by max-prefix never recovers
 - Status: open
 - Severity: medium

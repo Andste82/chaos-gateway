@@ -257,7 +257,7 @@ func (s *Server) GetHealth(c *gin.Context) {
 		comps = append(comps, svcns)
 	}
 	dns := healthComponent{Name: "dns", Status: "healthy"}
-	if last := s.dnsLastPoll(); last.IsZero() || time.Since(last) > 60*time.Second {
+	if last := s.dnsLastPoll(); last.IsZero() || s.clk.Now().Sub(last) > 60*time.Second {
 		dns.Status, dns.Detail = "degraded", "the DNS proxy has not polled for its configuration in the last 60s"
 		worse("degraded")
 	}

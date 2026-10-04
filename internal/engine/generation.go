@@ -44,13 +44,13 @@ func writeGenerationMark(path string, mark uint64) error {
 	if err != nil {
 		return fmt.Errorf("write the generation mark: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.WriteString(strconv.FormatUint(mark, 10)); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write the generation mark: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write the generation mark: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

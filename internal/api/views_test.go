@@ -61,9 +61,11 @@ func TestNetworksAreViewsOfTheActiveRevision(t *testing.T) {
 	if len(p2["items"].([]any)) != 1 || p2["next_cursor"] != nil {
 		t.Errorf("%v", p2)
 	}
+	g.badRequest = true // limit=0 is below the schema's minimum
 	if r := g.do("GET", "/networks?limit=0", nil, nil, nil); r.Status != 400 && r.Status != 422 {
 		t.Errorf("limit 0: %d", r.Status)
 	}
+	g.badRequest = false
 	if r := g.do("GET", "/networks?cursor=%25%25", nil, nil, nil); r.Status != 400 {
 		t.Errorf("a garbled cursor: %d", r.Status)
 	}
@@ -256,9 +258,11 @@ func TestQRCodesAndNetworkExports(t *testing.T) {
 	if !strings.Contains(string(svg.Body), "<svg") {
 		t.Errorf("%s", truncate(svg.Body))
 	}
+	g.badRequest = true // format=pdf is not one of the schema's allowed values
 	if r := g.do("GET", "/networks/lab-hub/clients/rC/export?format=pdf", nil, nil, nil); r.Status != 400 && r.Status != 422 {
 		t.Errorf("an unknown format: %d", r.Status)
 	}
+	g.badRequest = false
 	// the hub as a zip: all clients, or the named ones
 	z := g.do("GET", "/networks/lab-hub/export", nil, nil, nil)
 	zr, err := zip.NewReader(bytes.NewReader(z.Body), int64(len(z.Body)))

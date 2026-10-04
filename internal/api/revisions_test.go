@@ -14,6 +14,7 @@ func TestCandidateRevisionsFromMergePatchAndFullConfiguration(t *testing.T) {
 		t.Fatalf("active %d", g.activeID())
 	}
 	// no If-Match: 428; wrong If-Match: 409 with the active revision
+	g.badRequest = true // every request in this block is deliberately invalid
 	if r := g.do("POST", "/revisions", map[string]any{}, map[string]string{"Content-Type": "application/merge-patch+json"}, nil); r.Status != 428 || r.code(t) != "precondition_required" {
 		t.Errorf("no If-Match: %d %s", r.Status, r.Body)
 	}
@@ -27,6 +28,7 @@ func TestCandidateRevisionsFromMergePatchAndFullConfiguration(t *testing.T) {
 	if r := g.do("POST", "/revisions", "x", map[string]string{"Content-Type": "text/plain", "If-Match": `"1"`}, nil); r.Status != 400 {
 		t.Errorf("wrong content type: %d", r.Status)
 	}
+	g.badRequest = false
 
 	// a merge patch: rename the uplink gateway, delete nothing
 	r = g.patch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.11"}})
@@ -318,9 +320,11 @@ func TestDiscardCloneDiffAndExport(t *testing.T) {
 	if cl.Status != 201 || cl.json(t)["base"] != float64(a) || !strings.Contains(fmt.Sprint(cl.json(t)["message"]), "clone of revision 1") {
 		t.Fatalf("%d %s", cl.Status, cl.Body)
 	}
+	g.badRequest = true
 	if r := g.do("POST", "/revisions/1/clone", nil, nil, nil); r.Status != 428 {
 		t.Errorf("clone without If-Match: %d", r.Status)
 	}
+	g.badRequest = false
 	if r := g.apply(int64(cl.json(t)["id"].(float64))); r.Status != 200 {
 		t.Errorf("applying the clone: %d %s", r.Status, r.Body)
 	}
@@ -328,9 +332,7 @@ func TestDiscardCloneDiffAndExport(t *testing.T) {
 		t.Errorf("the rollback did not restore the gateway: %v", gw)
 	}
 	// export: yaml by default, json on request; no secrets
-	g.noContract = true // kin-openapi decodes the YAML document with other number types than the schema check expects
 	ex := g.do("GET", "/revisions/1/export", nil, nil, nil)
-	g.noContract = false
 	if ex.Status != 200 || !strings.HasPrefix(ex.Header.Get("Content-Type"), "application/yaml") || strings.Contains(string(ex.Body), "private_key") || !strings.Contains(string(ex.Body), "uplink:") {
 		t.Errorf("%d %s", ex.Status, truncate(ex.Body))
 	}

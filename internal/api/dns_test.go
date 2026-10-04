@@ -158,6 +158,7 @@ func TestTheQueryLogIsPostedByTheProxyAndListedNewestFirst(t *testing.T) {
 	}
 	// entries that make no sense are refused as a whole
 	g.token = svc
+	g.badRequest = true // every body below is deliberately invalid
 	for name, bad := range map[string]any{
 		"no name":    []any{map[string]any{"time": now.Format(time.RFC3339), "client": "10.10.0.5", "type": "A", "rcode": "NOERROR"}},
 		"bad client": []any{entry(0, "nope", "x.test")},
@@ -167,6 +168,7 @@ func TestTheQueryLogIsPostedByTheProxyAndListedNewestFirst(t *testing.T) {
 			t.Errorf("%s: %d %s", name, r.Status, r.Body)
 		}
 	}
+	g.badRequest = false
 	g.token = admin
 	if n := g.do("GET", "/dns/queries", nil, nil, nil).json(t)["items"].([]any); len(n) != 6 {
 		t.Errorf("a refused batch was partly taken: %d", len(n))

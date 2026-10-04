@@ -180,7 +180,7 @@ func TestTheReadTimeoutClosesAStalledUploadButNotAStream(t *testing.T) {
 			if r.URL.Path == "/stream" {
 				rc := http.NewResponseController(w)
 				_ = rc.SetReadDeadline(time.Time{})
-				w.WriteHeader(200)
+				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte("a"))
 				_ = rc.Flush()
 				time.Sleep(3 * api.ReadTimeout)
@@ -201,7 +201,7 @@ func TestTheReadTimeoutClosesAStalledUploadButNotAStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n12345"); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestTheReadTimeoutClosesAStalledUploadButNotAStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 	if _, err := io.WriteString(conn2, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}

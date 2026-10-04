@@ -31,6 +31,10 @@ type desired struct {
 	// IdentityOnly marks a desired state that differs from the one before only in the identity: the
 	// apply loop then changes set elements instead of rebuilding the ruleset.
 	IdentityOnly bool
+	// RolledBack marks a desired state that restores the committed revision after a commit-confirm
+	// rollback (timeout, or an unconfirmed revision found at restart), for AppliedInfo.RolledBack
+	// (M5-22).
+	RolledBack bool
 }
 
 type ownerInit struct {
@@ -466,7 +470,8 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 	}
 	// the snapshot's applied state follows every verified apply, whatever caused it
 	if r.err == nil {
-		o.snap.Applied = &AppliedInfo{Generation: r.d.Generation, Revision: r.d.Revision, Hash: r.target.Hash, At: o.now(), Uplink: r.target.Uplink}
+		o.snap.Applied = &AppliedInfo{Generation: r.d.Generation, Revision: r.d.Revision, Hash: r.target.Hash, At: o.now(), Uplink: r.target.Uplink,
+			Duration: r.took, RolledBack: r.d.RolledBack}
 		o.snap.LastError = ""
 		o.snap.Problems = r.target.Problems
 		o.snap.WireGuardInterfaces = r.target.WireGuard
@@ -647,7 +652,9 @@ func (o *owner) rollback(rev int64, reason string) error {
 	o.pending = nil
 	o.event(EventRolledBack, map[string]any{"revision": rev, "reason": reason})
 	if o.committed != nil {
-		o.converge(o.nextDesired(o.committed.Config, o.committed.Revision))
+		d := o.nextDesired(o.committed.Config, o.committed.Revision)
+		d.RolledBack = true
+		o.converge(d)
 	}
 	o.publish()
 	o.startQueued()

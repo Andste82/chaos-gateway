@@ -347,6 +347,10 @@ func TestALockoutRelevantChangeNeedsConfirmationAndIsRolledBackAfterTheTimeout(t
 	if s.Pending != nil || s.Revision != r1 {
 		t.Fatalf("after the timeout: %+v", s)
 	}
+	// M5-22: the restore itself is marked as a rollback, not an ordinary apply
+	if s.Applied == nil || !s.Applied.RolledBack || s.Applied.Revision != r1 {
+		t.Errorf("Applied %+v", s.Applied)
+	}
 	if rev, _, _ := h.st.Get(r2); rev.Status != "rolled_back" || h.st.ActiveID() != r1 {
 		t.Errorf("r2 is %s, active %d", rev.Status, h.st.ActiveID())
 	}

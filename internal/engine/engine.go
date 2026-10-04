@@ -125,6 +125,11 @@ type AppliedInfo struct {
 	Hash       string
 	At         time.Time
 	Uplink     compiler.Uplink
+	// Duration is how long the apply (compile, apply, verify) took (M5-22).
+	Duration time.Duration
+	// RolledBack marks that this apply restored the committed revision after a commit-confirm
+	// rollback, rather than applying a newly confirmed one (M5-22).
+	RolledBack bool
 }
 
 // Engine is the state owner, the apply loop and their snapshot.

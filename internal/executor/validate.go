@@ -551,6 +551,9 @@ func (o WireGuard) validate() error {
 	return nil
 }
 
+// ipv6Default is the one IPv6 allowed ip a WireGuard peer may carry (M4c-05).
+var ipv6Default = netip.PrefixFrom(netip.IPv6Unspecified(), 0)
+
 func (p WGPeer) validate() error {
 	if !wgKey.MatchString(p.PublicKey) {
 		return errors.New("invalid public key")
@@ -563,8 +566,11 @@ func (p WGPeer) validate() error {
 	}
 	for _, a := range p.AllowedIPs {
 		pf, err := netip.ParsePrefix(a)
-		if err != nil || !pf.Addr().Is4() || pf.Masked() != pf {
-			return fmt.Errorf("allowed ip %q is not an IPv4 network prefix", a)
+		if err != nil || pf.Masked() != pf || (!pf.Addr().Is4() && pf != ipv6Default) {
+			// a link's peer may also carry Babel's wire protocol (M4c-05), which needs its IPv6
+			// link-local traffic, multicast included, to actually reach it: ::/0 is the one IPv6
+			// exception, same idea as the fe80::/64 one in LinkEntry.validate.
+			return fmt.Errorf("allowed ip %q is not an IPv4 network prefix (or ::/0)", a)
 		}
 	}
 	if p.Keepalive < 0 || p.Keepalive > 65535 {

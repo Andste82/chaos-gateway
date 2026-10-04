@@ -182,6 +182,23 @@ func TestLinkRemoteConfig(t *testing.T) {
 	}
 }
 
+// M4c-05 test: a link carrying Babel gets an IPv6 entry in its remote config's AllowedIPs too, the
+// same reason the gateway's own side of the link does.
+func TestLinkRemoteConfigAddsAnIPv6DefaultRouteForBabel(t *testing.T) {
+	in, _, _, linkID, _ := exportSetup(t)
+	asn := int64(65001)
+	in.Config.Routing = &model.Routing{Asn: &asn, Protocols: &map[string]model.RoutingProtocol{
+		"44444444-5555-4666-8777-888888888888": {Name: "b", Type: model.RoutingProtocolTypeBabel, Link: linkID},
+	}}
+	e, err := LinkRemoteConfig(in, linkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.Conf, "AllowedIPs = 0.0.0.0/0, ::/0\n") {
+		t.Errorf("no IPv6 allowed ip for Babel:\n%s", e.Conf)
+	}
+}
+
 func TestExportErrors(t *testing.T) {
 	in, hubID, cid, linkID, _ := exportSetup(t)
 	if _, err := ClientConfig(in, "00000000-0000-4000-8000-000000000000", cid); err == nil {

@@ -454,10 +454,17 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   (`WGInterface.LinkLocal`, applied as an ordinary `links addr_replace`; the executor's address
   check accepts `fe80::/64` as the one IPv6 exception) — the whole address, not just its last
   octet, so a transfer address ending in `.0` (the low end of a `/31`, as this link's own addressing
-  does) does not produce `fe80::` itself, the reserved subnet-router anycast address, which BIRD's
-  Babel silently refuses to exchange routes over even though the session still comes up; `RenderRemote`
+  does) does not produce `fe80::` itself, the reserved subnet-router anycast address; `RenderRemote`
   prints the matching `ip -6 addr add` as a comment, since the remote side is not Chaos Gateway's to
-  configure. Tested with a real session in the testbed (`TestBabelOverAWireGuardLink`).
+  configure (the testbed test plays that operator for its own BIRD instance instead, via
+  `bird.RemoteLinkLocal`, before that instance starts: bird's babel does not pick up an address
+  added to the interface afterwards). The link's peer also needs `::/0` alongside its usual
+  `0.0.0.0/0` in `AllowedIPs` (the one IPv6 exception the executor's own check accepts for a
+  WireGuard peer, same idea as the link address one): without it, WireGuard has no peer to route
+  Babel's own IPv6 traffic to — including the `ff02::1:6` multicast its Hello and Update packets
+  actually use even for IPv4-only routes — and silently drops most of it, confirmed with
+  `ip -s link show`'s cumulative counters showing one side almost unable to transmit at all. Tested
+  with a real session in the testbed (`TestBabelOverAWireGuardLink`).
 - **A BIRD outage (M4c-02).** `runBird` probes the control socket with a harmless read before
   `configure`; when BIRD does not answer, it writes the new file anyway (BIRD reads it at its own
   start) and returns `BirdDownError` instead of restoring the previous one. `apply` and `verify`

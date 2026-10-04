@@ -320,8 +320,28 @@ func LinkRemoteConfig(in ExportInput, networkID string) (Export, error) {
 		}
 		fmt.Fprintf(&b, "Endpoint = %s\nPersistentKeepalive = 25\n", endpoint)
 	}
-	b.WriteString("AllowedIPs = 0.0.0.0/0\n")
+	allowed := "0.0.0.0/0"
+	if linkHasBabel(in.Config, networkID) {
+		// Babel's wire protocol needs its IPv6 link-local Hello/Update traffic, multicast included,
+		// to actually cross the tunnel (M4c-05): WireGuard decides which peer a packet belongs to
+		// from AllowedIPs, and this link's only peer otherwise has no IPv6 entry at all.
+		allowed += ", ::/0"
+	}
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowed)
 	return Export{Name: wg.Name, Conf: b.String(), HasPrivateKey: has}, nil
+}
+
+// linkHasBabel reports whether an enabled Babel protocol runs over the given link.
+func linkHasBabel(cfg *model.Configuration, networkID string) bool {
+	if cfg.Routing == nil || cfg.Routing.Protocols == nil {
+		return false
+	}
+	for _, p := range *cfg.Routing.Protocols {
+		if p.Link == networkID && p.Type == model.RoutingProtocolTypeBabel && (p.Enabled == nil || *p.Enabled) {
+			return true
+		}
+	}
+	return false
 }
 
 // ConsumePrivateKey implements "export once": after the first download of a client whose key

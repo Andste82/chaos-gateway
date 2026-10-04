@@ -74,6 +74,13 @@ func (t *Target) compileBird(cfg *model.Configuration, idx *domain.Index) {
 			if p.Type == model.RoutingProtocolTypeBabel && w.Address.Addr().Is4() {
 				ll := babelLinkLocal(w.Address.Addr())
 				w.LinkLocal = &ll
+				// Babel's wire protocol needs its IPv6 link-local Hello/Update traffic, multicast
+				// included, to actually cross the tunnel: WireGuard decides which peer a packet
+				// belongs to from AllowedIPs, and a link's only peer otherwise has no IPv6 entry
+				// at all (RenderRemote's side of this is linkHasBabel in internal/wireguard).
+				if len(w.Peers) == 1 {
+					w.Peers[0].AllowedIPs = append(w.Peers[0].AllowedIPs, "::/0")
+				}
 			}
 			bp.Name = bird.ProtocolName(string(p.Type), p.Name)
 			for names[bp.Name] {

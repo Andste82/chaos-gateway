@@ -13,6 +13,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/kea"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -495,5 +496,37 @@ func TestConcurrentICMPFlowsDoNotCollide(t *testing.T) {
 	}
 	if flows[0].ID == flows[1].ID {
 		t.Errorf("both flows got the same id: %q", flows[0].ID)
+	}
+}
+
+// M6a-14 test: a failed read of the observed state is not silent: the snapshot carries the error
+// (and the health check degrades, api/system_test.go), and the addresses that were in use stay in
+// use instead of looking like nothing is connected any more.
+func TestAFailingConntrackReadIsReported(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=1 dport=2 packets=1 bytes=60 src=203.0.113.10 dst=10.10.0.31 sport=2 dport=1 packets=1 bytes=60 [ASSURED] mark=0 use=1\n")
+	h.observe()
+	if h.e.Snapshot().ObserveError != "" {
+		t.Fatalf("a good read is not an error: %q", h.e.Snapshot().ObserveError)
+	}
+	if d := h.device(devID); d == nil || !d.Online {
+		t.Fatalf("%+v", d)
+	}
+
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "conntrack" {
+			return &executor.Result{Exit: 1, Stderr: "conntrack v1.4.8: netlink error: No such file or directory\n"}
+		}
+		return nil
+	}
+	h.observe()
+	if got := h.e.Snapshot().ObserveError; got == "" {
+		t.Fatal("a failing read was not reported")
+	}
+	// the address that was in use stays in use: the device is not shown as having gone offline
+	if d := h.device(devID); d == nil || !d.Online {
+		t.Errorf("%+v", d)
 	}
 }

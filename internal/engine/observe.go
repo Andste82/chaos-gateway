@@ -148,7 +148,8 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 		e.setActive(obs.Active)
 	} else if err != nil {
 		// a failed read is not "no connections": the addresses that were in use stay in use
-		e.cfg.Log.Debug("cannot read the connections", "error", err)
+		e.logObserveError(err)
+		obs.ObserveError = err.Error()
 		obs.Active = e.lastActive()
 	}
 	if e.cfg.DHCP != nil {

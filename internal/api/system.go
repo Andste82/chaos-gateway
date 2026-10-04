@@ -266,6 +266,10 @@ func (s *Server) GetHealth(c *gin.Context) {
 		comps[0].Status, comps[0].Detail = "unhealthy", "the audit log cannot be written: "+firstLine(err.Error())
 		worse("unhealthy")
 	}
+	if snap.ObserveError != "" {
+		comps[0].Status, comps[0].Detail = "degraded", "observation degraded: "+firstLine(snap.ObserveError)
+		worse("degraded")
+	}
 	body := gin.H{"status": overall}
 	if principalOf(c) != nil {
 		body["components"] = comps

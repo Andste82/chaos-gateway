@@ -101,6 +101,9 @@ type Snapshot struct {
 	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first
 	// one (there is a service namespace in the configuration but nothing applied or read yet).
 	ServiceHealth *ServiceHealth
+	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
+	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
+	ObserveError string
 }
 
 // ServiceHealth is the last reading of the service namespace's state (WatchService).
@@ -157,6 +160,26 @@ type Engine struct {
 	active          map[netip.Addr]bool
 	// observeNow asks the observation poller to read at once (a lease event, a neighbor change).
 	observeNow chan struct{}
+	obsErrMu   sync.Mutex
+	// lastObsErrLog is when a failed read of the observed state was last logged, to warn at most
+	// once per observeErrLogInterval instead of once per poll.
+	lastObsErrLog time.Time
+}
+
+// observeErrLogInterval bounds how often a persistent failure to read the observed state is logged.
+const observeErrLogInterval = time.Minute
+
+// logObserveError warns about a failed read of the observed state, at most once per
+// observeErrLogInterval while the failure persists.
+func (e *Engine) logObserveError(err error) {
+	e.obsErrMu.Lock()
+	defer e.obsErrMu.Unlock()
+	now := e.cfg.Clock.Now()
+	if !e.lastObsErrLog.IsZero() && now.Sub(e.lastObsErrLog) < observeErrLogInterval {
+		return
+	}
+	e.lastObsErrLog = now
+	e.cfg.Log.Warn("cannot read the observed state: connections", "error", err)
 }
 
 // ErrClosed is returned by commands after Close.

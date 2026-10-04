@@ -284,10 +284,16 @@ func TestBabelOverAWireGuardLink(t *testing.T) {
 	gwCap.Stop()
 	siteCap.Stop()
 	if !ok {
-		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\n%s\n%s\ngw capture:\n%s\nsite capture:\n%s", g.table100(),
-			birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
+		// cumulative interface counters span the whole test, unlike a capture window: they settle
+		// whether anything at all left either interface, no timing race.
+		gwCounters := g.top.GW.Must("ip", "-s", "link", "show", "dev", "wg-site-b")
+		siteCounters := g.top.Site.Must("ip", "-s", "link", "show", "dev", "wgsite")
+		gwMcast := g.top.GW.Must("ip", "maddr", "show", "dev", "wg-site-b")
+		siteMcast := g.top.Site.Must("ip", "maddr", "show", "dev", "wgsite")
+		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\n%s\n%s\ngw counters:\n%s\nsite counters:\n%s\ngw multicast groups:\n%s\nsite multicast groups:\n%s\ngw capture:\n%s\nsite capture:\n%s",
+			g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
 			birdc(t, g.gwSock, "show", "route", "all"), birdc(t, g.siteSock, "show", "route", "all"),
-			gwCap.Output(), siteCap.Output())
+			gwCounters, siteCounters, gwMcast, siteMcast, gwCap.Output(), siteCap.Output())
 	}
 	// IPv6 is still not a routed family of its own (plan §2.2): Babel's hellos stay link-local
 	// traffic the input chain accepts for the protocol, nothing forwarded; TestIPv6IsBlockedOnTestNetworks

@@ -191,7 +191,9 @@ func (t *Target) compileDeviceSets(idx *domain.Index, id *domain.Identity) {
 	if id != nil {
 		for _, d := range id.Discovered {
 			names[d.ID] = true
-			for _, a := range d.IPs {
+			// id.Addresses is the resolved identity (the stronger claim wins, §2.3); d.IPs is only
+			// what was sighted, which can still include an address another device has already won.
+			for _, a := range id.Addresses[d.ID] {
 				addrs[d.ID] = append(addrs[d.ID], a.String())
 			}
 		}

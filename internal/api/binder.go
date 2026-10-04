@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// ReadTimeout bounds how long a request body may take to arrive (M5-11): a client trickling a
+// body otherwise ties up a connection indefinitely. A package variable so tests can shorten it.
+var ReadTimeout = 60 * time.Second
+
 // Binder keeps the API listening on the addresses it should be reachable at (plan §2.16): until the
 // setup is finished on every address of the host, afterwards only on the management network (and the
 // loopback, for the health check). It compares what it listens on with what is wanted and opens or
@@ -90,7 +94,7 @@ func (b *Binder) Reconcile() {
 			b.Log.Info("the API can listen again", "address", ap.String())
 			delete(b.lastErr, ap)
 		}
-		srv := &http.Server{Handler: b.Handler, TLSConfig: b.TLS, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+		srv := &http.Server{Handler: b.Handler, TLSConfig: b.TLS, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: ReadTimeout, IdleTimeout: 2 * time.Minute}
 		b.servers[ap] = srv
 		b.Log.Info("the API listens", "address", ap.String())
 		go func() {

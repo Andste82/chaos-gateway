@@ -168,6 +168,8 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 	defer s.streams.Add(-1)
 	p := principalOf(c)
 	rc := http.NewResponseController(c.Writer)
+	// an SSE stream is long-lived by design; the server's ReadTimeout (M5-11) must not cut it off.
+	_ = rc.SetReadDeadline(time.Time{})
 	var replay []engine.Event
 	var live <-chan engine.Event
 	var cancel func()

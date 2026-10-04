@@ -386,16 +386,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 | Audit log | done | `internal/audit`: retention, failure surfaced as unhealthy, system-originated rollbacks audited |
 | T: contract tests, clients compile, E2E testbed, conflicts, confirm_pending, SSE reconnect, slow subscriber, concurrent applies | done | `harness_test.go` `checkContract` (now validates requests and SSE events too), `make check-clients`, `e2e_test.go`, `revisions_test.go`, `events_test.go` |
 
-### M5-02 SSE has no resync signal after lost events
-- Status: open
-- Severity: medium
-- Reason: needs-decision — event ids are per boot; a `Last-Event-ID` older than the buffer or from another boot replays partially or nothing, and the client is not told.
-- Evidence: `internal/engine/events.go:64-76`; `internal/api/events.go:153-178`.
-- Task: 1. Ids `<boot_id>-<seq>` (`engine/events.go`), parse both parts. 2. If the boot differs or seq is below the oldest buffered seq − 1, first send `event: events_lost` with `{"reason":"restart"|"expired"}`, then the live stream. 3. Add `events_lost` to `EventType` in api/openapi.yaml, `make generate`, add to `knownTypes`. 4. `TestAStaleLastEventIDGetsEventsLost`, `TestAnIdFromAnotherBootGetsEventsLost`.
-- Acceptance: local unit tests; `make check-generated`.
-- Needs maintainer: decided 2026-10-04: (a) synthetic `events_lost` event.
-- Effort: S
-
 ### M5-03 Setup applies without commit-confirm
 - Status: open (the old list had it twice, under M12 and M8a/M10; neither milestone covers it)
 - Severity: medium

@@ -844,6 +844,7 @@ const (
 	EventTypeDiskLow               EventType = "disk_low"
 	EventTypeDnsFaultTriggered     EventType = "dns_fault_triggered"
 	EventTypeDnsSetEpoch           EventType = "dns_set_epoch"
+	EventTypeEventsLost            EventType = "events_lost"
 	EventTypeNetworkDegraded       EventType = "network_degraded"
 	EventTypeNetworkRestored       EventType = "network_restored"
 	EventTypeObservedChanged       EventType = "observed_changed"
@@ -901,6 +902,8 @@ func (e EventType) Valid() bool {
 	case EventTypeDnsFaultTriggered:
 		return true
 	case EventTypeDnsSetEpoch:
+		return true
+	case EventTypeEventsLost:
 		return true
 	case EventTypeNetworkDegraded:
 		return true
@@ -3462,14 +3465,20 @@ type Event struct {
 	// Type Every type the event bus can carry. `observed_changed` fires when the observed state
 	// (devices, leases, flows) changes without a configuration change behind it.
 	// `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
-	// produced from M28 on.
+	// produced from M28 on. `events_lost` is synthetic: the server sends it instead of a replay
+	// when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
+	// the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
+	// `expired`).
 	Type EventType `json:"type"`
 }
 
 // EventType Every type the event bus can carry. `observed_changed` fires when the observed state
 // (devices, leases, flows) changes without a configuration change behind it.
 // `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
-// produced from M28 on.
+// produced from M28 on. `events_lost` is synthetic: the server sends it instead of a replay
+// when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
+// the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
+// `expired`).
 type EventType string
 
 // Explanation defines model for Explanation.

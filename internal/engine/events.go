@@ -1,6 +1,10 @@
 package engine
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +30,26 @@ type Event struct {
 	Data map[string]any
 }
 
+// ID is the public id of the event (plan §2.15's Last-Event-ID): the boot id that produced it and
+// its sequence number, so a client's last-seen id can be told apart from one of an earlier boot
+// (M5-02) even though the sequence restarts at 1 every time.
+func (e Event) ID(bootID string) string { return bootID + "-" + strconv.FormatUint(e.Seq, 10) }
+
+// ParseEventID splits a Last-Event-ID into its boot id and sequence number. ok is false when it
+// does not have the "<boot_id>-<seq>" shape at all (a malformed id, handled as bad_request by the
+// caller, same as before M5-02).
+func ParseEventID(id string) (bootID string, seq uint64, ok bool) {
+	i := strings.LastIndex(id, "-")
+	if i < 0 {
+		return "", 0, false
+	}
+	n, err := strconv.ParseUint(id[i+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return id[:i], n, true
+}
+
 // Subject identifies what an event is about (plan §2.15's Event.subject), e.g. {Kind: "revision",
 // ID: "7"}. Set in Data under the key "subject"; "actor" (a model.Actor) holds who caused it, for
 // events an API caller, rather than the engine itself, set off (M5-06).
@@ -36,8 +60,10 @@ type Subject struct {
 }
 
 // ReplayWindow is how long the bus keeps events for a client that reconnects with Last-Event-ID
-// (plan §2.15: at least 10 minutes); ReplayMax bounds the memory.
-const (
+// (plan §2.15: at least 10 minutes); ReplayMax bounds the memory. Both are package variables, not
+// constants, so a test can shrink ReplayMax instead of publishing tens of thousands of events to
+// force an eviction (M5-02).
+var (
 	ReplayWindow = 15 * time.Minute
 	ReplayMax    = 20000
 )
@@ -51,9 +77,34 @@ type bus struct {
 	subs map[chan Event]struct{}
 	// log holds the recent events in order, for replay.
 	log []Event
+	// bootID identifies this start of the engine (M5-02): a client's Last-Event-ID from an earlier
+	// boot can never be mistaken for one of this boot's sequence numbers, which restart at 1.
+	bootID string
 }
 
-func newBus() *bus { return &bus{subs: map[chan Event]struct{}{}} }
+func newBus() *bus { return &bus{subs: map[chan Event]struct{}{}, bootID: newBootID()} }
+
+func newBootID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // the system's randomness is gone: nothing safe is left to do
+	}
+	return hex.EncodeToString(b)
+}
+
+// BootID is this bus's boot id.
+func (b *bus) BootID() string { return b.bootID }
+
+// OldestSeq is the sequence number of the oldest event still buffered for replay, and whether
+// anything is buffered at all.
+func (b *bus) OldestSeq() (uint64, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.log) == 0 {
+		return 0, false
+	}
+	return b.log[0].Seq, true
+}
 
 const subscriberBuffer = 256
 

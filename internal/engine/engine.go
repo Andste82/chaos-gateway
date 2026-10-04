@@ -247,6 +247,13 @@ func (e *Engine) SubscribeFrom(last uint64) ([]Event, <-chan Event, func()) {
 // Subscribe returns a channel of events and a function that ends the subscription.
 func (e *Engine) Subscribe() (<-chan Event, func()) { return e.events.subscribe() }
 
+// BootID is this start of the engine's boot id (M5-02).
+func (e *Engine) BootID() string { return e.events.BootID() }
+
+// OldestEventSeq is the sequence number of the oldest event still buffered for replay, and
+// whether anything is buffered at all (M5-02).
+func (e *Engine) OldestEventSeq() (uint64, bool) { return e.events.OldestSeq() }
+
 // Health returns the state of the engine's goroutines.
 func (e *Engine) Health() []supervisor.Health { return e.sup.Health() }
 

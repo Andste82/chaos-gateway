@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,14 +62,16 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeRevisionApplied, model.EventTypeRevisionConfirmed, model.EventTypeRevisionRolledBack,
 		model.EventTypeNetworkDegraded, model.EventTypeNetworkRestored, model.EventTypeUplinkChanged,
 		model.EventTypeWireguardPeerOnline, model.EventTypeWireguardPeerOffline, model.EventTypeRoutingSessionChanged,
+		model.EventTypeRoutingRoutesChanged, model.EventTypeObservedChanged,
 		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
+		model.EventTypeEventsLost,
 	} {
 		m[string(t)] = true
 	}
 	return m
 }()
 
-func toPublic(ev engine.Event) (publicEvent, bool) {
+func (s *Server) toPublic(ev engine.Event) (publicEvent, bool) {
 	if !knownTypes[ev.Type] {
 		return publicEvent{}, false
 	}
@@ -81,7 +82,7 @@ func toPublic(ev engine.Event) (publicEvent, bool) {
 	} else if _, ok := data["subject"]; ok {
 		data = maps.Clone(data)
 	}
-	pe := publicEvent{ID: strconv.FormatUint(ev.Seq, 10), Type: ev.Type, Time: ev.Time.UTC(), Data: data, Message: describe(ev)}
+	pe := publicEvent{ID: ev.ID(s.cfg.Engine.BootID()), Type: ev.Type, Time: ev.Time.UTC(), Data: data, Message: describe(ev)}
 	if a, ok := data["actor"]; ok {
 		if act, ok := a.(model.Actor); ok {
 			pe.Actor = &act
@@ -182,14 +183,22 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 		}
 	}
 	var last uint64
-	hasLast := false
+	hasLast, lostReason := false, ""
 	if params.LastEventID != nil && *params.LastEventID != "" {
-		n, err := strconv.ParseUint(*params.LastEventID, 10, 64)
-		if err != nil {
+		bootID, n, ok := engine.ParseEventID(*params.LastEventID)
+		if !ok {
 			s.write(c, newProblem(model.ErrorCodeBadRequest, "Last-Event-ID must be an event id"))
 			return
 		}
 		last, hasLast = n, true
+		// a client's Last-Event-ID from an earlier boot, or older than what the replay buffer still
+		// holds, is told so instead of silently replaying partially or nothing (M5-02).
+		switch {
+		case bootID != s.cfg.Engine.BootID():
+			lostReason = "restart"
+		case func() bool { oldest, has := s.cfg.Engine.OldestEventSeq(); return has && last < oldest-1 }():
+			lostReason = "expired"
+		}
 	}
 	if n := s.streams.Add(1); n > maxStreams {
 		s.streams.Add(-1)
@@ -204,9 +213,14 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 	var replay []engine.Event
 	var live <-chan engine.Event
 	var cancel func()
-	if hasLast {
+	switch {
+	case lostReason != "":
+		// the client already missed something: replaying from its stale id would repeat the same
+		// gap, so it starts fresh from now instead.
+		live, cancel = s.cfg.Engine.Subscribe()
+	case hasLast:
 		replay, live, cancel = s.cfg.Engine.SubscribeFrom(last)
-	} else {
+	default:
 		live, cancel = s.cfg.Engine.Subscribe()
 	}
 	defer cancel()
@@ -229,8 +243,16 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 	if !send(": stream open\n\n") {
 		return
 	}
+	if lostReason != "" {
+		lost := publicEvent{ID: s.cfg.Engine.BootID() + "-0", Type: string(model.EventTypeEventsLost),
+			Time: s.clk.Now().UTC(), Data: map[string]any{"reason": lostReason}}
+		b, _ := json.Marshal(lost)
+		if !send("id: " + lost.ID + "\nevent: " + lost.Type + "\ndata: " + string(b) + "\n\n") {
+			return
+		}
+	}
 	emit := func(ev engine.Event) bool {
-		pe, ok := toPublic(ev)
+		pe, ok := s.toPublic(ev)
 		if !ok || (len(want) > 0 && !want[pe.Type]) {
 			return true
 		}

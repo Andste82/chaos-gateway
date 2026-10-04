@@ -4681,7 +4681,10 @@ components:
         Every type the event bus can carry. `observed_changed` fires when the observed state
         (devices, leases, flows) changes without a configuration change behind it.
         `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
-        produced from M28 on.
+        produced from M28 on. `events_lost` is synthetic: the server sends it instead of a replay
+        when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
+        the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
+        `expired`).
       enum:
         - applied
         - apply_failed
@@ -4722,6 +4725,7 @@ components:
         - counter_epoch
         - disk_low
         - service_restarted
+        - events_lost
     Event:
       type: object
       required: [id, type, time]

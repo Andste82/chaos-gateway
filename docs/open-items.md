@@ -1105,16 +1105,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Needs maintainer: no
 - Effort: S
 
-### M6b-10 Holder PID file can name a reused PID
-- Status: open
-- Severity: low
-- Reason: env-limit / deferred to M28 — no Docker here; the PID file survives a crash in the named volume, and a reused PID of another process would be attached (the executor refuses only its own namespace).
-- Evidence: `deploy/Dockerfile`, `compose.dns.yaml`, `internal/executor/exec.go`.
-- Task: the holder writes its PID together with its netns inode (`stat -L /proc/self/ns/net`); the API passes both; the executor compares the inode of `/proc/<pid>/ns/net` with the expected one before attaching and refuses on mismatch; executor unit test; add the deployment check to the M28 test list.
-- Acceptance: local unit test; nightly appliance with M28.
-- Needs maintainer: no
-- Effort: M
-
 ### M6b-11 Direct access to the proxy without DNAT
 - Status: open
 - Severity: low

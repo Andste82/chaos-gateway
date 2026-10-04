@@ -1464,7 +1464,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M28 — Container deployment** (M)
 - Scope: multi-arch image (amd64/arm64), `compose.yaml` with the containers and privileges of §3.8, health checks and start order, final host-setup script (modules, `ip_forward`, netplan hints), preflight in the executor, setup token in the container log, update script that waits for `system/busy`, refusal of newer schemas, teardown.
-- Tests: level-2 smoke tests on Ubuntu 24.04 and 26.04 hosts (two- and three-port topologies): host setup, `compose up`, setup wizard, reboot, image update during an idle and during an active run; the arm64 image starts and passes the functional smoke test in emulated level 1b; the non-exec containers run without privileges (checked from the container runtime); the DNS proxy coexists with the host's own systemd-resolved (M6b-06; the testbed only stands one in for it).
+- Tests: level-2 smoke tests on Ubuntu 24.04 and 26.04 hosts (two- and three-port topologies): host setup, `compose up`, setup wizard, reboot, image update during an idle and during an active run; the arm64 image starts and passes the functional smoke test in emulated level 1b; the non-exec containers run without privileges (checked from the container runtime); the DNS proxy coexists with the host's own systemd-resolved (M6b-06; the testbed only stands one in for it); the holder's PID file reused by another real container process is refused by the executor, not attached (M6b-10; the testbed cannot reuse a PID on demand).
 - Depends on: M5b, M14, M27, S7.
 
 **M29 — Security hardening** (M)

@@ -24,8 +24,13 @@ func TestTheHolderWritesItsPIDAndStopsOnSIGTERM(t *testing.T) {
 	for {
 		raw, err := os.ReadFile(file)
 		if err == nil {
-			if n, perr := strconv.Atoi(strings.TrimSpace(string(raw))); perr != nil || n != os.Getpid() {
+			fields := strings.Fields(string(raw))
+			pid, perr := strconv.Atoi(fields[0])
+			if len(fields) != 2 || perr != nil || pid != os.Getpid() {
 				t.Fatalf("%q", raw)
+			}
+			if _, ierr := strconv.ParseUint(fields[1], 10, 64); ierr != nil {
+				t.Fatalf("no namespace inode: %q", raw)
 			}
 			break
 		}

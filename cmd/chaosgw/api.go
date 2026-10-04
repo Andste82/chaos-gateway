@@ -369,17 +369,30 @@ func engineConfig(st *store.Store, ex apply.Exec, o apiOptions, sec *secrets.Sto
 	cfg := engine.Config{Store: st, Exec: ex, Namespace: o.namespace, Secrets: sec, Log: log, DHCP: dhcp, ServiceNS: o.serviceNS, DefaultUIPort: o.port,
 		GenerationFile: filepath.Join(o.stateDir, "generation")}
 	if o.holderPIDFile != "" {
-		cfg.ServiceHolderPID = func() int {
-			raw, err := os.ReadFile(o.holderPIDFile)
-			if err != nil {
-				return 0
-			}
-			n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-			if err != nil || n < 0 {
-				return 0
-			}
-			return n
-		}
+		cfg.ServiceHolderPID = func() int { pid, _ := readHolderPIDFile(o.holderPIDFile); return pid }
+		cfg.ServiceHolderNetnsInode = func() uint64 { _, inode := readHolderPIDFile(o.holderPIDFile); return inode }
 	}
 	return cfg
+}
+
+// readHolderPIDFile reads the holder's PID and the inode of the network namespace it was in when it
+// wrote the file ("<pid> <inode>", M6b-10); either is 0 when it cannot be read or parsed.
+func readHolderPIDFile(path string) (pid int, inode uint64) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) == 0 {
+		return 0, 0
+	}
+	if n, err := strconv.Atoi(fields[0]); err == nil && n >= 0 {
+		pid = n
+	}
+	if len(fields) > 1 {
+		if n, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
+			inode = n
+		}
+	}
+	return pid, inode
 }

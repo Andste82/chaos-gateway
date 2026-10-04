@@ -347,7 +347,8 @@ func serviceOp(t *compiler.Target, s *State, tg executor.Target) (executor.Opera
 		return nil, ""
 	}
 	return &executor.ServiceNS{Target: tg, Action: "ensure", Name: t.Service.Name, HostIf: t.Service.HostIf, PeerIf: t.Service.PeerIf,
-		HostCIDR: t.Service.HostCIDR.String(), PeerCIDR: t.Service.PeerCIDR.String(), HolderPID: t.Service.HolderPID}, why
+		HostCIDR: t.Service.HostCIDR.String(), PeerCIDR: t.Service.PeerCIDR.String(), HolderPID: t.Service.HolderPID,
+		HolderNetnsInode: t.Service.HolderNetnsInode}, why
 }
 
 // serviceDiffers says what is wrong with the service namespace; empty when nothing is.

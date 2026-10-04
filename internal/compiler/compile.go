@@ -55,6 +55,9 @@ type Input struct {
 	// ServiceHolderPID is the process whose namespace is attached as the service namespace when it
 	// has to be created.
 	ServiceHolderPID int
+	// ServiceHolderNetnsInode is the inode ServiceHolderPID's namespace had when the holder itself
+	// reported it; 0 skips the executor's reused-PID check (M6b-10).
+	ServiceHolderNetnsInode uint64
 	// DefaultUIPort is the port the API listens on; it stands in for `management.ui_port` when the
 	// configuration names none (0: DefaultUIPort).
 	DefaultUIPort int

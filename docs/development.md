@@ -493,7 +493,11 @@ proxy; the TLS responder (M21) joins it later.
   `ip netns attach NAME PID`, then creates the veth pair `svc0` (gateway, `169.254.100.1`) and `svc1`
   (namespace, `169.254.100.2`), brings both up and points the namespace's default route at the gateway.
   `svc0` is an assigned interface; the operation refuses any other. `Read service_ns` tells whether the
-  namespace exists and whether it is the holder's (same inode as `/proc/PID/ns/net`).
+  namespace exists and whether it is the holder's (same inode as `/proc/PID/ns/net`). The holder writes
+  its PID file as `<pid> <inode>` (`chaosgw svcns`, its own `/proc/self/ns/net`); when the API passes
+  both on to an `ensure`, the executor refuses to attach if the PID's current namespace inode no longer
+  matches, since the PID was reused by some other process since the holder last reported it (M6b-10);
+  0 (a PID file from before this, or the API not passing it) skips that check.
 - **Compiler.** With `Input.ServiceNS` set, `Target.Service` holds the pair; routes and rules follow:
   `169.254.100.0/30 dev svc0` and `iif svc0` use table 100 (what the services send upstream leaves
   through the uplink, masqueraded), table 102 has `default via 169.254.100.2 dev svc0` and a `prohibit

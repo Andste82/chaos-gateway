@@ -238,6 +238,8 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 		"bad event":     map[string]any{"event": "explode", "ip": "10.10.0.150", "mac": "02:00:00:00:00:aa", "subnet_id": 1},
 		"bad ip":        map[string]any{"event": "select", "ip": "nope", "mac": "02:00:00:00:00:aa", "subnet_id": 1},
 		"no mac":        map[string]any{"event": "select", "ip": "10.10.0.150", "subnet_id": 1},
+		// M6a-22: the spec marks subnet_id required
+		"no subnet_id": map[string]any{"event": "select", "ip": "10.10.0.150", "mac": "02:00:00:00:00:aa"},
 	} {
 		if r := g.do("POST", "/internal/dhcp/lease-events", body, nil, nil); r.Status != 422 {
 			t.Errorf("%s: %d %s", name, r.Status, r.Body)

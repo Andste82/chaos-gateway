@@ -39,6 +39,7 @@ jobs:
       - run: make check-generated
       - run: make check-clients
       - run: make lint
+      - run: go vet -tags appliance ./internal/appliance
       - run: make test
       # 5 minutes of fuzzing on the executor's decoder (plan M3); the nightly run goes longer
       - run: make fuzz

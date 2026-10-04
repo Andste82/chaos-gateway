@@ -18,7 +18,7 @@ import (
 func runSvcNS(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("svcns", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	pidFile := fs.String("pid-file", "/run/chaosgw/svcns/pid", "where to write the PID of this process")
+	pidFile := fs.String("pid-file", "/run/chaosgw/svcns/pid", "where to write the PID and the network namespace inode of this process")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -33,14 +33,20 @@ func runSvcNS(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// writePID writes the PID atomically: the API reads the file at any time.
+// writePID writes this process's PID and its network namespace inode, space-separated, atomically:
+// the API reads the file at any time. The inode lets the executor refuse to attach to this PID once it
+// has been reused by another process (M6b-10): a bare PID file cannot tell the two apart.
 func writePID(path string) error {
+	inode, err := selfNetnsInode()
+	if err != nil {
+		return fmt.Errorf("this process's own network namespace: %w", err)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pid-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.WriteString(strconv.Itoa(os.Getpid()) + "\n"); err != nil {
+	if _, err := tmp.WriteString(strconv.Itoa(os.Getpid()) + " " + strconv.FormatUint(inode, 10) + "\n"); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -52,4 +58,18 @@ func writePID(path string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// selfNetnsInode is this process's own network namespace, identified the same way the executor
+// identifies one (the inode of the ns/net file).
+func selfNetnsInode() (uint64, error) {
+	fi, err := os.Stat("/proc/self/ns/net")
+	if err != nil {
+		return 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("no inode information for /proc/self/ns/net")
+	}
+	return st.Ino, nil
 }

@@ -342,6 +342,12 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		if own, ok := e.inode("/proc/self/ns/net"); ok && own == want {
 			return nil, fmt.Errorf("process %d is in the executor's own network namespace: not a holder", s.HolderPID)
 		}
+		// a reused PID would otherwise attach to whatever process happens to have it now (M6b-10): the
+		// holder reports the inode of the namespace it was actually in when it wrote its PID file, and
+		// that must be the one this PID has now
+		if s.HolderNetnsInode != 0 && want != s.HolderNetnsInode {
+			return nil, fmt.Errorf("process %d is not the service namespace's holder any more (its PID was reused)", s.HolderPID)
+		}
 		st := e.serviceNSState(s.Name, s.HolderPID)
 		if st.Exists && !st.HolderMatches {
 			s.recreate = true

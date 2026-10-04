@@ -125,3 +125,28 @@ func TestAHolderMustBeAnotherNamespaceThanTheExecutors(t *testing.T) {
 		t.Errorf("a good holder: %v", err)
 	}
 }
+
+// M6b-10 test: a PID whose current namespace does not match the inode the holder itself reported
+// when it wrote its PID file was reused by another process since; the executor must refuse it rather
+// than attach to whatever that PID is in now.
+func TestAReusedHolderPIDIsRefused(t *testing.T) {
+	inodes := map[string]uint64{"/proc/43/ns/net": 9}
+	r := &fakeRunner{}
+	e := newExec(t, r, WithNetnsInode(func(p string) (uint64, bool) { i, ok := inodes[p]; return i, ok }))
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":43,"holder_netns_inode":999`)); err == nil || !strings.Contains(err.Error(), "reused") {
+		t.Errorf("a mismatched inode: %v", err)
+	}
+	for _, c := range r.commands() {
+		if strings.Contains(c.String(), "netns") {
+			t.Errorf("a namespace was touched for a reused PID: %s", c)
+		}
+	}
+	// the matching inode is accepted
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":43,"holder_netns_inode":9`)); err != nil {
+		t.Errorf("a matching inode: %v", err)
+	}
+	// 0 (not reported) skips the check: a deployment before M28's full wiring still works
+	if _, err := e.DoBatch(context.Background(), serviceOps(t, `,"holder_pid":43`)); err != nil {
+		t.Errorf("no expected inode given: %v", err)
+	}
+}

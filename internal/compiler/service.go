@@ -45,6 +45,9 @@ type ServiceNS struct {
 	// HolderPID is the process whose namespace becomes the service namespace when it has to be
 	// created; 0 creates an empty one.
 	HolderPID int `json:"holder_pid,omitempty"`
+	// HolderNetnsInode is the inode of HolderPID's namespace as the holder itself reported it; see
+	// executor.ServiceNS.HolderNetnsInode (M6b-10).
+	HolderNetnsInode uint64 `json:"holder_netns_inode,omitempty"`
 }
 
 func (t *Target) compileService(in Input) {
@@ -52,7 +55,7 @@ func (t *Target) compileService(in Input) {
 		return
 	}
 	t.Service = &ServiceNS{Name: in.ServiceNS, HostIf: ServiceHostIf, PeerIf: ServicePeerIf,
-		HostCIDR: ServiceHostCIDR, PeerCIDR: ServicePeerCIDR, HolderPID: in.ServiceHolderPID}
+		HostCIDR: ServiceHostCIDR, PeerCIDR: ServicePeerCIDR, HolderPID: in.ServiceHolderPID, HolderNetnsInode: in.ServiceHolderNetnsInode}
 }
 
 // serviceRouting adds the routes and rules of the namespace: the pair's subnet and the traffic the

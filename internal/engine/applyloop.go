@@ -86,6 +86,9 @@ func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compile
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 	}
+	if e.cfg.ServiceHolderNetnsInode != nil {
+		in.ServiceHolderNetnsInode = e.cfg.ServiceHolderNetnsInode()
+	}
 	if e.cfg.Secrets != nil {
 		keys, err := wireguard.InterfaceKeys(cfg, e.cfg.Secrets)
 		if err != nil {

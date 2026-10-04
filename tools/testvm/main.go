@@ -81,6 +81,7 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 	work := fs.String("work", "", "work directory shared with the VM (default: a temporary one that is kept after a failure; a named one is never removed)")
 	keep := fs.Bool("keep", false, "also keep a created work directory after a successful run")
 	allowSkip := fs.Bool("allow-skip", false, "allow skipped tests; otherwise any skip fails the run")
+	noKVM := fs.Bool("no-kvm", false, "force software emulation in VM mode even where /dev/kvm is available")
 	if err := fs.Parse(args); err != nil {
 		return vmrun.Config{}, "", err
 	}
@@ -92,7 +93,7 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 		Kernel: *kernel, Memory: *mem, CPUs: *cpus,
 		Tags: strings.Split(*tags, ","), Packages: pkgs, Run: *runRE,
 		TestTimeout: *testTimeout, VMTimeout: *vmTimeout, WorkDir: *work, Keep: *keep,
-		AllowSkip: *allowSkip,
+		AllowSkip: *allowSkip, NoKVM: *noKVM,
 	}
 	return c, *mode, nil
 }

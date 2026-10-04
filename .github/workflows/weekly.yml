@@ -1,0 +1,32 @@
+name: Weekly
+
+on:
+  schedule:
+    # M1-03: the emulated branches (!testbed.Accurate()) only ever run automatically on the
+    # development VPS, which has no KVM; this exercises the same software-emulation path on
+    # hosted CI, where every other job normally has KVM available. Weekly, not nightly: it is a
+    # sanity check on a code path that otherwise only changes with the compiler or the testbed
+    # library, not with every commit.
+    - cron: '23 3 * * 0'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  testbed-no-kvm:
+    name: testbed (level 1b, emulated)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
+      - name: Run the testbed tests in a VM, software emulation forced
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS=-no-kvm

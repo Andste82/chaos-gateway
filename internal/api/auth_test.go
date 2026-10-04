@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Andste82/chaos-gateway/internal/auth"
 )
 
 func TestLoginSessionCSRFAndLogout(t *testing.T) {
@@ -255,6 +257,12 @@ func TestChangingThePassword(t *testing.T) {
 }
 
 func TestAResetFromTheCommandLineEndsSessions(t *testing.T) {
+	// the GET below right after the reset must not fall inside auth.refresh's rate-limit window
+	// (M5-09), or it would read the file-change too late and this test would be a real-time race.
+	saved := auth.RefreshInterval
+	auth.RefreshInterval = 0
+	t.Cleanup(func() { auth.RefreshInterval = saved })
+
 	g := newGW(t)
 	g.finishSetup()
 	g.token = ""

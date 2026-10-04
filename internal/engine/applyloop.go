@@ -119,13 +119,14 @@ func (e *Engine) applyIdentity(ctx context.Context, old, next *compiler.Target) 
 			return false, err
 		}
 	}
-	// the generation of the rules did not change: verify against the target as it stands in the kernel
+	// the generation of the rules did not change: an identity update only ever touches set elements,
+	// so verifying it only needs the sets, not the rest of the state (M6a-11).
 	next.Nft.Generation = old.Nft.Generation
-	st, err := apply.ReadState(ctx, e.cfg.Exec, e.cfg.Namespace, apply.WantOf(next))
+	rs, err := apply.ReadSets(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return false, err
 	}
-	if mm := apply.Verify(next, st); len(mm) > 0 {
+	if mm := apply.VerifyDeviceSets(next, rs); len(mm) > 0 {
 		return false, fmt.Errorf("the kernel does not match after an identity update: %s", mm[0])
 	}
 	return true, nil

@@ -305,6 +305,16 @@ func TestAnIdentityChangeIsAnIncrementalUpdateNotARebuild(t *testing.T) {
 	if len(mutations) != 2 { // one add and one delete of elements: two commands of the one request
 		t.Errorf("the update ran %d mutating commands: %v", len(mutations), mutations)
 	}
+	// M6a-11: verifying the update reads only the nft sets, not the rest of the state
+	var reads []string
+	for _, c := range h.k.Commands()[before:] {
+		if strings.HasPrefix(c, "ip -j") || strings.HasPrefix(c, "iptables -w 5 -S") {
+			reads = append(reads, c)
+		}
+	}
+	if len(reads) != 0 {
+		t.Errorf("the update read more than the nft sets: %v", reads)
+	}
 	if got := h.deviceSetElements(devID); got != "10.10.0.77" {
 		t.Errorf("the device set holds %q", got)
 	}

@@ -94,13 +94,18 @@ func fakeVNG(t *testing.T, body string) {
 func TestRunVMExitCodes(t *testing.T) {
 	t.Setenv("GOARCH", "") // see vmrun's fixtureConfig: nested go commands must build natively
 	t.Chdir("../..")
-	if m, _ := filepath.Glob("/boot/vmlinuz-*"); len(m) == 0 {
+	// vmrun.Run checks that its target kernel is installed; the level0 CI runner (unlike the
+	// devcontainer, which pins specific kernels) has none of ours, only its own host kernel
+	// under an unrelated name, so the default kernel must not be assumed here.
+	m, _ := filepath.Glob("/boot/vmlinuz-*")
+	if len(m) == 0 {
 		t.Skip("no installed kernel image: vmrun.Run checks for one")
 	}
+	kernel := strings.TrimPrefix(filepath.Base(m[0]), "vmlinuz-")
 
 	t.Run("pass", func(t *testing.T) {
 		fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
-		code, out, errOut := runCLI(t, "run", "-mode", "vm", "-allow-skip", fixture)
+		code, out, errOut := runCLI(t, "run", "-mode", "vm", "-kernel", kernel, "-allow-skip", fixture)
 		if code != 0 {
 			t.Fatalf("code %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 		}
@@ -109,7 +114,7 @@ func TestRunVMExitCodes(t *testing.T) {
 	t.Run("failing package", func(t *testing.T) {
 		fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
 		t.Setenv("VMRUN_FIXTURE_FAIL", "1")
-		code, _, _ := runCLI(t, "run", "-mode", "vm", "-allow-skip", fixture)
+		code, _, _ := runCLI(t, "run", "-mode", "vm", "-kernel", kernel, "-allow-skip", fixture)
 		if code != 1 {
 			t.Fatalf("code = %d, want 1", code)
 		}
@@ -117,7 +122,7 @@ func TestRunVMExitCodes(t *testing.T) {
 
 	t.Run("run not carried out", func(t *testing.T) {
 		fakeVNG(t, "sleep 5\n") // never touches $cmd: the guest never boots
-		code, _, _ := runCLI(t, "run", "-mode", "vm", "-vm-timeout", "1s", fixture)
+		code, _, _ := runCLI(t, "run", "-mode", "vm", "-kernel", kernel, "-vm-timeout", "1s", fixture)
 		if code != 2 {
 			t.Fatalf("code = %d, want 2", code)
 		}

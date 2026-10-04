@@ -424,5 +424,13 @@ func (g *gw) finishSetupWith(body map[string]any) {
 	if r.Status != 200 {
 		g.t.Fatalf("setup: %d %s", r.Status, r.Body)
 	}
+	res := r.json(g.t)
 	g.mintToken("full")
+	// the setup always needs confirming now (M5-03)
+	if res["status"] == "pending_confirm" {
+		id := int64(res["revision"].(float64))
+		if cf := g.do("POST", "/revisions/"+itoa(id)+"/confirm", nil, nil, nil); cf.Status != 200 {
+			g.t.Fatalf("confirming the setup: %d %s", cf.Status, cf.Body)
+		}
+	}
 }

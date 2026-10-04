@@ -101,7 +101,9 @@ func New(cfg Config) (*Server, error) {
 }
 
 // auditSystemEvents records the audit log entries of changes the engine makes on its own (M5-05):
-// today, only a commit-confirm rollback (timeout, or an unconfirmed revision found at restart).
+// today, only a commit-confirm rollback (timeout, or an unconfirmed revision found at restart). A
+// rollback that leaves nothing committed was the setup's own first revision (M5-03): the admin
+// password it set is of no use without the configuration it was paired with, so the setup reopens.
 func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 	defer close(s.eventsDone)
 	for ev := range events {
@@ -112,6 +114,15 @@ func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 		reason, _ := ev.Data["reason"].(string)
 		_, _ = s.cfg.Audit.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system",
 			Action: "revision.rolled_back", Revision: rev, Detail: reason})
+		if s.cfg.Engine.Snapshot().Revision != 0 {
+			continue
+		}
+		tok, err := s.cfg.Auth.ReopenSetup()
+		if err != nil {
+			s.log.Error("cannot reopen the setup after the unconfirmed first revision was rolled back", "error", err)
+			continue
+		}
+		s.log.Warn("the setup's first revision was rolled back without confirmation: setup is open again", "setup_token", tok)
 	}
 }
 

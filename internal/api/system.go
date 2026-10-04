@@ -508,7 +508,7 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), rev.Id, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
+	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), rev.Id, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout, ForceConfirm: true})
 	if err != nil {
 		_ = s.cfg.Store.Discard(rev.Id) // the setup stays open: the candidate is of no use
 		undo()

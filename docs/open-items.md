@@ -356,16 +356,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 | Audit log | done | `internal/audit`: retention, failure surfaced as unhealthy, system-originated rollbacks audited |
 | T: contract tests, clients compile, E2E testbed, conflicts, confirm_pending, SSE reconnect, slow subscriber, concurrent applies | done | `harness_test.go` `checkContract` (now validates requests and SSE events too), `make check-clients`, `e2e_test.go`, `revisions_test.go`, `events_test.go` |
 
-### M5-03 Setup applies without commit-confirm
-- Status: open (the old list had it twice, under M12 and M8a/M10; neither milestone covers it)
-- Severity: medium
-- Reason: needs-decision — the spec (`POST /setup`, openapi.yaml:145, "the revision waits for confirmation") requires commit-confirm; the code applies directly because `LockoutRelevant` is false without a current configuration; a wrong management interface at setup locks the admin out.
-- Evidence: `internal/api/system.go:403`; `internal/engine/lockout.go:15-16`; `TestTheSetupNeedsTheTokenAndCreatesRevisionOne`.
-- Task: 1. `ForceConfirm bool` in `engine.ApplyOptions`, used by `CompleteSetup`. 2. Keep the binder on the pre-setup addresses until the revision is confirmed (pass `Pending != nil` into `listenAddrs`). 3. On rollback (no active revision) reopen setup (`auth.ReopenSetup()` prints a new token). 4. `TestTheSetupWaitsForConfirmation`, `TestAnUnconfirmedSetupIsRolledBackAndReopened` (short confirm timeout); update e2e_test.go:54 to confirm first.
-- Acceptance: local unit tests in `internal/api` and `cmd/chaosgw`; CI testbed for e2e_test.go.
-- Needs maintainer: decided 2026-10-04: (a) implement commit-confirm for the setup.
-- Effort: M
-
 ## M5b (appliance VM harness, level 2)
 
 Verdict: incomplete. Scope done; the level-2 smoke is green with the current deploy config (24.04 and 26.04, three and two ports, run 37171706227, on branch `phase1-deploy-pin-health`, which also added BIRD to the deployment); still open are an SSH check that reuses an old connection and the checksum verification.

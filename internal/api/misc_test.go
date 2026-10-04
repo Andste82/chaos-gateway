@@ -296,8 +296,8 @@ func TestTheAuditLogRecordsWritesNotReads(t *testing.T) {
 		}
 	}
 	got := strings.Join(actions, ",")
-	// newest first: the token, the apply, the creation, the setup
-	if !strings.HasPrefix(got, "token.create,revision.apply,revision.create,setup.complete") {
+	// newest first: the token, the apply, the creation, the setup's own confirm (M5-03) and completion
+	if !strings.HasPrefix(got, "token.create,revision.apply,revision.create,revision.confirm,setup.complete") {
 		t.Errorf("%s", got)
 	}
 	if strings.Contains(got, "state") {

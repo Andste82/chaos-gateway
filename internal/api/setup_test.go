@@ -1,10 +1,12 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestBeforeTheSetupOnlyTheSetupAndTheHealthAnswer(t *testing.T) {
@@ -61,11 +63,20 @@ func TestTheSetupNeedsTheTokenAndCreatesRevisionOne(t *testing.T) {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	res := r.json(t)
-	if res["revision"] != float64(1) || res["status"] != "active" || r.Header.Get("Chaos-Generation") == "" {
+	// M5-03: the setup's own revision needs confirming like any other lockout-relevant one, since
+	// LockoutRelevant alone never flags a first revision (there is nothing to compare it against).
+	if res["revision"] != float64(1) || res["status"] != "pending_confirm" || res["confirm_deadline"] == nil || r.Header.Get("Chaos-Generation") == "" {
 		t.Errorf("%v %v", res, r.Header)
 	}
-	if g.activeID() != 1 || !g.au.SetupCompleted() {
-		t.Error("the setup did not finish")
+	if g.activeID() != 0 || !g.au.SetupCompleted() {
+		t.Error("the admin password is not usable yet, or active before confirmation")
+	}
+	g.mintToken("full")
+	if cf := g.do("POST", "/revisions/1/confirm", nil, nil, nil); cf.Status != 200 {
+		t.Fatalf("confirming the setup: %d %s", cf.Status, cf.Body)
+	}
+	if g.activeID() != 1 {
+		t.Error("the setup did not finish once confirmed")
 	}
 	// the token is void and the setup cannot be run again
 	if r := g.do("POST", "/setup", body, map[string]string{"X-Setup-Token": g.setup}, nil); r.Status != 409 || r.code(t) != "setup_completed" {
@@ -140,7 +151,8 @@ func TestTwoSetupRequestsRunTheSetupOnce(t *testing.T) {
 			t.Errorf("%d %s", r.Status, r.Body)
 		}
 	}
-	if ok != 1 || done != 1 || g.activeID() != 1 {
+	// the one setup's revision exists (and is pending confirmation, M5-03) but is not active yet
+	if ok != 1 || done != 1 || g.activeID() != 0 {
 		t.Errorf("%d setups, %d refused, active revision %d", ok, done, g.activeID())
 	}
 	if n := len(g.mintAndList()); n != 1 {
@@ -151,4 +163,87 @@ func TestTwoSetupRequestsRunTheSetupOnce(t *testing.T) {
 func (g *gw) mintAndList() []any {
 	g.mintToken("read")
 	return g.do("GET", "/revisions", nil, nil, nil).json(g.t)["items"].([]any)
+}
+
+// M5-03 test: the first-start setup's own revision waits for confirmation like any other
+// lockout-relevant one, even though LockoutRelevant itself never flags a first revision (nothing
+// to compare it against) — a wrong management interface here would otherwise lock the admin out
+// with no way back.
+func TestTheSetupWaitsForConfirmation(t *testing.T) {
+	g := newGW(t)
+	body := fixtureJSON(t)
+	r := g.do("POST", "/setup", body, map[string]string{"X-Setup-Token": g.setup}, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	res := r.json(t)
+	if res["status"] != "pending_confirm" || res["confirm_deadline"] == nil {
+		t.Fatalf("%v", res)
+	}
+	// the admin password already works: without it nothing could ever confirm or retry
+	login := g.do("POST", "/auth/login", map[string]any{"password": adminPassword}, nil, nil)
+	if login.Status != 200 {
+		t.Fatalf("login before confirmation: %d %s", login.Status, login.Body)
+	}
+	csrf := login.json(t)["csrf_token"].(string)
+	// but nothing is active, and the setup is not done in the sense that matters for lockout
+	if g.activeID() != 0 {
+		t.Errorf("active before confirmation: %d", g.activeID())
+	}
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["pending_confirm"] == nil {
+		t.Errorf("%v", st)
+	}
+	if r := g.do("POST", "/revisions/1/confirm", nil, map[string]string{"X-CSRF-Token": csrf}, nil); r.Status != 200 {
+		t.Fatalf("confirm: %d %s", r.Status, r.Body)
+	}
+	if g.activeID() != 1 {
+		t.Error("not active once confirmed")
+	}
+}
+
+// M5-03 test: if the setup's own revision is never confirmed, it rolls back like any other
+// lockout-relevant one, and the setup reopens with a fresh token instead of leaving an admin
+// password that is paired with no active configuration.
+func TestAnUnconfirmedSetupIsRolledBackAndReopened(t *testing.T) {
+	g := newGW(t, func(o *options) { o.confirm = 500 * time.Millisecond })
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	r := g.do("POST", "/setup", fixtureJSON(t), map[string]string{"X-Setup-Token": g.setup}, nil)
+	if r.Status != 200 || r.json(t)["status"] != "pending_confirm" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	deadline := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev := <-ch:
+			done = ev.Type == "revision_rolled_back"
+		case <-deadline:
+			t.Fatal("no rollback")
+		}
+	}
+	if _, err := g.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// the server's own subscriber (internal/api/server.go) reopens the setup asynchronously, on a
+	// separate subscription to the same event this test's loop above already consumed
+	deadline = time.After(5 * time.Second)
+	for g.au.SetupCompleted() {
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("the setup is still done after its only revision was rolled back")
+		}
+	}
+	if g.activeID() != 0 {
+		t.Errorf("active after a rollback: %d", g.activeID())
+	}
+	// logging in with the old password no longer works: it was paired with the rolled-back revision
+	if r := g.do("POST", "/auth/login", map[string]any{"password": adminPassword}, nil, nil); r.Status != 503 {
+		t.Errorf("login after reopening: %d", r.Status)
+	}
+	// the setup accepts a fresh attempt
+	tok := g.mustSetupToken()
+	if r := g.do("POST", "/setup", fixtureJSON(t), map[string]string{"X-Setup-Token": tok}, nil); r.Status != 200 {
+		t.Errorf("a second attempt after reopening: %d %s", r.Status, r.Body)
+	}
 }

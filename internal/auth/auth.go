@@ -332,6 +332,20 @@ func (s *Store) CompleteSetup(password string) error {
 	return s.save()
 }
 
+// ReopenSetup undoes a completed setup whose only revision was rolled back without confirmation
+// (M5-03): the admin password it set is of no use without the configuration it was paired with, so
+// the setup opens again with a fresh token, the same as a start that was never finished.
+func (s *Store) ReopenSetup() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	t := "setup_" + randomString(24)
+	s.st.PasswordHash, s.st.SetupDone, s.st.SetupTokenHash = "", false, hashSecret(t)
+	s.st.Epoch++
+	s.sessions = map[string]*Session{}
+	return t, s.save()
+}
+
 // ---- password
 
 // VerifyPassword checks the admin password.

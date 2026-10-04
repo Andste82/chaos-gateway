@@ -482,11 +482,24 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
 - **Setup.** The first start prints `Setup token: …` to the log (only its hash is stored; every start
   of an unfinished setup prints a new one). `POST /setup` validates the configuration, provisions the
   WireGuard keys, creates revision 1, applies it and only then sets the admin password: a failed apply
-  leaves the setup open. Until then the server listens on every address of the host except a test
-  network's own (its bridge, or a test-role WireGuard tunnel — `api.NetworkInterfaceNames`, M5-21:
-  a configuration can already be active before setup, e.g. `chaosgw apply --file`), afterwards on
-  the management interface, the tunnel addresses of management-role WireGuard networks and the
-  loopback (`api.Binder` follows the configuration without a restart).
+  leaves the setup open. Until the setup is done the server listens on every address of the host
+  except a test network's own (its bridge, or a test-role WireGuard tunnel —
+  `api.NetworkInterfaceNames`, M5-21: a configuration can already be active before setup, e.g.
+  `chaosgw apply --file`), afterwards on the management interface, the tunnel addresses of
+  management-role WireGuard networks and the loopback (`api.Binder` follows the configuration
+  without a restart).
+  - **Commit-confirm (M5-03).** The setup's own apply always waits for confirmation
+    (`engine.ApplyOptions.ForceConfirm`), the same as any other lockout-relevant change: `LockoutRelevant`
+    itself never flags a first revision (there is nothing to compare it against), but a wrong
+    management interface there locks the admin out just the same. The admin password is set
+    immediately (the admin needs it to log in and confirm or to wait it out), but `api.Binder` keeps
+    the broad, pre-setup addresses while the revision is pending (`Snapshot.Pending != nil`), not just
+    before `SetupCompleted()` — narrowing down to what the new configuration says the management
+    network is, before it is known to be reachable, is exactly the lockout this exists to prevent. A
+    revision that is never confirmed rolls back like any other; since nothing is then committed
+    (`Snapshot.Revision == 0`), the server's own rollback subscriber (`auditSystemEvents`) calls
+    `auth.ReopenSetup()`, which clears the admin password and prints a fresh setup token: the
+    password set by a setup that never took effect is of no use, and the operator starts over.
 - **Revisions.** A candidate is a complete configuration (`application/json`, also the import) or a
   JSON Merge Patch (`application/merge-patch+json`) against the revision named in `If-Match`;
   `domain.NewCandidate` merges, resolves names to UUIDs, validates; a candidate that fails is not

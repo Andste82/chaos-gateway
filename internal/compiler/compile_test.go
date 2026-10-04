@@ -261,13 +261,16 @@ func TestPolicyRoutingTable100(t *testing.T) {
 
 func TestHostStateOfTheTarget(t *testing.T) {
 	tg := compileBasic(t, nil)
-	if strings.Join(tg.Interfaces, ",") != "br-iot,br-lab,lan0,lan1,wan0" {
+	if strings.Join(tg.Interfaces, ",") != "br-iot,br-lab,lan0,lan1,mgmt0,wan0" {
 		t.Errorf("interfaces %v", tg.Interfaces)
+	}
+	if strings.Join(tg.OSOwned, ",") != "mgmt0,wan0" {
+		t.Errorf("OS-owned %v: the uplink and the dedicated management interface (M3-01)", tg.OSOwned)
 	}
 	if strings.Join(tg.DockerUser, ",") != "br-iot,br-lab" {
 		t.Errorf("DOCKER-USER interfaces %v: the bridges of the test networks (a packet to or from the uplink has a bridge on its other side)", tg.DockerUser)
 	}
-	if strings.Join(tg.Offloads, ",") != "br-iot,br-lab,lan0,lan1,wan0" {
+	if strings.Join(tg.Offloads, ",") != "br-iot,br-lab,lan0,lan1,mgmt0,wan0" {
 		t.Errorf("offloads %v", tg.Offloads)
 	}
 	var ra []string

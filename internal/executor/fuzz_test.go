@@ -19,6 +19,7 @@ var fuzzSeeds = []string{
 	`{"type":"offloads","devs":["wan0"]}`,
 	`{"type":"docker_user","action":"ensure","devs":["br-lan0"]}`,
 	`{"type":"assign_interfaces","devs":["wan0","lan0"]}`,
+	`{"type":"assign_interfaces","devs":["wan0","lan0"],"os_owned":["wan0"]}`,
 	`{"type":"read","what":"routes","table":"100"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"ruleset":null}}]}}`,
 	`{"type":"routing","rules":[{"action":"delete","family":4,"priority":32766,"table":254}]}`,

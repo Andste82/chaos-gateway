@@ -273,9 +273,11 @@ func (e *Executor) execute(j *job) (res jobResult) {
 	// taken effect by now. Assignments inside the batch widen the scope for the operations after
 	// them, and all operations are checked before the first one runs.
 	check := NewScope(e.scope.Devs()...)
+	check.SetOSOwned(e.scope.OSOwned())
 	for i, op := range j.ops {
 		if a, ok := op.(*AssignInterfaces); ok {
 			check.Set(a.Devs)
+			check.SetOSOwned(a.OSOwned)
 		}
 		if err := check.Check(op); err != nil {
 			out.Generation = e.Generation()
@@ -320,7 +322,7 @@ func (e *CommandError) Error() string {
 func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, error) {
 	switch o := op.(type) {
 	case *AssignInterfaces:
-		return nil, e.assign(o.Devs)
+		return nil, e.assign(o.Devs, o.OSOwned)
 	case *Read:
 		return e.read(ctx, o)
 	}
@@ -613,13 +615,15 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	return b, err
 }
 
-func (e *Executor) assign(devs []string) error {
+func (e *Executor) assign(devs, osOwned []string) error {
 	e.scope.Set(devs)
+	e.scope.SetOSOwned(osOwned)
 	return e.saveState()
 }
 
 type stateFile struct {
 	Interfaces []string `json:"interfaces"`
+	OSOwned    []string `json:"os_owned,omitempty"`
 }
 
 func (e *Executor) loadState() error {
@@ -641,6 +645,7 @@ func (e *Executor) loadState() error {
 		return fmt.Errorf("read %s: %w", e.state, err)
 	}
 	e.scope.Set(s.Interfaces)
+	e.scope.SetOSOwned(s.OSOwned)
 	return nil
 }
 
@@ -648,7 +653,7 @@ func (e *Executor) saveState() error {
 	if e.state == "" {
 		return nil
 	}
-	b, err := json.Marshal(stateFile{Interfaces: e.scope.Devs()})
+	b, err := json.Marshal(stateFile{Interfaces: e.scope.Devs(), OSOwned: e.scope.OSOwned()})
 	if err != nil {
 		return err
 	}

@@ -149,7 +149,13 @@ All operations the compiler needs are implemented (`links`, `sysctl`, `wireguard
 DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20), and the reader
 pool with operation time stamps (M8a). Which interfaces count as assigned is decided by whoever
 may call `assign_interfaces`: loopback and Docker's devices are
-refused, the rest is trusted to the (root or allowed-uid) caller. Routing batches use
+refused, the rest is trusted to the (root or allowed-uid) caller. An assigned interface can also be
+named OS-owned (`os_owned`, a subset of the assigned devices): the uplink, and the management
+interface when it is a NIC of its own, are tc, routing, offloads and DOCKER-USER targets like any
+other assigned interface, but `links`, `sysctl`, `wireguard` and `service_ns` refuse to touch one
+(`ErrOutOfScope`, M3-01) — the in-band management path and the host's own address stay outside what
+a chaos scenario can bring down or reconfigure. The compiler reports `Target.OSOwned` alongside
+`Target.Interfaces`. Routing batches use
 `ip -force -batch` and treat "exists"/"does not exist" answers as success, so re-sending an
 unchanged rule set is safe.
 

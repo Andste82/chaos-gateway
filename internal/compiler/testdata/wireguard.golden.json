@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "2359d89d96c2c434",
+  "hash": "9644cbe1dc17a3b9",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -109,10 +109,15 @@
   "interfaces": [
     "br-iot",
     "lan0",
+    "mgmt0",
     "wan0",
     "wg-admin",
     "wg-lab-hub",
     "wg-site-b"
+  ],
+  "os_owned": [
+    "mgmt0",
+    "wan0"
   ],
   "sysctls": [
     {
@@ -152,6 +157,7 @@
   "offloads": [
     "br-iot",
     "lan0",
+    "mgmt0",
     "wan0"
   ],
   "routes": [

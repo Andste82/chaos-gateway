@@ -105,7 +105,7 @@ func TestWireGuardInterfaces(t *testing.T) {
 	if adm := wgByName(t, tg, "admin"); adm.Role != "management" || len(adm.Peers) != 0 {
 		t.Errorf("%+v", adm)
 	}
-	if len(tg.Interfaces) != 6 || !contains(tg.Interfaces, "wg-lab-hub") || !contains(tg.Interfaces, "wg-site-b") || !contains(tg.Interfaces, "wg-admin") {
+	if len(tg.Interfaces) != 7 || !contains(tg.Interfaces, "wg-lab-hub") || !contains(tg.Interfaces, "wg-site-b") || !contains(tg.Interfaces, "wg-admin") {
 		t.Errorf("interfaces %v", tg.Interfaces)
 	}
 	if contains(tg.Offloads, "wg-lab-hub") {

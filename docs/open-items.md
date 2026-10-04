@@ -4,9 +4,8 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 
 ## Result
 
-**Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green. Work packages 1-9 of the "Suggested work packages" list below are done (merged, or for package 9 committed directly as plan/doc fixes); packages 10 and 11 remain. What remains is a mix of:
+**Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green. Work packages 1-10 of the "Suggested work packages" list below are done (merged, or for package 9 committed directly as plan/doc fixes); package 11 remains. What remains is a mix of:
 
-- a handful of decided but not yet implemented functional changes (package 10: the executor's `os_owned` class, BIRD outage/max-prefix/Babel behaviour, an SSE resync signal, setup commit-confirm, 413 for oversized bodies, the Kea hook's datagram socket, a dead service-namespace holder not blocking applies);
 - conntrack followed through events instead of polled (package 11, effort L);
 - test gaps where a plan test exists only weakly (M5b, CC-03);
 - small env-limited or deferred items with no further action needed beyond a decision already recorded.
@@ -16,13 +15,13 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M0 (spikes, docs) | – | 1 | 0 | 0 | 1 |
 | M1 Repository, CI, testbed | done | 0 | 0 | 0 | 0 |
 | M2 Domain model, persistence | incomplete | 2 | 0 | 0 | 2 |
-| M3 Executor | incomplete | 2 | 0 | 0 | 2 |
+| M3 Executor | incomplete | 1 | 0 | 0 | 1 |
 | M4 Compiler, preview, safe apply | incomplete | 2 | 0 | 0 | 2 |
-| M4b WireGuard | incomplete | 2 | 0 | 0 | 2 |
-| M4c Dynamic routing | incomplete | 5 | 0 | 3 | 5 |
-| M5 REST API | incomplete | 3 | 0 | 2 | 3 |
+| M4b WireGuard | done | 0 | 0 | 0 | 0 |
+| M4c Dynamic routing | incomplete | 1 | 0 | 0 | 1 |
+| M5 REST API | done | 0 | 0 | 0 | 0 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
-| M6a DHCP, devices | incomplete | 3 | 0 | 2 | 2 |
+| M6a DHCP, devices | incomplete | 2 | 0 | 1 | 1 |
 | M6b DNS, service namespace | incomplete | 1 | 0 | 0 | 1 |
 | Cross-cutting | – | 3 | 0 | 0 | 0 |
 
@@ -114,7 +113,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 9. **Plan and docs sync** (done, one commit directly on `main`; M6a-04 was listed here originally but excluded, since its decision was to implement conntrack events in code, see package 11):
    - all `plan-error` items once their decisions are made: M1-01, M1-06, M1-10, M3-06, M4-09, M4b-03, M4b-07, M4b-08, M4c-11, M4c-16, M5-07, M5-23, M6a-07 (doc part), M6a-10, M6a-12, M6a-23, M6a-24, M6b-04 (M7 test), M6b-11;
    - doc items M0-01, M0-02, M3-07, M4-08, M4b-06, M6b-09, CC-01, CC-02.
-10. **Decided changes**: M3-01, M4c-02, M4c-04, M4c-05, M5-02, M5-03, M5-10, M6a-09, M6b-02; close M4b-04, M4b-05 and M4c-12 with a doc sentence.
+10. **Decided changes** (done, `phase1-decided-changes`): M3-01, M4c-02, M4c-04, M4c-05, M5-02, M5-03, M5-10, M6a-09, M6b-02; closed M4b-04, M4b-05 and M4c-12 with a doc sentence.
 11. **Conntrack events** (effort L): M6a-04, then the rates of M6a-03 on top of it.
 
 ## Cross-cutting
@@ -225,7 +224,7 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 
 ## M3 (executor and state reader)
 
-Verdict: incomplete. All scope and test items exist; open are one literal scope rule (the uplink may only get a qdisc), the per-process generation decision, and plan/doc drift.
+Verdict: incomplete. All scope and test items exist; open is the per-process generation decision.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -233,21 +232,11 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 | Parsers `ip -j`, `nft -j`, `tc -j` | done | `internal/linux`; `parse_test.go` |
 | Unix socket, version handshake, `SO_PEERCRED` | done | `proto.go`, `server.go`; `TestPeerCredentialsAreChecked`, version-mismatch tests |
 | Scope: nft only `inet chaosgw`; routing only own tables/rules | done | `validate.go`; testbed `TestNftablesApplyIsAtomicAndScoped`, `TestExecutorCannotDeleteForeignRulesOrRoutes` |
-| Scope: tc only assigned interfaces **and the uplink qdisc** | partial | the uplink is a fully assigned interface (M3-01) |
+| Scope: tc only assigned interfaces **and the uplink qdisc** | done | `os_owned` (M3-01); `TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads` |
 | Single `DOCKER-USER` operation | done | `DockerUser`; `TestDockerUserAcceptRulesAreMaintained` |
 | Serialized queue with identity priority | done | `exec.go`; `TestIdentityUpdatesGoBeforeQueuedPlansAndNeverRunConcurrently` |
 | Container hardening profile | done | `deploy/compose.executor.yaml`; `TestExecutorContainerHardeningProfile` |
 | T: integration reads the gateway namespace; out-of-scope rejected; fuzz 5 min/nightly; version mismatch | done | testbed `TestExecutorReadsTheGatewayNamespace`; `TestDecodeRejects`; `FuzzDecode`/`FuzzFrame`, Makefile, nightly.yml |
-
-### M3-01 The executor has no rule for OS-owned interfaces (uplink)
-- Status: open
-- Severity: low
-- Reason: needs-decision — plan M3 says "tc only assigned interfaces and the uplink qdisc"; the uplink is a fully assigned interface, so `links` (down, addr_delete, enslave), `sysctl`, `wireguard` and `service_ns` ops are accepted on it; in the two-port topology it is also the management NIC.
-- Evidence: `internal/executor/scope.go:67-134`; `internal/compiler/compile.go:365-372`; docs/development.md:141-142.
-- Task: 1. Add `OSOwned []string \`json:"os_owned,omitempty"\`` to `AssignInterfaces` (`op.go`), validated as a subset of `Devs`, stored in `Scope` and in the state file. 2. In `Scope.Check` refuse `Links` entries, per-device `Sysctl` entries, `WireGuard` and `ServiceNS` naming an OS-owned interface (`ErrOutOfScope`). 3. Compiler: `Target.OSOwned` (uplink, plus the management interface when assigned), passed in `internal/apply/plan.go` where `AssignInterfaces` is built. 4. Tests: `TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads` (exec_test.go), rejection cases in decode_test.go, a fuzz seed. 5. Update development.md.
-- Acceptance: `go test ./internal/executor ./internal/apply ./internal/compiler`; CI testbed level 1/1b green.
-- Needs maintainer: decided 2026-10-04: (A) implement the `os_owned` class.
-- Effort: M
 
 ### M3-04 Executor generation restarts at 0
 - Status: open
@@ -299,7 +288,7 @@ Removed from the old list: "tc tokens allow `/` and `..`" — wrong: `..` is rej
 
 ## M4b (WireGuard networks and clients)
 
-Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); open are two accepted-as-documented deferrals.
+Verdict: done. All plan tests exist and passed in CI (run 37147106957); two formerly open items (PSK verify by presence only, the first poll announcing online peers) are accepted as documented behaviour (docs/development.md).
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -312,13 +301,13 @@ Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); op
 
 ## M4c (dynamic routing, BIRD)
 
-Verdict: incomplete. The high bug (external mode) is fixed; four medium items remain, all `needs-decision` or `test-gap` on real-kernel behaviour the dev environment cannot run.
+Verdict: incomplete. The high bug (external mode) is fixed; one low item remains (the effective route in the preview, moved to M8a `/explain`).
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | BIRD instance, own config/socket/container | done | `deploy/compose.bird.yaml`, `executor/exec.go:662-758` |
 | BGP, OSPFv2 | done | testbed `TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable` (now also exercises the OSPF import filter) |
-| Babel | partial | config only; probably does not run (M4c-05) |
+| Babel | done | the link-local address Babel needs is assigned to the WireGuard interface (M4c-05); testbed `TestBabelOverAWireGuardLink` |
 | Static, router id/ASN/neighbors/areas/timers, announcements | done | `compiler/routing.go`; `TestTheBirdConfigurationFollowsTheModel` |
 | Import filters | done | `bird/render.go`; the management subnet is protected with explicit `allowed_sources` too, and `allow_default` is honored with an allowed list |
 | Export only into own tables | done for table 100 | PMTU tables come with M10 (plan.md updated) |
@@ -342,15 +331,15 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 
 ## M5 (REST API v1)
 
-Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M5` operations have handlers; open are an SSE resync signal, the setup without commit-confirm, and the 413 oversized-body code.
+Verdict: done. Every scope and test item exists and all 41 `x-milestone: M5` operations have handlers.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | problem+json, UUID or name in paths, cursor pagination, ETag/If-Match/428, merge-patch candidates, idempotency keys | done | `internal/api/{problem,helpers,middleware,revisions,idempotency}.go`; `TestProblemsAreProblemJSON`, `TestIdempotencyKeys` |
-| SSE with ids, replay, keepalive | done, gap | `events.go`, `engine/events.go`; no signal for lost events (M5-02) |
+| SSE with ids, replay, keepalive | done | `events.go`, `engine/events.go`; a restart or an expired replay window sends a synthetic `events_lost` event (M5-02) |
 | Generation (state, header, SSE `applied`) | done | persisted across restarts (`engine.Config.GenerationFile`); `TestGenerationContinuesAfterRestart`, `TestGenerationSurvivesAnAPIRestart` |
 | Capabilities, candidate model, sessions + CSRF, hashed tokens with scopes, setup token | done | `system.go`, `revisions.go`, `auth/auth.go`; `TestLoginSessionCSRFAndLogout`, `TestTokenScopesAndTheirLifecycle` |
-| Setup "applies with commit-confirm" (spec `POST /setup`) | missing | M5-03 |
+| Setup "applies with commit-confirm" (spec `POST /setup`) | done | `engine.ApplyOptions.ForceConfirm` (M5-03); `TestTheSetupWaitsForConfirmation`, `TestAnUnconfirmedSetupIsRolledBackAndReopened` |
 | Admin password reset | done | `cmd/chaosgw/admin.go`: audited, interactive prompt |
 | UI/API bound to the management network after setup | done | `cmd/chaosgw/api.go`: also excludes test networks before setup; the loopback binding for the container health check is documented (plan §2.16) |
 | Audit log | done | `internal/audit`: retention, failure surfaced as unhealthy, system-originated rollbacks audited |
@@ -384,13 +373,13 @@ Verdict: incomplete. Scope done; the level-2 smoke is green with the current dep
 
 ## M6a (DHCP and device discovery)
 
-Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are conntrack events, the hook's fork per lease, and a verified `started_at` format.
+Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are conntrack events and a verified `started_at` format.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Kea container, pinned version | done | `deploy/Dockerfile`, `.devcontainer/Dockerfile` (`ARG KEA_VERSION`) |
 | One subnet per network, pools, reservations via `config-set`, DHCP on/off | done | `internal/compiler/dhcp.go`, `internal/kea`; `TestTheClientDrivesARealKea`; testbed `TestDhcpOffOnOneNetworkLeavesItSilent` |
-| Lease events via `run_script` | done | `cmd/chaosgw/keahook.go`, `api/devices.go:312`; `TestACommittedHookCarriesEveryLease` |
+| Lease events via `run_script` | done | `cmd/chaosgw/keahook.go`, `api/devices.go:312`; `TestACommittedHookCarriesEveryLease`; a Unix datagram socket to the API, HTTP only as a fallback, not a fork per lease (M6a-09) |
 | Flow observer on conntrack events | partial | polled every second (M6a-04) |
 | Flows API | done, gap | `started_at` needs a format verified on a real kernel (M6a-03) |
 | Discovery from leases, neighbors, conntrack, WG clients | done | discovery by address also covers a LAN network's own downstream routes |
@@ -444,7 +433,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 | T: no bind on 127.0.0.53, resolved keeps working | done | |
 | T: holder restart healed | done | |
 | T: fail closed | done | named in the plan's M7 test list |
-
 
 ### M6b-12 `ui_port` default in the spec (443) differs from the code
 - Status: open

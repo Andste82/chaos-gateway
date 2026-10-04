@@ -230,6 +230,54 @@ func TestAssignmentInsideABatchWidensTheScopeForLaterOperations(t *testing.T) {
 	}
 }
 
+// M3-01: the uplink (and a dedicated management interface) is assigned for tc, routing, offloads
+// and DOCKER-USER, but links, sysctl, wireguard and service_ns refuse to touch it.
+func TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads(t *testing.T) {
+	e := newExec(t, &fakeRunner{})
+	ctx := context.Background()
+	assign := `{"type":"assign_interfaces","devs":["wan0","lan0"],"os_owned":["wan0"]}`
+	if _, err := e.Do(ctx, mustDecode(t, assign)); err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]string{
+		"tc":          `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","args":["netem","delay","10ms"]}]}`,
+		"route dev":   `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"10.0.0.0/8","dev":"wan0"}]}`,
+		"offloads":    `{"type":"offloads","devs":["wan0"]}`,
+		"docker_user": `{"type":"docker_user","action":"ensure","devs":["wan0"]}`,
+	} {
+		if _, err := e.Do(ctx, mustDecode(t, in)); err != nil {
+			t.Errorf("%s on the OS-owned interface: %v", name, err)
+		}
+	}
+	for name, in := range map[string]string{
+		"links":        `{"type":"links","entries":[{"action":"up","name":"wan0"}]}`,
+		"links master": `{"type":"links","entries":[{"action":"enslave","name":"lan0","master":"wan0"}]}`,
+		"sysctl":       `{"type":"sysctl","entries":[{"name":"accept_ra","dev":"wan0","value":0}]}`,
+		"wireguard":    `{"type":"wireguard","action":"delete","name":"wan0"}`,
+	} {
+		_, err := e.Do(ctx, mustDecode(t, in))
+		if !errors.Is(err, ErrOutOfScope) {
+			t.Errorf("%s: want ErrOutOfScope, got %v", name, err)
+		}
+	}
+	// service_ns's host_if is always svc0 (never an interface a real configuration could mark
+	// OS-owned), so the guard is exercised directly against the scope.
+	scope := NewScope("svc0")
+	scope.SetOSOwned([]string{"svc0"})
+	if err := scope.Check(&ServiceNS{Action: "ensure", Name: "cgsvc", HostIf: "svc0", PeerIf: "svc1"}); !errors.Is(err, ErrOutOfScope) {
+		t.Errorf("service_ns: want ErrOutOfScope, got %v", err)
+	}
+	// the same operations on the non-OS-owned, merely assigned interface pass
+	for _, in := range []string{
+		`{"type":"links","entries":[{"action":"up","name":"lan0"}]}`,
+		`{"type":"sysctl","entries":[{"name":"accept_ra","dev":"lan0","value":0}]}`,
+	} {
+		if _, err := e.Do(ctx, mustDecode(t, in)); err != nil {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
+}
+
 func TestNamespaceIsPassedToEveryCommand(t *testing.T) {
 	fr := &fakeRunner{}
 	e := newExec(t, fr)

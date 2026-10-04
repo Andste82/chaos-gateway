@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "09dbedd27b2d9f0e",
+  "hash": "76f7bcc2b03e48bc",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -47,6 +47,11 @@
     "br-lab",
     "lan0",
     "lan1",
+    "mgmt0",
+    "wan0"
+  ],
+  "os_owned": [
+    "mgmt0",
     "wan0"
   ],
   "sysctls": [
@@ -84,6 +89,7 @@
     "br-lab",
     "lan0",
     "lan1",
+    "mgmt0",
     "wan0"
   ],
   "routes": [

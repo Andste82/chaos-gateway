@@ -148,7 +148,7 @@ func TestFirstApplyBuildsTheRoutedGatewayAndVerifies(t *testing.T) {
 	if own != 5 {
 		t.Errorf("%d routes in table 100", own)
 	}
-	if strings.Join(s.Assigned, ",") != "br-iot,br-lab,lan0,lan1,wan0" {
+	if strings.Join(s.Assigned, ",") != "br-iot,br-lab,lan0,lan1,mgmt0,wan0" {
 		t.Errorf("assigned %v", s.Assigned)
 	}
 	// the management interface was not touched
@@ -276,7 +276,7 @@ func TestARemovedNetworkLeavesNothingBehind(t *testing.T) {
 	if s.Links["lan1"].Master != "" {
 		t.Errorf("the port is still attached: %+v", s.Links["lan1"])
 	}
-	if strings.Join(s.Assigned, ",") != "br-iot,lan0,wan0" {
+	if strings.Join(s.Assigned, ",") != "br-iot,lan0,mgmt0,wan0" {
 		t.Errorf("assigned %v", s.Assigned)
 	}
 	for _, r := range s.Rules {

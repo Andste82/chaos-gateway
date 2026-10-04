@@ -144,7 +144,11 @@ type Target struct {
 	// DeviceSets maps a device (configured or discovered) to its nftables set of addresses.
 	DeviceSets map[string]string `json:"device_sets,omitempty"`
 	deviceSets []SetDef
-	Interfaces []string               `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
+	Interfaces []string `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
+	// OSOwned is the subset of Interfaces that is assigned (tc, routing, offloads, DOCKER-USER) but
+	// not Chaos Gateway's own in the stricter sense: the uplink, and the management interface when
+	// it is a NIC of its own (M3-01). links, sysctl, wireguard and service_ns refuse them.
+	OSOwned    []string               `json:"os_owned,omitempty"`
 	Sysctls    []executor.SysctlEntry `json:"sysctls"`
 	Offloads   []string               `json:"offloads"`
 	Routes     []executor.Route       `json:"routes"`
@@ -374,13 +378,26 @@ func (t *Target) compileHostState() {
 	if t.Service != nil {
 		owned[t.Service.HostIf] = true
 	}
-	// the uplink is OS-owned: assigned (routes, offloads, DOCKER-USER) but its sysctls stay alone
+	// the uplink and the management interface (when it is a NIC of its own) are OS-owned: assigned
+	// (routes, offloads, DOCKER-USER) but their sysctls stay alone, and links/sysctl/wireguard/
+	// service_ns refuse them (M3-01, executor.Scope)
+	osOwned := map[string]bool{}
+	if t.Uplink.Name != "" {
+		osOwned[t.Uplink.Name] = true
+	}
+	if t.Management.Name != "" {
+		osOwned[t.Management.Name] = true
+	}
+	for n := range osOwned {
+		t.OSOwned = append(t.OSOwned, n)
+	}
+	sort.Strings(t.OSOwned)
 	iface := map[string]bool{}
 	for n := range owned {
 		iface[n] = true
 	}
-	if t.Uplink.Name != "" {
-		iface[t.Uplink.Name] = true
+	for n := range osOwned {
+		iface[n] = true
 	}
 	for n := range iface {
 		t.Interfaces = append(t.Interfaces, n)

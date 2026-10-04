@@ -53,9 +53,9 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	oldAssigned := s.Assigned
 	both := union(oldAssigned, t.Interfaces)
 	if len(minus(both, oldAssigned)) > 0 || len(minus(oldAssigned, t.Interfaces)) > 0 {
-		add("assign interfaces: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both})
+		add("assign interfaces: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both, OSOwned: t.OSOwned})
 	} else {
-		add("interfaces assigned: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both})
+		add("interfaces assigned: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both, OSOwned: t.OSOwned})
 	}
 	removed := minus(oldAssigned, t.Interfaces)
 	wgWant := map[string]compiler.WGInterface{}
@@ -335,7 +335,7 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		return nil, err
 	}
 	if len(removed) > 0 {
-		add("interfaces assigned: "+strings.Join(t.Interfaces, ", "), &executor.AssignInterfaces{Target: tg, Devs: t.Interfaces})
+		add("interfaces assigned: "+strings.Join(t.Interfaces, ", "), &executor.AssignInterfaces{Target: tg, Devs: t.Interfaces, OSOwned: t.OSOwned})
 	}
 	return p, nil
 }

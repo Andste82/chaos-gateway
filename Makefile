@@ -87,10 +87,10 @@ test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 	$(GO) test $(RACE) -count=1 ./...
 
 # Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
-# target: the default 2m30s makes the two targets of the executor decoder 5 minutes in CI; the
-# nightly workflow uses a longer time.
-FUZZTIME ?= 150s
-FUZZ_TARGETS := FuzzDecode FuzzFrame
+# target: the default 100s makes the three targets of the executor decoder and connection handling
+# 5 minutes in CI; the nightly workflow uses a longer time.
+FUZZTIME ?= 100s
+FUZZ_TARGETS := FuzzDecode FuzzFrame FuzzConn
 
 fuzz: ## fuzz the executor's operation decoder and request handling (FUZZTIME per target)
 	@for t in $(FUZZ_TARGETS); do \

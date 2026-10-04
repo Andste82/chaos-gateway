@@ -2,8 +2,13 @@ package executor
 
 import (
 	"encoding/json"
+	"net"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var fuzzSeeds = []string{
@@ -163,6 +168,74 @@ func FuzzFrame(f *testing.F) {
 		if !resp.OK && resp.Error == nil {
 			t.Fatal("a failed response without an error")
 		}
+		for _, c := range fake.commands() {
+			checkInert(t, c)
+		}
+	})
+}
+
+// socketpair returns a connected pair of *net.UnixConn, so PeerCred (which needs a real Unix
+// socket, unlike net.Pipe) works on them.
+func socketpair(t *testing.T) (a, b *net.UnixConn) {
+	t.Helper()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toConn := func(fd int) *net.UnixConn {
+		f := os.NewFile(uintptr(fd), "socketpair")
+		defer func() { _ = f.Close() }()
+		c, err := net.FileConn(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.(*net.UnixConn)
+	}
+	return toConn(fds[0]), toConn(fds[1])
+}
+
+// FuzzConn drives the connection handler itself over a real Unix socketpair: the hello handshake,
+// the maxLine-bounded scanner and the request loop, none of which FuzzFrame reaches (it calls
+// Server.serve directly, skipping the connection entirely). It must never panic, the connection
+// must always end, and whatever the fake runner saw must still be inert.
+func FuzzConn(f *testing.F) {
+	for _, s := range fuzzSeeds {
+		f.Add([]byte(`{"request":{"id":1,"ops":[` + s + `]}}`))
+	}
+	f.Add([]byte(`{"hello":{"protocol":1,"version":"x","role":"client"}}`))
+	f.Add([]byte(""))
+	f.Add([]byte("\x00\x00\x00"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		fake := &fakeRunner{}
+		e, err := New(fake)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer e.Close()
+		s := &Server{Exec: e, Auth: func(Cred) error { return nil }, HelloTimeout: time.Second}
+
+		client, server := socketpair(t)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.handle(t.Context(), server)
+		}()
+
+		cc := newCodec(client)
+		if _, err := cc.read(); err != nil { // the server's own hello
+			_ = client.Close()
+			<-done
+			return
+		}
+		if err := cc.write(&Frame{Hello: &Hello{Protocol: s.proto(), Version: "fuzz", Role: "client"}}); err != nil {
+			_ = client.Close()
+			<-done
+			return
+		}
+		_, _ = client.Write(data)
+		_, _ = client.Write([]byte("\n"))
+		_ = client.Close()
+		<-done
 		for _, c := range fake.commands() {
 			checkInert(t, c)
 		}

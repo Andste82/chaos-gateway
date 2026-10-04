@@ -473,3 +473,18 @@ func TestADiscoveredDeviceCanBeTargetedByItsUUID(t *testing.T) {
 		t.Error("another device must not match")
 	}
 }
+
+// M2-05 test: NewWorld refuses a configuration that still has names instead of UUIDs.
+func TestNewWorldRejectsNames(t *testing.T) {
+	cfg := exampleConfiguration(t) // not normalized: references are names
+	if _, err := NewWorld(cfg, nil); err == nil {
+		t.Fatal("NewWorld accepted a configuration with names instead of UUIDs")
+	}
+	norm, errs := Normalize(cfg)
+	if len(errs) != 0 {
+		t.Fatalf("normalize: %v", errs)
+	}
+	if _, err := NewWorld(norm, nil); err != nil {
+		t.Fatalf("NewWorld rejected a normalized configuration: %v", err)
+	}
+}

@@ -485,7 +485,7 @@ func (o DockerUser) validate() error {
 var sysctlLimits = map[string]struct {
 	perDev bool
 	max    int
-}{"ip_forward": {false, 1}, "accept_ra": {true, 2}, "disable_ipv6": {true, 1}}
+}{"ip_forward": {false, 1}, "nf_conntrack_acct": {false, 1}, "accept_ra": {true, 2}, "disable_ipv6": {true, 1}}
 
 func checkSysctl(name, dev string) error {
 	lim, ok := sysctlLimits[name]

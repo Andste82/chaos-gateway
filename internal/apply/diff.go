@@ -170,6 +170,7 @@ func targetHostLines(t *compiler.Target) []line {
 	var out []line
 	add := func(s string) { out = append(out, line{s, s}) }
 	add("sysctl ip_forward=1")
+	add("sysctl nf_conntrack_acct=1")
 	for _, b := range t.Bridges {
 		add("bridge " + b.Name + " up")
 		add("  address " + b.Address.String())
@@ -223,6 +224,9 @@ func hostLines(s *State, t *compiler.Target) []line {
 	add := func(l string) { out = append(out, line{l, l}) }
 	if v, ok := s.Sysctl["ip_forward"]; ok && v == 1 {
 		add("sysctl ip_forward=1")
+	}
+	if v, ok := s.Sysctl["nf_conntrack_acct"]; ok && v == 1 {
+		add("sysctl nf_conntrack_acct=1")
 	}
 	ours := map[string]bool{}
 	for _, d := range union(s.Assigned, t.Interfaces) {

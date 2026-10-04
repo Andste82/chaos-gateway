@@ -637,3 +637,40 @@ func TestLinksComeUpAfterTheirSysctls(t *testing.T) {
 		t.Errorf("sysctl at %d, up at %d: a bridge must not be up before accept_ra is off", sysctl, up)
 	}
 }
+
+// M4-05 test: renaming a network moves its ports to the new bridge name and removes the old one.
+func TestRenamingANetworkMovesItsPortsToTheNewBridge(t *testing.T) {
+	e := newEnv(t)
+	e.apply(e.compile())
+
+	const labID = "1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32" // "Lab", lan1, br-lab
+	n := (*e.cfg.Networks)[labID]
+	lan, err := n.AsLanNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lan.Name = "Extra"
+	if err := n.FromLanNetwork(lan); err != nil {
+		t.Fatal(err)
+	}
+	(*e.cfg.Networks)[labID] = n
+
+	tg := e.compile()
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	res := e.apply(tg)
+	if len(res.Mismatches) != 0 {
+		t.Fatalf("not verified after the rename: %v", res.Mismatches)
+	}
+	s := res.After
+	if l := s.Links["br-extra"]; l.Kind() != "bridge" || !l.Up() {
+		t.Errorf("br-extra: %+v", l)
+	}
+	if s.Links["lan1"].Master != "br-extra" {
+		t.Errorf("lan1 did not move to the renamed bridge: %+v", s.Links["lan1"])
+	}
+	if _, ok := s.Links["br-lab"]; ok {
+		t.Error("br-lab still exists after the rename")
+	}
+}

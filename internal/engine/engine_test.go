@@ -918,6 +918,47 @@ func TestFirstApplyFailureWithoutAPreviousRevisionIsReported(t *testing.T) {
 	}
 }
 
+// M4-05 test: when a candidate's apply fails and restoring the previously committed revision fails
+// too, the caller gets Restored:false and the owner keeps retrying on its own; once the kernel
+// accepts commands again, the retry succeeds and the committed revision is active and verified.
+func TestARestoreThatFailsTooIsReportedAndRetried(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	r1 := h.mustApply(h.revision(nil)).Revision
+
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
+	_, err := h.apply(r2)
+	var af *engine.ErrApplyFailed
+	if !errors.As(err, &af) || af.Restored {
+		t.Fatalf("got %v, want Restored:false", err)
+	}
+	if s := h.e.Snapshot(); s.LastError == "" {
+		t.Error("LastError is empty after a failed apply whose restore also failed")
+	}
+	if h.st.ActiveID() != r1 {
+		t.Errorf("active revision changed to %d", h.st.ActiveID())
+	}
+
+	// nobody is waiting any more; the owner retries on its own after retryDelay (10s)
+	h.k.Fail = nil
+	h.clk.Advance(11 * time.Second)
+	s := h.barrier()
+	for i := 0; i < 100 && s.LastError != ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		s = h.barrier()
+	}
+	if s.LastError != "" || s.Applied == nil || s.Applied.Revision != r1 {
+		t.Fatalf("not recovered after the retry: %+v", s)
+	}
+	h.verifyKernel()
+}
+
 func TestATargetWithErrorsFailsTheApplyAndKeepsTheOldRevision(t *testing.T) {
 	h := newHarness(t)
 	h.start()

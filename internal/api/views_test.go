@@ -224,6 +224,25 @@ func TestExportOfAClientIsASecretDownload(t *testing.T) {
 	}
 }
 
+// M5-16 test: when the audit log cannot be written, the export fails and no key is sent, instead
+// of recording the download only after the key already went out (or not at all).
+func TestAFailingAuditLogBlocksTheExport(t *testing.T) {
+	g := ready(t)
+	g.addGeneratedClient(true)
+	if err := g.log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := g.do("GET", "/networks/lab-hub/clients/rC/export", nil, nil, nil)
+	if r.Status != 503 || strings.Contains(string(r.Body), "PrivateKey") {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	// the key is still stored: export once did not consume it on a failed export
+	c := g.do("GET", "/networks/lab-hub/clients/rC", nil, nil, nil).json(t)
+	if c["private_key_stored"] != true {
+		t.Errorf("%v", c)
+	}
+}
+
 func TestQRCodesAndNetworkExports(t *testing.T) {
 	g := ready(t)
 	g.addGeneratedClient(false)

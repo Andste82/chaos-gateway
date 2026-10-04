@@ -356,7 +356,11 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
 - **Events.** `GET /events` is SSE. The engine's bus keeps 15 minutes (at most 20 000 events) for
   `Last-Event-ID`; replay and live stream are joined atomically. A client whose writes block is
   closed after the write timeout (and the bus drops a subscriber whose buffer is full), neither delays
-  the publisher or the other subscribers. Event names are the spec's (`EventType`).
+  the publisher or the other subscribers. Event names are the spec's (`EventType`). The events an API
+  call causes directly (`revision_created`, `revision_applied`, `revision_confirmed`) carry `actor`
+  and `subject`, set at the call site rather than discovered generically; a discarded revision stays
+  without an event, since the revision simply stops existing as a candidate and there is nothing
+  later to reconcile it against (the audit log still records the discard as a write).
 - **Audit.** Every write is an entry (who, through which channel — `ui` for a session, `api` for a
   token —, what, which revision); reads are not. Secrets never enter it.
 - **Password reset.** `chaosgw admin reset-password --secrets-dir D --password-stdin` changes the

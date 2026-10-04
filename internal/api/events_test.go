@@ -111,6 +111,18 @@ func TestEventsAreStreamedWithIds(t *testing.T) {
 	if !ok || created.Data["data"].(map[string]any)["revision"] != float64(id) || created.ID == "" {
 		t.Fatalf("%+v", created)
 	}
+	// M5-06: the event carries who caused it and what it is about
+	actor, ok := created.Data["actor"].(map[string]any)
+	if !ok || actor["type"] != "token" || actor["id"] == "" {
+		t.Errorf("no actor on revision_created: %+v", created.Data)
+	}
+	subject, ok := created.Data["subject"].(map[string]any)
+	if !ok || subject["kind"] != "revision" || subject["id"] != itoa(id) {
+		t.Errorf("no subject on revision_created: %+v", created.Data)
+	}
+	if _, ok := created.Data["data"].(map[string]any)["actor"]; ok {
+		t.Errorf("the actor is duplicated inside data: %+v", created.Data)
+	}
 	applied, ok := s.until("applied", 5*time.Second)
 	if !ok || applied.Data["type"] != "applied" || applied.Data["id"] != applied.ID || applied.Data["time"] == nil {
 		t.Fatalf("%+v", applied)

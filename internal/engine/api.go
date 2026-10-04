@@ -32,9 +32,9 @@ func (e *Engine) Apply(ctx context.Context, rev int64, opts ApplyOptions) (Appli
 }
 
 // Confirm confirms the revision that waits for confirmation.
-func (e *Engine) Confirm(ctx context.Context, rev int64) error {
+func (e *Engine) Confirm(ctx context.Context, rev int64, actor model.Actor) error {
 	reply := make(chan error, 1)
-	if err := e.send(ctx, cmdConfirm{rev: rev, reply: reply}); err != nil {
+	if err := e.send(ctx, cmdConfirm{rev: rev, actor: actor, reply: reply}); err != nil {
 		return err
 	}
 	return waitErr(ctx, e, reply)

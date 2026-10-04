@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
@@ -76,6 +77,7 @@ type cmdApply struct {
 
 type cmdConfirm struct {
 	rev   int64
+	actor model.Actor
 	reply chan error
 }
 
@@ -359,7 +361,7 @@ func (o *owner) handle(ctx context.Context, c command) {
 		}
 		o.startApply(c)
 	case cmdConfirm:
-		err := o.confirm(c.rev)
+		err := o.confirm(c.rev, c.actor)
 		o.later(func() { c.reply <- err })
 	case cmdRollback:
 		err := o.rollback(c.rev, c.reason)
@@ -606,7 +608,7 @@ func (o *owner) startQueued() {
 	o.startApply(next)
 }
 
-func (o *owner) confirm(rev int64) error {
+func (o *owner) confirm(rev int64, actor model.Actor) error {
 	if o.pending == nil || o.pending.d.Revision != rev {
 		return &store.ErrNotACandidate{ID: rev, Status: "not pending", Want: store.StatusPendingConfirm}
 	}
@@ -624,7 +626,7 @@ func (o *owner) confirm(rev int64) error {
 	o.prune(o.committed.Config)
 	o.snap.Revision, o.snap.Config = o.committed.Revision, o.committed.Config
 	o.pending = nil
-	o.event(EventConfirmed, map[string]any{"revision": rev})
+	o.event(EventConfirmed, map[string]any{"revision": rev, "actor": actor, "subject": Subject{Kind: "revision", ID: strconv.FormatInt(rev, 10)}})
 	o.publish()
 	o.startQueued()
 	return nil

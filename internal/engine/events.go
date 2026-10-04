@@ -26,6 +26,15 @@ type Event struct {
 	Data map[string]any
 }
 
+// Subject identifies what an event is about (plan §2.15's Event.subject), e.g. {Kind: "revision",
+// ID: "7"}. Set in Data under the key "subject"; "actor" (a model.Actor) holds who caused it, for
+// events an API caller, rather than the engine itself, set off (M5-06).
+type Subject struct {
+	Kind string
+	ID   string
+	Name string
+}
+
 // ReplayWindow is how long the bus keeps events for a client that reconnects with Last-Event-ID
 // (plan §2.15: at least 10 minutes); ReplayMax bounds the memory.
 const (

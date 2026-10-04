@@ -381,7 +381,7 @@ func TestConfirmingInTimeMakesTheRevisionActive(t *testing.T) {
 	h.mustApply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second})
 	h.clk.Advance(10 * time.Second)
 	ctx := context.Background()
-	if err := h.e.Confirm(ctx, r2); err != nil {
+	if err := h.e.Confirm(ctx, r2, model.Actor{Type: "user", Id: "admin"}); err != nil {
 		t.Fatal(err)
 	}
 	s := h.e.Snapshot()
@@ -398,7 +398,7 @@ func TestConfirmingInTimeMakesTheRevisionActive(t *testing.T) {
 		t.Errorf("a confirmed revision was rolled back: %+v", s)
 	}
 	// confirming something that is not pending fails
-	if err := h.e.Confirm(ctx, r2); err == nil {
+	if err := h.e.Confirm(ctx, r2, model.Actor{Type: "user", Id: "admin"}); err == nil {
 		t.Error("a second confirm must fail")
 	}
 }

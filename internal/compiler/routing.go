@@ -278,6 +278,9 @@ func (t *Target) protectedPrefixes() []string {
 	for _, p := range t.Management.Sources {
 		out = append(out, p.Masked().String())
 	}
+	if t.Management.Subnet.IsValid() {
+		out = append(out, t.Management.Subnet.String())
+	}
 	if t.Uplink.Addr.IsValid() {
 		out = append(out, t.Uplink.Addr.Masked().String())
 	}

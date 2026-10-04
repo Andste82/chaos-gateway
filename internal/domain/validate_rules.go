@@ -90,16 +90,17 @@ func (v *validator) accessRules() {
 
 // ---- routing ----------------------------------------------------------------------------
 
-// Routing tables that an external routing daemon must not write to: the system tables and the
-// tables of Chaos Gateway itself (policy routing 100, PMTU mirrors, service namespace, plan
-// §2.2, §3.3). The exact numbers of the last two are fixed in M4; this range leaves room.
+// OwnTableFirst and OwnTableLast bound the routing tables Chaos Gateway itself uses: policy
+// routing (compiler.PolicyTable, 100), the service namespace (compiler.ServiceTable) and the PMTU
+// mirror tables of M10. An external routing daemon must not write to any of them, nor to the
+// system tables (plan §2.2, §3.3). executor.OwnTableFirst/Last are the same two numbers.
 const (
-	reservedTableFirst = 100
-	reservedTableLast  = 110
+	OwnTableFirst = 100
+	OwnTableLast  = 110
 )
 
 func reservedTable(t int) bool {
-	return (t >= reservedTableFirst && t <= reservedTableLast) || t == 253 || t == 254 || t == 255
+	return (t >= OwnTableFirst && t <= OwnTableLast) || t == 253 || t == 254 || t == 255
 }
 
 func (v *validator) routing() {

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 )
 
 // What Chaos Gateway owns. Anything outside is out of scope for the executor (plan §2.16).
@@ -22,10 +23,11 @@ const (
 	// ProtoTag marks the routes and rules the executor writes (`proto`/`protocol` of iproute2).
 	// Rules are only ever deleted together with this tag, so foreign rules are out of reach.
 	ProtoTag = 201
-	// OwnTableFirst..OwnTableLast are the routing tables Chaos Gateway uses (plan §2.2.2: 100 and the
-	// PMTU mirror, 102 service, ...). The domain validation reserves the same range.
-	OwnTableFirst = 100
-	OwnTableLast  = 110
+	// OwnTableFirst..OwnTableLast are the routing tables Chaos Gateway uses (plan §2.2.2: 100 policy,
+	// 102 service, the PMTU mirrors of M10, ...). domain.OwnTableFirst/Last are the same range,
+	// reserved against external routing daemons.
+	OwnTableFirst = domain.OwnTableFirst
+	OwnTableLast  = domain.OwnTableLast
 	// DockerUserChain is the one foreign chain with an own operation; the comment marks our rules.
 	DockerUserChain   = "DOCKER-USER"
 	DockerUserComment = "chaosgw"

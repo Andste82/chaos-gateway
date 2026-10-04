@@ -205,16 +205,28 @@ func TestSystemEndpoints(t *testing.T) {
 	if info["version"] != "test" || info["boot_id"] != "boot-1" || info["api_version"] != "v1" || info["arch"] == nil {
 		t.Errorf("%v", info)
 	}
-	// the health check works without credentials and then shows only the status
+	// the health check works without credentials and then shows only the status; this fixture has
+	// no DHCP, no service namespace and a DNS proxy that has never polled, so it is "degraded"
+	// rather than "healthy" (M6b-05, M4-01)
 	g.token = ""
 	h := g.do("GET", "/system/health", nil, nil, nil)
-	if h.Status != 200 || h.json(t)["status"] != "healthy" || h.json(t)["components"] != nil {
+	if h.Status != 200 || h.json(t)["status"] != "degraded" || h.json(t)["components"] != nil {
 		t.Errorf("%d %s", h.Status, h.Body)
 	}
 	g.mintToken("read")
 	hb := g.do("GET", "/system/health", nil, nil, nil).json(t)
-	if comps, _ := hb["components"].([]any); len(comps) < 2 {
+	comps, _ := hb["components"].([]any)
+	if len(comps) < 2 {
 		t.Errorf("%v", hb)
+	}
+	names := map[string]bool{}
+	for _, c := range comps {
+		names[c.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"api", "executor", "kea", "svcns", "dns"} {
+		if !names[want] {
+			t.Errorf("missing component %q: %v", want, hb)
+		}
 	}
 	if p := g.do("GET", "/system/preflight", nil, nil, nil).json(t); p["status"] == nil {
 		t.Errorf("%v", p)

@@ -11,6 +11,62 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
+// M6b-05 test: WatchService's reading of the service namespace reaches the snapshot, so
+// /system/health can report the svcns component without its own executor round-trip.
+func TestWatchServicePublishesTheServiceHealthInTheSnapshot(t *testing.T) {
+	h := newHarness(t)
+	h.k.ServiceNamespace("cgsvc")
+	h.k.AddHolder(100)
+	ex, err := executor.New(h.k, executor.WithNetnsInode(h.k.NetnsInode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ex.Close)
+	var pid atomic.Int64
+	pid.Store(100)
+	e, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: ex}, Clock: h.clk, ServiceNS: "cgsvc", ServiceHolderPID: func() int { return int(pid.Load()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	h.e = e
+	h.mustApply(h.revision(nil))
+	if sh := e.Snapshot().ServiceHealth; sh != nil {
+		t.Fatalf("a reading exists before the watcher ever ran: %+v", sh)
+	}
+
+	e.WatchService(context.Background(), time.Second)
+	h.clk.BlockUntil(1)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.clk.Advance(time.Second)
+		if s := e.Snapshot().ServiceHealth; s != nil && s.Exists && s.HolderMatches {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the snapshot never reported a matching service namespace: %+v", e.Snapshot().ServiceHealth)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// a holder pid that was never attached: the namespace exists, but it is not its network
+	pid.Store(999)
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		h.clk.Advance(time.Second)
+		if s := e.Snapshot().ServiceHealth; s != nil && s.Exists && !s.HolderMatches {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the snapshot never reported the holder mismatch: %+v", e.Snapshot().ServiceHealth)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // M6b test: nothing tells the engine that the holder of the service namespace restarted (the old
 // namespace lives on under its name), so it looks: a changed holder is applied again, the pair leads
 // into the new namespace afterwards.

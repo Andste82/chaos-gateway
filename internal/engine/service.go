@@ -52,6 +52,7 @@ func (e *Engine) WatchService(ctx context.Context, interval time.Duration) {
 			if json.Unmarshal(out.Data[0], &st) != nil {
 				continue
 			}
+			_ = e.send(ctx, cmdServiceStatus{exists: st.Exists, holderMatches: st.HolderMatches})
 			bad := !st.Exists || !st.HolderMatches
 			now := e.cfg.Clock.Now()
 			// a change of the PID, or a namespace that is wrong, applies again at once; a namespace that

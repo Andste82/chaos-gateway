@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,10 @@ type dnsState struct {
 	resolvers   []string
 	resolversAt time.Time
 
+	// lastPollAt is when the DNS proxy last asked for its configuration (M6b-05): the health check
+	// uses it to tell whether the service is still polling.
+	lastPollAt atomic.Int64 // UnixNano, 0 before the first poll
+
 	logMu   sync.Mutex
 	seq     int64
 	entries []loggedQuery // oldest first, bounded
@@ -41,6 +46,14 @@ type dnsState struct {
 type loggedQuery struct {
 	seq int64
 	e   model.DnsQueryLogEntry
+}
+
+// dnsLastPoll is when the DNS proxy last asked for its configuration, zero before the first poll.
+func (s *Server) dnsLastPoll() time.Time {
+	if ns := s.dns.lastPollAt.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
 }
 
 // dnsConfig computes what the proxy needs from the engine's snapshot: the networks with their
@@ -125,6 +138,7 @@ func (s *Server) hostResolvers() []string {
 // GetDnsServiceConfig implements GET /internal/dns/config: the configuration at once when its
 // generation is newer than `after`, else a long poll that ends with 204.
 func (s *Server) GetDnsServiceConfig(c *gin.Context, params model.GetDnsServiceConfigParams) {
+	s.dns.lastPollAt.Store(time.Now().UnixNano())
 	deadline := time.Now().Add(dnsPoll.wait)
 	for {
 		cfg := s.dnsConfig()

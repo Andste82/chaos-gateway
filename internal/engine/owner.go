@@ -110,6 +110,9 @@ type cmdObserved struct {
 
 type cmdDHCPStatus struct{ err string }
 
+// cmdServiceStatus carries WatchService's last reading of the service namespace.
+type cmdServiceStatus struct{ exists, holderMatches bool }
+
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
 const retryDelay = 10 * time.Second
 
@@ -125,6 +128,7 @@ func (cmdRoutingStatus) command() {}
 func (cmdRetry) command()         {}
 func (cmdObserved) command()      {}
 func (cmdDHCPStatus) command()    {}
+func (cmdServiceStatus) command() {}
 
 // applyResult is what the apply loop reports about one desired state.
 type applyResult struct {
@@ -364,6 +368,9 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.flush()
 	case cmdDHCPStatus:
 		o.snap.DHCPError = c.err
+		o.publish()
+	case cmdServiceStatus:
+		o.snap.ServiceHealth = &ServiceHealth{Exists: c.exists, HolderMatches: c.holderMatches}
 		o.publish()
 	case cmdRoutingStatus:
 		o.routingStatus(c.status)

@@ -372,17 +372,28 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 		case "overlays.yaml":
 			doc, _ := ParseDocument(raw, FormatYAML)
 			for i, item := range doc.([]any) {
-				var req model.OverlayRequest
-				if err := decodeInto(item, &req); err != nil {
+				itemRaw, err := json.Marshal(item)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if _, errs := ValidateOverlay(cfg, &req); len(errs) != 0 {
+				req, err := DecodeOverlayRequest(itemRaw, FormatJSON)
+				if err != nil {
+					t.Fatalf("%s[%d]: %v", name, i, err)
+				}
+				if _, errs := ValidateOverlay(cfg, req); len(errs) != 0 {
 					t.Errorf("%s[%d]: %v", name, i, errs)
 				}
 			}
 		case "run-request.yaml":
 			// the inline scenario of a run is validated against the configuration like any scenario
 			doc, _ := ParseDocument(raw, FormatYAML)
+			v, err := Schemas()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if errs := v.Validate("RunRequest", doc); len(errs) > 0 {
+				t.Fatalf("%s: %v", name, ValidationErrors(errs))
+			}
 			var run struct {
 				Inline model.Scenario `json:"inline"`
 			}

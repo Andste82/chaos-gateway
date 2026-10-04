@@ -135,6 +135,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 	if len(later) < 40 {
 		t.Fatalf("only %d operations of later milestones", len(later))
 	}
+	g.badRequest = true // every operation here is probed generically with an empty body
 	for _, o := range later {
 		var body any
 		if o.Method == http.MethodPost || o.Method == http.MethodPut || o.Method == http.MethodPatch {
@@ -157,6 +158,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 			t.Errorf("%s %s (%s): %d %s", o.Method, o.Path, o.Milestone, r.Status, truncate(r.Body))
 		}
 	}
+	g.badRequest = false
 }
 
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
@@ -165,6 +167,7 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	if len(m5) != 49 {
 		t.Fatalf("%d operations of M5", len(m5))
 	}
+	g.badRequest = true // every operation here is probed generically with an empty body
 	for _, o := range m5 {
 		var body any
 		if o.Method == http.MethodPost || o.Method == http.MethodPut || o.Method == http.MethodPatch {
@@ -175,9 +178,7 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 			continue // a stream: tested on its own
 		}
 		hdr := map[string]string{"If-Match": `"1"`}
-		g.noContract = o.Path == "/revisions/{revisionId}/export" // the YAML export, see TestDiscardCloneDiffAndExport
 		r := g.do(o.Method, path, body, hdr, nil)
-		g.noContract = false
 		if r.Status >= 500 {
 			t.Errorf("%s %s: %d %s", o.Method, o.Path, r.Status, truncate(r.Body))
 		}
@@ -188,6 +189,7 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 			t.Errorf("%s %s is not routed", o.Method, o.Path)
 		}
 	}
+	g.badRequest = false
 }
 
 func TestSystemEndpoints(t *testing.T) {

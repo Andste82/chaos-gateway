@@ -378,11 +378,15 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
   either change. The reset is recorded in the audit log at `--data-dir` (the API's own, default
   `/var/lib/chaosgw/api`) as `auth.password_reset` by actor `{type: system, id: cli}`, distinct from
   whatever the running API's own audit subscriber would otherwise attribute the epoch bump to.
-- **Contract tests.** `internal/api/harness_test.go` validates every response of every test against
-  `api/openapi.yaml` (kin-openapi): status, headers, content type, body schema. (kin-openapi cannot
-  decode the YAML export and SVG bodies; those calls skip the check.) The testbed test
-  (`e2e_test.go`) configures a real gateway only through the API and brings up a tunnel from a
-  downloaded client configuration.
+- **Contract tests.** `internal/api/harness_test.go` validates every request and response of every
+  test against `api/openapi.yaml` (kin-openapi): status, headers, content type, body schema.
+  `g.badRequest` skips the request half for a call that exists specifically to provoke a 4xx the
+  spec itself would reject it with (an out-of-range parameter, a missing required field, …); the
+  response is still checked. A YAML export is validated by converting it to JSON first (kin-openapi
+  decodes YAML numbers differently than the schema check expects); SVG bodies skip the check
+  (kin-openapi cannot decode them). Every received SSE event is validated against `Event`. The
+  testbed test (`e2e_test.go`) configures a real gateway only through the API and brings up a
+  tunnel from a downloaded client configuration.
 
 ## Appliance VMs (test level 2)
 

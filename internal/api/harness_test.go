@@ -27,6 +27,7 @@ import (
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"go.uber.org/goleak"
+	"gopkg.in/yaml.v3"
 
 	specpkg "github.com/Andste82/chaos-gateway/api"
 	"github.com/Andste82/chaos-gateway/internal/api"
@@ -65,6 +66,10 @@ type gw struct {
 	setup  string // the setup token
 	client *http.Client
 	router routers.Router
+	doc    *openapi3.T
+	// badRequest marks a request as deliberately invalid: checkContract skips validating it
+	// against the spec (M5-19), since it exists to provoke a 4xx the spec itself would reject.
+	badRequest bool
 	// token is the bearer token of the default requests, "" for none
 	token    string
 	authPath string
@@ -185,7 +190,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	jar, _ := cookiejar.New(nil)
-	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, authPath: authPath, dhcp: fd}
+	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, doc: doc, authPath: authPath, dhcp: fd}
 	switch {
 	case o.done:
 		g.completeSetupDirectly()
@@ -277,21 +282,25 @@ func (r resp) code(t testing.TB) string {
 func (g *gw) do(method, path string, body any, headers map[string]string, mod func(*http.Request)) resp {
 	g.t.Helper()
 	var rdr io.Reader
+	var sentBody []byte
 	ct := ""
 	switch b := body.(type) {
 	case nil:
 	case string:
-		rdr = strings.NewReader(b)
+		sentBody = []byte(b)
+		rdr = bytes.NewReader(sentBody)
 		ct = "application/json"
 	case []byte:
-		rdr = bytes.NewReader(b)
+		sentBody = b
+		rdr = bytes.NewReader(sentBody)
 		ct = "application/json"
 	default:
 		raw, err := json.Marshal(b)
 		if err != nil {
 			g.t.Fatal(err)
 		}
-		rdr = bytes.NewReader(raw)
+		sentBody = raw
+		rdr = bytes.NewReader(sentBody)
 		ct = "application/json"
 	}
 	req, err := http.NewRequest(method, g.ts.URL+"/api/v1"+path, rdr)
@@ -322,35 +331,85 @@ func (g *gw) do(method, path string, body any, headers map[string]string, mod fu
 	raw, _ := io.ReadAll(res.Body)
 	r := resp{Status: res.StatusCode, Header: res.Header, Body: raw}
 	if !g.noContract {
-		g.checkContract(method, path, req, r)
+		g.checkContract(method, path, req, sentBody, r)
 	}
 	return r
 }
 
-// checkContract validates the response against the OpenAPI document: status, headers, content type
-// and body schema.
-func (g *gw) checkContract(method, path string, sent *http.Request, r resp) {
+// checkContract validates the sent request and the response against the OpenAPI document: status,
+// headers, content type and body schema (M5-19). A deliberately invalid request (g.badRequest)
+// skips the request half: it exists to provoke the 4xx the spec itself would reject it with.
+func (g *gw) checkContract(method, path string, sent *http.Request, sentBody []byte, r resp) {
 	g.t.Helper()
-	if strings.HasPrefix(r.Header.Get("Content-Type"), "text/event-stream") {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/yaml") {
+		g.checkYAMLConfiguration(method, path, r)
 		return
 	}
 	u, _ := url.Parse("http://localhost/api/v1" + path)
-	vreq, _ := http.NewRequest(method, u.String(), nil)
+	var body io.Reader
+	if sentBody != nil {
+		body = bytes.NewReader(sentBody)
+	}
+	vreq, _ := http.NewRequest(method, u.String(), body)
+	for k, vs := range sent.Header {
+		for _, v := range vs {
+			vreq.Header.Add(k, v)
+		}
+	}
 	route, params, err := g.router.FindRoute(vreq)
 	if err != nil {
 		g.t.Errorf("%s %s is not in the spec: %v", method, path, err)
 		return
 	}
+	reqIn := &openapi3filter.RequestValidationInput{Request: vreq, PathParams: params, Route: route,
+		Options: &openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc}}
+	if !g.badRequest {
+		if err := openapi3filter.ValidateRequest(context.Background(), reqIn); err != nil {
+			g.t.Errorf("%s %s: the sent request does not match the spec: %v", method, path, err)
+		}
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "text/event-stream") {
+		return
+	}
 	in := &openapi3filter.ResponseValidationInput{
-		RequestValidationInput: &openapi3filter.RequestValidationInput{Request: vreq, PathParams: params, Route: route,
-			Options: &openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc}},
-		Status:  r.Status,
-		Header:  r.Header,
-		Options: &openapi3filter.Options{IncludeResponseStatus: true},
+		RequestValidationInput: reqIn,
+		Status:                 r.Status,
+		Header:                 r.Header,
+		Options:                &openapi3filter.Options{IncludeResponseStatus: true},
 	}
 	in.SetBodyBytes(r.Body)
 	if err := openapi3filter.ValidateResponse(context.Background(), in); err != nil {
 		g.t.Errorf("%s %s → %d does not match the spec: %v\n%s", method, path, r.Status, err, truncate(r.Body))
+	}
+}
+
+// checkYAMLConfiguration validates a YAML export against the Configuration schema by converting it
+// to JSON first: kin-openapi's own YAML content-type handling decodes numbers differently than the
+// schema check expects (M5-19).
+func (g *gw) checkYAMLConfiguration(method, path string, r resp) {
+	g.t.Helper()
+	if r.Status != 200 {
+		return
+	}
+	var doc any
+	if err := yaml.Unmarshal(r.Body, &doc); err != nil {
+		g.t.Errorf("%s %s: invalid YAML: %v\n%s", method, path, err, truncate(r.Body))
+		return
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		g.t.Fatal(err)
+	}
+	schema := g.doc.Components.Schemas["Configuration"]
+	if schema == nil {
+		g.t.Fatalf("the spec has no Configuration schema")
+	}
+	if err := schema.Value.VisitJSON(v); err != nil {
+		g.t.Errorf("%s %s: the YAML export does not match Configuration: %v\n%s", method, path, err, truncate(r.Body))
 	}
 }
 

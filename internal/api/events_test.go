@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
+
 	"github.com/Andste82/chaos-gateway/internal/api"
 )
 
@@ -23,6 +25,9 @@ type stream struct {
 	lines  chan string
 	status int
 	header http.Header
+	// doc validates each received event against the spec's Event schema (M5-19): the contract
+	// harness skips SSE bodies entirely otherwise, since they are not a single JSON response.
+	doc *openapi3.T
 }
 
 type sseEvent struct {
@@ -43,7 +48,7 @@ func (g *gw) openStream(lastID, query string) *stream {
 		cancel()
 		g.t.Fatal(err)
 	}
-	s := &stream{t: g.t, cancel: cancel, lines: make(chan string, 1000), status: res.StatusCode, header: res.Header}
+	s := &stream{t: g.t, cancel: cancel, lines: make(chan string, 1000), status: res.StatusCode, header: res.Header, doc: g.doc}
 	go func() {
 		defer func() { _ = res.Body.Close(); close(s.lines) }()
 		sc := bufio.NewScanner(res.Body)
@@ -74,11 +79,24 @@ func (s *stream) next(d time.Duration) (sseEvent, bool) {
 			case strings.HasPrefix(l, "data: "):
 				_ = json.Unmarshal([]byte(strings.TrimPrefix(l, "data: ")), &ev.Data)
 			case l == "" && ev.Event != "":
+				s.checkEvent(ev)
 				return ev, true
 			}
 		case <-deadline:
 			return ev, false
 		}
+	}
+}
+
+// checkEvent validates a received SSE event against the spec's Event schema (M5-19).
+func (s *stream) checkEvent(ev sseEvent) {
+	s.t.Helper()
+	schema := s.doc.Components.Schemas["Event"]
+	if schema == nil {
+		s.t.Fatalf("the spec has no Event schema")
+	}
+	if err := schema.Value.VisitJSON(ev.Data); err != nil {
+		s.t.Errorf("SSE event %q does not match Event: %v\n%+v", ev.Event, err, ev.Data)
 	}
 }
 

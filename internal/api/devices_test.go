@@ -180,6 +180,9 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 	ev := map[string]any{"event": "select", "ip": "10.10.0.150", "mac": "02:00:00:00:00:AA", "subnet_id": sid, "valid_lifetime": 600, "hostname": "esp32"}
 
 	// users cannot post lease events, even with the full scope
+	// the MAC's upper case does not match the spec's pattern (lower case only): the server is
+	// deliberately more lenient than the schema, which this test exercises on purpose
+	g.badRequest = true
 	if r := g.do("POST", "/internal/dhcp/lease-events", ev, nil, nil); r.Status != 403 {
 		t.Errorf("a full token: %d", r.Status)
 	}
@@ -189,6 +192,7 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 	if r := g.do("POST", "/internal/dhcp/lease-events", ev, nil, nil); r.Status != 204 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
+	g.badRequest = false
 	got, ok := stream.until("dhcp_lease", 5*time.Second)
 	if !ok || got.Data["data"].(map[string]any)["ip"] != "10.10.0.150" || got.Data["data"].(map[string]any)["network"] != iotID || got.Data["data"].(map[string]any)["mac"] != "02:00:00:00:00:aa" {
 		t.Fatalf("%+v", got)
@@ -200,6 +204,7 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 		}
 	}
 	// strict body
+	g.badRequest = true // every body below is deliberately invalid
 	for name, body := range map[string]any{
 		"unknown field": map[string]any{"event": "select", "ip": "10.10.0.150", "mac": "02:00:00:00:00:aa", "subnet_id": 1, "x": 1},
 		"bad event":     map[string]any{"event": "explode", "ip": "10.10.0.150", "mac": "02:00:00:00:00:aa", "subnet_id": 1},
@@ -210,5 +215,6 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 			t.Errorf("%s: %d %s", name, r.Status, r.Body)
 		}
 	}
+	g.badRequest = false
 	g.token = admin
 }

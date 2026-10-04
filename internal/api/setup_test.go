@@ -34,6 +34,7 @@ func TestTheSetupNeedsTheTokenAndCreatesRevisionOne(t *testing.T) {
 	if r := g.do("POST", "/setup", body, map[string]string{"X-Setup-Token": "setup_wrong"}, nil); r.Status != 401 {
 		t.Errorf("a wrong token: %d", r.Status)
 	}
+	g.badRequest = true // every body in this block is deliberately invalid
 	short := map[string]any{"admin_password": "short", "configuration": fixture(t)}
 	r := g.do("POST", "/setup", short, map[string]string{"X-Setup-Token": g.setup}, nil)
 	if r.Status != 422 || r.code(t) != "validation_failed" {
@@ -50,6 +51,7 @@ func TestTheSetupNeedsTheTokenAndCreatesRevisionOne(t *testing.T) {
 	if r := g.do("POST", "/setup", map[string]any{"admin_password": adminPassword, "configuration": fixture(t), "extra": 1}, map[string]string{"X-Setup-Token": g.setup}, nil); r.Status != 422 {
 		t.Errorf("an unknown field: %d %s", r.Status, r.Body)
 	}
+	g.badRequest = false
 	if g.au.SetupCompleted() {
 		t.Fatal("the setup is done after failures")
 	}

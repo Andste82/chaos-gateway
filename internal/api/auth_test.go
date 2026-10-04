@@ -153,6 +153,7 @@ func TestTokenScopesAndTheirLifecycle(t *testing.T) {
 
 func TestTokenValidation(t *testing.T) {
 	g := ready(t)
+	g.badRequest = true // every body in this loop is deliberately invalid
 	for name, body := range map[string]any{
 		"no name":       map[string]any{"scope": "read"},
 		"bad scope":     map[string]any{"name": "x", "scope": "root"},
@@ -168,6 +169,7 @@ func TestTokenValidation(t *testing.T) {
 	if r := g.do("POST", "/auth/tokens", "{not json", nil, nil); r.Status != 400 || r.code(t) != "bad_request" {
 		t.Errorf("malformed: %d %s", r.Status, r.Body)
 	}
+	g.badRequest = false
 	// an expiring token
 	r := g.do("POST", "/auth/tokens", map[string]any{"name": "short", "scope": "read", "expires_in": "1h"}, nil, nil)
 	if r.Status != 201 || r.json(t)["expires_at"] == nil {
@@ -188,9 +190,11 @@ func TestChangingThePassword(t *testing.T) {
 	if r := g.do("POST", "/auth/password", map[string]any{"current": "wrong password!!", "new": "another long password"}, h, nil); r.Status != 422 {
 		t.Errorf("wrong current: %d %s", r.Status, r.Body)
 	}
+	g.badRequest = true // "short" is shorter than the schema's minLength
 	if r := g.do("POST", "/auth/password", map[string]any{"current": adminPassword, "new": "short"}, h, nil); r.Status != 422 {
 		t.Errorf("too short: %d", r.Status)
 	}
+	g.badRequest = false
 	if r := g.do("POST", "/auth/password", map[string]any{"current": adminPassword, "new": "another long password"}, h, nil); r.Status != 204 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}

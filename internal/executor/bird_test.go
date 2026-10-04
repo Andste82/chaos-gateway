@@ -157,7 +157,7 @@ func TestBirdReconfigureFailureIsReported(t *testing.T) {
 func TestBirdNeedsADirectory(t *testing.T) {
 	e := newExec(t, &fakeRunner{})
 	_, err := e.Do(context.Background(), mustDecode(t, birdOp("check", birdText)))
-	if err == nil || !errors.Is(err, errNoBirdDir) && !strings.Contains(err.Error(), "--bird-dir") {
+	if err == nil || !errors.Is(err, ErrNoBirdDir) {
 		t.Fatal(err)
 	}
 }

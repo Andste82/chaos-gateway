@@ -15,8 +15,9 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2).
-const PolicyTable = 100
+// PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2): the first of the
+// executor's own reserved tables.
+const PolicyTable = executor.OwnTableFirst
 
 // PolicyRulePriority is the priority of the policy rules: one rule per test network, all alike.
 const PolicyRulePriority = 1000

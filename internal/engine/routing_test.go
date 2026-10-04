@@ -127,6 +127,31 @@ func TestRouteCountChangesAreEvents(t *testing.T) {
 	}
 }
 
+// M4c-15 test: a configuration that needs BIRD, but an executor without --bird-dir, gets a routing
+// problem from the preview instead of a hard error.
+func TestPreviewReportsRoutingWhenTheExecutorHasNoBirdDirectory(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(nil))
+	enabled, table := true, 200
+	rev := h.revision(func(c *model.Configuration) {
+		c.Routing = &model.Routing{External: &model.ExternalRouting{Enabled: &enabled, Table: &table}}
+	})
+	p, err := h.e.Preview(context.Background(), rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pr := range p.Problems {
+		if pr.Code == compiler.CodeRouting && pr.Severity == compiler.SevError && strings.Contains(pr.Message, "--bird-dir") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%+v", p.Problems)
+	}
+}
+
 // M4c-14 test: a routing change bundled with a lockout-relevant one is rolled back together with
 // it when nobody confirms in time: the BIRD configuration reverts along with nftables.
 func TestARoutingChangeIsRolledBackTogetherWithALockoutRelevantOne(t *testing.T) {

@@ -288,10 +288,13 @@ func TestBabelOverAWireGuardLink(t *testing.T) {
 	}
 	if !g.waitRoute("10.60.0.0/24", true, 30*time.Second) {
 		// cumulative interface counters, unlike a packet capture window, settle for good whether
-		// anything left either interface at all over the whole test, no timing race.
-		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\ngw counters:\n%s\nsite counters:\n%s", g.table100(),
+		// anything left either interface at all over the whole test, no timing race; the addresses
+		// are checked again here too, not just right after setup, in case something removed or
+		// changed one later.
+		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\ngw counters:\n%s\nsite counters:\n%s\ngw addresses:\n%s\nsite addresses:\n%s", g.table100(),
 			birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
-			g.top.GW.Must("ip", "-s", "link", "show", "dev", "wg-site-b"), g.top.Site.Must("ip", "-s", "link", "show", "dev", "wgsite"))
+			g.top.GW.Must("ip", "-s", "link", "show", "dev", "wg-site-b"), g.top.Site.Must("ip", "-s", "link", "show", "dev", "wgsite"),
+			g.top.GW.Must("ip", "-6", "addr", "show", "dev", "wg-site-b"), g.top.Site.Must("ip", "-6", "addr", "show", "dev", "wgsite"))
 	}
 	// IPv6 is still not a routed family of its own (plan §2.2): Babel's hellos stay link-local
 	// traffic the input chain accepts for the protocol, nothing forwarded; TestIPv6IsBlockedOnTestNetworks

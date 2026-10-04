@@ -253,9 +253,17 @@ func TestTheAPIListensOnTheManagementNetworkOnly(t *testing.T) {
 		}
 		return strings.Join(s, ",")
 	}
-	// before the setup: every address of the host
+	// before the setup, with no configuration yet: every address of the host
 	if got := strs(listenAddrs(&engine.Snapshot{Host: host}, false, "")); got != "127.0.0.1,192.168.56.1,203.0.113.1,10.10.0.1" {
 		t.Errorf("before the setup: %s", got)
+	}
+	// before the setup, but already running a configuration (M5-21: e.g. `apply --file`): the test
+	// network's bridge and a test-role WireGuard tunnel are not bound either
+	beforeSetupSnap := &engine.Snapshot{Host: host, Config: cfg,
+		Bridges:             []compiler.Bridge{{Name: "br-lan0", NetworkID: "lan0"}},
+		WireGuardInterfaces: []compiler.WGInterface{{Name: "wg-lab", Role: "test", Address: netip.MustParsePrefix("10.99.0.1/24")}}}
+	if got := strs(listenAddrs(beforeSetupSnap, false, "")); got != "127.0.0.1,192.168.56.1,203.0.113.1" {
+		t.Errorf("before the setup, with a configuration: %s", got)
 	}
 	// after: the management interface, nothing of the uplink or the test networks
 	if got := strs(listenAddrs(&engine.Snapshot{Host: host, Config: cfg}, true, "")); got != "127.0.0.1,192.168.56.1" {

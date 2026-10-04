@@ -244,8 +244,9 @@ func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip
 		out = append(out, snap.Service.HostCIDR.Addr())
 	}
 	if !setupDone {
+		exclude := api.NetworkInterfaceNames(snap)
 		for _, l := range snap.Host.Links {
-			if l.Name == "lo" {
+			if l.Name == "lo" || exclude[l.Name] {
 				continue
 			}
 			for _, p := range l.Addrs {

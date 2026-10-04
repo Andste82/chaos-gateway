@@ -226,22 +226,33 @@ func TestANewGenerationDropsTheCache(t *testing.T) {
 	}
 }
 
-func TestAAAAIsRemovedAndNeverAsked(t *testing.T) {
+// M6b-07 test: an AAAA query of a name that exists (upstream answers NOERROR, with or without an
+// AAAA record of its own) is NODATA, not NXDOMAIN; the name is still looked up, only the AAAA record
+// of the answer is removed.
+func TestAAAAIsStrippedButTheNameIsStillLookedUpUpstream(t *testing.T) {
+	aaaa, err := dns.NewRR("dual.test. 60 IN AAAA 2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	up := &fakeUpstream{answer: func(_, _ string, q dns.Question) (*dns.Msg, error) {
 		m := new(dns.Msg)
-		m.Answer = []dns.RR{aRecord("dual.test.", "203.0.113.10", 60)}
-		aaaa, _ := dns.NewRR("dual.test. 60 IN AAAA 2001:db8::1")
-		m.Answer = append(m.Answer, aaaa)
+		// a real resolver answers the question it was asked, not every record of the name
+		if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
+			m.Answer = append(m.Answer, aRecord("dual.test.", "203.0.113.10", 60))
+		}
+		if q.Qtype == dns.TypeAAAA || q.Qtype == dns.TypeANY {
+			m.Answer = append(m.Answer, aaaa)
+		}
 		return m, nil
 	}}
 	sink := &memSink{}
 	s, addr := running(t, up, baseConfig(), func(o *Options) { o.Sink = sink })
 	r := ask(t, addr, "udp", "dual.test", dns.TypeAAAA)
 	if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-		t.Fatalf("an AAAA query is answered with no data: %v", r)
+		t.Fatalf("an AAAA query of an existing name is NODATA: %v", r)
 	}
-	if up.count() != 0 {
-		t.Errorf("AAAA was sent upstream: %v", up.calls)
+	if up.count() != 1 {
+		t.Errorf("the name was not looked up upstream: %v", up.calls)
 	}
 	// a query of another type whose answer holds an AAAA gets it removed
 	r = ask(t, addr, "udp", "dual.test", dns.TypeANY)
@@ -269,6 +280,38 @@ func TestAAAAIsRemovedAndNeverAsked(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("%d entries say stripped_aaaa: %+v", n, sink.all())
+	}
+}
+
+// M6b-07 test: an AAAA query of a name that does not exist at all gets the upstream's own NXDOMAIN,
+// not the NOERROR/NODATA of a name that exists without an AAAA record.
+func TestAAAAForAMissingNameIsNXDOMAIN(t *testing.T) {
+	up := &fakeUpstream{} // answer is nil: every query gets NXDOMAIN
+	_, addr := running(t, up, baseConfig(), nil)
+	r := ask(t, addr, "udp", "nowhere.test", dns.TypeAAAA)
+	if r.Rcode != dns.RcodeNameError {
+		t.Errorf("rcode %s, want NXDOMAIN: %v", dns.RcodeToString[r.Rcode], r)
+	}
+	if up.count() != 1 {
+		t.Errorf("the name was not looked up upstream: %v", up.calls)
+	}
+}
+
+// M6b-07 test: stripping AAAA records never touches an SVCB/HTTPS record's own ipv6hint parameter;
+// that is a hint inside a different record type, not an AAAA record.
+func TestSVCBIPv6HintSurvivesAAAAStripping(t *testing.T) {
+	https, err := dns.NewRR("svc.test. 60 IN HTTPS 1 . ipv6hint=2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := &fakeUpstream{answer: okAnswer(https)}
+	_, addr := running(t, up, baseConfig(), nil)
+	r := ask(t, addr, "udp", "svc.test", dns.TypeHTTPS)
+	if len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeHTTPS {
+		t.Fatalf("the HTTPS record was removed: %v", r)
+	}
+	if !strings.Contains(r.Answer[0].String(), "2001:db8::1") {
+		t.Errorf("ipv6hint was stripped: %v", r.Answer[0])
 	}
 }
 

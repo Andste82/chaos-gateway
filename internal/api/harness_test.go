@@ -93,6 +93,9 @@ type options struct {
 	// root reuses an existing data directory instead of a fresh t.TempDir(), to simulate a restart
 	// on the same disk state (M5-01).
 	root string
+	// holderPID is the process whose namespace becomes the service namespace (M6b-03: a real one, not
+	// the simulated kernel's bookkeeping)
+	holderPID func() int
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -155,7 +158,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if o.execWrap != nil {
 		eng = o.execWrap(eng)
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS,
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID,
 		GenerationFile: filepath.Join(root, "api", "generation")})
 	if err != nil {
 		t.Fatal(err)

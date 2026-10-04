@@ -3,6 +3,8 @@ package domain
 import (
 	"sort"
 
+	"github.com/google/uuid"
+
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/schema"
 )
@@ -220,6 +222,19 @@ func visitOverlayRequest(r *model.OverlayRequest, fn refFunc) {
 	visitRuleBody("/rule", r.Rule, fn)
 	visitTLS("/tls", r.Tls, fn)
 	visitWireGuardAction("/wireguard", r.Wireguard, fn)
+}
+
+// IsNormalized reports whether every reference in cfg is already a UUID rather than a name (plan
+// convention: stored configurations contain UUIDs only, see Normalize). It only checks syntax,
+// not whether a reference resolves to an existing object.
+func IsNormalized(cfg *model.Configuration) bool {
+	normalized := true
+	visitConfiguration(cfg, func(_ string, _ Kind, ref *string) {
+		if _, err := uuid.Parse(*ref); err != nil || len(*ref) != 36 {
+			normalized = false
+		}
+	})
+	return normalized
 }
 
 // Normalize returns a copy of the configuration in which every reference is the UUID of the

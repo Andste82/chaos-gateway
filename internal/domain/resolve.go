@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -64,8 +65,12 @@ type World struct {
 	mgmt     []netip.Prefix            // management sources: not reached via the uplink
 }
 
-// NewWorld prepares a resolution. The configuration must be normalized.
-func NewWorld(cfg *model.Configuration, overlays []model.Overlay) *World {
+// NewWorld prepares a resolution. The configuration must be normalized (see Normalize): it
+// refuses one that still has names instead of UUIDs.
+func NewWorld(cfg *model.Configuration, overlays []model.Overlay) (*World, error) {
+	if !IsNormalized(cfg) {
+		return nil, errors.New("domain: NewWorld needs a normalized configuration")
+	}
 	idx, _ := BuildIndex(cfg)
 	w := &World{Config: cfg, Index: idx, Overlays: overlays, prefixes: map[string][]netip.Prefix{}}
 	for _, id := range sortedKeys(idx.Networks) {
@@ -76,7 +81,7 @@ func NewWorld(cfg *model.Configuration, overlays []model.Overlay) *World {
 			w.mgmt = append(w.mgmt, p.Masked())
 		}
 	}
-	return w
+	return w, nil
 }
 
 // prefixesOf returns the prefixes that belong to a network: its subnet, for a hub also the

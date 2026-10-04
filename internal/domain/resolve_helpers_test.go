@@ -88,7 +88,13 @@ func padHex(n int) string {
 	return string(out)
 }
 
-func (w *testWorld) world() *World { return NewWorld(w.cfg, w.overlays) }
+func (w *testWorld) world() *World {
+	wd, err := NewWorld(w.cfg, w.overlays)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return wd
+}
 
 // A is the device of the examples: esp32-42 in the network IoT.
 var subjectA = Subject{Device: idESP, IP: netip.MustParseAddr("10.10.0.42")}

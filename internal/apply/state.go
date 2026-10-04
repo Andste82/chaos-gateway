@@ -82,6 +82,24 @@ func decode[T any](out executor.Outcome, i int, what string) (T, error) {
 	return v, nil
 }
 
+// ReadSets reads only the kernel's nft table (one executor round trip), for checking device set
+// elements after an identity-only update (M6a-11): the rest of the state is not expected to have
+// changed, and reading it too would cost several more round trips for nothing.
+func ReadSets(ctx context.Context, ex Exec, ns string) (*linux.Ruleset, error) {
+	out, err := ex.Do(ctx, read(ns, executor.ReadNft, ""))
+	if err != nil {
+		return nil, fmt.Errorf("read the kernel's nft sets: %w", err)
+	}
+	rs, err := decode[*linux.Ruleset](out, 0, "nft")
+	if err != nil {
+		return nil, err
+	}
+	if rs == nil {
+		rs = &linux.Ruleset{}
+	}
+	return rs, nil
+}
+
 // ReadState reads the state in the namespace ns ("" for the executor's own).
 func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, error) {
 	out, err := ex.Do(ctx,

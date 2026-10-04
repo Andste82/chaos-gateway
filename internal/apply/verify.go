@@ -17,6 +17,39 @@ type Mismatch struct {
 
 func (m Mismatch) String() string { return m.Subsystem + ": " + m.Detail }
 
+// VerifyDeviceSets compares only the target's device sets with the kernel's nft sets (M6a-11): an
+// identity-only update touches set elements and nothing else, so checking the rest of the ruleset,
+// let alone links, routes or sysctls, would not catch anything an element update could get wrong.
+func VerifyDeviceSets(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
+	var mm []Mismatch
+	wantSets := map[string]compiler.SetDef{}
+	for _, s := range t.Nft.Sets {
+		wantSets[s.Name] = s
+	}
+	for dev, name := range t.DeviceSets {
+		want, ok := wantSets[name]
+		if !ok {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s is not in the target", dev, name)})
+			continue
+		}
+		got := rs.Set(name)
+		if got == nil {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s is missing", dev, name)})
+			continue
+		}
+		have := got.Elements()
+		wantEl := make([]string, 0, len(want.Elements))
+		for _, e := range want.Elements {
+			wantEl = append(wantEl, linux.NormalizeElement(e))
+		}
+		sort.Strings(wantEl)
+		if strings.Join(have, ",") != strings.Join(wantEl, ",") {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s holds %v, want %v", dev, name, have, wantEl)})
+		}
+	}
+	return mm
+}
+
 // Verify compares the state read back after an apply with the target (plan §2.14): the
 // generation, the elements of sets, the rules of every chain, routes and rules in Chaos Gateway's
 // tables, bridges, addresses, sysctls, offloads and the DOCKER-USER accept rules. The state must

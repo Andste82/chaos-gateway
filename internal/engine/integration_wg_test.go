@@ -281,10 +281,11 @@ func TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix(t
 	}
 }
 
-// M4b-02 test: a hub client's network reaches a host beyond the uplink only through NAT. The gateway
-// masquerades it towards the uplink, so the server beyond the uplink sees the gateway's own uplink
-// address as the source; turning NAT off on the hub cuts the client network off from the uplink,
-// because the unmasqueraded source has no route back and is dropped.
+// M4b-02 test: a hub client's network reaches a host beyond the uplink; the gateway masquerades it
+// towards the uplink, so the server beyond the uplink sees the gateway's own uplink address as the
+// source. NAT only controls translation, not reachability (that is the matrix's job, §2.2.1): turning
+// NAT off on the hub still forwards the traffic, but unmasqueraded, so the server sees the client
+// network's own address.
 func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
 	g := newWGGW(t)
 	setHub := func(nat *bool) func(*model.Configuration) {
@@ -313,8 +314,8 @@ func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
 
 	off := false
 	g.apply(setHub(&off))
-	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != "" {
-		t.Errorf("the server saw %q although nat is off on the hub", src)
+	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != testbed.ClientNetHost {
+		t.Errorf("the server saw %q, want the unmasqueraded client address %s (nat is off on the hub)", src, testbed.ClientNetHost)
 	}
 }
 

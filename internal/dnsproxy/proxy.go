@@ -276,11 +276,10 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 	if strings.HasSuffix(name, ".invalid.") || name == "invalid." {
 		return fail(dns.RcodeNameError), e // RFC 6761: never forwarded
 	}
-	// the V1 networks are IPv4 only: a device that gets an IPv6 address would bypass the faults. What
-	// rcode an AAAA query gets still has to come from whether the name itself exists (static or
-	// upstream): a missing name is NXDOMAIN, an existing one with no AAAA record is NOERROR/NODATA.
-	// Only the AAAA record itself is removed; SVCB/HTTPS answers (and their ipv6hint parameter, which
-	// is not a record type stripAAAA looks at) pass through untouched.
+	// the V1 networks are IPv4 only: a device that gets an IPv6 address, directly or as a SVCB/HTTPS
+	// ipv6hint, would bypass the faults. What rcode an AAAA query gets still has to come from whether
+	// the name itself exists (static or upstream): a missing name is NXDOMAIN, an existing one with no
+	// AAAA record is NOERROR/NODATA.
 	strip := cfg.StripAaaa == nil || *cfg.StripAaaa
 	if m, ok := s.static(cfg, r, name, q, client); ok {
 		if q.Qtype == dns.TypeAAAA && strip {
@@ -307,6 +306,7 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 	removed := false
 	if strip {
 		removed = stripAAAA(m)
+		stripIPv6Hint(m)
 	}
 	if removed || (strip && q.Qtype == dns.TypeAAAA) {
 		t := true
@@ -443,6 +443,33 @@ func stripAAAA(m *dns.Msg) bool {
 	m.Answer = filter(m.Answer)
 	m.Extra = filter(m.Extra)
 	return removed
+}
+
+// stripIPv6Hint removes the ipv6hint parameter from every SVCB/HTTPS record of the answer (RFC 9460):
+// the V1 networks are IPv4 only, so the hint would point at an address nothing can route to.
+func stripIPv6Hint(m *dns.Msg) {
+	filter := func(rrs []dns.RR) {
+		for _, rr := range rrs {
+			var svcb *dns.SVCB
+			switch v := rr.(type) {
+			case *dns.SVCB:
+				svcb = v
+			case *dns.HTTPS:
+				svcb = &v.SVCB
+			default:
+				continue
+			}
+			out := svcb.Value[:0:0]
+			for _, kv := range svcb.Value {
+				if kv.Key() != dns.SVCB_IPV6HINT {
+					out = append(out, kv)
+				}
+			}
+			svcb.Value = out
+		}
+	}
+	filter(m.Answer)
+	filter(m.Extra)
 }
 
 type client struct{}

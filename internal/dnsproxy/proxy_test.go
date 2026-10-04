@@ -299,8 +299,10 @@ func TestAAAAForAMissingNameIsNXDOMAIN(t *testing.T) {
 
 // M6b-07 test: stripping AAAA records never touches an SVCB/HTTPS record's own ipv6hint parameter;
 // that is a hint inside a different record type, not an AAAA record.
-func TestSVCBIPv6HintSurvivesAAAAStripping(t *testing.T) {
-	https, err := dns.NewRR("svc.test. 60 IN HTTPS 1 . ipv6hint=2001:db8::1")
+// M6b-07 test: stripping removes an SVCB/HTTPS record's ipv6hint parameter, not the whole record and
+// not its other parameters.
+func TestSVCBIPv6HintIsStripped(t *testing.T) {
+	https, err := dns.NewRR("svc.test. 60 IN HTTPS 1 . alpn=h2 ipv6hint=2001:db8::1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,8 +312,11 @@ func TestSVCBIPv6HintSurvivesAAAAStripping(t *testing.T) {
 	if len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeHTTPS {
 		t.Fatalf("the HTTPS record was removed: %v", r)
 	}
-	if !strings.Contains(r.Answer[0].String(), "2001:db8::1") {
-		t.Errorf("ipv6hint was stripped: %v", r.Answer[0])
+	if strings.Contains(r.Answer[0].String(), "2001:db8::1") || strings.Contains(r.Answer[0].String(), "ipv6hint") {
+		t.Errorf("ipv6hint was not stripped: %v", r.Answer[0])
+	}
+	if !strings.Contains(r.Answer[0].String(), "alpn=\"h2\"") && !strings.Contains(r.Answer[0].String(), "alpn=h2") {
+		t.Errorf("the other parameter was removed too: %v", r.Answer[0])
 	}
 }
 

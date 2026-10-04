@@ -553,11 +553,11 @@ proxy; the TLS responder (M21) joins it later.
   (`dnsproxy.WatchNamespace`, M6b-01), and a freshly started one resolves again once it joins the new
   holder's namespace.
 - **Limits.** With `strip_aaaa` (on by default, V1 networks are IPv4 only), an AAAA query only ever
-  loses its own AAAA record: a name that exists gets NOERROR/NODATA, a name that does not exist still
-  gets upstream's NXDOMAIN, and SVCB/HTTPS `ipv6hint` records are left alone (stripping looks at the
-  AAAA record type only, not at every field that happens to carry an IPv6 address). A failure of the
-  service namespace step fails the apply (a dead holder blocks other revisions until the holder is
-  back). `/run/systemd/resolve` is mounted read-only into the API container so that the
+  loses its own AAAA record, never the whole answer: a name that exists gets NOERROR/NODATA, a name
+  that does not exist still gets upstream's NXDOMAIN. The same policy removes a SVCB/HTTPS record's
+  `ipv6hint` parameter (RFC 9460), the only other place an answer can carry a usable IPv6 address;
+  every other parameter of that record is untouched. A failure of the service namespace step fails
+  the apply (a dead holder blocks other revisions until the holder is back). `/run/systemd/resolve` is mounted read-only into the API container so that the
   proxy finds the real resolvers of a systemd-resolved host; `TestDNSThroughTheServiceNamespace` checks
   the reverse too, with a stand-in for resolved's local stub: it keeps answering on `127.0.0.53`
   throughout, undisturbed by the proxy or the compiled ruleset (M6b-06; the appliance's own M28 smoke

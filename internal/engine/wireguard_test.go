@@ -153,6 +153,36 @@ func TestPeersGoOnlineAndOfflineWithEvents(t *testing.T) {
 	}
 }
 
+// M6a-03 test: a flow's network is resolved against a WireGuard interface's own subnet or a peer's
+// routed client network, not only the local test networks' bridges; a flow redirected into the service
+// namespace for DNS carries service "dns_proxy".
+func TestFlowsThroughWireGuardGetTheirNetworkAndService(t *testing.T) {
+	h, _ := newWGHarness(t)
+	h.mustApply(h.revision(nil))
+	h.k.SetConntrack(
+		"tcp      6 431999 ESTABLISHED src=10.99.0.50 dst=203.0.113.60 sport=1 dport=2 packets=3 bytes=300 src=203.0.113.60 dst=10.99.0.50 sport=2 dport=1 packets=2 bytes=200 [ASSURED] mark=0 use=1\n" +
+			"udp      17 25 src=10.50.0.5 dst=203.0.113.50 sport=3 dport=53 packets=1 bytes=60 src=169.254.100.2 dst=10.50.0.5 sport=53 dport=3 packets=1 bytes=90 [ASSURED] mark=0 use=1\n")
+	flows, err := h.e.Flows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hub, dns *engine.Flow
+	for i := range flows {
+		switch flows[i].Src.String() {
+		case "10.99.0.50":
+			hub = &flows[i]
+		case "10.50.0.5":
+			dns = &flows[i]
+		}
+	}
+	if hub == nil || hub.Network != wgHub || hub.Service != "" {
+		t.Fatalf("flow in the hub's own subnet: %+v", hub)
+	}
+	if dns == nil || dns.Network != wgHub || dns.Service != "dns_proxy" {
+		t.Fatalf("flow in the client's routed network, redirected to the service namespace: %+v", dns)
+	}
+}
+
 func TestDisablingAClientTakesItOfflineWithAnEvent(t *testing.T) {
 	h, _ := newWGHarness(t)
 	h.mustApply(h.revision(nil))

@@ -27,13 +27,16 @@ type deviceView struct {
 }
 
 type deviceObserved struct {
-	Addresses []string         `json:"addresses,omitempty"`
-	Lease     *model.DhcpLease `json:"lease,omitempty"`
-	LastSeen  *time.Time       `json:"last_seen,omitempty"`
-	MACs      []string         `json:"macs,omitempty"`
-	Online    bool             `json:"online"`
-	Sources   []string         `json:"sources,omitempty"`
-	WireGuard gin.H            `json:"wireguard,omitempty"`
+	Addresses   []string         `json:"addresses,omitempty"`
+	Lease       *model.DhcpLease `json:"lease,omitempty"`
+	LastSeen    *time.Time       `json:"last_seen,omitempty"`
+	MACs        []string         `json:"macs,omitempty"`
+	Online      bool             `json:"online"`
+	Sources     []string         `json:"sources,omitempty"`
+	WireGuard   gin.H            `json:"wireguard,omitempty"`
+	UploadBps   int64            `json:"upload_bps,omitempty"`
+	DownloadBps int64            `json:"download_bps,omitempty"`
+	FlowsActive int              `json:"flows_active,omitempty"`
 }
 
 func observedOf(st *engine.DeviceState, peer *engine.PeerStatus) deviceObserved {
@@ -43,6 +46,7 @@ func observedOf(st *engine.DeviceState, peer *engine.PeerStatus) deviceObserved 
 			o.Addresses = append(o.Addresses, a.String())
 		}
 		o.Lease, o.MACs, o.Online, o.Sources = st.Lease, st.MACs, st.Online, st.Sources
+		o.UploadBps, o.DownloadBps, o.FlowsActive = st.UploadBps, st.DownloadBps, st.FlowsActive
 		if !st.LastSeen.IsZero() {
 			t := st.LastSeen.UTC()
 			o.LastSeen = &t
@@ -242,6 +246,7 @@ type flowView struct {
 	NatSrc   string   `json:"nat_src,omitempty"`
 	Network  string   `json:"network,omitempty"`
 	Protocol string   `json:"protocol"`
+	Service  string   `json:"service,omitempty"`
 	SPort    int      `json:"sport,omitempty"`
 	Src      string   `json:"src"`
 	State    string   `json:"state,omitempty"`
@@ -293,7 +298,7 @@ func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 		if (wantDevice != "" && f.Device != wantDevice) || (wantNet != "" && f.Network != wantNet) {
 			continue
 		}
-		fv := flowView{Device: f.Device, DPort: f.DPort, Dst: f.Dst.String(), ID: f.ID, Network: f.Network, Protocol: f.Protocol, SPort: f.SPort,
+		fv := flowView{Device: f.Device, DPort: f.DPort, Dst: f.Dst.String(), ID: f.ID, Network: f.Network, Protocol: f.Protocol, Service: f.Service, SPort: f.SPort,
 			Src: f.Src.String(), State: f.State, Upload: trafficOf(f.Upload), Download: trafficOf(f.Download)}
 		if f.NatSrc.IsValid() {
 			fv.NatSrc = f.NatSrc.String()

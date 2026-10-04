@@ -190,6 +190,38 @@ func TestWireGuardClientsAreOnlineWithTheirPeer(t *testing.T) {
 	}
 }
 
+// M6a-03 test: a device's active flow count and byte rates come from the conntrack traffic the
+// observation carries for its addresses; the rate needs two samples, since conntrack counters are
+// cumulative for the life of a connection.
+func TestDeviceTrafficRatesAndActiveFlowCount(t *testing.T) {
+	tr := newTracker()
+	cfg := trackerConfig(t)
+	ip := addr("10.10.0.31")
+	stateOf := func(states []DeviceState) *DeviceState {
+		for i := range states {
+			if states[i].ID == tDev {
+				return &states[i]
+			}
+		}
+		return nil
+	}
+
+	_, states, _ := tr.step(cfg, observation{At: t0.Add(time.Second), Neighbors: []domain.Neighbor{neigh("10.10.0.31", macCf)},
+		Traffic: map[netip.Addr]AddrTraffic{ip: {Upload: Traffic{Packets: 10, Bytes: 1000}, Download: Traffic{Packets: 5, Bytes: 500}, Flows: 2}}})
+	st := stateOf(states)
+	if st == nil || st.FlowsActive != 2 || st.UploadBps != 0 || st.DownloadBps != 0 {
+		t.Fatalf("first sample has no previous one to rate against: %+v", st)
+	}
+
+	_, states, _ = tr.step(cfg, observation{At: t0.Add(3 * time.Second), Neighbors: []domain.Neighbor{neigh("10.10.0.31", macCf)},
+		Traffic: map[netip.Addr]AddrTraffic{ip: {Upload: Traffic{Packets: 30, Bytes: 5000}, Download: Traffic{Packets: 15, Bytes: 2500}, Flows: 1}}})
+	st = stateOf(states)
+	// two seconds elapsed: (5000-1000)/2 = 2000 B/s upload, (2500-500)/2 = 1000 B/s download
+	if st == nil || st.FlowsActive != 1 || st.UploadBps != 2000 || st.DownloadBps != 1000 {
+		t.Fatalf("%+v", st)
+	}
+}
+
 func TestHostsBehindARouterAreDiscoveredByAddress(t *testing.T) {
 	tr := newTracker()
 	cfg := trackerConfig(t)

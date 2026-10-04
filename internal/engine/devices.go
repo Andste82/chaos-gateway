@@ -48,6 +48,13 @@ type DeviceState struct {
 	// Lease is the device's DHCP lease, when it has one.
 	Lease   *model.DhcpLease
 	Sources []string
+	// FlowsActive is the number of tracked connections where the device is a party, as of the last
+	// observation.
+	FlowsActive int
+	// UploadBps and DownloadBps are byte rates since the previous observation, from the device's own
+	// point of view (plan §2.3).
+	UploadBps   int64
+	DownloadBps int64
 }
 
 // observation is one reading of everything the gateway sees.
@@ -62,6 +69,16 @@ type observation struct {
 	// UnknownSources are source addresses of connections that no neighbor, lease or configuration explains
 	// (hosts behind a router, in a client network): they become discovered devices by address.
 	UnknownSources []netip.Addr
+	// Traffic sums the conntrack byte and packet counters touching each address, from that address's
+	// own point of view (what it sent is Upload, what it received is Download), plus how many tracked
+	// connections it is a party to.
+	Traffic map[netip.Addr]AddrTraffic
+}
+
+// AddrTraffic is one address's share of the current connections.
+type AddrTraffic struct {
+	Upload, Download Traffic
+	Flows            int
 }
 
 // trackerEvent is what a step reports.
@@ -84,10 +101,43 @@ type tracker struct {
 	prev     *domain.Identity
 	devices  map[string]*DeviceState
 	started  bool
+	// traffic holds each device's cumulative byte totals as of the last observation, to turn the
+	// conntrack counters (cumulative for the life of a connection) into a rate.
+	traffic map[string]trafficSample
+}
+
+// trafficSample is one device's cumulative traffic as of a given time.
+type trafficSample struct {
+	at               time.Time
+	upload, download int64
 }
 
 func newTracker() *tracker {
-	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}}
+	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}, traffic: map[string]trafficSample{}}
+}
+
+// applyTraffic fills st.FlowsActive and the byte rates from obs.Traffic, using the previous sample
+// for this device (if any) to turn cumulative counters into a rate, and records the new sample.
+func (t *tracker) applyTraffic(st *DeviceState, obs observation) {
+	var up, down int64
+	for _, a := range st.Addresses {
+		if tr, ok := obs.Traffic[a]; ok {
+			up += tr.Upload.Bytes
+			down += tr.Download.Bytes
+			st.FlowsActive += tr.Flows
+		}
+	}
+	if prev, ok := t.traffic[st.ID]; ok {
+		if dt := obs.At.Sub(prev.at).Seconds(); dt > 0 {
+			if d := up - prev.upload; d > 0 {
+				st.UploadBps = int64(float64(d) / dt)
+			}
+			if d := down - prev.download; d > 0 {
+				st.DownloadBps = int64(float64(d) / dt)
+			}
+		}
+	}
+	t.traffic[st.ID] = trafficSample{at: obs.At, upload: up, download: down}
 }
 
 func (t *tracker) see(id string, mac string, ip netip.Addr, network, source string, at time.Time) {
@@ -272,6 +322,12 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		}
 		if st.Online {
 			st.LastSeen = obs.At
+		}
+		t.applyTraffic(st, obs)
+	}
+	for did := range t.traffic {
+		if _, ok := next[did]; !ok {
+			delete(t.traffic, did)
 		}
 	}
 

@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -46,11 +48,18 @@ func watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Durat
 	events := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 
-	// the reader: blocks in recvfrom with a timeout so it notices the end of the context
+	// the reader: blocks in recvfrom with a timeout so it notices the end of the context. A panic
+	// here must not take the process down with it (plan §3.11): recover, and let the deferred
+	// close below tell the debouncer (and so the consumer) that watching stopped.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer close(events)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in the netlink reader", "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
 		buf := make([]byte, 1<<16)
 		for ctx.Err() == nil {
 			n, _, err := unix.Recvfrom(fd, buf, 0)
@@ -71,7 +80,13 @@ func watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Durat
 			case errors.Is(err, unix.EBADF), errors.Is(err, unix.ENOTSOCK), errors.Is(err, unix.EINVAL):
 				return // the socket is gone; the consumer sees the closed channel
 			default:
-				time.Sleep(100 * time.Millisecond) // a transient error: keep listening
+				// a transient error: keep listening, but still notice the context ending
+				t := clk.NewTimer(100 * time.Millisecond)
+				select {
+				case <-t.C():
+				case <-ctx.Done():
+					t.Stop()
+				}
 			}
 		}
 	}()
@@ -81,6 +96,11 @@ func watch(ctx context.Context, ns string, clk clock.Clock, debounce0 time.Durat
 	go func() {
 		defer wg.Done()
 		defer close(out)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in the netlink debouncer", "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
 		debounce(ctx, clk, debounce0, events, out)
 	}()
 

@@ -16,6 +16,7 @@ linters:
     - unconvert
     - usestdlibvars
     - copyloopvar
+    - forbidigo
   settings:
     errcheck:
       # writing to a terminal or a buffer: nothing useful to do on failure
@@ -23,6 +24,10 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+    forbidigo:
+      forbid:
+        - pattern: '^time\.(Now|Since|Sleep|After|NewTimer|NewTicker|Tick)$'
+          msg: use internal/clock instead of calling time directly (plan §3.11)
   exclusions:
     generated: lax
     paths:
@@ -30,6 +35,26 @@ linters:
       - internal/model
       - web
       - clients
+    rules:
+      # process-lifetime CLI entrypoints, not the engine/API logic §3.11 means to keep testable
+      - path: ^cmd/
+        linters:
+          - forbidigo
+      - path: _test\.go$
+        linters:
+          - forbidigo
+      # internal/clock is the real implementation the rule exists to make everything else use
+      - path: ^internal/clock/
+        linters:
+          - forbidigo
+      # pre-existing, out of scope here: internal/observer (M4-10), internal/appliance (M5b-04,
+      # testbed/appliance-only code this run of golangci-lint does not even build-tag in)
+      - path: ^internal/observer/
+        linters:
+          - forbidigo
+      - path: ^internal/appliance/
+        linters:
+          - forbidigo
 
 formatters:
   enable:

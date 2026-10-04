@@ -162,7 +162,11 @@ The model is plan §3.11 (D32). In short, for code from M3 on:
 - No mutable package-level state. Mutexes only in leaf components (like `internal/store`), never
   held while sending on a channel or calling another component.
 - Bounded channels; every blocking send or receive also selects on `ctx.Done()`.
-- Time only through `internal/clock`.
+- Time only through `internal/clock`, enforced by `golangci-lint`'s `forbidigo` (M5-24) for
+  `time.Now|Since|Sleep|After|NewTimer|NewTicker|Tick` outside `internal/clock` itself; `_test.go`
+  files and `cmd/` (process-lifetime CLI entrypoints, not logic this rule means to keep testable)
+  are excluded. `internal/observer` (M4-10) and `internal/appliance` (M5b-04) still have raw calls
+  and are excluded for now too, pending those items.
 - Start goroutines through the supervisor helper (recovers panics, reports health).
 - CI runs `go test -race`; packages that start goroutines run `goleak` in their `TestMain`.
 

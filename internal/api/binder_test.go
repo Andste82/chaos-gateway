@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/api"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 )
 
 func freePort(t *testing.T) int {
@@ -232,5 +234,54 @@ func TestTheReadTimeoutClosesAStalledUploadButNotAStream(t *testing.T) {
 			t.Fatalf("the stream's connection was closed early (got %q): %v", got, err)
 		}
 		got = append(got, buf2[:n]...)
+	}
+}
+
+// M5-24 test: Run's ticker is the injected clock, not a raw time.NewTicker.
+func TestRunReconcilesOnTheInjectedClock(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	port := freePort(t)
+	var wanted atomic.Pointer[[]netip.Addr]
+	set := func(a ...string) {
+		var l []netip.Addr
+		for _, s := range a {
+			l = append(l, netip.MustParseAddr(s))
+		}
+		wanted.Store(&l)
+	}
+	set("127.0.0.1")
+	b := &api.Binder{
+		Addrs:   func() []netip.Addr { return *wanted.Load() },
+		Port:    func() int { return port },
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+		Log:     slog.New(slog.DiscardHandler),
+		Clock:   clk,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { b.Run(ctx, time.Minute); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	// Run's own first Reconcile binds the initial address before the ticker even starts
+	deadline := time.Now().Add(2 * time.Second)
+	for len(b.Listening()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(b.Listening()) == 0 {
+		t.Fatal("the initial Reconcile never ran")
+	}
+
+	set() // nothing wanted any more
+	time.Sleep(20 * time.Millisecond)
+	if len(b.Listening()) == 0 {
+		t.Fatal("reconciled without the clock advancing")
+	}
+	clk.Advance(time.Minute)
+	deadline = time.Now().Add(2 * time.Second)
+	for len(b.Listening()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(b.Listening()) != 0 {
+		t.Fatal("did not reconcile after the clock advanced")
 	}
 }

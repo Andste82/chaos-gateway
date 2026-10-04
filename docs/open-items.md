@@ -421,16 +421,6 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Needs maintainer: decided 2026-10-04: (b) implement conntrack events now (see the revised task).
 - Effort: S (a) / L (b)
 
-### M6a-09 The Kea hook forks a process with TLS per lease event
-- Status: open
-- Severity: medium
-- Reason: needs-decision — `run_script` with `sync:false`, unbounded; a DHCP flood from an untrusted device forks `chaosgw` plus a TLS handshake per lease.
-- Evidence: `internal/kea/config.go:185`; `cmd/chaosgw/keahook.go:22-49`.
-- Task: `chaosgw kea-hook` writes one JSON line to a Unix datagram socket `/run/kea/chaosgw-events.sock` (created by the API in the shared `chaosgw-kea-run` volume), non-blocking, dropped when full; the API reads, coalesces and calls `Engine.LeaseEvent`; HTTP stays as fallback; unit tests for reader and hook.
-- Acceptance: local unit tests.
-- Needs maintainer: decided 2026-10-04: (a) a datagram socket to the API.
-- Effort: M
-
 
 Removed from the old list: "Only the first MAC is reserved" — the spec defines `fixed_ip` as "DHCP reservation for the device's first MAC" (openapi.yaml:2752). "Executor priority only unit-tested" — plan §3.11 prescribes exactly that (fake-executor test). "Online ignores leases" → M6a-24.
 

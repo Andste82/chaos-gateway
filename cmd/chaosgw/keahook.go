@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -30,27 +31,62 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
 		return 1
 	}
-	api := envOr("CHAOSGW_API", "https://127.0.0.1:8443")
-	tokenFile := envOr("CHAOSGW_SERVICE_TOKEN_FILE", "/var/lib/chaosgw/service/token")
-	raw, err := os.ReadFile(tokenFile)
-	if err != nil {
-		fmt.Fprintf(stderr, "chaosgw kea-hook: cannot read the service token: %v\n", err)
-		return 1
-	}
-	tc, err := keaHookTLSConfig(os.Getenv("CHAOSGW_API_CERT"))
-	if err != nil {
-		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
-		return 1
-	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}
+	eventsSocket := envOr("CHAOSGW_KEA_EVENTS_SOCKET", "/run/kea/chaosgw-events.sock")
+	var client *http.Client
+	api, token := "", ""
 	status := 0
 	for _, ev := range evs {
-		if err := postLeaseEvent(client, strings.TrimRight(api, "/"), strings.TrimSpace(string(raw)), ev); err != nil {
+		if postLeaseEventDatagram(eventsSocket, ev) == nil {
+			continue
+		}
+		// the socket is missing, full, or anything else went wrong: fall back to HTTP (M6a-09)
+		if client == nil {
+			var err error
+			api, token, client, err = httpFallbackClient(stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
+				return 1
+			}
+		}
+		if err := postLeaseEvent(client, api, token, ev); err != nil {
 			fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
 			status = 1
 		}
 	}
 	return status
+}
+
+// httpFallbackClient sets up the HTTP fallback the first time a lease event needs it: the token
+// and the API's certificate, read once per hook invocation even when several events fall back.
+func httpFallbackClient(stderr io.Writer) (api, token string, client *http.Client, err error) {
+	api = strings.TrimRight(envOr("CHAOSGW_API", "https://127.0.0.1:8443"), "/")
+	tokenFile := envOr("CHAOSGW_SERVICE_TOKEN_FILE", "/var/lib/chaosgw/service/token")
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("cannot read the service token: %w", err)
+	}
+	tc, err := keaHookTLSConfig(os.Getenv("CHAOSGW_API_CERT"))
+	if err != nil {
+		return "", "", nil, err
+	}
+	return api, strings.TrimSpace(string(raw)), &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}, nil
+}
+
+// postLeaseEventDatagram writes one lease event as a single JSON datagram (M6a-09): no connection,
+// no TLS handshake, and the kernel drops it rather than blocking if the socket is full or absent.
+func postLeaseEventDatagram(path string, ev kea.Event) error {
+	body, err := json.Marshal(map[string]any{"event": ev.Name, "ip": ev.IP.String(), "mac": ev.MAC, "subnet_id": ev.SubnetID,
+		"valid_lifetime": ev.ValidLifetime, "hostname": ev.Hostname, "client_id": ev.ClientID})
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unixgram", path, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.Write(body)
+	return err
 }
 
 // keaHookTLSConfig builds the TLS configuration the hook talks to the API with. With certFile it

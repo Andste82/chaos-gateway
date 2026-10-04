@@ -334,9 +334,11 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
 - **Setup.** The first start prints `Setup token: …` to the log (only its hash is stored; every start
   of an unfinished setup prints a new one). `POST /setup` validates the configuration, provisions the
   WireGuard keys, creates revision 1, applies it and only then sets the admin password: a failed apply
-  leaves the setup open. Until then the server listens on every address of the host, afterwards on the
-  management interface, the tunnel addresses of management-role WireGuard networks and the loopback
-  (`api.Binder` follows the configuration without a restart).
+  leaves the setup open. Until then the server listens on every address of the host except a test
+  network's own (its bridge, or a test-role WireGuard tunnel — `api.NetworkInterfaceNames`, M5-21:
+  a configuration can already be active before setup, e.g. `chaosgw apply --file`), afterwards on
+  the management interface, the tunnel addresses of management-role WireGuard networks and the
+  loopback (`api.Binder` follows the configuration without a restart).
 - **Revisions.** A candidate is a complete configuration (`application/json`, also the import) or a
   JSON Merge Patch (`application/merge-patch+json`) against the revision named in `If-Match`;
   `domain.NewCandidate` merges, resolves names to UUIDs, validates; a candidate that fails is not

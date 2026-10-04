@@ -330,6 +330,31 @@ func refMatches(ref model.InterfaceRef, l compiler.HostLink) bool {
 	return ref.Name != nil && *ref.Name == l.Name
 }
 
+// NetworkInterfaceNames returns the host interface and bridge names a LAN network or a test-role
+// WireGuard network occupies: not yet assigned to a test network (plan §2.16), listenAddrs must
+// not bind them before the setup is finished, even when a configuration is already active (M5-21:
+// e.g. `chaosgw apply --file` without a state directory to track the setup in).
+func NetworkInterfaceNames(snap *engine.Snapshot) map[string]bool {
+	out := map[string]bool{}
+	if snap.Config == nil {
+		return out
+	}
+	for _, l := range snap.Host.Links {
+		if a := assignment(snap.Config, l); a != nil && a.Role == "network" {
+			out[l.Name] = true
+		}
+	}
+	for _, b := range snap.Bridges {
+		out[b.Name] = true
+	}
+	for _, w := range snap.WireGuardInterfaces {
+		if w.Role != "management" {
+			out[w.Name] = true
+		}
+	}
+	return out
+}
+
 func assignment(cfg *model.Configuration, l compiler.HostLink) *hostAssignment {
 	if refMatches(cfg.Uplink.Interface, l) {
 		return &hostAssignment{Role: "uplink"}

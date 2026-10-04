@@ -16,8 +16,8 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M0 (spikes, docs) | – | 3 | 0 | 0 | 1 |
 | M1 Repository, CI, testbed | incomplete | 10 | 0 | 2 | 2 |
 | M2 Domain model, persistence | incomplete | 2 | 0 | 0 | 2 |
-| M3 Executor | incomplete | 7 | 0 | 0 | 2 |
-| M4 Compiler, preview, safe apply | incomplete | 9 | 0 | 0 | 2 |
+| M3 Executor | incomplete | 4 | 0 | 0 | 2 |
+| M4 Compiler, preview, safe apply | incomplete | 4 | 0 | 0 | 2 |
 | M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
 | M4c Dynamic routing | incomplete | 7 | 0 | 3 | 5 |
 | M5 REST API | incomplete | 5 | 0 | 2 | 4 |
@@ -109,7 +109,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03, M6a-07 and M6a-22 only narrowed, see their remaining blocks below): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
 5. **Service namespace hardening** (done, `phase1-svcns-hardening`): M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain** (done, `phase1-retention-domain`): M2-01, M2-02, M2-04 to M2-07, M2-09.
-7. **Executor and engine robustness**: M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
+7. **Executor and engine robustness** (done, `phase1-executor-engine-robustness`): M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
 8. **Test infrastructure**: M1-02 (x86 matrix), M1-03 to M1-09, CC-04.
 9. **Plan and docs sync**:
    - all `plan-error` items once their decisions are made: M1-01, M1-06, M1-10, M3-06, M4-09, M4b-03, M4b-07, M4b-08, M4c-11, M4c-16, M5-07, M5-23, M6a-04, M6a-07 (doc part), M6a-10, M6a-12, M6a-23, M6a-24, M6b-04 (M7 test), M6b-11;
@@ -378,12 +378,12 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 
 ## M3 (executor and state reader)
 
-Verdict: incomplete. All scope and test items exist; open are one literal scope rule (the uplink may only get a qdisc), small robustness and test gaps, and outdated docs.
+Verdict: incomplete. All scope and test items exist; open are one literal scope rule (the uplink may only get a qdisc), the per-process generation decision, and plan/doc drift.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Typed closed operations, argument arrays, fixed paths, namespace targeting | done | `internal/executor/op.go`, `runner.go`; `TestRunnerUsesOnlyFixedAbsolutePaths`, `TestNamespaceIsPassedToEveryCommand` |
-| Parsers `ip -j`, `nft -j`, `tc -j` | done | `internal/linux`; `parse_test.go` (testdata partly hand-trimmed, M3-05) |
+| Parsers `ip -j`, `nft -j`, `tc -j` | done | `internal/linux`; `parse_test.go` |
 | Unix socket, version handshake, `SO_PEERCRED` | done | `proto.go`, `server.go`; `TestPeerCredentialsAreChecked`, version-mismatch tests |
 | Scope: nft only `inet chaosgw`; routing only own tables/rules | done | `validate.go`; testbed `TestNftablesApplyIsAtomicAndScoped`, `TestExecutorCannotDeleteForeignRulesOrRoutes` |
 | Scope: tc only assigned interfaces **and the uplink qdisc** | partial | the uplink is a fully assigned interface (M3-01) |
@@ -402,26 +402,6 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 - Needs maintainer: decided 2026-10-04: (A) implement the `os_owned` class.
 - Effort: M
 
-### M3-02 `Server.Serve` goroutine leak and accept race
-- Status: open
-- Severity: low
-- Reason: forgotten — the ctx goroutine never ends on a non-close `Accept` error while ctx is live; a connection accepted during the close loop is never closed, so `wg.Wait` can hang.
-- Evidence: `internal/executor/server.go:81-119`.
-- Task: 1. Replace the goroutine with `stop := context.AfterFunc(ctx, closeAll)`; `defer stop()`. 2. After `Accept`, under `s.mu`, check `ctx.Err()`; when cancelled close `c` and return, else register it. 3. `TestServeReturnsOnAcceptErrorWithoutLeaking` in server_test.go with a fake listener (goleak in TestMain catches the leak).
-- Acceptance: `go test -race ./internal/executor`.
-- Needs maintainer: no
-- Effort: S
-
-### M3-03 `FuzzFrame` covers only `Server.serve`
-- Status: open
-- Severity: low
-- Reason: test-gap — the codec, the hello handshake and the `maxLine` limit are never fuzzed.
-- Evidence: `internal/executor/fuzz_test.go:141-170`; `proto.go:77-95`.
-- Task: add `FuzzConn` driving the connection handler over a `unix.Socketpair` (PeerCred works there) with an allow-all `Auth`: hello plus arbitrary bytes; assert no panic, the connection ends, `fakeRunner` ran only inert commands. Add it to `FUZZ_TARGETS` in the Makefile and lower `FUZZTIME` to 100s so CI stays at 5 min.
-- Acceptance: CI `make fuzz`; nightly 60 min.
-- Needs maintainer: no
-- Effort: S
-
 ### M3-04 Executor generation restarts at 0
 - Status: open
 - Severity: low
@@ -430,16 +410,6 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 - Task: doc comment on `Outcome.Generation`: "counts mutating requests since this executor started; not persistent".
 - Acceptance: doc review.
 - Needs maintainer: decided 2026-10-04: (B) document the counter as per-process.
-- Effort: S
-
-### M3-05 Parser test data is hand-trimmed
-- Status: open
-- Severity: low
-- Reason: test-gap — e.g. `tc_class_htb.json` has `dev` only on the first entry; the parsers are not checked against real tool output.
-- Evidence: `internal/linux/testdata/`.
-- Task: in a CI testbed run (or a privileged container) record full outputs of `ip -j -d link show`, `ip -j addr`, `ip -j route show table all`, `ip -j rule`, `nft -j list table inet chaosgw`, `tc -j qdisc/class/filter show` after a first apply; add a small testbed helper test that writes them to `$CHAOSGW_RECORD_DIR` when set; replace the files and adjust `parse_test.go`.
-- Acceptance: `go test ./internal/linux`.
-- Needs maintainer: no
 - Effort: S
 
 ### M3-06 Plan §2.2 still names a `uidrange` rule for the service user
@@ -476,7 +446,7 @@ Verdict: incomplete. All scope and test items exist and pass; open are a spec/co
 | Supervisor helper | done | used by the engine; `Engine.Health()` read by `GetHealth` |
 | goleak in goroutine packages | done (gap: `internal/appliance`, see M5b-05) | TestMain in executor, engine, observer, supervisor, cmd/chaosgw, api, clock, dnsproxy, testbed |
 | T: golden, client reaches server, protection, management route, verify manipulation, injected failure, rollback, set change, uplink change, immutable snapshots, observer during apply | done | see the test names in `internal/{compiler,apply,engine}` |
-| T: preview matches applied state | partial | compares only hash and an empty diff (M4-04) |
+| T: preview matches applied state | done | `TestPreviewShowsTheChangeAndChangesNothing` compares the previewed plan and diff with what `apply.BuildPlan`/`apply.Diff` build from the same pre-apply state |
 
 ### M4-02 The management matrix endpoint differs from the spec
 - Status: open
@@ -486,46 +456,6 @@ Verdict: incomplete. All scope and test items exist and pass; open are a spec/co
 - Task: (A) change the description at openapi.yaml:2560 to "`Management.allowed_sources`, or the management interface subnet when none are given"; run `make check-spec check-generated check-clients`. (B) add a set `mgmt_net` (allowed_sources ∪ interface subnet) used only in `matrixRules`, golden update, `TestTheManagementEndpointIncludesTheInterfaceSubnet`.
 - Acceptance: doc review + `make check-spec` (A) or local unit test (B).
 - Needs maintainer: decided 2026-10-04: (A) the spec follows the code.
-- Effort: S
-
-### M4-03 The lockout rollback test accepts too much
-- Status: open
-- Severity: low
-- Reason: test-gap — `!contains("22,8443") && !contains("8443")` equals `!contains("8443")`.
-- Evidence: `internal/engine/engine_test.go:318`.
-- Task: read the ruleset (`apply.ReadState` or parse `h.nftText()`), assert the anti-lockout rule has the port set `{22, 8443}` and the drop rule `tcp dport 8443`; keep the post-rollback check.
-- Acceptance: `go test ./internal/engine -run Lockout`.
-- Needs maintainer: no
-- Effort: S
-
-### M4-04 The preview-equals-apply test is indirect
-- Status: open
-- Severity: low
-- Reason: test-gap — compares only `Target.Hash` and an empty diff afterwards; the previewed plan is never compared with what the apply runs.
-- Evidence: `internal/engine/engine_test.go:712-767`; `engine/api.go:151`.
-- Task: in `TestPreviewShowsTheChangeAndChangesNothing`, record the summary of the plan the apply runs (expose `Applied.Plan []string` from the apply loop, or rebuild with `apply.BuildPlan` against the state before the apply) and assert it equals `p.Plan`; also assert `p.Linux` equals `apply.Diff(target, stateBeforeApply)`.
-- Acceptance: `go test ./internal/engine -run Preview`.
-- Needs maintainer: no
-- Effort: S
-
-### M4-05 No test for a network rename or a failed restore
-- Status: open
-- Severity: low
-- Reason: test-gap — a rename only happens inside the injected-failure testbed test; no test covers a restore that fails too (`Restored:false`, retry).
-- Evidence: `internal/engine/integration_test.go:272-320`; `owner.go:465-494`.
-- Task: 1. `TestRenamingANetworkMovesItsPortsToTheNewBridge` in `internal/apply/apply_test.go` (kernelsim): rename "Lab" → "Extra", assert `br-extra` with port `lan1`, `br-lab` gone, `Verify` empty. 2. `TestARestoreThatFailsTooIsReportedAndRetried` in `internal/engine/engine_test.go`: `h.k.Fail` fails every `nft -f` until switched off; assert `ErrApplyFailed{Restored:false}`, `Snapshot().LastError != ""`, and after `clk.Advance(11s)` with failures off the committed revision is applied and verified.
-- Acceptance: `go test ./internal/apply ./internal/engine`.
-- Needs maintainer: no
-- Effort: S
-
-### M4-06 `FirstV4()` depends on the kernel's address order
-- Status: open
-- Severity: low
-- Reason: forgotten — with several IPv4 addresses on the uplink or management interface a reordering changes `Uplink.Addr`, the table-100 route and the default management sources.
-- Evidence: `internal/compiler/host.go:87-95`; compile.go:284,330.
-- Task: carry the `secondary` flag from `ip -j addr` into `HostLink`; prefer non-secondary addresses, then the lowest; `TestFirstV4PrefersThePrimaryAddress`.
-- Acceptance: `go test ./internal/compiler`.
-- Needs maintainer: no
 - Effort: S
 
 ### M4-07 `chaosgw apply --file` without `--state-dir` has no rollback
@@ -555,16 +485,6 @@ Verdict: incomplete. All scope and test items exist and pass; open are a spec/co
 - Evidence: docs/plan.md:548; `internal/linux/parse_test.go`; `internal/apply/verify.go`.
 - Task: amend plan.md:548: parsers have recorded-output tests; the tc normalizer and its golden tests come with fault verify in M8b; add "golden tests for the tc normalizer" to the M8b test list.
 - Acceptance: doc review.
-- Needs maintainer: no
-- Effort: S
-
-### M4-10 Observer breaks the §3.11 code rules
-- Status: new
-- Severity: low
-- Reason: forgotten — `time.Sleep` outside `internal/clock`; the observer's goroutines are not supervised, so a panic there kills the process.
-- Evidence: `internal/observer/netlink.go:74` (Sleep), :51,81,87,104 (raw `go`).
-- Task: replace the sleep with a select on a timer from the injected clock and ctx; add a `recover` in the reader goroutine that closes the channels (or accept a `*supervisor.Supervisor`); keep `TestEventsAreDebouncedIntoOneTrigger` green.
-- Acceptance: `go test -race ./internal/observer`.
 - Needs maintainer: no
 - Effort: S
 

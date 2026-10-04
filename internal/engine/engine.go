@@ -95,6 +95,17 @@ type Snapshot struct {
 	Service *compiler.ServiceNS
 	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
 	DHCPError string
+	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first
+	// one (there is a service namespace in the configuration but nothing applied or read yet).
+	ServiceHealth *ServiceHealth
+}
+
+// ServiceHealth is the last reading of the service namespace's state (WatchService).
+type ServiceHealth struct {
+	// Exists reports whether the namespace is still there.
+	Exists bool
+	// HolderMatches reports whether it belongs to the holder the last apply attached it to.
+	HolderMatches bool
 }
 
 // PendingInfo describes a revision waiting for confirmation.

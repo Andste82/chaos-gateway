@@ -79,6 +79,8 @@ type options struct {
 	// serviceNS is the service namespace of the gateway services; resolvers the DNS proxy's upstream
 	serviceNS string
 	resolvers []netip.Addr
+	// execWrap, when set, wraps the engine's apply.Exec (fault injection, e.g. a panicking goroutine).
+	execWrap func(apply.Exec) apply.Exec
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -134,7 +136,11 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(func() { _ = lg.Close() })
 	fd := &fakeDHCP{}
-	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS})
+	var eng apply.Exec = apply.Local{E: ex}
+	if o.execWrap != nil {
+		eng = o.execWrap(eng)
+	}
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,9 +446,16 @@ func toMap(t *testing.T, v any) map[string]any {
 type fakeDHCP struct {
 	mu     sync.Mutex
 	leases []kea.Lease
+	err    error
 }
 
-func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error { return nil }
+func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
+func (f *fakeDHCP) setErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
 
 func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
 	f.mu.Lock()

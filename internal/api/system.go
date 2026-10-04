@@ -21,6 +21,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/store"
+	"github.com/Andste82/chaos-gateway/internal/supervisor"
 )
 
 type lastApply struct {
@@ -167,6 +168,14 @@ func (s *Server) GetHealth(c *gin.Context) {
 			overall = to
 		}
 	}
+	// §3.11: a panicked or failed supervised goroutine marks the api component unhealthy instead of
+	// staying invisible until something downstream of it breaks
+	for _, h := range s.cfg.Engine.Health() {
+		if h.State == supervisor.Panicked || h.State == supervisor.Failed {
+			api.Status, api.Detail = "unhealthy", fmt.Sprintf("%s %s: %s", h.Name, h.State, firstLine(h.Err))
+			worse("unhealthy")
+		}
+	}
 	// the executor answers a read
 	ex := healthComponent{Name: "executor", Status: "healthy"}
 	if _, err := s.cfg.Exec.Do(ctx, &executor.Read{Target: executor.Target{NS: s.cfg.Namespace}, What: executor.ReadAssigned}); err != nil {
@@ -184,9 +193,37 @@ func (s *Server) GetHealth(c *gin.Context) {
 		comps = append(comps, b)
 	}
 	if snap.LastError != "" {
-		comps[0].Status, comps[0].Detail = "degraded", "the last apply failed: "+firstLine(snap.LastError)
+		worse("degraded")
+		if comps[0].Status == "healthy" {
+			comps[0].Status, comps[0].Detail = "degraded", "the last apply failed: "+firstLine(snap.LastError)
+		}
+	}
+	if snap.KeaNetworks == nil {
+		comps = append(comps, healthComponent{Name: "kea", Status: "disabled"})
+	} else {
+		kea := healthComponent{Name: "kea", Status: "healthy"}
+		if snap.DHCPError != "" {
+			kea.Status, kea.Detail = "degraded", "the DHCP server does not run the applied configuration: "+firstLine(snap.DHCPError)
+			worse("degraded")
+		}
+		comps = append(comps, kea)
+	}
+	if snap.Service == nil {
+		comps = append(comps, healthComponent{Name: "svcns", Status: "disabled"})
+	} else {
+		svcns := healthComponent{Name: "svcns", Status: "healthy"}
+		if h := snap.ServiceHealth; h != nil && (!h.Exists || !h.HolderMatches) {
+			svcns.Status, svcns.Detail = "degraded", "the service namespace does not match what was applied"
+			worse("degraded")
+		}
+		comps = append(comps, svcns)
+	}
+	dns := healthComponent{Name: "dns", Status: "healthy"}
+	if last := s.dnsLastPoll(); last.IsZero() || time.Since(last) > 60*time.Second {
+		dns.Status, dns.Detail = "degraded", "the DNS proxy has not polled for its configuration in the last 60s"
 		worse("degraded")
 	}
+	comps = append(comps, dns)
 	body := gin.H{"status": overall}
 	if principalOf(c) != nil {
 		body["components"] = comps

@@ -725,6 +725,7 @@ func (o *owner) observed(obs observation) {
 	newDevices := len(id.Addresses) > 0 && (o.identity == nil || deviceSetMembershipChanged(*o.identity, id))
 	o.identity = &id
 	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
+	o.snap.ObserveError = obs.ObserveError
 	for _, ev := range events {
 		o.event(ev.Type, ev.Data)
 	}

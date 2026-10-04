@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	specpkg "github.com/Andste82/chaos-gateway/api"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
 func TestIdempotencyKeys(t *testing.T) {
@@ -190,6 +191,34 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 		}
 	}
 	g.badRequest = false
+}
+
+// M6a-14 test: a failed read of the observed state degrades the health check, with a detail saying
+// so, instead of staying silently healthy.
+func TestHealthDegradesWhenObservationFails(t *testing.T) {
+	g := dhcpGateway(t)
+	g.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "conntrack" {
+			return &executor.Result{Exit: 1, Stderr: "conntrack: netlink error\n"}
+		}
+		return nil
+	}
+	g.observe()
+	hb := g.do("GET", "/system/health", nil, nil, nil).json(t)
+	if hb["status"] != "degraded" {
+		t.Fatalf("%v", hb)
+	}
+	comps, _ := hb["components"].([]any)
+	var found bool
+	for _, c := range comps {
+		m := c.(map[string]any)
+		if m["name"] == "api" && m["status"] == "degraded" && strings.Contains(fmt.Sprint(m["detail"]), "observation degraded") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("%v", comps)
+	}
 }
 
 func TestSystemEndpoints(t *testing.T) {

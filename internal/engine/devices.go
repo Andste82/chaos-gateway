@@ -73,6 +73,9 @@ type observation struct {
 	// own point of view (what it sent is Upload, what it received is Download), plus how many tracked
 	// connections it is a party to.
 	Traffic map[netip.Addr]AddrTraffic
+	// ObserveError is set when reading the connections failed; the snapshot carries it so the API and
+	// the health check can tell a stale reading from a fresh one with nothing in it.
+	ObserveError string
 }
 
 // AddrTraffic is one address's share of the current connections.

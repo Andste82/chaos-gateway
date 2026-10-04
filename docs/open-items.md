@@ -22,7 +22,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M4c Dynamic routing | incomplete | 7 | 0 | 3 | 5 |
 | M5 REST API | incomplete | 5 | 0 | 2 | 4 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
-| M6a DHCP, devices | incomplete | 8 | 0 | 3 | 3 |
+| M6a DHCP, devices | incomplete | 7 | 0 | 3 | 3 |
 | M6b DNS, service namespace | incomplete | 5 | 0 | 1 | 2 |
 | Cross-cutting | – | 5 | 0 | 0 | 0 |
 
@@ -106,7 +106,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - M6b-05 and M4-01 (health of the managed services and the supervisor);
    - M6a-25, M4c-07, M5b-04, M5b-01 (run the nightly job on main).
 3. **API correctness** (done, `phase1-api-correctness`): M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
-4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03, M6a-07 and M6a-22 only narrowed, see their remaining blocks below): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
+4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03 and M6a-07 only narrowed, see their remaining blocks below; M6a-22 closed outright once M6b-08 added certificate pinning): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
 5. **Service namespace hardening** (done, `phase1-svcns-hardening`): M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain** (done, `phase1-retention-domain`): M2-01, M2-02, M2-04 to M2-07, M2-09.
 7. **Executor and engine robustness** (done, `phase1-executor-engine-robustness`): M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
@@ -667,7 +667,7 @@ Verdict: incomplete. Scope done; the level-2 smoke is green with the current dep
 
 ## M6a (DHCP and device discovery)
 
-Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are the conntrack-events wording, the hook's fork per lease, and smaller gaps (a verified `started_at` format, certificate pinning for the hook, plan wording).
+Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are the conntrack-events wording, the hook's fork per lease, and smaller gaps (a verified `started_at` format, plan wording).
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -742,16 +742,6 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Task: amend §2.14: "the marker names the last full apply; identity updates are element operations and do not rewrite it".
 - Acceptance: doc review.
 - Needs maintainer: decided 2026-10-04: (a) amend the plan.
-- Effort: S
-
-### M6a-22 Lease event hook trusts any certificate
-- Status: open (narrowed 2026-10-04: `subnet_id` is now required, matching the spec — done, see `phase1-devices-flows`)
-- Severity: low
-- Reason: forgotten — the hook uses `InsecureSkipVerify` to 127.0.0.1.
-- Evidence: `cmd/chaosgw/keahook.go:40`.
-- Task: certificate pinning together with M6b-08.
-- Acceptance: local unit test.
-- Needs maintainer: no
 - Effort: S
 
 ### M6a-23 Merge does not move overlays; WireGuard online state lags

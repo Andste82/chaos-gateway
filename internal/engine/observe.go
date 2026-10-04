@@ -123,7 +123,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 	if cout, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadConntrack}); err == nil && len(cout.Data) > 0 {
 		var flows []linux.Conntrack
 		if json.Unmarshal(cout.Data[0], &flows) == nil {
-			behind := tunnelPrefixes(snap)
+			behind := routedPrefixes(snap)
 			seen := map[netip.Addr]bool{}
 			obs.Traffic = map[netip.Addr]AddrTraffic{}
 			for _, f := range flows {
@@ -200,9 +200,11 @@ func bridgeNetworks(bridges []compiler.Bridge) map[string]string {
 	return m
 }
 
-// tunnelPrefixes are the networks behind WireGuard peers: the networks of clients and the routes of
-// links. A source address in one of them is a host behind a tunnel.
-func tunnelPrefixes(s *Snapshot) []netip.Prefix {
+// routedPrefixes are the networks behind a router this gateway does not itself assign addresses in:
+// the networks of WireGuard clients, the routes of links, and a LAN network's own downstream routes
+// (plan §2.3, "identifies such devices by IP"). A source address in one of them is a host behind a
+// router, not the gateway's direct neighbor, so it can only become a device by address.
+func routedPrefixes(s *Snapshot) []netip.Prefix {
 	var out []netip.Prefix
 	for _, w := range s.WireGuardInterfaces {
 		for _, p := range w.Peers {
@@ -210,6 +212,13 @@ func tunnelPrefixes(s *Snapshot) []netip.Prefix {
 				if pf, err := netip.ParsePrefix(r); err == nil && pf.Bits() < 32 {
 					out = append(out, pf)
 				}
+			}
+		}
+	}
+	for _, b := range s.Bridges {
+		for _, r := range b.Routes {
+			if pf, err := netip.ParsePrefix(r); err == nil {
+				out = append(out, pf)
 			}
 		}
 	}

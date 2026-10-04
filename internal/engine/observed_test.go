@@ -517,6 +517,27 @@ func TestFlowsAreListedWithTheirDevice(t *testing.T) {
 
 // M6a-13 test: two concurrent pings from the same device to the same destination have different
 // echo ids; their flows must not collide into one id.
+// M6a-18 test: a host behind a LAN network's own downstream router is discovered by its address, the
+// same way a host behind a WireGuard client's network already was; the gateway only ever sees it
+// through its connections, never as a direct neighbor.
+func TestAHostBehindALANDownstreamRouterIsDiscovered(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	// gateway.yaml's IoT network has a downstream route 10.30.0.0/24 via 10.10.0.2
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.30.0.5 dst=203.0.113.10 sport=1 dport=2 packets=1 bytes=60 src=203.0.113.10 dst=10.30.0.5 sport=2 dport=1 packets=1 bytes=60 [ASSURED] mark=0 use=1\n")
+	h.observe()
+	var d *engine.DeviceState
+	for _, dv := range h.e.Snapshot().Devices {
+		if dv.Origin == model.DeviceOriginDiscovered && len(dv.Addresses) > 0 && dv.Addresses[0].String() == "10.30.0.5" {
+			c := dv
+			d = &c
+		}
+	}
+	if d == nil || !d.Online {
+		t.Fatalf("the host behind the LAN downstream route was not discovered: %+v", h.e.Snapshot().Devices)
+	}
+}
+
 func TestConcurrentICMPFlowsDoNotCollide(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))

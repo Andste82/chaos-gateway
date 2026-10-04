@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -122,6 +124,48 @@ func TestRouteCountChangesAreEvents(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if ev := collect(ch, engine.EventRoutingRoutesChanged); len(ev) != 0 {
 		t.Fatalf("an unchanged poll must not emit an event: %+v", ev)
+	}
+}
+
+// M4c-14 test: a routing change bundled with a lockout-relevant one is rolled back together with
+// it when nobody confirms in time: the BIRD configuration reverts along with nftables.
+func TestARoutingChangeIsRolledBackTogetherWithALockoutRelevantOne(t *testing.T) {
+	h, _ := newWGHarness(t)
+	r1 := h.mustApply(h.revision(nil)).Revision
+
+	r2 := h.revision(func(c *model.Configuration) {
+		lockoutChange(c)
+		withBGP(c)
+	})
+	a := h.mustApply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second})
+	if a.Status != "pending_confirm" {
+		t.Fatalf("%+v", a)
+	}
+	birdText := func() string {
+		st, err := apply.ReadState(context.Background(), apply.Local{E: h.ex}, "", apply.Want{BirdInstance: compiler.BirdInstance})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Bird == nil {
+			return ""
+		}
+		return st.Bird.Config
+	}
+	if !strings.Contains(birdText(), "protocol bgp bgp_site_b") {
+		t.Fatalf("the new routing configuration is not running yet:\n%s", birdText())
+	}
+
+	h.clk.Advance(31 * time.Second)
+	s := h.barrier()
+	for i := 0; i < 100 && s.Pending != nil; i++ {
+		time.Sleep(10 * time.Millisecond)
+		s = h.barrier()
+	}
+	if s.Pending != nil || s.Revision != r1 {
+		t.Fatalf("after the timeout: %+v", s)
+	}
+	if strings.Contains(birdText(), "bgp_site_b") {
+		t.Errorf("the routing change was not rolled back along with the lockout-relevant one:\n%s", birdText())
 	}
 }
 

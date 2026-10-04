@@ -59,6 +59,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
+          test -w /dev/kvm || { echo "::error title=No KVM::level 2 needs /dev/kvm, the runner did not offer it"; exit 1; }
       - name: Build the container image
         run: |
           docker build -f deploy/Dockerfile -t chaos-gateway:appliance .

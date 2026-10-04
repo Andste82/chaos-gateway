@@ -49,6 +49,9 @@ type Config struct {
 	// DefaultUIPort is the port the API listens on when the configuration names no `ui_port`: the
 	// gateway's input rules let the management network and the services reach exactly this port.
 	DefaultUIPort int
+	// GenerationFile persists the generation counter's high-water mark across restarts (plan
+	// openapi.yaml convention: "monotonic integer, never reused"). Empty keeps it per-process.
+	GenerationFile string
 }
 
 // Snapshot is an immutable view of the engine. Nothing in a published snapshot is modified
@@ -275,6 +278,11 @@ func (e *Engine) initialState(ctx context.Context) (*ownerInit, error) {
 		return nil, fmt.Errorf("read the host: %w", err)
 	}
 	init.host = host
+	mark, err := readGenerationMark(e.cfg.GenerationFile)
+	if err != nil {
+		return nil, err
+	}
+	init.genReserved = mark
 	return init, nil
 }
 

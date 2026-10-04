@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -314,5 +315,24 @@ func TestProblemsAreProblemJSON(t *testing.T) {
 	g.noContract = true
 	if r := g.do("PUT", "/state", nil, nil, nil); r.Status != 404 && r.Status != 400 && r.Status != 405 {
 		t.Errorf("%d", r.Status)
+	}
+}
+
+// M5-01 test: the generation counter is persisted across a restart, over the API too.
+func TestGenerationSurvivesAnAPIRestart(t *testing.T) {
+	root := t.TempDir()
+	g1 := newGW(t, func(o *options) { o.root = root })
+	g1.finishSetup()
+	gen1 := g1.do("GET", "/state", nil, nil, nil).json(t)["generation"].(float64)
+	g1.close()
+
+	g2 := newGW(t, func(o *options) { o.root = root })
+	g2.mintToken("full")
+	if _, err := g2.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gen2 := g2.do("GET", "/state", nil, nil, nil).json(t)["generation"].(float64)
+	if gen2 <= gen1 {
+		t.Fatalf("generation did not continue across the restart: %v, then %v", gen1, gen2)
 	}
 }

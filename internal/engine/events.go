@@ -92,7 +92,14 @@ func (b *bus) publish(t time.Time, typ string, data map[string]any) {
 		cut++
 	}
 	if cut > 0 {
-		b.log = append([]Event(nil), b.log[cut:]...)
+		// once the window is full, cut is almost always 1: reslicing in place (no copy) keeps
+		// publish O(1) instead of O(n). The backing array is only ever compacted, and its unused
+		// prefix reclaimed, once more than half of it is wasted.
+		if cut > len(b.log)/2 {
+			b.log = append([]Event(nil), b.log[cut:]...)
+		} else {
+			b.log = b.log[cut:]
+		}
 	}
 	var full []chan Event
 	for ch := range b.subs {

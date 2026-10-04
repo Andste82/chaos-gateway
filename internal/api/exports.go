@@ -81,37 +81,42 @@ func (s *Server) ExportWireGuardClient(c *gin.Context, networkId model.NetworkId
 	if params.Format != nil {
 		format = string(*params.Format)
 	}
+	var contentType string
+	var body []byte
 	switch format {
 	case "conf":
-		attachment(c, cl.Name, "conf")
-		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(e.Conf))
+		contentType, body = "text/plain; charset=utf-8", []byte(e.Conf)
 	case "png":
 		b, err := wireguard.QRPNG(e.Conf, 512)
 		if err != nil {
 			s.write(c, newProblem(model.ErrorCodeValidationFailed, "the configuration does not fit into a QR code: %v", err))
 			return
 		}
-		attachment(c, cl.Name, "png")
-		c.Data(http.StatusOK, "image/png", b)
+		contentType, body = "image/png", b
 	case "svg":
 		svg, err := wireguard.QRSVG(e.Conf)
 		if err != nil {
 			s.write(c, newProblem(model.ErrorCodeValidationFailed, "the configuration does not fit into a QR code: %v", err))
 			return
 		}
-		attachment(c, cl.Name, "svg")
-		c.Data(http.StatusOK, "image/svg+xml", []byte(svg))
+		contentType, body = "image/svg+xml", []byte(svg)
 	default:
 		s.write(c, newProblem(model.ErrorCodeBadRequest, "format must be conf, png or svg"))
 		return
 	}
-	detail := "format " + format
+	// every download is recorded (plan §2.16); the entry is written before the key is sent, not
+	// after, so a failing audit log never lets a key out unrecorded (M5-16)
+	if err := s.tryRecord(c, "wireguard.export", &audit.Object{Kind: "client", ID: cid, Name: cl.Name}, 0, "format "+format); err != nil {
+		s.write(c, newProblem(model.ErrorCodeUnavailable, "the audit log cannot be written"))
+		return
+	}
+	attachment(c, cl.Name, format)
+	c.Data(http.StatusOK, contentType, body)
 	if done, err := wireguard.ConsumePrivateKey(in, netID, cid); err != nil {
 		s.log.Error("cannot delete the private key after the export", "client", cid, "error", err)
 	} else if done {
-		detail += "; the private key was deleted (export once)"
+		s.record(c, "wireguard.private_key_consumed", &audit.Object{Kind: "client", ID: cid, Name: cl.Name}, 0, "export once")
 	}
-	s.record(c, "wireguard.export", &audit.Object{Kind: "client", ID: cid, Name: cl.Name}, 0, detail)
 }
 
 // DeleteWireGuardClientPrivateKey implements DELETE /networks/{networkId}/clients/{clientId}/private-key.

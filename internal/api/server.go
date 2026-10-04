@@ -224,15 +224,22 @@ func viaOf(p *Principal) string {
 // record writes an audit entry for the request's principal. A failing log is logged, not fatal:
 // the action was already done.
 func (s *Server) record(c *gin.Context, action string, obj *audit.Object, rev int64, detail string) {
+	if err := s.tryRecord(c, action, obj, rev, detail); err != nil {
+		s.log.Error("cannot write the audit log", "action", action, "error", err)
+	}
+}
+
+// tryRecord is record with the Append error returned instead of logged, for a caller that must not
+// go on when the audit log cannot be written (M5-16: a key export).
+func (s *Server) tryRecord(c *gin.Context, action string, obj *audit.Object, rev int64, detail string) error {
 	p := principalOf(c)
 	a := actorOf(p)
 	e := audit.Entry{Actor: audit.Actor{Type: string(a.Type), ID: a.Id}, Via: viaOf(p), Action: action, Object: obj, Revision: rev, Detail: detail}
 	if a.Name != nil {
 		e.Actor.Name = *a.Name
 	}
-	if _, err := s.cfg.Audit.Append(e); err != nil {
-		s.log.Error("cannot write the audit log", "action", action, "error", err)
-	}
+	_, err := s.cfg.Audit.Append(e)
+	return err
 }
 
 func contextOf(c *gin.Context) context.Context { return c.Request.Context() }

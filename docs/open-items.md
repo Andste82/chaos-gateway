@@ -14,7 +14,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | Milestone | Verdict | Open items | High | Medium | Decided 2026-10-04 |
 |---|---|---|---|---|---|
 | M0 (spikes, docs) | – | 3 | 0 | 0 | 1 |
-| M1 Repository, CI, testbed | incomplete | 10 | 0 | 2 | 2 |
+| M1 Repository, CI, testbed | incomplete | 3 | 0 | 1 | 1 |
 | M2 Domain model, persistence | incomplete | 2 | 0 | 0 | 2 |
 | M3 Executor | incomplete | 4 | 0 | 0 | 2 |
 | M4 Compiler, preview, safe apply | incomplete | 4 | 0 | 0 | 2 |
@@ -24,7 +24,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
 | M6a DHCP, devices | incomplete | 8 | 0 | 3 | 3 |
 | M6b DNS, service namespace | incomplete | 5 | 0 | 1 | 2 |
-| Cross-cutting | – | 6 | 0 | 0 | 0 |
+| Cross-cutting | – | 5 | 0 | 0 | 0 |
 
 ### Why items stayed open
 
@@ -110,7 +110,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 5. **Service namespace hardening** (done, `phase1-svcns-hardening`): M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain** (done, `phase1-retention-domain`): M2-01, M2-02, M2-04 to M2-07, M2-09.
 7. **Executor and engine robustness** (done, `phase1-executor-engine-robustness`): M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
-8. **Test infrastructure**: M1-02 (x86 matrix), M1-03 to M1-09, CC-04.
+8. **Test infrastructure** (done, `phase1-test-infrastructure`): M1-02 (x86 matrix), M1-03 to M1-09, CC-04.
 9. **Plan and docs sync**:
    - all `plan-error` items once their decisions are made: M1-01, M1-06, M1-10, M3-06, M4-09, M4b-03, M4b-07, M4b-08, M4c-11, M4c-16, M5-07, M5-23, M6a-04, M6a-07 (doc part), M6a-10, M6a-12, M6a-23, M6a-24, M6b-04 (M7 test), M6b-11;
    - doc items M0-01, M0-02, M3-07, M4-08, M4b-06, M6b-09, CC-01, CC-02.
@@ -149,16 +149,6 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 - Evidence: `internal/linkexport/`.
 - Task: add `linkexport_test.go`. Cover a link with static routes: the `.conf` holds the peer, the endpoint and the AllowedIPs; the BIRD snippet passes `bird -p` (skip when bird is missing).
 - Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### CC-04 The level-1 CI job hides skipped tests
-- Status: new
-- Severity: low
-- Reason: test-gap. `go test` runs without `-v`, and testbed tests skip when a tool is missing (`integration_dhcp_test.go:47-50`), so CI could pass without running them. Together with M1-08 this hides missing tools.
-- Evidence: `.github/workflows/ci.yml`, Makefile `test-privileged`.
-- Task: fix it as part of M1-08: direct mode fails on skips unless `-allow-skip` is given.
-- Acceptance: CI green with 0 skips.
 - Needs maintainer: no
 - Effort: S
 
@@ -220,25 +210,25 @@ Removed from the old list: "Devcontainer rebuild never verified" — wrong: CI b
 
 ## M1 (repository, CI, testbed)
 
-Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open are the Q1 decision (an M1 scope item), the runner's exit code (plan wording) and hardening/drift.
+Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open are the Q1 decision (an M1 scope item), the runner's exit code (plan wording) and repository-layout drift.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Go module, Vue skeleton, oapi-codegen, Orval, openapi-python-client | done | `go.mod`, `web/`, `api/oapi-codegen-*.yaml`, `web/orval.config.ts`, Makefile `generate-python` |
 | CI check: spec validates, examples validate, generated code compiles | done (validation, no style linter) | `make check-spec`, `check-generated`, `check-clients`; ci.yml level0 |
 | Makefile, golangci-lint, go test -race, Vitest, Playwright skeleton | done | Makefile, `.golangci.yml`, `web/src/App.test.ts`, `web/e2e/smoke.spec.ts` |
-| CI levels 0 and 1b "on the development VPS" | partial | level 1b runs on hosted runners with KVM, on the VPS only by hand (M1-03) |
+| CI levels 0, 1b and 1 in hosted CI; `make test-vm` on the VPS before a merge | done | ci.yml; nightly kernel matrix (`testbed-matrix`) and weekly emulated check (`weekly.yml`) |
 | Level 1 job in hosted CI | done | ci.yml `testbed-privileged` |
 | `internal/testbed` (two networks, bridges, management default route) | done | `internal/testbed/topology.go`; `TestDefaultTopology` |
 | Level 1b runner (one VM, rw share, no terminal) | done | `internal/testbed/vmrun` |
-| Devcontainer with tools and stock kernels | done (GA kernels only) | `.devcontainer/Dockerfile` |
+| Devcontainer with tools and stock kernels | done (GA kernels; nightly matrix runs each) | `.devcontainer/Dockerfile`; `nightly.yml` `testbed-matrix` |
 | Injectable clock | done | `internal/clock` |
 | arm64 image build | done | ci.yml `arm64` |
 | Decision where KVM tests run (Q1) | missing | plan §7.2 Q1 still open (M1-01) |
 | Shared module preflight | done | `internal/preflight`; `TestHostSetupLoadsExactlyTheModulesOfThePreflight` |
 | T: ping through a forwarding namespace in level 1b | done (CI) | `TestClientPingsServerThroughPlainForwardingGateway` |
-| T: netem delay visible | done (CI), fragile | `TestNetemDelayIsVisible` (M1-05) |
-| T: runner returns the tests' exit code | partial | returns 0/1/2 (M1-06) |
+| T: netem delay visible | done (CI) | `TestNetemDelayIsVisible` |
+| T: runner returns the tests' exit code | done (code), plan wording still open | `TestRunVMExitCodes` (M1-06) |
 | T: same test in a privileged container | done (CI) | ci.yml `testbed-privileged` |
 
 ### M1-01 Q1 not decided; the plan's evidence is stale
@@ -251,83 +241,13 @@ Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open ar
 - Needs maintainer: decided 2026-10-04: (b) hosted GitHub runners with `/dev/kvm` only; no self-hosted runner is planned. Record this as D33, and note that measurement accuracy depends on the hosted hardware.
 - Effort: S
 
-### M1-02 Nightly level 1b kernel matrix and arm64 level 1b missing
-- Status: open
-- Severity: medium
-- Reason: forgotten — §4.4 promises nightly level 1b on 24.04 and 26.04 with GA and HWE kernels plus an arm64 level 1b run; no milestone owns it, CI only boots the default kernel.
-- Evidence: plan.md:1134-1135; `nightly.yml` (only `fuzz` and `appliance`); `.devcontainer/Dockerfile` `ARG KERNELS` (two GA kernels); `vmrun.DefaultKernel` (run.go:21); `vmrun` has no arch option (an arm64 guest needs its own arm64 root file system).
-- Task: 1. Add a `testbed-matrix` job to `nightly.yml` that builds `.devcontainer` as ci.yml does and runs `make test-vm ARGS="-kernel ${{ matrix.kernel }}"` for each kernel in `ARG KERNELS` (`6.8.0-142-generic`, `7.0.0-38-generic`). 2. Find the current 24.04 HWE kernel (`apt-cache policy linux-image-generic-hwe-24.04`), add it to `ARG KERNELS` and the matrix; 26.04 has no HWE kernel yet, so change §4.4 to "HWE kernels where they exist". 3. Arm64 per the decision: if deferred, change §4.4 to say arm64 level 1b comes with M28 (its test list already has "the arm64 image … in emulated level 1b").
-- Acceptance: a manually started nightly run (`gh workflow run nightly.yml --ref <branch>`) shows one green `testbed-matrix` job per kernel.
-- Needs maintainer: decided 2026-10-04: (a) arm64 level 1b comes with M28; amend §4.4. Do the x86 kernel matrix now.
-- Effort: S (x86) / L (arm64)
-
-### M1-03 The plan says level 1b runs "on the development VPS" on every commit
-- Status: new
-- Severity: low
-- Reason: plan-error — CI runs level 1b on hosted runners with KVM; on the VPS level 1b runs only via `make test-vm`, so the emulated branches (`!testbed.Accurate()`) never run automatically.
-- Evidence: plan.md:1133, :1279; ci.yml `testbed-vm`; `vmrun.HasKVM()` decides, no flag forces emulation.
-- Task: 1. Change §4.4 "Every commit" and the M1 scope wording: levels 0, 1b (hosted, KVM) and 1 in hosted CI; `make test-vm` on the VPS before a merge (emulated). 2. Optional: add `-no-kvm` to `tools/testvm run` (passes `kvm=false` into `VNGArgs` and `GuestOptions.Emulated`), a unit test that it yields `--disable-kvm` and `CHAOSGW_TESTBED_EMULATED=1`, and a weekly job `make test-vm ARGS=-no-kvm`.
-- Acceptance: doc review; with step 2 a local unit test and a green scheduled job.
-- Needs maintainer: no
-- Effort: S
-
-### M1-04 KVM mode of CI not asserted
-- Status: open
-- Severity: low
-- Reason: forgotten — the udev step ends in `|| true`; a runner without KVM silently runs emulated.
-- Evidence: `.github/workflows/ci.yml:76`.
-- Task: after "Enable KVM" add a step: `if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi`. In `nightly.yml` job `appliance` fail instead (level 2 skips without KVM).
-- Acceptance: CI shows the annotation only when KVM is missing.
-- Needs maintainer: no
-- Effort: S
-
-### M1-05 Netem test tolerances can flake under emulation
-- Status: open
-- Severity: low
-- Reason: test-gap — under TCG the baseline is noisy; the isolation and "after" checks use `ref+25ms`/`ref+20ms`.
-- Evidence: `internal/testbed/topology_integration_test.go:184,191`.
-- Task: when `!testbed.Accurate()`, assert `iso.Median() < got-25*time.Millisecond` and `after.Median() < got-25*time.Millisecond`; keep the `ref+…` bounds only when `testbed.Accurate()`.
-- Acceptance: CI testbed green; `make test-vm ARGS="-run TestNetemDelayIsVisible ./internal/testbed"` green on the VPS (emulated).
-- Needs maintainer: no
-- Effort: S
-
 ### M1-06 Runner does not return the tests' exit code
-- Status: open
+- Status: open (narrowed: the exit codes are now unit-tested — `TestRunVMExitCodes`, `tools/testvm/main_test.go` — phase1-test-infrastructure; only the plan wording is left)
 - Severity: low
 - Reason: plan-error — `testvm` returns 0 (pass), 1 (a test or the VM failed), 2 (run not carried out); documented and arguably better than a raw code, but the M1 text says "returns the tests' exit code".
-- Evidence: `tools/testvm/main.go` (end of `runTests`), docs/development.md:78, plan.md:1280.
-- Task: 1. Change the M1 test text to "exits 0 only when every package ran and passed, 1 when a test or the VM failed, 2 when the run could not be carried out, and prints per-package results". 2. Add `TestRunVMExitCodes` in `tools/testvm/main_test.go` with the fake `vng` of `vmrun/run_test.go` (pass → 0, failing package → 1, `-vm-timeout 1s` → 2).
-- Acceptance: doc review plus a local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M1-07 `Process.Wait` can hang; namespaces of a crashed level-1 run are not swept
-- Status: open
-- Severity: low
-- Reason: forgotten — `Namespace.Start` sets no `WaitDelay`; nothing removes `tb…` namespaces left by a crashed direct run (level 1b gets a fresh VM and is not affected).
-- Evidence: `internal/testbed/testbed.go:277-292` (Start), :319 (Stop).
-- Task: 1. In `Start` set `p.cmd.WaitDelay = 5 * time.Second`. 2. Add `testvm sweep` in `tools/testvm/main.go`: for `ip netns list` entries matching `^tb[0-9a-f]{8}-`, kill `ip netns pids`, then `ip netns del`; print what was removed; require `-force` while another `testvm`/`.test` process runs. 3. Document in development.md. 4. Unit-test the name filter.
-- Acceptance: local unit test; manual `testvm sweep` in a privileged container.
-- Needs maintainer: no
-- Effort: S
-
-### M1-08 Skipped testbed tests count as passes
-- Status: open
-- Severity: low
-- Reason: forgotten — `Summary.OK()` ignores skips, while development.md says testbed tests are "never skipped silently"; real skips exist (`internal/engine/integration_dhcp_test.go:49`, `internal/apply/integration_test.go:312`).
-- Evidence: `internal/testbed/vmrun/results.go:58`.
-- Task: 1. Add `AllowSkip bool` to `vmrun.Config` and `-allow-skip` to `testvm run`. 2. In `Summary.Problems()`/`OK()` report "N tests skipped" and fail unless allowed. 3. In direct mode parse the `-v` output the same way (reuse `ParseCounts`). 4. Test `TestCollectSkipsFailUnlessAllowed` with `testdata/fixture` `TestSkips`.
-- Acceptance: local unit tests; CI level 1/1b stays green (0 skips today).
-- Needs maintainer: no (recommendation: fail by default)
-- Effort: S
-
-### M1-09 Runner flag plumbing untested
-- Status: open
-- Severity: low
-- Reason: test-gap — `vmrun` covers keep, timeout, cancel and stale results; `tools/testvm` flag plumbing (`-kernel`, `-keep`, `-vm-timeout`, `-v`) is untested.
-- Evidence: `tools/testvm/main_test.go`.
-- Task: extract a pure `parseRunFlags(args) (vmrun.Config, mode string, err)` from `runTests` and test it in `TestParseRunFlags` (each flag lands in the config; `TESTVM_KERNEL`/`TESTVM_MEM` defaults). Combine with M1-06.
-- Acceptance: local unit test.
+- Evidence: docs/plan.md:1280 (M1 test text).
+- Task: change the M1 test text to "exits 0 only when every package ran and passed, 1 when a test or the VM failed, 2 when the run could not be carried out, and prints per-package results".
+- Acceptance: doc review.
 - Needs maintainer: no
 - Effort: S
 

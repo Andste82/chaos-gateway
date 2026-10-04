@@ -20,7 +20,9 @@ func TestNeighborChangesTrigger(t *testing.T) {
 	ns.Must("ip", "link", "add", "dummy0", "type", "dummy")
 	ns.Must("ip", "link", "set", "dummy0", "up")
 
-	ch, err := WatchNeighbors(context.Background(), ns.Name, &clock.Real{}, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := WatchNeighbors(ctx, ns.Name, &clock.Real{}, 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,5 +39,16 @@ func TestNeighborChangesTrigger(t *testing.T) {
 	case <-ch:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no trigger for the second neighbor")
+	}
+
+	// goleak (TestMain) needs the watch goroutines gone before the test binary exits
+	cancel()
+	select {
+	case _, ok := <-ch:
+		_ = ok
+	case <-time.After(3 * time.Second):
+		t.Fatal("the channel did not close after the context ended")
+	}
+	for range ch {
 	}
 }

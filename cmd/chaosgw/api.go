@@ -57,6 +57,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	serviceNS := fs.String("service-ns", "", "name of the service namespace of the gateway services (the DNS proxy); empty runs without one")
 	holderPID := fs.String("service-holder-pid-file", "", "file with the PID (as the executor sees it) of the process whose network namespace becomes the service namespace")
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
+	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
 	if err := fs.Parse(args); err != nil {
@@ -73,7 +74,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
-		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, serviceToken: *serviceToken, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -94,6 +95,7 @@ type apiOptions struct {
 	confirm      time.Duration
 	keaSocket    string
 	serviceToken string
+	serviceCert  string
 	// serviceNS and holderPIDFile configure the service namespace (plan §3.3)
 	serviceNS     string
 	holderPIDFile string
@@ -189,6 +191,11 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	cert, err := api.LoadOrCreateCertificate(filepath.Join(o.secretsDir, "tls"), names, ips, time.Now())
 	if err != nil {
 		return err
+	}
+	if o.serviceCert != "" {
+		if err := api.PublishCertificate(filepath.Join(o.secretsDir, "tls"), o.serviceCert); err != nil {
+			return fmt.Errorf("the service certificate: %w", err)
+		}
 	}
 	b := &api.Binder{
 		Addrs:   func() []netip.Addr { return listenAddrs(eng.Snapshot(), au.SetupCompleted(), o.listen) },

@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/api"
 )
 
 func TestTheKeaHookPostsTheLeaseEventWithTheServiceToken(t *testing.T) {
@@ -54,5 +59,66 @@ func TestTheKeaHookPostsTheLeaseEventWithTheServiceToken(t *testing.T) {
 	t.Setenv("CHAOSGW_SERVICE_TOKEN_FILE", tok)
 	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 1 {
 		t.Errorf("a refusal by the API: %d", code)
+	}
+}
+
+// M6b-08 test: with CHAOSGW_API_CERT set, the hook verifies the API's certificate instead of trusting
+// whatever is presented.
+func TestTheKeaHookVerifiesTheAPICertificateWhenGiven(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+	tok := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tok, []byte("cgw_svc_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAOSGW_API", srv.URL)
+	t.Setenv("CHAOSGW_SERVICE_TOKEN_FILE", tok)
+	t.Setenv("KEA_LEASE4_ADDRESS", "10.10.0.150")
+	t.Setenv("KEA_LEASE4_HWADDR", "02:00:00:00:00:aa")
+	t.Setenv("KEA_SUBNET_ID", "7")
+	t.Setenv("KEA_LEASE4_VALID_LIFETIME", "600")
+
+	certFile := filepath.Join(t.TempDir(), "api.pem")
+	write := func(cert *x509.Certificate) {
+		raw := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+		if err := os.WriteFile(certFile, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CHAOSGW_API_CERT", certFile)
+
+	// the server's own certificate: verification succeeds
+	write(srv.Certificate())
+	var out, errOut bytes.Buffer
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 0 {
+		t.Fatalf("a matching certificate was rejected: %d %s", code, errOut.String())
+	}
+
+	// a different certificate (httptest.NewTLSServer reuses one fixed built-in certificate for every
+	// server, so a genuinely different one has to be generated): verification fails closed, it does
+	// not fall back to trusting anything.
+	otherDir := t.TempDir()
+	if _, err := api.LoadOrCreateCertificate(otherDir, nil, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(otherDir, "cert.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certFile, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	errOut.Reset()
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 1 {
+		t.Errorf("a mismatched certificate was accepted: %d", code)
+	}
+
+	// a file that holds no certificate at all is reported, not silently ignored
+	if err := os.WriteFile(certFile, []byte("not a certificate"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	errOut.Reset()
+	if code := runKeaHook([]string{"lease4_select"}, &out, &errOut); code != 1 || errOut.Len() == 0 {
+		t.Errorf("an invalid CHAOSGW_API_CERT: %d %s", code, errOut.String())
 	}
 }

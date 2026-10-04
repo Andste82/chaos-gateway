@@ -21,7 +21,7 @@ services:
       - chaosgw-kea-run:/run/kea
       # the leases and the configuration Kea was started with
       - chaosgw-kea-state:/var/lib/kea
-      # the service token the hook reads: nothing else of the secrets volume
+      # the service token and the API's certificate the hook reads: nothing else of the secrets volume
       - type: volume
         source: chaosgw-service
         target: /var/lib/chaosgw/service
@@ -29,6 +29,8 @@ services:
     environment:
       # where the hook reports lease events: the API on the loopback of the host
       CHAOSGW_API: https://127.0.0.1:${CHAOSGW_UI_PORT:-8443}
+      # the API's certificate, so the hook verifies it instead of trusting whatever is presented
+      CHAOSGW_API_CERT: /var/lib/chaosgw/service/api.pem
     restart: unless-stopped
     stop_grace_period: 10s
     logging:

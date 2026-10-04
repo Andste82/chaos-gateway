@@ -33,7 +33,7 @@ services:
         max-file: "2"
   dns:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["dns", "--listen", ":53", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token"]
+    command: ["dns", "--listen", ":53", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem"]
     user: "65532:65532"
     network_mode: "service:svcns"
     read_only: true
@@ -44,7 +44,7 @@ services:
     tmpfs:
       - /tmp:size=4m,mode=0700
     volumes:
-      # the token the proxy authenticates with: nothing else of the secrets volume
+      # the token the proxy authenticates with and the API's certificate: nothing else of the secrets volume
       - type: volume
         source: chaosgw-service
         target: /var/lib/chaosgw/service

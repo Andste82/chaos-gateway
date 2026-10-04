@@ -242,7 +242,7 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 			return
 		}
 	}
-	tick := time.NewTicker(keepalive)
+	tick := s.clk.NewTicker(keepalive)
 	defer tick.Stop()
 	for {
 		select {
@@ -255,7 +255,7 @@ func (s *Server) StreamEvents(c *gin.Context, params model.StreamEventsParams) {
 			if !emit(ev) {
 				return
 			}
-		case <-tick.C:
+		case <-tick.C():
 			// a stream ends with its credential: logout, a revoked or expired token, a password reset
 			if !s.credentialValid(p) {
 				return

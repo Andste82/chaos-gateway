@@ -11,6 +11,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/clock"
 )
 
 // ReadTimeout bounds how long a request body may take to arrive (M5-11): a client trickling a
@@ -32,6 +34,9 @@ type Binder struct {
 	// TLS is the configuration of the HTTPS listeners.
 	TLS *tls.Config
 	Log *slog.Logger
+	// Clock drives Run's ticker (M5-24: no raw time.* outside internal/clock); nil uses the real
+	// clock.
+	Clock clock.Clock
 
 	mu      sync.Mutex
 	servers map[netip.AddrPort]*http.Server
@@ -118,15 +123,19 @@ func (b *Binder) Reconcile() {
 
 // Run reconciles every interval until ctx ends, then closes everything.
 func (b *Binder) Run(ctx context.Context, interval time.Duration) {
+	clk := b.Clock
+	if clk == nil {
+		clk = &clock.Real{}
+	}
 	b.Reconcile()
-	t := time.NewTicker(interval)
+	t := clk.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			b.Close()
 			return
-		case <-t.C:
+		case <-t.C():
 			b.Reconcile()
 		}
 	}

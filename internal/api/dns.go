@@ -120,7 +120,7 @@ func (s *Server) dnsConfig() *model.DnsServiceConfig {
 func (s *Server) hostResolvers() []string {
 	s.dns.mu.Lock()
 	defer s.dns.mu.Unlock()
-	if !s.dns.resolversAt.IsZero() && time.Since(s.dns.resolversAt) < 5*time.Second {
+	if !s.dns.resolversAt.IsZero() && s.clk.Now().Sub(s.dns.resolversAt) < 5*time.Second {
 		return s.dns.resolvers
 	}
 	read := s.cfg.Resolvers
@@ -131,29 +131,29 @@ func (s *Server) hostResolvers() []string {
 	for _, a := range read() {
 		out = append(out, a.String())
 	}
-	s.dns.resolvers, s.dns.resolversAt = out, time.Now()
+	s.dns.resolvers, s.dns.resolversAt = out, s.clk.Now()
 	return out
 }
 
 // GetDnsServiceConfig implements GET /internal/dns/config: the configuration at once when its
 // generation is newer than `after`, else a long poll that ends with 204.
 func (s *Server) GetDnsServiceConfig(c *gin.Context, params model.GetDnsServiceConfigParams) {
-	s.dns.lastPollAt.Store(time.Now().UnixNano())
-	deadline := time.Now().Add(dnsPoll.wait)
+	s.dns.lastPollAt.Store(s.clk.Now().UnixNano())
+	deadline := s.clk.Now().Add(dnsPoll.wait)
 	for {
 		cfg := s.dnsConfig()
 		if cfg != nil && (params.After == nil || cfg.Generation > *params.After) {
 			c.JSON(200, cfg)
 			return
 		}
-		if !time.Now().Before(deadline) {
+		if !s.clk.Now().Before(deadline) {
 			c.Status(204)
 			return
 		}
 		select {
 		case <-contextOf(c).Done():
 			return
-		case <-time.After(dnsPoll.tick):
+		case <-s.clk.After(dnsPoll.tick):
 		}
 	}
 }

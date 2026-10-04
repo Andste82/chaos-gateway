@@ -22,6 +22,10 @@ import (
 // SchemaVersion is the version of the files this build writes.
 const SchemaVersion = 1
 
+// DefaultRetainedRevisions is the retention the plan's §3.6 default applies when
+// `settings.retention.revisions` is not set.
+const DefaultRetainedRevisions = 200
+
 // Revision statuses (the spec's RevisionStatus).
 const (
 	StatusCandidate      = "candidate"

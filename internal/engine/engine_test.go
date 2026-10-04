@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -450,20 +451,23 @@ func TestASecondApplyDuringTheConfirmationWindowIsRefused(t *testing.T) {
 	_ = r1
 }
 
-func TestACandidateOnAnOutdatedBaseGetsARevisionConflict(t *testing.T) {
+// a candidate based on a revision that is no longer active can never be committed
+// (store.ErrRevisionConflict is covered directly in internal/store, on a store that nothing
+// prunes), but through the engine a sibling candidate of the one that just committed is reclaimed
+// in that same commit's prune (M2-01: a stale candidate goes whatever the retention count says),
+// so applying it afterwards finds it already gone.
+func TestACandidateOnAnOutdatedBaseIsPrunedAndNotFound(t *testing.T) {
 	h := newHarness(t)
 	h.start()
 	h.mustApply(h.revision(nil))
 	a := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
 	b := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.30") })
 	h.mustApply(a)
-	_, err := h.apply(b)
-	var rc *store.ErrRevisionConflict
-	if !errors.As(err, &rc) {
+	if _, err := h.apply(b); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("got %v", err)
 	}
 	// and a revision that is active already is not a candidate
-	_, err = h.apply(a)
+	_, err := h.apply(a)
 	var nc *store.ErrNotACandidate
 	if !errors.As(err, &nc) {
 		t.Fatalf("got %v", err)
@@ -491,20 +495,22 @@ func TestConcurrentAppliesOfCandidatesOnTheSameBaseExactlyOneSucceeds(t *testing
 		}()
 	}
 	wg.Wait()
-	var ok, conflict int
+	// the owner commits one, and that same commit's prune (M2-01) reclaims every other candidate
+	// based on the same now-superseded revision before their own queued applies ever run, so a
+	// loser finds it already gone rather than getting store.ErrRevisionConflict.
+	var ok, notFound int
 	for _, err := range results {
-		var rc *store.ErrRevisionConflict
 		switch {
 		case err == nil:
 			ok++
-		case errors.As(err, &rc):
-			conflict++
+		case errors.Is(err, store.ErrNotFound):
+			notFound++
 		default:
 			t.Errorf("unexpected error %v", err)
 		}
 	}
-	if ok != 1 || conflict != len(revs)-1 {
-		t.Fatalf("%d succeeded, %d conflicts", ok, conflict)
+	if ok != 1 || notFound != len(revs)-1 {
+		t.Fatalf("%d succeeded, %d not found", ok, notFound)
 	}
 	h.verifyKernel()
 }
@@ -1156,5 +1162,60 @@ func TestGenerationContinuesAfterRestart(t *testing.T) {
 	}
 	if snap2.Generation <= a.Generation {
 		t.Fatalf("generation did not continue across the restart: %d, then %d", a.Generation, snap2.Generation)
+	}
+}
+
+// M2-01 test: the committed revision's retention setting (§3.6) bounds how many old revisions the
+// store keeps; a stale candidate (based on a revision no longer active) goes regardless of the count.
+func TestCommittedRevisionsArePrunedToTheRetention(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	// h.revision clones the harness's pristine base configuration each time, not the currently
+	// active one, so every revision below must set the retention itself to keep it in effect.
+	retain10 := func(c *model.Configuration) {
+		c.Settings = &model.Settings{Retention: &model.RetentionSettings{Revisions: ptr(10)}}
+	}
+	rev1 := h.revision(retain10)
+	h.mustApply(rev1)
+
+	// based on rev1: once a later revision supersedes it, this candidate can never be committed
+	// (revision_conflict) and must be pruned whatever the retention count says.
+	stale := h.revision(func(c *model.Configuration) {
+		retain10(c)
+		c.Uplink.Gateway = ptr("203.0.113.90")
+	})
+
+	rev2 := h.revision(func(c *model.Configuration) {
+		retain10(c)
+		c.Uplink.Gateway = ptr("203.0.113.21")
+	})
+	h.mustApply(rev2)
+
+	var last = rev2
+	for i := 3; i <= 12; i++ {
+		rev := h.revision(func(c *model.Configuration) {
+			retain10(c)
+			c.Uplink.Gateway = ptr(fmt.Sprintf("203.0.113.%d", 20+i))
+		})
+		h.mustApply(rev)
+		last = rev
+	}
+
+	if _, _, err := h.st.Get(rev1); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("revision 1 (beyond the retention of 10) still exists: %v", err)
+	}
+	if _, _, err := h.st.Get(rev2); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("revision 2 (beyond the retention of 10) still exists: %v", err)
+	}
+	if _, _, err := h.st.Get(stale); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the stale candidate still exists: %v", err)
+	}
+	if active := h.st.ActiveID(); active != last {
+		t.Errorf("active is %d, want %d", active, last)
+	} else if _, _, err := h.st.Get(active); err != nil {
+		t.Errorf("the active revision was pruned: %v", err)
+	}
+	if lkg, _, err := h.st.LastKnownGood(); err != nil || lkg.Id != last {
+		t.Errorf("last known good: %+v, %v", lkg, err)
 	}
 }

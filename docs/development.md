@@ -220,6 +220,26 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
 the API; `--dry-run` shows the plan and the diffs, `--state-dir` also stores the configuration as the
 active revision. In the testbed `--namespace` points it at the gateway namespace.
 
+### Revision retention
+
+After a revision becomes active (commit or confirm), the owner runs `store.Prune`: it bounds the
+revision files to `settings.retention.revisions` (default `store.DefaultRetainedRevisions`, 200;
+plan §3.6) and, whatever that count says, discards any candidate whose base is no longer the
+active revision — it can never be committed any more (`store.ErrRevisionConflict`). The active
+revision, the last known good and a revision still waiting for confirmation are never pruned. The
+engine also runs the prune once at start, after loading the committed revision, so revisions left
+over from before a restart are bounded too.
+
+This runs synchronously, right after the commit, in the same owner turn: a sibling candidate based
+on the revision that just got superseded is reclaimed immediately, so a concurrent apply of it that
+is already in flight (a second admin editing at the same time) finds it gone (`not_found`) rather
+than getting `revision_conflict` with the new active id. A deferred prune would preserve that
+response, but on the fake clock this codebase tests with it would arm an extra timer indistinguishable
+from the ones several tests wait for with `clock.Fake.BlockUntil`, which is worse: it was tried and
+reverted after it silently broke unrelated WireGuard and routing status tests by letting their own
+`Advance` fire before the timer they meant to wait for was even armed. Losing the richer conflict
+response in this one race is the accepted trade-off.
+
 ## WireGuard
 
 WireGuard networks (plan §2.2.1) are compiled like test networks: an interface `wg-<name>` per

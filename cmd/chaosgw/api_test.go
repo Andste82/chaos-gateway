@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/auth"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
@@ -186,6 +187,42 @@ func TestResetPasswordRefusesWhatItShould(t *testing.T) {
 	var o, e bytes.Buffer
 	if code := runAdmin(nil, &o, &e, nil); code != 2 {
 		t.Errorf("no subcommand: %d", code)
+	}
+}
+
+// M5-17 test: without a flag and without a terminal on stdin, the command refuses outright.
+func TestResetPasswordWithoutAFlagOrATerminalRefuses(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := runAdmin([]string{"reset-password", "--secrets-dir", t.TempDir()}, &out, &errOut, strings.NewReader(""))
+	if code != 2 || !strings.Contains(errOut.String(), "terminal") {
+		t.Errorf("%d %s", code, errOut.String())
+	}
+}
+
+// M5-17 test: a successful reset is recorded in the audit log, as the CLI's own actor.
+func TestResetPasswordIsAudited(t *testing.T) {
+	dir := t.TempDir()
+	secretsDir := filepath.Join(dir, "secrets")
+	st, err := auth.Open(filepath.Join(secretsDir, "auth"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CompleteSetup("a long enough password"); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(dir, "data")
+	var out, errOut bytes.Buffer
+	code := runAdmin([]string{"reset-password", "--secrets-dir", secretsDir, "--data-dir", dataDir, "--password-stdin"},
+		&out, &errOut, strings.NewReader("a reset password!!\n"))
+	if code != 0 {
+		t.Fatalf("%d %s", code, errOut.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(dataDir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"auth.password_reset"`) || !strings.Contains(string(raw), `"id":"cli"`) {
+		t.Errorf("no audit entry for the reset: %s", raw)
 	}
 }
 

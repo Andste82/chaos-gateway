@@ -367,11 +367,15 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
   older than the retention (§3.6: 1 year, `audit.WithRetention` for tests) are dropped at open and
   once a day; a failing append (write or fsync, not a caller's marshal bug) marks the `api` health
   component unhealthy until the next successful one.
-- **Password reset.** `chaosgw admin reset-password --secrets-dir D --password-stdin` changes the
-  password from the host; the running API notices the new epoch in the file and ends all sessions
-  (within `auth.RefreshInterval`, 500ms: an authenticated request stats the file at most that often,
-  not on every request). The reset itself holds an advisory flock (`auth.json.lock`) across its own
-  load-modify-save cycle, so a concurrent save by the running API does not lose either change.
+- **Password reset.** `chaosgw admin reset-password --secrets-dir D [--data-dir D]
+  (--password-stdin | --password-file F | interactively on a terminal, confirmed twice)` changes
+  the password from the host; the running API notices the new epoch in the file and ends all
+  sessions (within `auth.RefreshInterval`, 500ms: an authenticated request stats the file at most
+  that often, not on every request). The reset itself holds an advisory flock (`auth.json.lock`)
+  across its own load-modify-save cycle, so a concurrent save by the running API does not lose
+  either change. The reset is recorded in the audit log at `--data-dir` (the API's own, default
+  `/var/lib/chaosgw/api`) as `auth.password_reset` by actor `{type: system, id: cli}`, distinct from
+  whatever the running API's own audit subscriber would otherwise attribute the epoch bump to.
 - **Contract tests.** `internal/api/harness_test.go` validates every response of every test against
   `api/openapi.yaml` (kin-openapi): status, headers, content type, body schema. (kin-openapi cannot
   decode the YAML export and SVG bodies; those calls skip the check.) The testbed test

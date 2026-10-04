@@ -310,26 +310,6 @@ Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); op
 | Client status and events, clients as devices, role management, MSS clamp, MTU | done | `engine/wireguard.go`; testbed `TestDisablingAClientStopsItsHandshakeAndEmitsTheEvent`, `TestRolesDecideWhoReachesTheControlPlane`, `TestTheMSSIsClampedOnTheTunnel` |
 | T: export works in a fresh namespace, QR decodes, keys never in logs, re-apply keeps the tunnel | done | `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` |
 
-### M4b-04 Verify checks preshared keys by presence only
-- Status: open
-- Severity: low
-- Reason: deferred (documented) — a changed PSK value without a generation bump is not noticed; provisioning never does that.
-- Evidence: `internal/apply/plan.go:595-596`; docs/development.md:228-233.
-- Task: none, or a key-hash fingerprint compared with the executor's read.
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: accepted as documented; close the item with a sentence in docs/development.md.
-- Effort: S
-
-### M4b-05 The first poll after a restart announces every online peer
-- Status: open
-- Severity: low
-- Reason: deferred (by design).
-- Evidence: `internal/engine/wireguard.go:128,145`; `TestPollingTwiceIsRefusedAndTheFirstPollAnnouncesWhatIsOnline`.
-- Task: one sentence in docs/development.md.
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: intended; close the item with a sentence in docs/development.md.
-- Effort: S
-
 ## M4c (dynamic routing, BIRD)
 
 Verdict: incomplete. The high bug (external mode) is fixed; four medium items remain, all `needs-decision` or `test-gap` on real-kernel behaviour the dev environment cannot run.
@@ -389,16 +369,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 - Acceptance: doc review.
 - Needs maintainer: decided 2026-10-04: (a) move it to M8a `/explain`.
 - Effort: S (doc) / M (code)
-
-### M4c-12 Routing input rules have no source address match
-- Status: open
-- Severity: low
-- Reason: deferred — accepts match only `iifname <link>`; on a point-to-point WireGuard link only the peer can send.
-- Evidence: `internal/compiler/rules.go:101-113`.
-- Task: optional `ip saddr <link peer>` for BGP.
-- Acceptance: local compiler test.
-- Needs maintainer: decided 2026-10-04: accepted as is; close the item with a sentence in docs/development.md.
-- Effort: S
 
 ## M5 (REST API v1)
 

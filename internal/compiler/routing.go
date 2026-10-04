@@ -117,10 +117,13 @@ type BirdTarget struct {
 }
 
 // babelLinkLocal is an IPv6 link-local address for a link interface running Babel (M4c-05):
-// fe80::<last octet of the IPv4 transfer address>/64, so it stays distinct from the link's peer.
+// fe80::<IPv4 transfer address, in hex>/64, so it stays distinct from the link's peer. The whole
+// address goes into the interface identifier, not just its last octet: a transfer address ending
+// in .0 (the low end of a /31, as a point-to-point link commonly uses) would otherwise produce
+// fe80:: itself, the reserved subnet-router anycast address, not a usable one.
 func babelLinkLocal(v4 netip.Addr) netip.Prefix {
 	b := v4.As4()
-	addr := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[3]})
+	addr := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[0], b[1], b[2], b[3]})
 	return netip.PrefixFrom(addr, 64)
 }
 

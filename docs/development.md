@@ -67,7 +67,10 @@ shows why a machine can or cannot run level 1.
 **Testbed tests are never skipped silently.** A test that needs the testbed calls
 `testbed.New` (or `testbed.NewDefault`), which fails with the way out when the machine cannot
 create namespaces or lacks kernel modules. The tests carry the build tag `testbed`; plain unit
-tests do not and run at level 0 only.
+tests do not and run at level 0 only. `tools/testvm run` enforces this at the runner level too
+(both `-mode direct` and `-mode vm`, CC-04): any `t.Skip` fails the run unless `-allow-skip` is
+given, so a missing tool cannot make CI pass without actually running the test it was supposed
+to gate.
 
 ### Level 1b: the VM runner
 
@@ -87,14 +90,20 @@ Things to know:
 - **Boot time.** Without KVM the VM runs in software emulation and takes about 8 minutes to boot
   (virtme-ng waits for udev until its 300 s timeout; this happens even with a minimal rule set).
   That is why one VM runs all tests. Run `make test-vm` in the background while you work.
-- **KVM.** The VPS has no `/dev/kvm`. With KVM, boot is expected to be much faster and accuracy
-  assertions apply; measurement tests and level 2 need a KVM-capable machine (plan §7.2, Q1).
+- **KVM.** The VPS has no `/dev/kvm`; hosted CI runners do, and that is where level 1b, the
+  nightly kernel matrix, measurement tests and level 2 actually run with real timing. `-no-kvm`
+  forces software emulation even where `/dev/kvm` exists, so the emulated branches
+  (`!testbed.Accurate()`) can be exercised on a KVM-capable machine too, not only implicitly on
+  the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with
   a bare absolute path it computes a relative guest path and rejects it.
 - **Kernels.** `TESTVM_KERNEL` selects the kernel: `6.8.0-142-generic` (Ubuntu 24.04, the
   default and the minimum supported) or `7.0.0-38-generic` (Ubuntu 26.04).
+- **Crashed direct runs.** `tools/testvm sweep` removes `tb...` namespaces a crashed `-mode
+  direct` run left behind (level 1b always gets a fresh VM, so it is never affected). It refuses
+  while another `testvm` or compiled test binary is running, unless `-force` is given.
 
 ### Writing a testbed test
 

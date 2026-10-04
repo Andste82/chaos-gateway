@@ -149,7 +149,10 @@ func TestReservationsComeFromDevicesWithAFixedAddress(t *testing.T) {
 func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
 	mac := []string{"02:00:00:00:00:31"}
 	id := &domain.Identity{
-		Addresses:  map[string][]netip.Addr{devA: {netip.MustParseAddr("10.10.0.31"), netip.MustParseAddr("10.10.0.32")}},
+		Addresses: map[string][]netip.Addr{
+			devA:                                   {netip.MustParseAddr("10.10.0.31"), netip.MustParseAddr("10.10.0.32")},
+			"bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb": {netip.MustParseAddr("10.10.0.99")},
+		},
 		Discovered: []domain.DiscoveredDevice{{ID: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", IPs: []netip.Addr{netip.MustParseAddr("10.10.0.99")}}},
 	}
 	cfg := loadConfig(t, "gateway.yaml")
@@ -187,5 +190,36 @@ func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
 	var doc any
 	if err := json.Unmarshal(tx, &doc); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// M6a-17 test: a discovered device's sighted address is not automatically its set's content; only
+// the resolved identity's claim is, so an address another device has already won (the stronger claim,
+// plan §2.3) does not leak into the discovered device's set too.
+func TestAnAddressIsInOneDeviceSetOnly(t *testing.T) {
+	mac := []string{"02:00:00:00:00:31"}
+	discID := "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+	id := &domain.Identity{
+		// devA's claim on 10.10.0.50 won; the discovered entry was seen with it too (a stale
+		// sighting, or the losing side of the claim), but its own resolved address list is empty.
+		Addresses:  map[string][]netip.Addr{devA: {netip.MustParseAddr("10.10.0.50")}},
+		Discovered: []domain.DiscoveredDevice{{ID: discID, IPs: []netip.Addr{netip.MustParseAddr("10.10.0.50")}}},
+	}
+	cfg := loadConfig(t, "gateway.yaml")
+	addDevice(cfg, devA, model.Device{Name: "esp32-42", Identifiers: &model.DeviceIdentifiers{Macs: &mac}})
+	tg := Compile(Input{Config: cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}, Identity: id})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	elems := map[string][]string{}
+	for _, s := range tg.Nft.Sets {
+		elems[s.Name] = s.Elements
+	}
+	a, d := tg.DeviceSets[devA], tg.DeviceSets[discID]
+	if strings.Join(elems[a], ",") != "10.10.0.50" {
+		t.Errorf("devA's set: %v", elems[a])
+	}
+	if len(elems[d]) != 0 {
+		t.Errorf("the discovered device's set should be empty (its sighting lost to devA), got %v", elems[d])
 	}
 }

@@ -131,6 +131,14 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		o.serviceNS = ns
 		o.resolvers = []netip.Addr{netip.MustParseAddr(testbed.ServerAddr)}
 	})
+	// M6b-06: a stand-in for systemd-resolved's local stub, in the gateway's own namespace; the proxy
+	// must not bind 127.0.0.53 and the compiled ruleset must not catch its traffic either
+	top.GW.Start("dnsmasq", "--no-daemon", "--no-resolv", "--no-hosts", "--conf-file=/dev/null", "--user=root", "--bind-interfaces",
+		"--listen-address=127.0.0.53", "--address=/stub.test/192.0.2.1")
+	waitFor(t, 10*time.Second, "the resolved stand-in answers", func() bool {
+		out, err := top.GW.Run(context.Background(), "dig", "+short", "+time=1", "+tries=1", "@127.0.0.53", "stub.test")
+		return err == nil && strings.TrimSpace(out) == "192.0.2.1"
+	})
 	// the upstream resolver of the testbed: dnsmasq on the server answers example.test
 	top.Server.Start("dnsmasq", "--no-daemon", "--no-resolv", "--no-hosts", "--conf-file=/dev/null", "--user=root", "--bind-interfaces",
 		"--listen-address="+testbed.ServerAddr, "--address=/example.test/203.0.113.77")
@@ -295,6 +303,10 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"
 	})
+	// M6b-06: resolved's stand-in was never disturbed by any of this
+	if out, err := top.GW.Run(context.Background(), "dig", "+short", "+time=1", "+tries=1", "@127.0.0.53", "stub.test"); err != nil || strings.TrimSpace(out) != "192.0.2.1" {
+		t.Errorf("the resolved stand-in stopped answering: %q %v", out, err)
+	}
 }
 
 // startHolder starts a real process with its own, fresh network namespace (what the svcns container

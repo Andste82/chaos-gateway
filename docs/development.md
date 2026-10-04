@@ -549,12 +549,17 @@ proxy; the TLS responder (M21) joins it later.
   (`dnsproxy.WatchNamespace`, M6b-01), and a freshly started one resolves again once it joins the new
   holder's namespace.
 - **Limits.** An AAAA query for a name that does not exist gets an empty answer, not NXDOMAIN (the
-  reply is made before the upstream is asked); SVCB/HTTPS `ipv6hint` records are not removed; the
-  proxy trusts the API's certificate unchecked unless `--api-cert-file` is given (it talks to the
-  gateway over the private link only); a failure of the service namespace step fails the apply (a
-  dead holder blocks other revisions until the holder is back). `/run/systemd/resolve` is mounted
-  read-only into the API container so that the proxy finds the real resolvers of a systemd-resolved
-  host.
+  reply is made before the upstream is asked); SVCB/HTTPS `ipv6hint` records are not removed; a
+  failure of the service namespace step fails the apply (a dead holder blocks other revisions until
+  the holder is back). `/run/systemd/resolve` is mounted read-only into the API container so that the
+  proxy finds the real resolvers of a systemd-resolved host; `TestDNSThroughTheServiceNamespace` checks
+  the reverse too, with a stand-in for resolved's local stub: it keeps answering on `127.0.0.53`
+  throughout, undisturbed by the proxy or the compiled ruleset (M6b-06; the appliance's own M28 smoke
+  test checks it against the real `systemd-resolved`).
+  The proxy and the Kea hook verify the API's certificate against the one it publishes to the
+  `chaosgw-service` volume (`--api-cert-file`/`CHAOSGW_API_CERT`, set by default in
+  `compose.dns.yaml`/`compose.kea.yaml`); without it, either trusts whatever is presented (they only
+  ever talk to the gateway over a private link).
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
   `/internal/dns/resolutions` (M20), per-device query statistics.
 

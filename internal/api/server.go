@@ -67,6 +67,9 @@ type Server struct {
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
 	// endpoint must not give every caller its own round trip to the executor.
 	health healthProbeCache
+	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
+	unsubEvents func()
+	eventsDone  chan struct{}
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -90,7 +93,26 @@ func New(cfg Config) (*Server, error) {
 	if s.idem, err = openIdempotency(cfg.StateDir, cfg.Clock); err != nil {
 		return nil, err
 	}
+	events, unsub := cfg.Engine.Subscribe()
+	s.unsubEvents = unsub
+	s.eventsDone = make(chan struct{})
+	go s.auditSystemEvents(events)
 	return s, nil
+}
+
+// auditSystemEvents records the audit log entries of changes the engine makes on its own (M5-05):
+// today, only a commit-confirm rollback (timeout, or an unconfirmed revision found at restart).
+func (s *Server) auditSystemEvents(events <-chan engine.Event) {
+	defer close(s.eventsDone)
+	for ev := range events {
+		if ev.Type != engine.EventRolledBack {
+			continue
+		}
+		rev, _ := ev.Data["revision"].(int64)
+		reason, _ := ev.Data["reason"].(string)
+		_, _ = s.cfg.Audit.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system",
+			Action: "revision.rolled_back", Revision: rev, Detail: reason})
+	}
 }
 
 // Handler returns the HTTP handler: the API under /api/v1.
@@ -147,7 +169,11 @@ func pathMatches(pattern, actual string) bool {
 }
 
 // Close releases what the server holds.
-func (s *Server) Close() error { return s.idem.close() }
+func (s *Server) Close() error {
+	s.unsubEvents()
+	<-s.eventsDone
+	return s.idem.close()
+}
 
 // ---- the principal
 

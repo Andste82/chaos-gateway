@@ -362,7 +362,11 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
   without an event, since the revision simply stops existing as a candidate and there is nothing
   later to reconcile it against (the audit log still records the discard as a write).
 - **Audit.** Every write is an entry (who, through which channel — `ui` for a session, `api` for a
-  token —, what, which revision); reads are not. Secrets never enter it.
+  token —, what, which revision); reads are not. Secrets never enter it. Every entry is fsynced as
+  it is appended (integrity over throughput: the log is small and writes are infrequent). Entries
+  older than the retention (§3.6: 1 year, `audit.WithRetention` for tests) are dropped at open and
+  once a day; a failing append (write or fsync, not a caller's marshal bug) marks the `api` health
+  component unhealthy until the next successful one.
 - **Password reset.** `chaosgw admin reset-password --secrets-dir D --password-stdin` changes the
   password from the host; the running API notices the new epoch in the file and ends all sessions.
 - **Contract tests.** `internal/api/harness_test.go` validates every response of every test against

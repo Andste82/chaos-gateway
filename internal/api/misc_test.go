@@ -332,6 +332,31 @@ func TestWrongMethodGives405WithAllow(t *testing.T) {
 	}
 }
 
+// M5-04 test: a failing audit log marks the API component unhealthy.
+func TestAFailingAuditLogMakesTheHealthUnhealthy(t *testing.T) {
+	g := ready(t)
+	if err := g.log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// any write triggers an audit entry, which now fails
+	g.mustPatch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.11"}})
+	h := g.do("GET", "/system/health", nil, nil, nil)
+	if h.Status != 503 || h.json(t)["status"] != "unhealthy" {
+		t.Fatalf("%d %s", h.Status, h.Body)
+	}
+	comps := h.json(t)["components"].([]any)
+	var found bool
+	for _, c := range comps {
+		m := c.(map[string]any)
+		if m["name"] == "api" && m["status"] == "unhealthy" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("%v", comps)
+	}
+}
+
 // M5-01 test: the generation counter is persisted across a restart, over the API too.
 func TestGenerationSurvivesAnAPIRestart(t *testing.T) {
 	root := t.TempDir()

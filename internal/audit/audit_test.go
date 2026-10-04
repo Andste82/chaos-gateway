@@ -71,6 +71,46 @@ func TestEntriesAreNumberedStoredAndPaged(t *testing.T) {
 	}
 }
 
+// M5-04 test: an entry older than the retention is dropped when the log reopens.
+func TestOldEntriesAreDropped(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+	l, err := Open(dir, clk, WithRetention(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := l.Append(Entry{Actor: Actor{Type: "system", ID: "system"}, Action: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(20 * time.Minute)
+	recent, err := l.Append(Entry{Actor: Actor{Type: "system", ID: "system"}, Action: "recent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	l2, err := Open(dir, clk, WithRetention(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l2.Close() }()
+	all, _, err := l2.List(Filter{}, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].ID != recent.ID {
+		t.Fatalf("%+v", all)
+	}
+	for _, e := range all {
+		if e.ID == old.ID {
+			t.Error("the old entry survived the reopen")
+		}
+	}
+}
+
 func TestATimeFilter(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
 	l, _ := Open(t.TempDir(), clk)

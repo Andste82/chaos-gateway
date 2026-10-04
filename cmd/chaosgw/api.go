@@ -250,7 +250,11 @@ func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip
 	if snap.Service != nil && snap.Service.HostCIDR.IsValid() {
 		out = append(out, snap.Service.HostCIDR.Addr())
 	}
-	if !setupDone {
+	// a revision still waiting for confirmation (M5-03: every first-start setup, until the admin
+	// confirms it) keeps the broad, pre-setup binding: narrowing down to what it says the
+	// management network is, before it is known to be reachable, is exactly the lockout the
+	// confirmation window exists to prevent.
+	if !setupDone || snap.Pending != nil {
 		exclude := api.NetworkInterfaceNames(snap)
 		for _, l := range snap.Host.Links {
 			if l.Name == "lo" || exclude[l.Name] {

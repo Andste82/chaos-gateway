@@ -431,7 +431,16 @@ func (g *gw) finishSetup() {
 	if r.Status != 200 {
 		g.t.Fatalf("setup: %d %s", r.Status, r.Body)
 	}
+	body := r.json(g.t)
 	g.mintToken("full")
+	// the setup always needs confirming now (M5-03); every other test's fixture assumes an active
+	// revision, so confirm it the same way a real admin would right after finishing the setup.
+	if body["status"] == "pending_confirm" {
+		id := int64(body["revision"].(float64))
+		if cf := g.do("POST", "/revisions/"+itoa(id)+"/confirm", nil, nil, nil); cf.Status != 200 {
+			g.t.Fatalf("confirming the setup: %d %s", cf.Status, cf.Body)
+		}
+	}
 }
 
 // mintToken creates a token directly in the store and makes it the default.

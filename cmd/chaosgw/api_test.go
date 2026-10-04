@@ -129,12 +129,16 @@ func TestTheAPIServerRunsFromSetupToPasswordReset(t *testing.T) {
 	}
 	cfg := yamlToJSON(t, cfgRaw)
 	code, res := call("POST", "/setup", map[string]any{"admin_password": "a long enough password", "configuration": cfg}, map[string]string{"X-Setup-Token": m[1]})
-	if code != 200 || res["revision"] != float64(1) {
+	// the setup's own revision needs confirming now (M5-03), same as any other lockout-relevant one
+	if code != 200 || res["revision"] != float64(1) || res["status"] != "pending_confirm" {
 		t.Fatalf("setup: %d %v\n%s", code, res, logs.String())
 	}
 	code, sess := call("POST", "/auth/login", map[string]any{"password": "a long enough password"}, nil)
 	if code != 200 {
 		t.Fatalf("login: %d %v", code, sess)
+	}
+	if code, cf := call("POST", "/revisions/1/confirm", nil, map[string]string{"X-CSRF-Token": sess["csrf_token"].(string)}); code != 200 {
+		t.Fatalf("confirming the setup: %d %v", code, cf)
 	}
 	if code, st := call("GET", "/state", nil, nil); code != 200 || st["active_revision"] != float64(1) {
 		t.Errorf("%d %v", code, st)
@@ -284,6 +288,12 @@ func TestTheAPIListensOnTheManagementNetworkOnly(t *testing.T) {
 	}
 	if got := strs(listenAddrs(snap, true, "127.0.0.5:9000")); got != "127.0.0.5" {
 		t.Errorf("explicit: %s", got)
+	}
+	// M5-03: a revision still waiting for confirmation (the setup's own, or any other
+	// lockout-relevant one) keeps the broad, pre-setup binding, whatever setupDone says
+	pendingSnap := &engine.Snapshot{Host: host, Config: cfg, Pending: &engine.PendingInfo{Revision: 1}}
+	if got := strs(listenAddrs(pendingSnap, true, "")); got != "127.0.0.1,192.168.56.1,203.0.113.1,10.10.0.1" {
+		t.Errorf("with a pending revision: %s", got)
 	}
 }
 

@@ -56,6 +56,10 @@ type ApplyOptions struct {
 	SkipConfirm bool
 	// ConfirmTimeout overrides the window; zero means the configuration's setting or the default.
 	ConfirmTimeout time.Duration
+	// ForceConfirm always waits for confirmation, whatever LockoutRelevant says: the first-start
+	// setup (M5-03), which LockoutRelevant never flags since there is no prior configuration to
+	// compare against, yet a wrong management interface there locks the admin out just the same.
+	ForceConfirm bool
 }
 
 // Applied is the result of Apply.
@@ -587,7 +591,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 	e := o.e
 	c := run.cmd
 	took := o.now().Sub(run.started)
-	needs := o.committed != nil && !c.opts.SkipConfirm && LockoutRelevant(o.committed.Config, run.cfg)
+	needs := !c.opts.SkipConfirm && (c.opts.ForceConfirm || (o.committed != nil && LockoutRelevant(o.committed.Config, run.cfg)))
 	if needs {
 		timeout := c.opts.ConfirmTimeout
 		if timeout <= 0 {

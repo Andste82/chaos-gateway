@@ -15,7 +15,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 |---|---|---|---|---|---|
 | M0 (spikes, docs) | – | 3 | 0 | 0 | 1 |
 | M1 Repository, CI, testbed | incomplete | 10 | 0 | 2 | 2 |
-| M2 Domain model, persistence | incomplete | 9 | 0 | 1 | 2 |
+| M2 Domain model, persistence | incomplete | 2 | 0 | 0 | 2 |
 | M3 Executor | incomplete | 7 | 0 | 0 | 2 |
 | M4 Compiler, preview, safe apply | incomplete | 9 | 0 | 0 | 2 |
 | M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
@@ -108,7 +108,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
 3. **API correctness** (done, `phase1-api-correctness`): M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
 4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03, M6a-07 and M6a-22 only narrowed, see their remaining blocks below): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
 5. **Service namespace hardening** (done, `phase1-svcns-hardening`): M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
-6. **Retention and domain**: M2-01, M2-02, M2-04 to M2-07, M2-09.
+6. **Retention and domain** (done, `phase1-retention-domain`): M2-01, M2-02, M2-04 to M2-07, M2-09.
 7. **Executor and engine robustness**: M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
 8. **Test infrastructure**: M1-02 (x86 matrix), M1-03 to M1-09, CC-04.
 9. **Plan and docs sync**:
@@ -343,7 +343,7 @@ Verdict: incomplete. The scope is delivered and the M1 tests pass in CI; open ar
 
 ## M2 (domain model, persistence)
 
-Verdict: incomplete. Every scope and test item is implemented and tested; open is revision retention (never wired) plus documentation and small gaps.
+Verdict: incomplete. Every scope and test item is implemented and tested; open is documentation and small gaps (revision retention and the validation rules/codes are done).
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -354,27 +354,7 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 | Precedence per family, overlays first | done | `domain/resolve.go`; `TestOverlaysWinWhateverTheLevel` |
 | Atomic persistence, revisions with diff, schema versions | done | `store/files.go`, `store.Diff`, `store/migrate.go` |
 | T: validation, precedence rows, E1–E8/E12, round-trip, corrupted files, examples, pointers and codes | done | `TestEveryPrecedenceLevel…`, `TestE1…`–`TestE12…`, corrupt_test.go, crash_test.go, `TestEveryExampleFileIsCheckedByTheDomain` |
-| Retention 200 revisions (§3.6) | partial | `Store.Prune` never called (M2-01) |
-
-### M2-01 Revision retention: `Store.Prune` is never called
-- Status: open
-- Severity: medium
-- Reason: forgotten — §3.6 sets a default of 200 revisions (`settings.retention.revisions`, schema `minimum: 10, default: 200`); `Prune` exists and is tested but never called; revisions and stale candidates grow without bound. The M2 PR said "wire up in M5"; it was not done.
-- Evidence: `internal/store/store.go:616`; only `wireguard.Prune` is called (`internal/engine/owner.go:287`); commit path `owner.go:547-558`; `api/openapi.yaml:2815`.
-- Task: 1. In `internal/engine/owner.go` `prune(cfg)`, before the WireGuard prune, call `o.e.cfg.Store.Prune(keep)` with `keep = *cfg.Settings.Retention.Revisions` when set, else a new constant `store.DefaultRetainedRevisions = 200`; log removed ids at info, warn on error. 2. Call it once at engine start after the committed revision is loaded. 3. Test `TestCommittedRevisionsArePrunedToTheRetention` in `internal/engine` (kernelsim, `retention.revisions: 10`, commit 12; revisions 1–2 gone, active/LKG kept, a stale candidate removed). 4. Document in development.md.
-- Acceptance: `go test ./internal/engine -run Prune` (local).
-- Needs maintainer: no
-- Effort: S
-
-### M2-02 Validation rules beyond the spec are undocumented
-- Status: open
-- Severity: low
-- Reason: forgotten — rules and codes (hold ≥ 3× keepalive, OSPF dead > hello, `matrix_self_entry`, `duplicate_matrix_entry`, BGP neighbor = link peer, lease/TTL ≥ 1 s, `duplicate_protocol`, `invalid_timers`, `duplicate_step_id`, `host_bits_set`, `mutually_exclusive`) exist only in code.
-- Evidence: `internal/domain/validate_rules.go`, `validate_network.go:17-77`; `api/openapi.yaml:2181`.
-- Task: 1. Add each rule as a sentence to the spec field descriptions concerned. 2. Add a "Validation codes" section to docs/development.md listing every `Code*` constant. 3. `TestEveryValidationCodeIsDocumented` in `internal/domain` (table of codes, each must appear in development.md).
-- Acceptance: doc review; local unit test; `make check-generated` passes.
-- Needs maintainer: no
-- Effort: S
+| Retention 200 revisions (§3.6) | done | `internal/engine/owner.go` `pruneRevisions`; `TestCommittedRevisionsArePrunedToTheRetention` |
 
 ### M2-03 "Configured address beats a lease" not confirmed
 - Status: open
@@ -386,46 +366,6 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 - Needs maintainer: decided 2026-10-04: (a) configuration wins (current behaviour); document it.
 - Effort: S
 
-### M2-04 Reserved routing tables hard-coded in the domain
-- Status: open
-- Severity: low
-- Reason: forgotten — `reservedTableFirst/Last = 100/110` duplicates `executor.OwnTableFirst/Last`, `compiler.PolicyTable`, `compiler.ServiceTable`; the comment says "fixed in M4".
-- Evidence: `internal/domain/validate_rules.go:93-102`; `internal/executor/validate.go:27-28`; `internal/compiler/compile.go:19`; `internal/compiler/service.go`.
-- Task: 1. Export `domain.OwnTableFirst = 100`, `domain.OwnTableLast = 110`. 2. Make `executor.OwnTableFirst/Last` refer to them; assert in a compiler test that `PolicyTable` and `ServiceTable` lie in the range. 3. Remove the stale comment.
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
-### M2-05 `NewWorld` does not refuse an un-normalized configuration
-- Status: open
-- Severity: low
-- Reason: forgotten — only a comment; there is no production caller yet (M7/M8a will use it).
-- Evidence: `internal/domain/resolve.go:67-68`.
-- Task: add `IsNormalized(cfg) bool` in `refs.go`; change the signature to `NewWorld(cfg, overlays) (*World, error)` (no callers yet) and return an error for names; test `TestNewWorldRejectsNames`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M2-06 `Store.get` decodes loosely
-- Status: open
-- Severity: low
-- Reason: forgotten — unknown fields in a stored revision are accepted silently; `Configuration.schema_version` is not re-checked.
-- Evidence: `internal/store/store.go:287`.
-- Task: decode with `DisallowUnknownFields`, return `&ErrCorrupt{…}` on error, check `cfg.SchemaVersion`; test `TestAStoredConfigurationWithAnUnknownFieldIsCorrupt` in corrupt_test.go (valid checksum, extra field).
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M2-07 Missing edge tests
-- Status: open (partial: nested clients in the diff are covered by `TestDiffShowsClientsAndLinkPeersAsObjectsOfTheirOwn`; `<`, `>`, `&` round-trip correctly today, verified)
-- Severity: low
-- Reason: test-gap.
-- Evidence: `internal/store/store_test.go`, `internal/domain/diff_test.go`, `validate_network_test.go`.
-- Task: `TestHTMLCharactersSurviveTheChecksum` (store), `TestDiffShowsARemovedClient` (domain), `TestAHubWithASlash30AndSeveralClients` (pin what the code returns for a second client in a /30 hub).
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
 ### M2-08 Persistence layout differs from plan §3.6
 - Status: new
 - Severity: low
@@ -434,16 +374,6 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 - Task: per the decision, update §3.6 to the real paths, volumes and status files, or switch the compose files to bind mounts at the §3.6 paths in M28 (record in the M28 scope).
 - Acceptance: doc review.
 - Needs maintainer: decided 2026-10-04: (b) bind mounts at the §3.6 paths in M28. Amend §3.6 now for the status files and the path flags, and add the switch to the M28 scope.
-- Effort: S
-
-### M2-09 Overlay and run-request examples bypass the strict Go decoder
-- Status: new
-- Severity: low
-- Reason: test-gap — `overlays.yaml` and `run-request.yaml` are decoded with the non-validating `decodeInto`; strictness is checked only by the Python script (they pass today, verified).
-- Evidence: `internal/domain/overlay_test.go:27-42`, `review_fixes_test.go:356-397`.
-- Task: in `TestEveryExampleFileIsCheckedByTheDomain`, marshal each overlay item and run `DecodeOverlayRequest(raw, FormatJSON)` before `ValidateOverlay`; validate run-request with `Schemas().Validate("RunRequest", doc)` before decoding the inline scenario.
-- Acceptance: local unit test.
-- Needs maintainer: no
 - Effort: S
 
 ## M3 (executor and state reader)

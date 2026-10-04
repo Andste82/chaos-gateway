@@ -167,6 +167,41 @@ func (t *tracker) see(id string, mac string, ip netip.Addr, network, source stri
 	}
 }
 
+// originSources reports where a configured, WireGuard client or probe device's identity comes from
+// (plan §2.3, spec DeviceObserved.sources): its origin always gives one, and a matching DHCP lease
+// or a fresh neighbor sighting adds another, the same as a discovered device's.
+func originSources(origin model.DeviceOrigin, macs []string, addrs []netip.Addr, leaseOf map[string]model.DhcpLease, neighbors []domain.Neighbor) []string {
+	var out []string
+	switch origin {
+	case model.DeviceOriginConfigured:
+		out = append(out, "config")
+	case model.DeviceOriginWireguardClient:
+		out = append(out, "wireguard")
+	case model.DeviceOriginProbe:
+		out = append(out, "probe")
+	}
+	for _, m := range macs {
+		if _, ok := leaseOf[m]; ok {
+			out = append(out, "dhcp")
+			break
+		}
+	}
+	for _, a := range addrs {
+		found := false
+		for _, n := range neighbors {
+			if n.IP == a && !n.Stale {
+				out = append(out, "neighbor")
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	return out
+}
+
 func contains(l []string, s string) bool {
 	for _, x := range l {
 		if x == s {
@@ -302,6 +337,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 				st.Lease = &lc
 			}
 		}
+		st.Sources = originSources(st.Origin, st.MACs, st.Addresses, leaseOf, obs.Neighbors)
 		next[did] = st
 	}
 	for _, d := range id.Discovered {

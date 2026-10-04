@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// remoteLinkLocal is the remote side's own fe80::<its IPv4 address, in hex>/64, derived the same
+// RemoteLinkLocal is the remote side's own fe80::<its IPv4 address, in hex>/64, derived the same
 // way the compiler derives the gateway's (M4c-05), so the hint matches what the gateway side
 // actually gets without the two colliding, and never fe80:: itself (see babelLinkLocal).
-func remoteLinkLocal(v4 string) (string, bool) {
+func RemoteLinkLocal(v4 string) (string, bool) {
 	addr, err := netip.ParseAddr(v4)
 	if err != nil || !addr.Is4() {
 		return "", false
@@ -52,7 +52,7 @@ func RenderRemote(c Config, p Protocol, remoteIface string) (string, error) {
 		// Babel's wire protocol needs an IPv6 link-local address on the tunnel even for IPv4-only
 		// routing (M4c-05); the gateway's side gets one from the compiler, the remote side does not
 		// manage this file's host and needs the hint instead.
-		if ll, ok := remoteLinkLocal(p.NeighborAddress); ok {
+		if ll, ok := RemoteLinkLocal(p.NeighborAddress); ok {
 			w("# Babel needs an IPv6 link-local address on the tunnel, e.g.:\n#   ip -6 addr add %s dev %s\n\n", ll, remoteIface)
 		}
 		w("protocol babel gateway {\n  ipv4 { import all; export where proto = \"announce\"; };\n  interface %q { type tunnel; hello interval %d s; };\n}\n", remoteIface, p.Babel.HelloInterval)

@@ -140,6 +140,14 @@ func (g *bgpGW) remoteSite(ns *testbed.Namespace, linkID, iface, name string, ro
 	if err != nil {
 		g.t.Fatal(err)
 	}
+	if proto.Type == "babel" {
+		// RenderRemote's own comment only hints at this for a real operator; here, in the test, we
+		// are the operator, and it must be in place before bird starts (M4c-05): bird's babel does
+		// not pick up a link-local address added to the interface after it already initialized.
+		if ll, ok := bird.RemoteLinkLocal(proto.NeighborAddress); ok {
+			ns.Must("ip", "-6", "addr", "add", ll, "dev", iface)
+		}
+	}
 	var b strings.Builder
 	for _, r := range routes {
 		b.WriteString("  route " + r + " unreachable;\n")
@@ -247,7 +255,8 @@ func TestBGPOverAWireGuardLinkExchangesRoutes(t *testing.T) {
 // M4c-05 test: Babel exchanges routes over a WireGuard link, the same way BGP does. Babel's wire
 // protocol needs an IPv6 link-local address on the tunnel even for IPv4-only routing; the gateway
 // side gets one from the compiler (M4c-05), the remote side gets it the way RenderRemote's comment
-// hints at (a plain operator action, not Chaos Gateway's).
+// hints at (a plain operator action for a real remote site, applied by remoteSite here since the
+// test plays that operator, and before bird starts: see bird.RemoteLinkLocal).
 func TestBabelOverAWireGuardLink(t *testing.T) {
 	g := newBGPWith(t, func(c *model.Configuration) {
 		n := (*c.Networks)[tLink]
@@ -268,32 +277,21 @@ func TestBabelOverAWireGuardLink(t *testing.T) {
 	if ll := g.top.GW.Must("ip", "-6", "addr", "show", "dev", "wg-site-b"); !strings.Contains(ll, "fe80:") {
 		t.Fatalf("the gateway's side of the link has no IPv6 link-local address\n%s", ll)
 	}
-	// the remote side is not Chaos Gateway's: the operator adds the address RenderRemote hints at
-	// (10.255.0.1, the site's own transfer address, in hex: see babelLinkLocal/remoteLinkLocal)
-	g.top.Site.Must("ip", "-6", "addr", "add", "fe80::aff:1/64", "dev", "wgsite")
-
-	// temporary diagnostics: does Babel's UDP/6696 traffic (not just the Hello/IHU that bring the
-	// session up) actually cross the tunnel in both directions?
-	gwCap := g.top.GW.Start("tcpdump", "-n", "-c", "40", "-i", "wg-site-b", "udp", "port", "6696")
-	siteCap := g.top.Site.Start("tcpdump", "-n", "-c", "40", "-i", "wgsite", "udp", "port", "6696")
+	// the remote side's own link-local address is added by remoteSite, before its bird starts
+	// (M4c-05): bird's babel does not pick up an address added to the interface afterwards.
+	if ll := g.top.Site.Must("ip", "-6", "addr", "show", "dev", "wgsite"); !strings.Contains(ll, "fe80:") {
+		t.Fatalf("the site's side of the link has no IPv6 link-local address\n%s", ll)
+	}
 
 	if !g.established(90 * time.Second) {
 		t.Fatalf("the Babel session did not come up\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"))
 	}
-	ok := g.waitRoute("10.60.0.0/24", true, 90*time.Second)
-	gwCap.Stop()
-	siteCap.Stop()
-	if !ok {
-		// cumulative interface counters span the whole test, unlike a capture window: they settle
-		// whether anything at all left either interface, no timing race.
-		gwCounters := g.top.GW.Must("ip", "-s", "link", "show", "dev", "wg-site-b")
-		siteCounters := g.top.Site.Must("ip", "-s", "link", "show", "dev", "wgsite")
-		gwMcast := g.top.GW.Must("ip", "maddr", "show", "dev", "wg-site-b")
-		siteMcast := g.top.Site.Must("ip", "maddr", "show", "dev", "wgsite")
-		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\n%s\n%s\ngw counters:\n%s\nsite counters:\n%s\ngw multicast groups:\n%s\nsite multicast groups:\n%s\ngw capture:\n%s\nsite capture:\n%s",
-			g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
-			birdc(t, g.gwSock, "show", "route", "all"), birdc(t, g.siteSock, "show", "route", "all"),
-			gwCounters, siteCounters, gwMcast, siteMcast, gwCap.Output(), siteCap.Output())
+	if !g.waitRoute("10.60.0.0/24", true, 30*time.Second) {
+		// cumulative interface counters, unlike a packet capture window, settle for good whether
+		// anything left either interface at all over the whole test, no timing race.
+		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\ngw counters:\n%s\nsite counters:\n%s", g.table100(),
+			birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
+			g.top.GW.Must("ip", "-s", "link", "show", "dev", "wg-site-b"), g.top.Site.Must("ip", "-s", "link", "show", "dev", "wgsite"))
 	}
 	// IPv6 is still not a routed family of its own (plan §2.2): Babel's hellos stay link-local
 	// traffic the input chain accepts for the protocol, nothing forwarded; TestIPv6IsBlockedOnTestNetworks

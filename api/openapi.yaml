@@ -70,6 +70,7 @@ info:
     | `csrf_failed` | 403 | session request without valid `X-CSRF-Token` |
     | `not_found` | 404 | unknown id or name |
     | `method_not_allowed` | 405 | the path exists, but not with this method; `Allow` names the methods it does take |
+    | `payload_too_large` | 413 | the request body exceeds the server's size limit |
     | `revision_conflict` | 409 | `If-Match` is not the active revision any more; reload and reapply |
     | `confirm_pending` | 409 | another revision is waiting for commit-confirm |
     | `target_busy` | 409 | a run is active on the target and `?queue=false` was given |
@@ -2126,6 +2127,7 @@ components:
         - csrf_failed
         - not_found
         - method_not_allowed
+        - payload_too_large
         - revision_conflict
         - confirm_pending
         - target_busy

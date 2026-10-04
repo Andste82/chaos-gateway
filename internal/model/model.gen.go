@@ -759,6 +759,7 @@ const (
 	ErrorCodeNameTaken            ErrorCode = "name_taken"
 	ErrorCodeNotACandidate        ErrorCode = "not_a_candidate"
 	ErrorCodeNotFound             ErrorCode = "not_found"
+	ErrorCodePayloadTooLarge      ErrorCode = "payload_too_large"
 	ErrorCodePreconditionRequired ErrorCode = "precondition_required"
 	ErrorCodeRateLimited          ErrorCode = "rate_limited"
 	ErrorCodeRevisionConflict     ErrorCode = "revision_conflict"
@@ -799,6 +800,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeNotACandidate:
 		return true
 	case ErrorCodeNotFound:
+		return true
+	case ErrorCodePayloadTooLarge:
 		return true
 	case ErrorCodePreconditionRequired:
 		return true

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"strings"
@@ -216,6 +217,17 @@ func TestTokenValidation(t *testing.T) {
 	// an expiring token
 	r := g.do("POST", "/auth/tokens", map[string]any{"name": "short", "scope": "read", "expires_in": "1h"}, nil, nil)
 	if r.Status != 201 || r.json(t)["expires_at"] == nil {
+		t.Errorf("%d %s", r.Status, r.Body)
+	}
+}
+
+// M5-10 test: a body past the per-operation size limit is 413, not 400.
+func TestAnOversizedBodyIs413(t *testing.T) {
+	g := ready(t)
+	g.badRequest = true // the oversized body itself is deliberately invalid
+	oversized := append([]byte(`{"name":"`), bytes.Repeat([]byte("x"), 1<<20)...)
+	oversized = append(oversized, []byte(`","scope":"read"}`)...)
+	if r := g.do("POST", "/auth/tokens", oversized, nil, nil); r.Status != 413 || r.code(t) != "payload_too_large" {
 		t.Errorf("%d %s", r.Status, r.Body)
 	}
 }

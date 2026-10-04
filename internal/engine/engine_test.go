@@ -21,6 +21,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
@@ -317,8 +318,12 @@ func TestALockoutRelevantChangeNeedsConfirmationAndIsRolledBackAfterTheTimeout(t
 		t.Fatalf("%+v", a)
 	}
 	// the kernel runs the new revision, the store still names the old one active
-	if !strings.Contains(h.nftText(), "22,8443") && !strings.Contains(h.nftText(), "8443") {
-		t.Errorf("the new UI port is not in the kernel:\n%s", h.nftText())
+	lockout, drop := antiLockoutAndDropRules(t, h.inputRules())
+	if lockout == nil {
+		t.Errorf("no anti-lockout rule for the control port set {22, 8443}:\n%s", h.nftText())
+	}
+	if drop == nil {
+		t.Errorf("no drop rule for tcp dport 8443:\n%s", h.nftText())
 	}
 	if h.st.ActiveID() != r1 {
 		t.Errorf("active %d", h.st.ActiveID())
@@ -376,6 +381,62 @@ func (h *harness) nftText() string {
 	}
 	b, _ := json.Marshal(st.Nft)
 	return string(b)
+}
+
+// inputRules returns the rules of the "input" chain, where the anti-lockout and the UI/API drop
+// rule live.
+func (h *harness) inputRules() []linux.NftRule {
+	h.t.Helper()
+	st, err := apply.ReadState(context.Background(), apply.Local{E: h.ex}, "", apply.Want{})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var out []linux.NftRule
+	for _, o := range st.Nft.Objects {
+		if o.Rule != nil && o.Rule.Chain == "input" {
+			out = append(out, *o.Rule)
+		}
+	}
+	return out
+}
+
+// hasExprContaining reports whether any expression of the rule, re-encoded as JSON, contains all
+// of the given substrings.
+func hasExprContaining(r linux.NftRule, subs ...string) bool {
+	for _, e := range r.Expr {
+		ok := true
+		for _, s := range subs {
+			if !strings.Contains(string(e), s) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// antiLockoutAndDropRules finds, among the input rules, the anti-lockout accept rule (matching the
+// control port set {22, 8443}) and the UI/API drop rule (matching tcp dport 8443 alone), each as the
+// one rule whose expressions together satisfy every given predicate.
+func antiLockoutAndDropRules(t *testing.T, rules []linux.NftRule) (lockout, drop *linux.NftRule) {
+	t.Helper()
+	for i := range rules {
+		r := &rules[i]
+		hasPorts := hasExprContaining(*r, `"set":[22,8443]`)
+		hasAccept := hasExprContaining(*r, `"accept":null`)
+		hasDport8443 := hasExprContaining(*r, `"right":8443`)
+		hasDrop := hasExprContaining(*r, `"drop":null`)
+		switch {
+		case hasPorts && hasAccept:
+			lockout = r
+		case hasDport8443 && !hasPorts && hasDrop:
+			drop = r
+		}
+	}
+	return lockout, drop
 }
 
 func TestConfirmingInTimeMakesTheRevisionActive(t *testing.T) {

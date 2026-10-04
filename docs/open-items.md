@@ -20,7 +20,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M4 Compiler, preview, safe apply | incomplete | 9 | 0 | 0 | 2 |
 | M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
 | M4c Dynamic routing | incomplete | 7 | 0 | 3 | 5 |
-| M5 REST API | incomplete | 23 | 0 | 3 | 4 |
+| M5 REST API | incomplete | 5 | 0 | 2 | 4 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
 | M6a DHCP, devices | incomplete | 23 | 0 | 9 | 3 |
 | M6b DNS, service namespace | incomplete | 11 | 0 | 4 | 2 |
@@ -105,7 +105,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - M6a-01 and M4c-17 (pin Kea and BIRD);
    - M6b-05 and M4-01 (health of the managed services and the supervisor);
    - M6a-25, M4c-07, M5b-04, M5b-01 (run the nightly job on main).
-3. **API correctness**: M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
+3. **API correctness** (done, `phase1-api-correctness`): M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
 4. **Devices and flows**: M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
 5. **Service namespace hardening**: M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain**: M2-01, M2-02, M2-04 to M2-07, M2-09.
@@ -805,29 +805,19 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 
 ## M5 (REST API v1)
 
-Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M5` operations have handlers; open are the generation persistence the spec requires, an SSE resync signal, the setup without commit-confirm, and many small fixes.
+Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M5` operations have handlers; open are an SSE resync signal, the setup without commit-confirm, documenting the loopback binding, the 413 oversized-body code, and the M8a scope note for `?force`/`references[]`.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | problem+json, UUID or name in paths, cursor pagination, ETag/If-Match/428, merge-patch candidates, idempotency keys | done | `internal/api/{problem,helpers,middleware,revisions,idempotency}.go`; `TestProblemsAreProblemJSON`, `TestIdempotencyKeys` |
 | SSE with ids, replay, keepalive | done, gap | `events.go`, `engine/events.go`; no signal for lost events (M5-02) |
-| Generation (state, header, SSE `applied`) | partial | not persisted across restarts as the spec says (M5-01) |
+| Generation (state, header, SSE `applied`) | done | persisted across restarts (`engine.Config.GenerationFile`); `TestGenerationContinuesAfterRestart`, `TestGenerationSurvivesAnAPIRestart` |
 | Capabilities, candidate model, sessions + CSRF, hashed tokens with scopes, setup token | done | `system.go`, `revisions.go`, `auth/auth.go`; `TestLoginSessionCSRFAndLogout`, `TestTokenScopesAndTheirLifecycle` |
 | Setup "applies with commit-confirm" (spec `POST /setup`) | missing | M5-03 |
-| Admin password reset | done, gaps | `cmd/chaosgw/admin.go` (M5-17) |
-| UI/API bound to the management network after setup | done, gaps | `cmd/chaosgw/api.go:229-274` (M5-07, M5-21) |
-| Audit log | done, gaps | `internal/audit` (M5-04, M5-05) |
-| T: contract tests, clients compile, E2E testbed, conflicts, confirm_pending, SSE reconnect, slow subscriber, concurrent applies | done | `harness_test.go` `checkContract`, `make check-clients`, `e2e_test.go`, `revisions_test.go`, `events_test.go` |
-
-### M5-01 Generation is not persisted across restarts
-- Status: new
-- Severity: medium
-- Reason: forgotten — the spec's Generation convention (openapi.yaml:35) says "monotonic integer, never reused, persisted across restarts"; the engine starts at 1 on every boot.
-- Evidence: `internal/engine/owner.go:199` (`o.gen = 1`), :326.
-- Task: 1. Add `GenerationFile string` to `engine.Config`; `cmd/chaosgw/api.go` sets `<state-dir>/generation`. 2. At start read the stored high-water mark and start at mark+1; reserve blocks (when `o.gen` reaches the mark, write mark+1000 atomically: temp file, fsync, rename) to avoid an fsync per generation. 3. `TestGenerationContinuesAfterRestart` in `internal/engine` (start, apply, record, close, restart with the same file: greater). 4. API test: `GET /state` after recreating `newGW` on the same root (add an option to reuse `root`).
-- Acceptance: local unit tests in `internal/engine` and `internal/api`.
-- Needs maintainer: no
-- Effort: S
+| Admin password reset | done | `cmd/chaosgw/admin.go`: audited, interactive prompt |
+| UI/API bound to the management network after setup | done, gap | `cmd/chaosgw/api.go`: also excludes test networks before setup; loopback binding still needs a doc note (M5-07) |
+| Audit log | done | `internal/audit`: retention, failure surfaced as unhealthy, system-originated rollbacks audited |
+| T: contract tests, clients compile, E2E testbed, conflicts, confirm_pending, SSE reconnect, slow subscriber, concurrent applies | done | `harness_test.go` `checkContract` (now validates requests and SSE events too), `make check-clients`, `e2e_test.go`, `revisions_test.go`, `events_test.go` |
 
 ### M5-02 SSE has no resync signal after lost events
 - Status: open
@@ -849,36 +839,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Needs maintainer: decided 2026-10-04: (a) implement commit-confirm for the setup.
 - Effort: M
 
-### M5-04 Audit retention, fsync per entry, failures not surfaced
-- Status: open (extended)
-- Severity: low
-- Reason: partial — §3.6 says retention 1 year (only trimmed to 100000 entries at start); §3.11 says a failing audit writer marks the component unhealthy (only logged).
-- Evidence: `internal/audit/audit.go:60,114,143`; `internal/api/server.go:169-171`; `system.go:160-199`.
-- Task: 1. `Retention time.Duration` (default 365 days) in `audit.Open`; drop older entries at open and daily. 2. Keep the fsync per entry (integrity) and document it. 3. `audit.Log.Err()` with the last append error; health component (`api` detail or a new one, see the enum) `unhealthy` when set. 4. `TestOldEntriesAreDropped` (fake clock), `TestAFailingAuditLogMakesTheHealthUnhealthy`.
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
-### M5-05 System-originated changes are not audited
-- Status: new
-- Severity: low
-- Reason: forgotten — §2.13 "audit log of all changes"; a commit-confirm rollback (timeout or restart) is only an event.
-- Evidence: `internal/engine/owner.go:621`, `engine.go:252`.
-- Task: in `api.New` (or cmd), one goroutine subscribes to the engine and appends `revision.rolled_back` with actor `system` per `revision_rolled_back` event (§3.11: writers receive records from the event bus); assert it in `TestAnUnconfirmedRevisionIsRolledBack`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-06 Events lack actor/subject
-- Status: open
-- Severity: low
-- Reason: partial — the spec's Event has `actor` and `subject`; `publicEvent` has neither; discard emits nothing.
-- Evidence: `internal/api/events.go:41-48`, `revisions.go:221-228`.
-- Task: add `Actor`/`Subject` to `publicEvent` from `ev.Data`; pass `actorOf(principalOf(c))` and `{kind:"revision", id}` in `storeCandidate`, `ApplyRevision`, `ConfirmRevision`, `CompleteSetup`; do not add a discard event (document); test: `revision_created` carries the actor.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
 ### M5-07 Loopback is always bound
 - Status: open
 - Severity: low
@@ -887,16 +847,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Task: plan §2.16: "plus the loopback address for the container health check; local processes on the host are trusted".
 - Acceptance: doc review.
 - Needs maintainer: decided 2026-10-04: (a) document the loopback binding.
-- Effort: S
-
-### M5-09 `auth.refresh` detects changes by mtime and size only
-- Status: open
-- Severity: low
-- Reason: forgotten — no lock between CLI and API; a stat per authenticated request under the global mutex.
-- Evidence: `internal/auth/auth.go:172-181`.
-- Task: advisory `flock` on `auth.json.lock` in `save` and `ResetPassword`; rate-limit `refresh` to once per 500 ms (injected clock); test: two Stores on one dir saving concurrently keep both changes.
-- Acceptance: local unit test.
-- Needs maintainer: no
 - Effort: S
 
 ### M5-10 Oversized body gives 400 instead of 413
@@ -909,126 +859,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Needs maintainer: decided 2026-10-04: add `payload_too_large` (413).
 - Effort: S
 
-### M5-11 No read timeout on the API servers
-- Status: open
-- Severity: low
-- Reason: forgotten — a client can trickle a 16 MiB body indefinitely.
-- Evidence: `internal/api/binder.go:75`.
-- Task: `ReadTimeout: 60s` (package variable for tests); in `StreamEvents` call `rc.SetReadDeadline(time.Time{})` after `NewResponseController`; test: a stalled upload is closed, an SSE stream survives past the read timeout.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-12 Wrong method gives 400
-- Status: open
-- Severity: low
-- Reason: forgotten.
-- Evidence: `internal/api/server.go:101-103`.
-- Task: answer 405 with an `Allow` header (add `method_not_allowed` to the spec's ErrorCode, recommended); test `PUT /state` → 405.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-13 Unauthenticated health does an executor round-trip per call
-- Status: open
-- Severity: low
-- Reason: forgotten.
-- Evidence: `internal/api/system.go:160-175`.
-- Task: cache the executor probe for 2 s (time from `s.clk`), one in-flight probe (singleflight); test: 50 parallel calls → at most one executor read (counting `apply.Exec` wrapper).
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-14 Binder logs a warning every interval per unbindable address
-- Status: open
-- Severity: low
-- Reason: forgotten.
-- Evidence: `internal/api/binder.go:71-72`.
-- Task: remember the last error per address, log only on change or recovery; test with a captured slog handler.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-15 `bus.publish` copies the replay log on every trimming publish
-- Status: open
-- Severity: low
-- Reason: forgotten — O(n) copy per publish once the window is full.
-- Evidence: `internal/engine/events.go:94-104`.
-- Task: ring buffer, or compact only when `cut > len/2`; keep `subscribeFrom` semantics; `BenchmarkPublishFullWindow`.
-- Acceptance: engine tests pass; benchmark without allocation growth.
-- Needs maintainer: no
-- Effort: S
-
-### M5-16 WireGuard export audited after the key was consumed and sent
-- Status: open
-- Severity: low
-- Reason: forgotten — spec "Every download is recorded".
-- Evidence: `internal/api/exports.go:108-114` (also :165, :224).
-- Task: write the audit entry before `c.Data`; if the append fails answer 503 `unavailable` and send no key; record consumption as `wireguard.private_key_consumed`; test with a failing audit log.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-17 `chaosgw admin reset-password`: no audit entry, no prompt
-- Status: open
-- Severity: low
-- Reason: partial — §2.16 shows the bare command; the code needs `--password-stdin`/`--password-file` and writes no audit entry.
-- Evidence: `cmd/chaosgw/admin.go:23-35`.
-- Task: `--data-dir` (default `/var/lib/chaosgw/api`), append `auth.password_reset` with actor `{type:system,id:cli}`; without flags on a terminal prompt twice with `golang.org/x/term` `ReadPassword`; tests: audit entry; no flag and no TTY → exit 2.
-- Acceptance: local unit tests in `cmd/chaosgw`.
-- Needs maintainer: no
-- Effort: S
-
-### M5-18 Session cookie has no `__Host-` prefix
-- Status: open
-- Severity: low
-- Reason: forgotten (hardening).
-- Evidence: `internal/api/middleware.go:19`, `authapi.go:73,97`.
-- Task: on TLS `__Host-chaosgw_session` (Secure, Path=/); plain name on HTTP (tests); read both; update `TestLoginSessionCSRFAndLogout`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-19 Contract harness validates responses only
-- Status: open
-- Severity: low
-- Reason: test-gap — requests and SSE bodies are not validated; YAML/SVG skip the check.
-- Evidence: `internal/api/harness_test.go:306-329`.
-- Task: `openapi3filter.ValidateRequest` on sent requests (flag `g.badRequest` for deliberately invalid ones); validate each SSE `data:` against `Event`; YAML export → JSON → `Configuration`.
-- Acceptance: `go test ./internal/api`.
-- Needs maintainer: no
-- Effort: M
-
-### M5-20 Missing API tests: X-Forwarded-For, CORS/Origin
-- Status: open
-- Severity: low
-- Reason: test-gap.
-- Evidence: `server.go:96` `SetTrustedProxies(nil)`; no tests.
-- Task: `TestXForwardedForDoesNotChooseTheClient` (rotating XFF still rate-limited), `TestNoCORSHeaders` (`Origin: https://evil` gets no `Access-Control-Allow-*`; a session POST without CSRF is 403); the 413 test from M5-10.
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
-### M5-21 Before setup the API also binds test-network addresses
-- Status: new
-- Severity: low
-- Reason: partial — §2.16 says "interfaces not yet assigned to a test network"; `listenAddrs` binds every IPv4 address (matters only with an active configuration before setup, e.g. after `chaosgw apply --file`; the input rules still drop it).
-- Evidence: `cmd/chaosgw/api.go:245-256`, `cmd/chaosgw/api_test.go:220`.
-- Task: with `snap.Config != nil` and setup not done, skip interfaces of LAN networks, their bridges and test-role WireGuard interfaces (reuse `internal/api/system.go` `assignment` logic); change the expectation and add a case with a config.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M5-22 `GET /state.last_apply` never reports `rolled_back` or `duration_ms`
-- Status: new
-- Severity: low
-- Reason: partial — the spec enum and field exist.
-- Evidence: `internal/api/system.go:65-71`; openapi.yaml:3641-3651.
-- Task: `Duration` and `RolledBack` in `engine.AppliedInfo` (owner.go apply and rollback paths), map them; after `TestAnUnconfirmedRevisionIsRolledBack` assert `last_apply.result == "rolled_back"`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
 ### M5-23 `?force=` and `references[]` deferred without a home in the plan
 - Status: open
 - Severity: low
@@ -1036,16 +866,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Evidence: `internal/api/revisions.go:294`; plan §2.1.1.
 - Task: add "apply `?force=true`, `references[]` in `validation_failed`, event `overlay_orphaned` (§2.1.1)" to M8a scope and tests in docs/plan.md.
 - Acceptance: doc review.
-- Needs maintainer: no
-- Effort: S
-
-### M5-24 `time.*` used outside `internal/clock`
-- Status: new
-- Severity: low
-- Reason: forgotten — §3.11 rule "no time.* outside internal/clock, enforced by linters"; `.golangci.yml` has no such rule.
-- Evidence: `internal/api/events.go:212`, `binder.go:100`, `dns.go:110-142`; `cmd/chaosgw/api.go:142,170,188,303`, `dns.go:48`, `apply.go:185`; `internal/observer/netlink.go:74` (M4-10).
-- Task: 1. Use the injected clock (`s.clk`) in `internal/api` and the observer. 2. Add a `forbidigo` rule to `.golangci.yml` for `time.Now|time.Since|time.Sleep|time.After|time.NewTimer|time.NewTicker|time.Tick` outside `internal/clock` (exclude `_test.go` and `cmd/` with a comment if needed). 3. `make lint` green.
-- Acceptance: `make lint`; local tests.
 - Needs maintainer: no
 - Effort: S
 

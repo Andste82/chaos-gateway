@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -76,6 +77,46 @@ func TestTheLoginIsRateLimited(t *testing.T) {
 	// even the right password has to wait
 	if r := g.do("POST", "/auth/login", map[string]any{"password": adminPassword}, nil, nil); r.Status != 429 {
 		t.Errorf("%d", r.Status)
+	}
+}
+
+// M5-20 test: the login rate limiter keys on the real peer address, not a client-supplied header
+// (server.go SetTrustedProxies(nil)): a rotating X-Forwarded-For does not reset the count.
+func TestXForwardedForDoesNotChooseTheClient(t *testing.T) {
+	g := newGW(t)
+	g.finishSetup()
+	g.token = ""
+	var last resp
+	for i := 0; i < 6; i++ {
+		xff := fmt.Sprintf("10.%d.%d.%d", i, i, i)
+		last = g.do("POST", "/auth/login", map[string]any{"password": "wrong password!!"}, map[string]string{"X-Forwarded-For": xff}, nil)
+	}
+	if last.Status != 429 || last.code(t) != "rate_limited" {
+		t.Fatalf("a rotating X-Forwarded-For avoided the rate limit: %d %s", last.Status, last.Body)
+	}
+}
+
+// M5-20 test: no CORS headers are ever sent, and a cross-origin session request still needs CSRF.
+func TestNoCORSHeaders(t *testing.T) {
+	g := newGW(t)
+	g.finishSetup()
+	g.token = "" // from here: the browser's way, with a session cookie
+	if r := g.do("POST", "/auth/login", map[string]any{"password": adminPassword}, nil, nil); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	r := g.do("GET", "/state", nil, map[string]string{"Origin": "https://evil.example"}, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	for h := range r.Header {
+		if strings.HasPrefix(h, "Access-Control-") {
+			t.Errorf("a CORS header was sent: %s: %s", h, r.Header.Get(h))
+		}
+	}
+	// a session request from "evil.example", without the real CSRF token, is still refused
+	if r := g.do("POST", "/auth/tokens", map[string]any{"name": "cross-origin", "scope": "read"},
+		map[string]string{"Origin": "https://evil.example"}, nil); r.Status != 403 || r.code(t) != "csrf_failed" {
+		t.Errorf("%d %s", r.Status, r.Body)
 	}
 }
 

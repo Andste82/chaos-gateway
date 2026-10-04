@@ -267,6 +267,10 @@ running daemon through `<bird-dir>/chaosgw.ctl` (`chaosgw exec --bird-dir`). The
 that file, so BIRD and the executor have to name the same path; the executor writes an idle
 configuration at start when there is none.
 
+BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
+`.devcontainer/Dockerfile`), the current Ubuntu 26.04 package version; the image build checks `bird
+--version` against it and fails on a mismatch. Bump the two `ARG`s together when the package updates.
+
 - **Compiler.** `Target.Bird` holds the model (`bird.Config`) and its rendered text. A protocol runs on
   one WireGuard link (neighbor = the link peer's address); the filters follow plan §2.2.2: the import
   filter accepts only the allowed prefixes, never a default route, never a protected prefix (the
@@ -410,6 +414,10 @@ Kea (plan §2.7) runs in its own container (`deploy/compose.kea.yaml`: host netw
 `NET_BIND_SERVICE`, read-only root; `kea-start.sh` prepares the restricted paths `/run/kea` and
 `/var/lib/kea` and starts it from a configuration without scopes). The API configures it; the engine
 learns what the gateway sees and works out which device has which address (plan §2.3).
+
+Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Dockerfile` and
+`.devcontainer/Dockerfile`), the current Ubuntu 26.04 package version; the image build checks `kea-dhcp4
+-V` against it and fails on a mismatch. Bump the two `ARG`s together when the package updates.
 
 - **Compiler.** `Target.Kea` has one subnet per network with `dhcp` switched on, bound to the network's
   bridge: pools (default: the second half of the subnet), lease time (default 1 h), router and DNS

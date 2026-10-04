@@ -59,6 +59,7 @@ type lastApply struct {
 	Generation int64      `json:"generation,omitempty"`
 	Result     string     `json:"result"`
 	Revision   int64      `json:"revision,omitempty"`
+	DurationMs int64      `json:"duration_ms,omitempty"`
 }
 
 type pendingConfirm struct {
@@ -97,7 +98,12 @@ func (s *Server) GetState(c *gin.Context) {
 		st.LastApply = &lastApply{Result: "failed", Error: firstLine(snap.LastError)}
 	case snap.Applied != nil:
 		at := snap.Applied.At.UTC()
-		st.LastApply = &lastApply{Result: "ok", At: &at, Generation: int64(snap.Applied.Generation), Revision: snap.Applied.Revision}
+		result := "ok"
+		if snap.Applied.RolledBack {
+			result = "rolled_back"
+		}
+		st.LastApply = &lastApply{Result: result, At: &at, Generation: int64(snap.Applied.Generation), Revision: snap.Applied.Revision,
+			DurationMs: snap.Applied.Duration.Milliseconds()}
 	}
 	for _, p := range snap.Problems {
 		if p.Code == compiler.CodePortMissing && p.Network != "" {

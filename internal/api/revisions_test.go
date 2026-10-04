@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -258,9 +259,17 @@ func TestAnUnconfirmedRevisionIsRolledBack(t *testing.T) {
 			t.Fatal("no rollback")
 		}
 	}
+	// the rollback event fires before the restore's own apply (converge) completes; wait for it
+	if _, err := g.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	st := g.do("GET", "/state", nil, nil, nil).json(t)
 	if st["active_revision"] != float64(1) || st["pending_confirm"] != nil {
 		t.Errorf("%v", st)
+	}
+	// M5-22: the restore itself shows up as the last apply, not as an ordinary "ok"
+	if la := st["last_apply"].(map[string]any); la["result"] != "rolled_back" || la["revision"] != float64(1) {
+		t.Errorf("%v", la)
 	}
 	if r := g.do("GET", "/revisions/"+itoa(id), nil, nil, nil).json(t); r["status"] != "rolled_back" {
 		t.Errorf("%v", r["status"])

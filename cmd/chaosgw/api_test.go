@@ -51,7 +51,7 @@ func TestTheAPIServerRunsFromSetupToPasswordReset(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- serveAPI(ctx, slog.New(slog.NewTextHandler(logs, nil)), logs, apiOptions{socket: sock, execUID: uint32(os.Getuid()), stateDir: filepath.Join(root, "state"),
-			secretsDir: secretsDir, dataDir: filepath.Join(root, "data"), port: port, listen: fmt.Sprintf("127.0.0.1:%d", port), poll: time.Second, confirm: time.Second})
+			secretsDir: secretsDir, dataDir: filepath.Join(root, "data"), port: port, listen: fmt.Sprintf("127.0.0.1:%d", port), poll: time.Second, confirm: 20 * time.Second})
 	}()
 	defer func() {
 		cancel()

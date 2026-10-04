@@ -23,12 +23,17 @@ type Conntrack struct {
 
 // Tuple is one direction of a connection.
 type Tuple struct {
-	Src     string `json:"src"`
-	Dst     string `json:"dst"`
-	SPort   int    `json:"sport,omitempty"`
-	DPort   int    `json:"dport,omitempty"`
-	Packets int64  `json:"packets,omitempty"`
-	Bytes   int64  `json:"bytes,omitempty"`
+	Src   string `json:"src"`
+	Dst   string `json:"dst"`
+	SPort int    `json:"sport,omitempty"`
+	DPort int    `json:"dport,omitempty"`
+	// ICMPType, ICMPCode and ICMPID are set instead of SPort/DPort for icmp: concurrent pings share
+	// no port, so the echo id is what tells their flows apart.
+	ICMPType *int  `json:"icmp_type,omitempty"`
+	ICMPCode *int  `json:"icmp_code,omitempty"`
+	ICMPID   *int  `json:"icmp_id,omitempty"`
+	Packets  int64 `json:"packets,omitempty"`
+	Bytes    int64 `json:"bytes,omitempty"`
 }
 
 // ParseConntrack parses `conntrack -L` text: lines like
@@ -91,6 +96,18 @@ func ParseConntrack(text string) []Conntrack {
 				cur.Packets, _ = strconv.ParseInt(v, 10, 64)
 			case "bytes":
 				cur.Bytes, _ = strconv.ParseInt(v, 10, 64)
+			case "type":
+				if n, err := strconv.Atoi(v); err == nil {
+					cur.ICMPType = &n
+				}
+			case "code":
+				if n, err := strconv.Atoi(v); err == nil {
+					cur.ICMPCode = &n
+				}
+			case "id":
+				if n, err := strconv.Atoi(v); err == nil {
+					cur.ICMPID = &n
+				}
 			case "mark":
 				m, _ := strconv.ParseUint(v, 10, 32)
 				c.Mark = uint32(m)

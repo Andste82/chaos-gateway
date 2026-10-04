@@ -358,5 +358,19 @@ func flowState(c linux.Conntrack) string {
 }
 
 func flowID(c linux.Conntrack) string {
+	if c.Proto == "icmp" {
+		// icmp has no ports: concurrent pings would otherwise share "icmp/src>dst" and collide in the
+		// flow list's cursor paging (M6a-13). The echo id (and type/code, for completeness) tells them
+		// apart; -1 marks a field conntrack did not report, so it still differs from a real 0.
+		return fmt.Sprintf("%s/%s>%s/%d.%d.%d", c.Proto, c.Original.Src, c.Original.Dst,
+			intOr(c.Original.ICMPType, -1), intOr(c.Original.ICMPCode, -1), intOr(c.Original.ICMPID, -1))
+	}
 	return c.Proto + "/" + c.Original.Src + ":" + strconv.Itoa(c.Original.SPort) + ">" + c.Original.Dst + ":" + strconv.Itoa(c.Original.DPort)
+}
+
+func intOr(p *int, def int) int {
+	if p == nil {
+		return def
+	}
+	return *p
 }

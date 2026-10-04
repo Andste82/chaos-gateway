@@ -26,8 +26,17 @@ garbage line
 	if udp.Proto != "udp" || udp.State != "" || udp.Original.DPort != 53 || udp.Flags[0] != "UNREPLIED" || udp.Mark != 5 || udp.Reply.Src != "10.10.0.1" {
 		t.Errorf("%+v", udp)
 	}
-	if icmp := got[2]; icmp.Proto != "icmp" || icmp.Original.Dst != "203.0.113.10" || icmp.TimeoutSeconds != 29 {
+	icmp := got[2]
+	if icmp.Proto != "icmp" || icmp.Original.Dst != "203.0.113.10" || icmp.TimeoutSeconds != 29 {
 		t.Errorf("%+v", icmp)
+	}
+	// M6a-13: the echo type, code and id are parsed, for both tuples
+	if icmp.Original.ICMPType == nil || *icmp.Original.ICMPType != 8 || icmp.Original.ICMPCode == nil || *icmp.Original.ICMPCode != 0 ||
+		icmp.Original.ICMPID == nil || *icmp.Original.ICMPID != 7 {
+		t.Errorf("original tuple: %+v", icmp.Original)
+	}
+	if icmp.Reply.ICMPType == nil || *icmp.Reply.ICMPType != 0 || icmp.Reply.ICMPID == nil || *icmp.Reply.ICMPID != 7 {
+		t.Errorf("reply tuple: %+v", icmp.Reply)
 	}
 	if len(ParseConntrack("")) != 0 {
 		t.Error("an empty output has flows")

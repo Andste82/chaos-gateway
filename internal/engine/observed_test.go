@@ -478,3 +478,22 @@ func TestFlowsAreListedWithTheirDevice(t *testing.T) {
 		t.Errorf("%+v", f)
 	}
 }
+
+// M6a-13 test: two concurrent pings from the same device to the same destination have different
+// echo ids; their flows must not collide into one id.
+func TestConcurrentICMPFlowsDoNotCollide(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.k.SetConntrack(
+		"ipv4     2 icmp     1 29 src=10.10.0.31 dst=203.0.113.10 type=8 code=0 id=100 src=203.0.113.10 dst=10.10.0.31 type=0 code=0 id=100 mark=0 use=1\n" +
+			"ipv4     2 icmp     1 29 src=10.10.0.31 dst=203.0.113.10 type=8 code=0 id=101 src=203.0.113.10 dst=10.10.0.31 type=0 code=0 id=101 mark=0 use=1\n")
+	flows, err := h.e.Flows(context.Background())
+	if err != nil || len(flows) != 2 {
+		t.Fatalf("%+v %v", flows, err)
+	}
+	if flows[0].ID == flows[1].ID {
+		t.Errorf("both flows got the same id: %q", flows[0].ID)
+	}
+}

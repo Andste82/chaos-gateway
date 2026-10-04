@@ -255,6 +255,17 @@ func TestDevicesAppearAndTheirAddressesFollowThem(t *testing.T) {
 // deviceSetElements returns the elements of a device's set in the kernel.
 func (h *harness) deviceSetElements(dev string) string {
 	h.t.Helper()
+	v, ok := h.tryDeviceSetElements(dev)
+	if !ok {
+		h.t.Fatalf("no set for device %s in the kernel", dev)
+	}
+	return v
+}
+
+// tryDeviceSetElements is deviceSetElements without the hard failure, for polling a set that may not
+// exist in the kernel yet.
+func (h *harness) tryDeviceSetElements(dev string) (string, bool) {
+	h.t.Helper()
 	s := h.e.Snapshot()
 	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
 	name := tg.DeviceSets[dev]
@@ -268,11 +279,10 @@ func (h *harness) deviceSetElements(dev string) string {
 			for _, e := range o.Set.Elem {
 				el = append(el, strings.Trim(fmt.Sprint(e), `"`))
 			}
-			return strings.Join(el, ",")
+			return strings.Join(el, ","), true
 		}
 	}
-	h.t.Fatalf("no set %s in the kernel", name)
-	return ""
+	return "", false
 }
 
 func TestAnIdentityChangeIsAnIncrementalUpdateNotARebuild(t *testing.T) {
@@ -327,6 +337,50 @@ func TestANewDeviceOfAPendingRevisionGetsItsAddressAtOnce(t *testing.T) {
 	// already runs, not by recompiling from the snapshot.
 	if !strings.Contains(h.nftText(), "10.10.0.31") {
 		t.Errorf("the device set in the kernel does not hold the new address:\n%s", h.nftText())
+	}
+}
+
+// M6a-07 test: new devices appearing close together converge once, not once per appearance; the
+// second one waits for the window instead of running its own full apply immediately.
+func TestNewDevicesWithinTheWindowConvergeOnce(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.observe() // the first reading only learns, no device yet
+
+	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a2"
+	idX, idY := engine.DeviceID(macX), engine.DeviceID(macY)
+
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX)})
+	h.observe()
+	h.barrier()
+	gen1 := h.e.Snapshot().Generation
+	if got := h.deviceSetElements(idX); got != "10.10.0.60" {
+		t.Fatalf("the first device did not converge at once: %q", got)
+	}
+
+	// a second device appears in the same instant: it must not run its own full apply right away
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	h.observe()
+	if g := h.e.Snapshot().Generation; g != gen1 {
+		t.Fatalf("the second device converged at once instead of waiting for the window: generation %d, want %d", g, gen1)
+	}
+
+	// once the window elapses, the coalesced converge picks up the latest state
+	h.clk.Advance(2 * time.Second)
+	var got string
+	for i := 0; i < 100; i++ {
+		h.barrier()
+		if v, ok := h.tryDeviceSetElements(idY); ok && v == "10.10.0.61" {
+			got = v
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got != "10.10.0.61" {
+		t.Fatalf("the second device never converged: %q", got)
+	}
+	if g := h.e.Snapshot().Generation; g != gen1+1 {
+		t.Errorf("the coalesced converge ran %d times, want exactly 1", g-gen1)
 	}
 }
 

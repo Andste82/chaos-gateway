@@ -8,13 +8,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/auth"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 
 	"go.uber.org/goleak"
 )
 
 // The commands start the executor, the engine and their goroutines: none may outlive a test.
-func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
+func TestMain(m *testing.M) {
+	auth.RefreshInterval = time.Millisecond // M5-09: don't sleep real time for a cross-process test
+	goleak.VerifyTestMain(m)
+}
 
 func runCmd(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer

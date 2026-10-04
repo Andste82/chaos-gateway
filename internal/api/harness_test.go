@@ -42,7 +42,10 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
-func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
+func TestMain(m *testing.M) {
+	auth.RefreshInterval = time.Millisecond // M5-09: don't sleep real time for a cross-process test
+	goleak.VerifyTestMain(m)
+}
 
 const adminPassword = "correct horse battery staple"
 

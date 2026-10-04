@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,7 +127,14 @@ type Store struct {
 	sessions map[string]*Session
 	lastUsed map[string]time.Time
 	limiter  *limiter
+	// lastRefresh rate-limits refresh's stat of the file (M5-09): otherwise every authenticated
+	// request pays for one, even though another process changes it rarely.
+	lastRefresh time.Time
 }
+
+// RefreshInterval bounds how often refresh actually stats the file: a package variable so tests
+// can shorten it instead of sleeping real time.
+var RefreshInterval = 500 * time.Millisecond
 
 // Open opens or creates the store in dir (mode 0700).
 func Open(dir string, opts ...Option) (*Store, error) {
@@ -168,8 +176,20 @@ func (s *Store) load() error {
 	return nil
 }
 
-// refresh reloads the file when another process (the password reset) changed it. The caller holds mu.
+// refresh reloads the file when another process (the password reset) changed it, at most once per
+// refreshInterval (M5-09): a stat on every authenticated request otherwise. The caller holds mu.
 func (s *Store) refresh() {
+	now := s.clk.Now()
+	if !s.lastRefresh.IsZero() && now.Sub(s.lastRefresh) < RefreshInterval {
+		return
+	}
+	s.lastRefresh = now
+	s.refreshNow()
+}
+
+// refreshNow is refresh without the rate limit: a mutator that is about to save needs the current
+// state regardless of how recently it last checked. The caller holds mu.
+func (s *Store) refreshNow() {
 	fi, err := os.Stat(s.path)
 	if err != nil || (fi.ModTime().Equal(s.mtime) && fi.Size() == s.size) {
 		return
@@ -180,8 +200,40 @@ func (s *Store) refresh() {
 	}
 }
 
-// save writes the state atomically. The caller holds mu.
+// lockFile acquires the advisory, cross-process lock that serializes a load-modify-save cycle
+// against another process doing the same (M5-09: today only setPassword, called by the CLI's
+// reset-password, needs it — every other mutator already runs inside this same process's mu, and
+// save locks the write step on its own).
+func (s *Store) lockFile() (*os.File, error) {
+	f, err := os.OpenFile(filepath.Join(s.dir, "auth.json.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func unlockFile(f *os.File) {
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
+}
+
+// save writes the state atomically, under the cross-process lock. The caller holds mu.
 func (s *Store) save() error {
+	lf, err := s.lockFile()
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lf)
+	return s.saveLocked()
+}
+
+// saveLocked is save without acquiring the lock itself, for a caller that already holds it across
+// a load-modify-save cycle (setPassword). The caller holds mu.
+func (s *Store) saveLocked() error {
 	raw, err := json.MarshalIndent(s.st, "", "  ")
 	if err != nil {
 		return err
@@ -327,7 +379,15 @@ func (s *Store) setPassword(next, keep string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.refresh()
+	lf, err := s.lockFile()
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lf)
+	// the lock is held from here through saveLocked: another process (the running API, saving an
+	// unrelated change such as a new token) must not be able to load, modify and save in between,
+	// which would make this save overwrite its change (lost update).
+	s.refreshNow()
 	s.st.PasswordHash = h
 	s.st.Epoch++
 	for id, sess := range s.sessions {
@@ -337,7 +397,7 @@ func (s *Store) setPassword(next, keep string) error {
 			sess.epoch = s.st.Epoch
 		}
 	}
-	return s.save()
+	return s.saveLocked()
 }
 
 // ---- tokens

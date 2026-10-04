@@ -355,3 +355,14 @@ func parseRuleset(t *testing.T, doc string) *linux.Ruleset {
 	}
 	return rs
 }
+
+// M2-04 test: the compiler's own routing tables stay inside the range the domain reserves against
+// external routing daemons.
+func TestPolicyAndServiceTablesAreWithinTheReservedRange(t *testing.T) {
+	if PolicyTable < domain.OwnTableFirst || PolicyTable > domain.OwnTableLast {
+		t.Errorf("PolicyTable %d is outside %d-%d", PolicyTable, domain.OwnTableFirst, domain.OwnTableLast)
+	}
+	if ServiceTable < domain.OwnTableFirst || ServiceTable > domain.OwnTableLast {
+		t.Errorf("ServiceTable %d is outside %d-%d", ServiceTable, domain.OwnTableFirst, domain.OwnTableLast)
+	}
+}

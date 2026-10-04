@@ -403,6 +403,9 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 	marker := b.generationMarker()
 	var move strings.Builder
 	for i := 0; i < 40; i++ {
+		// "replace" only touches the given IP: without deleting the old one too, the device would
+		// end up with both addresses instead of having moved
+		fmt.Fprintf(&move, "neigh del 10.10.0.%d dev br-iot\n", 100+i)
 		fmt.Fprintf(&move, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 150+i, mac(i))
 	}
 	b.top.GW.MustStdin(move.String(), "ip", "-batch", "-")

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -821,6 +822,22 @@ func TestPreviewShowsTheChangeAndChangesNothing(t *testing.T) {
 	}
 	if len(p.Plan) == 0 || p.Target == nil || p.Target.HasErrors() {
 		t.Errorf("plan %v", p.Plan)
+	}
+	// the preview is not just plausible-looking: it is exactly what an apply would build and diff
+	// from the same (still unchanged) kernel state, not just a hash and an empty post-apply diff.
+	stateBeforeApply, err := apply.ReadState(context.Background(), apply.Local{E: h.ex}, "", apply.WantOf(p.Target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPlan, err := apply.BuildPlan(p.Target, stateBeforeApply, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(wantPlan.Summary, p.Plan) {
+		t.Errorf("the previewed plan differs from what an apply would run:\npreview: %v\nbuilt:   %v", p.Plan, wantPlan.Summary)
+	}
+	if wantDiff := apply.Diff(p.Target, stateBeforeApply); wantDiff.Nftables != p.Linux.Nftables || wantDiff.Routes != p.Linux.Routes {
+		t.Errorf("the previewed diff differs from apply.Diff on the same state:\npreview:\n%s\n%s\nwant:\n%s\n%s", p.Linux.Nftables, p.Linux.Routes, wantDiff.Nftables, wantDiff.Routes)
 	}
 	// the preview matches what the apply then does
 	a := h.mustApply(r2, engine.ApplyOptions{SkipConfirm: true})

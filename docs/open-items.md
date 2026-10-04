@@ -406,16 +406,6 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 - Needs maintainer: decided 2026-10-04: (a) implement commit-confirm for the setup.
 - Effort: M
 
-### M5-10 Oversized body gives 400 instead of 413
-- Status: open
-- Severity: low
-- Reason: needs-decision — the spec's error table has no 413 code.
-- Evidence: `internal/api/helpers.go:106-110`, `revisions.go:112-115`, `middleware.go:64`.
-- Task: add `payload_too_large` (413) to `ErrorCode` and the spec table, regenerate; detect `*http.MaxBytesError` in `decodeJSON` and `CreateRevision`; `statusOf`/`titleOf`; `TestAnOversizedBodyIs413`.
-- Acceptance: local unit test.
-- Needs maintainer: decided 2026-10-04: add `payload_too_large` (413).
-- Effort: S
-
 ## M5b (appliance VM harness, level 2)
 
 Verdict: incomplete. Scope done; the level-2 smoke is green with the current deploy config (24.04 and 26.04, three and two ports, run 37171706227, on branch `phase1-deploy-pin-health`, which also added BIRD to the deployment); still open are an SSH check that reuses an old connection and the checksum verification.

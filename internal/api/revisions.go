@@ -111,7 +111,7 @@ func (s *Server) CreateRevision(c *gin.Context, params model.CreateRevisionParam
 	}
 	raw, rerr := io.ReadAll(c.Request.Body)
 	if rerr != nil {
-		s.write(c, newProblem(model.ErrorCodeBadRequest, "cannot read the request body: %v", rerr))
+		s.write(c, bodyReadProblem(rerr))
 		return
 	}
 	active := s.cfg.Store.ActiveID()

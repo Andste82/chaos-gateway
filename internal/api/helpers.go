@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -105,11 +106,20 @@ func page[T any](items []T, key func(T) string, cursor *string, limit *int) ([]T
 func decodeJSON(c *gin.Context, v any) *problem {
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		var mbe interface{ Error() string }
-		_ = mbe
-		return newProblem(model.ErrorCodeBadRequest, "cannot read the request body: %v", err)
+		return bodyReadProblem(err)
 	}
 	return decodeBytes(raw, v)
+}
+
+// bodyReadProblem classifies a body-read error: the body exceeded the per-operation limit the
+// guard middleware set with http.MaxBytesReader (`payload_too_large`), or anything else reading
+// the body (`bad_request`).
+func bodyReadProblem(err error) *problem {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return newProblem(model.ErrorCodePayloadTooLarge, "the request body exceeds the %d byte limit", mbe.Limit)
+	}
+	return newProblem(model.ErrorCodeBadRequest, "cannot read the request body: %v", err)
 }
 
 func decodeBytes(raw []byte, v any) *problem {

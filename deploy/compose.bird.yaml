@@ -20,8 +20,18 @@ services:
     volumes:
       # the configuration and the control socket; the executor writes the file, BIRD only reads it
       - chaosgw-bird:/run/chaosgw/bird
+    depends_on:
+      # the executor writes the idle chaosgw.conf at start; without it BIRD crash-loops
+      exec:
+        condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "birdc", "-s", "/run/chaosgw/bird/chaosgw.ctl", "show", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
       driver: json-file
       options:

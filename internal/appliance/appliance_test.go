@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/appliance"
+	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 )
 
 // Environment of the level 2 tests:
@@ -200,7 +202,8 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 		t.Errorf("the host setup is not idempotent:\n%s", out)
 	}
 
-	// the image and the executor container (plan §3.8)
+	// the image, the executor and the BIRD container (plan §3.8; M4c-07: BIRD depends on the
+	// executor's health, since it crash-loops until the executor has written chaosgw.conf)
 	if err := vm.PutFile(ctx, imageTar, "/opt/chaosgw/image.tar.gz", 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -208,9 +211,21 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	if err := vm.PutFile(ctx, "../../deploy/compose.executor.yaml", "/opt/chaosgw/compose.executor.yaml", 0o644); err != nil {
 		t.Fatal(err)
 	}
-	compose := "sudo CHAOSGW_VERSION=" + versionOf(tag) + " docker compose -p chaosgw -f /opt/chaosgw/compose.executor.yaml"
+	if err := vm.PutFile(ctx, "../../deploy/compose.bird.yaml", "/opt/chaosgw/compose.bird.yaml", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compose := "sudo CHAOSGW_VERSION=" + versionOf(tag) + " docker compose -p chaosgw -f /opt/chaosgw/compose.executor.yaml -f /opt/chaosgw/compose.bird.yaml"
 	must(compose + " up -d")
-	waitHealthy(t, ctx, vm, compose)
+	waitHealthy(t, ctx, vm, compose, "exec")
+	waitHealthy(t, ctx, vm, compose, "bird")
+
+	// BIRD came up on the idle configuration the executor writes when there is none yet
+	if out := must(compose + " exec -T bird birdc -s /run/chaosgw/bird/chaosgw.ctl show status"); !strings.Contains(out, "BIRD") {
+		t.Errorf("birdc show status did not answer:\n%s", out)
+	}
+	if out := must(compose + " exec -T bird cat /run/chaosgw/bird/chaosgw.conf"); strings.TrimSpace(out) != strings.TrimSpace(bird.Idle(compiler.PolicyTable)) {
+		t.Errorf("chaosgw.conf is not the idle configuration:\n%s", out)
+	}
 
 	// the minimal deployment: `chaosgw apply --file` through the executor's socket
 	if err := vm.Put(ctx, "/opt/chaosgw/gateway.yaml", 0o644, strings.NewReader(gatewayConfig(two))); err != nil {
@@ -265,18 +280,18 @@ func versionOf(tag string) string {
 	return "latest"
 }
 
-func waitHealthy(t *testing.T, ctx context.Context, vm *appliance.VM, compose string) {
+func waitHealthy(t *testing.T, ctx context.Context, vm *appliance.VM, compose, service string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Minute)
 	var last string
 	for time.Now().Before(deadline) {
-		out, _ := vm.Must(ctx, compose+" ps -q exec | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
+		out, _ := vm.Must(ctx, compose+" ps -q "+service+" | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
 		last = strings.TrimSpace(out)
 		if last == "running healthy" {
 			return
 		}
 		time.Sleep(3 * time.Second)
 	}
-	logs, _ := vm.Must(ctx, compose+" logs --tail 100 exec")
-	t.Fatalf("the executor container is not healthy (%q):\n%s", last, logs)
+	logs, _ := vm.Must(ctx, compose+" logs --tail 100 "+service)
+	t.Fatalf("the %s container is not healthy (%q):\n%s", service, last, logs)
 }

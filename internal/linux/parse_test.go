@@ -108,7 +108,7 @@ func TestParseTC(t *testing.T) {
 		t.Error("options are dropped")
 	}
 	c, err := ParseClasses(fixture(t, "tc_class_htb.json"))
-	if err != nil || len(c) != 2 || c[1].Parent != "1:" || c[1].Leaf != "10:" || c[1].Rate != 1000000 || !c[0].Root {
+	if err != nil || len(c) != 2 || c[1].Parent != "1:" || c[1].Leaf != "10:" || c[1].Rate != 1000000 || c[1].Dev != "wan0" || !c[0].Root {
 		t.Fatalf("%+v %v", c, err)
 	}
 	f, err := ParseFilters(fixture(t, "tc_filter_fw.json"))

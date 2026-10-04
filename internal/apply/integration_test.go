@@ -5,6 +5,7 @@ package apply_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -169,6 +170,42 @@ func TestFirstApplyOnARealKernel(t *testing.T) {
 	}
 	if !p.Empty() {
 		t.Errorf("preview after the apply: %v", p.Summary)
+	}
+	recordRealToolOutput(t, gwns)
+}
+
+// recordRealToolOutput is a recording aid for M3-05: internal/linux's parser testdata was
+// hand-trimmed by hand rather than captured from a real tool, which let at least one file go
+// internally inconsistent (a tc class missing "dev" on one of its two entries). It is a no-op
+// unless CHAOSGW_RECORD_DIR is set, in which case it dumps the real output of every tool
+// internal/linux parses, right after a representative first apply, so that output can be used to
+// refresh the testdata fixtures. Not wired into any CI job: it is meant to be run by hand (or
+// temporarily from a CI job) with the directory as a mounted volume or uploaded artifact.
+func recordRealToolOutput(t *testing.T, ns *testbed.Namespace) {
+	t.Helper()
+	dir := os.Getenv("CHAOSGW_RECORD_DIR")
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commands := map[string][]string{
+		"ip_link.json":      {"ip", "-j", "-d", "link", "show"},
+		"ip_addr.json":      {"ip", "-j", "addr", "show"},
+		"ip_route.json":     {"ip", "-j", "route", "show", "table", "all"},
+		"ip_rule.json":      {"ip", "-j", "rule", "show"},
+		"nft_chaosgw.json":  {"nft", "-j", "list", "table", "inet", "chaosgw"},
+		"tc_qdisc.json":     {"tc", "-j", "qdisc", "show"},
+		"tc_class_htb.json": {"tc", "-j", "class", "show", "dev", "wan0"},
+		"tc_filter_fw.json": {"tc", "-j", "filter", "show", "dev", "wan0"},
+	}
+	for name, cmd := range commands {
+		out := ns.Must(cmd[0], cmd[1:]...)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(out), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("recorded %s (%d bytes)", name, len(out))
 	}
 }
 

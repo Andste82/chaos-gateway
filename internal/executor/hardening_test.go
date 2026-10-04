@@ -163,6 +163,16 @@ func TestBirdContainerHardeningProfile(t *testing.T) {
 	if len(s.Volumes) != 1 {
 		t.Errorf("volumes %v", s.Volumes)
 	}
+	// without the executor's idle chaosgw.conf, BIRD crash-loops (M4c-07)
+	var deps map[string]struct {
+		Condition string `yaml:"condition"`
+	}
+	if err := s.DependsOn.Decode(&deps); err != nil || deps["exec"].Condition != "service_healthy" {
+		t.Errorf("depends_on: %v, %v", deps, err)
+	}
+	if len(s.Healthcheck.Test) < 2 || !contains(s.Healthcheck.Test, "birdc") || !contains(s.Healthcheck.Test, "show") || !contains(s.Healthcheck.Test, "status") {
+		t.Errorf("health check: %v", s.Healthcheck.Test)
+	}
 }
 
 // The API container is unprivileged: the user the executor lets through, no capabilities, a

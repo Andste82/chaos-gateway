@@ -2,8 +2,22 @@ package bird
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 )
+
+// remoteLinkLocal is the remote side's own fe80::<last octet>/64, derived the same way the
+// compiler derives the gateway's (M4c-05), so the hint matches what the gateway side actually
+// gets without the two colliding.
+func remoteLinkLocal(v4 string) (string, bool) {
+	addr, err := netip.ParseAddr(v4)
+	if err != nil || !addr.Is4() {
+		return "", false
+	}
+	b := addr.As4()
+	ll := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[3]})
+	return netip.PrefixFrom(ll, 64).String(), true
+}
 
 // RenderRemote renders the BIRD configuration for the other end of a link: the gateway's roles
 // swapped, the same protocol and timers, and a place to announce the remote side's own prefixes.
@@ -35,6 +49,12 @@ func RenderRemote(c Config, p Protocol, remoteIface string) (string, error) {
 		w("protocol ospf v2 gateway {\n  ipv4 { import all; export where proto = \"announce\"; };\n  area %s {\n    interface %q { type ptp; hello %d; dead %d; };\n  };\n}\n", p.OSPF.Area, remoteIface, p.OSPF.HelloInterval, p.OSPF.DeadInterval)
 	case "babel":
 		w("protocol kernel { ipv4 { import none; export where source ~ [ RTS_BABEL ]; }; }\n\n")
+		// Babel's wire protocol needs an IPv6 link-local address on the tunnel even for IPv4-only
+		// routing (M4c-05); the gateway's side gets one from the compiler, the remote side does not
+		// manage this file's host and needs the hint instead.
+		if ll, ok := remoteLinkLocal(p.NeighborAddress); ok {
+			w("# Babel needs an IPv6 link-local address on the tunnel, e.g.:\n#   ip -6 addr add %s dev %s\n\n", ll, remoteIface)
+		}
 		w("protocol babel gateway {\n  ipv4 { import all; export where proto = \"announce\"; };\n  interface %q { type tunnel; hello interval %d s; };\n}\n", remoteIface, p.Babel.HelloInterval)
 	}
 	return b.String(), nil

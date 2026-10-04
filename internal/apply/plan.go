@@ -189,8 +189,12 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		}
 		if !exists {
 			links = append(links, executor.LinkEntry{Action: "addr_replace", Name: w.Name, CIDR: w.Address.String()})
+			if w.LinkLocal != nil {
+				links = append(links, executor.LinkEntry{Action: "addr_replace", Name: w.Name, CIDR: w.LinkLocal.String()})
+			}
 		} else {
 			links = append(links, addrEntries(s, w.Name, w.Address.String())...)
+			links = append(links, linkLocalEntries(s, w.Name, w.LinkLocal)...)
 		}
 		if !exists || !l.Up() {
 			ups = append(ups, executor.LinkEntry{Action: "up", Name: w.Name})
@@ -526,6 +530,37 @@ func addrEntries(s *State, dev, want string) []executor.LinkEntry {
 	}
 	if !have {
 		out = append(out, executor.LinkEntry{Action: "addr_replace", Name: dev, CIDR: want})
+	}
+	return out
+}
+
+// linkLocalEntries converges the fe80::/64 address a link interface running Babel needs (M4c-05):
+// any stray link-local address is removed and the wanted one added, leaving every other address
+// family alone. want being nil means none is needed; a stray one is still removed.
+func linkLocalEntries(s *State, dev string, want *netip.Prefix) []executor.LinkEntry {
+	var out []executor.LinkEntry
+	have := false
+	wantStr := ""
+	if want != nil {
+		wantStr = want.String()
+	}
+	for _, a := range s.Addrs[dev] {
+		if a.Family != "inet6" {
+			continue
+		}
+		addr, err := netip.ParseAddr(a.Local)
+		if err != nil || !addr.IsLinkLocalUnicast() {
+			continue
+		}
+		c := fmt.Sprintf("%s/%d", a.Local, a.PrefixLen)
+		if c == wantStr {
+			have = true
+		} else {
+			out = append(out, executor.LinkEntry{Action: "addr_delete", Name: dev, CIDR: c})
+		}
+	}
+	if want != nil && !have {
+		out = append(out, executor.LinkEntry{Action: "addr_replace", Name: dev, CIDR: wantStr})
 	}
 	return out
 }

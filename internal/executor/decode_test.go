@@ -50,6 +50,18 @@ func TestDecodeAcceptsEveryOperationType(t *testing.T) {
 	}
 }
 
+// M4c-05 test: an fe80::/64 link-local address is the one IPv6 case the links address action
+// accepts, for a Babel link.
+func TestLinksAcceptsAnFe80Address(t *testing.T) {
+	op, err := Decode([]byte(`{"type":"links","entries":[{"action":"addr_replace","name":"wg-site-b","cidr":"fe80::a/64"},{"action":"addr_delete","name":"wg-site-b","cidr":"fe80::a/64"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Plan(op); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
 	nft := func(body string) string { return `{"type":"nft_apply","ruleset":{"nftables":[` + body + `]}}` }
 	route := func(fields string) string {
@@ -112,7 +124,8 @@ func TestDecodeRejects(t *testing.T) {
 		{"links own master", `{"type":"links","entries":[{"action":"enslave","name":"lan0","master":"lan0"}]}`},
 		{"links address without cidr", `{"type":"links","entries":[{"action":"addr_replace","name":"br0"}]}`},
 		{"links cidr on up", `{"type":"links","entries":[{"action":"up","name":"br0","cidr":"10.0.0.1/24"}]}`},
-		{"links v6 address", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"fe80::1/64"}]}`},
+		{"links v6 address", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"2001:db8::1/64"}]}`},
+		{"links v6 address not /64", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"fe80::1/80"}]}`},
 		{"links bare address", `{"type":"links","entries":[{"action":"addr_replace","name":"br0","cidr":"10.0.0.1"}]}`},
 		{"links bad name", `{"type":"links","entries":[{"action":"up","name":"br0 x"}]}`},
 		{"links none", `{"type":"links","entries":[]}`},

@@ -726,8 +726,10 @@ func (e LinkEntry) validate() error {
 	}
 	if isAddr {
 		p, err := netip.ParsePrefix(e.CIDR)
-		if err != nil || p.Addr().Zone() != "" || !p.Addr().Is4() {
-			return fmt.Errorf("%q is not an IPv4 address with prefix length", e.CIDR)
+		// an IPv4 address, or an IPv6 link-local one for a Babel link (M4c-05) — nothing else, since
+		// the executor's scope is Chaos Gateway's own addressing, not arbitrary IPv6.
+		if err != nil || p.Addr().Zone() != "" || (!p.Addr().Is4() && (p.Bits() != 64 || !p.Addr().IsLinkLocalUnicast())) {
+			return fmt.Errorf("%q is not an IPv4 address or an fe80::/64 link-local address with prefix length", e.CIDR)
 		}
 	}
 	return nil

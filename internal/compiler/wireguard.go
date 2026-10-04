@@ -56,6 +56,10 @@ type WGInterface struct {
 	// NAT reports masquerade towards the uplink.
 	NAT   bool     `json:"nat"`
 	Peers []WGPeer `json:"peers"`
+	// LinkLocal is an IPv6 link-local address for a link interface that runs Babel (M4c-05): Babel's
+	// wire protocol needs one even to exchange IPv4 routes, and a WireGuard interface gets none on
+	// its own. nil when not needed.
+	LinkLocal *netip.Prefix `json:"link_local,omitempty"`
 }
 
 // wgName derives the interface name of a WireGuard network: wg-<name>, at most 15 characters.

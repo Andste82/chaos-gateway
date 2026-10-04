@@ -71,6 +71,10 @@ func (t *Target) compileBird(cfg *model.Configuration, idx *domain.Index) {
 			if !ok {
 				continue
 			}
+			if p.Type == model.RoutingProtocolTypeBabel && w.Address.Addr().Is4() {
+				ll := babelLinkLocal(w.Address.Addr())
+				w.LinkLocal = &ll
+			}
 			bp.Name = bird.ProtocolName(string(p.Type), p.Name)
 			for names[bp.Name] {
 				bp.Name += "_" + shortID(id)[:4]
@@ -110,6 +114,14 @@ type BirdTarget struct {
 	Text string `json:"text"`
 	// ImportTables are the kernel tables BIRD may read besides Chaos Gateway's own.
 	ImportTables []int `json:"import_tables,omitempty"`
+}
+
+// babelLinkLocal is an IPv6 link-local address for a link interface running Babel (M4c-05):
+// fe80::<last octet of the IPv4 transfer address>/64, so it stays distinct from the link's peer.
+func babelLinkLocal(v4 netip.Addr) netip.Prefix {
+	b := v4.As4()
+	addr := netip.AddrFrom16([16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[3]})
+	return netip.PrefixFrom(addr, 64)
 }
 
 func (t *Target) birdProtocol(cfg *model.Configuration, idx *domain.Index, p model.RoutingProtocol, w *WGInterface) (bird.Protocol, bool) {

@@ -465,8 +465,10 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	if !strings.Contains(main, "default via 192.168.56.254") {
 		t.Errorf("the management default route is gone\n%s", main)
 	}
-	// the neighbors learn the gateway's network (the return path); give them a moment
-	deadline := time.Now().Add(20 * time.Second)
+	// the neighbors learn the gateway's network (the return path); give them a moment. OSPF has
+	// more to converge here than before: three extra announcements from site2 are filtered on
+	// import, which delays this a little.
+	deadline := time.Now().Add(40 * time.Second)
 	for !strings.Contains(g.top.Site2.Must("ip", "route", "show"), "10.10.0.0/24") && time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 	}

@@ -330,16 +330,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 | Remote-side snippet in link exports | done | `bird/remote.go`, `internal/linkexport`, API `format=bird` |
 | T: three sites, learned only into own tables, filters (BGP and OSPF), max-prefix, link down, withdrawal, config change, invalid snippet, failed apply, confirm-timeout rollback | done | see the M4c test names in `internal/engine`, `internal/apply` |
 
-### M4c-05 Babel probably does not work and is not tested
-- Status: open (raised from low)
-- Severity: medium
-- Reason: partial — Babel needs an IPv6 link-local address; WireGuard interfaces get none and nothing adds one (unverified here, no netns).
-- Evidence: `internal/bird/render.go:276-281`; `bird/remote.go`; `compiler/rules.go:111-112`; no `fe80`/`addrgenmode` in the code.
-- Task: 1. Testbed test `TestBabelOverAWireGuardLink` like `TestBGPOverAWireGuardLinkExchangesRoutes` with `Type: model.RoutingProtocolTypeBabel`. 2. If it fails for lack of a link-local address: the compiler emits `fe80::<last octet of the transfer address>/64` for link interfaces running Babel (new address entry in `WGInterface`; the executor `links` address action accepts `fe80::/64` only). 3. `RenderRemote` prints the matching `ip -6 addr add` hint. 4. Forwarded IPv6 stays dropped.
-- Acceptance: CI testbed.
-- Needs maintainer: decided 2026-10-04: (a) make Babel work.
-- Effort: M
-
 ### M4c-10 The preview does not show the effective route for a destination
 - Status: open
 - Severity: low

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -155,7 +156,7 @@ func TestChangingThePasswordEndsTheOtherSessions(t *testing.T) {
 }
 
 func TestAResetFromAnotherProcessEndsRunningSessions(t *testing.T) {
-	s, _, dir := open(t)
+	s, clk, dir := open(t)
 	_ = s.CompleteSetup("a long enough password")
 	sess, _ := s.Login("a long enough password", "a")
 	// `chaosgw admin reset-password` is another process on the same directory
@@ -169,11 +170,67 @@ func TestAResetFromAnotherProcessEndsRunningSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.Chtimes(filepath.Join(dir, "auth.json"), later, later)
+	// refresh is rate-limited to once per 500ms (M5-09): past that, s notices the other process
+	clk.Advance(time.Second)
 	if _, ok := s.LookupSession(sess.ID); ok {
 		t.Error("a session survived the reset")
 	}
 	if !s.VerifyPassword("reset by the admin!") || s.VerifyPassword("a long enough password") {
 		t.Error("the running process does not see the new password")
+	}
+}
+
+// M5-09 test: two Stores on the same directory, saving concurrently (one through setPassword's
+// cross-process lock), keep both changes instead of one clobbering the other's.
+func TestTwoStoresSavingConcurrentlyKeepBothChanges(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "auth")
+	s1, err := Open(dir, WithHashParams(FastHashParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.CompleteSetup("a long enough password"); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(dir, WithHashParams(FastHashParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	for i, pw := range []struct {
+		s  *Store
+		pw string
+	}{{s1, "reset by the first process!"}, {s2, "reset by the second process!"}} {
+		wg.Add(1)
+		go func(i int, s *Store, pw string) {
+			defer wg.Done()
+			<-start
+			errs[i] = s.ResetPassword(pw)
+		}(i, pw.s, pw.pw)
+	}
+	close(start)
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// read the authoritative, on-disk outcome fresh: s1 and s2 each only know their own view
+	final, err := Open(dir, WithHashParams(FastHashParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	final.mu.Lock()
+	epoch := final.st.Epoch
+	final.mu.Unlock()
+	if epoch != 3 { // 1 from CompleteSetup, 1 from each ResetPassword, applied in sequence
+		t.Fatalf("epoch %d: a reset was lost", epoch)
+	}
+	if !final.VerifyPassword("reset by the first process!") && !final.VerifyPassword("reset by the second process!") {
+		t.Error("neither reset password verifies")
 	}
 }
 

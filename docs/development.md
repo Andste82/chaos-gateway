@@ -323,7 +323,9 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
 
 - **Guard.** One middleware looks the operation up in the embedded spec (`x-required-scope`,
   `security`) and decides: a bearer token (`cgw_…`, only its hash is stored) or the session cookie
-  (`chaosgw_session`, HttpOnly, SameSite=Strict, Secure on TLS), the scope (`full` includes `overlays`
+  (`chaosgw_session` over plain HTTP, `__Host-chaosgw_session` over TLS — a browser only ever
+  accepts that prefix from exactly this origin, Secure and Path=/; a cookie is read under either
+  name), the scope (`full` includes `overlays`
   includes `read`), the `X-CSRF-Token` of a session on every unsafe method, and `If-Match` on
   `POST /revisions` (`428` instead of the generated binding's `400`). Until the setup is finished only
   `GET/POST /setup` and the health check answer; everything else is `503 unavailable`. A wrong

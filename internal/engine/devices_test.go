@@ -101,6 +101,10 @@ func TestAConfiguredDeviceIsNotDiscoveredAndGetsItsLease(t *testing.T) {
 	if d == nil || !d.Online || d.Lease == nil || d.Lease.Ip != "10.10.0.31" || len(d.Addresses) != 1 || d.Origin != model.DeviceOriginConfigured {
 		t.Fatalf("%+v", d)
 	}
+	// M6a-15: a configured device reports where its identity comes from, same as a discovered one
+	if !contains(d.Sources, "config") || !contains(d.Sources, "dhcp") || !contains(d.Sources, "neighbor") {
+		t.Errorf("sources %v", d.Sources)
+	}
 	if !strings.Contains(types(ev), EventDeviceOnline) {
 		t.Errorf("%v", types(ev))
 	}
@@ -186,6 +190,10 @@ func TestWireGuardClientsAreOnlineWithTheirPeer(t *testing.T) {
 	for _, s := range states {
 		if s.ID == client && (!s.Online || s.Origin != model.DeviceOriginWireguardClient || len(s.Addresses) != 1 || s.Addresses[0].String() != "10.99.0.2") {
 			t.Errorf("%+v", s)
+		}
+		// M6a-15
+		if s.ID == client && !contains(s.Sources, "wireguard") {
+			t.Errorf("sources %v", s.Sources)
 		}
 	}
 }

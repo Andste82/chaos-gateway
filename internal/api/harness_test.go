@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -81,6 +82,9 @@ type options struct {
 	resolvers []netip.Addr
 	// execWrap, when set, wraps the engine's apply.Exec (fault injection, e.g. a panicking goroutine).
 	execWrap func(apply.Exec) apply.Exec
+	// root reuses an existing data directory instead of a fresh t.TempDir(), to simulate a restart
+	// on the same disk state (M5-01).
+	root string
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -103,7 +107,10 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		k.AddDockerChain()
 		runner = k
 	}
-	root := t.TempDir()
+	root := o.root
+	if root == "" {
+		root = t.TempDir()
+	}
 	sec, err := secrets.Open(filepath.Join(root, "secrets"))
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +147,8 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if o.execWrap != nil {
 		eng = o.execWrap(eng)
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS})
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS,
+		GenerationFile: filepath.Join(root, "api", "generation")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,9 +183,18 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	jar, _ := cookiejar.New(nil)
 	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, authPath: authPath, dhcp: fd}
-	if o.done {
+	switch {
+	case o.done:
 		g.completeSetupDirectly()
-	} else {
+	case o.root != "":
+		// a reopened root (M5-01's restart test) may already have a completed setup; a fresh root
+		// never does, so any other error here is still fatal.
+		tok, err := au.NewSetupToken()
+		if err != nil && !errors.Is(err, auth.ErrSetupDone) {
+			t.Fatal(err)
+		}
+		g.setup = tok
+	default:
 		tok, err := au.NewSetupToken()
 		if err != nil {
 			t.Fatal(err)
@@ -372,6 +389,18 @@ func ready(t *testing.T) *gw {
 }
 
 func (g *gw) activeID() int64 { return g.st.ActiveID() }
+
+// close shuts the harness's server, engine and stores down ahead of the test's own t.Cleanup, so a
+// second harness can reopen the same root (M5-01's restart test). The later, registered cleanup
+// calls are no-ops on the already-closed handles.
+func (g *gw) close() {
+	g.ts.Close()
+	_ = g.srv.Close()
+	g.e.Close()
+	_ = g.st.Close()
+	_ = g.log.Close()
+	g.ex.Close()
+}
 
 func ifMatch(id int64) map[string]string {
 	return map[string]string{"If-Match": `"` + itoa(id) + `"`}

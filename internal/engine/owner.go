@@ -36,6 +36,9 @@ type ownerInit struct {
 	revision int64
 	config   *model.Configuration
 	host     compiler.Host
+	// genReserved is the generation high-water mark already persisted to GenerationFile (M5-01);
+	// 0 when it is unset or the file does not exist yet.
+	genReserved uint64
 }
 
 // command is a request to the state owner.
@@ -155,6 +158,10 @@ type inflight struct {
 type owner struct {
 	e   *Engine
 	gen uint64
+	// genPath persists the generation high-water mark (M5-01); empty keeps it per-process.
+	// genReserved is the mark already written: ensureGenReserved writes a new one once gen passes it.
+	genPath     string
+	genReserved uint64
 	// committed is the active revision: what the kernel runs when nothing else is going on.
 	committed *desired
 	// current is what the apply loop was told to converge to.
@@ -199,8 +206,11 @@ type barrier struct {
 func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 	o := &owner{e: e, host: init.host, problem: map[string]bool{}, tracker: newTracker()}
 	o.snap.Host = init.host
+	o.genPath = e.cfg.GenerationFile
+	o.gen = init.genReserved
+	o.genReserved = init.genReserved
 	if init.config != nil {
-		o.gen = 1
+		o.bumpGen()
 		o.committed = &desired{Config: init.config, Revision: init.revision, Host: init.host, Generation: o.gen}
 		o.current = o.committed
 		o.snap.Revision, o.snap.Config, o.snap.Generation = init.revision, init.config, o.gen
@@ -327,8 +337,16 @@ func (o *owner) converge(d *desired) {
 
 // nextDesired returns a desired state with a fresh generation for the given configuration.
 func (o *owner) nextDesired(cfg *model.Configuration, rev int64) *desired {
-	o.gen++
+	o.bumpGen()
 	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity}
+}
+
+// bumpGen advances the generation counter and persists a new reservation block once it runs past
+// the last one written (M5-01).
+func (o *owner) bumpGen() uint64 {
+	o.gen++
+	o.ensureGenReserved()
+	return o.gen
 }
 
 func (o *owner) handle(ctx context.Context, c command) {

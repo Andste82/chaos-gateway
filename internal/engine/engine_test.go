@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1118,5 +1119,38 @@ func TestAFirstRevisionThatFailedIsNotAppliedAgainByLaterObservations(t *testing
 		if strings.HasPrefix(c, "nft -j -f") {
 			t.Errorf("an uncommitted candidate was applied again: %s", c)
 		}
+	}
+}
+
+// M5-01 test: the generation counter is persisted across a restart instead of starting over at 1.
+func TestGenerationContinuesAfterRestart(t *testing.T) {
+	h := newHarness(t)
+	genFile := filepath.Join(h.dir, "generation")
+
+	e1, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: h.ex}, Clock: h.clk, GenerationFile: genFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e1.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e1
+	a := h.mustApply(h.revision(nil))
+	e1.Close()
+
+	e2, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: h.ex}, Clock: h.clk, GenerationFile: genFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+	snap2, err := e2.Barrier(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap2.Generation <= a.Generation {
+		t.Fatalf("generation did not continue across the restart: %d, then %d", a.Generation, snap2.Generation)
 	}
 }

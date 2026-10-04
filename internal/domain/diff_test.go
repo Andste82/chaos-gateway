@@ -270,3 +270,27 @@ func TestDiffShortensLongValues(t *testing.T) {
 		t.Fatalf("summary = %v", summaries(got))
 	}
 }
+
+// M2-07 test: removing a client from a hub is reported as a removed client, by path and name, not
+// folded into a network-level change.
+func TestDiffShowsARemovedClient(t *testing.T) {
+	base := stored(t)
+	next := clone(*base)
+	nets := *next.Networks
+	hub, _ := nets[idHub].AsWireGuardNetwork()
+	delete(*hub.Clients, idClient)
+	hubNet := nets[idHub]
+	_ = hubNet.FromWireGuardNetwork(hub)
+	nets[idHub] = hubNet
+
+	got := Diff(base, &next)
+	rm := changeOf(t, got, "client", "removed")
+	if rm.Path != "/networks/"+idHub+"/clients/"+idClient || rm.Name == nil || *rm.Name != "lab-rA" {
+		t.Errorf("removed client: %+v", rm)
+	}
+	for _, c := range got {
+		if c.Kind == "network" {
+			t.Errorf("the network itself did not change: %s", c.Summary)
+		}
+	}
+}

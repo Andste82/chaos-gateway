@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -562,4 +563,37 @@ func mustBegin(t *testing.T, s *Store, id int64) {
 	if _, err := s.BeginConfirm(id, t0, t0.Add(time.Minute)); err != nil {
 		t.Fatalf("BeginConfirm(%d): %v", id, err)
 	}
+}
+
+// M2-07 test: a name with characters Go's default JSON encoder would HTML-escape (<, >, &) round-
+// trips exactly, and the stored file still verifies against its checksum.
+func TestHTMLCharactersSurviveTheChecksum(t *testing.T) {
+	s, _ := openStore(t)
+	cfg := exampleConfig(t)
+	const text = `<script>alert("hi")</script> & 'quoted'`
+	patch := []byte(`{"devices":{"1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a":{"description":` + mustJSON(t, text) + `}}}`)
+	patched, err := domain.NewCandidate(cfg, patch, domain.FormatJSON, domain.CandidatePatch, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create(t, s, patched, 0, "html")
+	_, got, err := s.Get(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc := (*got.Devices)["1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a"].Description; desc == nil || *desc != text {
+		t.Errorf("description = %v", desc)
+	}
+	if bad, err := s.Verify(); err != nil || len(bad) != 0 {
+		t.Errorf("Verify: %v, %v", bad, err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

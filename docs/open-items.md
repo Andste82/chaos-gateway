@@ -653,13 +653,13 @@ Removed from the old list: "tc tokens allow `/` and `..`" — wrong: `..` is rej
 
 ## M4b (WireGuard networks and clients)
 
-Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); open are a real bug (networks a link learns dynamically are not masqueraded), a missing real-kernel NAT test, and plan/doc fixes.
+Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); open are plan/doc fixes.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Hub and link as network type, `wg` tool, clients with client networks, reachable lists, static routes, policy rules | done | `internal/compiler/wireguard.go`; `TestWireGuardRoutesAndRules`; testbed `TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix`, `TestALinkWithStaticRoutesCarriesTrafficToTheRemoteSite` |
 | Routed without NAT to test networks | done | testbed `integration_wg_test.go:251,275,304` |
-| Masqueraded towards the uplink | partial | compile test only; prefixes learned over a link not masqueraded (M4b-01, M4b-02) |
+| Masqueraded towards the uplink | done | `TestMasqueradeTowardsTheUplinkOnlyAndForTheNetworksBehindClients` (a link matches by interface, covering learned routes too); testbed `TestAClientNetworkIsMasqueradedTowardsTheUplink` |
 | Keys, preshared keys, export once, `.conf`/QR/zip | done | `internal/wireguard/*_test.go`; `TestQRCodesAndNetworkExports` |
 | Client status and events, clients as devices, role management, MSS clamp, MTU | done | `engine/wireguard.go`; testbed `TestDisablingAClientStopsItsHandshakeAndEmitsTheEvent`, `TestRolesDecideWhoReachesTheControlPlane`, `TestTheMSSIsClampedOnTheTunnel` |
 | T: export works in a fresh namespace, QR decodes, keys never in logs, re-apply keeps the tunnel | done | `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` |

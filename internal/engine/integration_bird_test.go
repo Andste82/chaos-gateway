@@ -238,6 +238,27 @@ func TestBGPOverAWireGuardLinkExchangesRoutes(t *testing.T) {
 	}
 }
 
+// M4b-01 test: a prefix the link learns dynamically over BGP, not one of its static routes, is
+// masqueraded towards the uplink too.
+func TestALinkMasqueradesLearnedNetworksTowardsTheUplink(t *testing.T) {
+	g := newBGPWith(t, func(c *model.Configuration) {
+		routingMod(10, "")(c)
+		link, up := tLink, model.MatrixEndpointUplink(true)
+		entries := append(*c.AccessMatrix.Entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &link}, To: model.MatrixEndpoint{Uplink: &up}, Policy: model.MatrixEntryPolicyAllow})
+		c.AccessMatrix.Entries = &entries
+	}, "10.60.0.0/24")
+	if !g.established(90 * time.Second) {
+		t.Fatalf("no BGP session\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
+	}
+	if !g.waitRoute("10.60.0.0/24 via 10.255.0.1 dev wg-site-b", true, 30*time.Second) {
+		t.Fatalf("the learned route is not in table 100\n%s", g.table100())
+	}
+	g.top.Site.Must("ip", "route", "add", "198.51.100.10/32", "via", "10.255.0.0", "dev", "wgsite")
+	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.Site, testbed.SiteNetHost, testbed.InternetAddr); src != testbed.UplinkGateway {
+		t.Fatalf("the server saw %q, want the uplink address %s (masqueraded)", src, testbed.UplinkGateway)
+	}
+}
+
 // M4c test: when the link goes down the session ends and the learned routes leave table 100; when it
 // comes back the session is re-established.
 func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {

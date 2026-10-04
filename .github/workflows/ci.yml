@@ -75,6 +75,7 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi
       # Without /dev/kvm the VM runs in software emulation: functional assertions only, minutes
       # of boot time (plan §4.3, open question Q1 in §7.2).
       - name: Run the testbed tests in a VM

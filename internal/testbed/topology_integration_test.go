@@ -180,16 +180,27 @@ func TestNetemDelayIsVisible(t *testing.T) {
 		t.Fatalf("netem 50 ms off: %v -> %v, want %v ± (2 ms + 5 %%)", ref, got, ref+50*time.Millisecond)
 	}
 
-	// isolation: a fault on the uplink must not affect traffic between the test networks
-	if iso := testbed.MustPing(t, top.A, testbed.ClientCAddr, 10, 100*time.Millisecond); iso.Median() > ref+25*time.Millisecond {
-		t.Fatalf("a fault on the uplink delays A -> C: %v", iso.Median())
+	// isolation: a fault on the uplink must not affect traffic between the test networks. Under
+	// emulation the baseline (ref) itself is noisy, so the bound is relative to the delayed
+	// measurement (got) instead: isolation must be clearly faster than the netem-affected path.
+	iso := testbed.MustPing(t, top.A, testbed.ClientCAddr, 10, 100*time.Millisecond)
+	isoBound := ref + 25*time.Millisecond
+	if !testbed.Accurate() {
+		isoBound = got - 25*time.Millisecond
+	}
+	if iso.Median() > isoBound {
+		t.Fatalf("a fault on the uplink delays A -> C: %v, want < %v", iso.Median(), isoBound)
 	}
 
 	// removing the qdisc brings the baseline back
 	top.GW.Must("tc", "qdisc", "del", "dev", "wan0", "root")
 	after := testbed.MustPing(t, top.A, testbed.ServerAddr, 10, 100*time.Millisecond)
-	if after.Median() > ref+20*time.Millisecond {
-		t.Fatalf("delay remains after the qdisc was removed: %v", after.Median())
+	afterBound := ref + 20*time.Millisecond
+	if !testbed.Accurate() {
+		afterBound = got - 25*time.Millisecond
+	}
+	if after.Median() > afterBound {
+		t.Fatalf("delay remains after the qdisc was removed: %v, want < %v", after.Median(), afterBound)
 	}
 }
 

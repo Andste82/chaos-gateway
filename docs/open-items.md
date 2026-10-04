@@ -22,7 +22,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M4c Dynamic routing | incomplete | 7 | 0 | 3 | 5 |
 | M5 REST API | incomplete | 5 | 0 | 2 | 4 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
-| M6a DHCP, devices | incomplete | 23 | 0 | 9 | 3 |
+| M6a DHCP, devices | incomplete | 8 | 0 | 3 | 3 |
 | M6b DNS, service namespace | incomplete | 11 | 0 | 4 | 2 |
 | Cross-cutting | – | 6 | 0 | 0 | 0 |
 
@@ -106,7 +106,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - M6b-05 and M4-01 (health of the managed services and the supervisor);
    - M6a-25, M4c-07, M5b-04, M5b-01 (run the nightly job on main).
 3. **API correctness** (done, `phase1-api-correctness`): M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
-4. **Devices and flows**: M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
+4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03, M6a-07 and M6a-22 only narrowed, see their remaining blocks below): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
 5. **Service namespace hardening**: M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain**: M2-01, M2-02, M2-04 to M2-07, M2-09.
 7. **Executor and engine robustness**: M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
@@ -897,7 +897,7 @@ Verdict: incomplete. Scope done; the level-2 smoke is green with the current dep
 
 ## M6a (DHCP and device discovery)
 
-Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are flow counters and fields, the conntrack-events wording, identity during a pending revision, DHCP option validation, the hook's fork per lease, and smaller gaps.
+Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are the conntrack-events wording, the hook's fork per lease, and smaller gaps (a verified `started_at` format, certificate pinning for the hook, plan wording).
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -905,34 +905,24 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 | One subnet per network, pools, reservations via `config-set`, DHCP on/off | done | `internal/compiler/dhcp.go`, `internal/kea`; `TestTheClientDrivesARealKea`; testbed `TestDhcpOffOnOneNetworkLeavesItSilent` |
 | Lease events via `run_script` | done | `cmd/chaosgw/keahook.go`, `api/devices.go:312`; `TestACommittedHookCarriesEveryLease` |
 | Flow observer on conntrack events | partial | polled every second (M6a-04) |
-| Flows API | partial | counters always 0, fields missing (M6a-02, M6a-03) |
-| Discovery from leases, neighbors, conntrack, WG clients | partial | conntrack only inside tunnel prefixes (M6a-18) |
-| Identity events, incremental updates | done, gaps | `owner.go`, `applyloop.go`; M6a-05, M6a-07, M6a-11, M6a-12 |
+| Flows API | done, gap | `started_at` needs a format verified on a real kernel (M6a-03) |
+| Discovery from leases, neighbors, conntrack, WG clients | done | discovery by address also covers a LAN network's own downstream routes |
+| Identity events, incremental updates | done, gaps | `owner.go`, `applyloop.go`; M6a-07 (doc part), M6a-12 |
 | Manual device merge | done (as a revision per the spec) | `domain/observed.go:278`; moving overlays waits for M8a (M6a-23) |
-| Devices API | done, gaps | `upload_bps`, `download_bps`, `flows_active` missing (M6a-03) |
+| Devices API | done | `upload_bps`, `download_bps`, `flows_active` |
 | §3.11 identity before plans | done | `TestIdentityUpdatesGoBeforeQueuedPlansAndNeverRunConcurrently` |
 | T: lease, MAC/IP, reservation, DHCP off, discovered vs configured, identity within 1 s, flows | done | `internal/engine/integration_dhcp_test.go` |
-| T: burst debounced into one identity update | partial | asserts ≤3 generations with new devices (M6a-08) |
+| T: burst debounced into one identity update | done | `TestABurstOfNeighborChangesIsOneIdentityUpdate` |
 
-### M6a-02 `nf_conntrack_acct` never enabled: flow counters always 0
-- Status: open
-- Severity: medium
-- Reason: forgotten — the flows API and §2.3 "current flows (… bytes …)" need accounting; the kernel default is 0.
-- Evidence: no reference in the code; `compiler/compile.go:378`; `executor/validate.go:488` (sysctl allowlist); `executor/plan.go:304` (`sysctlPath`).
-- Task: allow sysctl `nf_conntrack_acct` (no dev, value 1) in validate.go and map it to `net/netfilter/nf_conntrack_acct` in `sysctlPath`; emit it in compile.go next to `ip_forward`; verify reads it like `ip_forward`; update goldens; extend testbed `TestFlowsOfADeviceAreListed` with `Upload.Bytes > 0 && Download.Bytes > 0`.
-- Acceptance: compiler and executor unit tests; CI testbed.
+### M6a-03 `started_at` needs a verified conntrack timestamp format
+- Status: open (narrowed 2026-10-04: `network` now also matches WireGuard interfaces and routed client/link networks, `service` is set for traffic redirected to the DNS proxy, and `DeviceObserved.upload_bps`/`download_bps`/`flows_active` are filled from conntrack's per-address byte counters — done, see `phase1-devices-flows`)
+- Severity: low
+- Reason: test-gap — `started_at` needs `nf_conntrack_timestamp` enabled and parsing `conntrack -L -o ktimestamp`, whose exact field name and format cannot be verified without a real kernel; left out rather than guessed at.
+- Evidence: `internal/engine/observe.go` (`Flow.Service`, `Flow.Network` done; no `StartedAt`); `internal/linux/conntrack.go`.
+- Task: in a CI testbed run (or a privileged container), enable `nf_conntrack_timestamp`, capture `conntrack -L -o ktimestamp` output and confirm the field, parse it into `Flow.StartedAt`, add `started_at` to `flowView`.
+- Acceptance: CI testbed; local unit test.
 - Needs maintainer: no
 - Effort: S
-
-### M6a-03 Flow and device fields of the spec missing
-- Status: open (extended)
-- Severity: medium
-- Reason: partial — spec `Flow` lacks `started_at`, `service`; WireGuard flows have no `network`; `DeviceObserved` lacks `upload_bps`, `download_bps`, `flows_active` (openapi.yaml:4069-4071).
-- Evidence: `internal/api/devices.go:29-37,236-249`; `engine/observe.go:288-292`.
-- Task: 1. `network`: also match `snap.WireGuardInterfaces[].Address` and peer routes. 2. `service`: `dns_proxy` when the reply source is 169.254.100.2. 3. `started_at`: enable `nf_conntrack_timestamp` like M6a-02 and parse `conntrack -L -o ktimestamp` (check the output format in a CI testbed run first; otherwise leave it out and amend the spec). 4. `flows_active` per device in PollObserved. 5. `upload_bps`/`download_bps` from byte deltas between two polls (needs M6a-02). 6. Tests in `engine/observed_test.go`, `api/devices_test.go`.
-- Acceptance: local unit tests; CI testbed.
-- Needs maintainer: no
-- Effort: M
 
 ### M6a-04 Conntrack is polled, not followed through events
 - Status: open
@@ -944,43 +934,13 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Needs maintainer: decided 2026-10-04: (b) implement conntrack events now (see the revised task).
 - Effort: S (a) / L (b)
 
-### M6a-05 Identity resolved against the committed configuration only
-- Status: open (partly fixed: commit triggers an observation, owner.go:557; confirm does not)
-- Severity: medium
-- Reason: forgotten — while a revision waits for confirmation the kernel runs it, but identity uses the previous configuration; its new devices get empty sets until confirm and the next poll.
-- Evidence: `engine/owner.go:664-667` (`o.committed.Config`), :598 (confirm).
-- Task: in `observed` use `o.current.Config` when set, else `o.committed`; call `o.e.TriggerObserve()` in `confirm`; `TestANewDeviceOfAPendingRevisionGetsItsAddressAtOnce` in `engine/observed_test.go` (lockout-relevant revision with a device and MAC, fake neighbor, `ObserveNow`: address present and set element compiled).
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-06 One bad custom DHCP option breaks every scope
-- Status: open
-- Severity: medium
-- Reason: forgotten — custom options are checked only for duplicate codes; a managed code or bad data makes Kea reject the whole `config-set`; the apply "succeeds" with only `DHCPError`.
-- Evidence: `internal/domain/validate_network.go:262-268`; `internal/kea/config.go:221-223`.
-- Task: 1. Reject codes Kea or the compiler manage: 1, 3, 6, 12, 15, 28, 42, 50, 51, 53, 54, 55, 58, 59, 61, 82, 255 (code `invalid_value` or a new `reserved_option` at `/networks/<id>/dhcp/options/custom/<i>/code`). 2. In engine Preview, when DHCP is configured, run Kea's `config-test` (add `Test(ctx, *compiler.KeaTarget) error` to the `DHCP` interface) and report a `dhcp` problem with Kea's text. 3. Tests: domain validation; engine preview with a fake DHCP that rejects.
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-07 A new device forces a full ruleset apply
-- Status: open
-- Severity: medium
-- Reason: deferred (implicitly to M7, not written there) — per-device sets change the set count; a host rotating MACs forces one full apply per poll (registry bound 1024).
-- Evidence: `engine/applyloop.go:137-139`; `compiler/dhcp.go:180-216`; `engine/devices.go:77`.
-- Task: 1. Add to the M7 scope in docs/plan.md: "identity maps keyed by address → device id replace the per-device sets, so a new device is an element update". 2. Meanwhile rate-limit identity-driven full applies in `owner.observed` (at most one per 2 s, later ones coalesced). 3. Unit test with a fake clock.
-- Acceptance: doc review; local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-08 Burst test does not assert one identity update
-- Status: open
-- Severity: medium
-- Reason: test-gap — the plan test says "debounced into one identity update"; the test adds 40 new devices (full-apply path) and accepts ≤3 generations.
-- Evidence: `internal/engine/integration_dhcp_test.go:346-369`.
-- Task: `TestABurstOfNeighborChangesIsOneIdentityUpdate`: `PollObserved(ctx, time.Hour)` so only `FollowNeighbors` triggers; create 40 permanent neighbor entries, wait for the 40 devices; record the generation; in one `ip -batch` replace them with new IPs (same MACs); after 2 s the generation advanced by exactly 1, the sets show the new IPs, and no new ruleset hash was applied.
-- Acceptance: CI testbed.
+### M6a-07 M7 scope should note identity maps replacing per-device sets
+- Status: open (narrowed 2026-10-04: the rate-limiting half is done — identity-driven converges that change which devices have a set now coalesce into one per 2-second window, see `phase1-devices-flows`)
+- Severity: low
+- Reason: deferred (implicitly to M7, not written there) — per-device sets change the set count; a host rotating MACs across several polls used to force one full apply per poll (now rate-limited; the plan still does not say the future identity-maps design replaces per-device sets entirely).
+- Evidence: docs/plan.md M7 scope; `engine/owner.go` (`triggerIdentityConverge`).
+- Task: add to the M7 scope in docs/plan.md: "identity maps keyed by address → device id replace the per-device sets, so a new device is an element update".
+- Acceptance: doc review.
 - Needs maintainer: no
 - Effort: S
 
@@ -1004,16 +964,6 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Needs maintainer: no
 - Effort: M
 
-### M6a-11 Each identity update reads and verifies the whole target
-- Status: open
-- Severity: low
-- Reason: partial — correct and within 1 s, but every update reads all subsystems and any drift falls back to a full apply.
-- Evidence: `engine/applyloop.go:122-129`.
-- Task: verify only the nft sets (a restricted read, e.g. `apply.ReadSets(ctx, exec, ns, names)`), compare only the `DeviceSets` elements; unit test of the reads issued.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
 ### M6a-12 Kernel generation marker not updated by identity updates
 - Status: open
 - Severity: low
@@ -1024,102 +974,12 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Needs maintainer: decided 2026-10-04: (a) amend the plan.
 - Effort: S
 
-### M6a-13 ICMP flow ids collide
-- Status: open
+### M6a-22 Lease event hook trusts any certificate
+- Status: open (narrowed 2026-10-04: `subnet_id` is now required, matching the spec — done, see `phase1-devices-flows`)
 - Severity: low
-- Reason: forgotten — `flowID` uses ports; ICMP `id=` is not parsed, so concurrent pings share an id and break cursor paging.
-- Evidence: `engine/observe.go:315-317`; `internal/linux/conntrack.go:76-95`.
-- Task: parse `id=`, `type=`, `code=` into the tuple; include them in `flowID` for icmp; parser test with a real ICMP line; engine test with two flows.
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-14 Conntrack read failure is silent
-- Status: open
-- Severity: low
-- Reason: forgotten — a failure (including the 16 MiB output cap) is logged at debug; the last active set is reused without a signal.
-- Evidence: `engine/observe.go:142-146`; `executor/runner.go:44`.
-- Task: warn (rate-limited); `Snapshot.ObserveError`; health detail "observation degraded"; unit test with a failing fake read.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-15 Discovery `sources` `config` and `wireguard` never produced
-- Status: open
-- Severity: low
-- Reason: partial — the spec enum has them; configured devices and WG clients get no sources.
-- Evidence: `engine/devices.go:235`.
-- Task: `config` for configured devices, `wireguard` for clients, plus `dhcp`/`neighbor` when matched; extend `devices_test.go`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-16 `device_identity_changed` carries no generation
-- Status: new
-- Severity: low
-- Reason: forgotten — spec `Event.generation` is "set for … identity changes".
-- Evidence: `engine/owner.go:668-679`.
-- Task: in `observed` create the IdentityOnly desired state first and add `"generation": d.Generation` to each event; assert in `TestAnAddressChangeIsAnIdentityEventAndFaultsStayOnTheDevice`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-17 Discovered device sets can hold addresses of other devices
-- Status: new
-- Severity: low (medium from M7 on, when the sets classify traffic)
-- Reason: forgotten — `compileDeviceSets` uses `d.IPs` of discovered devices instead of the resolved `id.Addresses[d.ID]`.
-- Evidence: `compiler/dhcp.go:191-197` vs `domain/observed.go:262-268`.
-- Task: use `id.Addresses[d.ID]`; `TestAnAddressIsInOneDeviceSetOnly` (configured device with an explicit IP, discovered device seen with the same IP).
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-18 Hosts behind a router in a LAN network are not discovered
-- Status: open (rewritten; the old "address-only entries stay after a MAC sighting" is fixed, `devices.go:162,175`)
-- Severity: low
-- Reason: partial — conntrack sources become devices only inside WireGuard peer routes; LAN `routes` (downstream routers) are ignored, though §2.3 identifies such devices by IP.
-- Evidence: `engine/observe.go:134,197-209`.
-- Task: rename `tunnelPrefixes` → `routedPrefixes`, add each LAN network's compiled downstream routes; unit test in `observed_test.go`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-19 `lease4-get-all` every second, unpaged
-- Status: open
-- Severity: low
-- Reason: forgotten.
-- Evidence: `internal/kea/client.go:171`.
-- Task: `lease4-get-page` (limit 1000, from `start`) in a loop; test against the real Kea in `kea_test.go`.
-- Acceptance: local unit test (root and `kea-dhcp4`).
-- Needs maintainer: no
-- Effort: S
-
-### M6a-20 `observer.WatchNeighbors` has no unit test
-- Status: open
-- Severity: low
-- Reason: test-gap — only exercised indirectly by the testbed.
-- Evidence: `internal/observer/netlink_test.go`.
-- Task: `TestNeighborChangesTrigger` with build tag `testbed` (creates a namespace, `ip neigh add`, expects one trigger), mirroring `TestEventsAreDebouncedIntoOneTrigger`.
-- Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-21 Service token written 0644 in a 0755 directory
-- Status: open (downgraded: the volume is reachable only by host root and the three containers that mount it)
-- Severity: low
-- Reason: forgotten.
-- Evidence: `internal/auth/auth.go:411,420`.
-- Task: directory 0750, file 0640 (owner 65532 = api and dns; Kea runs as 0:65532 with DAC_OVERRIDE); unit test of the modes.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-22 Lease event: `subnet_id` not required; hook trusts any certificate
-- Status: open (merged with the old "Hook API address default")
-- Severity: low
-- Reason: forgotten — the spec marks `subnet_id` required; the hook uses `InsecureSkipVerify` to 127.0.0.1.
-- Evidence: `internal/api/devices.go:326`; `cmd/chaosgw/keahook.go:40`.
-- Task: add `"subnet_id": body.SubnetID > 0` to `requireFields`; certificate pinning together with M6b-08; extend `TestLeaseEventsComeFromTheServiceOnly`.
+- Reason: forgotten — the hook uses `InsecureSkipVerify` to 127.0.0.1.
+- Evidence: `cmd/chaosgw/keahook.go:40`.
+- Task: certificate pinning together with M6b-08.
 - Acceptance: local unit test.
 - Needs maintainer: no
 - Effort: S

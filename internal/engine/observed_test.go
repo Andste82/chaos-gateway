@@ -262,6 +262,36 @@ func TestAnIdentityChangeIsAnIncrementalUpdateNotARebuild(t *testing.T) {
 	}
 }
 
+// M6a-05 test: while a lockout-relevant revision waits for confirmation, the kernel already runs it;
+// identity must use that running configuration, not the last committed one, so a device the new
+// revision adds gets its address at once instead of waiting for the confirm and the next poll.
+func TestANewDeviceOfAPendingRevisionGetsItsAddressAtOnce(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(nil))
+	r2 := h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		c.Management.UiPort = ptr(8443)
+	})
+	a, err := h.apply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second})
+	if err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.barrier()
+
+	d := h.device(devID)
+	if d == nil || len(d.Addresses) != 1 || d.Addresses[0].String() != "10.10.0.31" {
+		t.Fatalf("%+v", d)
+	}
+	// the snapshot's Config stays the previous, still-active one until confirmed (commit-confirm
+	// semantics), so the device set element is checked directly in the kernel the pending revision
+	// already runs, not by recompiling from the snapshot.
+	if !strings.Contains(h.nftText(), "10.10.0.31") {
+		t.Errorf("the device set in the kernel does not hold the new address:\n%s", h.nftText())
+	}
+}
+
 func TestABurstOfTriggersIsOneReading(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))

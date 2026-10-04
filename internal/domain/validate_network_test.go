@@ -155,3 +155,14 @@ func TestAWellFormedAdditionalNetworkIsAccepted(t *testing.T) {
 	d.set(t, obj(t, `{"type":"lan","name":"office","interfaces":[{"name":"lan1"}],"address":"10.30.0.1/24"}`), "networks", idNew)
 	wantValid(t, d.validate(t))
 }
+
+// M2-07 test: pins what the code does for a second client in a hub shrunk to a /30. usableHost
+// excludes the network and broadcast addresses of anything narrower than /31, so a /30 hub has
+// exactly one usable address beyond the gateway (.1 gateway, .2 the one client that fits, .0 and
+// .3 excluded) — there is no address left for a second client.
+func TestAHubWithASlash30AndSeveralClients(t *testing.T) {
+	d := baseDoc(t)
+	d.set(t, "10.99.0.1/30", "networks", idHub, "address")
+	d.set(t, obj(t, `{"name":"lab-rB","address":"10.99.0.3"}`), "networks", idHub, "clients", idNew)
+	wantError(t, d.validate(t), hub+"/clients/"+idNew+"/address", CodeOutsideSubnet)
+}

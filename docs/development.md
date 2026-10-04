@@ -542,7 +542,12 @@ proxy; the TLS responder (M21) joins it later.
   the commands are unit-tested. The testbed test `TestDNSThroughTheServiceNamespace` runs the proxy inside a real
   service namespace with `dnsmasq` as the upstream: clients of a test network and a WireGuard client
   resolve over UDP and TCP, the log shows the queries, a restarted proxy resolves again, and without
-  the namespace the redirected queries are dropped by the guard.
+  the namespace the redirected queries are dropped by the guard. `TestAHolderRestartIsHealedWithoutHelp`
+  uses a real holder process (not the simulated kernel's bookkeeping): killing it and starting a
+  replacement is noticed by `Engine.WatchService` on its own, without the test calling `Refresh`; the
+  proxy left behind in the now-orphaned namespace exits on its own once the pair into it is torn down
+  (`dnsproxy.WatchNamespace`, M6b-01), and a freshly started one resolves again once it joins the new
+  holder's namespace.
 - **Limits.** An AAAA query for a name that does not exist gets an empty answer, not NXDOMAIN (the
   reply is made before the upstream is asked); SVCB/HTTPS `ipv6hint` records are not removed; the
   proxy trusts the API's certificate unchecked unless `--api-cert-file` is given (it talks to the

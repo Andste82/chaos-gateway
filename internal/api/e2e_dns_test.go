@@ -7,17 +7,22 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+	"golang.org/x/sys/unix"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/dnsproxy"
 	"github.com/Andste82/chaos-gateway/internal/testbed"
 )
@@ -278,6 +283,190 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 	})
 	startProxy(t, ns, token, base)
 	waitFor(t, 60*time.Second, "A resolves again after the namespace was created again", func() bool {
+		out, err := digA(top, top.A, testbed.LAN0Gateway)
+		return err == nil && out == "203.0.113.77"
+	})
+}
+
+// startHolder starts a real process with its own, fresh network namespace (what the svcns container
+// is in production) and returns it together with its PID once the namespace has actually taken effect
+// (unshare's child does not have it from the first instruction).
+func startHolder(t *testing.T) (*exec.Cmd, int) {
+	t.Helper()
+	cmd := exec.Command("unshare", "--net", "sleep", "infinity")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	pid := cmd.Process.Pid
+	self, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if ns, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/net", pid)); err == nil && ns != self {
+			return cmd, pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d never got its own network namespace", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// pinnedNamespaceAddrs returns the interface addresses of whatever network namespace ns names right
+// now, pinned to that specific instance for every later call even if ns comes to name a different one
+// afterwards (a real process that joins a namespace once, like the DNS proxy container, does not
+// re-resolve the name either: internal/testbed.InNamedNS does, which is right for every other use of
+// it in this file, but wrong for this one).
+func pinnedNamespaceAddrs(t *testing.T, ns string) func() ([]netip.Addr, error) {
+	t.Helper()
+	var fd *os.File
+	var err error
+	for _, dir := range []string{"/run/netns/", "/var/run/netns/"} {
+		if fd, err = os.Open(dir + ns); err == nil {
+			break
+		}
+	}
+	if fd == nil {
+		t.Fatalf("network namespace %q not found: %v", ns, err)
+	}
+	t.Cleanup(func() { _ = fd.Close() })
+	return func() ([]netip.Addr, error) {
+		ch := make(chan struct {
+			addrs []netip.Addr
+			err   error
+		}, 1)
+		go func() {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			orig, err := os.Open("/proc/thread-self/ns/net")
+			if err != nil {
+				ch <- struct {
+					addrs []netip.Addr
+					err   error
+				}{nil, err}
+				return
+			}
+			defer func() { _ = orig.Close() }()
+			if err := unix.Setns(int(fd.Fd()), unix.CLONE_NEWNET); err != nil {
+				ch <- struct {
+					addrs []netip.Addr
+					err   error
+				}{nil, err}
+				return
+			}
+			ifaceAddrs, aerr := net.InterfaceAddrs()
+			_ = unix.Setns(int(orig.Fd()), unix.CLONE_NEWNET)
+			var out []netip.Addr
+			for _, a := range ifaceAddrs {
+				ipNet, ok := a.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				if ip, ok := netip.AddrFromSlice(ipNet.IP); ok {
+					out = append(out, ip.Unmap())
+				}
+			}
+			ch <- struct {
+				addrs []netip.Addr
+				err   error
+			}{out, aerr}
+		}()
+		r := <-ch
+		return r.addrs, r.err
+	}
+}
+
+// M6b-03 test: the holder of the service namespace is a real process. When it is replaced, the engine
+// notices on its own (WatchService) and re-attaches without the test calling Refresh by hand; the
+// proxy that was stuck in the now-orphaned namespace exits on its own once the pair into it is gone
+// (M6b-01), and a freshly started one resolves again.
+func TestAHolderRestartIsHealedWithoutHelp(t *testing.T) {
+	ns := fmt.Sprintf("svc%06x", rand.Intn(1<<24))
+	t.Cleanup(func() { _ = exec.Command("ip", "netns", "delete", ns).Run() })
+
+	holder, holderPID := startHolder(t)
+	var pid atomic.Int64
+	pid.Store(int64(holderPID))
+
+	g, top := newBedGW(t, func(o *options) {
+		o.serviceNS = ns
+		o.resolvers = []netip.Addr{netip.MustParseAddr(testbed.ServerAddr)}
+		o.holderPID = func() int { return int(pid.Load()) }
+	})
+	top.Server.Start("dnsmasq", "--no-daemon", "--no-resolv", "--no-hosts", "--conf-file=/dev/null", "--user=root", "--bind-interfaces",
+		"--listen-address="+testbed.ServerAddr, "--address=/example.test/203.0.113.77")
+	waitFor(t, 20*time.Second, "the upstream resolver answers the gateway", func() bool {
+		out, err := top.GW.Run(context.Background(), "dig", "+short", "+time=1", "+tries=1", "@"+testbed.ServerAddr, "example.test")
+		return err == nil && strings.TrimSpace(out) == "203.0.113.77"
+	})
+	waitFor(t, 30*time.Second, "svc0 attached to the real holder", func() bool {
+		_, err := top.GW.Run(context.Background(), "ip", "-br", "addr", "show", "dev", "svc0")
+		return err == nil
+	})
+
+	port := 443
+	if cfg := g.e.Snapshot().Config; cfg != nil && cfg.Management.UiPort != nil && *cfg.Management.UiPort > 0 {
+		port = *cfg.Management.UiPort
+	}
+	base := fmt.Sprintf("http://169.254.100.1:%d", port)
+	l, err := testbed.ListenIn(top.GW.Name, "tcp", fmt.Sprintf("169.254.100.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := &http.Server{Handler: g.srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = web.Serve(l) }()
+	t.Cleanup(func() { _ = web.Close() })
+	token := filepath.Join(t.TempDir(), "service-token")
+	if err := g.au.EnsureServiceToken(token); err != nil {
+		t.Fatal(err)
+	}
+
+	p := startProxy(t, ns, token, base)
+	waitFor(t, 30*time.Second, "A resolves through the real holder's namespace", func() bool {
+		out, err := digA(top, top.A, testbed.LAN0Gateway)
+		return err == nil && out == "203.0.113.77"
+	})
+
+	// from here the engine watches the service namespace on its own, as it does in production
+	wctx, wcancel := context.WithCancel(context.Background())
+	t.Cleanup(wcancel)
+	g.e.WatchService(wctx, 200*time.Millisecond)
+
+	// the old proxy watches its own (pinned) namespace exactly as chaosgw dns does (M6b-01); once the
+	// service address is gone from it, it stops itself, same as the real process would exit
+	oldAddrs := pinnedNamespaceAddrs(t, ns)
+	oldStopped := make(chan struct{})
+	go func() {
+		_ = dnsproxy.WatchNamespace(wctx, clock.NewReal(), netip.MustParseAddr("169.254.100.2"), 300*time.Millisecond, 20*time.Second, oldAddrs)
+		p.stop()
+		close(oldStopped)
+	}()
+
+	// the holder restarts: a new process, a new namespace; nothing but ServiceHolderPID's answer
+	// changes (exactly what the real svcns container's PID file gives the API)
+	_, newPID := startHolder(t)
+	pid.Store(int64(newPID))
+	if err := holder.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = holder.Wait()
+
+	select {
+	case <-oldStopped:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the old proxy never noticed its namespace was replaced")
+	}
+
+	// the executor has re-attached the name to the new holder without the test calling Refresh
+	waitFor(t, 10*time.Second, "svc0 attached to the new holder", func() bool {
+		out, err := top.GW.Run(context.Background(), "ip", "-br", "addr", "show", "dev", "svc0")
+		return err == nil && strings.Contains(out, "169.254.100.1")
+	})
+	startProxy(t, ns, token, base)
+	waitFor(t, 30*time.Second, "A resolves again once a proxy joins the new holder's namespace", func() bool {
 		out, err := digA(top, top.A, testbed.LAN0Gateway)
 		return err == nil && out == "203.0.113.77"
 	})

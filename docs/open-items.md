@@ -17,13 +17,13 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M1 Repository, CI, testbed | incomplete | 10 | 0 | 2 | 2 |
 | M2 Domain model, persistence | incomplete | 9 | 0 | 1 | 2 |
 | M3 Executor | incomplete | 7 | 0 | 0 | 2 |
-| M4 Compiler, preview, safe apply | incomplete | 10 | 0 | 1 | 2 |
+| M4 Compiler, preview, safe apply | incomplete | 9 | 0 | 0 | 2 |
 | M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
-| M4c Dynamic routing | incomplete | 9 | 0 | 4 | 5 |
+| M4c Dynamic routing | incomplete | 8 | 0 | 4 | 5 |
 | M5 REST API | incomplete | 23 | 0 | 3 | 4 |
-| M5b Appliance harness | incomplete | 4 | 0 | 1 | 0 |
-| M6a DHCP, devices | incomplete | 25 | 0 | 10 | 3 |
-| M6b DNS, service namespace | incomplete | 12 | 0 | 5 | 2 |
+| M5b Appliance harness | incomplete | 3 | 0 | 1 | 0 |
+| M6a DHCP, devices | incomplete | 23 | 0 | 9 | 3 |
+| M6b DNS, service namespace | incomplete | 11 | 0 | 4 | 2 |
 | Cross-cutting | – | 6 | 0 | 0 | 0 |
 
 ### Why items stayed open
@@ -534,7 +534,7 @@ Verdict: incomplete. All scope and test items exist; open are one literal scope 
 
 ## M4 (compiler, preview, safe apply)
 
-Verdict: incomplete. All scope and test items exist and pass; open are supervisor health in `/system/health`, a spec/code mismatch, loose or indirect tests, and docs/plan drift.
+Verdict: incomplete. All scope and test items exist and pass; open are a spec/code mismatch, loose or indirect tests, and docs/plan drift.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -543,20 +543,10 @@ Verdict: incomplete. All scope and test items exist and pass; open are superviso
 | nft layout (dynamic sets survive, removed objects deleted, hashed names), generation and verify | done | `compiler/nft.go`, `apply/verify.go`; `TestDynamicSetsAndCountersSurviveEveryApply`, `TestAGenerationThatDoesNotMatchIsReported` |
 | Preview, apply, rollback, commit-confirm, anti-lockout, assignment by MAC, `chaosgw apply --file` | done | `engine/api.go`, `owner.go`, `lockout.go`, `compiler/host.go`, `cmd/chaosgw/apply.go` |
 | State owner, snapshots, apply loop (§3.11) | done | owner.go, applyloop.go |
-| Supervisor helper | partial | used by the engine; `Engine.Health()` never read (M4-01) |
+| Supervisor helper | done | used by the engine; `Engine.Health()` read by `GetHealth` |
 | goleak in goroutine packages | done (gap: `internal/appliance`, see M5b-05) | TestMain in executor, engine, observer, supervisor, cmd/chaosgw, api, clock, dnsproxy, testbed |
 | T: golden, client reaches server, protection, management route, verify manipulation, injected failure, rollback, set change, uplink change, immutable snapshots, observer during apply | done | see the test names in `internal/{compiler,apply,engine}` |
 | T: preview matches applied state | partial | compares only hash and an empty diff (M4-04) |
-
-### M4-01 Supervisor health never reaches `/system/health`
-- Status: new
-- Severity: medium
-- Reason: partial — §3.11 says a recovered panic "marks the component unhealthy (`/system/health`)"; `Engine.Health()` exists but nothing calls it, so a panicked poller is invisible.
-- Evidence: `internal/engine/engine.go:206`; `internal/api/system.go:160-200`; plan §3.11 "Panics".
-- Task: 1. In `GetHealth` call `s.cfg.Engine.Health()` and add one component per supervised goroutine whose state is panicked or failed (name = goroutine name, status `unhealthy`, detail = the error), and `worse("unhealthy")`. The spec's component `name` is an enum: check `Health.components.name` in api/openapi.yaml and either map to an existing value (`api`) with the goroutine name in `detail`, or extend the enum and regenerate. 2. `TestHealthReportsAPanickedEngineGoroutine` in `internal/api` (make a supervised goroutine panic via a test hook, or start one with `Engine` test helper): 503 and the component in the authenticated body.
-- Acceptance: `go test ./internal/api -run Health`.
-- Needs maintainer: no
-- Effort: S
 
 ### M4-02 The management matrix endpoint differs from the spec
 - Status: open
@@ -820,16 +810,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 - Evidence: docs/plan.md:225,1307.
 - Task: amend §2.2.2 and the M4c test: "filter and announcement changes are applied without resetting sessions; changes of a protocol's neighbor, AS or timers restart that protocol only".
 - Acceptance: doc review.
-- Needs maintainer: no
-- Effort: S
-
-### M4c-17 BIRD and Kea installed unpinned
-- Status: new
-- Severity: low
-- Reason: forgotten — plan §3.7 (plan.md:946) promises pinned Kea and BIRD versions (Kea: see M6a-01).
-- Evidence: `deploy/Dockerfile:31`.
-- Task: together with M6a-01, pin `bird2=<exact version>` and add a build-time version check.
-- Acceptance: CI image build.
 - Needs maintainer: no
 - Effort: S
 
@@ -1113,25 +1093,15 @@ Verdict: incomplete. Scope done; the level-2 smoke passed once (24.04 and 26.04,
 - Needs maintainer: no
 - Effort: S
 
-### M5b-04 `appliance` tests are neither linted nor compiled per commit; no goleak
-- Status: new
-- Severity: low
-- Reason: forgotten — `.golangci.yml` build tags cover only `testbed`; `internal/appliance` starts goroutines (`vm.go:76,148`) but has no goleak `TestMain`.
-- Evidence: `.golangci.yml`; `internal/appliance/appliance_unit_test.go`.
-- Task: add `appliance` to the lint build tags; add `go vet -tags appliance ./internal/appliance` to the level0 job; add `TestMain` with `goleak.VerifyTestMain` to the untagged unit tests.
-- Acceptance: CI level0 green.
-- Needs maintainer: no
-- Effort: S
-
 (Q1 and the level-2 wording of the plan: see M1-01.)
 
 ## M6a (DHCP and device discovery)
 
-Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are the pinned Kea version, flow counters and fields, the conntrack-events wording, identity during a pending revision, DHCP option validation, the hook's fork per lease, and smaller gaps.
+Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are flow counters and fields, the conntrack-events wording, identity during a pending revision, DHCP option validation, the hook's fork per lease, and smaller gaps.
 
 | Plan item | Status | Evidence |
 |---|---|---|
-| Kea container, pinned version | partial | unpinned (M6a-01) |
+| Kea container, pinned version | done | `deploy/Dockerfile`, `.devcontainer/Dockerfile` (`ARG KEA_VERSION`) |
 | One subnet per network, pools, reservations via `config-set`, DHCP on/off | done | `internal/compiler/dhcp.go`, `internal/kea`; `TestTheClientDrivesARealKea`; testbed `TestDhcpOffOnOneNetworkLeavesItSilent` |
 | Lease events via `run_script` | done | `cmd/chaosgw/keahook.go`, `api/devices.go:312`; `TestACommittedHookCarriesEveryLease` |
 | Flow observer on conntrack events | partial | polled every second (M6a-04) |
@@ -1143,16 +1113,6 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 | §3.11 identity before plans | done | `TestIdentityUpdatesGoBeforeQueuedPlansAndNeverRunConcurrently` |
 | T: lease, MAC/IP, reservation, DHCP off, discovered vs configured, identity within 1 s, flows | done | `internal/engine/integration_dhcp_test.go` |
 | T: burst debounced into one identity update | partial | asserts ≤3 generations with new devices (M6a-08) |
-
-### M6a-01 Kea version not pinned
-- Status: open
-- Severity: medium
-- Reason: forgotten — the M6a scope says "Kea container (pinned version)"; §2.7 "pins the Kea version (≥ 2.6)"; risk 25 relies on it.
-- Evidence: `deploy/Dockerfile:27` (`FROM ubuntu:26.04`), :31 (`kea-dhcp4-server` unversioned); devcontainer has 3.0.3.
-- Task: `ARG KEA_VERSION=<exact Ubuntu 26.04 package version>`, install `kea-dhcp4-server=${KEA_VERSION}`; pin the base image by digest; build check `RUN kea-dhcp4 -V | head -1 | grep -q "^${KEA_VERSION%%-*}"`; same pin in `.devcontainer/Dockerfile:39`; note the version in development.md. Do BIRD at the same time (M4c-17).
-- Acceptance: CI image build fails on a mismatch; doc review.
-- Needs maintainer: no
-- Effort: S
 
 ### M6a-02 `nf_conntrack_acct` never enabled: flow counters always 0
 - Status: open
@@ -1384,21 +1344,11 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 - Needs maintainer: no
 - Effort: S
 
-### M6a-25 Preflight and host setup lack `nf_conntrack_netlink`
-- Status: new
-- Severity: low
-- Reason: forgotten — `conntrack -L` needs it; it relies on autoload.
-- Evidence: `internal/preflight` module list; `deploy/host-setup.sh:23`.
-- Task: add `nf_conntrack_netlink` to the shared module list (preflight and host-setup stay equal, `TestHostSetupLoadsExactlyTheModulesOfThePreflight`).
-- Acceptance: local unit tests.
-- Needs maintainer: no
-- Effort: S
-
 Removed from the old list: "Only the first MAC is reserved" — the spec defines `fixed_ip` as "DHCP reservation for the device's first MAC" (openapi.yaml:2752). "Executor priority only unit-tested" — plan §3.11 prescribes exactly that (fake-executor test). "Online ignores leases" → M6a-24.
 
 ## M6b (DNS proxy and service namespace)
 
-Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open are the services' own namespace check (§3.8), health of the managed services, a dead holder blocking applies, and test gaps for the holder, the prohibit path and systemd-resolved.
+Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open are the services' own namespace check (§3.8), a dead holder blocking applies, and test gaps for the holder, the prohibit path and systemd-resolved.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -1409,7 +1359,7 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 | Forwarding, caching, AAAA removal, query log, registration | done | `internal/dnsproxy`, `api/dns.go` |
 | Coexistence with systemd-resolved | done, not tested | M6b-06 |
 | Upstream from the host | done, limits | M6b-09 |
-| Managed services report health (§2.14, Health enum `kea`/`svcns`/`dns`) | missing | M6b-05 |
+| Managed services report health (§2.14, Health enum `kea`/`svcns`/`dns`) | done | `internal/api/system.go` GetHealth |
 | T: LAN and WG client over UDP and TCP; restart of the proxy | done | `e2e_dns_test.go` |
 | T: no bind on 127.0.0.53, resolved keeps working | partial | M6b-06 |
 | T: holder restart healed | partial | M6b-03 |
@@ -1452,16 +1402,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Evidence: `compiler/service.go:60-75`; `e2e_dns_test.go:142-147`.
 - Task: in `TestDNSThroughTheServiceNamespace`: with `svc0` present `ip route get 203.0.113.10 from <ClientAAddr> iif br-iot mark 0x100000` (GW namespace) says `dev svc0`; after the namespace is deleted the same command fails (prohibit / no route); add "fail closed via mark" to the M7 tests in docs/plan.md.
 - Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: S
-
-### M6b-05 Health does not report kea, svcns, dns
-- Status: new
-- Severity: medium
-- Reason: forgotten — §2.14 "managed services report healthy"; the spec enum has `kea`, `svcns`, `dns`.
-- Evidence: `internal/api/system.go:160-201`; api/openapi.yaml:3721.
-- Task: `kea`: disabled without DHCP, degraded when `snap.DHCPError != ""`; `svcns`: disabled when `snap.Service == nil`, degraded when WatchService's last state is `!Exists || !HolderMatches` (keep it in the snapshot); `dns`: time of the last `GetDnsServiceConfig` call in `dnsState`, degraded when older than 60 s or never; unit tests.
-- Acceptance: local unit test.
 - Needs maintainer: no
 - Effort: S
 

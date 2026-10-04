@@ -411,3 +411,42 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 		}
 	}
 }
+
+// M2-02 test: every validation code the domain can report is documented in development.md's
+// "Validation codes" table (a table of the package's own Code* constants, mirroring how CC-01
+// checks the engine's Event* constants against the spec).
+func TestEveryValidationCodeIsDocumented(t *testing.T) {
+	codes := []string{
+		CodeInvalidID, CodeDuplicateID, CodeDuplicateName, CodeNameIsUUID, CodeReservedName,
+		CodeUnknownReference, CodeWrongReference, CodeInvalidNetwork,
+		CodeHostBitsSet, CodeOverlappingSubnet, CodeReservedRange, CodeInvalidPrefixLength,
+		CodeInvalidAddress, CodeOutsideSubnet, CodeDuplicateAddress, CodeDuplicateInterface,
+		CodeDuplicatePort, CodeInvalidEndpoint, CodeWrongKind, CodePoolOrder, CodePoolOverlap,
+		CodeInvalidDuration, CodeNoIdentifier, CodeDuplicateIdentifier, CodeInvalidMAC,
+		CodeFixedIPRequires, CodeDuplicateMember, CodeProbeNetwork, CodeMatrixSelf,
+		CodeMatrixDuplicate, CodeManagementOverlap, CodeRuleOrder, CodePortsRequireProtocol,
+		CodeInvalidPortRange, CodeResetRequiresTCP, CodeCutRequiresTCP, CodeDuplicatePublicKey,
+		CodeKeySettings, CodeMissingField, CodeUnexpectedField, CodeProtocolSettings, CodeTimers,
+		CodeInvalidTable, CodeRemoteNetwork, CodeStepOrder, CodeTargetWidened, CodeTargetKind,
+		CodeTunnelOutsideTarget, CodeReservedID, CodeStepKind, CodeCheckWindow, CodeDuplicateStep,
+		CodeJitterExceedsLatency, CodeReorderNeedsLatency, CodeExclusive, CodeMixedDirections,
+		CodeMixedFamily, CodeEmptyFault, CodeInvalidMTU, CodeCutWithAllow, CodeTunnelParameter,
+		CodeInvalidDNSFault, CodeInvalidTLSCase, CodeInvalidDHCPAction, CodeInvalidOverlay,
+		CodeInvalidFlapping, CodeInvalidName, CodeDuplicateRoutingKind, CodeUnknownRoutingSettings,
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "development.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	seen := map[string]bool{}
+	for _, c := range codes {
+		if seen[c] {
+			t.Errorf("%q listed twice in the test's own table", c)
+		}
+		seen[c] = true
+		if !strings.Contains(doc, "`"+c+"`") {
+			t.Errorf("code %q is not documented in development.md", c)
+		}
+	}
+}

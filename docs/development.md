@@ -170,6 +170,105 @@ The model is plan §3.11 (D32). In short, for code from M3 on:
 - Start goroutines through the supervisor helper (recovers panics, reports health).
 - CI runs `go test -race`; packages that start goroutines run `goleak` in their `TestMain`.
 
+## Domain model and validation
+
+### Validation rules beyond the spec
+
+A few rules span more than one field or need information the JSON Schema cannot express; the
+schema's own field descriptions cover most of them (`Ipv4Cidr` "host bits must be zero", `Fault`
+"loss and burst_loss are exclusive; blackout and flapping are exclusive", `StepId` "unique within a
+scenario", `start` reserved). The ones worth calling out on top of that:
+
+- A BGP neighbor on a link must be the link's own peer (`BgpSettings.neighbor_address`,
+  `outside_subnet`).
+- `hold_time` must be at least three times `keepalive_time` (BGP); `dead_interval` must be longer
+  than `hello_interval` (OSPF); both report `invalid_timers`.
+- An access matrix entry from an endpoint to itself is rejected (`matrix_self_entry`); the same
+  `from`/`to` pair twice is rejected too (`duplicate_matrix_entry`).
+- One link runs at most one routing protocol of a given type (`duplicate_protocol`).
+- A DHCP lease time and a DNS fault's TTL have their own minimums (`invalid_duration`): a lease of
+  at least 1s, a TTL that is not negative.
+
+### Validation codes
+
+Every `Code*` constant of `internal/domain` (`model.ValidationError.Code` of a `validation_failed`
+problem). The codes are stable; new ones are added, never renamed.
+
+| Code | Meaning |
+|---|---|
+| `invalid_id` | A map key that should be a UUID is not one in lower-case canonical form. |
+| `duplicate_id` | The same UUID is used by two objects that share a namespace (devices, WireGuard clients and probes). |
+| `duplicate_name` | Two objects of the same kind have the same name (case-insensitive). |
+| `name_is_uuid` | A name has the syntactic form of a UUID. |
+| `reserved_name` | A profile is named like a built-in profile. |
+| `unknown_reference` | A reference (name or UUID) does not resolve to an object of the expected kind. |
+| `wrong_reference` | Reserved; not produced yet. |
+| `invalid_network` | A network's `union` does not decode as the type its `type` field names. |
+| `host_bits_set` | A prefix has non-zero host bits. |
+| `overlapping_subnet` | Two prefixes that must be disjoint overlap. |
+| `reserved_range` | A prefix falls in a range Chaos Gateway reserves (link-local service namespace, multicast, ...). |
+| `invalid_prefix_length` | A prefix is longer or shorter than the field allows (e.g. a link needs exactly `/31`). |
+| `invalid_address` | A string is not the kind of address the field expects (unicast IPv4, a host address, ...). |
+| `outside_subnet` | An address must lie inside a given subnet (as a host address, or as the specific peer) and does not. |
+| `duplicate_address` | An address is already used by another object in the same scope. |
+| `duplicate_interface` | A host interface is assigned to more than one role (uplink, management, a test network, ...). |
+| `duplicate_port` | A UDP listen port is already used by another WireGuard network. |
+| `invalid_endpoint` | A `host:port` value does not parse, or names something other than an IPv4 address or host name. |
+| `wrong_kind` | A field only makes sense for one kind of network (e.g. `clients` on a link, `peer` on a hub) and is set on the other. |
+| `pool_order` | A DHCP pool's `end` comes before its `start`. |
+| `pool_overlap` | Two DHCP pools of the same network overlap. |
+| `invalid_duration` | A duration is outside the field's allowed range (a minimum, "not negative", ...). |
+| `no_identifier` | A device has neither a MAC nor an IP identifier. |
+| `duplicate_identifier` | A MAC or IP identifier already identifies another device. |
+| `invalid_mac` | A string is not a unicast MAC address. |
+| `fixed_ip_requires` | `fixed_ip` needs a local test network and the device's first MAC; one of those is missing. |
+| `duplicate_member` | A group lists the same device twice. |
+| `probe_network_not_lan` | A probe's network is a WireGuard network, not a local test network. |
+| `matrix_self_entry` | An access matrix entry's `from` and `to` name the same endpoint. |
+| `duplicate_matrix_entry` | The same `from`/`to` pair appears in the access matrix twice. |
+| `management_overlaps_network` | The management network's sources overlap a test network's subnet. |
+| `rule_order` | An access control rule is listed twice, or `access_rule_order` omits one that exists. |
+| `ports_require_protocol` | `ports`/`port_ranges` are set without `protocol` being `tcp` or `udp`. |
+| `invalid_port_range` | A port range's end comes before its start. |
+| `reset_requires_tcp` | An access rule's action `reset` is used with a protocol other than `tcp`. |
+| `cut_existing_requires_tcp` | `cut_existing` is set on a rule whose protocol is not `tcp`. |
+| `duplicate_public_key` | A WireGuard public key (provided or generated) is already used by another peer. |
+| `invalid_key_settings` | A key setting needs generated keys (`export_once`, `generation`) but the mode is `provided`. |
+| `missing_field` | A field that a particular case, action or kind requires is absent. |
+| `unexpected_field` | A field is set that the current case, action or kind does not use. |
+| `invalid_protocol_settings` | A routing protocol's type-specific settings (`bgp`, `ospf`, `babel`) are set for the wrong `type`. |
+| `invalid_timers` | A routing protocol's timers are inconsistent (hold vs. keepalive, dead vs. hello) or too short. |
+| `invalid_table` | An external routing table number belongs to the system or to Chaos Gateway itself. |
+| `unknown_remote_network` | A remote network scope's CIDR is not inside a client network or a route via a link. |
+| `invalid_step_reference` | A scenario step's `remove` names a step that does not exist, created no overlay, or runs later. |
+| `target_widened` | A step's `target` is broader than the scenario's own target. |
+| `invalid_target` | A scope is not valid where it is used (wrong kind for that context). |
+| `tunnel_outside_target` | A tunnel fault or WireGuard action's target is not that WireGuard network or client. |
+| `reserved_id` | A step uses the reserved id `start`. |
+| `invalid_step` | A step or check names more than one, or none, of its mutually exclusive kinds. |
+| `invalid_window` | A check's window is malformed: neither or both of `within`/`until` given, or `from`/`until` do not name real steps in order. |
+| `duplicate_step_id` | Two steps of the same scenario share an id. |
+| `jitter_exceeds_latency` | A fault's `jitter` is larger than its `latency`. |
+| `reorder_requires_latency` | `reorder` is set without `latency`. |
+| `mutually_exclusive` | Two fields that must not both be set are both set (`loss`/`burst_loss`, `blackout`/`flapping`). |
+| `mixed_directions` | A fault mixes flat parameters with per-direction (`upload`/`download`) ones. |
+| `mixed_family` | A fault sets parameters of a family (`impairment`, `tunnel`, `mtu`) other than the one its context allows. |
+| `empty_fault` | A fault sets no parameter at all. |
+| `invalid_mtu` | An MTU fault's size is outside 552-1500 bytes. |
+| `cut_existing_with_allow` | `cut_existing` is set on an `allow` rule (only `drop`, `reject` and `reset` cut connections). |
+| `tunnel_parameter` | A tunnel fault sets a parameter other than latency, jitter, loss, burst_loss, blackout or flapping. |
+| `invalid_dns_fault` | A DNS fault's action and its fields do not match (a field required by the action is missing, or set for the wrong one). |
+| `invalid_tls_case` | A TLS case's fields do not match its case (protocol not tcp, interception fields outside `intercept`, ...). |
+| `invalid_dhcp_action` | A DHCP action's fields do not match (`lease_time` only for `short_lease`, `options` only for `set_options`). |
+| `invalid_overlay` | An overlay request names zero, or both, of `client` and `link`. |
+| `invalid_flapping` | A flapping fault's `up` or `down` is zero. |
+| `invalid_name` | Reserved; not produced yet. |
+| `duplicate_protocol` | A link already runs a routing protocol of the same type. |
+| `missing_routing_settings` | Reserved; not produced yet. |
+
+`TestEveryValidationCodeIsDocumented` in `internal/domain` checks that every `Code*` constant's
+value appears somewhere on this page.
+
 ## Compiler, apply and engine
 
 Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.11):

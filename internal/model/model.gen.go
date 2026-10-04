@@ -2538,10 +2538,13 @@ type BabelSettings struct {
 
 // BgpSettings defines model for BgpSettings.
 type BgpSettings struct {
-	HoldTime      *Duration `json:"hold_time,omitempty"`
+	// HoldTime Must be at least three times `keepalive_time` (`invalid_timers` otherwise).
+	HoldTime *Duration `json:"hold_time,omitempty"`
+
+	// KeepaliveTime Must be at least 1s.
 	KeepaliveTime *Duration `json:"keepalive_time,omitempty"`
 
-	// NeighborAddress Default - the link peer's address.
+	// NeighborAddress Default - the link peer's address. On a link, must be the peer itself (`outside_subnet` otherwise).
 	NeighborAddress *Ipv4 `json:"neighbor_address,omitempty"`
 	NeighborAsn     int64 `json:"neighbor_asn"`
 	Passive         *bool `json:"passive,omitempty"`
@@ -3135,7 +3138,9 @@ type DhcpPool struct {
 
 // DhcpScope One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`.
 type DhcpScope struct {
-	Enabled   *bool        `json:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// LeaseTime Must be at least 1s.
 	LeaseTime *Duration    `json:"lease_time,omitempty"`
 	Options   *DhcpOptions `json:"options,omitempty"`
 
@@ -3256,7 +3261,7 @@ type DnsFault struct {
 	// Names Names the fault applies to (exact or `*.suffix`). Empty - all names.
 	Names *[]Hostname `json:"names,omitempty"`
 
-	// Ttl Required for `short_ttl`.
+	// Ttl Required for `short_ttl`. Must not be negative.
 	Ttl *Duration `json:"ttl,omitempty"`
 }
 
@@ -3332,7 +3337,7 @@ type DnsServiceConfig struct {
 		Overlay Uuid         `json:"overlay"`
 		Sources []Ipv4OrCidr `json:"sources"`
 
-		// Ttl Required for `short_ttl`.
+		// Ttl Required for `short_ttl`. Must not be negative.
 		Ttl *Duration `json:"ttl,omitempty"`
 	} `json:"faults"`
 	Generation int64 `json:"generation"`
@@ -4054,7 +4059,8 @@ type MatrixEndpointManagement bool
 // MatrixEndpointUplink defines model for MatrixEndpoint.Uplink.
 type MatrixEndpointUplink bool
 
-// MatrixEntry defines model for MatrixEntry.
+// MatrixEntry `from` and `to` must not name the same endpoint (`matrix_self_entry`), and the same pair
+// must not appear twice (`duplicate_matrix_entry`).
 type MatrixEntry struct {
 	// From Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources` and the management interface subnet; the control plane itself is governed by gateway protection, not by the matrix).
 	From   MatrixEndpoint    `json:"from"`
@@ -4197,9 +4203,13 @@ type NetworkView struct {
 
 // OspfSettings defines model for OspfSettings.
 type OspfSettings struct {
-	Area          *string   `json:"area,omitempty"`
-	Cost          *int      `json:"cost,omitempty"`
-	DeadInterval  *Duration `json:"dead_interval,omitempty"`
+	Area *string `json:"area,omitempty"`
+	Cost *int    `json:"cost,omitempty"`
+
+	// DeadInterval Must be longer than `hello_interval` (`invalid_timers` otherwise).
+	DeadInterval *Duration `json:"dead_interval,omitempty"`
+
+	// HelloInterval Must be at least 1s.
 	HelloInterval *Duration `json:"hello_interval,omitempty"`
 }
 
@@ -4728,7 +4738,7 @@ type RoutingProtocol struct {
 	// Import Management, uplink and gateway-own prefixes are always rejected, regardless of this filter.
 	Import *ImportFilter `json:"import,omitempty"`
 
-	// Link WireGuard link network the protocol runs on.
+	// Link WireGuard link network the protocol runs on. One link runs at most one protocol of each `type` (`duplicate_protocol` otherwise).
 	Link Ref `json:"link"`
 
 	// Name Unique per object type (case-insensitive); must not have the form of a UUID.

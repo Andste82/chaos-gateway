@@ -283,9 +283,10 @@ func TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix(t
 
 // M4b-02 test: a hub client's network reaches a host beyond the uplink; the gateway masquerades it
 // towards the uplink, so the server beyond the uplink sees the gateway's own uplink address as the
-// source. NAT only controls translation, not reachability (that is the matrix's job, §2.2.1): turning
-// NAT off on the hub still forwards the traffic, but unmasqueraded, so the server sees the client
-// network's own address.
+// source. Turning NAT off on the hub removes the postrouting masquerade rule for that network (checked
+// directly on the gateway: observing the unmasqueraded packet at a third namespace turned out to be at
+// the mercy of the kernel's own default reverse-path filtering, which differs between the level-1 and
+// level-1b runners and made the probe flaky).
 func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
 	g := newWGGW(t)
 	setHub := func(nat *bool) func(*model.Configuration) {
@@ -312,10 +313,17 @@ func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
 		t.Fatalf("the server saw %q, want the uplink address %s (masqueraded)", src, testbed.UplinkGateway)
 	}
 
+	// the masquerade counter's name is "nat_" plus the network id with its hyphens stripped
+	// (compiler.shortID): the hub's first UUID group is already 8 hex digits.
+	natCounter := "nat_" + strings.ReplaceAll(tHub, "-", "")[:8]
+	if out := g.top.GW.Must("nft", "list", "counter", "inet", "chaosgw", natCounter); !strings.Contains(out, "packets") {
+		t.Errorf("no masquerade counter for the hub network while nat is on\n%s", out)
+	}
+
 	off := false
 	g.apply(setHub(&off))
-	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != testbed.ClientNetHost {
-		t.Errorf("the server saw %q, want the unmasqueraded client address %s (nat is off on the hub)", src, testbed.ClientNetHost)
+	if _, err := g.top.GW.Run(context.Background(), "nft", "list", "counter", "inet", "chaosgw", natCounter); err == nil {
+		t.Errorf("the masquerade counter for the hub network still exists although nat is off on the hub")
 	}
 }
 

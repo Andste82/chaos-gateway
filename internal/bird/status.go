@@ -25,6 +25,9 @@ type ProtocolStatus struct {
 	LastError string `json:"last_error,omitempty"`
 	// ImportLimit is the configured import limit, 0 for none.
 	ImportLimit int `json:"import_limit,omitempty"`
+	// ImportLimitHit reports whether the import limit has been reached: routes beyond it are not
+	// imported (action block, M4c-04), but the session itself stays up.
+	ImportLimitHit bool `json:"import_limit_hit,omitempty"`
 }
 
 // Established reports whether the protocol's adjacency is up: a BGP session in the state
@@ -46,7 +49,7 @@ var (
 	routesRE  = regexp.MustCompile(`^\s+Routes:\s+(\d+) imported(?:, (\d+) filtered)?(?:, (\d+) exported)?`)
 	neighbRE  = regexp.MustCompile(`^\s+Neighbor address:\s+(\S+)`)
 	lastErrRE = regexp.MustCompile(`^\s+Last error:\s+(.*\S)`)
-	limitRE   = regexp.MustCompile(`^\s+Import limit:\s+(\d+)`)
+	limitRE   = regexp.MustCompile(`^\s+Import limit:\s+(\d+)(\s+\[HIT\])?`)
 )
 
 // ParseProtocols parses `birdc show protocols [all]`.
@@ -84,6 +87,7 @@ func ParseProtocols(out string) ([]ProtocolStatus, error) {
 			p.LastError = m[1]
 		} else if m := limitRE.FindStringSubmatch(line); m != nil {
 			p.ImportLimit, _ = strconv.Atoi(m[1])
+			p.ImportLimitHit = m[2] != ""
 		}
 	}
 	if !inTable {

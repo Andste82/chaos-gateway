@@ -4800,6 +4800,9 @@ type RoutingStatus struct {
 			Exported *int `json:"exported,omitempty"`
 			Filtered *int `json:"filtered,omitempty"`
 			Imported *int `json:"imported,omitempty"`
+
+			// LimitHit The configured import limit has been reached (action block): the session stays up, routes beyond it are not imported.
+			LimitHit *bool `json:"limit_hit,omitempty"`
 		} `json:"routes,omitempty"`
 		Since *time.Time                  `json:"since,omitempty"`
 		State RoutingStatusProtocolsState `json:"state"`

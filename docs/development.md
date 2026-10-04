@@ -410,7 +410,9 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   one WireGuard link (neighbor = the link peer's address); the filters follow plan §2.2.2: the import
   filter accepts only the allowed prefixes, never a default route, never a protected prefix (the
   gateway's own networks, the management network, the uplink network and the tunnel subnets), and
-  `import limit N action disable` makes the maximum number of prefixes a hard stop. BIRD's kernel
+  `import limit N action block` keeps the session up and simply stops importing past N prefixes
+  (M4c-04; `ProtocolStatus.ImportLimitHit`, from BIRD's own `[HIT]` marker, is in `/routing/status`
+  as `routes.limit_hit` and in `routing_routes_changed`). BIRD's kernel
   protocol exports only into table 100 (`learn off`, `export where source ~ [RTS_...]`), so learned
   routes never reach the main table. External mode reads another daemon's table through a pipe. The
   input chain accepts BGP (tcp 179), OSPF (ip protocol 89) and Babel (udp 6696) from the link's
@@ -440,8 +442,7 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   remote site's own prefixes.
 - **Protected prefixes** also contain the networks the executor routes itself (behind clients, links
   and routers): a more specific prefix from a neighbor would win over them in the kernel.
-- **Known limits.** A protocol disabled by `import limit` stays disabled until its configuration
-  changes. Babel is covered by configuration tests only, not by a session in the testbed.
+- **Known limits.** Babel is covered by configuration tests only, not by a session in the testbed.
 - **A BIRD outage (M4c-02).** `runBird` probes the control socket with a harmless read before
   `configure`; when BIRD does not answer, it writes the new file anyway (BIRD reads it at its own
   start) and returns `BirdDownError` instead of restoring the previous one. `apply` and `verify`

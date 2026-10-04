@@ -128,7 +128,7 @@ func TestTheGeneratedFiltersFollowSpikeS15(t *testing.T) {
 		"if net = 0.0.0.0/0 then reject;",
 		"if net ~ [ 10.10.0.0/24+, 192.168.56.0/24+, 203.0.113.0/24+, 10.255.0.0/31+ ] then reject;",
 		"if net ~ [ 10.60.0.0/22{22,24} ] then accept;",
-		"import limit 10 action disable;",
+		"import limit 10 action block;",
 		"export where source = RTS_STATIC && net ~ [ 10.10.0.0/24, 10.99.0.0/24 ];",
 		// OSPF: an allowed list combined with AllowDefault still lets the default route through
 		"if net = 0.0.0.0/0 then accept;",
@@ -264,6 +264,31 @@ func TestParseProtocols(t *testing.T) {
 		if _, err := ParseProtocols(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// M4c-04 test: BIRD 2.18's own "[HIT]" marker on the Import limit line, captured from a real
+// instance that imported an "action block" channel past its limit (a session stays up, unlike the
+// old "action disable").
+func TestParseProtocolsReportsAnImportLimitHit(t *testing.T) {
+	raw, err := os.ReadFile("testdata/show_protocols_limit_hit.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := ParseProtocols(string(raw))
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("%v %v", ps, err)
+	}
+	by := map[string]ProtocolStatus{}
+	for _, p := range ps {
+		by[p.Name] = p
+	}
+	st := by["st1"]
+	if !st.Established() || st.ImportLimit != 2 || !st.ImportLimitHit {
+		t.Errorf("%+v", st)
+	}
+	if dev := by["device1"]; dev.ImportLimitHit {
+		t.Errorf("a protocol without a limit reports one hit: %+v", dev)
 	}
 }
 

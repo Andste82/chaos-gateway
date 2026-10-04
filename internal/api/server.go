@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 	r.Use(s.recovery(), s.headers(), s.guard(), s.idempotent())
 	r.NoRoute(func(c *gin.Context) { s.write(c, newProblem(model.ErrorCodeNotFound, "no such resource")) })
 	r.NoMethod(func(c *gin.Context) {
-		s.write(c, &problem{code: model.ErrorCodeBadRequest, detail: "method not allowed", header: map[string]string{}})
+		s.write(c, newProblem(model.ErrorCodeMethodNotAllowed, "method not allowed").withHeader("Allow", strings.Join(s.allowedMethods(c.Request.URL.Path), ", ")))
 	})
 	apiserver.RegisterHandlersWithOptions(r, s, apiserver.GinServerOptions{BaseURL: "/api/v1", ErrorHandler: s.bindError})
 	return r
@@ -107,6 +109,39 @@ func (s *Server) Handler() http.Handler {
 
 // opOf returns the spec operation of the matched route.
 func (s *Server) opOf(c *gin.Context) *op { return s.ops[c.Request.Method+" "+c.FullPath()] }
+
+// allowedMethods lists the methods the spec gives the request path (Gin's NoMethod handler does
+// not expose the pattern it matched, only that one did, so this matches it again), for the Allow
+// header of a 405.
+func (s *Server) allowedMethods(path string) []string {
+	var methods []string
+	for key, o := range s.ops {
+		if pattern, ok := strings.CutPrefix(key, o.Method+" "); ok && pathMatches(pattern, path) {
+			methods = append(methods, o.Method)
+		}
+	}
+	sort.Strings(methods)
+	return methods
+}
+
+// pathMatches reports whether actual (a request path) matches a Gin route pattern such as
+// "/api/v1/revisions/:id", segment by segment.
+func pathMatches(pattern, actual string) bool {
+	ps := strings.Split(strings.Trim(pattern, "/"), "/")
+	as := strings.Split(strings.Trim(actual, "/"), "/")
+	if len(ps) != len(as) {
+		return false
+	}
+	for i, seg := range ps {
+		if strings.HasPrefix(seg, ":") {
+			continue
+		}
+		if seg != as[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // Close releases what the server holds.
 func (s *Server) Close() error { return s.idem.close() }

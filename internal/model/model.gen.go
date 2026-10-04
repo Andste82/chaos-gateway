@@ -755,6 +755,7 @@ const (
 	ErrorCodeIdempotencyConflict  ErrorCode = "idempotency_conflict"
 	ErrorCodeInternal             ErrorCode = "internal"
 	ErrorCodeLockoutProtected     ErrorCode = "lockout_protected"
+	ErrorCodeMethodNotAllowed     ErrorCode = "method_not_allowed"
 	ErrorCodeNameTaken            ErrorCode = "name_taken"
 	ErrorCodeNotACandidate        ErrorCode = "not_a_candidate"
 	ErrorCodeNotFound             ErrorCode = "not_found"
@@ -790,6 +791,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeInternal:
 		return true
 	case ErrorCodeLockoutProtected:
+		return true
+	case ErrorCodeMethodNotAllowed:
 		return true
 	case ErrorCodeNameTaken:
 		return true

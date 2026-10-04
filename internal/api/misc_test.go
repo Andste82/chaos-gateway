@@ -313,8 +313,22 @@ func TestProblemsAreProblemJSON(t *testing.T) {
 	g.noContract = false
 	// a method the route does not have
 	g.noContract = true
-	if r := g.do("PUT", "/state", nil, nil, nil); r.Status != 404 && r.Status != 400 && r.Status != 405 {
+	if r := g.do("PUT", "/state", nil, nil, nil); r.Status != 405 {
 		t.Errorf("%d", r.Status)
+	}
+}
+
+// M5-12 test: a method the path does not have gives 405 with an Allow header, not a bare 400.
+func TestWrongMethodGives405WithAllow(t *testing.T) {
+	g := ready(t)
+	g.noContract = true
+	r := g.do("PUT", "/state", nil, nil, nil)
+	if r.Status != 405 || r.code(t) != "method_not_allowed" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	allow := r.Header.Get("Allow")
+	if !strings.Contains(allow, "GET") {
+		t.Errorf("Allow: %q", allow)
 	}
 }
 

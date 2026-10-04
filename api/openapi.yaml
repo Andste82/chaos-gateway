@@ -69,6 +69,7 @@ info:
     | `forbidden` | 403 | authenticated, but scope too small |
     | `csrf_failed` | 403 | session request without valid `X-CSRF-Token` |
     | `not_found` | 404 | unknown id or name |
+    | `method_not_allowed` | 405 | the path exists, but not with this method; `Allow` names the methods it does take |
     | `revision_conflict` | 409 | `If-Match` is not the active revision any more; reload and reapply |
     | `confirm_pending` | 409 | another revision is waiting for commit-confirm |
     | `target_busy` | 409 | a run is active on the target and `?queue=false` was given |
@@ -2124,6 +2125,7 @@ components:
         - forbidden
         - csrf_failed
         - not_found
+        - method_not_allowed
         - revision_conflict
         - confirm_pending
         - target_busy

@@ -167,23 +167,37 @@ type Lease struct {
 // ExpiresAt is when the lease ends.
 func (l Lease) ExpiresAt() time.Time { return time.Unix(l.CLTT+l.ValidLft, 0).UTC() }
 
-// Leases returns all IPv4 leases (`lease4-get-all`).
+// leasePageLimit bounds how many leases Leases asks for per lease4-get-page call. A variable, not a
+// constant, so a test can lower it to exercise more than one page without adding thousands of leases.
+var leasePageLimit = 1000
+
+// Leases returns all IPv4 leases, paging through `lease4-get-page` (M6a-19) instead of
+// `lease4-get-all`, which would answer every lease in the table in one message however large it is.
 func (c *Client) Leases(ctx context.Context) ([]Lease, error) {
-	a, err := c.Do(ctx, "lease4-get-all", nil)
-	var ke *Error
-	if errors.As(err, &ke) && ke.Empty() {
-		return nil, nil
+	var out []Lease
+	from := "start"
+	for {
+		a, err := c.Do(ctx, "lease4-get-page", map[string]any{"from": from, "limit": leasePageLimit})
+		var ke *Error
+		if errors.As(err, &ke) && ke.Empty() {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var v struct {
+			Leases []Lease `json:"leases"`
+		}
+		if err := json.Unmarshal(a.Arguments, &v); err != nil {
+			return nil, err
+		}
+		out = append(out, v.Leases...)
+		if len(v.Leases) < leasePageLimit {
+			break
+		}
+		from = v.Leases[len(v.Leases)-1].IP
 	}
-	if err != nil {
-		return nil, err
-	}
-	var v struct {
-		Leases []Lease `json:"leases"`
-	}
-	if err := json.Unmarshal(a.Arguments, &v); err != nil {
-		return nil, err
-	}
-	return v.Leases, nil
+	return out, nil
 }
 
 // DeleteLease deletes the lease of an address (`lease4-del`). Deleting a lease does not force a

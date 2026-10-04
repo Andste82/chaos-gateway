@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -290,6 +291,48 @@ func TestTheClientDrivesARealKea(t *testing.T) {
 	}
 	if leases, _ := c.Leases(ctx); len(leases) != 0 {
 		t.Errorf("%+v", leases)
+	}
+}
+
+// M6a-19 test: Leases pages through lease4-get-page instead of asking for everything in one
+// lease4-get-all call. leasePageLimit is lowered so the real Kea answers three leases in two pages
+// rather than needing thousands of real leases to prove the loop works.
+func TestLeasesArePagedPastTheLimit(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Subnets[0].Interface = "lo"
+	cfg.Subnets[0].Subnet = netip.MustParsePrefix("127.0.0.0/8")
+	cfg.Subnets[0].Pools = []Pool{{netip.MustParseAddr("127.0.0.100"), netip.MustParseAddr("127.0.0.200")}}
+	cfg.Subnets[0].Reservations = nil
+	cfg.Subnets[0].Router = netip.MustParseAddr("127.0.0.1")
+	cfg.Subnets[0].DNS, cfg.Subnets[0].NTP = nil, nil
+	cfg.Script = ""
+	c := startKea(t, cfg)
+	ctx := context.Background()
+
+	addrs := []string{"127.0.0.101", "127.0.0.102", "127.0.0.103"}
+	for i, ip := range addrs {
+		mac := fmt.Sprintf("02:00:00:00:00:%02x", i)
+		if _, err := c.Do(ctx, "lease4-add", map[string]any{"ip-address": ip, "hw-address": mac, "valid-lft": 300, "subnet-id": 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	old := leasePageLimit
+	leasePageLimit = 2
+	t.Cleanup(func() { leasePageLimit = old })
+
+	leases, err := c.Leases(ctx)
+	if err != nil || len(leases) != len(addrs) {
+		t.Fatalf("%+v %v", leases, err)
+	}
+	got := map[string]bool{}
+	for _, l := range leases {
+		got[l.IP] = true
+	}
+	for _, ip := range addrs {
+		if !got[ip] {
+			t.Errorf("lease %s is missing: %+v", ip, leases)
+		}
 	}
 }
 

@@ -276,7 +276,9 @@ func TestBabelOverAWireGuardLink(t *testing.T) {
 		t.Fatalf("the Babel session did not come up\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"))
 	}
 	if !g.waitRoute("10.60.0.0/24", true, 30*time.Second) {
-		t.Fatalf("the learned route is not in table 100\n%s", g.table100())
+		t.Fatalf("the learned route is not in table 100\n%s\n%s\n%s\n%s\n%s", g.table100(),
+			birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, g.siteSock, "show", "protocols", "all"),
+			birdc(t, g.gwSock, "show", "route", "all"), birdc(t, g.siteSock, "show", "route", "all"))
 	}
 	// IPv6 is still not a routed family of its own (plan §2.2): Babel's hellos stay link-local
 	// traffic the input chain accepts for the protocol, nothing forwarded; TestIPv6IsBlockedOnTestNetworks

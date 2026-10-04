@@ -1,6 +1,7 @@
 package apply_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -56,6 +57,47 @@ func TestSwitchingRoutingOffWithdrawsTheProtocols(t *testing.T) {
 	}
 	if birdOps(e.apply()) != 0 {
 		t.Error("the idle configuration is applied again and again")
+	}
+}
+
+// M4c-14 test: when `birdc configure` fails, the executor keeps the previous configuration file in
+// place (it already did; this is the first test of it at the apply level), so a retry with the same
+// target finds nothing to synchronize once the injected failure is lifted.
+func TestAFailedApplyRestoresThePreviousBirdConfiguration(t *testing.T) {
+	e := newWGEnv(t)
+	withBGP(e)
+	before := e.compile()
+	e.apply()
+	beforeHash := apply.TextHash(before.Bird.Text)
+
+	asn := int64(65099)
+	e.cfg.Routing.Asn = &asn
+	next := e.compile()
+	if next.Bird.Text == before.Bird.Text {
+		t.Fatal("the change does not touch the bird configuration")
+	}
+	e.k.Fail = func(argv []string, _ string) *executor.Result {
+		if len(argv) > 0 && argv[0] == "birdc" && strings.Contains(strings.Join(argv, " "), "configure") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	if _, err := apply.Apply(context.Background(), e.exec(), "", next); err == nil {
+		t.Fatal("the injected failure did not surface")
+	}
+	e.k.Fail = nil
+
+	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Bird == nil || s.Bird.ConfigHash != beforeHash {
+		t.Fatalf("the running configuration was not restored: %+v", s.Bird)
+	}
+
+	res := e.apply()
+	if birdOps(res) != 1 {
+		t.Errorf("the restored configuration still needs the pending change applied: %v", res.Plan.Summary)
 	}
 }
 

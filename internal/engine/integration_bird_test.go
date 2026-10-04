@@ -255,7 +255,9 @@ func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {
 	if _, ok := waitRoutingState(ch, "down", 30*time.Second); !ok {
 		t.Fatalf("no routing_session_changed event (down)\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
 	}
-	if !g.waitRoute("10.60.0.0/24", false, 30*time.Second) {
+	// hold time (9 s) + the 1 s poll interval + 5 s margin: a looser bound would hide a withdrawal
+	// that only happens on the next, unrelated apply
+	if !g.waitRoute("10.60.0.0/24", false, 20*time.Second) {
 		t.Errorf("the learned route stays in table 100\n%s", g.table100())
 	}
 	g.top.Site.Must("ip", "link", "set", "wgsite", "up")
@@ -267,14 +269,52 @@ func TestALinkOutageEndsTheSessionAndTheLearnedRoutesLeave(t *testing.T) {
 	}
 }
 
+// M4c-14 test: a neighbor that stops announcing a prefix withdraws it from table 100, leaving what
+// it still announces alone.
+func TestANeighborWithdrawingAPrefixRemovesIt(t *testing.T) {
+	g := newBGP(t, 10, "10.60.0.0/24", "10.60.1.0/24")
+	if !g.established(90*time.Second) || !g.waitRoute("10.60.0.0/24", true, 30*time.Second) || !g.waitRoute("10.60.1.0/24", true, 30*time.Second) {
+		t.Fatalf("no session or routes\n%s", g.table100())
+	}
+	conf := strings.Replace(g.siteConf, "  route 10.60.1.0/24 unreachable;\n", "", 1)
+	if conf == g.siteConf {
+		t.Fatalf("the route to remove is not in the site's configuration:\n%s", g.siteConf)
+	}
+	confPath := filepath.Join(g.dir, "site", "site.conf")
+	if err := os.WriteFile(confPath, []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	birdc(t, g.siteSock, "configure")
+	if !g.waitRoute("10.60.1.0/24", false, 20*time.Second) {
+		t.Errorf("the withdrawn route stays in table 100\n%s", g.table100())
+	}
+	if !g.waitRoute("10.60.0.0/24", true, 5*time.Second) {
+		t.Errorf("the prefix that is still announced was removed too\n%s", g.table100())
+	}
+}
+
 // M4c test: a prefix limit that is exceeded takes the session down instead of flooding table 100.
 // The same remote routes under a limit of 10 come up in the other tests, so a session that stays
 // down here is the limit's doing; a disabled protocol stays disabled.
 func TestMoreRoutesThanTheLimitDisableTheSession(t *testing.T) {
 	g := newBGP(t, 2, "10.60.0.0/24", "10.60.1.0/24", "10.60.2.0/24", "10.60.3.0/24")
 	time.Sleep(45 * time.Second)
+	out := birdc(t, g.gwSock, "show", "protocols", "all")
 	if g.establishedNow() || strings.Contains(g.table100(), "10.60.") {
-		t.Fatalf("the limit of 2 did not take the session down\n%s\n%s", birdc(t, g.gwSock, "show", "protocols", "all"), g.table100())
+		t.Fatalf("the limit of 2 did not take the session down\n%s\n%s", out, g.table100())
+	}
+	ps, err := bird.ParseProtocols(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limit int
+	for _, p := range ps {
+		if p.Proto == "BGP" {
+			limit = p.ImportLimit
+		}
+	}
+	if limit != 2 {
+		t.Errorf("BIRD's own status does not name the limit that was hit: %d\n%s", limit, out)
 	}
 }
 
@@ -315,11 +355,14 @@ func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *test
 		return ""
 	}
 	before := since()
-	// a different timer in the announce list: BIRD reconfigures, the session stays
+	// changing the announce list and the import filter (not the protocol's own neighbor, AS or
+	// timers) reconfigures BIRD without ending the session
 	g.apply(func(c *model.Configuration) {
 		routingMod(10, "")(c)
 		p := (*c.Routing.Protocols)[birdProtoID]
 		p.Announce = &[]model.AnnounceEntry{{Cidr: ptrS("10.77.0.0/24")}}
+		maxp, max24 := 5, 28
+		p.Import = &model.ImportFilter{MaxPrefixes: &maxp, AllowedPrefixes: &[]model.PrefixFilterEntry{{Prefix: "10.60.0.0/22", MaxLength: &max24}}}
 		(*c.Routing.Protocols)[birdProtoID] = p
 	})
 	if got := since(); got != before {
@@ -340,8 +383,8 @@ func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *test
 			msg = pr.Message
 		}
 	}
-	if msg == "" {
-		t.Fatalf("the preview does not show BIRD's message: %+v", p.Problems)
+	if msg == "" || !strings.Contains(msg, "syntax error") {
+		t.Fatalf("the preview does not show BIRD's own syntax error message: %+v", p.Problems)
 	}
 	if got := since(); got != before {
 		t.Errorf("the preview changed the running instance: %s", got)
@@ -374,10 +417,10 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 		c.AccessMatrix.Entries = &entries
 		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}, Announce: &[]model.AnnounceEntry{{Network: &iot}}}
 	})
-	// the BGP neighbor announces a default route, the management prefix, a prefix of the gateway
-	// and the remote network
+	// both neighbors announce a default route, the management prefix, a prefix of the gateway and
+	// their own remote network: the import filter rejects the first three for BGP and OSPF alike
 	g.remoteSite(g.top.Site, tLink, "wgsite", "site", "10.60.0.0/24", "0.0.0.0/0", "192.168.56.0/24")
-	siteC := g.remoteSite(g.top.Site2, linkC, "wgsite2", "site2", "10.70.0.0/24")
+	siteC := g.remoteSite(g.top.Site2, linkC, "wgsite2", "site2", "10.70.0.0/24", "0.0.0.0/0", "192.168.56.0/24", "10.10.0.0/24")
 	if !g.established(90 * time.Second) {
 		t.Fatalf("no BGP session\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
 	}
@@ -387,7 +430,7 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	if !g.waitRoute("10.70.0.0/24 via 10.255.1.1 dev wg-site-c", true, 90*time.Second) {
 		t.Fatalf("the OSPF route is not in table 100\n%s\n%s\n%s", g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, siteC, "show", "protocols", "all"))
 	}
-	for _, bad := range []string{"default via 10.255.", "192.168.56.0/24 via"} {
+	for _, bad := range []string{"default via 10.255.", "192.168.56.0/24 via", "10.10.0.0/24 via 10.255.1.1"} {
 		if strings.Contains(g.table100(), bad) {
 			t.Errorf("the filter let %q through\n%s", bad, g.table100())
 		}

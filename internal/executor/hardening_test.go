@@ -211,7 +211,7 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "api" {
 		t.Fatalf("command %v", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--kea-events-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)

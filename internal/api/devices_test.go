@@ -1,6 +1,8 @@
 package api_test
 
 import (
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,4 +249,48 @@ func TestLeaseEventsComeFromTheServiceOnly(t *testing.T) {
 	}
 	g.badRequest = false
 	g.token = admin
+}
+
+// M6a-09 test: a lease event posted over the Unix datagram socket reaches the engine the same way
+// the HTTP path does.
+func TestLeaseEventsArriveOverTheDatagramSocket(t *testing.T) {
+	g := dhcpGateway(t)
+	sid := 0
+	for id := range g.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	sockPath := filepath.Join(g.t.TempDir(), "chaosgw-events.sock")
+	ctx, cancel := context_(10 * time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- g.srv.ListenKeaEvents(ctx, sockPath) }()
+	// ListenKeaEvents creates the socket itself; give it a moment to exist before dialing
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(sockPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the socket was never created")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stream := g.openStream("", "?types=dhcp_lease")
+	conn, err := net.DialTimeout("unixgram", sockPath, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"event": "select", "ip": "10.10.0.150", "mac": "02:00:00:00:00:AA", "subnet_id": sid, "valid_lifetime": 600, "hostname": "esp32"})
+	if _, err := conn.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	got, ok := stream.until("dhcp_lease", 5*time.Second)
+	if !ok || got.Data["data"].(map[string]any)["ip"] != "10.10.0.150" || got.Data["data"].(map[string]any)["mac"] != "02:00:00:00:00:aa" {
+		t.Fatalf("%+v", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("ListenKeaEvents: %v", err)
+	}
 }

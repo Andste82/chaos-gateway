@@ -627,9 +627,16 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   apply. The executor takes such requests before queued plans (a second queue class) and never runs two
   requests at once. The generation rule in the kernel keeps naming the last full apply.
 - **Lease events.** Kea's `run_script` hook starts `chaosgw-kea-hook`, which runs `chaosgw kea-hook`: it
-  posts the event to `/api/v1/internal/dhcp/lease-events` with the service token (scope `service`, the
-  only scope that reaches `/internal`; written by the API to the `chaosgw-service` volume, which Kea
-  mounts read-only). The event is published as `dhcp_lease` and makes the poller read at once.
+  writes the event as one JSON datagram to the Unix socket the API serves at `--kea-events-socket`
+  (`CHAOSGW_KEA_EVENTS_SOCKET`, default `/run/kea/chaosgw-events.sock` in the shared `chaosgw-kea-run`
+  volume, M6a-09) — no connection, no TLS handshake, so a DHCP flood from an untrusted device costs the
+  hook a `write(2)` and the API a few bytes, not a forked process and a handshake each. The kernel
+  drops a datagram rather than blocking the hook if the API is slow or the socket's buffer is full.
+  When the socket is missing or the write fails for any reason, the hook falls back to
+  `POST /api/v1/internal/dhcp/lease-events` with the service token (scope `service`, the only scope
+  that reaches `/internal`; written by the API to the `chaosgw-service` volume, which Kea mounts
+  read-only) — the only path before M6a-09, kept for exactly this case. Either way the event is
+  published as `dhcp_lease` and makes the poller read at once.
 - **API.** `GET /devices`, `/devices/{id}` (configured, WireGuard clients, probes and discovered devices
   with their observed state), `GET /networks/{id}/leases`, `GET /flows` (from conntrack, with the device
   of each flow). Adopting a discovered device and merging two devices are revisions (the spec's

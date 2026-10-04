@@ -4,7 +4,8 @@
 # its control socket directory to the API's group at start). It runs as root without any other
 # capability; its root file system is read-only. The API container configures it through the control
 # socket (`config-set`) and gets the lease events from Kea's run_script hook (`chaosgw-kea-hook`),
-# which posts them to the API with the service token.
+# which posts them over the datagram socket the API serves in the shared chaosgw-kea-run volume
+# (M6a-09; HTTP with the service token is the fallback when that socket is unavailable).
 services:
   kea:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
@@ -31,6 +32,9 @@ services:
       CHAOSGW_API: https://127.0.0.1:${CHAOSGW_UI_PORT:-8443}
       # the API's certificate, so the hook verifies it instead of trusting whatever is presented
       CHAOSGW_API_CERT: /var/lib/chaosgw/service/api.pem
+      # the hook posts over this datagram socket instead of HTTP when it is available (M6a-09);
+      # HTTP (CHAOSGW_API above) stays the fallback
+      CHAOSGW_KEA_EVENTS_SOCKET: /run/kea/chaosgw-events.sock
     restart: unless-stopped
     stop_grace_period: 10s
     logging:

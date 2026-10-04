@@ -86,7 +86,33 @@ func fixtureConfig(t *testing.T) (Config, *bytes.Buffer) {
 		Dir: ".", Kernel: kernel, Packages: []string{"./testdata/fixture"},
 		WorkDir: filepath.Join(t.TempDir(), "work"), Stdout: &out, Stderr: &out,
 		TestTimeout: time.Minute, VMTimeout: time.Minute,
+		// the fixture's TestSkips skips on purpose; most tests here are not about that, so they
+		// allow it and TestCollectSkipsFailUnlessAllowed below tests the default separately.
+		AllowSkip: true,
 	}, &out
+}
+
+// M1-08 test: a skip fails the run unless explicitly allowed, the same way a FAIL does.
+func TestCollectSkipsFailUnlessAllowed(t *testing.T) {
+	fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
+	c, out := fixtureConfig(t)
+	c.Run = "TestSkips"
+	c.AllowSkip = false
+	s, err := Run(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Run: %v\n%s", err, out)
+	}
+	if s.OK() {
+		t.Fatal("a skip must fail the run by default")
+	}
+	if probs := strings.Join(s.Problems(), "\n"); !strings.Contains(probs, "1 tests skipped") {
+		t.Fatalf("problems = %q", probs)
+	}
+	c.AllowSkip = true
+	s, err = Run(context.Background(), c)
+	if err != nil || !s.OK() {
+		t.Fatalf("AllowSkip must let the same run pass: %v %v\n%s", err, s.Problems(), out)
+	}
 }
 
 func TestRunWithFakeVMAllPass(t *testing.T) {

@@ -281,6 +281,7 @@ func (n *Namespace) Start(name string, args ...string) *Process {
 	p.cmd = n.Command(context.Background(), name, args...)
 	w := &lockedWriter{p: p}
 	p.cmd.Stdout, p.cmd.Stderr = w, w
+	p.cmd.WaitDelay = 5 * time.Second
 	if err := p.cmd.Start(); err != nil {
 		n.bed.t.Fatalf("testbed: start %s in %s: %v", name, n.Short, err)
 	}

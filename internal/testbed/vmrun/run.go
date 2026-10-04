@@ -42,6 +42,9 @@ type Config struct {
 	// temporary directory. It is removed afterwards unless Keep is set.
 	WorkDir string
 	Keep    bool
+	// AllowSkip allows skipped tests; otherwise Summary.OK reports a skip as a failure (CC-04:
+	// a skip must never pass silently).
+	AllowSkip bool
 	// Stdout receives the guest's console and the summary; Stderr the host-side progress.
 	Stdout, Stderr io.Writer
 }
@@ -291,6 +294,7 @@ func run(ctx context.Context, c Config) (Summary, error) {
 	runErr := cmd.Run()
 
 	summary, err := Collect(os.DirFS(c.WorkDir), units)
+	summary.AllowSkip = c.AllowSkip
 	if err != nil {
 		return summary, err
 	}

@@ -45,6 +45,7 @@ func TestCollectAllPassed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.AllowSkip = true // this fixture's "all passed" data includes one SKIP on purpose
 	if !s.OK() || len(s.Problems()) != 0 {
 		t.Fatalf("summary not OK: %v", s.Problems())
 	}

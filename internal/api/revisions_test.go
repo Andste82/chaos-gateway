@@ -151,6 +151,11 @@ func TestPreviewApplyAndTheState(t *testing.T) {
 	}
 }
 
+// a candidate based on a revision that is no longer active can never be committed
+// (store.ErrRevisionConflict is covered directly in internal/store, on a store that nothing
+// prunes); through the API, applying a committed a's sibling candidate b finds it already gone
+// instead, because that same commit's prune (M2-01) reclaims it right away, whatever the
+// retention count says.
 func TestAConflictingCandidateIsRejected(t *testing.T) {
 	g := ready(t)
 	a := g.mustPatch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.11"}})
@@ -159,7 +164,7 @@ func TestAConflictingCandidateIsRejected(t *testing.T) {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	r := g.apply(b)
-	if r.Status != 409 || r.code(t) != "revision_conflict" || r.json(t)["active_revision"] != float64(a) {
+	if r.Status != 404 || r.code(t) != "not_found" {
 		t.Errorf("%d %s", r.Status, r.Body)
 	}
 	// the client reloads and reapplies its change
@@ -183,19 +188,21 @@ func TestConcurrentAppliesOfTwoCandidatesExactlyOneSucceeds(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	ok, conflict := 0, 0
+	// the one that commits first reclaims the other's candidate in the same step (M2-01), so the
+	// loser finds it already gone rather than getting a revision_conflict.
+	ok, notFound := 0, 0
 	for _, r := range results {
 		switch {
 		case r.Status == 200:
 			ok++
-		case r.Status == 409 && r.code(t) == "revision_conflict":
-			conflict++
+		case r.Status == 404 && r.code(t) == "not_found":
+			notFound++
 		default:
 			t.Errorf("%d %s", r.Status, r.Body)
 		}
 	}
-	if ok != 1 || conflict != 1 {
-		t.Errorf("%d applied, %d conflicted", ok, conflict)
+	if ok != 1 || notFound != 1 {
+		t.Errorf("%d applied, %d not found", ok, notFound)
 	}
 }
 

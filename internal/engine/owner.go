@@ -230,6 +230,7 @@ func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 		o.snap.Revision, o.snap.Config, o.snap.Generation = init.revision, init.config, o.gen
 		e.desired.Store(o.committed)
 		e.signal()
+		o.prune(init.config)
 	}
 	o.publish()
 	for {
@@ -291,29 +292,54 @@ func (o *owner) scheduleRetry() {
 	})
 }
 
-// prune removes the secrets that the committed configuration does not use any more: those of
-// deleted objects and of older key generations. A revision that waits for confirmation still has
-// its predecessor to go back to, so this runs when a revision has become the active one.
+// prune removes the secrets that the committed configuration does not use any more (those of
+// deleted objects and of older key generations) and old revisions beyond the retention setting
+// (§3.6). A revision that waits for confirmation still has its predecessor to go back to, so this
+// runs when a revision has become the active one.
+//
+// The revision prune runs last, after the secrets of every still-existing candidate have been
+// protected: Store.Prune also discards a candidate whose base is no longer the active revision,
+// whatever the retention count says (it can never be committed any more), and if that ran first a
+// candidate's still-unused rotated keys would already be unreachable by the time the WireGuard
+// prune looks for candidates to protect. A side effect worth knowing: a sibling candidate based on
+// the same, now-superseded revision is reclaimed in this same step, so a concurrent apply of it
+// that is still in flight finds it already gone (store.ErrNotFound) rather than getting a
+// revision_conflict with the new active id — see the "Revision retention" note below.
 func (o *owner) prune(cfg *model.Configuration) {
 	if o.e.cfg.Secrets == nil {
+		o.pruneRevisions(cfg)
 		return
 	}
-	keep := []*model.Configuration{cfg}
+	wgKeep := []*model.Configuration{cfg}
 	// a candidate that has not been applied yet may carry rotated keys that exist in the store
 	if revs, err := o.e.cfg.Store.List(store.ListOptions{Status: store.StatusCandidate}); err == nil {
 		for _, r := range revs {
 			if _, c, err := o.e.cfg.Store.Get(r.Id); err == nil {
-				keep = append(keep, c)
+				wgKeep = append(wgKeep, c)
 			}
 		}
 	}
 	if p, ok := o.e.cfg.Store.PendingConfirm(); ok {
 		if _, c, err := o.e.cfg.Store.Get(p.Revision); err == nil {
-			keep = append(keep, c)
+			wgKeep = append(wgKeep, c)
 		}
 	}
-	if err := wireguard.Prune(o.e.cfg.Secrets, keep...); err != nil {
+	if err := wireguard.Prune(o.e.cfg.Secrets, wgKeep...); err != nil {
 		o.e.cfg.Log.Warn("cannot remove unused secrets", "error", err)
+	}
+	o.pruneRevisions(cfg)
+}
+
+// pruneRevisions bounds the store to the configured (or default) retention.
+func (o *owner) pruneRevisions(cfg *model.Configuration) {
+	keep := store.DefaultRetainedRevisions
+	if cfg.Settings != nil && cfg.Settings.Retention != nil && cfg.Settings.Retention.Revisions != nil {
+		keep = *cfg.Settings.Retention.Revisions
+	}
+	if removed, err := o.e.cfg.Store.Prune(keep); err != nil {
+		o.e.cfg.Log.Warn("cannot prune old revisions", "error", err)
+	} else if len(removed) > 0 {
+		o.e.cfg.Log.Info("pruned old revisions", "ids", removed)
 	}
 }
 

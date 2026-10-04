@@ -328,7 +328,7 @@ func (s *Server) PostLeaseEvent(c *gin.Context) {
 		s.write(c, p)
 		return
 	}
-	if p := requireFields(map[string]bool{"event": body.Event != "", "ip": body.IP != "", "mac": body.MAC != ""}); p != nil {
+	if p := requireFields(map[string]bool{"event": body.Event != "", "ip": body.IP != "", "mac": body.MAC != "", "subnet_id": body.SubnetID > 0}); p != nil {
 		s.write(c, p)
 		return
 	}

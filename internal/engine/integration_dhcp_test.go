@@ -414,4 +414,7 @@ func TestFlowsOfADeviceAreListed(t *testing.T) {
 	if f.Src.String() != ip || f.Dst.String() != testbed.ServerAddr || f.DPort != 8080 || f.Protocol != "tcp" || f.Network != tIoT {
 		t.Errorf("%+v", f)
 	}
+	if f.Upload.Bytes <= 0 || f.Download.Bytes <= 0 {
+		t.Errorf("accounting is off: upload %+v, download %+v", f.Upload, f.Download)
+	}
 }

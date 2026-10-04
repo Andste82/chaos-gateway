@@ -302,8 +302,11 @@ func ReadCommand(o *Read) Command {
 }
 
 func sysctlPath(name, dev string) string {
-	if name == "ip_forward" {
+	switch name {
+	case "ip_forward":
 		return "net/ipv4/ip_forward"
+	case "nf_conntrack_acct":
+		return "net/netfilter/nf_conntrack_acct"
 	}
 	return "net/ipv6/conf/" + dev + "/" + name
 }

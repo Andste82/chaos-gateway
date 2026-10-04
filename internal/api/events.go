@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,12 +40,20 @@ var writeTimeout = 10 * time.Second
 
 // publicEvent is the event as the API shows it; internal event types are left out.
 type publicEvent struct {
-	ID         string         `json:"id"`
-	Type       string         `json:"type"`
-	Time       time.Time      `json:"time"`
-	Data       map[string]any `json:"data,omitempty"`
-	Message    string         `json:"message,omitempty"`
-	Generation *int64         `json:"generation,omitempty"`
+	ID         string              `json:"id"`
+	Type       string              `json:"type"`
+	Time       time.Time           `json:"time"`
+	Data       map[string]any      `json:"data,omitempty"`
+	Message    string              `json:"message,omitempty"`
+	Generation *int64              `json:"generation,omitempty"`
+	Actor      *model.Actor        `json:"actor,omitempty"`
+	Subject    *publicEventSubject `json:"subject,omitempty"`
+}
+
+type publicEventSubject struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 var knownTypes = func() map[string]bool {
@@ -65,7 +74,29 @@ func toPublic(ev engine.Event) (publicEvent, bool) {
 	if !knownTypes[ev.Type] {
 		return publicEvent{}, false
 	}
-	pe := publicEvent{ID: strconv.FormatUint(ev.Seq, 10), Type: ev.Type, Time: ev.Time.UTC(), Data: ev.Data, Message: describe(ev)}
+	// actor and subject (M5-06) are reported as their own fields, not nested under data too
+	data := ev.Data
+	if _, ok := data["actor"]; ok {
+		data = maps.Clone(data)
+	} else if _, ok := data["subject"]; ok {
+		data = maps.Clone(data)
+	}
+	pe := publicEvent{ID: strconv.FormatUint(ev.Seq, 10), Type: ev.Type, Time: ev.Time.UTC(), Data: data, Message: describe(ev)}
+	if a, ok := data["actor"]; ok {
+		if act, ok := a.(model.Actor); ok {
+			pe.Actor = &act
+		}
+		delete(data, "actor")
+	}
+	if s, ok := data["subject"]; ok {
+		if sub, ok := s.(engine.Subject); ok {
+			pe.Subject = &publicEventSubject{Kind: sub.Kind, ID: sub.ID, Name: sub.Name}
+		}
+		delete(data, "subject")
+	}
+	if len(data) == 0 {
+		pe.Data = nil
+	}
 	if g, ok := ev.Data["generation"]; ok {
 		switch v := g.(type) {
 		case uint64:

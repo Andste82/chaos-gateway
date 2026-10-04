@@ -481,7 +481,8 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		return
 	}
 	s.record(c, "setup.complete", nil, rev.Id, "")
-	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": rev.Id, "setup": true})
+	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": rev.Id, "setup": true,
+		"actor": actorOf(principalOf(c)), "subject": engine.Subject{Kind: "revision", ID: itoa(rev.Id)}})
 	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
 	c.JSON(200, applyResult(res))
 }

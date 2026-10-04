@@ -192,7 +192,7 @@ func (s *Server) storeCandidate(c *gin.Context, cfg *model.Configuration, ifMatc
 		return model.Revision{}, err
 	}
 	s.record(c, "revision.create", &audit.Object{Kind: "revision", ID: itoa(rev.Id)}, rev.Id, message)
-	s.cfg.Engine.Emit("revision_created", map[string]any{"revision": rev.Id, "base": ifMatch})
+	s.cfg.Engine.Emit("revision_created", map[string]any{"revision": rev.Id, "base": ifMatch, "actor": by, "subject": engine.Subject{Kind: "revision", ID: itoa(rev.Id)}})
 	return rev, nil
 }
 
@@ -311,14 +311,15 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 		return
 	}
 	s.record(c, "revision.apply", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, res.Status)
-	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": revisionId, "status": res.Status})
+	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": revisionId, "status": res.Status,
+		"actor": actorOf(principalOf(c)), "subject": engine.Subject{Kind: "revision", ID: itoa(revisionId)}})
 	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
 	c.JSON(200, applyResult(res))
 }
 
 // ConfirmRevision implements POST /revisions/{revisionId}/confirm.
 func (s *Server) ConfirmRevision(c *gin.Context, revisionId model.RevisionId) {
-	if err := s.cfg.Engine.Confirm(contextOf(c), revisionId); err != nil {
+	if err := s.cfg.Engine.Confirm(contextOf(c), revisionId, actorOf(principalOf(c))); err != nil {
 		s.fail(c, err)
 		return
 	}

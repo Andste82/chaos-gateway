@@ -72,6 +72,9 @@ func TestNetworkRules(t *testing.T) {
 		{"dhcp custom option set twice", func(t *testing.T, d doc) {
 			d.set(t, []any{obj(t, `{"code":128,"value":"a"}`), obj(t, `{"code":128,"value":"b"}`)}, "networks", idIoT, "dhcp", "options", "custom")
 		}, iot + "/dhcp/options/custom/1/code", CodeDuplicateIdentifier},
+		{"dhcp custom option uses a code Kea manages", func(t *testing.T, d doc) {
+			d.set(t, []any{obj(t, `{"code":6,"value":"a"}`)}, "networks", idIoT, "dhcp", "options", "custom")
+		}, iot + "/dhcp/options/custom/0/code", CodeReservedOption},
 		{"static dns entry twice", func(t *testing.T, d doc) {
 			d.set(t, []any{obj(t, `{"name":"a.test","addresses":["10.10.0.5"]}`), obj(t, `{"name":"A.test","addresses":["10.10.0.6"]}`)}, "networks", idIoT, "dns", "static_entries")
 		}, iot + "/dns/static_entries/1/name", CodeDuplicateName},

@@ -26,10 +26,11 @@ const (
 
 // fakeDHCP records what the engine asks of the DHCP server.
 type fakeDHCP struct {
-	mu     sync.Mutex
-	applys []*compiler.KeaTarget
-	err    error
-	leases []kea.Lease
+	mu      sync.Mutex
+	applys  []*compiler.KeaTarget
+	err     error
+	testErr error
+	leases  []kea.Lease
 }
 
 func (f *fakeDHCP) Apply(_ context.Context, t *compiler.KeaTarget) error {
@@ -45,8 +46,15 @@ func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
 	return append([]kea.Lease(nil), f.leases...), nil
 }
 
-func (f *fakeDHCP) setErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
-func (f *fakeDHCP) calls() int       { f.mu.Lock(); defer f.mu.Unlock(); return len(f.applys) }
+func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.testErr
+}
+
+func (f *fakeDHCP) setErr(err error)     { f.mu.Lock(); f.err = err; f.mu.Unlock() }
+func (f *fakeDHCP) setTestErr(err error) { f.mu.Lock(); f.testErr = err; f.mu.Unlock() }
+func (f *fakeDHCP) calls() int           { f.mu.Lock(); defer f.mu.Unlock(); return len(f.applys) }
 func (f *fakeDHCP) last() *compiler.KeaTarget {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -104,6 +112,36 @@ func (h *harness) device(id string) *engine.DeviceState {
 		}
 	}
 	return nil
+}
+
+// M6a-06 test: the preview runs Kea's own config-test on a configured scope, so a scope Kea would
+// reject (a managed option code, bad option data) is reported before an apply would hit it, instead
+// of only showing up afterwards as DHCPError.
+func TestPreviewReportsAScopeKeaRejects(t *testing.T) {
+	h, f := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	f.setTestErr(errors.New("'option-data' parameter is invalid"))
+	r2 := h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		n := (*c.Networks)[iotID]
+		lan, _ := n.AsLanNetwork()
+		lan.Dhcp.LeaseTime = ptr("20m")
+		_ = n.FromLanNetwork(lan)
+		(*c.Networks)[iotID] = n
+	})
+	p, err := h.e.Preview(context.Background(), r2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, pr := range p.Problems {
+		if pr.Code == compiler.CodeDHCP && strings.Contains(pr.Message, "option-data") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no dhcp problem in %+v", p.Problems)
+	}
 }
 
 func TestTheKernelAndTheDHCPServerAreConfiguredTogether(t *testing.T) {

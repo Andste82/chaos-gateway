@@ -261,10 +261,14 @@ func (v *validator) dhcpOptions(path string, o *model.DhcpOptions) {
 	}
 	seen := map[int]bool{}
 	for i, c := range deref(o.Custom) {
+		p := schema.Pointer(path+"/custom", itoa(i)) + "/code"
 		if seen[c.Code] {
-			v.add(schema.Pointer(path+"/custom", itoa(i))+"/code", CodeDuplicateIdentifier, "option %d is set twice", c.Code)
+			v.add(p, CodeDuplicateIdentifier, "option %d is set twice", c.Code)
 		}
 		seen[c.Code] = true
+		if reservedDHCPOptions[c.Code] {
+			v.add(p, CodeReservedOption, "option %d is managed by the gateway and cannot be set as a custom option", c.Code)
+		}
 	}
 }
 

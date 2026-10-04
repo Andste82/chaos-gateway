@@ -75,7 +75,16 @@ const (
 	CodeInvalidName            = "invalid_name"
 	CodeDuplicateRoutingKind   = "duplicate_protocol"
 	CodeUnknownRoutingSettings = "missing_routing_settings"
+	CodeReservedOption         = "reserved_option"
 )
+
+// reservedDHCPOptions are the DHCPv4 option codes Kea or the compiler already manage (router,
+// lease time, DNS/NTP servers, …); a custom option with one of these codes would either be
+// rejected by Kea's config-set or silently overridden, breaking every scope in the same network.
+var reservedDHCPOptions = map[int]bool{
+	1: true, 3: true, 6: true, 12: true, 15: true, 28: true, 42: true, 50: true, 51: true,
+	53: true, 54: true, 55: true, 58: true, 59: true, 61: true, 82: true, 255: true,
+}
 
 // reservedPrefixes may not be used for test, WireGuard or client networks: loopback, multicast,
 // "this network", link-local (the gateway's service namespace uses 169.254.100.0/30, plan §3.3)

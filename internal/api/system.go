@@ -319,8 +319,8 @@ func (s *Server) hostInterfaces() []hostInterface {
 		}
 		hi := hostInterface{Name: l.Name, MAC: l.MAC}
 		for _, a := range l.Addrs {
-			if a.Addr().Is4() {
-				hi.Addresses = append(hi.Addresses, a.String())
+			if a.Prefix.Addr().Is4() {
+				hi.Addresses = append(hi.Addresses, a.Prefix.String())
 			}
 		}
 		sysfs(&hi)

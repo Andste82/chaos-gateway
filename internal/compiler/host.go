@@ -13,7 +13,15 @@ type HostLink struct {
 	Name  string
 	MAC   string
 	Kind  string // bridge, veth, ... empty for physical devices
-	Addrs []netip.Prefix
+	Addrs []HostAddr
+}
+
+// HostAddr is one address of a HostLink. Secondary marks an address added after the interface
+// already had one of the same family: the kernel's own address order then depends on history
+// (DHCP renewals, manual changes), not on anything the configuration says.
+type HostAddr struct {
+	Prefix    netip.Prefix
+	Secondary bool
 }
 
 // HostRoute is a default route of the main routing table.
@@ -84,12 +92,28 @@ func (h Host) DefaultGateway(dev string) (netip.Addr, bool) {
 	return best.Gateway, true
 }
 
-// FirstV4 returns the first IPv4 address of the interface.
+// FirstV4 returns the interface's IPv4 address: a non-secondary one if there is one, else the
+// lowest. The kernel's own address order (what a plain "first" would follow) depends on history,
+// not on anything the configuration says, and reorders unpredictably across a DHCP renewal or a
+// reboot.
 func (l HostLink) FirstV4() (netip.Prefix, bool) {
-	for _, a := range l.Addrs {
-		if a.Addr().Is4() {
-			return a, true
+	var best *HostAddr
+	for i := range l.Addrs {
+		a := &l.Addrs[i]
+		if !a.Prefix.Addr().Is4() {
+			continue
+		}
+		switch {
+		case best == nil:
+			best = a
+		case best.Secondary && !a.Secondary:
+			best = a
+		case best.Secondary == a.Secondary && a.Prefix.Addr().Less(best.Prefix.Addr()):
+			best = a
 		}
 	}
-	return netip.Prefix{}, false
+	if best == nil {
+		return netip.Prefix{}, false
+	}
+	return best.Prefix, true
 }

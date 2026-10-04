@@ -7,14 +7,14 @@ import (
 	"net/netip"
 	"strconv"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-type netipPrefix = netip.Prefix
-
-func mustPrefix(s string) netip.Prefix { return netip.MustParsePrefix(s) }
-func itoa(n int) string                { return strconv.Itoa(n) }
+func mustPrefix(s string) netip.Prefix    { return netip.MustParsePrefix(s) }
+func hostAddr(s string) compiler.HostAddr { return compiler.HostAddr{Prefix: mustPrefix(s)} }
+func itoa(n int) string                   { return strconv.Itoa(n) }
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 

@@ -239,11 +239,12 @@ func yamlToJSON(t *testing.T, raw []byte) any {
 }
 
 func TestTheAPIListensOnTheManagementNetworkOnly(t *testing.T) {
+	hostAddr := func(s string) compiler.HostAddr { return compiler.HostAddr{Prefix: netip.MustParsePrefix(s)} }
 	host := compiler.Host{Links: []compiler.HostLink{
-		{Name: "lo", Addrs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/8")}},
-		{Name: "mgmt0", Addrs: []netip.Prefix{netip.MustParsePrefix("192.168.56.1/24")}},
-		{Name: "wan0", Addrs: []netip.Prefix{netip.MustParsePrefix("203.0.113.1/24")}},
-		{Name: "br-lan0", Addrs: []netip.Prefix{netip.MustParsePrefix("10.10.0.1/24")}},
+		{Name: "lo", Addrs: []compiler.HostAddr{hostAddr("127.0.0.1/8")}},
+		{Name: "mgmt0", Addrs: []compiler.HostAddr{hostAddr("192.168.56.1/24")}},
+		{Name: "wan0", Addrs: []compiler.HostAddr{hostAddr("203.0.113.1/24")}},
+		{Name: "br-lan0", Addrs: []compiler.HostAddr{hostAddr("10.10.0.1/24")}},
 	}}
 	cfg := &model.Configuration{Management: model.Management{Interface: model.InterfaceRef{Name: ptrOf("mgmt0")}}}
 	strs := func(a []netip.Addr) string {

@@ -31,6 +31,9 @@ type Binder struct {
 
 	mu      sync.Mutex
 	servers map[netip.AddrPort]*http.Server
+	// lastErr remembers the last bind error per address (M5-14), so a repeated failure across
+	// reconciles logs only once, not every interval.
+	lastErr map[netip.AddrPort]string
 }
 
 // Listening returns the addresses the binder listens on, sorted.
@@ -63,14 +66,29 @@ func (b *Binder) Reconcile() {
 			delete(b.servers, ap)
 		}
 	}
+	for ap := range b.lastErr {
+		if !want[ap] {
+			delete(b.lastErr, ap)
+		}
+	}
 	for ap := range want {
 		if _, ok := b.servers[ap]; ok {
 			continue
 		}
 		l, err := net.Listen("tcp", ap.String())
 		if err != nil {
-			b.Log.Warn("the API cannot listen", "address", ap.String(), "error", err)
+			if b.lastErr[ap] != err.Error() {
+				b.Log.Warn("the API cannot listen", "address", ap.String(), "error", err)
+				if b.lastErr == nil {
+					b.lastErr = map[netip.AddrPort]string{}
+				}
+				b.lastErr[ap] = err.Error()
+			}
 			continue
+		}
+		if _, hadErr := b.lastErr[ap]; hadErr {
+			b.Log.Info("the API can listen again", "address", ap.String())
+			delete(b.lastErr, ap)
 		}
 		srv := &http.Server{Handler: b.Handler, TLSConfig: b.TLS, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 		b.servers[ap] = srv

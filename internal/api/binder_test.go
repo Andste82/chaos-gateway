@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,5 +128,38 @@ func TestTheBinderFollowsTheWantedAddresses(t *testing.T) {
 	b.Reconcile()
 	if len(b.Listening()) != 0 {
 		t.Errorf("%v", b.Listening())
+	}
+}
+
+// M5-14 test: a repeated bind failure on one address logs once, not every reconcile, and recovery
+// logs once too.
+func TestAnUnbindableAddressLogsOnlyOnceAndOnRecovery(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := occupied.Addr().(*net.TCPAddr).Port
+	var logBuf bytes.Buffer
+	b := &api.Binder{
+		Addrs:   func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("127.0.0.1")} },
+		Port:    func() int { return port },
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+		Log:     slog.New(slog.NewTextHandler(&logBuf, nil)),
+	}
+	defer b.Close()
+	for range 3 {
+		b.Reconcile()
+	}
+	if n := strings.Count(logBuf.String(), "cannot listen"); n != 1 {
+		t.Fatalf("logged the same failure %d times: %s", n, logBuf.String())
+	}
+	if err := occupied.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		b.Reconcile()
+	}
+	if n := strings.Count(logBuf.String(), "listen again"); n != 1 {
+		t.Fatalf("logged the recovery %d times: %s", n, logBuf.String())
 	}
 }

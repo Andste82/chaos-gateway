@@ -301,7 +301,7 @@ func (s *State) Host() compiler.Host {
 				continue
 			}
 			if p, err := netip.ParsePrefix(a.Local + "/" + strconv.Itoa(a.PrefixLen)); err == nil {
-				hl.Addrs = append(hl.Addrs, p)
+				hl.Addrs = append(hl.Addrs, compiler.HostAddr{Prefix: p, Secondary: a.Secondary})
 			}
 		}
 		h.Links = append(h.Links, hl)

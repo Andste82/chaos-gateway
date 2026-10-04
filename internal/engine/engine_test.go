@@ -602,7 +602,7 @@ func TestAnObserverEventDuringAnApplyIsContainedInTheNextApply(t *testing.T) {
 	for i, l := range host.Links {
 		if l.Name == "wan0" {
 			links := append([]compiler.HostLink(nil), host.Links...)
-			links[i].Addrs = []netipPrefix{mustPrefix("198.51.100.5/24")}
+			links[i].Addrs = []compiler.HostAddr{hostAddr("198.51.100.5/24")}
 			host.Links = links
 		}
 	}
@@ -648,7 +648,7 @@ func TestABurstOfObservationsIsCoalesced(t *testing.T) {
 		links := append([]compiler.HostLink(nil), host.Links...)
 		for i, l := range links {
 			if l.Name == "wan0" {
-				links[i].Addrs = []netipPrefix{mustPrefix(addr)}
+				links[i].Addrs = []compiler.HostAddr{hostAddr(addr)}
 			}
 		}
 		host.Links = links
@@ -1028,7 +1028,7 @@ func TestSubscribersThatDoNotReadAreDroppedWithoutDelayingOthers(t *testing.T) {
 		links := append([]compiler.HostLink(nil), host.Links...)
 		for j, l := range links {
 			if l.Name == "wan0" {
-				links[j].Addrs = []netipPrefix{mustPrefix("198.51." + itoa(i%250) + ".5/24")}
+				links[j].Addrs = []compiler.HostAddr{hostAddr("198.51." + itoa(i%250) + ".5/24")}
 			}
 		}
 		host.Links = links
@@ -1151,7 +1151,7 @@ func TestAFailedApplyWithAnObservationInBetweenIsRestoredAndReportedRight(t *tes
 	links := append([]compiler.HostLink(nil), host.Links...)
 	for i, l := range links {
 		if l.Name == "wan0" {
-			links[i].Addrs = []netipPrefix{mustPrefix("198.51.100.5/24")}
+			links[i].Addrs = []compiler.HostAddr{hostAddr("198.51.100.5/24")}
 		}
 	}
 	host.Links = links
@@ -1198,7 +1198,7 @@ func TestAFailedApplyWithoutAWaiterIsRetried(t *testing.T) {
 	links := append([]compiler.HostLink(nil), host.Links...)
 	for i, l := range links {
 		if l.Name == "wan0" {
-			links[i].Addrs = []netipPrefix{mustPrefix("198.51.100.5/24")}
+			links[i].Addrs = []compiler.HostAddr{hostAddr("198.51.100.5/24")}
 		}
 	}
 	host.Links = links

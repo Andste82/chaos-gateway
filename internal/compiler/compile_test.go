@@ -36,6 +36,8 @@ func loadConfig(t *testing.T, name string) *model.Configuration {
 
 func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 
+func addr(s string) HostAddr { return HostAddr{Prefix: pfx(s)} }
+
 // testbedHost is the host of the testbed topology: the physical ports with their MACs, the uplink
 // with its address and the management interface with a default route.
 func testbedHost() Host {
@@ -44,8 +46,8 @@ func testbedHost() Host {
 			{Name: "lo", MAC: "00:00:00:00:00:00"},
 			{Name: "lan0", MAC: "02:00:00:00:00:01", Kind: "veth"},
 			{Name: "lan1", MAC: "02:00:00:00:01:01", Kind: "veth"},
-			{Name: "wan0", MAC: "02:00:00:00:02:01", Kind: "veth", Addrs: []netip.Prefix{pfx("203.0.113.1/24")}},
-			{Name: "mgmt0", MAC: "02:00:00:00:03:01", Kind: "veth", Addrs: []netip.Prefix{pfx("192.168.56.1/24")}},
+			{Name: "wan0", MAC: "02:00:00:00:02:01", Kind: "veth", Addrs: []HostAddr{addr("203.0.113.1/24")}},
+			{Name: "mgmt0", MAC: "02:00:00:00:03:01", Kind: "veth", Addrs: []HostAddr{addr("192.168.56.1/24")}},
 		},
 		Defaults: []HostRoute{{Dev: "mgmt0", Gateway: netip.MustParseAddr("192.168.56.254"), Metric: 0}},
 	}

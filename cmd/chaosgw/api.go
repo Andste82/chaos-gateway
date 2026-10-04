@@ -257,8 +257,8 @@ func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip
 				continue
 			}
 			for _, p := range l.Addrs {
-				if p.Addr().Is4() {
-					out = append(out, p.Addr())
+				if p.Prefix.Addr().Is4() {
+					out = append(out, p.Prefix.Addr())
 				}
 			}
 		}
@@ -269,8 +269,8 @@ func listenAddrs(snap *engine.Snapshot, setupDone bool, explicit string) []netip
 	}
 	if l, ok := snap.Host.Resolve(snap.Config.Management.Interface); ok {
 		for _, p := range l.Addrs {
-			if p.Addr().Is4() {
-				out = append(out, p.Addr())
+			if p.Prefix.Addr().Is4() {
+				out = append(out, p.Prefix.Addr())
 			}
 		}
 	}
@@ -294,8 +294,8 @@ func certNames(eng *engine.Engine) ([]string, []net.IP) {
 			continue
 		}
 		for _, p := range l.Addrs {
-			if p.Addr().Is4() {
-				ips = append(ips, net.IP(p.Addr().AsSlice()))
+			if p.Prefix.Addr().Is4() {
+				ips = append(ips, net.IP(p.Prefix.Addr().AsSlice()))
 			}
 		}
 	}

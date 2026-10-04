@@ -49,12 +49,16 @@ func (l Link) HasFlag(f string) bool {
 
 // Address is one address of an interface.
 type Address struct {
-	Family       string `json:"family"` // inet or inet6
-	Local        string `json:"local"`
-	PrefixLen    int    `json:"prefixlen"`
-	Scope        string `json:"scope"`
-	Label        string `json:"label"`
-	Dynamic      bool   `json:"dynamic"`
+	Family    string `json:"family"` // inet or inet6
+	Local     string `json:"local"`
+	PrefixLen int    `json:"prefixlen"`
+	Scope     string `json:"scope"`
+	Label     string `json:"label"`
+	Dynamic   bool   `json:"dynamic"`
+	// Secondary is true for every address on the interface after the first (the kernel's own
+	// distinction, reported by `ip -j addr`; which one ends up primary depends on the order
+	// addresses were added in, not on any property of the address itself).
+	Secondary    bool   `json:"secondary,omitempty"`
 	Protocol     string `json:"protocol"`
 	ValidLife    int64  `json:"valid_life_time"`
 	PreferedLife int64  `json:"preferred_life_time"`

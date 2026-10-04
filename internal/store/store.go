@@ -288,8 +288,13 @@ func (s *Store) get(id int64) (model.Revision, *model.Configuration, error) {
 		return model.Revision{}, nil, err
 	}
 	var cfg model.Configuration
-	if err := json.Unmarshal(f.Configuration, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(f.Configuration))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return model.Revision{}, nil, &ErrCorrupt{s.revPath(id), "the configuration does not decode: " + err.Error()}
+	}
+	if !cfg.SchemaVersion.Valid() {
+		return model.Revision{}, nil, &ErrCorrupt{s.revPath(id), fmt.Sprintf("unknown configuration schema version %d", cfg.SchemaVersion)}
 	}
 	return s.revisionOf(f, st), &cfg, nil
 }

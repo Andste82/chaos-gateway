@@ -397,3 +397,38 @@ func TestAMissingOrFailingMigrationStopsOpen(t *testing.T) {
 
 var _ = model.Revision{}
 var _ = time.Second
+
+// M2-06 test: the checksum matches but the configuration has a field the schema does not know;
+// the strict decode catches it, not just a loose one that would silently drop it.
+func TestAStoredConfigurationWithAnUnknownFieldIsCorrupt(t *testing.T) {
+	s, dir := storeWithTwo(t)
+	raw, err := os.ReadFile(revFile(dir, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f revisionFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(f.Configuration, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["not_a_real_field"] = json.RawMessage(`true`)
+	f.Configuration, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.SHA256 = sha256Sum(f.Configuration)
+	fixed, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(revFile(dir, 2), fixed, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	_, cfg, err := s.Get(2)
+	if c := asCorrupt(err); c == nil || !strings.Contains(c.Reason, "does not decode") || cfg != nil {
+		t.Fatalf("err = %v, cfg = %v", err, cfg)
+	}
+}

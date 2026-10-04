@@ -376,12 +376,16 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	baseline := b.generationMarker()
 	mac := func(i int) string { return fmt.Sprintf("02:aa:00:00:00:%02x", i) }
 	var create strings.Builder
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&create, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 100+i, mac(i))
 	}
 	b.top.GW.MustStdin(create.String(), "ip", "-batch", "-")
+	// 40 new devices change the set count, so this is a full apply (identityOps refuses it as
+	// non-incremental): wait for it to actually land in the kernel, not only for the snapshot (which
+	// updates before the apply loop has caught up) to show the devices.
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		n := 0
@@ -390,13 +394,16 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 				n++
 			}
 		}
-		if n == 40 {
+		if n == 40 && b.generationMarker() != baseline {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if n := len(b.e.Snapshot().Devices); n < 40 {
 		t.Fatalf("the 40 devices never appeared: %d devices", n)
+	}
+	if got := b.generationMarker(); got == baseline {
+		t.Fatalf("the devices' own full apply never landed in the kernel: marker still %q", got)
 	}
 
 	gen := b.e.Snapshot().Generation

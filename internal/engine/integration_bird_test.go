@@ -439,9 +439,13 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 		(*c.Routing.Protocols)[ospfID] = model.RoutingProtocol{Name: "site-c", Type: model.RoutingProtocolTypeOspf, Link: linkC, Ospf: &model.OspfSettings{}, Announce: &[]model.AnnounceEntry{{Network: &iot}}}
 	})
 	// both neighbors announce a default route, the management prefix, a prefix of the gateway and
-	// their own remote network: the import filter rejects the first three for BGP and OSPF alike
+	// their own remote network: the import filter rejects the first three for BGP and OSPF alike.
+	// Site2's "prefix of the gateway" is the lab hub's, not the IoT network's: that one is also
+	// exported back to site2 over this same OSPF session, and a neighbor's self-originated external
+	// LSA for the very prefix it is also learning competes with the gateway's in OSPF's own external
+	// route selection, which is not what this filter test is about.
 	g.remoteSite(g.top.Site, tLink, "wgsite", "site", "10.60.0.0/24", "0.0.0.0/0", "192.168.56.0/24")
-	siteC := g.remoteSite(g.top.Site2, linkC, "wgsite2", "site2", "10.70.0.0/24", "0.0.0.0/0", "192.168.56.0/24", "10.10.0.0/24")
+	siteC := g.remoteSite(g.top.Site2, linkC, "wgsite2", "site2", "10.70.0.0/24", "0.0.0.0/0", "192.168.56.0/24", "10.99.0.0/24")
 	if !g.established(90 * time.Second) {
 		t.Fatalf("no BGP session\n%s", birdc(t, g.gwSock, "show", "protocols", "all"))
 	}
@@ -451,7 +455,7 @@ func TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable(t *testing.T) {
 	if !g.waitRoute("10.70.0.0/24 via 10.255.1.1 dev wg-site-c", true, 90*time.Second) {
 		t.Fatalf("the OSPF route is not in table 100\n%s\n%s\n%s", g.table100(), birdc(t, g.gwSock, "show", "protocols", "all"), birdc(t, siteC, "show", "protocols", "all"))
 	}
-	for _, bad := range []string{"default via 10.255.", "192.168.56.0/24 via", "10.10.0.0/24 via 10.255.1.1"} {
+	for _, bad := range []string{"default via 10.255.", "192.168.56.0/24 via", "10.99.0.0/24 via 10.255.1.1"} {
 		if strings.Contains(g.table100(), bad) {
 			t.Errorf("the filter let %q through\n%s", bad, g.table100())
 		}

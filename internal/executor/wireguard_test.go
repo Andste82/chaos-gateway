@@ -40,6 +40,19 @@ func TestDecodeWireGuard(t *testing.T) {
 	}
 }
 
+// M4c-05 test: ::/0 is accepted as a link peer's one IPv6 allowed ip (Babel's wire protocol needs
+// it to reach its own link-local multicast traffic), but no other IPv6 prefix is.
+func TestWireGuardAcceptsTheIPv6DefaultRouteAsAnAllowedIP(t *testing.T) {
+	in := `{"type":"wireguard","action":"ensure","name":"wg0","listen_port":51820,"key_ref":"` + netID + `","peers":[{"public_key":"` + pubA + `","allowed_ips":["0.0.0.0/0","::/0"]}]}`
+	op, err := Decode([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := op.(*WireGuard).Peers[0].AllowedIPs; strings.Join(w, ",") != "0.0.0.0/0,::/0" {
+		t.Errorf("%+v", w)
+	}
+}
+
 func TestDecodeWireGuardRejects(t *testing.T) {
 	peer := func(fields string) string {
 		return `{"type":"wireguard","action":"ensure","name":"wg0","listen_port":51820,"key_ref":"` + netID + `","peers":[{"public_key":"` + pubA + `","allowed_ips":["10.0.0.2/32"]` + fields + `}]}`
@@ -48,30 +61,31 @@ func TestDecodeWireGuardRejects(t *testing.T) {
 		return `{"type":"wireguard","action":"ensure","name":"wg0","key_ref":"` + netID + `"` + fields + `}`
 	}
 	for name, in := range map[string]string{
-		"private key in the operation": head(`,"listen_port":1,"private_key":"` + secPriv + `"`),
-		"unknown action":               `{"type":"wireguard","action":"flush","name":"wg0"}`,
-		"bad name":                     `{"type":"wireguard","action":"delete","name":"wg 0"}`,
-		"delete with peers":            `{"type":"wireguard","action":"delete","name":"wg0","listen_port":1}`,
-		"no port":                      head(``),
-		"port 0":                       head(`,"listen_port":0`),
-		"port 70000":                   head(`,"listen_port":70000`),
-		"mtu 100":                      head(`,"listen_port":1,"mtu":100`),
-		"mtu 70000":                    head(`,"listen_port":1,"mtu":70000`),
-		"key ref not a uuid":           `{"type":"wireguard","action":"ensure","name":"wg0","listen_port":1,"key_ref":"../etc/passwd"}`,
-		"peer key short":               strings.Replace(peer(``), pubA, "abc=", 1),
-		"peer key with newline":        strings.Replace(peer(``), pubA, pubA[:43]+"\\n=", 1),
-		"psk ref not a uuid":           peer(`,"preshared_key_ref":"x"`),
-		"allowed ip not a prefix":      strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2", 1),
-		"allowed ip with host bits":    strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2/24", 1),
-		"allowed ip injection":         strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2/32\\n[Peer]", 1),
-		"allowed ip v6":                strings.Replace(peer(``), "10.0.0.2/32", "fd00::/64", 1),
-		"negative keepalive":           peer(`,"keepalive":-1`),
-		"endpoint without port":        peer(`,"endpoint":"203.0.113.1"`),
-		"endpoint v6":                  peer(`,"endpoint":"[::1]:51820"`),
-		"endpoint injection":           peer(`,"endpoint":"a.example\\nPrivateKey = x:51820"`),
-		"endpoint port 0":              peer(`,"endpoint":"203.0.113.1:0"`),
-		"duplicate peer":               strings.Replace(peer(``), `}]}`, `},{"public_key":"`+pubA+`","allowed_ips":[]}]}`, 1),
-		"read without dev":             `{"type":"read","what":"wireguard"}`,
+		"private key in the operation":  head(`,"listen_port":1,"private_key":"` + secPriv + `"`),
+		"unknown action":                `{"type":"wireguard","action":"flush","name":"wg0"}`,
+		"bad name":                      `{"type":"wireguard","action":"delete","name":"wg 0"}`,
+		"delete with peers":             `{"type":"wireguard","action":"delete","name":"wg0","listen_port":1}`,
+		"no port":                       head(``),
+		"port 0":                        head(`,"listen_port":0`),
+		"port 70000":                    head(`,"listen_port":70000`),
+		"mtu 100":                       head(`,"listen_port":1,"mtu":100`),
+		"mtu 70000":                     head(`,"listen_port":1,"mtu":70000`),
+		"key ref not a uuid":            `{"type":"wireguard","action":"ensure","name":"wg0","listen_port":1,"key_ref":"../etc/passwd"}`,
+		"peer key short":                strings.Replace(peer(``), pubA, "abc=", 1),
+		"peer key with newline":         strings.Replace(peer(``), pubA, pubA[:43]+"\\n=", 1),
+		"psk ref not a uuid":            peer(`,"preshared_key_ref":"x"`),
+		"allowed ip not a prefix":       strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2", 1),
+		"allowed ip with host bits":     strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2/24", 1),
+		"allowed ip injection":          strings.Replace(peer(``), "10.0.0.2/32", "10.0.0.2/32\\n[Peer]", 1),
+		"allowed ip v6":                 strings.Replace(peer(``), "10.0.0.2/32", "fd00::/64", 1),
+		"allowed ip v6 not the default": strings.Replace(peer(``), "10.0.0.2/32", "::/1", 1),
+		"negative keepalive":            peer(`,"keepalive":-1`),
+		"endpoint without port":         peer(`,"endpoint":"203.0.113.1"`),
+		"endpoint v6":                   peer(`,"endpoint":"[::1]:51820"`),
+		"endpoint injection":            peer(`,"endpoint":"a.example\\nPrivateKey = x:51820"`),
+		"endpoint port 0":               peer(`,"endpoint":"203.0.113.1:0"`),
+		"duplicate peer":                strings.Replace(peer(``), `}]}`, `},{"public_key":"`+pubA+`","allowed_ips":[]}]}`, 1),
+		"read without dev":              `{"type":"read","what":"wireguard"}`,
 	} {
 		if _, err := Decode([]byte(in)); err == nil {
 			t.Errorf("%s: accepted: %s", name, in)

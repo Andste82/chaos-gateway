@@ -224,6 +224,24 @@ func TestRoutingProtocolsMayEnterTheGatewayFromTheirLinkOnly(t *testing.T) {
 	}
 }
 
+// M4c-05 test: a link's peer needs an IPv6 entry in its AllowedIPs for Babel's own wire protocol
+// (link-local Hello/Update, multicast included) to actually cross the tunnel; without Babel the
+// peer carries only the IPv4 one, as before.
+func TestBabelAddsAnIPv6DefaultRouteToTheLinksPeer(t *testing.T) {
+	tg := withRouting(t, func(cfg *model.Configuration, in *Input) {
+		id := "44444444-5555-4666-8777-888888888888"
+		(*cfg.Routing.Protocols)[id] = model.RoutingProtocol{Name: "b", Type: model.RoutingProtocolTypeBabel, Link: linkID}
+	})
+	link := wgByName(t, tg, "site-b")
+	if len(link.Peers) != 1 || strings.Join(link.Peers[0].AllowedIPs, ",") != "0.0.0.0/0,::/0" {
+		t.Errorf("peer allowed ips %v", link.Peers[0].AllowedIPs)
+	}
+	plain := wgByName(t, compileWG(t, nil), "site-b")
+	if len(plain.Peers) != 1 || strings.Join(plain.Peers[0].AllowedIPs, ",") != "0.0.0.0/0" {
+		t.Errorf("peer allowed ips %v without Babel", plain.Peers[0].AllowedIPs)
+	}
+}
+
 func TestACustomSnippetThatCannotBeRenderedIsAProblem(t *testing.T) {
 	tg := withRouting(t, func(cfg *model.Configuration, in *Input) {
 		for id, p := range *cfg.Routing.Protocols {

@@ -208,7 +208,9 @@ func importLimit(i Import) string {
 	if i.MaxPrefixes <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("import limit %d action disable; ", i.MaxPrefixes)
+	// M4c-04: block, not disable, so the session stays up once the limit is hit (the prefixes
+	// beyond it are simply not imported) instead of going down until the configuration changes.
+	return fmt.Sprintf("import limit %d action block; ", i.MaxPrefixes)
 }
 
 func (c Config) renderFilter(b *strings.Builder, name string, i Import) {

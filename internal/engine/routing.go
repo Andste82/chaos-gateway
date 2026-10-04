@@ -116,12 +116,18 @@ func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 			}
 			o.event(EventRoutingChanged, map[string]any{"state": state, "protocol": n, "type": st.Proto, "neighbor": st.Neighbor, "info": st.Info, "last_error": st.LastError})
 		}
-		if !first && hadPrev && hasNext && (p.Imported != cur.Imported || p.Exported != cur.Exported) {
-			o.event(EventRoutingRoutesChanged, map[string]any{
+		if !first && hadPrev && hasNext && (p.Imported != cur.Imported || p.Exported != cur.Exported || p.ImportLimitHit != cur.ImportLimitHit) {
+			data := map[string]any{
 				"protocol": n, "type": cur.Proto,
 				"imported": cur.Imported, "exported": cur.Exported, "filtered": cur.Filtered,
 				"previous_imported": p.Imported, "previous_exported": p.Exported,
-			})
+			}
+			if cur.ImportLimitHit {
+				// M4c-04: action block keeps the session up, so this is the only signal that the
+				// limit was reached; the route counts alone would not say why they stopped growing.
+				data["limit_hit"] = true
+			}
+			o.event(EventRoutingRoutesChanged, data)
 		}
 	}
 	o.snap.Routing = next

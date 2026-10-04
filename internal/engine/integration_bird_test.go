@@ -314,19 +314,37 @@ func TestANeighborWithdrawingAPrefixRemovesIt(t *testing.T) {
 	}
 }
 
-// M4c test: a prefix limit that is exceeded takes the session down instead of flooding table 100.
-// The same remote routes under a limit of 10 come up in the other tests, so a session that stays
-// down here is the limit's doing; a disabled protocol stays disabled.
-func TestMoreRoutesThanTheLimitDisableTheSession(t *testing.T) {
+// M4c-04 test: a prefix limit that is exceeded blocks the routes beyond it instead of taking the
+// session down (the decided "action block"). The same remote routes under a limit of 10 come up
+// fully in the other tests, so routes missing here are the limit's doing, not a filter.
+func TestMoreRoutesThanTheLimitAreBlocked(t *testing.T) {
 	g := newBGP(t, 2, "10.60.0.0/24", "10.60.1.0/24", "10.60.2.0/24", "10.60.3.0/24")
-	time.Sleep(45 * time.Second)
-	out := birdc(t, g.gwSock, "show", "protocols", "all")
-	if g.establishedNow() || strings.Contains(g.table100(), "10.60.") {
-		t.Fatalf("the limit of 2 did not take the session down\n%s\n%s", out, g.table100())
+	if !g.established(90 * time.Second) {
+		t.Fatalf("the limit of 2 took the session down instead of blocking the excess routes\n%s", g.table100())
 	}
-	ps, err := bird.ParseProtocols(out)
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(30 * time.Second)
+	var out string
+	var ps []bird.ProtocolStatus
+	var hit bool
+	for time.Now().Before(deadline) {
+		out = birdc(t, g.gwSock, "show", "protocols", "all")
+		var err error
+		ps, err = bird.ParseProtocols(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range ps {
+			if p.Proto == "BGP" && p.ImportLimitHit {
+				hit = true
+			}
+		}
+		if hit {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !hit {
+		t.Fatalf("BIRD's own status never reports the limit hit\n%s", out)
 	}
 	var limit int
 	for _, p := range ps {
@@ -336,6 +354,10 @@ func TestMoreRoutesThanTheLimitDisableTheSession(t *testing.T) {
 	}
 	if limit != 2 {
 		t.Errorf("BIRD's own status does not name the limit that was hit: %d\n%s", limit, out)
+	}
+	n := strings.Count(g.table100(), "10.60.")
+	if n == 0 || n > 2 {
+		t.Errorf("table 100 holds %d of the 4 announced routes, want at most the limit of 2\n%s", n, g.table100())
 	}
 }
 

@@ -466,8 +466,11 @@ func (s *Server) GetRoutingStatus(c *gin.Context) {
 		if id == "" {
 			continue
 		}
-		entry := gin.H{"id": id, "name": cfgName[id], "type": strings.ToLower(p.Proto), "state": birdState(p),
-			"routes": gin.H{"imported": p.Imported, "filtered": p.Filtered, "exported": p.Exported}}
+		routes := gin.H{"imported": p.Imported, "filtered": p.Filtered, "exported": p.Exported}
+		if p.ImportLimitHit {
+			routes["limit_hit"] = true
+		}
+		entry := gin.H{"id": id, "name": cfgName[id], "type": strings.ToLower(p.Proto), "state": birdState(p), "routes": routes}
 		if p.Info != "" {
 			entry["info"] = p.Info
 		}

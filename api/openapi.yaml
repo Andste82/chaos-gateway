@@ -4009,6 +4009,9 @@ components:
                   imported: {type: integer}
                   filtered: {type: integer}
                   exported: {type: integer}
+                  limit_hit:
+                    type: boolean
+                    description: "The configured import limit has been reached (action block): the session stays up, routes beyond it are not imported."
               announced:
                 type: array
                 description: Prefixes announced to the neighbor.

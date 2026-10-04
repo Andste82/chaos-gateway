@@ -330,16 +330,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 | Remote-side snippet in link exports | done | `bird/remote.go`, `internal/linkexport`, API `format=bird` |
 | T: three sites, learned only into own tables, filters (BGP and OSPF), max-prefix, link down, withdrawal, config change, invalid snippet, failed apply, confirm-timeout rollback | done | see the M4c test names in `internal/engine`, `internal/apply` |
 
-### M4c-04 A protocol disabled by max-prefix never recovers
-- Status: open
-- Severity: medium
-- Reason: needs-decision — `import limit N action disable` leaves the protocol down until its configuration changes; no flag or event says "limit hit".
-- Evidence: `internal/bird/render.go:204-209`; docs/development.md:299-300.
-- Task: 1. In `internal/bird/render.go` `importLimit`, emit `import limit N action block`: the session stays up and the routes over the limit are not imported. 2. Parse BIRD's import-limit state from `show protocols all` (the "Import limit" line; check the exact output of BIRD 2.18 in CI or with a local instance) into `ImportLimitHit bool` in `bird.ProtocolStatus`. 3. Show the flag in the routing status of the API (extend the spec field if missing and run `make generate`), and send `routing_routes_changed` (M4c-03) with `limit_hit: true` when it turns on. 4. Update the goldens. Rewrite `TestMoreRoutesThanTheLimitDisableTheSession` as `TestMoreRoutesThanTheLimitAreBlocked`: the session stays established, table 100 holds at most the limit, and the status reports the limit hit. 5. Document the behaviour in docs/development.md.
-- Acceptance: unit tests in `internal/bird`; CI testbed.
-- Needs maintainer: decided 2026-10-04: (b) `action block` (see the revised task).
-- Effort: M
-
 ### M4c-05 Babel probably does not work and is not tested
 - Status: open (raised from low)
 - Severity: medium

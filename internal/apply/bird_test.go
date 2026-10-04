@@ -101,6 +101,34 @@ func TestAFailedApplyRestoresThePreviousBirdConfiguration(t *testing.T) {
 	}
 }
 
+// M4c-15 test: with routing switched off, verify checks that the running instance is idle, not
+// just that the target has no BIRD configuration.
+func TestVerifyDetectsABirdConfigurationLeftRunningAfterRoutingIsSwitchedOff(t *testing.T) {
+	e := newWGEnv(t)
+	withBGP(e)
+	e.apply()
+	tgOn := e.compile()
+
+	e.cfg.Routing = nil
+	tgOff := e.compile()
+	if tgOff.Bird != nil {
+		t.Fatal("routing is off: the target must have no BIRD configuration")
+	}
+
+	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tgOn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm := apply.Verify(tgOff, s)
+	found := false
+	for _, m := range mm {
+		found = found || strings.Contains(m.String(), "switched off")
+	}
+	if !found {
+		t.Fatalf("verify did not report the leftover BIRD configuration: %v", mm)
+	}
+}
+
 func TestRoutingWithoutABirdDirectoryFailsInPlan(t *testing.T) {
 	e := newWGEnv(t)
 	ex, err := executor.New(e.k, executor.WithKeys(func(id string) (string, string, error) {

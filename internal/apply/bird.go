@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
@@ -28,7 +27,7 @@ func TextHash(text string) string {
 func readBird(ctx context.Context, ex Exec, instance string) (*executor.BirdState, error) {
 	out, err := ex.Do(ctx, &executor.Read{What: executor.ReadBird, Instance: instance})
 	if err != nil {
-		if strings.Contains(err.Error(), "no BIRD directory") {
+		if errors.Is(err, executor.ErrNoBirdDir) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read BIRD: %w", err)
@@ -59,6 +58,9 @@ func planBird(t *compiler.Target, s *State, p *Plan) error {
 // verifyBird compares the running instance with the target.
 func verifyBird(t *compiler.Target, s *State, bad func(string, string, ...any)) {
 	if t.Bird == nil {
+		if s.Bird != nil && s.Bird.ConfigHash != "" && s.Bird.ConfigHash != TextHash(idleText) {
+			bad("bird", "the BIRD instance runs a configuration although routing is switched off")
+		}
 		return
 	}
 	if s.Bird == nil || !s.Bird.Running {

@@ -200,6 +200,7 @@ func TestDecodeRejects(t *testing.T) {
 		{"assign docker0", `{"type":"assign_interfaces","devs":["wan0","docker0"]}`},
 		{"assign docker network bridge", `{"type":"assign_interfaces","devs":["br-0123456789ab"]}`},
 		{"assign docker veth", `{"type":"assign_interfaces","devs":["veth0123abc"]}`},
+		{"assign os_owned not assigned", `{"type":"assign_interfaces","devs":["lan0"],"os_owned":["wan0"]}`},
 		{"read unknown", `{"type":"read","what":"bridges"}`},
 		{"read offloads without dev", `{"type":"read","what":"offloads"}`},
 		{"read table of links", `{"type":"read","what":"links","table":"main"}`},

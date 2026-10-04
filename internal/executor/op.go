@@ -199,6 +199,10 @@ type DockerUser struct {
 type AssignInterfaces struct {
 	Target
 	Devs []string `json:"devs"`
+	// OSOwned is the subset of Devs that is the host's own (the uplink, the management interface):
+	// assigned for tc, routing and DOCKER-USER like any other, but links, sysctl, wireguard and
+	// service_ns refuse to touch it (M3-01).
+	OSOwned []string `json:"os_owned,omitempty"`
 }
 
 // LinkEntry is one change of the links Chaos Gateway owns: its bridges, their ports and addresses.

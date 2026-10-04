@@ -153,7 +153,7 @@ func TestWireGuardNetworksAreBuiltAndVerified(t *testing.T) {
 	if routes != 5 {
 		t.Errorf("%d WireGuard routes in table 100", routes)
 	}
-	if strings.Join(s.Assigned, ",") != "br-iot,lan0,wan0,wg-admin,wg-lab-hub,wg-site-b" {
+	if strings.Join(s.Assigned, ",") != "br-iot,lan0,mgmt0,wan0,wg-admin,wg-lab-hub,wg-site-b" {
 		t.Errorf("assigned %v", s.Assigned)
 	}
 }

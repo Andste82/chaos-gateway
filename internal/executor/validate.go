@@ -747,6 +747,18 @@ func (o AssignInterfaces) validate() error {
 			return fmt.Errorf("%s is not a Chaos Gateway interface (loopback and Docker's devices cannot be assigned)", d)
 		}
 	}
+	if err := checkDevs(o.OSOwned, true); err != nil {
+		return err
+	}
+	assigned := make(map[string]bool, len(o.Devs))
+	for _, d := range o.Devs {
+		assigned[d] = true
+	}
+	for _, d := range o.OSOwned {
+		if !assigned[d] {
+			return fmt.Errorf("os_owned %s is not in devs", d)
+		}
+	}
 	return nil
 }
 

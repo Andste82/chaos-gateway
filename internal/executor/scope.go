@@ -14,8 +14,9 @@ var ErrOutOfScope = errors.New("outside the executor's scope")
 // interfaces that belong to Chaos Gateway. The static parts (table inet chaosgw, routing tables
 // and the protocol tag, the closed set of tc keywords) are enforced by the decoder.
 type Scope struct {
-	mu   sync.RWMutex
-	devs map[string]bool
+	mu      sync.RWMutex
+	devs    map[string]bool
+	osOwned map[string]bool
 }
 
 // NewScope returns a scope with the given interfaces assigned.
@@ -36,12 +37,36 @@ func (s *Scope) Set(devs []string) {
 	s.mu.Unlock()
 }
 
+// SetOSOwned replaces the OS-owned subset of the assigned interfaces (M3-01): assigned for tc,
+// routing and DOCKER-USER, but off limits to links, sysctl, wireguard and service_ns.
+func (s *Scope) SetOSOwned(devs []string) {
+	m := make(map[string]bool, len(devs))
+	for _, d := range devs {
+		m[d] = true
+	}
+	s.mu.Lock()
+	s.osOwned = m
+	s.mu.Unlock()
+}
+
 // Devs returns the assigned interfaces, sorted.
 func (s *Scope) Devs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]string, 0, len(s.devs))
 	for d := range s.devs {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// OSOwned returns the OS-owned interfaces, sorted.
+func (s *Scope) OSOwned() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.osOwned))
+	for d := range s.osOwned {
 		out = append(out, d)
 	}
 	sort.Strings(out)
@@ -55,9 +80,25 @@ func (s *Scope) Has(dev string) bool {
 	return s.devs[dev]
 }
 
+// IsOSOwned reports whether the interface is the host's own (M3-01).
+func (s *Scope) IsOSOwned(dev string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.osOwned[dev]
+}
+
 func (s *Scope) need(dev string) error {
 	if !s.Has(dev) {
 		return fmt.Errorf("%w: interface %q is not assigned to Chaos Gateway", ErrOutOfScope, dev)
+	}
+	return nil
+}
+
+// needNotOSOwned refuses an interface that is assigned only as the host's own (M3-01): it must
+// already pass need() too, since an unassigned interface is refused that way first.
+func (s *Scope) needNotOSOwned(dev string) error {
+	if s.IsOSOwned(dev) {
+		return fmt.Errorf("%w: interface %q is OS-owned, not Chaos Gateway's own", ErrOutOfScope, dev)
 	}
 	return nil
 }
@@ -105,22 +146,37 @@ func (s *Scope) Check(op Operation) error {
 			if err := s.need(e.Name); err != nil {
 				return fmt.Errorf("entries[%d]: %w", i, err)
 			}
+			if err := s.needNotOSOwned(e.Name); err != nil {
+				return fmt.Errorf("entries[%d]: %w", i, err)
+			}
 			if e.Master != "" {
 				if err := s.need(e.Master); err != nil {
+					return fmt.Errorf("entries[%d]: %w", i, err)
+				}
+				if err := s.needNotOSOwned(e.Master); err != nil {
 					return fmt.Errorf("entries[%d]: %w", i, err)
 				}
 			}
 		}
 	case *WireGuard:
-		return s.need(o.Name)
+		if err := s.need(o.Name); err != nil {
+			return err
+		}
+		return s.needNotOSOwned(o.Name)
 	case *ServiceNS:
-		return s.need(o.HostIf)
+		if err := s.need(o.HostIf); err != nil {
+			return err
+		}
+		return s.needNotOSOwned(o.HostIf)
 	case *Bird:
 		return nil // no interface: the instance is a name inside the executor's own BIRD directory
 	case *Sysctl:
 		for i, e := range o.Entries {
 			if e.Dev != "" {
 				if err := s.need(e.Dev); err != nil {
+					return fmt.Errorf("entries[%d]: %w", i, err)
+				}
+				if err := s.needNotOSOwned(e.Dev); err != nil {
 					return fmt.Errorf("entries[%d]: %w", i, err)
 				}
 			}

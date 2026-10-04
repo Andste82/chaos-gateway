@@ -19,9 +19,9 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M3 Executor | incomplete | 7 | 0 | 0 | 2 |
 | M4 Compiler, preview, safe apply | incomplete | 9 | 0 | 0 | 2 |
 | M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
-| M4c Dynamic routing | incomplete | 8 | 0 | 4 | 5 |
+| M4c Dynamic routing | incomplete | 7 | 0 | 3 | 5 |
 | M5 REST API | incomplete | 23 | 0 | 3 | 4 |
-| M5b Appliance harness | incomplete | 3 | 0 | 1 | 0 |
+| M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
 | M6a DHCP, devices | incomplete | 23 | 0 | 9 | 3 |
 | M6b DNS, service namespace | incomplete | 11 | 0 | 4 | 2 |
 | Cross-cutting | – | 6 | 0 | 0 | 0 |
@@ -101,7 +101,7 @@ The most common causes are:
 Ordered by value. Each package is one branch and one PR, and stays green in CI.
 
 1. **Routing fixes** (done, `phase1-routing-fixes`): M4c-01 (high), M4b-01, M4b-02, M4c-03, M4c-06, M4c-08, M4c-09, M4c-13, M4c-14, M4c-15.
-2. **Deployment pinning and health**:
+2. **Deployment pinning and health** (done, `phase1-deploy-pin-health`):
    - M6a-01 and M4c-17 (pin Kea and BIRD);
    - M6b-05 and M4-01 (health of the managed services and the supervisor);
    - M6a-25, M4c-07, M5b-04, M5b-01 (run the nightly job on main).
@@ -719,7 +719,7 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 
 | Plan item | Status | Evidence |
 |---|---|---|
-| BIRD instance, own config/socket/container | done (deployment untested, M4c-07) | `deploy/compose.bird.yaml`, `executor/exec.go:662-758` |
+| BIRD instance, own config/socket/container | done | `deploy/compose.bird.yaml`, `executor/exec.go:662-758` |
 | BGP, OSPFv2 | done | testbed `TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable` (now also exercises the OSPF import filter) |
 | Babel | partial | config only; probably does not run (M4c-05) |
 | Static, router id/ASN/neighbors/areas/timers, announcements | done | `compiler/routing.go`; `TestTheBirdConfigurationFollowsTheModel` |
@@ -762,16 +762,6 @@ Verdict: incomplete. The high bug (external mode) is fixed; four medium items re
 - Acceptance: CI testbed.
 - Needs maintainer: decided 2026-10-04: (a) make Babel work.
 - Effort: M
-
-### M4c-07 BIRD container deployment untested; no start order
-- Status: new
-- Severity: medium
-- Reason: test-gap — `compose.bird.yaml` has no `depends_on: exec (service_healthy)` (BIRD crash-loops until the executor writes `chaosgw.conf`) and no health check; the level-2 smoke never starts it.
-- Evidence: `deploy/compose.bird.yaml`; compare `deploy/compose.api.yaml:48-50`.
-- Task: add `depends_on: {exec: {condition: service_healthy}}` and a healthcheck (`birdc -s /run/chaosgw/bird/chaosgw.ctl show status`); add the file to the appliance smoke deployment and assert `birdc show status` answers and `chaosgw.conf` holds the idle text; extend the hardening test if it pins depends_on.
-- Acceptance: nightly appliance.
-- Needs maintainer: no
-- Effort: S
 
 ### M4c-10 The preview does not show the effective route for a destination
 - Status: open
@@ -1061,17 +1051,7 @@ Verdict: incomplete. Every scope and test item exists and all 41 `x-milestone: M
 
 ## M5b (appliance VM harness, level 2)
 
-Verdict: incomplete. Scope done; the level-2 smoke passed once (24.04 and 26.04, three and two ports, run 37121687715) but on a branch before later deploy changes.
-
-### M5b-01 Level-2 smoke not green on current main
-- Status: new
-- Severity: medium
-- Reason: env-limit — the only green run was on branch `m5b-appliance`; `deploy/Dockerfile` and `compose.executor.yaml` (`pid: host`) changed since; the schedule only fires on main and has not run yet.
-- Evidence: `gh run list --workflow nightly.yml`.
-- Task: `gh workflow run nightly.yml --ref main`; then `gh run view <id> --log | grep -E -- '--- (PASS|FAIL)'`: all 4 subtests must pass; on failure use the `appliance-logs-*` artifacts.
-- Acceptance: nightly appliance green on main.
-- Needs maintainer: no
-- Effort: S
+Verdict: incomplete. Scope done; the level-2 smoke is green with the current deploy config (24.04 and 26.04, three and two ports, run 37171706227, on branch `phase1-deploy-pin-health`, which also added BIRD to the deployment); still open are an SSH check that reuses an old connection and the checksum verification.
 
 ### M5b-02 Anti-lockout check reuses the old SSH connection
 - Status: open (reworded: not a no-op, but it runs over the connection opened before the apply, which conntrack keeps)

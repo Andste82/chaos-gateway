@@ -193,6 +193,46 @@ func TestAReconnectingClientGetsTheMissedEvents(t *testing.T) {
 	}
 }
 
+// M5-02 test: a Last-Event-ID from a boot other than the current one gets a synthetic
+// events_lost event (reason "restart") instead of a silent, partial or empty replay.
+func TestAnIdFromAnotherBootGetsEventsLost(t *testing.T) {
+	g := ready(t)
+	s := g.openStream("another-boot-id-1", "")
+	lost, ok := s.until("events_lost", 5*time.Second)
+	if !ok || lost.Data["data"].(map[string]any)["reason"] != "restart" {
+		t.Fatalf("%+v", lost)
+	}
+}
+
+// M5-02 test: a Last-Event-ID from the current boot, but older than what the replay buffer still
+// holds, also gets events_lost, with reason "expired".
+func TestAStaleLastEventIDGetsEventsLost(t *testing.T) {
+	saved := engine.ReplayMax
+	engine.ReplayMax = 2
+	t.Cleanup(func() { engine.ReplayMax = saved })
+
+	g := ready(t)
+	s := g.openStream("", "")
+	id := g.mustPatch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.11"}})
+	first, ok := s.until("revision_created", 5*time.Second)
+	if !ok {
+		t.Fatal("no event")
+	}
+	s.cancel()
+	// enough further events to evict the one above from the replay buffer (ReplayMax above)
+	g.apply(id)
+	id2 := g.mustPatch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.12"}})
+	g.apply(id2)
+	id3 := g.mustPatch(map[string]any{"uplink": map[string]any{"gateway": "203.0.113.13"}})
+	g.apply(id3)
+
+	again := g.openStream(first.ID, "")
+	lost, ok := again.until("events_lost", 5*time.Second)
+	if !ok || lost.Data["data"].(map[string]any)["reason"] != "expired" {
+		t.Fatalf("%+v", lost)
+	}
+}
+
 func TestEventsCanBeFilteredByType(t *testing.T) {
 	g := ready(t)
 	s := g.openStream("", "?types=revision_applied,revision_confirmed")

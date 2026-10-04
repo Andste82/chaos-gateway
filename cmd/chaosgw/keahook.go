@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,8 +37,12 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw kea-hook: cannot read the service token: %v\n", err)
 		return 1
 	}
-	// the API is on the host's loopback with a self-signed certificate
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // the loopback
+	tc, err := keaHookTLSConfig(os.Getenv("CHAOSGW_API_CERT"))
+	if err != nil {
+		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
+		return 1
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}
 	status := 0
 	for _, ev := range evs {
 		if err := postLeaseEvent(client, strings.TrimRight(api, "/"), strings.TrimSpace(string(raw)), ev); err != nil {
@@ -46,6 +51,25 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return status
+}
+
+// keaHookTLSConfig builds the TLS configuration the hook talks to the API with. With certFile it
+// verifies the API's certificate against it; empty trusts whatever is presented (the API is reached
+// over the host's loopback, which is hard to intercept, but M6b-08 asks for verification once the API
+// publishes its certificate to the hook).
+func keaHookTLSConfig(certFile string) (*tls.Config, error) {
+	if certFile == "" {
+		return &tls.Config{InsecureSkipVerify: true}, nil //nolint:gosec // the loopback; see CHAOSGW_API_CERT
+	}
+	pemBytes, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("CHAOSGW_API_CERT: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("CHAOSGW_API_CERT: %s holds no certificate", certFile)
+	}
+	return &tls.Config{RootCAs: pool}, nil
 }
 
 func postLeaseEvent(client *http.Client, api, token string, ev kea.Event) error {

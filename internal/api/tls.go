@@ -65,3 +65,35 @@ func LoadOrCreateCertificate(dir string, names []string, ips []net.IP, now time.
 	}
 	return tls.LoadX509KeyPair(cert, key)
 }
+
+// PublishCertificate copies the API's certificate (never the key) from dir's cert.pem to path, so the
+// service containers (the DNS proxy, Kea's hook) can verify the API's certificate instead of trusting
+// whatever presents it (M6b-08). Call it after LoadOrCreateCertificate, which has already ensured dir
+// holds a current certificate.
+func PublishCertificate(dir, path string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "cert.pem"))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".api-cert-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	// readable by the service containers' users, which differ from ours
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}

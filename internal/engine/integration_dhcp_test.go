@@ -15,6 +15,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -37,6 +38,7 @@ type dhcpBed struct {
 	top  *testbed.Topology
 	st   *store.Store
 	e    *engine.Engine
+	ex   *executor.Executor
 	base *model.Configuration
 	kc   *kea.Client
 	dir  string
@@ -120,7 +122,7 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	b := &dhcpBed{t: t, top: top, st: st, e: e, base: cfg, kc: kc, dir: dir}
+	b := &dhcpBed{t: t, top: top, st: st, e: e, ex: ex, base: cfg, kc: kc, dir: dir}
 	return b
 }
 
@@ -158,6 +160,21 @@ func (b *dhcpBed) follow() {
 	if err := b.e.FollowNeighbors(context.Background(), 50*time.Millisecond); err != nil {
 		b.t.Fatal(err)
 	}
+}
+
+// generationMarker reads the comment of the kernel's one "generation" rule (plan §2.14): a full
+// apply rewrites it to the newly compiled target's hash; an identity-only element update does not.
+func (b *dhcpBed) generationMarker() string {
+	b.t.Helper()
+	st, err := apply.ReadState(context.Background(), apply.Local{E: b.ex}, b.top.GW.Name, apply.Want{})
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	g := st.Nft.Rules(compiler.GenerationChain)
+	if len(g) != 1 {
+		b.t.Fatalf("generation chain has %d rules, want 1", len(g))
+	}
+	return g[0].Comment
 }
 
 func dhcpOn(c *model.Configuration) {
@@ -314,9 +331,8 @@ func TestDhcpOffOnOneNetworkLeavesItSilent(t *testing.T) {
 	}
 }
 
-// M6a test: a device that changes its address shows an identity event within a second, and a burst of
-// neighbor-table changes is one update.
-func TestAnAddressChangeIsAnEventWithinASecondAndABurstIsOneUpdate(t *testing.T) {
+// M6a test: a device that changes its address shows an identity event within a second.
+func TestAnAddressChangeIsAnEventWithinASecond(t *testing.T) {
 	b := newDHCPBed(t)
 	b.apply(dhcpOn)
 	b.follow()
@@ -342,14 +358,30 @@ func TestAnAddressChangeIsAnEventWithinASecondAndABurstIsOneUpdate(t *testing.T)
 	if n, _ := ev.Data["new_addresses"].([]string); !contains(n, "10.10.0.99") {
 		t.Errorf("%v", ev.Data)
 	}
+}
 
-	// a burst: forty entries in the neighbor table at once
-	gen := b.e.Snapshot().Generation
-	var batch strings.Builder
-	for i := 0; i < 40; i++ {
-		fmt.Fprintf(&batch, "neigh replace 10.10.0.%d lladdr 02:aa:00:00:00:%02x dev br-iot nud permanent\n", 100+i, i)
+// M6a-08 test: a burst of forty devices changing address at once (a host rotating MACs, or just a
+// noisy neighbor table) debounces into exactly one identity update, not one per device: the generation
+// advances by one, every device's set shows its new address, and the kernel's generation marker (which
+// only a full apply rewrites) stays the one from before the burst.
+func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
+	b := newDHCPBed(t)
+	b.apply(dhcpOn)
+	// only FollowNeighbors triggers an observation here: the periodic poll would be a second,
+	// independent source of generations and make the "exactly one" assertion meaningless.
+	if err := b.e.PollObserved(context.Background(), time.Hour); err != nil {
+		t.Fatal(err)
 	}
-	b.top.GW.MustStdin(batch.String(), "ip", "-batch", "-")
+	if err := b.e.FollowNeighbors(context.Background(), 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	mac := func(i int) string { return fmt.Sprintf("02:aa:00:00:00:%02x", i) }
+	var create strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&create, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 100+i, mac(i))
+	}
+	b.top.GW.MustStdin(create.String(), "ip", "-batch", "-")
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		n := 0
@@ -363,9 +395,30 @@ func TestAnAddressChangeIsAnEventWithinASecondAndABurstIsOneUpdate(t *testing.T)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	time.Sleep(2 * time.Second) // let the last update settle
-	if got := b.e.Snapshot().Generation - gen; got > 3 {
-		t.Errorf("forty neighbor changes made %d generations: they are not debounced", got)
+	if n := len(b.e.Snapshot().Devices); n < 40 {
+		t.Fatalf("the 40 devices never appeared: %d devices", n)
+	}
+
+	gen := b.e.Snapshot().Generation
+	marker := b.generationMarker()
+	var move strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&move, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 150+i, mac(i))
+	}
+	b.top.GW.MustStdin(move.String(), "ip", "-batch", "-")
+	time.Sleep(2 * time.Second) // the debounce plus a margin to settle
+
+	if got := b.e.Snapshot().Generation - gen; got != 1 {
+		t.Errorf("the burst made %d generations, want exactly 1", got)
+	}
+	if got := b.generationMarker(); got != marker {
+		t.Errorf("the generation marker changed from %q to %q: a full apply ran, not an element update", marker, got)
+	}
+	for i := 0; i < 40; i++ {
+		want := fmt.Sprintf("10.10.0.%d", 150+i)
+		b.waitDevice(mac(i), 2*time.Second, func(d *engine.DeviceState) bool {
+			return len(d.Addresses) > 0 && d.Addresses[0].String() == want
+		})
 	}
 }
 

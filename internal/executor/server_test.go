@@ -452,3 +452,47 @@ func TestRedialingFindsARestartedExecutor(t *testing.T) {
 		t.Fatalf("the client does not connect again: %v", err)
 	}
 }
+
+// acceptOnceThenFail accepts one connection and then fails every further Accept with a fixed error,
+// unrelated to the listener being closed or the context ending.
+type acceptOnceThenFail struct {
+	net.Listener
+	once sync.Once
+	conn net.Conn
+	err  error
+}
+
+func (l *acceptOnceThenFail) Accept() (net.Conn, error) {
+	var c net.Conn
+	l.once.Do(func() { c = l.conn })
+	if c != nil {
+		return c, nil
+	}
+	return nil, l.err
+}
+
+func (l *acceptOnceThenFail) Close() error { return nil }
+
+// M3-02 test: Serve must not leak a goroutine when Accept fails for a reason that has nothing to do
+// with the context ending or the listener closing. The context in this test is never cancelled: the
+// old implementation's background goroutine (`go func() { <-ctx.Done(); ... }()`) would then block
+// forever, and goleak (TestMain) would catch it at the end of the package's test run.
+func TestServeReturnsOnAcceptErrorWithoutLeaking(t *testing.T) {
+	cconn, sconn := net.Pipe()
+	// net.Pipe is synchronous and unbuffered: closing the client side right away makes the server
+	// handler's write of the hello frame fail immediately instead of blocking forever for a read
+	// that never comes, which would otherwise hang Serve's own wg.Wait and the test with it.
+	_ = cconn.Close()
+	e := newExec(t, &fakeRunner{})
+	s := &Server{Exec: e, Auth: AllowUIDs(uint32(os.Getuid()))}
+	l := &acceptOnceThenFail{conn: sconn, err: errors.New("accept: too many open files")}
+	ctx := context.Background() // deliberately never cancelled: see the comment above
+	err := s.Serve(ctx, l)
+	if err == nil || !strings.Contains(err.Error(), "too many open files") {
+		t.Fatalf("got %v, want the Accept error", err)
+	}
+	// Serve's own wg.Wait (inside the deferred call) only returns once the handler goroutine for the
+	// one accepted connection has finished, so by the time we get here it is done; goleak's TestMain
+	// is what actually proves nothing else (in particular the pre-fix background goroutine, which
+	// would still be blocked on <-ctx.Done() since ctx above is never cancelled) was left running.
+}

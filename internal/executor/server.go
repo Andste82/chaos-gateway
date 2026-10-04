@@ -79,15 +79,15 @@ func (s *Server) logger() *slog.Logger {
 
 // Serve accepts connections until the listener closes or the context ends.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	go func() {
-		<-ctx.Done()
+	stop := context.AfterFunc(ctx, func() {
 		_ = l.Close()
 		s.mu.Lock()
 		for c := range s.conns {
 			_ = c.Close()
 		}
 		s.mu.Unlock()
-	}()
+	})
+	defer stop()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -99,6 +99,15 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			return err
 		}
 		s.mu.Lock()
+		if ctx.Err() != nil {
+			// the context ended between Accept returning this connection (already queued by the
+			// kernel before Close took effect) and this lock: the closer above already ran and will
+			// not run again, so close it here instead of leaving it open and its handler goroutine
+			// running forever.
+			s.mu.Unlock()
+			_ = c.Close()
+			return nil
+		}
 		if s.conns == nil {
 			s.conns = map[net.Conn]struct{}{}
 		}

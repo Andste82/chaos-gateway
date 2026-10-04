@@ -440,10 +440,14 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   remote site's own prefixes.
 - **Protected prefixes** also contain the networks the executor routes itself (behind clients, links
   and routers): a more specific prefix from a neighbor would win over them in the kernel.
-- **Known limits.** A BIRD that is down fails every apply that has to configure it (the previous
-  target is restored the same way). A protocol disabled by `import limit` stays disabled until its
-  configuration changes. Babel is covered by configuration tests only, not by a session in the
-  testbed.
+- **Known limits.** A protocol disabled by `import limit` stays disabled until its configuration
+  changes. Babel is covered by configuration tests only, not by a session in the testbed.
+- **A BIRD outage (M4c-02).** `runBird` probes the control socket with a harmless read before
+  `configure`; when BIRD does not answer, it writes the new file anyway (BIRD reads it at its own
+  start) and returns `BirdDownError` instead of restoring the previous one. `apply` and `verify`
+  both treat this as best effort, not as a failure: the outage itself is visible through
+  `routing_session_changed` (every adjacency the poller knew about goes `down`) and the health
+  check (`bird`: no routing protocol reported).
 - **Testbed.** `WithRemotes` adds a second remote site (`site2`, 203.0.113.50, network 10.70.0.10).
   The tests in `internal/engine/integration_bird_test.go` run BIRD in the gateway's namespace and in
   the remote ones.

@@ -714,6 +714,17 @@ func (e *Executor) birdOutput(ctx context.Context, tool Tool, args ...string) (s
 	return r.Stdout + r.Stderr, r.Exit, nil
 }
 
+// birdRunning probes the control socket the same way readBird does: a non-zero exit from a
+// harmless read is BIRD not running (the daemon down, or its socket gone), whatever birdc's exact
+// wording for that case happens to be.
+func (e *Executor) birdRunning(ctx context.Context, sock string) (bool, error) {
+	_, exit, err := e.birdOutput(ctx, ToolBirdc, "-s", sock, "show", "protocols", "all")
+	if err != nil {
+		return false, err
+	}
+	return exit == 0, nil
+}
+
 // runBird implements the bird operation.
 func (e *Executor) runBird(ctx context.Context, o *Bird) error {
 	conf, sock, err := e.birdPaths(o.Instance)
@@ -753,6 +764,14 @@ func (e *Executor) runBird(ctx context.Context, o *Bird) error {
 	if err := os.Rename(tmpName, conf); err != nil {
 		return err
 	}
+	if running, err := e.birdRunning(ctx, sock); err != nil {
+		return err
+	} else if !running {
+		// best effort (M4c-02): the daemon reads this file at its own start, so the new
+		// configuration stays in place instead of being restored; nothing else about this apply
+		// failed, so it must not restore the file or fail the apply either.
+		return &BirdDownError{}
+	}
 	out, exit, err = e.birdOutput(ctx, ToolBirdc, "-s", sock, "configure")
 	if err == nil && (exit != 0 || (!strings.Contains(out, "Reconfigured") && !strings.Contains(out, "Reconfiguration in progress"))) {
 		err = &BirdError{Message: strings.TrimSpace(out)}
@@ -769,6 +788,12 @@ func (e *Executor) runBird(ctx context.Context, o *Bird) error {
 	}
 	return nil
 }
+
+// BirdDownError reports that BIRD is not running: the new configuration was written (it reads it
+// at its own start) but could not be loaded with `birdc configure`.
+type BirdDownError struct{}
+
+func (e *BirdDownError) Error() string { return "bird: not running" }
 
 // BirdError is a configuration BIRD rejects, or a BIRD that cannot be reached; Message is BIRD's.
 type BirdError struct{ Message string }

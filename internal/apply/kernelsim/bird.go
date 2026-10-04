@@ -44,6 +44,14 @@ func (k *Kernel) SetBirdProtocols(out string) {
 	k.birdShow = out
 }
 
+// SetBirdRunning makes the simulated BIRD daemon unreachable (false) or reachable again (true),
+// independent of whether it has ever been configured (M4c-02).
+func (k *Kernel) SetBirdRunning(running bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.birdRunning = running
+}
+
 // SetNeighbors makes `ip neigh show` answer with the given entries.
 func (k *Kernel) SetNeighbors(n []linux.Neighbor) {
 	k.mu.Lock()

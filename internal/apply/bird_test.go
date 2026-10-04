@@ -101,6 +101,38 @@ func TestAFailedApplyRestoresThePreviousBirdConfiguration(t *testing.T) {
 	}
 }
 
+// M4c-02 test: an apply still succeeds, best effort, while BIRD itself is unreachable; the new
+// configuration is written for BIRD to pick up once it comes back, and the apply does not restore
+// or fail just because of it.
+func TestABirdThatIsDownDoesNotFailTheApply(t *testing.T) {
+	e := newWGEnv(t)
+	withBGP(e)
+	e.k.SetBirdRunning(false)
+
+	target := e.compile()
+	res, err := apply.Apply(context.Background(), e.exec(), "", target)
+	if err != nil {
+		t.Fatalf("the apply failed instead of degrading: %v", err)
+	}
+	if res.After == nil || res.After.Bird == nil || res.After.Bird.Running {
+		t.Fatalf("%+v", res.After)
+	}
+	if res.After.Bird.ConfigHash != apply.TextHash(target.Bird.Text) {
+		t.Error("the new configuration was not written for BIRD to pick up at its own start")
+	}
+	if len(apply.Verify(target, res.After)) != 0 {
+		t.Errorf("a down BIRD is reported as drift: %v", apply.Verify(target, res.After))
+	}
+
+	// BIRD reads the file at its own start: once it is back, the file written while it was down
+	// already matches the target, so nothing more needs applying.
+	e.k.SetBirdRunning(true)
+	res = e.apply()
+	if birdOps(res) != 0 {
+		t.Errorf("BIRD coming back with the already-written file still reconfigures it: %v", res.Plan.Summary)
+	}
+}
+
 // M4c-15 test: with routing switched off, verify checks that the running instance is idle, not
 // just that the target has no BIRD configuration.
 func TestVerifyDetectsABirdConfigurationLeftRunningAfterRoutingIsSwitchedOff(t *testing.T) {

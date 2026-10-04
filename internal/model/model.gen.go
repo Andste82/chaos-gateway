@@ -3922,6 +3922,7 @@ type ImpairmentParams struct {
 
 // ImportFilter Management, uplink and gateway-own prefixes are always rejected, regardless of this filter.
 type ImportFilter struct {
+	// AllowDefault Accept the default route (0.0.0.0/0). It is let through even when allowed_prefixes does not name it explicitly.
 	AllowDefault *bool `json:"allow_default,omitempty"`
 
 	// AllowedPrefixes Empty - accept any prefix not otherwise forbidden.

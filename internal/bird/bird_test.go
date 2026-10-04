@@ -21,9 +21,10 @@ func sample() Config {
 				Import:   Import{Allowed: []Allowed{{Prefix: "10.60.0.0/22", MaxLength: 24}}, MaxPrefixes: 10},
 				BGP:      &BGP{NeighborASN: 65002, HoldTime: 9, KeepaliveTime: 3}},
 			{Name: "ospf_site_c", Type: "ospf", Interface: "wg-site-c", LocalAddress: "10.255.1.0", NeighborAddress: "10.255.1.1",
-				Announce: []string{"10.10.0.0/24"}, Import: Import{AllowDefault: true},
-				OSPF:   &OSPF{Area: "0", Cost: 20, HelloInterval: 2, DeadInterval: 8},
-				Custom: "# a note\ndescription \"kept by hand\";"},
+				Announce: []string{"10.10.0.0/24"},
+				Import:   Import{AllowDefault: true, Allowed: []Allowed{{Prefix: "10.70.0.0/16"}}},
+				OSPF:     &OSPF{Area: "0", Cost: 20, HelloInterval: 2, DeadInterval: 8},
+				Custom:   "# a note\ndescription \"kept by hand\";"},
 			{Name: "babel_site_d", Type: "babel", Interface: "wg-site-d", LocalAddress: "10.255.2.0", NeighborAddress: "10.255.2.1",
 				Babel: &Babel{HelloInterval: 4, RxCost: 96}},
 		},
@@ -129,6 +130,9 @@ func TestTheGeneratedFiltersFollowSpikeS15(t *testing.T) {
 		"if net ~ [ 10.60.0.0/22{22,24} ] then accept;",
 		"import limit 10 action disable;",
 		"export where source = RTS_STATIC && net ~ [ 10.10.0.0/24, 10.99.0.0/24 ];",
+		// OSPF: an allowed list combined with AllowDefault still lets the default route through
+		"if net = 0.0.0.0/0 then accept;",
+		"if net ~ [ 10.70.0.0/16 ] then accept;",
 		"route 10.10.0.0/24 unreachable;",
 		"route 10.10.0.0/24 blackhole;", // OSPF announces blackhole routes: a device route is not exported
 		"hold time 9;", "keepalive time 3;",

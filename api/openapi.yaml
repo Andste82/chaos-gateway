@@ -2666,6 +2666,9 @@ components:
         allow_default:
           type: boolean
           default: false
+          description: >-
+            Accept the default route (0.0.0.0/0). It is let through even when allowed_prefixes
+            does not name it explicitly.
         max_prefixes:
           type: integer
           minimum: 1

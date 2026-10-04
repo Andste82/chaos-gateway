@@ -4064,7 +4064,9 @@ components:
       type: object
       required: [online]
       properties:
-        online: {type: boolean}
+        online:
+          type: boolean
+          description: Seen now - a confirmed neighbor entry, a connection, or a WireGuard handshake; a lease alone does not count.
         last_seen: {type: string, format: date-time}
         macs:
           type: array
@@ -4673,6 +4675,11 @@ components:
     # ============================================================ events and audit
     EventType:
       type: string
+      description: |
+        Every type the event bus can carry. `observed_changed` fires when the observed state
+        (devices, leases, flows) changes without a configuration change behind it.
+        `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
+        produced from M28 on.
       enum:
         - applied
         - apply_failed
@@ -4695,6 +4702,7 @@ components:
         - device_online
         - device_offline
         - device_identity_changed
+        - observed_changed
         - dhcp_lease
         - dns_fault_triggered
         - dns_set_epoch

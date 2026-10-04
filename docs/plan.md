@@ -170,7 +170,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
   4. **NAT:** masquerade towards the uplink per network (on by default for test networks, off between test and WireGuard networks). Port forwarding is M35.
 - A management network or interface for the UI and API, separated from test networks (see §2.16).
 - **Supported topologies:** three ports (uplink, test network, management) or two ports with management on the uplink side — the common case on a Raspberry Pi with one built-in port plus a USB adapter. In the two-port topology uplink and management are the same OS-owned interface; Chaos Gateway never changes its address. Both are covered by the level-2 tests (§4.5).
-- **Policy routing:** traffic entering from test networks and WireGuard networks and the gateway's own service traffic (DNS proxy, TLS proxy upstream) use routing table 100, owned by Chaos Gateway. It contains the connected routes of all test and WireGuard networks, the client networks, static downstream routes, routes learned by BIRD, the uplink subnet and the default route via the uplink gateway. The PMTU mirror tables (§2.5) contain the same routes. The rules match on the test-network bridges (`iif`) and on the service user (`uidrange`). The OS-owned management interface keeps its own default route in the main table; other host processes (package updates, SSH) keep using it. Spike S12: without the policy route, forwarded test traffic left through the management interface; with it, forwarded traffic and sockets of the service user took the uplink and nothing leaked.
+- **Policy routing:** traffic entering from test networks and WireGuard networks and the gateway's own service traffic (DNS proxy, TLS proxy upstream) use routing table 100, owned by Chaos Gateway. It contains the connected routes of all test and WireGuard networks, the client networks, static downstream routes, routes learned by BIRD, the uplink subnet and the default route via the uplink gateway. The PMTU mirror tables (§2.5) contain the same routes. The rules match on the test-network bridges (`iif`) and on `svc0`, the gateway side of the service namespace (§3.3, D29). The OS-owned management interface keeps its own default route in the main table; other host processes (package updates, SSH) keep using it. Spike S12: without the policy route, forwarded test traffic left through the management interface; with it, forwarded traffic and traffic of the service namespace took the uplink and nothing leaked.
 - **Downstream routes:** static routes per test network, for devices behind another router.
 
 **Later**
@@ -208,7 +208,7 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
 - Default: the gateway generates the client's key pair (and optionally a preshared key), so it can export a complete configuration. Alternative: the client provides only its public key; the export then contains a placeholder for the private key.
 - Client private keys are stored in the secrets directory (§2.16) and can be deleted after the first download ("export once").
 - Export formats: `wg-quick` `.conf` file (download), **QR code** in the UI (for phones and tablets), QR as PNG/SVG via API, a zip with configurations of several clients, `chaosctl wg export <client>`. For links: the configuration of the remote side plus, if dynamic routing is used, a matching BIRD configuration snippet.
-- Exports containing private keys are secret: shown with a warning, never included in configuration exports or logs.
+- Exports containing private keys are secret: shown with a warning, never included in configuration exports unless explicitly requested (`include_secrets`, scope full, audited), and never in logs.
 
 **Faults and WireGuard**
 
@@ -222,7 +222,7 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
 - **Dynamic routing** with **BIRD 2**, managed by Chaos Gateway in its own instance (own configuration file and control socket, own container; an existing BIRD on the host is not touched):
   - Protocols: **BGP** (recommended for links; private ASNs), **OSPFv2** (point-to-point on links), **Babel** (suited for meshes of links), plus static.
   - Configured in the model: router id, ASN, neighbors per link, OSPF area, timers, and which prefixes are announced (selection of test networks, WireGuard networks, client networks, remote networks).
-  - Chaos Gateway generates the BIRD configuration, validates it with `bird -p`, then applies it with `birdc configure` (graceful, sessions stay up). It is part of the revision and of preview/diff.
+  - Chaos Gateway generates the BIRD configuration, validates it with `bird -p`, then applies it with `birdc configure`. Filter and announcement changes are applied without resetting sessions; changes of a protocol's neighbor, AS or timers restart that protocol only. It is part of the revision and of preview/diff.
   - **Import safety:** learned routes go only into Chaos Gateway's routing tables (§2.2 policy routing, and the PMTU mirror tables), never into the main table. Import filters per neighbor: allowed prefix list, no default route unless explicitly allowed, never the management, uplink or gateway-own prefixes, maximum prefix count. A misbehaving remote site cannot hijack management traffic.
   - **Custom snippets:** per protocol, raw BIRD configuration can be added for cases the model does not cover; it is validated by `bird -p` and marked as "unmanaged" in the UI.
   - **Other routing daemons:** the routing layer is an adapter (generate configuration, reload, read status). BIRD is the only adapter in the plan; FRR is possible later. As a fallback, **external mode** imports routes that another daemon writes into a designated kernel table, with the same import filters.
@@ -540,12 +540,12 @@ edit → validate → preview → apply → verify → commit
   - On failure, the committed revision is recompiled and re-applied.
   - Short intermediate states during apply are possible; they never persist.
 - **Verify:** reads back the kernel state and compares it with the target:
-  - the generation id (§2.15) of the applied revision, overlay set and observed state is stored as the comment of the single rule in the chain `generation`, which every apply flushes and rewrites (the comment of an existing table cannot be changed); maps and sets hold exactly the expected elements, except the DNS-derived address sets, whose elements the compiler does not own;
+  - the generation id (§2.15) of the applied revision, overlay set and observed state is stored as the comment of the single rule in the chain `generation`, which a full apply flushes and rewrites (the comment of an existing table cannot be changed); the marker names the last full apply, and identity updates are element operations that do not rewrite it; maps and sets hold exactly the expected elements, except the DNS-derived address sets, whose elements the compiler does not own;
   - tc classes exist and their netem parameters match within the kernel's rounding;
   - routes and rules in the Chaos Gateway routing tables match;
   - the managed services (Kea, DNS proxy, TLS responder) report healthy.
 
-  The normalizers for `nft -j` and `tc -j` output have their own golden tests.
+  The `nft -j` parser has recorded-output tests against real tool output; the `tc -j` normalizer and its golden tests come with fault verify in M8b.
 - **Commit-confirm:** changes that could lock out the admin (management access, UI/API binding, *management*-role WireGuard networks, gateway protection) are rolled back automatically unless confirmed within 60 s (configurable, tests use seconds).
 - **Anti-lockout:** access from the management network to the gateway's **control plane** (UI, API, SSH) is always allowed and cannot be removed by rules. The protection covers nothing else: traffic from the management network to devices or the Internet follows the normal rules.
 - **Revisions:** diff, rollback, export/import (secrets excluded by default), clone.
@@ -614,7 +614,7 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 
 ## 2.16 Security
 
-- The UI/API listens only on the management network, over HTTPS (self-signed certificate by default, replaceable).
+- The UI/API listens only on the management network, over HTTPS (self-signed certificate by default, replaceable), plus the loopback address for the container health check; local processes on the host are trusted.
 - **First start:** until setup is finished, the UI listens on all interfaces that are not yet assigned to a test network and requires a one-time setup token that the container prints to its log (`docker compose logs`). The setup wizard assigns interfaces, sets the admin password and then restricts the UI to the management network.
 - Devices under test are untrusted: test networks cannot reach the management plane. WireGuard networks with role *test* are treated the same; only WireGuard networks with role *management* (§2.2.1) may reach the UI/API.
 - V1: one admin account plus API tokens (scoped: read-only, overlays only, full).
@@ -747,7 +747,7 @@ Further containers (same image, §3.8):
 
 - The core is **one Go binary, `chaosgw`**, with subcommands for the API server, the privileged executor, the DNS proxy and the TLS responder. Each runs in its own container with only the privileges it needs (§3.8); the web UI is compiled into the binary (`go:embed`). The spikes built the DNS proxy and TLS responder in Node.js; their findings are language-independent.
 - Python runs only in the TLS interception sidecar (mitmproxy addon). It communicates with the core via a local API and can be left out entirely if TLS interception is not used; the certificate test cases work without it.
-- Services register with the API when they start and receive their current state (DNS overlays, TLS cases); a restart of a single container therefore needs no coordination. All containers check the executor protocol version, so a half-updated set refuses to work instead of misbehaving.
+- Services register with the API when they start and receive their current state (DNS overlays, TLS cases); a restart of a single container therefore needs no coordination. Containers that use the executor check its protocol version, so a half-updated set refuses to work instead of misbehaving; the service containers (DNS proxy, TLS responder) use the internal API instead and are versioned through it.
 - The executor accepts only a closed set of operation types. Each is validated and turned into command invocations with argument arrays: no shell, fixed binary paths. It checks the scope of every operation (§2.16) and is the **only writer** to the kernel's network configuration — except the routes BIRD installs into Chaos Gateway's routing tables (import-filtered, §2.2.2) — so all changes are serialized — including the DNS proxy's address-set updates, which reach it through a narrow "add elements to set" operation over the same socket.
 - The executor protocol is versioned; both sides check the version and the peer credentials when a connection starts (§2.16).
 - The Linux adapter uses the standard command-line tools in V1 (§3.4). It sits behind an interface, so parts can later be replaced by native netlink access (fewer process starts, better error details, events) without changing the compiler.
@@ -949,24 +949,41 @@ Docker volumes (bind mounts on the host, backed up like any directory):
 chaos-gateway/
   api/                openapi.yaml (source of truth), examples/ (fixtures + validate.py)
   cmd/
-    chaosgw/          subcommands: api, exec, dns, tls
+    chaosgw/          subcommands: api, exec, dns, kea-hook, svcns, admin (tls, chaosctl are stubs: M21, M18)
     chaosctl/         CLI
   internal/
-    domain/           concepts, validation, precedence resolution
-    compiler/         effective policy, target state, diff
-    linux/            command builders, parsers (nft/tc/ip JSON), netlink
-    executor/         privileged operations, socket protocol
-    apiserver/        handlers (generated interfaces), auth, SSE
-    scheduler/        overlays/TTL, scenarios, checks
-    wireguard/        WireGuard networks, clients, keys, export (.conf, QR)
-    routing/          static routes, BIRD configuration and status
-    observer/         observed state: leases, neighbors, handshakes, conntrack flows
-    dnsproxy/  tlsresponder/  dhcp/  capture/  store/
-    testbed/          namespace topology harness (from spike S1)
+    clock/            injectable clock
+    preflight/        kernel version, the one shared kernel-module list, namespace capability
+    testbed/          namespace topology harness (from spike S1); vmrun runs it in a VM
+    model/            generated Go types of api/openapi.yaml: the domain model
+    schema/           validates documents against the spec's schemas
+    domain/           concepts, validation, precedence resolution, overlays, observed state and identity
+    store/            persistence: immutable revisions, checksum, status, commit-confirm, atomic writes
+    linux/            parsers for ip/tc/nft JSON output
+    executor/         privileged operations, strict decoder, scope checks, socket protocol
+    compiler/         effective policy, target state, diff; golden tests
+    apply/            reads kernel state through the executor, plans and applies the difference, verifies it
+    engine/           state owner, apply loop, commit-confirm, rollback, preview, event bus
+    observer/         netlink events debounced into triggers
+    supervisor/       starts goroutines, recovers panics, reports health
+    secrets/          protected key-material store
+    bird/             BIRD 2 configuration renderer, snippet checks, status parser
+    api/              the REST API server: handlers, auth guard, Server-Sent Events
+    auth/             admin password, API tokens, sessions, the setup token
+    audit/            append-only audit log
+    linkexport/       a link's remote-side configuration
+    appliance/        test level 2 harness (M5b)
+    kea/              Kea DHCPv4 configuration renderer and control-socket client
+    dnsproxy/         the DNS proxy (M6b)
+    wireguard/        key generation, provisioning, client/link export (.conf, QR, zip)
+    apiserver/        generated Gin server interface
+  tools/testvm/       runs the testbed tests: directly or in a VM
   web/                Vue app (src/), build output dist/ embedded via go:embed
   clients/            generated TypeScript and Python clients
-  sidecars/tls-proxy/ mitmproxy addon
-  profiles/  scenarios/  deploy/ (Dockerfile, compose.yaml, host setup)  docs/
+  deploy/             container image (multi-arch), compose files, host setup
+  docs/
+  sidecars/tls-proxy/ mitmproxy addon (later)
+  profiles/  scenarios/  capture/  tlsresponder/ (later)
 ```
 
 ## 3.8 Deployment
@@ -1091,7 +1108,7 @@ Rules:
 | Unit | domain, validation, precedence resolution, scheduler, parsers | `go test`; Vitest for UI components | every commit |
 | Compiler golden | configuration → nftables/tc/route output, compared with reviewed golden files | `go test` | every commit |
 | Linux integration | real kernel behavior in namespaces: routing, NAT, faults, rules, DNS, DHCP, TLS proxy | `go test` + testbed in a VM (§4.5 level 1b, the standard on the development VPS) or in a privileged test container (level 1, CI only) | every commit |
-| Measurement | statistical accuracy of faults, timing of scenarios | testbed on a machine with KVM or native (§4.4, open question Q1) | nightly |
+| Measurement | statistical accuracy of faults, timing of scenarios | testbed on a machine with KVM or native (§4.4, D33) | nightly |
 | API contract | OpenAPI conformance, error cases, concurrency | `go test` against the spec; generated clients compile | every commit |
 | UI | components against a mocked API; a few end-to-end flows against the real stack in the testbed | Playwright | every commit / nightly |
 | Distribution | host setup, container start, preflight, smoke tests on clean Ubuntu 24.04 and 26.04 hosts (x86-64 appliance VMs with KVM; the arm64 image functionally in emulated level 1b) | appliance VMs (§4.5 level 2, harness built in M5b) | nightly / before release |
@@ -1108,7 +1125,7 @@ A library that builds topologies from network namespaces and virtual interfaces 
 ```
 
 - A second test network (`lan1` ─ switch ─ client-c) and a management interface with its own default route (as in spike S12) are part of the default topology.
-- WireGuard is part of the default topology from M4b on (as in spike S15): an "internet" router namespace behind the uplink, a hub client with a client network behind it, and a link site. **Attachment matrix:** every integration test of forwarded traffic (classification, faults, rules, DNS, TLS, capture, scenarios) runs for a local test network **and** a WireGuard client network unless the feature does not apply (DHCP and MAC identity exist only on local networks).
+- From M4b on the testbed option `WithRemotes` adds a remote client (hub client with a client network), two link sites and a switch on the uplink; tests that need WireGuard enable it. **Attachment matrix:** every integration test of forwarded traffic (classification, faults, rules, DNS, TLS, capture, scenarios) runs for a local test network **and** a WireGuard client network unless the feature does not apply (DHCP and MAC identity exist only on local networks).
 - Tests start the real API and executor, pointed at the gateway namespace. Nothing touches the host network.
 - The server namespace provides reference services, with valid and invalid certificates for TLS tests.
 - Clients use standard tools: `ping`, `curl`, `openssl s_client`, `dig`, `udhcpc`, `iperf3`, `mosquitto_sub`, `wg`, BIRD, plus a small measurement tool.
@@ -1128,7 +1145,7 @@ Faults are random processes; tests use statistics, not exact values:
 
 ## 4.4 CI
 
-**Available infrastructure (V1):** one VPS that is itself a QEMU/KVM guest **without nested virtualization**, so there is no `/dev/kvm` on it, and development runs in an **unprivileged** devcontainer there (D9). No Raspberry Pi, no ARM64 machine, and no KVM-capable machine yet (Q1, §7.2). The plan works with that:
+**Available infrastructure (V1):** one VPS that is itself a QEMU/KVM guest **without nested virtualization**, so there is no `/dev/kvm` on it, and development runs in an **unprivileged** devcontainer there (D9). No Raspberry Pi, no ARM64 machine. KVM-dependent tests run on hosted GitHub runners instead (D33). The plan works with that:
 
 - **Every commit:** levels 0, 1b (hosted CI runners with `/dev/kvm`) and 1 (hosted CI, privileged container) in the repository's hosted CI. One VM boots per test run, not per test (§4.5). On the development VPS, which has neither privileges nor KVM, `make test-vm` runs the same tests in software emulation before a merge — functional assertions only.
 - **Nightly:** a level 1b job per kernel of the matrix (Ubuntu 24.04 and 26.04, GA and HWE kernels where they exist; functional, runs anywhere). Measurement tests (§4.3) and level 2 appliance VMs also run nightly on the hosted KVM runners.
@@ -1162,7 +1179,7 @@ Link events are simulated by setting one end of a veth pair down; the other end 
 | **0** | plain process, no root | domain, validation, compiler golden files, API contract, UI against mocked API | every commit |
 | **1** | namespace testbed in a **privileged container** (CI only: the development VPS does not allow privileged containers, D9) | routing, NAT, access rules, faults (functional and measurements), DNS proxy and faults, DHCP and test actions, TLS responder and interception, capture, probes, API and UI end-to-end, scenarios | every commit in CI where privileged containers are allowed |
 | **1b** | namespace testbed inside a VM with a **stock distribution kernel** (QEMU + virtme-ng); the **standard testbed on the development VPS** (unprivileged container, no KVM) | the same functional tests as level 1, with any kernel of the matrix; without KVM only functional assertions (§4.3); the decision for modules uses the same list as the product preflight (§3.4) | every commit on the development VPS; nightly for the kernel matrix |
-| **2** | **appliance VMs** (QEMU/KVM) from Ubuntu 24.04 and 26.04 cloud images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | host setup, Docker and the compose deployment, preflight, interface assignment, coexistence with netplan, setup wizard, reboot, last-known-good, safe mode, image updates and migrations, `DOCKER-USER` handling, two- and three-port topologies | nightly on a KVM-capable machine (Q1), from M5b on |
+| **2** | **appliance VMs** (QEMU/KVM) from Ubuntu 24.04 and 26.04 cloud images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | host setup, Docker and the compose deployment, preflight, interface assignment, coexistence with netplan, setup wizard, reboot, last-known-good, safe mode, image updates and migrations, `DOCKER-USER` handling, two- and three-port topologies | nightly on hosted GitHub runners with `/dev/kvm` (D33), from M5b on |
 | **3** | **hardware lab**: Raspberry Pi 4/5, x86 mini PC, real NICs, managed switch, real ESP32 devices (later a WiFi AP) | performance targets (§3.10), timing precision, NIC drivers and offloads, real firmware behavior, long-running tests | when hardware is available (not in V1 infrastructure) |
 
 A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmware with an emulated Ethernet interface. That would allow testing real ESP-IDF firmware against the gateway without hardware; it has to be evaluated first.
@@ -1213,7 +1230,7 @@ An Ubuntu VPS (itself a QEMU/KVM guest, kernel 6.8, no nested virtualization) wi
 | 4+ vCPUs, 8+ GB RAM, 40+ GB disk | the emulated test VMs, Kea, mitmproxy, Go and Node toolchains and captures in parallel |
 | No `/dev/kvm` | nested virtualization is not offered; level 1b runs in software emulation |
 
-**Limits of this setup:** measurement tests (§4.3), level 2 and timing precision need a KVM-capable machine (Q1, §7.2); real devices (e.g. an ESP32 behind the gateway) cannot be attached to the VPS (level 3).
+**Limits of this setup:** measurement tests (§4.3), level 2 and timing precision run on hosted GitHub runners with `/dev/kvm` instead (D33); real devices (e.g. an ESP32 behind the gateway) cannot be attached to the VPS (level 3).
 
 Further notes:
 
@@ -1276,8 +1293,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 1 — Foundation: Routed Gateway
 
 **M1 — Repository, CI and testbed library** (M)
-- Scope: Go module and Vue app skeleton, code generation from the existing `api/openapi.yaml` (oapi-codegen for types and Gin server interfaces, Orval for Vue Query hooks and Zod schemas, openapi-python-client) with a CI check that the spec lints, the examples validate and the generated code compiles, Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI (levels 0, 1b and 1 in hosted CI where privileged containers and KVM are allowed; `make test-vm` on the development VPS before a merge, in software emulation since it has no KVM), `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology) and its **level 1b runner**: one QEMU VM per test run, all tests of the run execute in it, results come back through a read-write share, works without a terminal (`script`), the devcontainer image with all test tools and the stock kernels (`.devcontainer/`, exists), the injectable test clock, the arm64 image build, the decision where KVM-dependent tests run (Q1), and the shared kernel-module preflight (level 1; inside the VM on level 1b).
-- Tests: CI runs a testbed test in a level 1b VM (client pings server through a plain forwarding namespace; a netem delay is visible); the runner returns the tests' exit code and results; the same test runs in a privileged container where CI allows it.
+- Scope: Go module and Vue app skeleton, code generation from the existing `api/openapi.yaml` (oapi-codegen for types and Gin server interfaces, Orval for Vue Query hooks and Zod schemas, openapi-python-client) with a CI check that the spec lints, the examples validate and the generated code compiles, Makefile, golangci-lint, `go test`, Vitest, Playwright skeleton, CI (levels 0, 1b and 1 in hosted CI where privileged containers and KVM are allowed; `make test-vm` on the development VPS before a merge, in software emulation since it has no KVM), `internal/testbed` from spike S1 (with two test networks and a bridge-based attachment as default topology) and its **level 1b runner**: one QEMU VM per test run, all tests of the run execute in it, results come back through a read-write share, works without a terminal (`script`), the devcontainer image with all test tools and the stock kernels (`.devcontainer/`, exists), the injectable test clock, the arm64 image build, the decision where KVM-dependent tests run (D33), and the shared kernel-module preflight (level 1; inside the VM on level 1b).
+- Tests: CI runs a testbed test in a level 1b VM (client pings server through a plain forwarding namespace; a netem delay is visible); the runner exits 0 only when every package ran and passed, 1 when a test or the VM failed, 2 when the run could not be carried out, and prints per-package results; the same test runs in a privileged container where CI allows it.
 - Depends on: S1.
 
 **M2 — Domain model and persistence** (M)
@@ -1304,7 +1321,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 **M4c — Dynamic routing (BIRD)** (L)
 - Why here: WireGuard links between sites depend on dynamic routing; like WireGuard itself it is part of the foundation, so later features are tested with learned routes too.
 - Scope: BIRD 2 instance managed by Chaos Gateway (§2.2.2): BGP, OSPFv2, Babel, static; router id, ASN, neighbors per link, areas and timers in the model; announced prefixes from the model; import filters (prefix lists, no default unless allowed, protected prefixes, max prefixes); export only into Chaos Gateway's routing tables; `bird -p` validation and `birdc configure` apply as part of the revision; custom snippets; external mode for another daemon's kernel table; neighbor and route status and events; remote-side BIRD snippet in link exports. (API resources in M5, routing view in the UI with M14.)
-- Tests (level 1, as in S15): three sites (gateway plus two remote namespaces with BIRD) over WireGuard links, with BGP and with OSPF; routes are learned and withdrawn; learned routes appear only in Chaos Gateway's tables, never in main; a neighbor announcing a default route, the management prefix or a gateway-own prefix is filtered; max-prefix triggers; taking a link down withdraws its routes within the hold time and they return after it comes back; a configuration change is applied without resetting established sessions; an invalid custom snippet is rejected in preview with BIRD's error message.
+- Tests (level 1, as in S15): three sites (gateway plus two remote namespaces with BIRD) over WireGuard links, with BGP and with OSPF; routes are learned and withdrawn; learned routes appear only in Chaos Gateway's tables, never in main; a neighbor announcing a default route, the management prefix or a gateway-own prefix is filtered; max-prefix triggers; taking a link down withdraws its routes within the hold time and they return after it comes back; a filter or announcement change is applied without resetting established sessions, while a change to a protocol's neighbor, AS or timers restarts that protocol; an invalid custom snippet is rejected in preview with BIRD's error message.
 - Depends on: M4b, S15.
 
 **M5 — REST API v1** (L)
@@ -1313,7 +1330,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M4, M4b, M4c.
 
 **M5b — Appliance VM harness (test level 2)** (M)
-- Scope: download Ubuntu 24.04 and 26.04 cloud images; boot a gateway VM with three virtio NICs (uplink, test network, management) connected via tap and bridges to client and server namespaces; run a first version of the host-setup script (modules, `ip_forward`) and a minimal compose deployment (executor container plus `chaosgw apply --file`); collect logs. Needs KVM: runs nightly on a KVM-capable machine (Q1), not on the development VPS.
+- Scope: download Ubuntu 24.04 and 26.04 cloud images; boot a gateway VM with three virtio NICs (uplink, test network, management) connected via tap and bridges to client and server namespaces; run a first version of the host-setup script (modules, `ip_forward`) and a minimal compose deployment (executor container plus `chaosgw apply --file`); collect logs. Needs KVM: runs nightly on hosted GitHub runners with `/dev/kvm` (D33), not on the development VPS.
 - Tests: a smoke test boots Ubuntu 24.04 and 26.04, starts the current image and passes traffic from a client namespace through the VM; the same in the two-port topology.
 - Depends on: M4.
 
@@ -1332,27 +1349,27 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 2 — Faults (core value)
 
 **M7 — Classification layer** (M)
-- Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting, only for test traffic, direction bit, identity updates as incremental map operations from the observed state. No IFB and no output-hook classification here: gateway services are reached through `svc0` egress (D29, S16); the output hook and IFB are only used for tunnel faults (M10).
-- Tests: with a test tc class per (id, direction), per-class counters increase only for matching traffic, in both directions, behind NAT, across two test networks, for a host in a WireGuard client network (as initiator and as destination), and over a WireGuard link (connections redirected to gateway services are tested with the first redirect in M20/M21); a map change moves an established connection to its new class (observed via the class counters); after a forced address change the device's map entry follows within 1 s and a concurrent full apply does not restore the old address; non-test traffic keeps its mark untouched; golden test of the id masks (direction bit kept).
+- Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting, only for test traffic, direction bit, identity updates as incremental map operations from the observed state; identity maps keyed by address → device id replace the per-device sets of Phase 1, so a new device is an element update too. No IFB and no output-hook classification here: gateway services are reached through `svc0` egress (D29, S16); the output hook and IFB are only used for tunnel faults (M10).
+- Tests: with a test tc class per (id, direction), per-class counters increase only for matching traffic, in both directions, behind NAT, across two test networks, for a host in a WireGuard client network (as initiator and as destination), and over a WireGuard link (connections redirected to gateway services are tested with the first redirect in M20/M21); a map change moves an established connection to its new class (observed via the class counters); after a forced address change the device's map entry follows within 1 s and a concurrent full apply does not restore the old address; non-test traffic keeps its mark untouched; golden test of the id masks (direction bit kept); fail closed via mark: a redirected packet resolves into `svc0` with the service namespace up, into the `prohibit` fallback without it.
 - Depends on: M6a, M6b, S2, S10, S11, S16.
 
 **M8a — Overlays** (M)
-- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint; coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start).
-- Tests: golden tests for precedence (E1–E8, E12; E9 and E10 follow in M10, E11 in M21) and tc output; TTL and lease expiry remove overlays and emit events (fake clock); writing an overlay with an existing key replaces it and keeps the id; `reset` only touches the caller's overlays; a restart drops overlays; `explain` returns the expected winner per family; coalescing (§3.11): 200 concurrent overlay writes need far fewer applies than writes, every writer gets a generation that contains its change, and the final kernel state equals the compile of the final snapshot; an injected executor failure reverts the batch and every waiting writer gets `apply_failed`; an invalid write (e.g. `capacity_exceeded`) is rejected without affecting concurrent valid writes; a counter read completes while a long plan runs.
+- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint; coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start); a revision that deletes a referenced object applies with `?force=true`, listing `references[]` in `validation_failed` otherwise, and emits `overlay_orphaned` for the removed overlays (§2.1.1); a merge revision moves overlays of the covered discovered device to the configured one.
+- Tests: golden tests for precedence (E1–E8, E12; E9 and E10 follow in M10, E11 in M21) and tc output; TTL and lease expiry remove overlays and emit events (fake clock); writing an overlay with an existing key replaces it and keeps the id; `reset` only touches the caller's overlays; a restart drops overlays; `explain` returns the expected winner per family; coalescing (§3.11): 200 concurrent overlay writes need far fewer applies than writes, every writer gets a generation that contains its change, and the final kernel state equals the compile of the final snapshot; an injected executor failure reverts the batch and every waiting writer gets `apply_failed`; an invalid write (e.g. `capacity_exceeded`) is rejected without affecting concurrent valid writes; a counter read completes while a long plan runs; deleting a referenced object without `?force` is rejected listing `references[]`, with `?force=true` it succeeds and emits `overlay_orphaned`; merging a discovered device moves its overlays to the configured device.
 - Depends on: M7.
 
 **M8b — Fault engine: latency, jitter, loss** (M)
 - Scope: apply the tc tree per interface with in-place parameter changes and make-before-break for id changes (§3.2); overlay writes return after verify with the new generation; netem queue statistics with counter epochs.
-- Tests: measurement tests (§4.3) for device, group and network scope, for traffic between two test networks, between a test network and a WireGuard client network, and over a route learned via BGP; isolation test; updating one fault does not disturb others; changing the parameters of a 600 ms fault under load loses no queued packet.
+- Tests: measurement tests (§4.3) for device, group and network scope, for traffic between two test networks, between a test network and a WireGuard client network, and over a route learned via BGP; isolation test; updating one fault does not disturb others; changing the parameters of a 600 ms fault under load loses no queued packet; golden tests for the `tc -j` normalizer.
 - Depends on: M8a.
 
 **M9 — Access rules** (M)
 - Scope: ordered allow/drop/reject/TCP reset rules in configuration and as overlays, evaluated in forward and input on the conntrack original tuple (§2.2); "also cut existing connections"; precedence rules vs. faults; named per-rule counters; preview and `explain` of the effective result.
-- Tests: behavior matrix from S3 as automated tests; rule order; overlay rules before configuration rules; anti-lockout rule cannot be overridden; a drop rule on UDP 53 blocks the device's queries to the DNS proxy.
+- Tests: behavior matrix from S3 as automated tests; rule order; overlay rules before configuration rules; anti-lockout rule cannot be overridden; a drop rule on UDP 53 blocks the device's queries to the DNS proxy, and also covers queries sent directly to 169.254.100.2.
 - Depends on: M8a, S3.
 
 **M10 — Extended faults** (M)
-- Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); **WireGuard-action overlays** (peer or link disable, key mismatch, endpoint blocking); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5.
+- Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); **WireGuard-action overlays** (peer or link disable, key mismatch, endpoint blocking); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5; BIRD exports learned routes into the PMTU mirror tables too (one kernel protocol per table).
 - Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; a tunnel fault affects everything inside that tunnel and nothing else, and stacks with inner faults (as in S15); a tunnel blackout on a BGP link withdraws the learned routes and the re-convergence time is reported; PMTU faults through a tunnel; golden tests E9 and E10; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
 - Depends on: M8b, M9.
 
@@ -1366,7 +1383,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Tests: results recorded; §3.10 targets and the ARM64 timing tolerance confirmed or adjusted. Until H1 has run, the Raspberry Pi targets are published as unvalidated.
 - Depends on: M11 (step timing: M15); hardware.
 
-*After Phase 2: the core product via API — faults, rules, profiles — measured on x86 (accuracy measurements need a KVM-capable machine, Q1).*
+*After Phase 2: the core product via API — faults, rules, profiles — measured on x86 (accuracy measurements run on hosted GitHub runners with `/dev/kvm`, D33).*
 
 ## Phase 3 — Web UI
 
@@ -1381,7 +1398,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M12.
 
 **M14 — Networks view and technical view** (M)
-- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog, QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
+- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog (proposes the next free tunnel address of the hub, computed client-side), QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
 - Tests: Playwright; commit-confirm — an unconfirmed change is rolled back after the timeout and the UI shows it; create a WireGuard client in the UI, scan its QR in the test (decoded content equals the download) and bring the tunnel up in the testbed.
 - Depends on: M13.
 
@@ -1464,7 +1481,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 **M28 — Container deployment** (M)
 - Scope: multi-arch image (amd64/arm64), `compose.yaml` with the containers and privileges of §3.8, health checks and start order, final host-setup script (modules, `ip_forward`, netplan hints), preflight in the executor, setup token in the container log, update script that waits for `system/busy`, refusal of newer schemas, teardown.
-- Tests: level-2 smoke tests on Ubuntu 24.04 and 26.04 hosts (two- and three-port topologies): host setup, `compose up`, setup wizard, reboot, image update during an idle and during an active run; the arm64 image starts and passes the functional smoke test in emulated level 1b; the non-exec containers run without privileges (checked from the container runtime); the DNS proxy coexists with the host's own systemd-resolved (M6b-06; the testbed only stands one in for it); the holder's PID file reused by another real container process is refused by the executor, not attached (M6b-10; the testbed cannot reuse a PID on demand).
+- Tests: level-2 smoke tests on Ubuntu 24.04 and 26.04 hosts (two- and three-port topologies): host setup, `compose up`, setup wizard, reboot, image update during an idle and during an active run; the arm64 image starts and passes the functional smoke test in emulated level 1b; the non-exec containers run without privileges (checked from the container runtime); the DNS proxy coexists with the host's own systemd-resolved (M6b-06; the testbed only stands one in for it); the holder's PID file reused by another real container process is refused by the executor, not attached (M6b-10; the testbed cannot reuse a PID on demand); the Kea container starts from compose, the API configures it, a client gets a lease, and the hook posts with the real token (M6a-10; the appliance smoke only deploys the executor otherwise).
 - Depends on: M5b, M14, M27, S7.
 
 **M29 — Security hardening** (M)
@@ -1554,7 +1571,8 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D6 | Uplink types | whatever the OS configures (static or DHCP tested; others such as PPPoE untested) | follows from D3 |
 | D7 | IP versions in V1 | IPv4-only test networks (§2.2); IPv6 blocked on test networks until dual-stack in M32 | review |
 | D8 | L2 transparent mode (gateway as a bridge **between** device and upstream router, not routing) | **later** (§8); only needed when the gateway cannot be the device's default router. Unrelated to the bridge that joins the ports of one test network (D16) | maintainer |
-| D9 | Test infrastructure and hardware | development on one VPS (QEMU/KVM guest without nested virtualization) in an **unprivileged** devcontainer, because privileged containers could affect other containers and interfaces on the host; the namespace testbed runs in QEMU (level 1b, software emulation, functional only); KVM-dependent tests (measurements, level 2) need a KVM-capable machine (Q1); ARM64 emulated; hardware validation (H1) when hardware exists (updated 2026-10-02; replaces the VirtualBox development VM) | maintainer |
+| D9 | Test infrastructure and hardware | development on one VPS (QEMU/KVM guest without nested virtualization) in an **unprivileged** devcontainer, because privileged containers could affect other containers and interfaces on the host; the namespace testbed runs in QEMU (level 1b, software emulation, functional only); KVM-dependent tests (measurements, level 2) run on hosted GitHub runners with `/dev/kvm` instead (D33); ARM64 emulated; hardware validation (H1) when hardware exists (updated 2026-10-02; replaces the VirtualBox development VM) | maintainer |
+| D33 | Where do the KVM-dependent tests run (Q1)? | **Hosted GitHub runners with `/dev/kvm`** (`ubuntu-24.04`) for level 1b with KVM, level 2 appliance VMs and later accuracy measurements; no self-hosted runner is planned. Measurement accuracy depends on the hosted hardware. **Evidence:** level 1b ran with `kvm=true` in run 37147106957; level 2 was green on 24.04 and 26.04 in nightly run 37121687715 | maintainer, decided 2026-10-04 |
 | D10 | Users | **one admin account plus scoped API tokens** in V1; no roles | maintainer |
 | D11 | Existing connections when an access rule changes | **new connections only** by default; "also cut existing connections" is an explicit option (§2.4) | maintainer |
 | D12 | Rule and fault precedence | as §2.4, with D24–D26 | maintainer |
@@ -1583,9 +1601,8 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | Where do the KVM-dependent tests run — measurement tests (§4.3) and level 2 appliance VMs (from M5b)? The development VPS has no `/dev/kvm`. | A KVM-capable CI runner: a hosted runner that offers `/dev/kvm`, or a dedicated or bare-metal machine as self-hosted runner. Decide before M5b (level 2) and before M8b (first accuracy measurements). **Evidence (first CI run, 2026-10-02):** hosted `ubuntu-24.04` runners offer `/dev/kvm`: the testbed VM job ran with accurate timing (50 ms netem measured 50.2 ms, baseline RTT 0.07 ms), and a privileged container ran level 1 directly with the runner's modules. Not yet tried: level 2 (appliance VMs with Docker inside) and a full nightly measurement run. Until then these tests do not run, and the release notes say that accuracy and timing are unvalidated. |
 
-New questions are added here with a recommendation.
+None currently. Q1 was decided as D33 (§7.1). New questions are added here with a recommendation.
 
 ---
 

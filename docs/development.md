@@ -125,9 +125,10 @@ never collide, and removes everything at the end of the test, killing processes 
 ## The executor
 
 `chaosgw exec` is the only process that writes the kernel's network configuration (plan §3.1). It
-accepts a closed set of operations (`nft_apply`, `nft_add_elements`, `routing`, `tc`, `offloads`,
-`docker_user`, `assign_interfaces`, `read`), each a JSON object with a `type` and an optional
-`namespace`. The decoder (`executor.Decode`) is strict and is where most of the scope is enforced:
+accepts a closed set of operations (`nft_apply`, `nft_add_elements`, `nft_del_elements`, `routing`,
+`tc`, `offloads`, `docker_user`, `assign_interfaces`, `links`, `sysctl`, `wireguard`, `bird`,
+`service_ns`, `read`), each a JSON object with a `type` and an optional `namespace`. The decoder
+(`executor.Decode`) is strict and is where most of the scope is enforced:
 nftables only `inet chaosgw`, routes and rules only in tables 100-110 and always with protocol tag
 201, tc arguments only from a token allowlist without the keywords that override the validated
 fields. What depends on run-time state, the interfaces assigned to Chaos Gateway, is checked by the
@@ -143,11 +144,11 @@ stay in scope.
 nightly workflow runs them for an hour each. A crashing input lands in
 `internal/executor/testdata/fuzz/`; commit it as a regression test with the fix.
 
-Deliberately not in M3, each with the milestone that needs it: operations for links, bridges,
-addresses, sysctls and namespaces (M4, the compiler needs them first), `uidrange` selectors on rules
-(service namespace), and the persistent netlink connection for DNS-derived set updates
-(`nft_add_elements` starts one `nft` per call until M6b measures the need). Which interfaces count as
-assigned is decided by whoever may call `assign_interfaces`: loopback and Docker's devices are
+All operations the compiler needs are implemented (`links`, `sysctl`, `wireguard`, `bird` and
+`service_ns` followed in M4-M6b). Still deferred: the persistent netlink connection for
+DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20), and the reader
+pool with operation time stamps (M8a). Which interfaces count as assigned is decided by whoever
+may call `assign_interfaces`: loopback and Docker's devices are
 refused, the rest is trusted to the (root or allowed-uid) caller. Routing batches use
 `ip -force -batch` and treat "exists"/"does not exist" answers as success, so re-sending an
 unchanged rule set is safe.
@@ -317,8 +318,8 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
   isolation. Docker that starts after the last apply is not noticed until the next one.
 - **Gateway protection** closes the UI port for everything but the management sources and drops
   all but DHCP, DNS and ping from test networks. SSH stays with the operating system.
-- Not yet compiled: WireGuard networks and their matrix endpoints (M4b), the `uidrange` rule of
-  the service user (M7), device identity maps and faults (M6a, M8).
+- Not yet compiled: device identity maps and classification (M7, M8a), faults (M8b), the PMTU
+  mirror tables (M10).
 - A failed `chaosgw apply --file` without `--state-dir` leaves the kernel as the failed apply left
   it; with `--state-dir` the engine restores the previous revision.
 - `Rollback` and `Observe` return when the owner has taken the command; `Barrier` waits for the
@@ -376,10 +377,9 @@ the sources that reach the control plane.
   a key provider (`chaosgw exec --secrets-dir`, read access); an operation carries a `key_ref`.
 - **Apply.** The executor creates the device with `ip link add type wireguard`, sets the MTU and
   synchronizes key, port and peers with `wg syncconf`, which leaves unchanged peers alone: a re-apply
-  does not interrupt a tunnel, and apply plans the operation only when something differs. (Deviation
-  from plan §3.4, which names wgctrl: the `wg` tool works in any network namespace without entering
-  it, and the testbed needs that.) `wg show <dev> dump` is the read; the parser drops the private key
-  at once.
+  does not interrupt a tunnel, and apply plans the operation only when something differs. The `wg`
+  tool works in any network namespace without entering it, which the testbed needs. `wg show <dev>
+  dump` is the read; the parser drops the private key at once.
 - **Status.** `Engine.PollWireGuard` reads the peers every interval; the snapshot has the state per
   peer, `wireguard_peer_online` and `wireguard_peer_offline` are emitted when a handshake becomes
   younger or older than three minutes or a peer disappears from the interface.
@@ -551,7 +551,7 @@ two ports:    the management network lives behind the uplink interface; there is
 - **Running it.** It needs root (taps, bridges, namespaces; the harness uses `sudo -n`), QEMU, `/dev/kvm`
   (without it the tests skip; `CHAOSGW_APPLIANCE_ALLOW_TCG=1` runs them emulated and very slowly) and
   the image as `docker save | gzip` in `CHAOSGW_APPLIANCE_IMAGE_TAR`. The nightly workflow's job
-  `appliance` does all of that on a hosted runner (plan Q1: they offer `/dev/kvm`); run it on a branch
+  `appliance` does all of that on a hosted runner (plan D33: they offer `/dev/kvm`); run it on a branch
   with `gh workflow run nightly.yml --ref <branch>`. `make test-appliance` is the same on a machine
   that has the prerequisites. The development VPS has no KVM: everything that needs none is unit-tested
   there (image verification, the cloud-init documents, the QEMU arguments, the topology plan).
@@ -652,7 +652,9 @@ proxy; the TLS responder (M21) joins it later.
   are IPv4 only). Until it has a configuration it answers SERVFAIL. The upstream resolvers are the
   uplink's `dns_upstream`, else the host's: `/run/systemd/resolve/resolv.conf` first (the stub
   `127.0.0.53` of systemd-resolved is not reachable from the namespace, and the proxy binds nothing on
-  the host), then `/etc/resolv.conf`, loopback addresses left out.
+  the host), then `/etc/resolv.conf`, loopback addresses left out. **Limit (V1):** resolved's file
+  lists all of the host's links together, so per-link upstream resolvers (plan §2.6) are not
+  distinguished; every network gets the same host resolver set.
 - **API.** The proxy keeps no state: `GET /internal/dns/config` (long poll, `after` = generation) gives
   the networks (gateway, client range, static entries), the upstream and the strip flag; the generation
   starts at the boot time in milliseconds and moves with the content. `POST /internal/dns/queries` takes
@@ -716,7 +718,7 @@ Python clients and checks that they compile and import. CI runs all three.
 `.github/workflows/ci.yml`: level 0 with the generated-code checks, the Playwright tests, the
 testbed tests in a VM and in a privileged container, and the arm64 job (multi-arch image build,
 unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
-it does not, it runs emulated. Where the KVM-dependent tests finally run is open question Q1.
+it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners (plan D33).
 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
 (`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem would

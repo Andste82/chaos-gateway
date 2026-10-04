@@ -843,6 +843,7 @@ const (
 	EventTypeDnsSetEpoch           EventType = "dns_set_epoch"
 	EventTypeNetworkDegraded       EventType = "network_degraded"
 	EventTypeNetworkRestored       EventType = "network_restored"
+	EventTypeObservedChanged       EventType = "observed_changed"
 	EventTypeOverlayCreated        EventType = "overlay_created"
 	EventTypeOverlayExpired        EventType = "overlay_expired"
 	EventTypeOverlayOrphaned       EventType = "overlay_orphaned"
@@ -901,6 +902,8 @@ func (e EventType) Valid() bool {
 	case EventTypeNetworkDegraded:
 		return true
 	case EventTypeNetworkRestored:
+		return true
+	case EventTypeObservedChanged:
 		return true
 	case EventTypeOverlayCreated:
 		return true
@@ -3023,16 +3026,18 @@ type DeviceIdentifiers struct {
 
 // DeviceObserved defines model for DeviceObserved.
 type DeviceObserved struct {
-	Addresses   *[]Ipv4                  `json:"addresses,omitempty"`
-	DownloadBps *int64                   `json:"download_bps,omitempty"`
-	FlowsActive *int                     `json:"flows_active,omitempty"`
-	LastSeen    *time.Time               `json:"last_seen,omitempty"`
-	Lease       *DhcpLease               `json:"lease,omitempty"`
-	Macs        *[]MacAddress            `json:"macs,omitempty"`
-	Online      bool                     `json:"online"`
-	Sources     *[]DeviceObservedSources `json:"sources,omitempty"`
-	UploadBps   *int64                   `json:"upload_bps,omitempty"`
-	Wireguard   *WireGuardPeerStatus     `json:"wireguard,omitempty"`
+	Addresses   *[]Ipv4       `json:"addresses,omitempty"`
+	DownloadBps *int64        `json:"download_bps,omitempty"`
+	FlowsActive *int          `json:"flows_active,omitempty"`
+	LastSeen    *time.Time    `json:"last_seen,omitempty"`
+	Lease       *DhcpLease    `json:"lease,omitempty"`
+	Macs        *[]MacAddress `json:"macs,omitempty"`
+
+	// Online Seen now - a confirmed neighbor entry, a connection, or a WireGuard handshake; a lease alone does not count.
+	Online    bool                     `json:"online"`
+	Sources   *[]DeviceObservedSources `json:"sources,omitempty"`
+	UploadBps *int64                   `json:"upload_bps,omitempty"`
+	Wireguard *WireGuardPeerStatus     `json:"wireguard,omitempty"`
 }
 
 // DeviceObservedSources defines model for DeviceObserved.Sources.
@@ -3450,10 +3455,18 @@ type Event struct {
 		Name *string `json:"name,omitempty"`
 	} `json:"subject,omitempty"`
 	Time time.Time `json:"time"`
+
+	// Type Every type the event bus can carry. `observed_changed` fires when the observed state
+	// (devices, leases, flows) changes without a configuration change behind it.
+	// `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
+	// produced from M28 on.
 	Type EventType `json:"type"`
 }
 
-// EventType defines model for EventType.
+// EventType Every type the event bus can carry. `observed_changed` fires when the observed state
+// (devices, leases, flows) changes without a configuration change behind it.
+// `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
+// produced from M28 on.
 type EventType string
 
 // Explanation defines model for Explanation.

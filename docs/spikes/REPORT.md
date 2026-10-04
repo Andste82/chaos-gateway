@@ -467,13 +467,13 @@ These changes are applied to `docs/plan.md`:
 
 ## 5. Open Follow-Ups
 
-1. **S8 on hardware:** Raspberry Pi 4/5 and an x86 mini PC with real NICs, with netem active (throughput, CPU, timing precision).
-2. **Distribution matrix:** Debian 12/13 kernels and nftables versions.
-3. **Kea version:** check `host_cmds` availability and control-socket path restrictions in newer Kea releases.
-4. **DNS proxy over TCP** and a persistent nftables session for selector updates.
-5. **IPv6:** all spikes were IPv4-only, consistent with V1.
-6. **Timing precision** of scenario steps on real hardware (plan target ±100 ms); emulation is not representative.
-7. **S7 remainder:** coexistence with netplan/NetworkManager/systemd-networkd on assigned interfaces was not tested (the sandbox has no network manager).
+1. **S8 on hardware:** Raspberry Pi 4/5 and an x86 mini PC with real NICs, with netem active (throughput, CPU, timing precision). → H1.
+2. **Distribution matrix:** Debian 12/13 kernels and nftables versions. Dropped (D1): V1 supports only Ubuntu 24.04/26.04.
+3. **Kea version:** check `host_cmds` availability and control-socket path restrictions in newer Kea releases. Done in M6a: Kea 3.0.3 pinned and version-checked at build time.
+4. **DNS proxy over TCP** and a persistent nftables session for selector updates. DNS over TCP done in M6b; the persistent nft session → M20.
+5. **IPv6:** all spikes were IPv4-only, consistent with V1. → M32.
+6. **Timing precision** of scenario steps on real hardware (plan target ±100 ms); emulation is not representative. → H1, M15.
+7. **S7 remainder:** coexistence with netplan/NetworkManager/systemd-networkd on assigned interfaces was not tested (the sandbox has no network manager). → M28.
 
 ---
 

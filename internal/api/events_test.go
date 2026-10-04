@@ -16,6 +16,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/Andste82/chaos-gateway/internal/api"
+	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
 // stream is an open Server-Sent Events connection.
@@ -293,6 +295,36 @@ func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testi
 				t.Fatal("the connection of a client that does not read stays open")
 			}
 			break
+		}
+	}
+}
+
+// CC-01: every event type the engine's own Event* constants can publish must be in the spec's
+// EventType enum, so a client never sees a type it cannot decode.
+func TestEveryEngineEventTypeIsInTheSpec(t *testing.T) {
+	types := []string{
+		engine.EventApplied,
+		engine.EventApplyFailed,
+		engine.EventRolledBack,
+		engine.EventConfirmPending,
+		engine.EventConfirmed,
+		engine.EventNetworkDegraded,
+		engine.EventNetworkRecovered,
+		engine.EventUplinkChanged,
+		engine.EventObservedChanged,
+		engine.EventDeviceDiscovered,
+		engine.EventDeviceOnline,
+		engine.EventDeviceOffline,
+		engine.EventDeviceIdentityChanged,
+		engine.EventDHCPLease,
+		engine.EventRoutingChanged,
+		engine.EventRoutingRoutesChanged,
+		engine.EventPeerOnline,
+		engine.EventPeerOffline,
+	}
+	for _, typ := range types {
+		if !model.EventType(typ).Valid() {
+			t.Errorf("%q is not in the spec's EventType enum", typ)
 		}
 	}
 }

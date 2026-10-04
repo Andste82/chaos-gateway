@@ -256,6 +256,10 @@ func (s *Server) GetHealth(c *gin.Context) {
 		worse("degraded")
 	}
 	comps = append(comps, dns)
+	if err := s.cfg.Audit.Err(); err != nil {
+		comps[0].Status, comps[0].Detail = "unhealthy", "the audit log cannot be written: "+firstLine(err.Error())
+		worse("unhealthy")
+	}
 	body := gin.H{"status": overall}
 	if principalOf(c) != nil {
 		body["components"] = comps

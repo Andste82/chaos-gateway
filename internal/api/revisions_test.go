@@ -266,6 +266,30 @@ func TestAnUnconfirmedRevisionIsRolledBack(t *testing.T) {
 	if r := g.do("POST", "/revisions/"+itoa(id)+"/confirm", nil, nil, nil); r.Status != 409 {
 		t.Errorf("confirming a rolled back revision: %d", r.Status)
 	}
+	// M5-05: a rollback the engine makes on its own is audited too, with actor "system". The
+	// server's own audit subscriber is independent of this test's ch, so give it a moment.
+	deadline = time.After(5 * time.Second)
+	var found bool
+	for !found {
+		items := g.do("GET", "/audit", nil, nil, nil).json(t)["items"].([]any)
+		for _, i := range items {
+			e := i.(map[string]any)
+			if e["action"] == "revision.rolled_back" {
+				found = true
+				if e["actor"].(map[string]any)["type"] != "system" || int64(e["revision"].(float64)) != id {
+					t.Errorf("%v", e)
+				}
+			}
+		}
+		if found {
+			break
+		}
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("no audit entry for the system rollback")
+		}
+	}
 }
 
 func TestDiscardCloneDiffAndExport(t *testing.T) {

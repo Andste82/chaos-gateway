@@ -6,6 +6,7 @@ package audit
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,18 +55,37 @@ type Log struct {
 	next uint64
 	// entries is the whole log in memory: the log is small (one line per administrative action).
 	entries []Entry
+	path    string
+	// retention is how long an entry is kept (§3.6: 1 year); zero uses DefaultRetention.
+	retention time.Duration
+	// err is the error of the last failed Append, nil after a successful one (M5-04).
+	err error
 }
+
+// Option configures Open.
+type Option func(*Log)
+
+// WithRetention overrides DefaultRetention (tests use a short one).
+func WithRetention(d time.Duration) Option {
+	return func(l *Log) { l.retention = d }
+}
+
+// DefaultRetention is §3.6's one year, used when Open is not given one.
+const DefaultRetention = 365 * 24 * time.Hour
 
 // maxEntries bounds the file: when it grows beyond, the oldest half is dropped at the next start.
 const maxEntries = 100000
 
 // Open opens or creates the log file in dir.
-func Open(dir string, c clock.Clock) (*Log, error) {
+func Open(dir string, c clock.Clock, opts ...Option) (*Log, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, "audit.jsonl")
-	l := &Log{clk: c, next: 1}
+	l := &Log{clk: c, next: 1, path: path, retention: DefaultRetention}
+	for _, o := range opts {
+		o(l)
+	}
 	if raw, err := os.Open(path); err == nil {
 		sc := bufio.NewScanner(raw)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -80,8 +100,7 @@ func Open(dir string, c clock.Clock) (*Log, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if len(l.entries) > maxEntries {
-		l.entries = l.entries[len(l.entries)-maxEntries/2:]
+	if l.pruneEntries() {
 		if err := rewrite(path, l.entries); err != nil {
 			return nil, err
 		}
@@ -96,6 +115,49 @@ func Open(dir string, c clock.Clock) (*Log, error) {
 	}
 	l.f = f
 	return l, nil
+}
+
+// pruneEntries drops entries older than retention and, if the log still exceeds maxEntries, the
+// oldest half of what remains. It reports whether anything was dropped. Callers hold l.mu.
+func (l *Log) pruneEntries() bool {
+	before := len(l.entries)
+	if l.retention > 0 {
+		cut := l.clk.Now().Add(-l.retention)
+		i := 0
+		for i < len(l.entries) && l.entries[i].Time.Before(cut) {
+			i++
+		}
+		l.entries = l.entries[i:]
+	}
+	if len(l.entries) > maxEntries {
+		l.entries = l.entries[len(l.entries)-maxEntries/2:]
+	}
+	return len(l.entries) != before
+}
+
+// Run drops entries past retention once a day, until ctx ends (§3.6: retention 1 year).
+func (l *Log) Run(ctx context.Context) {
+	t := l.clk.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C():
+			l.mu.Lock()
+			changed := l.pruneEntries()
+			entries := append([]Entry(nil), l.entries...)
+			l.mu.Unlock()
+			if !changed {
+				continue
+			}
+			if err := rewrite(l.path, entries); err != nil {
+				l.mu.Lock()
+				l.err = err
+				l.mu.Unlock()
+			}
+		}
+	}
 }
 
 func rewrite(path string, es []Entry) error {
@@ -137,15 +199,27 @@ func (l *Log) Append(e Entry) (Entry, error) {
 	if err != nil {
 		return e, err
 	}
-	if _, err := l.f.Write(append(b, '\n')); err != nil {
-		return e, err
+	// a write or fsync failure (plan §3.11: a failing audit writer marks the API unhealthy) is kept
+	// apart from a marshal error, which is the caller's bug, not the log's health
+	if _, werr := l.f.Write(append(b, '\n')); werr != nil {
+		l.err = werr
+		return e, werr
 	}
-	if err := l.f.Sync(); err != nil {
-		return e, err
+	if werr := l.f.Sync(); werr != nil {
+		l.err = werr
+		return e, werr
 	}
+	l.err = nil
 	l.next++
 	l.entries = append(l.entries, e)
 	return e, nil
+}
+
+// Err returns the error of the last failed append, or nil after a successful one (M5-04).
+func (l *Log) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
 }
 
 // Filter selects entries.

@@ -113,6 +113,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		return err
 	}
 	defer func() { _ = lg.Close() }()
+	go lg.Run(ctx)
 	st, err := store.Open(o.stateDir)
 	if err != nil {
 		return err

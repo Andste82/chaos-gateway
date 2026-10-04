@@ -43,6 +43,36 @@ func TestGoldenRouting(t *testing.T) {
 	}
 }
 
+// M4c-08: the management interface's own connected subnet is protected even when allowed_sources
+// narrows who else may reach the control plane to something else entirely.
+func TestTheManagementSubnetIsProtectedWithExplicitSources(t *testing.T) {
+	tg := withRouting(t, func(cfg *model.Configuration, in *Input) {
+		cfg.Management.AllowedSources = &[]model.Ipv4Cidr{"203.0.113.50/32"}
+	})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if tg.Management.Subnet.String() != "192.168.56.0/24" {
+		t.Errorf("the management interface's connected subnet is not recorded: %+v", tg.Management)
+	}
+	var sources []string
+	for _, p := range tg.Management.Sources {
+		sources = append(sources, p.String())
+	}
+	if !contains(sources, "203.0.113.50/32") || contains(sources, "192.168.56.0/24") {
+		t.Errorf("explicit allowed_sources must not be widened with the interface subnet: %v", sources)
+	}
+	found := false
+	for _, p := range tg.protectedPrefixes() {
+		if p == "192.168.56.0/24" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the management subnet is not among the protected prefixes: %v", tg.protectedPrefixes())
+	}
+}
+
 func TestTheBirdConfigurationFollowsTheModel(t *testing.T) {
 	tg := withRouting(t, nil)
 	c := tg.Bird.Config

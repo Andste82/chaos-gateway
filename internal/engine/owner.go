@@ -726,18 +726,32 @@ func (o *owner) observed(obs observation) {
 	o.identity = &id
 	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
 	o.snap.ObserveError = obs.ObserveError
+
+	// the desired state is built before the events are emitted, so device_identity_changed can name
+	// the generation it belongs to (spec Event.generation, "set for ... identity changes"); a
+	// throttled converge may later coalesce it with others into a different, newer generation (see
+	// triggerIdentityConverge), the same way a superseded apply never individually reaches the
+	// kernel either.
+	var d *desired
+	if changed && o.current != nil {
+		d = o.nextDesired(o.current.Config, o.current.Revision)
+		d.IdentityOnly = true
+	}
 	for _, ev := range events {
+		if ev.Type == EventDeviceIdentityChanged && d != nil {
+			ev.Data["generation"] = d.Generation
+		}
 		o.event(ev.Type, ev.Data)
 	}
-	if changed && o.current != nil {
+	if d != nil {
 		if newDevices {
 			// a device appeared or disappeared: the ruleset itself changes (a set is created or
 			// removed), so this is the case the window throttles.
-			o.triggerIdentityConverge()
+			o.triggerIdentityConverge(d)
 		} else {
 			// an existing device's address changed: an element update of an existing set, cheap
 			// enough to run at once (plan §2.3, "identity changes take a second at most").
-			o.convergeIdentity()
+			o.converge(d)
 		}
 	}
 	o.publish()
@@ -748,15 +762,15 @@ func (o *owner) observed(obs observation) {
 // into at most one converge per window instead of one per poll (M6a-07).
 const identityConvergeWindow = 2 * time.Second
 
-// triggerIdentityConverge converges at once when the window has elapsed, or schedules exactly one
-// converge for the end of the current window otherwise; further calls before it fires change
-// nothing, since the scheduled converge rebuilds the desired state from whatever identity is current
-// when it runs.
-func (o *owner) triggerIdentityConverge() {
+// triggerIdentityConverge converges at once with d when the window has elapsed, or schedules exactly
+// one converge for the end of the current window otherwise; further calls before it fires change
+// nothing, since the scheduled converge (identityConverge) rebuilds its own desired state from
+// whatever identity is current when it runs, rather than using d, which by then may be stale.
+func (o *owner) triggerIdentityConverge(d *desired) {
 	now := o.now()
 	if o.lastIdentityConverge.IsZero() || now.Sub(o.lastIdentityConverge) >= identityConvergeWindow {
 		o.lastIdentityConverge = now
-		o.convergeIdentity()
+		o.converge(d)
 		return
 	}
 	if o.identityThrottled {

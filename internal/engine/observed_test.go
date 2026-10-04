@@ -286,6 +286,32 @@ func (h *harness) tryDeviceSetElements(dev string) (string, bool) {
 	return "", false
 }
 
+// M6a-16 test: device_identity_changed carries the generation of the desired state it belongs to
+// (spec Event.generation, "set for ... identity changes"), the same one owner.observed builds before
+// emitting the event.
+func TestDeviceIdentityChangedCarriesTheGeneration(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.77", macCfg)})
+	h.observe()
+	ev := collect(ch, engine.EventDeviceIdentityChanged)
+	if len(ev) != 1 {
+		t.Fatalf("%v", ev)
+	}
+	g, ok := ev[0].Data["generation"].(uint64)
+	if !ok || g == 0 {
+		t.Fatalf("%+v", ev[0].Data)
+	}
+	if got := h.e.Snapshot().Generation; got != g {
+		t.Errorf("event generation %d, snapshot generation %d", g, got)
+	}
+}
+
 func TestAnIdentityChangeIsAnIncrementalUpdateNotARebuild(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))
@@ -364,7 +390,6 @@ func TestNewDevicesWithinTheWindowConvergeOnce(t *testing.T) {
 	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX)})
 	h.observe()
 	h.barrier()
-	gen1 := h.e.Snapshot().Generation
 	if got := h.deviceSetElements(idX); got != "10.10.0.60" {
 		t.Fatalf("the first device did not converge at once: %q", got)
 	}
@@ -372,11 +397,12 @@ func TestNewDevicesWithinTheWindowConvergeOnce(t *testing.T) {
 	// a second device appears in the same instant: it must not run its own full apply right away
 	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
 	h.observe()
-	if g := h.e.Snapshot().Generation; g != gen1 {
-		t.Fatalf("the second device converged at once instead of waiting for the window: generation %d, want %d", g, gen1)
+	if _, ok := h.tryDeviceSetElements(idY); ok {
+		t.Fatal("the second device converged at once instead of waiting for the window")
 	}
 
-	// once the window elapses, the coalesced converge picks up the latest state
+	// once the window elapses, the coalesced converge picks up the latest state, in one update
+	before := len(h.k.Commands())
 	h.clk.Advance(2 * time.Second)
 	var got string
 	for i := 0; i < 100; i++ {
@@ -390,8 +416,17 @@ func TestNewDevicesWithinTheWindowConvergeOnce(t *testing.T) {
 	if got != "10.10.0.61" {
 		t.Fatalf("the second device never converged: %q", got)
 	}
-	if g := h.e.Snapshot().Generation; g != gen1+1 {
-		t.Errorf("the coalesced converge ran %d times, want exactly 1", g-gen1)
+	// a new device changes the set count, so this is a full apply (identityOps refuses it as
+	// non-incremental); what matters here is that it ran exactly once for both devices together,
+	// not once more on top of whatever X's own earlier appearance already did.
+	var loads int
+	for _, c := range h.k.Commands()[before:] {
+		if strings.HasPrefix(c, "nft -j -f") {
+			loads++
+		}
+	}
+	if loads != 1 {
+		t.Errorf("the coalesced converge loaded the ruleset %d times, want 1", loads)
 	}
 }
 

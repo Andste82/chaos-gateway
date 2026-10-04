@@ -23,7 +23,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M5 REST API | incomplete | 5 | 0 | 2 | 4 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
 | M6a DHCP, devices | incomplete | 8 | 0 | 3 | 3 |
-| M6b DNS, service namespace | incomplete | 11 | 0 | 4 | 2 |
+| M6b DNS, service namespace | incomplete | 5 | 0 | 1 | 2 |
 | Cross-cutting | – | 6 | 0 | 0 | 0 |
 
 ### Why items stayed open
@@ -107,7 +107,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - M6a-25, M4c-07, M5b-04, M5b-01 (run the nightly job on main).
 3. **API correctness** (done, `phase1-api-correctness`): M5-01, M5-04, M5-05, M5-06, M5-09, M5-11 to M5-22, M5-24.
 4. **Devices and flows** (done, `phase1-devices-flows`; M6a-03, M6a-07 and M6a-22 only narrowed, see their remaining blocks below): M6a-02, M6a-03, M6a-05, M6a-06, M6a-07 (limiter part), M6a-08, M6a-11, M6a-13 to M6a-22.
-5. **Service namespace hardening**: M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
+5. **Service namespace hardening** (done, `phase1-svcns-hardening`): M6b-01, M6b-03, M6b-04, M6b-06, M6b-07, M6b-08, M6b-10.
 6. **Retention and domain**: M2-01, M2-02, M2-04 to M2-07, M2-09.
 7. **Executor and engine robustness**: M3-02, M3-03, M3-05, M4-03 to M4-06, M4-10.
 8. **Test infrastructure**: M1-02 (x86 matrix), M1-03 to M1-09, CC-04.
@@ -1008,32 +1008,23 @@ Removed from the old list: "Only the first MAC is reserved" — the spec defines
 
 ## M6b (DNS proxy and service namespace)
 
-Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open are the services' own namespace check (§3.8), a dead holder blocking applies, and test gaps for the holder, the prohibit path and systemd-resolved.
+Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open are a dead holder blocking applies and small gaps (direct access to the proxy without DNAT, upstream per link, a plan test name, a port default).
 
 | Plan item | Status | Evidence |
 |---|---|---|
-| Holder `svcns`, `svc0` pair, table 102 with prohibit fallback | done | `cmd/chaosgw/svcns.go`, `compiler/service.go`, `apply/service_test.go` |
-| Re-attach on holder change | done | `engine/service.go` (WatchService), `executor/exec.go`; `TestAHolderThatRestartsIsNoticedAndTheNamespaceReplaced` (simulated kernel) |
-| Services leave a stale namespace (§3.8, risk 35) | missing | M6b-01 |
+| Holder `svcns`, `svc0` pair, table 102 with prohibit fallback | done | `cmd/chaosgw/svcns.go`, `compiler/service.go`, `apply/service_test.go`; the holder's PID is checked against the netns inode it reported, so a reused PID is refused |
+| Re-attach on holder change | done | `engine/service.go` (WatchService), `executor/exec.go`; `TestAHolderThatRestartsIsNoticedAndTheNamespaceReplaced` (simulated kernel), `TestAHolderRestartIsHealedWithoutHelp` (real holder process) |
+| Services leave a stale namespace (§3.8, risk 35) | done | `dnsproxy.WatchNamespace`; `chaosgw dns --namespace-check` |
 | DNAT for LAN and WG gateway addresses, UDP+TCP | done | `compiler/service.go`; testbed `TestDNSThroughTheServiceNamespace` |
-| Forwarding, caching, AAAA removal, query log, registration | done | `internal/dnsproxy`, `api/dns.go` |
-| Coexistence with systemd-resolved | done, not tested | M6b-06 |
+| Forwarding, caching, AAAA removal, query log, registration | done | `internal/dnsproxy`, `api/dns.go`; an AAAA query of a missing name is NXDOMAIN, SVCB/HTTPS `ipv6hint` is stripped too |
+| Coexistence with systemd-resolved | done | tested |
 | Upstream from the host | done, limits | M6b-09 |
 | Managed services report health (§2.14, Health enum `kea`/`svcns`/`dns`) | done | `internal/api/system.go` GetHealth |
+| Proxy and Kea hook verify the API's certificate | done | `internal/api.PublishCertificate`, `--api-cert-file`/`CHAOSGW_API_CERT` |
 | T: LAN and WG client over UDP and TCP; restart of the proxy | done | `e2e_dns_test.go` |
-| T: no bind on 127.0.0.53, resolved keeps working | partial | M6b-06 |
-| T: holder restart healed | partial | M6b-03 |
-| T: fail closed | partial | prohibit path never hit (M6b-04) |
-
-### M6b-01 DNS proxy never leaves a stale service namespace
-- Status: open (rewrites "`dns` must join the holder's new namespace")
-- Severity: medium
-- Reason: forgotten — §3.8 "each service checks that its namespace carries the svc0 peer address and exits when not" (S16 C3, risk 35); compose `depends_on … restart: true` covers only a Compose recreate.
-- Evidence: `cmd/chaosgw/dns.go`; `deploy/compose.dns.yaml`.
-- Task: 1. `func WatchNamespace(ctx, clk clock.Clock, want netip.Addr, interval, grace time.Duration, addrs func() ([]netip.Addr, error)) error` in `internal/dnsproxy`: error once `want` was present and then absent on 3 checks in a row, or never present within `grace`. 2. `runDNS` starts it with 169.254.100.2, 2 s, 60 s, `net.InterfaceAddrs()`; on error log and exit 3 (`restart: unless-stopped` brings it back in the holder's current namespace). 3. Flags `--namespace-check` (default true), `--service-addr`. 4. Fake-clock tests: `TestTheProxyExitsWhenItsNamespaceLosesTheServiceAddress` plus the never-present case. 5. development.md.
-- Acceptance: local unit tests; CI testbed via M6b-03.
-- Needs maintainer: no
-- Effort: S
+| T: no bind on 127.0.0.53, resolved keeps working | done | |
+| T: holder restart healed | done | |
+| T: fail closed | done | the plan's M7 test list does not name it yet (M6b-04) |
 
 ### M6b-02 A failing service-namespace step fails every apply
 - Status: open
@@ -1045,16 +1036,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Needs maintainer: decided 2026-10-04: (a) degrade and report.
 - Effort: M
 
-### M6b-03 No test with a real holder process and automatic healing
-- Status: open
-- Severity: medium
-- Reason: test-gap — the plan test "restarting the holder is healed by re-attach and service restart" runs only over the simulated kernel; the testbed deletes the namespace and calls `Refresh()` by hand.
-- Evidence: `internal/api/e2e_dns_test.go:255-283`; `engine/service_test.go`.
-- Task: 1. `holderPID func() int` in `options` (internal/api/harness_test.go) passed as `engine.Config.ServiceHolderPID`; start `g.e.WatchService(ctx, 200*time.Millisecond)`. 2. `TestAHolderRestartIsHealedWithoutHelp`: holder = `exec.Command("unshare","-n","sleep","infinity")`; wait for `svc0`, start the proxy in that namespace, resolve from A. 3. Kill the holder, start a new one; without `Refresh` wait until the executor re-attached. 4. The old proxy exits through M6b-01; start a new one; resolve from A.
-- Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: M
-
 ### M6b-04 Plan §M7 test list does not mention "fail closed via mark"
 - Status: open (narrowed: the testbed assertions are done, in `phase1-svcns-hardening`)
 - Severity: low
@@ -1062,36 +1043,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Evidence: `compiler/service.go:60-75`; `internal/api/e2e_dns_test.go` (`TestDNSThroughTheServiceNamespace`); docs/plan.md's M7 test list.
 - Task: add "fail closed via mark: a redirected packet resolves into `svc0` with the service namespace up, into the `prohibit` fallback without it" to the M7 test list in docs/plan.md.
 - Acceptance: doc review.
-- Needs maintainer: no
-- Effort: S
-
-### M6b-06 Coexistence with systemd-resolved not tested
-- Status: open
-- Severity: low
-- Reason: test-gap — "the proxy does not bind 127.0.0.53 and resolved keeps working".
-- Evidence: `e2e_dns_test.go:200-206`; `TestHostResolversSkipTheLocalStub`.
-- Task: in `TestDNSThroughTheServiceNamespace` start `dnsmasq --listen-address=127.0.0.53 --bind-interfaces --address=/stub.test/192.0.2.1` in the GW namespace before the apply as a stand-in for resolved; afterwards `dig @127.0.0.53 stub.test` in GW still answers and A still resolves through the proxy; add a real resolved check on the appliance to M28.
-- Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: S
-
-### M6b-07 AAAA for a missing name is NODATA; SVCB/HTTPS `ipv6hint` kept
-- Status: open
-- Severity: low
-- Reason: forgotten — the AAAA reply is built before asking upstream.
-- Evidence: `internal/dnsproxy/proxy.go:280-289,431-447`.
-- Task: forward AAAA queries (cached like others), keep the upstream rcode with AAAA records stripped; strip `ipv6hint` from SVCB/HTTPS (`dns.SVCB.Value`); update `TestAAAAIsRemovedAndNeverAsked`, add an NXDOMAIN case.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6b-08 Proxy and Kea hook trust the API certificate unchecked
-- Status: open
-- Severity: low
-- Reason: forgotten — compose passes no `--api-cert-file`.
-- Evidence: `internal/dnsproxy/apiclient.go:44-58`; `deploy/compose.dns.yaml`; `cmd/chaosgw/keahook.go:40`.
-- Task: the API writes its certificate PEM to the `chaosgw-service` volume (`/var/lib/chaosgw/service/api.pem`) next to the token; compose.dns.yaml passes `--api-cert-file`; the Kea hook reads `CHAOSGW_API_CERT` (set in compose.kea.yaml); unit tests.
-- Acceptance: local unit tests.
 - Needs maintainer: no
 - Effort: S
 

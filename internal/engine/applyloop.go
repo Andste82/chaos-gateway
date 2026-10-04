@@ -85,6 +85,14 @@ func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compile
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
+		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is
+		// not named: compiling with 0 keeps (or creates) an empty namespace instead of the executor
+		// refusing to attach a PID it cannot find, which would otherwise fail every apply and every
+		// rollback until something re-creates the holder. A live replacement is still named, so the
+		// usual ensure op reattaches it.
+		if h := e.Snapshot().ServiceHealth; h != nil && !h.HolderExists {
+			in.ServiceHolderPID = 0
+		}
 	}
 	if e.cfg.ServiceHolderNetnsInode != nil {
 		in.ServiceHolderNetnsInode = e.cfg.ServiceHolderNetnsInode()

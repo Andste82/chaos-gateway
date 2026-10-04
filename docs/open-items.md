@@ -23,7 +23,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M5 REST API | incomplete | 3 | 0 | 2 | 3 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
 | M6a DHCP, devices | incomplete | 3 | 0 | 2 | 2 |
-| M6b DNS, service namespace | incomplete | 2 | 0 | 1 | 2 |
+| M6b DNS, service namespace | incomplete | 1 | 0 | 0 | 1 |
 | Cross-cutting | – | 3 | 0 | 0 | 0 |
 
 ### Why items stayed open
@@ -426,12 +426,13 @@ Removed from the old list: "Only the first MAC is reserved" — the spec defines
 
 ## M6b (DNS proxy and service namespace)
 
-Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open are a dead holder blocking applies and a port default.
+Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open is a port default.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Holder `svcns`, `svc0` pair, table 102 with prohibit fallback | done | `cmd/chaosgw/svcns.go`, `compiler/service.go`, `apply/service_test.go`; the holder's PID is checked against the netns inode it reported, so a reused PID is refused |
 | Re-attach on holder change | done | `engine/service.go` (WatchService), `executor/exec.go`; `TestAHolderThatRestartsIsNoticedAndTheNamespaceReplaced` (simulated kernel), `TestAHolderRestartIsHealedWithoutHelp` (real holder process) |
+| A dead holder degrades instead of failing every apply | done | `ServiceHealth.HolderExists` distinguishes dead from merely unattached (M6b-02); `engine.Snapshot.ServiceError`; `TestADeadHolderDoesNotBlockARevisionApply` |
 | Services leave a stale namespace (§3.8, risk 35) | done | `dnsproxy.WatchNamespace`; `chaosgw dns --namespace-check` |
 | DNAT for LAN and WG gateway addresses, UDP+TCP | done | `compiler/service.go`; testbed `TestDNSThroughTheServiceNamespace` |
 | Forwarding, caching, AAAA removal, query log, registration | done | `internal/dnsproxy`, `api/dns.go`; an AAAA query of a missing name is NXDOMAIN, SVCB/HTTPS `ipv6hint` is stripped too |
@@ -443,16 +444,6 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 | T: no bind on 127.0.0.53, resolved keeps working | done | |
 | T: holder restart healed | done | |
 | T: fail closed | done | named in the plan's M7 test list |
-
-### M6b-02 A failing service-namespace step fails every apply
-- Status: open
-- Severity: medium
-- Reason: needs-decision — a dead holder (PID file survives a crash in the named volume) makes every revision apply and every rollback fail.
-- Evidence: `internal/executor/exec.go:335-341`; `internal/apply/plan.go:66-68`; docs/development.md.
-- Task: before compiling, if `ServiceHolderPID()` names a process that does not exist, compile with `HolderPID=0` or skip `serviceOp` (table 102 and the forward guard keep traffic fail-closed); `Snapshot.ServiceError` plus a problem event; `TestADeadHolderDoesNotBlockARevisionApply` (simulated kernel: apply succeeds, `ServiceError` set, a later live PID re-attaches).
-- Acceptance: local unit test; CI testbed e2e still passes.
-- Needs maintainer: decided 2026-10-04: (a) degrade and report.
-- Effort: M
 
 
 ### M6b-12 `ui_port` default in the spec (443) differs from the code

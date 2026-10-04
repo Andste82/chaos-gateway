@@ -147,6 +147,9 @@ type ServiceNSState struct {
 	Exists bool `json:"exists"`
 	// HolderMatches is true when no holder was asked for, or the namespace is the holder's.
 	HolderMatches bool `json:"holder_matches"`
+	// HolderExists is true when no holder was asked for, or its own network namespace could be
+	// read: false means the PID is gone (M6b-02), not merely unattached yet.
+	HolderExists bool `json:"holder_exists"`
 }
 
 // Routing changes routes and rules.

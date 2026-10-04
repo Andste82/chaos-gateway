@@ -127,7 +127,7 @@ type cmdObserved struct {
 type cmdDHCPStatus struct{ err string }
 
 // cmdServiceStatus carries WatchService's last reading of the service namespace.
-type cmdServiceStatus struct{ exists, holderMatches bool }
+type cmdServiceStatus struct{ exists, holderMatches, holderExists bool }
 
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
 const retryDelay = 10 * time.Second
@@ -434,7 +434,7 @@ func (o *owner) handle(ctx context.Context, c command) {
 		o.snap.DHCPError = c.err
 		o.publish()
 	case cmdServiceStatus:
-		o.snap.ServiceHealth = &ServiceHealth{Exists: c.exists, HolderMatches: c.holderMatches}
+		o.snap.ServiceHealth = &ServiceHealth{Exists: c.exists, HolderMatches: c.holderMatches, HolderExists: c.holderExists}
 		o.publish()
 	case cmdRoutingStatus:
 		o.routingStatus(c.status)
@@ -518,6 +518,14 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
 		o.snap.Service = r.target.Service
+		o.snap.ServiceError = ""
+		if h := o.snap.ServiceHealth; r.target.Service != nil && h != nil && !h.HolderExists {
+			// M6b-02: input() already compiled this with HolderPID 0 instead of failing the apply;
+			// this is only the report of that degradation. A holder that is merely not attached yet
+			// (HolderExists true, HolderMatches false) is not degraded: this same apply attaches it.
+			o.snap.ServiceError = "the service namespace's holder does not exist: applied without attaching it"
+			o.e.cfg.Log.Warn("applied the service namespace without its holder", "exists", h.Exists, "holder_matches", h.HolderMatches)
+		}
 		o.snap.DHCPError = r.dhcpErr
 		o.snap.KeaNetworks = nil
 		if r.target.Kea != nil {

@@ -52,11 +52,18 @@ type Summary struct {
 	Packages []PackageResult
 	// Finished is true when the guest wrote its final marker, i.e. the VM did not die early.
 	Finished bool
+	// AllowSkip allows skipped tests; otherwise a skip fails OK, the same way a FAIL does (CC-04:
+	// a missing tool or a silent skip must never pass).
+	AllowSkip bool
 }
 
-// OK reports whether every package passed and the guest finished.
+// OK reports whether every package passed, the guest finished, and (unless AllowSkip) nothing
+// was skipped.
 func (s Summary) OK() bool {
 	if !s.Finished || len(s.Packages) == 0 || s.Totals().Total() == 0 {
+		return false
+	}
+	if !s.AllowSkip && s.Totals().Skipped > 0 {
 		return false
 	}
 	for _, p := range s.Packages {
@@ -89,6 +96,11 @@ func (s Summary) Problems() []string {
 	}
 	if len(s.Packages) > 0 && s.Totals().Total() == 0 {
 		out = append(out, "no test ran: every package reported zero tests")
+	}
+	if !s.AllowSkip {
+		if n := s.Totals().Skipped; n > 0 {
+			out = append(out, fmt.Sprintf("%d tests skipped (pass -allow-skip to allow)", n))
+		}
 	}
 	for _, p := range s.Packages {
 		switch {

@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "0373f732ecd74436",
+  "hash": "afe6e4b4446d2e1d",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -163,6 +163,10 @@
   "sysctls": [
     {
       "name": "ip_forward",
+      "value": 1
+    },
+    {
+      "name": "nf_conntrack_acct",
       "value": 1
     },
     {

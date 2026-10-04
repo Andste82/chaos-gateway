@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "94fe69d2d7b3e7c2",
+  "hash": "4e2cdc35fdacaf5e",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -26,7 +26,10 @@
       "ports": [
         "lan0"
       ],
-      "nat": true
+      "nat": true,
+      "routes": [
+        "10.30.0.0/24"
+      ]
     },
     {
       "name": "br-lab",
@@ -49,6 +52,10 @@
   "sysctls": [
     {
       "name": "ip_forward",
+      "value": 1
+    },
+    {
+      "name": "nf_conntrack_acct",
       "value": 1
     },
     {

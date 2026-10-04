@@ -2,9 +2,10 @@ version: "2"
 
 run:
   timeout: 5m
-  # lint the namespace testbed tests too
+  # lint the namespace testbed tests and the appliance VM harness too
   build-tags:
     - testbed
+    - appliance
 
 linters:
   default: standard

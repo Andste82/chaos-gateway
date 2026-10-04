@@ -276,18 +276,17 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 	if strings.HasSuffix(name, ".invalid.") || name == "invalid." {
 		return fail(dns.RcodeNameError), e // RFC 6761: never forwarded
 	}
+	// the V1 networks are IPv4 only: a device that gets an IPv6 address would bypass the faults. What
+	// rcode an AAAA query gets still has to come from whether the name itself exists (static or
+	// upstream): a missing name is NXDOMAIN, an existing one with no AAAA record is NOERROR/NODATA.
+	// Only the AAAA record itself is removed; SVCB/HTTPS answers (and their ipv6hint parameter, which
+	// is not a record type stripAAAA looks at) pass through untouched.
 	strip := cfg.StripAaaa == nil || *cfg.StripAaaa
-	if q.Qtype == dns.TypeAAAA && strip {
-		// the V1 networks are IPv4 only: a device that gets an IPv6 address would bypass the faults
-		m := new(dns.Msg)
-		m.SetReply(r)
-		m.RecursionAvailable = true
-		e.Rcode = "NOERROR"
-		t := true
-		e.StrippedAaaa = &t
-		return m, e
-	}
 	if m, ok := s.static(cfg, r, name, q, client); ok {
+		if q.Qtype == dns.TypeAAAA && strip {
+			t := true
+			e.StrippedAaaa = &t
+		}
 		e.Rcode = dns.RcodeToString[m.Rcode]
 		e.Answers = answers(m)
 		return m, e
@@ -305,11 +304,11 @@ func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dn
 		s.opt.Log.Debug("no upstream answer", "name", e.Name, "error", err)
 		return fail(dns.RcodeServerFailure), e
 	}
-	stripped := false
+	removed := false
 	if strip {
-		stripped = stripAAAA(m)
+		removed = stripAAAA(m)
 	}
-	if stripped {
+	if removed || (strip && q.Qtype == dns.TypeAAAA) {
 		t := true
 		e.StrippedAaaa = &t
 	}

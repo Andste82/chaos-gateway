@@ -133,6 +133,10 @@ type ServiceNS struct {
 	// HolderPID is the process whose network namespace becomes the service namespace; 0 creates an
 	// empty one.
 	HolderPID int `json:"holder_pid,omitempty"`
+	// HolderNetnsInode is the inode of HolderPID's network namespace as the holder itself observed it
+	// when it wrote its PID file (M6b-10); 0 skips the check. A PID whose current namespace inode does
+	// not match was reused by another process since the holder last reported it.
+	HolderNetnsInode uint64 `json:"holder_netns_inode,omitempty"`
 	// recreate is set by the executor when the namespace belongs to a holder that is gone: it is
 	// deleted first, together with the pair that leads into it.
 	recreate bool

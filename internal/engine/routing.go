@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -12,7 +13,10 @@ import (
 )
 
 // Event types of the routing protocols.
-const EventRoutingChanged = "routing_session_changed"
+const (
+	EventRoutingChanged       = "routing_session_changed"
+	EventRoutingRoutesChanged = "routing_routes_changed"
+)
 
 // PollRouting reads the protocols of the BIRD instance every interval and tells the state owner,
 // which publishes them in the snapshot and emits an event when an adjacency comes up or goes down.
@@ -78,11 +82,15 @@ func (e *Engine) pollRoutingOnce(ctx context.Context) error {
 	return e.send(ctx, cmdRoutingStatus{status: status})
 }
 
-// routingStatus takes a poll's result and emits an event for every adjacency that changed.
+// routingStatus takes a poll's result and emits an event for every adjacency and route count that
+// changed. It publishes the new snapshot only when something actually changed.
 func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 	prev := o.snap.Routing
 	first := !o.routingSeen
 	o.routingSeen = true
+	if !first && reflect.DeepEqual(prev, next) {
+		return
+	}
 	names := make([]string, 0, len(next)+len(prev))
 	for n := range next {
 		names = append(names, n)
@@ -94,19 +102,27 @@ func (o *owner) routingStatus(next map[string]bird.ProtocolStatus) {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		was, now := prev[n].Established(), next[n].Established()
-		if was == now || (first && !now) {
-			continue
-		}
-		st := next[n]
-		state := "up"
-		if !now {
-			state = "down"
-			if _, ok := next[n]; !ok {
-				st = prev[n]
+		p, hadPrev := prev[n]
+		cur, hasNext := next[n]
+		wasUp, isUp := p.Established(), cur.Established()
+		if wasUp != isUp && (!first || isUp) {
+			state := "up"
+			st := cur
+			if !isUp {
+				state = "down"
+				if !hasNext {
+					st = p
+				}
 			}
+			o.event(EventRoutingChanged, map[string]any{"state": state, "protocol": n, "type": st.Proto, "neighbor": st.Neighbor, "info": st.Info, "last_error": st.LastError})
 		}
-		o.event(EventRoutingChanged, map[string]any{"state": state, "protocol": n, "type": st.Proto, "neighbor": st.Neighbor, "info": st.Info, "last_error": st.LastError})
+		if !first && hadPrev && hasNext && (p.Imported != cur.Imported || p.Exported != cur.Exported) {
+			o.event(EventRoutingRoutesChanged, map[string]any{
+				"protocol": n, "type": cur.Proto,
+				"imported": cur.Imported, "exported": cur.Exported, "filtered": cur.Filtered,
+				"previous_imported": p.Imported, "previous_exported": p.Exported,
+			})
+		}
 	}
 	o.snap.Routing = next
 	o.publish()

@@ -15,8 +15,9 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2).
-const PolicyTable = 100
+// PolicyTable is Chaos Gateway's routing table for test traffic (plan §2.2): the first of the
+// executor's own reserved tables.
+const PolicyTable = executor.OwnTableFirst
 
 // PolicyRulePriority is the priority of the policy rules: one rule per test network, all alike.
 const PolicyRulePriority = 1000
@@ -109,7 +110,11 @@ type Uplink struct {
 // Management is the OS-owned management interface and the sources that always reach the control
 // plane (anti-lockout).
 type Management struct {
-	Name    string         `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Subnet is the management interface's own connected subnet, set whenever the interface
+	// resolves, regardless of Sources: a neighbor must never be able to reach it, even when
+	// explicit allowed_sources narrow who else is let in (plan §2.2.2).
+	Subnet  netip.Prefix   `json:"subnet,omitempty"`
 	Sources []netip.Prefix `json:"sources"`
 	UIPort  int            `json:"ui_port"`
 }
@@ -325,9 +330,10 @@ func (t *Target) compileManagement(cfg *model.Configuration, h Host, defaultPort
 		t.warn(CodeManagementAbsent, "", "the management interface %s is not present", describeRef(cfg.Management.Interface))
 	} else {
 		m.Name = l.Name
-		if cfg.Management.AllowedSources == nil {
-			// default: the management interface's connected subnet
-			if a, ok := l.FirstV4(); ok {
+		if a, ok := l.FirstV4(); ok {
+			m.Subnet = a.Masked()
+			if cfg.Management.AllowedSources == nil {
+				// default: the management interface's connected subnet
 				sources = append(sources, a.Masked())
 			}
 		}

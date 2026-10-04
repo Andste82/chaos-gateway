@@ -6,8 +6,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 
 **Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green (run 37147106957: level 0, arm64, e2e, testbed level 1 and 1b), and the level-2 smoke test passed once on a branch. What remains is a mix of:
 
-- one high bug (M4c-01: BIRD external mode exports nothing);
-- a few real functional gaps (link-learned networks not masqueraded, Kea/BIRD not pinned, flow counters always 0, no health for the managed services, no persistence of the API generation, retention not wired, the service's own namespace check);
+- a few real functional gaps (Kea/BIRD not pinned, flow counters always 0, no health for the managed services, no persistence of the API generation, retention not wired, the service's own namespace check);
 - test gaps where a plan test exists only weakly;
 - decisions the plan leaves open or got wrong;
 - plan and doc drift.
@@ -19,8 +18,8 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M2 Domain model, persistence | incomplete | 9 | 0 | 1 | 2 |
 | M3 Executor | incomplete | 7 | 0 | 0 | 2 |
 | M4 Compiler, preview, safe apply | incomplete | 10 | 0 | 1 | 2 |
-| M4b WireGuard | incomplete | 8 | 0 | 2 | 2 |
-| M4c Dynamic routing | incomplete | 17 | 1 | 6 | 5 |
+| M4b WireGuard | incomplete | 6 | 0 | 0 | 2 |
+| M4c Dynamic routing | incomplete | 9 | 0 | 4 | 5 |
 | M5 REST API | incomplete | 23 | 0 | 3 | 4 |
 | M5b Appliance harness | incomplete | 4 | 0 | 1 | 0 |
 | M6a DHCP, devices | incomplete | 25 | 0 | 10 | 3 |
@@ -101,7 +100,7 @@ The most common causes are:
 
 Ordered by value. Each package is one branch and one PR, and stays green in CI.
 
-1. **Routing fixes**: M4c-01 (high), M4b-01, M4b-02, M4c-03, M4c-06, M4c-08, M4c-09, M4c-13, M4c-14, M4c-15.
+1. **Routing fixes** (done, `phase1-routing-fixes`): M4c-01 (high), M4b-01, M4b-02, M4c-03, M4c-06, M4c-08, M4c-09, M4c-13, M4c-14, M4c-15.
 2. **Deployment pinning and health**:
    - M6a-01 and M4c-17 (pin Kea and BIRD);
    - M6b-05 and M4-01 (health of the managed services and the supervisor);
@@ -653,36 +652,16 @@ Removed from the old list: "tc tokens allow `/` and `..`" — wrong: `..` is rej
 
 ## M4b (WireGuard networks and clients)
 
-Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); open are a real bug (networks a link learns dynamically are not masqueraded), a missing real-kernel NAT test, and plan/doc fixes.
+Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); open are plan/doc fixes.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Hub and link as network type, `wg` tool, clients with client networks, reachable lists, static routes, policy rules | done | `internal/compiler/wireguard.go`; `TestWireGuardRoutesAndRules`; testbed `TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix`, `TestALinkWithStaticRoutesCarriesTrafficToTheRemoteSite` |
 | Routed without NAT to test networks | done | testbed `integration_wg_test.go:251,275,304` |
-| Masqueraded towards the uplink | partial | compile test only; prefixes learned over a link not masqueraded (M4b-01, M4b-02) |
+| Masqueraded towards the uplink | done | `TestMasqueradeTowardsTheUplinkOnlyAndForTheNetworksBehindClients` (a link matches by interface, covering learned routes too); testbed `TestAClientNetworkIsMasqueradedTowardsTheUplink` |
 | Keys, preshared keys, export once, `.conf`/QR/zip | done | `internal/wireguard/*_test.go`; `TestQRCodesAndNetworkExports` |
 | Client status and events, clients as devices, role management, MSS clamp, MTU | done | `engine/wireguard.go`; testbed `TestDisablingAClientStopsItsHandshakeAndEmitsTheEvent`, `TestRolesDecideWhoReachesTheControlPlane`, `TestTheMSSIsClampedOnTheTunnel` |
 | T: export works in a fresh namespace, QR decodes, keys never in logs, re-apply keeps the tunnel | done | `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` |
-
-### M4b-01 Prefixes learned over a link are not masqueraded towards the uplink
-- Status: new
-- Severity: medium
-- Reason: forgotten — a link's NAT source set is only its /31 plus static `routes`; remote networks learned via BGP/OSPF leave the uplink with private source addresses (§2.2.1 "Towards the uplink it is masqueraded").
-- Evidence: `internal/compiler/wireguard.go:265-277`, `rules.go:166-173`; `compiler/wireguard_test.go:268-289` covers only static routes.
-- Task: 1. In the postrouting chain, for `w.Kind == "link"` with NAT emit `iifname <link dev> oifname <uplink> counter masquerade` instead of the saddr-prefix rule (covers every routed source); keep the saddr rule for hubs and bridges. 2. Update `TestMasqueradeTowardsTheUplinkOnlyAndForTheNetworksBehindClients` and the golden files (`go test ./internal/compiler -update`). 3. Testbed test `TestALinkMasqueradesLearnedNetworksTowardsTheUplink` in `internal/engine/integration_bird_test.go`: newBGP with a matrix entry `{network: tLink} → {uplink: true}` allow; at the site `ip route add 198.51.100.10/32 via 10.255.0.0 dev wgsite`; `udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.Site, testbed.SiteNetHost, testbed.InternetAddr)` must equal `testbed.UplinkGateway`.
-- Acceptance: compiler unit tests; the new test in CI testbed.
-- Needs maintainer: no
-- Effort: M
-
-### M4b-02 No real-kernel test of NAT via the uplink for hub clients
-- Status: open
-- Severity: medium
-- Reason: test-gap — masquerade towards the uplink and the return path are compile-tested only.
-- Evidence: `internal/engine/integration_wg_test.go` never uses `testbed.InternetAddr`; `topology.go:24-26,129` provides the off-link host.
-- Task: `TestAClientNetworkIsMasqueradedTowardsTheUplink` in `integration_wg_test.go`: apply with `cl.Reachable = &[]model.MatrixEndpoint{{Uplink: ptr(true)}}`, bring the export up in `g.top.RC`, `src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr)` must equal `testbed.UplinkGateway`; then with `nat: false` on the hub no packet arrives. If wg-quick's full-tunnel setup clashes with RC's on-link route, use `Table = off` and `ip route add 198.51.100.10/32 dev wgrA`.
-- Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: S
 
 ### M4b-03 Plan §4.2 describes the old WireGuard testbed topology
 - Status: open
@@ -746,33 +725,23 @@ Verdict: incomplete. All plan tests exist and passed in CI (run 37147106957); op
 
 ## M4c (dynamic routing, BIRD)
 
-Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode exports nothing. Six medium items.
+Verdict: incomplete. The high bug (external mode) is fixed; four medium items remain, all `needs-decision` or `test-gap` on real-kernel behaviour the dev environment cannot run.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | BIRD instance, own config/socket/container | done (deployment untested, M4c-07) | `deploy/compose.bird.yaml`, `executor/exec.go:662-758` |
-| BGP, OSPFv2 | done | testbed `TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable` |
+| BGP, OSPFv2 | done | testbed `TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable` (now also exercises the OSPF import filter) |
 | Babel | partial | config only; probably does not run (M4c-05) |
 | Static, router id/ASN/neighbors/areas/timers, announcements | done | `compiler/routing.go`; `TestTheBirdConfigurationFollowsTheModel` |
-| Import filters | done, gaps | `bird/render.go:211-236` (M4c-08, M4c-09) |
+| Import filters | done | `bird/render.go`; the management subnet is protected with explicit `allowed_sources` too, and `allow_default` is honored with an allowed list |
 | Export only into own tables | done for table 100 | PMTU tables come with M10 (M4c-11) |
 | `bird -p` + `birdc configure` part of the revision | done | `executor/exec.go:705-758`, `apply/bird.go` |
-| …and of preview/diff | partial | `Preview.linux.bird` never filled (M4c-06) |
+| …and of preview/diff | done | `Preview.linux.bird` and `.wireguard` are filled |
 | Custom snippets | done | `bird/lexical.go` |
-| External mode | broken | M4c-01 |
-| Neighbor and route status and events | partial | session events only; `routing_routes_changed` never sent (M4c-03) |
+| External mode | done | fixed (RTS_INHERIT, not RTS_PIPE); `TestExternalModeImportsAnotherDaemonsTable` |
+| Neighbor and route status and events | done | `routing_session_changed` and `routing_routes_changed`; `TestRouteCountChangesAreEvents` |
 | Remote-side snippet in link exports | done | `bird/remote.go`, `internal/linkexport`, API `format=bird` |
-| T: three sites, learned only into own tables, filters (BGP), max-prefix, link down, config change, invalid snippet | done, several weak | M4c-13, M4c-14 |
-
-### M4c-01 External mode exports nothing (wrong export filter)
-- Status: wrong-in-list (the old list said "unverified, low"; it is broken)
-- Severity: high
-- Reason: forgotten — routes learned by a kernel protocol keep source `RTS_INHERIT` through a pipe, never `RTS_PIPE`.
-- Evidence: `internal/bird/render.go:173-175`; golden `internal/bird/testdata/sample.conf:11`; `bird_test.go:125`. Reproduced with BIRD 2.18 (kernel `learn` → pipe → master4 → `gw_table`): `RTS_PIPE` → 0 exported, `RTS_INHERIT` → 1 exported.
-- Task: 1. `render.go:174`: replace `sources["RTS_PIPE"]` with `sources["RTS_INHERIT"]`; update the comment at :192-194. 2. Regenerate `testdata/sample.conf`, fix `bird_test.go:125`. 3. Testbed test `TestExternalModeImportsAnotherDaemonsTable` in `internal/engine/integration_bird_test.go`: newWGGW, start BIRD as in `newBGPWith`, apply with `c.Routing = &model.Routing{External: &model.ExternalRouting{Enabled: true, Table: 200}}`; in `g.top.GW` add `ip route add 10.80.0.0/24 dev wg-site-b table 200 proto static`, `default dev wg-site-b table 200`, `10.10.0.0/24 dev wg-site-b table 200`; assert `10.80.0.0/24` appears in table 100 within 30 s and the other two do not. 4. Remove "external mode … configuration tests only" from docs/development.md:299-302.
-- Acceptance: `go test ./internal/bird` (real `bird -p`); the new test in CI testbed.
-- Needs maintainer: no
-- Effort: S
+| T: three sites, learned only into own tables, filters (BGP and OSPF), max-prefix, link down, withdrawal, config change, invalid snippet, failed apply, confirm-timeout rollback | done | see the M4c test names in `internal/engine`, `internal/apply` |
 
 ### M4c-02 A BIRD outage fails every apply, including rollbacks
 - Status: open
@@ -783,16 +752,6 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Acceptance: unit tests in `internal/apply`, `internal/executor`.
 - Needs maintainer: decided 2026-10-04: (a) best effort: write the file, warn, do not fail.
 - Effort: M
-
-### M4c-03 No route-change events; `routing_routes_changed` never sent
-- Status: open
-- Severity: medium
-- Reason: forgotten — §2.2.2 "route changes as events"; the spec declares `routing_routes_changed`.
-- Evidence: api/openapi.yaml:4692; `internal/engine/routing.go:84-118`.
-- Task: in `owner.routingStatus`, for each protocol in prev and next whose `Imported` or `Exported` differs emit `routing_routes_changed` with `{protocol, type, imported, exported, filtered, previous_imported, previous_exported}`; const `EventRoutingRoutesChanged`; publish only on change (fixes the republish nit of M4c-15); `TestRouteCountChangesAreEvents` (kernelsim `SetBirdProtocols`); document.
-- Acceptance: local unit test.
-- Needs maintainer: no (counts suffice for V1; a per-prefix list belongs to M14)
-- Effort: S
 
 ### M4c-04 A protocol disabled by max-prefix never recovers
 - Status: open
@@ -814,16 +773,6 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Needs maintainer: decided 2026-10-04: (a) make Babel work.
 - Effort: M
 
-### M4c-06 Preview has no BIRD (or WireGuard) diff
-- Status: new
-- Severity: medium
-- Reason: partial — §2.2.2 "part of the revision and of preview/diff"; the spec has `Preview.linux.bird` and `.wireguard`; only `nftables` and `routes` are filled (WireGuard lines are mixed into `routes`).
-- Evidence: `internal/apply/diff.go:15-34`; `internal/api/revisions.go:256`; api/openapi.yaml:3561-3572; `executor/exec.go:676-684` (BirdState has only a hash).
-- Task: 1. Add `Config string` to `executor.BirdState` (`readBird`). 2. Add `Bird` and `WireGuard` to `apply.LinuxDiff`: Bird = unified diff of the running config vs the target text (or the idle text); move the WireGuard lines (`diff.go:147-160`, `222-245`) into `WireGuard`. 3. Fill `"bird"` and `"wireguard"` in `revisions.go:256`. 4. Extend `TestThePreviewShowsWireGuardChanges`; add `TestThePreviewShowsTheBirdDiff`.
-- Acceptance: local unit tests (`internal/apply`, `internal/api` contract harness).
-- Needs maintainer: no
-- Effort: S
-
 ### M4c-07 BIRD container deployment untested; no start order
 - Status: new
 - Severity: medium
@@ -831,26 +780,6 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Evidence: `deploy/compose.bird.yaml`; compare `deploy/compose.api.yaml:48-50`.
 - Task: add `depends_on: {exec: {condition: service_healthy}}` and a healthcheck (`birdc -s /run/chaosgw/bird/chaosgw.ctl show status`); add the file to the appliance smoke deployment and assert `birdc show status` answers and `chaosgw.conf` holds the idle text; extend the hardening test if it pins depends_on.
 - Acceptance: nightly appliance.
-- Needs maintainer: no
-- Effort: S
-
-### M4c-08 The management interface subnet is not protected when `allowed_sources` is set
-- Status: new
-- Severity: low
-- Reason: forgotten — `protectedPrefixes` uses `Management.Sources`, which holds the interface subnet only without `allowed_sources`; §2.2.2 "never the management … prefixes".
-- Evidence: `internal/compiler/routing.go:276-280`, `compile.go:316-336`.
-- Task: store the management interface's connected subnet in `Management.Subnet` (compileManagement) and add it in `protectedPrefixes`; `TestTheManagementSubnetIsProtectedWithExplicitSources` in `compiler/routing_test.go`.
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M4c-09 `allow_default` with an allowed list still rejects the default route
-- Status: open
-- Severity: low
-- Reason: forgotten — with `AllowDefault` and a non-empty list, the final `reject` drops 0.0.0.0/0; undocumented.
-- Evidence: `internal/bird/render.go:211-236`.
-- Task: when `i.AllowDefault` emit `if net = 0.0.0.0/0 then accept;` before the protected check; add a case to `TestTheGeneratedFiltersFollowSpikeS15`; update the ImportFilter description (openapi.yaml:2658-2672).
-- Acceptance: local unit test (real `bird -p`).
 - Needs maintainer: no
 - Effort: S
 
@@ -882,36 +811,6 @@ Verdict: incomplete. One high bug, verified with a real BIRD 2.18: external mode
 - Task: optional `ip saddr <link peer>` for BGP.
 - Acceptance: local compiler test.
 - Needs maintainer: decided 2026-10-04: accepted as is; close the item with a sentence in docs/development.md.
-- Effort: S
-
-### M4c-13 No OSPF import-filter test
-- Status: open
-- Severity: low
-- Reason: test-gap — only BGP neighbors announce default, management or own prefixes in the testbed.
-- Evidence: `internal/engine/integration_bird_test.go:379-380`.
-- Task: in `TestThreeSitesWithBGPAndOSPFLearnRoutesOnlyIntoTheOwnTable` have site2 also announce `0.0.0.0/0`, `192.168.56.0/24`, `10.10.0.0/24` and assert none reaches table 100 via `10.255.1.1`.
-- Acceptance: CI testbed.
-- Needs maintainer: no
-- Effort: S
-
-### M4c-14 Weak M4c test assertions
-- Status: open (expanded)
-- Severity: low
-- Reason: test-gap — config change, withdrawal, limit, snippet message, timing and rollback are tested weakly or not at all.
-- Evidence: `integration_bird_test.go:250-260,273-279,303-349`; `engine/routing_test.go:61-84`; no rollback case in `apply/bird_test.go`.
-- Task: 1. In the config-change test also change `Import.AllowedPrefixes` and `MaxPrefixes`, assert `Since` unchanged; fix the comment "a different timer". 2. Assert `strings.Contains(msg, "syntax error")` for the invalid snippet. 3. `TestANeighborWithdrawingAPrefixRemovesIt` (site config without 10.60.0.0/24, `birdc configure`, route leaves table 100). 4. Link outage: route gone within ≈20 s (hold + poll + 5 s), not 30 s. 5. Max-prefix test asserts BIRD's info names the limit. 6. `TestAFailedApplyRestoresThePreviousBirdConfiguration` (kernelsim failure after the bird op) and an engine confirm-timeout case with a routing change.
-- Acceptance: CI testbed; local unit tests for item 6.
-- Needs maintainer: no
-- Effort: M
-
-### M4c-15 Small BIRD leftovers
-- Status: open
-- Severity: low
-- Reason: forgotten (nits).
-- Evidence: Preview hard error without `--bird-dir` and `"bird: "` substring match (`engine/api.go:132-141`); `EnsureBirdConfig` overwrites on any `Stat` error (`exec.go:670`); `routingStatus` republishes every poll (`engine/routing.go:116-117`); idle text uses `OwnTableFirst` vs `PolicyTable` (`exec.go:673`, `apply/bird.go:18`); nothing verified when routing is off (`apply/bird.go:59`); the `check` op writes a temp file although `Mutates()` is false.
-- Task: Preview: turn `errNoBirdDir` into a routing problem, match with `errors.As`; `EnsureBirdConfig` writes only on `os.IsNotExist`; one shared table constant (see M2-04); publish only on change (with M4c-03); with routing off verify the hash equals the idle text.
-- Acceptance: local unit tests.
-- Needs maintainer: no
 - Effort: S
 
 ### M4c-16 Plan overstates "sessions stay up" on reconfigure

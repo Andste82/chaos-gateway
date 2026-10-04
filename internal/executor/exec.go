@@ -669,6 +669,8 @@ func (e *Executor) EnsureBirdConfig(instance string) error {
 	}
 	if _, err := os.Stat(conf); err == nil {
 		return nil
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	return os.WriteFile(conf, []byte(bird.Idle(OwnTableFirst)), 0o644)
 }
@@ -679,15 +681,20 @@ type BirdState struct {
 	Running bool `json:"running"`
 	// ConfigHash is the SHA-256 of the configuration file, empty when there is none.
 	ConfigHash string `json:"config_hash,omitempty"`
+	// Config is the text of the configuration file, empty when there is none.
+	Config string `json:"config,omitempty"`
 	// Protocols are the protocols of the running instance.
 	Protocols []bird.ProtocolStatus `json:"protocols,omitempty"`
 }
 
-var errNoBirdDir = errors.New("the executor has no BIRD directory (--bird-dir)")
+// ErrNoBirdDir is returned by a bird operation or read when the executor has no BIRD directory
+// (--bird-dir): a configuration that uses dynamic routing cannot be applied, but a check that
+// finds nothing to check is not itself an error of the configuration.
+var ErrNoBirdDir = errors.New("the executor has no BIRD directory (--bird-dir)")
 
 func (e *Executor) birdPaths(instance string) (conf, sock string, err error) {
 	if e.birdDir == "" {
-		return "", "", errNoBirdDir
+		return "", "", ErrNoBirdDir
 	}
 	return filepath.Join(e.birdDir, instance+".conf"), filepath.Join(e.birdDir, instance+".ctl"), nil
 }
@@ -771,6 +778,7 @@ func (e *Executor) readBird(ctx context.Context, instance string) (*BirdState, e
 	if b, err := os.ReadFile(conf); err == nil {
 		sum := sha256.Sum256(b)
 		st.ConfigHash = hex.EncodeToString(sum[:])
+		st.Config = string(b)
 	}
 	out, exit, err := e.birdOutput(ctx, ToolBirdc, "-s", sock, "show", "protocols", "all")
 	if err != nil {

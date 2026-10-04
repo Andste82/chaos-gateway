@@ -171,7 +171,10 @@ func (c Config) Render() (string, error) {
 		}
 	}
 	if c.External != nil {
-		sources["RTS_PIPE"] = true
+		// routes read from the other daemon's kernel table and piped into master4
+		// keep the source of the originating protocol inside that daemon, not RTS_PIPE:
+		// BIRD only tags a route RTS_PIPE while it still sits in the pipe's own table.
+		sources["RTS_INHERIT"] = true
 	}
 	var src []string
 	for s := range sources {
@@ -212,6 +215,10 @@ func (c Config) renderFilter(b *strings.Builder, name string, i Import) {
 	fmt.Fprintf(b, "filter %s {\n", name)
 	if !i.AllowDefault {
 		b.WriteString("  if net = 0.0.0.0/0 then reject;\n")
+	} else {
+		// an allowed list ends in a catch-all reject: without this, it would catch the default
+		// route too and silently undo AllowDefault.
+		b.WriteString("  if net = 0.0.0.0/0 then accept;\n")
 	}
 	if len(c.Protected) > 0 {
 		set := make([]string, len(c.Protected))

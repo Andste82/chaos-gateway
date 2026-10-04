@@ -281,6 +281,52 @@ func TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix(t
 	}
 }
 
+// M4b-02 test: a hub client's network reaches a host beyond the uplink; the gateway masquerades it
+// towards the uplink, so the server beyond the uplink sees the gateway's own uplink address as the
+// source. Turning NAT off on the hub removes the postrouting masquerade rule for that network (checked
+// directly on the gateway: observing the unmasqueraded packet at a third namespace turned out to be at
+// the mercy of the kernel's own default reverse-path filtering, which differs between the level-1 and
+// level-1b runners and made the probe flaky).
+func TestAClientNetworkIsMasqueradedTowardsTheUplink(t *testing.T) {
+	g := newWGGW(t)
+	setHub := func(nat *bool) func(*model.Configuration) {
+		return func(c *model.Configuration) {
+			n := (*c.Networks)[tHub]
+			wg, _ := n.AsWireGuardNetwork()
+			cl := (*wg.Clients)[tClient]
+			cl.Reachable = &[]model.MatrixEndpoint{{Uplink: ptr(model.MatrixEndpointUplink(true))}}
+			(*wg.Clients)[tClient] = cl
+			if nat != nil {
+				wg.Nat = nat
+			}
+			_ = n.FromWireGuardNetwork(wg)
+			(*c.Networks)[tHub] = n
+		}
+	}
+	g.apply(setHub(nil))
+	conf := g.client(tHub, tClient)
+	g.up(g.top.RC, "wgrA", conf.Conf)
+	if !pingOK(g.top.RC, "", "10.99.0.1") {
+		t.Fatalf("the exported configuration did not bring up a working tunnel\n%s", g.wgShow())
+	}
+	if src := g.udpSeenAt(g.top.Server, testbed.InternetAddr, g.top.RC, testbed.ClientNetHost, testbed.InternetAddr); src != testbed.UplinkGateway {
+		t.Fatalf("the server saw %q, want the uplink address %s (masqueraded)", src, testbed.UplinkGateway)
+	}
+
+	// the masquerade counter's name is "nat_" plus the network id with its hyphens stripped
+	// (compiler.shortID): the hub's first UUID group is already 8 hex digits.
+	natCounter := "nat_" + strings.ReplaceAll(tHub, "-", "")[:8]
+	if out := g.top.GW.Must("nft", "list", "counter", "inet", "chaosgw", natCounter); !strings.Contains(out, "packets") {
+		t.Errorf("no masquerade counter for the hub network while nat is on\n%s", out)
+	}
+
+	off := false
+	g.apply(setHub(&off))
+	if _, err := g.top.GW.Run(context.Background(), "nft", "list", "counter", "inet", "chaosgw", natCounter); err == nil {
+		t.Errorf("the masquerade counter for the hub network still exists although nat is off on the hub")
+	}
+}
+
 // M4b test: a link with static routes carries traffic between the gateway's test network and the
 // remote site.
 func TestALinkWithStaticRoutesCarriesTrafficToTheRemoteSite(t *testing.T) {

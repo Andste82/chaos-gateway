@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "5092656b8ac29f94",
+  "hash": "94fe69d2d7b3e7c2",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -11,6 +11,7 @@
   },
   "management": {
     "name": "wan0",
+    "subnet": "203.0.113.0/24",
     "sources": [
       "203.0.113.0/24"
     ],

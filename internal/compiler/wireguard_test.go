@@ -277,15 +277,18 @@ func TestMasqueradeTowardsTheUplinkOnlyAndForTheNetworksBehindClients(t *testing
 		if strings.Contains(s, `"10.99.0.0"`) {
 			hub = s
 		}
-		if strings.Contains(s, `"10.255.0.0"`) {
+		if strings.Contains(s, `"wg-site-b"`) {
 			link = s
 		}
 	}
 	if hub == "" || !strings.Contains(hub, `"10.50.0.0"`) {
 		t.Errorf("the hub is masqueraded together with the network behind its client: %s", hub)
 	}
-	if link == "" || !strings.Contains(link, `"10.60.0.0"`) {
-		t.Errorf("a link masquerades its transfer net and what is reached through it: %s", link)
+	// a link is routed, not addressed from a fixed prefix: everything coming in through it is
+	// masqueraded, whatever route brought it there (a static route, or one a routing protocol
+	// learned), so the match is by interface, not by source prefix.
+	if link == "" || !strings.Contains(link, `"iifname"`) || strings.Contains(link, `"saddr"`) {
+		t.Errorf("a link masquerades by interface, not by source prefix: %s", link)
 	}
 	// NAT off
 	off := compileWG(t, func(cfg *model.Configuration, in *Input) {

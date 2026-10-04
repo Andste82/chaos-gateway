@@ -363,7 +363,8 @@ the sources that reach the control plane.
   revision that is rolled back, fails or is discarded still finds its keys. `Prune` (called by the
   engine when a revision becomes active, with the active configuration and all candidates) removes
   records that no configuration uses. A preshared key that is switched off is only no longer
-  referenced. Verify compares the presence of a preshared key, not its value.
+  referenced. Verify compares the presence of a preshared key, not its value: a changed PSK value
+  without a generation bump goes unnoticed, accepted as is since provisioning never does that (M4b-04).
 - **Return traffic.** A network behind a tunnel or a router (client networks, static routes of links
   and of test networks) gets a rule `to <prefix> lookup 100` next to the rules for the interfaces:
   replies from the uplink arrive on the uplink interface, and the main table does not know the
@@ -382,7 +383,9 @@ the sources that reach the control plane.
   dump` is the read; the parser drops the private key at once.
 - **Status.** `Engine.PollWireGuard` reads the peers every interval; the snapshot has the state per
   peer, `wireguard_peer_online` and `wireguard_peer_offline` are emitted when a handshake becomes
-  younger or older than three minutes or a peer disappears from the interface.
+  younger or older than three minutes or a peer disappears from the interface. The first poll after a
+  restart has no prior state to compare against, so it announces every peer that is online at that
+  moment as a fresh event; intended, not a bug (M4b-05).
 - **Export.** `chaosgw wg export --state-dir D --secrets-dir S --network lab-hub --client rA
   [--format conf|png|svg|zip] [--out file]`, `--all` for a zip of the hub, `--link` for the remote side
   of a link. An export with a private key is written with mode 0600 (also over an existing file) and a warning; with `export_once`
@@ -411,7 +414,9 @@ BIRD is pinned to `bird2=2.18-1` (`ARG BIRD_VERSION` in `deploy/Dockerfile` and
   protocol exports only into table 100 (`learn off`, `export where source ~ [RTS_...]`), so learned
   routes never reach the main table. External mode reads another daemon's table through a pipe. The
   input chain accepts BGP (tcp 179), OSPF (ip protocol 89) and Babel (udp 6696) from the link's
-  interface, because the interfaces of test networks are otherwise dropped.
+  interface, because the interfaces of test networks are otherwise dropped; it matches only the
+  interface, not the source address, accepted as is since a point-to-point WireGuard link only ever
+  carries traffic from its one peer anyway (M4c-12).
 - **Executor.** The `bird` operation (`check` | `apply`) writes the text to a temporary file, runs
   `bird -p -c` on it and only then replaces `chaosgw.conf` and runs `birdc configure`, which keeps
   established sessions. A rejected text never replaces the running one; BIRD's message comes back as

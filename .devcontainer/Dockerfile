@@ -30,17 +30,23 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # Kea. Test clients: ping, dig, curl, openssl, iperf3, mosquitto, udhcpc
 # (busybox), socat, netcat. Capture: tcpdump, tshark. dnsmasq is the upstream
 # resolver/DHCP comparison in the spikes.
+# Kea and BIRD are pinned to the same versions as deploy/Dockerfile (M6a-01, M4c-17), so
+# devcontainer-based tests exercise the same behaviour the deployed containers run.
+ARG KEA_VERSION=3.0.3-1
+ARG BIRD_VERSION=2.18-1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 nftables iptables conntrack ethtool kmod procps psmisc \
     iputils-ping iputils-tracepath arping bind9-dnsutils netcat-openbsd socat \
     iperf3 mosquitto-clients openssl tcpdump tshark \
     busybox-static udhcpc \
-    wireguard-tools bird2 \
-    kea-dhcp4-server kea-admin \
+    wireguard-tools "bird2=${BIRD_VERSION}" \
+    "kea-dhcp4-server=${KEA_VERSION}" kea-admin \
     dnsmasq-base dnsmasq-utils \
     python3 python3-venv python3-pip python3-cryptography \
     python3-yaml python3-jsonschema python3-openapi-spec-validator \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && kea-dhcp4 -V | head -1 | grep -qF "${KEA_VERSION%%-*}" \
+    && bird --version 2>&1 | grep -qF "${BIRD_VERSION%%-*}"
 
 # --- Test level 1b: namespace testbed inside a VM (plan §4.5) ------------------
 # This container runs unprivileged, so the testbed runs in QEMU via virtme-ng

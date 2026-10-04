@@ -10,10 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
@@ -23,6 +25,33 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/supervisor"
 )
+
+// healthProbeCache de-duplicates and rate-limits the unauthenticated health check's executor probe
+// (M5-13): at most one real probe every 2 seconds, with concurrent callers sharing one in-flight one.
+type healthProbeCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	err   error
+	group singleflight.Group
+}
+
+func (h *healthProbeCache) check(ctx context.Context, now time.Time, probe func(context.Context) error) error {
+	h.mu.Lock()
+	if !h.at.IsZero() && now.Sub(h.at) < 2*time.Second {
+		err := h.err
+		h.mu.Unlock()
+		return err
+	}
+	h.mu.Unlock()
+	_, err, _ := h.group.Do("probe", func() (any, error) {
+		perr := probe(ctx)
+		h.mu.Lock()
+		h.at, h.err = now, perr
+		h.mu.Unlock()
+		return nil, perr
+	})
+	return err
+}
 
 type lastApply struct {
 	At         *time.Time `json:"at,omitempty"`
@@ -176,9 +205,12 @@ func (s *Server) GetHealth(c *gin.Context) {
 			worse("unhealthy")
 		}
 	}
-	// the executor answers a read
+	// the executor answers a read, cached: this endpoint takes no authentication and no rate limit
 	ex := healthComponent{Name: "executor", Status: "healthy"}
-	if _, err := s.cfg.Exec.Do(ctx, &executor.Read{Target: executor.Target{NS: s.cfg.Namespace}, What: executor.ReadAssigned}); err != nil {
+	if err := s.health.check(ctx, s.clk.Now(), func(ctx context.Context) error {
+		_, err := s.cfg.Exec.Do(ctx, &executor.Read{Target: executor.Target{NS: s.cfg.Namespace}, What: executor.ReadAssigned})
+		return err
+	}); err != nil {
 		ex.Status, ex.Detail = "unhealthy", "the executor does not answer: "+firstLine(err.Error())
 		worse("unhealthy")
 	}

@@ -64,6 +64,9 @@ type Server struct {
 	setupMu sync.Mutex
 	streams atomic.Int64
 	dns     dnsState
+	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
+	// endpoint must not give every caller its own round trip to the executor.
+	health healthProbeCache
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)

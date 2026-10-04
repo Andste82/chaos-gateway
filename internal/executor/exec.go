@@ -830,10 +830,13 @@ func (e *Executor) readBird(ctx context.Context, instance string) (*BirdState, e
 // its holder: the same namespace has the same inode.
 func (e *Executor) serviceNSState(name string, pid int) ServiceNSState {
 	have, exists := e.inode("/run/netns/" + name)
-	st := ServiceNSState{Exists: exists, HolderMatches: true}
-	if exists && pid > 0 {
+	st := ServiceNSState{Exists: exists, HolderMatches: true, HolderExists: true}
+	if pid > 0 {
 		want, ok := e.inode("/proc/" + strconv.Itoa(pid) + "/ns/net")
-		st.HolderMatches = ok && want == have
+		st.HolderExists = ok
+		if exists {
+			st.HolderMatches = ok && want == have
+		}
 	}
 	return st
 }

@@ -104,6 +104,9 @@ type Snapshot struct {
 	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first
 	// one (there is a service namespace in the configuration but nothing applied or read yet).
 	ServiceHealth *ServiceHealth
+	// ServiceError is why the service namespace does not have the holder the configuration wants,
+	// empty when it does (M6b-02): a dead holder degrades instead of failing every apply.
+	ServiceError string
 	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
 	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
 	ObserveError string
@@ -115,6 +118,9 @@ type ServiceHealth struct {
 	Exists bool
 	// HolderMatches reports whether it belongs to the holder the last apply attached it to.
 	HolderMatches bool
+	// HolderExists reports whether the holder process itself could still be found: false means it
+	// is gone (M6b-02), not merely not yet attached.
+	HolderExists bool
 }
 
 // PendingInfo describes a revision waiting for confirmation.

@@ -722,8 +722,12 @@ proxy; the TLS responder (M21) joins it later.
   loses its own AAAA record, never the whole answer: a name that exists gets NOERROR/NODATA, a name
   that does not exist still gets upstream's NXDOMAIN. The same policy removes a SVCB/HTTPS record's
   `ipv6hint` parameter (RFC 9460), the only other place an answer can carry a usable IPv6 address;
-  every other parameter of that record is untouched. A failure of the service namespace step fails
-  the apply (a dead holder blocks other revisions until the holder is back). `/run/systemd/resolve` is mounted read-only into the API container so that the
+  every other parameter of that record is untouched. A holder that has died (its PID is gone, not
+  merely restarted under a new one) does not fail the apply or any later revision (M6b-02): the
+  engine compiles with `ServiceHolderPID` 0 instead of asking the executor to attach a PID it cannot
+  find, the existing namespace is left as it is, and `Snapshot.ServiceError` names the degradation
+  (cleared again once a live holder is found and reattached — `WatchService`'s own probe tells the two
+  cases apart, since a holder that is simply not attached yet is not degraded). `/run/systemd/resolve` is mounted read-only into the API container so that the
   proxy finds the real resolvers of a systemd-resolved host; `TestDNSThroughTheServiceNamespace` checks
   the reverse too, with a stand-in for resolved's local stub: it keeps answering on `127.0.0.53`
   throughout, undisturbed by the proxy or the compiled ruleset (M6b-06; the appliance's own M28 smoke

@@ -108,6 +108,17 @@ func waitFor(t *testing.T, d time.Duration, what string, ok func() bool) {
 	t.Fatalf("timeout: %s", what)
 }
 
+// withoutLines returns out with every line containing substr removed.
+func withoutLines(out, substr string) string {
+	var kept []string
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, substr) {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
 func counterPackets(top *testbed.Topology, name string) int {
 	out := top.GW.Must("nft", "list", "counter", "inet", "chaosgw", name)
 	var n int
@@ -214,8 +225,9 @@ func TestDNSThroughTheServiceNamespace(t *testing.T) {
 	if out, err := top.A.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "AAAA", "@"+testbed.LAN0Gateway, "example.test"); err != nil || strings.TrimSpace(out) != "" {
 		t.Errorf("AAAA: %q %v", out, err)
 	}
-	// the proxy sits in the service namespace: nothing listens on port 53 in the gateway's
-	if out := top.GW.Must("ss", "-H", "-lun"); strings.Contains(out, ":53 ") {
+	// the proxy sits in the service namespace: nothing but the resolved stand-in (M6b-06, on its own
+	// address) listens on port 53 in the gateway's
+	if out := top.GW.Must("ss", "-H", "-lun"); strings.Contains(withoutLines(out, "127.0.0.53:53"), ":53 ") {
 		t.Errorf("a listener on port 53 in the gateway's namespace:\n%s", out)
 	}
 	if out, err := exec.Command("ip", "netns", "exec", ns, "ss", "-H", "-lun").CombinedOutput(); err != nil || !strings.Contains(string(out), ":53 ") {

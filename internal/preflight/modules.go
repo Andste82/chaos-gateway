@@ -28,6 +28,7 @@ var modules = []Module{
 	{Name: "act_mirred", Feature: "tunnel faults and capture: redirect to IFB", Milestone: "M10"},
 	{Name: "ifb", Feature: "tunnel faults from a WireGuard peer (IFB device)", Milestone: "M10"},
 	{Name: "nf_conntrack", Feature: "connection tracking: classification by the original tuple", Milestone: "M4"},
+	{Name: "nf_conntrack_netlink", Feature: "connection tracking: reading the table (conntrack -L)", Milestone: "M6a"},
 	{Name: "nf_nat", Feature: "NAT", Milestone: "M4"},
 	{Name: "nf_tables", Feature: "firewall, access matrix, classification", Milestone: "M4"},
 	{Name: "nft_ct", Feature: "nftables: conntrack expressions", Milestone: "M4"},

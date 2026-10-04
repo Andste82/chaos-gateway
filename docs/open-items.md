@@ -1055,13 +1055,13 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 - Needs maintainer: no
 - Effort: M
 
-### M6b-04 Table 102 and its `prohibit` fallback never hit by a packet
-- Status: open
-- Severity: medium
-- Reason: test-gap — only the DNAT path is tested; nothing sets bit 20 before M7, and M7 does not list the test.
-- Evidence: `compiler/service.go:60-75`; `e2e_dns_test.go:142-147`.
-- Task: in `TestDNSThroughTheServiceNamespace`: with `svc0` present `ip route get 203.0.113.10 from <ClientAAddr> iif br-iot mark 0x100000` (GW namespace) says `dev svc0`; after the namespace is deleted the same command fails (prohibit / no route); add "fail closed via mark" to the M7 tests in docs/plan.md.
-- Acceptance: CI testbed.
+### M6b-04 Plan §M7 test list does not mention "fail closed via mark"
+- Status: open (narrowed: the testbed assertions are done, in `phase1-svcns-hardening`)
+- Severity: low
+- Reason: test-gap, remainder — the real-packet assertions (`ip route get ... mark 0x100000` resolving into `svc0` with the namespace up, and into the `prohibit` fallback without it) are now in `TestDNSThroughTheServiceNamespace`; what is left is that M7's test list in docs/plan.md still does not name this behaviour, and M7's own scope is not owned by this item.
+- Evidence: `compiler/service.go:60-75`; `internal/api/e2e_dns_test.go` (`TestDNSThroughTheServiceNamespace`); docs/plan.md's M7 test list.
+- Task: add "fail closed via mark: a redirected packet resolves into `svc0` with the service namespace up, into the `prohibit` fallback without it" to the M7 test list in docs/plan.md.
+- Acceptance: doc review.
 - Needs maintainer: no
 - Effort: S
 

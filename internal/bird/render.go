@@ -215,6 +215,10 @@ func (c Config) renderFilter(b *strings.Builder, name string, i Import) {
 	fmt.Fprintf(b, "filter %s {\n", name)
 	if !i.AllowDefault {
 		b.WriteString("  if net = 0.0.0.0/0 then reject;\n")
+	} else {
+		// an allowed list ends in a catch-all reject: without this, it would catch the default
+		// route too and silently undo AllowDefault.
+		b.WriteString("  if net = 0.0.0.0/0 then accept;\n")
 	}
 	if len(c.Protected) > 0 {
 		set := make([]string, len(c.Protected))

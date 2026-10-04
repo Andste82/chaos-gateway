@@ -25,8 +25,11 @@ func TestLoginSessionCSRFAndLogout(t *testing.T) {
 	if sess["kind"] != "session" || sess["scope"] != "full" || csrf == "" {
 		t.Fatalf("%v", sess)
 	}
+	// M5-18: over plain HTTP (this test server) the cookie keeps its plain name, not Secure;
+	// the __Host- prefixed name is used only over TLS (api.HostSessionCookie, unit-tested).
 	cookie := r.Header.Get("Set-Cookie")
-	if !strings.Contains(cookie, "chaosgw_session=") || !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Strict") {
+	if !strings.Contains(cookie, "chaosgw_session=") || strings.Contains(cookie, "__Host-") ||
+		strings.Contains(cookie, "Secure") || !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Strict") {
 		t.Errorf("cookie %q", cookie)
 	}
 	// reads work with the cookie alone, unsafe methods need the CSRF token

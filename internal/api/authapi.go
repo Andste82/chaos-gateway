@@ -70,7 +70,7 @@ func (s *Server) Login(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	http.SetCookie(c.Writer, &http.Cookie{Name: SessionCookie, Value: sess.ID, Path: "/", HttpOnly: true, Secure: c.Request.TLS != nil,
+	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookieName(c.Request), Value: sess.ID, Path: "/", HttpOnly: true, Secure: c.Request.TLS != nil,
 		SameSite: http.SameSiteStrictMode, Expires: sess.ExpiresAt})
 	p := &Principal{Kind: "session", Scope: auth.ScopeFull, SessionID: sess.ID, CSRF: sess.CSRF, ExpiresAt: sess.ExpiresAt}
 	c.Set("principal", p)
@@ -94,7 +94,9 @@ func (s *Server) Logout(c *gin.Context) {
 		s.cfg.Auth.Logout(p.SessionID)
 		s.record(c, "auth.logout", nil, 0, "")
 	}
+	// clear both names: the client may hold the cookie under either, e.g. if TLS was not always on
 	http.SetCookie(c.Writer, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(c.Writer, &http.Cookie{Name: HostSessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1, SameSite: http.SameSiteStrictMode})
 	c.Status(http.StatusNoContent)
 }
 

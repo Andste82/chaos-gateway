@@ -15,8 +15,32 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// SessionCookie is the name of the session cookie.
-const SessionCookie = "chaosgw_session"
+// SessionCookie is the name of the session cookie over plain HTTP (tests: `__Host-` requires
+// Secure, which the browser refuses without TLS). HostSessionCookie is the `__Host-` name used
+// over TLS (M5-18): Secure, Path=/, no Domain, so the browser itself refuses it from anywhere but
+// this exact origin.
+const (
+	SessionCookie     = "chaosgw_session"
+	HostSessionCookie = "__Host-" + SessionCookie
+)
+
+// sessionCookieName is the name a Set-Cookie for this request's session uses: the `__Host-` name
+// on TLS, the plain one otherwise.
+func sessionCookieName(r *http.Request) string {
+	if r.TLS != nil {
+		return HostSessionCookie
+	}
+	return SessionCookie
+}
+
+// sessionCookie reads the session cookie under either name (M5-18): a client may hold one set
+// under the other name, e.g. across a change of how the API is reached.
+func sessionCookie(r *http.Request) (*http.Cookie, error) {
+	if ck, err := r.Cookie(HostSessionCookie); err == nil {
+		return ck, nil
+	}
+	return r.Cookie(SessionCookie)
+}
 
 // Operations that work before the setup is finished.
 var beforeSetup = map[string]bool{"getSetup": true, "completeSetup": true, "getHealth": true}
@@ -131,7 +155,7 @@ func (s *Server) authenticate(c *gin.Context) (*Principal, *problem) {
 		}
 		return &Principal{Kind: "token", Scope: t.Scope, TokenID: t.ID, TokenName: t.Name}, nil
 	}
-	if ck, err := c.Request.Cookie(SessionCookie); err == nil && ck.Value != "" {
+	if ck, err := sessionCookie(c.Request); err == nil && ck.Value != "" {
 		sess, ok := s.cfg.Auth.LookupSession(ck.Value)
 		if !ok {
 			return nil, nil // an old cookie is no credential; the operation decides whether it needs one

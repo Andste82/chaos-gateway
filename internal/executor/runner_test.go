@@ -103,6 +103,52 @@ func TestRunnerReportsExitStatusAndMissingNamespace(t *testing.T) {
 	}
 }
 
+// M6a-04 test: Stream runs a real process, delivers its stdout line by line as it is written (not
+// only once it exits), and stop kills it instead of waiting for it to exit on its own.
+func TestRunnerStreamsRealOutputAndStopKillsIt(t *testing.T) {
+	const sh = Tool("sh")
+	r := &ExecRunner{paths: map[Tool]string{sh: "/bin/sh"}}
+	// `exec` replaces the shell with sleep in place, instead of forking it as a child that would
+	// keep the stdout pipe open on its own after the shell is killed.
+	lines, stop, err := r.Stream(context.Background(), Command{Tool: sh, Args: []string{"-c", "echo one; echo two; exec sleep 30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for _, want := range []string{"one", "two"} {
+		select {
+		case got := <-lines:
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no line (want %q)", want)
+		}
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Error("the lines took long enough to suggest they only arrived once the process exited")
+	}
+	stop() // must return well before the 30s sleep would, by killing the process
+	if time.Since(start) > 10*time.Second {
+		t.Error("stop did not kill the process promptly")
+	}
+	select {
+	case _, ok := <-lines:
+		if ok {
+			t.Error("a line after stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the channel did not close")
+	}
+}
+
+func TestRunnerStreamNeedsAFixedPath(t *testing.T) {
+	r := &ExecRunner{paths: map[Tool]string{}}
+	if _, _, err := r.Stream(context.Background(), Command{Tool: ToolConntrack}); err == nil {
+		t.Error("accepted")
+	}
+}
+
 func TestRunnerTimeoutAndLimits(t *testing.T) {
 	r := NewExecRunner()
 	if _, ok := r.Path(ToolIP); !ok {

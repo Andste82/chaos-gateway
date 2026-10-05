@@ -19,6 +19,13 @@ type Exec interface {
 	Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error)
 }
 
+// Watcher is implemented by an Exec that can also stream events (M6a-04): *executor.Client,
+// *executor.Redialing and Local all fit; the engine falls back to polling alone for an Exec that
+// is not a Watcher.
+type Watcher interface {
+	Watch(ctx context.Context, what, ns string) (<-chan json.RawMessage, func(), error)
+}
+
 // State is the kernel state relevant to Chaos Gateway, read through the executor.
 type State struct {
 	// Generation is the executor's generation when the state was read.
@@ -351,6 +358,43 @@ type Local struct{ E *executor.Executor }
 // Do runs the operations as one request.
 func (l Local) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
 	return l.E.DoBatch(ctx, ops)
+}
+
+// Watch implements Watcher: in the same process there is no connection to open, so this goes
+// straight to the executor's own Watch (M6a-04).
+func (l Local) Watch(ctx context.Context, what, ns string) (<-chan json.RawMessage, func(), error) {
+	events, innerStop, err := l.E.Watch(ctx, what, ns)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan json.RawMessage)
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		defer close(done)
+		for ev := range events {
+			b, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			select {
+			case out <- b:
+			case <-stopCh:
+				// stop below is about to end the underlying watch too: abandoning the rest of
+				// `events` here does not leak it, since closing stopCh always precedes that.
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	stop := func() {
+		close(stopCh)
+		innerStop()
+		<-done
+	}
+	return out, stop, nil
 }
 
 func sortedNames(m map[string]linux.Link) []string {

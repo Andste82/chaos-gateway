@@ -167,6 +167,25 @@ func TestFlowsOfADevice(t *testing.T) {
 	}
 }
 
+// M6a-03 test: a flow's started_at reaches the API when conntrack reports it, and is left out
+// (not a zero-value timestamp) when conntrack does not.
+func TestFlowStartedAtReachesTheAPI(t *testing.T) {
+	g := dhcpGateway(t)
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31")})
+	g.observe()
+	g.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=45566 dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=45566 packets=4 bytes=500 start=1700000000000000000 [ASSURED] mark=0 use=1\n")
+	f := g.do("GET", "/flows", nil, nil, nil).json(t)["items"].([]any)[0].(map[string]any)
+	if f["started_at"] != "2023-11-14T22:13:20Z" {
+		t.Errorf("%v", f)
+	}
+
+	g.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=45566 dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=45566 packets=4 bytes=500 [ASSURED] mark=0 use=1\n")
+	f = g.do("GET", "/flows", nil, nil, nil).json(t)["items"].([]any)[0].(map[string]any)
+	if _, ok := f["started_at"]; ok {
+		t.Errorf("a started_at with no ktimestamp field: %v", f)
+	}
+}
+
 // M6a-03 test: a device's active flow count reaches the devices API, and a flow redirected into the
 // service namespace for DNS carries service "dns_proxy" in the flows API.
 func TestDeviceFlowsActiveAndFlowService(t *testing.T) {

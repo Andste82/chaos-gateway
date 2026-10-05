@@ -163,6 +163,9 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	if err := eng.FollowNeighbors(ctx, 100*time.Millisecond); err != nil {
 		log.Warn("the neighbor table is not followed", "error", err)
 	}
+	if err := eng.FollowConntrack(ctx, 100*time.Millisecond); err != nil {
+		log.Warn("conntrack is not followed; polling alone", "error", err)
+	}
 	if o.serviceToken != "" {
 		if err := au.EnsureServiceToken(o.serviceToken); err != nil {
 			return fmt.Errorf("the service token: %w", err)

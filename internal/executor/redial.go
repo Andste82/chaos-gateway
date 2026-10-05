@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -57,6 +58,18 @@ func (r *Redialing) Do(ctx context.Context, ops ...Operation) (Outcome, error) {
 		r.drop(c)
 	}
 	return out, err
+}
+
+// Watch starts a watch on a connection of its own; see Client.Watch. It does not affect, and is
+// not affected by, this Redialing's own request connection: a watch that ends (the executor
+// restarted, the connection broke) is simply not reconnected here — the caller (the engine's
+// FollowConntrack) calls Watch again, the same way it already handles a dropped netlink watch.
+func (r *Redialing) Watch(ctx context.Context, what, ns string) (<-chan json.RawMessage, func(), error) {
+	c, err := r.client(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.Watch(ctx, what, ns)
 }
 
 // Close closes the connection.

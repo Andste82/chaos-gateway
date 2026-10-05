@@ -408,6 +408,8 @@ func (t *Target) compileHostState() {
 		executor.SysctlEntry{Name: "ip_forward", Value: 1},
 		// byte and packet accounting per conntrack entry: the flows API reports upload/download bytes.
 		executor.SysctlEntry{Name: "nf_conntrack_acct", Value: 1},
+		// each entry's start time (M6a-03): the flows API reports started_at.
+		executor.SysctlEntry{Name: "nf_conntrack_timestamp", Value: 1},
 	)
 	var ownedNames []string
 	for n := range owned {

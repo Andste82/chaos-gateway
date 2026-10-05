@@ -1,6 +1,8 @@
 package kernelsim
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -64,4 +66,66 @@ func (k *Kernel) SetConntrack(text string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.conntrack = text
+}
+
+// HasConntrackWatch reports whether a conntrack watch (M6a-04) is currently open: tests use it to
+// wait for FollowConntrack's watch to actually be listening before calling ScriptConntrackEvent.
+func (k *Kernel) HasConntrackWatch() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.conntrackEvents != nil
+}
+
+// ScriptConntrackEvent delivers one line to an open conntrack watch (M6a-04: `executor.Watch`,
+// `engine.FollowConntrack`), as if the kernel had just reported it over `conntrack -E`. It blocks
+// until a watch is listening (tests call it after starting the watch they want to drive) and does
+// nothing if none is open.
+func (k *Kernel) ScriptConntrackEvent(line string) {
+	k.mu.Lock()
+	ch := k.conntrackEvents
+	k.mu.Unlock()
+	if ch != nil {
+		ch <- line
+	}
+}
+
+// Stream implements executor.Streamer for a conntrack watch (M6a-04): the real tool is never run;
+// the lines are whatever ScriptConntrackEvent delivers. Only one watch at a time is simulated.
+func (k *Kernel) Stream(ctx context.Context, c executor.Command) (<-chan string, func(), error) {
+	if c.Tool != executor.ToolConntrack {
+		return nil, nil, fmt.Errorf("kernelsim: cannot stream %s", c.Tool)
+	}
+	ch := make(chan string)
+	k.mu.Lock()
+	k.conntrackEvents = ch
+	k.mu.Unlock()
+	cctx, cancel := context.WithCancel(ctx)
+	out := make(chan string)
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		defer close(done)
+		for {
+			select {
+			case line := <-ch:
+				select {
+				case out <- line:
+				case <-cctx.Done():
+					return
+				}
+			case <-cctx.Done():
+				return
+			}
+		}
+	}()
+	stop := func() {
+		cancel()
+		<-done
+		k.mu.Lock()
+		if k.conntrackEvents == ch {
+			k.conntrackEvents = nil
+		}
+		k.mu.Unlock()
+	}
+	return out, stop, nil
 }

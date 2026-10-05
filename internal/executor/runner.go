@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,6 +11,14 @@ import (
 	"strings"
 	"time"
 )
+
+// Streamer starts a long-running command and streams its stdout line by line (M6a-04: `conntrack
+// -E`). The lines channel closes once the command exits, for any reason; stop ends it early and
+// blocks until the process has been reaped. The production runner (ExecRunner) implements it; a
+// Runner that does not is simply unable to serve a watch.
+type Streamer interface {
+	Stream(ctx context.Context, c Command) (lines <-chan string, stop func(), err error)
+}
 
 // Result is the outcome of one command.
 type Result struct {
@@ -86,6 +95,51 @@ func (r *ExecRunner) argv(c Command) ([]string, error) {
 		return nil, fmt.Errorf("invalid namespace name %q", c.NS)
 	}
 	return append([]string{ip, "netns", "exec", c.NS, bin}, c.Args...), nil
+}
+
+// Stream implements Streamer: it starts the command (no timeout; it runs until stop or ctx ends)
+// and sends each line of its stdout on the returned channel, which closes once the process has
+// exited and been reaped, by any path (ctx cancelled, stop called, or the command exiting on its
+// own, which is always an error for a long-running watch).
+func (r *ExecRunner) Stream(ctx context.Context, c Command) (<-chan string, func(), error) {
+	argv, err := r.argv(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
+	cmd.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	lines := make(chan string)
+	finished := make(chan struct{})
+	go func() {
+		defer close(lines)
+		defer close(finished)
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 4<<10), maxOutput)
+	scan:
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-cctx.Done():
+				break scan
+			}
+		}
+		_ = cmd.Wait()
+	}()
+	stop := func() {
+		cancel()
+		<-finished
+	}
+	return lines, stop, nil
 }
 
 // Run implements Runner.

@@ -1,6 +1,9 @@
 package linux
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseConntrack(t *testing.T) {
 	text := `tcp      6 431999 ESTABLISHED src=10.10.0.10 dst=203.0.113.10 sport=45566 dport=80 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=80 dport=45566 packets=4 bytes=500 [ASSURED] mark=0 use=1
@@ -40,6 +43,52 @@ garbage line
 	}
 	if len(ParseConntrack("")) != 0 {
 		t.Error("an empty output has flows")
+	}
+}
+
+func TestParseConntrackEventLine(t *testing.T) {
+	// M6a-04: a real `conntrack -E -o id` line, TCP new.
+	line := `    [NEW] tcp      6 120 SYN_SENT src=10.10.0.10 dst=203.0.113.10 sport=45566 dport=80 [UNREPLIED] src=203.0.113.10 dst=10.10.0.10 sport=80 dport=45566 id=3260047744`
+	ev, ok := ParseConntrackEventLine(line)
+	if !ok {
+		t.Fatal("not parsed")
+	}
+	if ev.Type != "new" || ev.ID != 3260047744 || ev.Proto != "tcp" || ev.TimeoutSeconds != 120 || ev.State != "SYN_SENT" ||
+		ev.Original.Src != "10.10.0.10" || ev.Original.DPort != 80 || ev.Reply.Src != "203.0.113.10" {
+		t.Errorf("%+v", ev)
+	}
+
+	// an update and a destroy, lowercase event types, no state (UDP)
+	for _, tc := range []struct {
+		line, wantType string
+	}{
+		{`[UPDATE] tcp      6 431999 ESTABLISHED src=10.10.0.10 dst=203.0.113.10 sport=45566 dport=80 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=45566 id=3260047744`, "update"},
+		{`[DESTROY] udp      17 src=10.10.0.10 dst=10.10.0.1 sport=40000 dport=53 src=10.10.0.1 dst=10.10.0.10 sport=53 dport=40000 id=42`, "destroy"},
+	} {
+		ev, ok := ParseConntrackEventLine(tc.line)
+		if !ok || ev.Type != tc.wantType {
+			t.Errorf("%q: %+v %v", tc.line, ev, ok)
+		}
+	}
+
+	// an ICMP line's echo id inside a tuple must not be confused with the trailing entry id
+	icmp := `[NEW] icmp     1 29 src=10.10.0.10 dst=203.0.113.10 type=8 code=0 id=7 src=203.0.113.10 dst=10.10.0.10 type=0 code=0 id=7 id=99`
+	ev, ok = ParseConntrackEventLine(icmp)
+	if !ok || ev.ID != 99 || ev.Original.ICMPID == nil || *ev.Original.ICMPID != 7 {
+		t.Errorf("%+v %v", ev, ok)
+	}
+
+	// M6a-03: a `start=` field (ktimestamp, nanoseconds since the epoch) becomes StartedAt
+	withStart := `[NEW] tcp      6 120 SYN_SENT src=10.10.0.10 dst=203.0.113.10 sport=1 dport=80 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=1 start=1700000000000000000 id=1`
+	ev, ok = ParseConntrackEventLine(withStart)
+	if !ok || ev.StartedAt.IsZero() || !ev.StartedAt.Equal(time.Unix(0, 1700000000000000000).UTC()) {
+		t.Errorf("%+v %v", ev, ok)
+	}
+
+	for _, bad := range []string{"", "[NEW]", "garbage", "[NEW] tcp notanumber"} {
+		if _, ok := ParseConntrackEventLine(bad); ok {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }
 

@@ -21,6 +21,10 @@ type Client struct {
 	conn   net.Conn
 	codec  *codec
 	nextID uint64
+	// path and opt dial a fresh connection for Watch (M6a-04), which needs a connection of its
+	// own: a long-lived watch must not block, or be blocked by, this Client's ordinary requests.
+	path string
+	opt  DialOptions
 }
 
 // DialOptions tune Dial.
@@ -43,6 +47,7 @@ func Dial(ctx context.Context, path string, opt DialOptions) (*Client, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+	c.path, c.opt = path, opt
 	return c, nil
 }
 
@@ -167,4 +172,54 @@ func (c *Client) Read(ctx context.Context, r Read, v any) (Outcome, error) {
 		return out, errors.New("executor returned no data")
 	}
 	return out, json.Unmarshal(out.Data[0], v)
+}
+
+// Watch streams events of the named kind in the given namespace (M6a-04: "conntrack") on a
+// connection of its own, separate from this Client's request connection. The returned channel
+// carries each event's raw JSON (internal/linux.ConntrackEvent for "conntrack"); it closes once
+// the watch ends, for any reason. Call stop to end it early; stop waits for the connection to
+// close. ctx bounds only the dial and the initial handshake, not the watch's lifetime.
+func (c *Client) Watch(ctx context.Context, what, ns string) (<-chan json.RawMessage, func(), error) {
+	if c.path == "" {
+		return nil, nil, errors.New("this client was not created with Dial")
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", c.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	wc, err := handshake(ctx, conn, c.opt)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	if err := wc.codec.write(&Frame{Watch: &WatchRequest{What: what, NS: ns}}); err != nil {
+		_ = wc.Close()
+		return nil, nil, err
+	}
+	events := make(chan json.RawMessage)
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(events)
+		defer close(done)
+		for {
+			f, err := wc.codec.read()
+			if err != nil || f.Error != nil || f.Event == nil {
+				return
+			}
+			select {
+			case events <- f.Event.Data:
+			case <-stopCh:
+				// stop is about to close the connection too: abandoning this event does not leak
+				// the reader goroutine, since closing stopCh always precedes that.
+				return
+			}
+		}
+	}()
+	stop := func() {
+		close(stopCh)
+		_ = wc.Close()
+		<-done
+	}
+	return events, stop, nil
 }

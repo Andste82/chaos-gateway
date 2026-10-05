@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,26 @@ type Server struct {
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
+
+	watchesMu sync.Mutex
+	watches   int
+}
+
+// acquireWatch reserves one of maxWatches concurrent watch slots.
+func (s *Server) acquireWatch() bool {
+	s.watchesMu.Lock()
+	defer s.watchesMu.Unlock()
+	if s.watches >= maxWatches {
+		return false
+	}
+	s.watches++
+	return true
+}
+
+func (s *Server) releaseWatch() {
+	s.watchesMu.Lock()
+	defer s.watchesMu.Unlock()
+	s.watches--
 }
 
 // Listen creates the Unix socket at path with the given mode. A stale socket file from an earlier
@@ -168,16 +189,61 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		_ = cc.write(&Frame{Error: &RemoteError{Code: CodeProtocol, Message: fmt.Sprintf("client speaks protocol %d, executor speaks %d", f.Hello.Protocol, s.proto())}})
 		return
 	}
+	f, err = cc.read()
+	if err != nil {
+		return
+	}
+	if f.Watch != nil {
+		s.serveWatch(ctx, cc, f.Watch)
+		return
+	}
 	for {
-		f, err := cc.read()
-		if err != nil {
-			return
-		}
 		if f.Request == nil {
 			_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: "expected a request"}})
 			return
 		}
 		if err := cc.write(&Frame{Response: s.serve(ctx, f.Request)}); err != nil {
+			return
+		}
+		if f, err = cc.read(); err != nil {
+			return
+		}
+		if f.Watch != nil {
+			_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: "a watch must be the only message on its connection"}})
+			return
+		}
+	}
+}
+
+// maxWatches bounds concurrent watch connections (M6a-04): a watch is cheap (one child process,
+// one goroutine), but unbounded, uninvited long-lived connections are still a resource a client
+// should not be able to exhaust; a handful is far more than this gateway's own clients ever need
+// at once (today: one, the engine's conntrack follower).
+const maxWatches = 4
+
+// serveWatch runs a connection that asked to watch instead of to make requests (M6a-04): it owns
+// the connection for as long as the watch runs, sending one Frame.Event per line until the
+// connection closes, the executor stops, or the watch itself fails.
+func (s *Server) serveWatch(ctx context.Context, cc *codec, w *WatchRequest) {
+	log := s.logger()
+	if !s.acquireWatch() {
+		_ = cc.write(&Frame{Error: &RemoteError{Code: CodeForbidden, Message: "too many concurrent watches"}})
+		return
+	}
+	defer s.releaseWatch()
+	events, stop, err := s.Exec.Watch(ctx, w.What, w.NS)
+	if err != nil {
+		_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: err.Error()}})
+		return
+	}
+	defer stop()
+	for ev := range events {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			log.Error("cannot encode a watch event", "error", err)
+			continue
+		}
+		if err := cc.write(&Frame{Event: &WatchEvent{Data: b}}); err != nil {
 			return
 		}
 	}

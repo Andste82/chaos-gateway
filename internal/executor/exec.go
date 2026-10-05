@@ -173,6 +173,69 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	}
 }
 
+// Watch streams events of the named kind in the given namespace (M6a-04): it never enters the
+// request queue, so a long-lived watch never blocks, and is never blocked by, an ordinary request.
+// Each line is parsed and sent on the returned channel as a linux.ConntrackEvent; a line the
+// parser rejects is skipped. The channel closes once the underlying command ends, for any reason
+// (ctx cancelled, stop called, the executor closing, or the command itself exiting, which for a
+// watch is always unexpected); stop ends it early and waits for the command to be reaped.
+func (e *Executor) Watch(ctx context.Context, what, ns string) (<-chan linux.ConntrackEvent, func(), error) {
+	str, ok := e.run.(Streamer)
+	if !ok {
+		return nil, nil, errors.New("this runner cannot stream a watch")
+	}
+	cmd, err := watchCommand(what, ns)
+	if err != nil {
+		return nil, nil, err
+	}
+	// wctx also ends the watch when the executor itself closes, not only when ctx does or stop is
+	// called: a watch outlives no caller's request, but it must not outlive the executor either.
+	wctx, cancelW := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-e.done:
+		case <-wctx.Done():
+		}
+		cancelW()
+	}()
+	lines, rawStop, err := str.Stream(wctx, cmd)
+	if err != nil {
+		cancelW()
+		return nil, nil, err
+	}
+	out := make(chan linux.ConntrackEvent)
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		defer close(done)
+		for line := range lines {
+			ev, ok := linux.ParseConntrackEventLine(line)
+			if !ok {
+				continue
+			}
+			select {
+			case out <- ev:
+			case <-stopCh:
+				// stop is about to cancel the underlying command too: abandoning the rest of
+				// `lines` here does not leak it, since closing stopCh always precedes that.
+				return
+			case <-wctx.Done():
+				// the executor itself is stopping, or ctx ended, with nobody having called stop:
+				// the caller's read loop may be gone too, so do not wait for it either.
+				return
+			}
+		}
+	}()
+	stop := func() {
+		close(stopCh)
+		rawStop()
+		cancelW()
+		<-done
+	}
+	return out, stop, nil
+}
+
 // waiting returns how many requests wait in the queue.
 func (e *Executor) waiting() int {
 	e.queue.mu.Lock()

@@ -20,12 +20,12 @@ jobs:
     if: github.event_name == 'schedule' || inputs.fuzz
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make fuzz FUZZTIME=60m
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-crashers
@@ -45,8 +45,8 @@ jobs:
       matrix:
         release: ['24.04', '26.04']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install QEMU and the tools of the harness
@@ -64,7 +64,7 @@ jobs:
         run: |
           docker build -f deploy/Dockerfile -t chaos-gateway:appliance .
           docker save chaos-gateway:appliance | gzip > "$RUNNER_TEMP/image.tar.gz"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/chaosgw-appliance
           key: appliance-images-${{ matrix.release }}-${{ github.run_id }}
@@ -78,7 +78,7 @@ jobs:
         run: |
           export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
           go test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: appliance-logs-${{ matrix.release }}
@@ -99,9 +99,9 @@ jobs:
       matrix:
         kernel: ['6.8.0-142-generic', '7.0.0-38-generic']
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: .devcontainer
           load: true

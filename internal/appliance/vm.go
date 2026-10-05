@@ -123,6 +123,34 @@ func (v *VM) WaitSSH(ctx context.Context, d time.Duration) error {
 	return fmt.Errorf("appliance: the VM does not accept SSH within %v: %w", d, last)
 }
 
+// DialFresh opens a brand new SSH connection to the VM, runs `true` over it and closes it. Unlike
+// Run/Must, which reuse the connection WaitSSH established before an apply, this proves the
+// management network still accepts a new connection afterwards (M5b-02): the anti-lockout check is
+// meaningless if it only ever runs over a connection conntrack was already keeping open.
+func (v *VM) DialFresh(ctx context.Context) error {
+	cfg := &ssh.ClientConfig{User: GuestUser, Auth: []ssh.AuthMethod{ssh.PublicKeys(v.key.Signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // a throw-away VM on a private bridge
+		Timeout:         5 * time.Second}
+	d := net.Dialer{Timeout: cfg.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(v.Addr, "22"))
+	if err != nil {
+		return err
+	}
+	cc, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(v.Addr, "22"), cfg)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	c := ssh.NewClient(cc, chans, reqs)
+	defer func() { _ = c.Close() }()
+	s, err := c.NewSession()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+	return s.Run("true")
+}
+
 // Result is the outcome of a command in the VM.
 type Result struct {
 	Stdout, Stderr string

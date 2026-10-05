@@ -1,28 +1,31 @@
 # Phase 1 audit and open items
 
 Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/plan.md` §5 Phase 1 (M1–M6b).
+Closed: 2026-10-05, work package 12.
 
 ## Result
 
-**Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green. All 11 "Suggested work packages" below are done (merged, or for package 9 committed directly as plan/doc fixes). What remains is a mix of small items that were decided on 2026-10-04 but never bundled into a work package:
+**Phase 1 is complete.** Every milestone delivers its scope, every test the plan lists exists and
+passes, and every item this audit found — all 11 "Suggested work packages" plus the 13 small items
+decided on 2026-10-04 but never bundled into one (work package 12: one-line doc/spec edits, CI action
+version bumps, a scheduled-nightly confirmation, and three small real gaps — `internal/linkexport`'s
+unit tests, the anti-lockout check's SSH connection, and the cloud-image signature check) — is
+closed. CI on `main` is green.
 
-- test gaps where a plan test exists only weakly (M5b, CC-03);
-- small env-limited or deferred items with no further action needed beyond a decision already recorded (mostly one-line doc or spec edits: M0-03, M2-03, M2-08, M3-04, M4-02, M4-07, M4c-10, M6b-12, CC-05, CC-06).
-
-| Milestone | Verdict | Open items | High | Medium | Decided 2026-10-04 |
-|---|---|---|---|---|---|
-| M0 (spikes, docs) | – | 1 | 0 | 0 | 1 |
-| M1 Repository, CI, testbed | done | 0 | 0 | 0 | 0 |
-| M2 Domain model, persistence | incomplete | 2 | 0 | 0 | 2 |
-| M3 Executor | incomplete | 1 | 0 | 0 | 1 |
-| M4 Compiler, preview, safe apply | incomplete | 2 | 0 | 0 | 2 |
-| M4b WireGuard | done | 0 | 0 | 0 | 0 |
-| M4c Dynamic routing | incomplete | 1 | 0 | 0 | 1 |
-| M5 REST API | done | 0 | 0 | 0 | 0 |
-| M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
-| M6a DHCP, devices | done | 0 | 0 | 0 | 0 |
-| M6b DNS, service namespace | incomplete | 1 | 0 | 0 | 1 |
-| Cross-cutting | – | 3 | 0 | 0 | 0 |
+| Milestone | Verdict |
+|---|---|
+| M0 (spikes, docs) | done |
+| M1 Repository, CI, testbed | done |
+| M2 Domain model, persistence | done |
+| M3 Executor | done |
+| M4 Compiler, preview, safe apply | done |
+| M4b WireGuard | done |
+| M4c Dynamic routing | done |
+| M5 REST API | done |
+| M5b Appliance harness | done |
+| M6a DHCP, devices | done |
+| M6b DNS, service namespace | done |
+| Cross-cutting | done |
 
 ### Why items stayed open
 
@@ -114,54 +117,25 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - doc items M0-01, M0-02, M3-07, M4-08, M4b-06, M6b-09, CC-01, CC-02.
 10. **Decided changes** (done, `phase1-decided-changes`): M3-01, M4c-02, M4c-04, M4c-05, M5-02, M5-03, M5-10, M6a-09, M6b-02; closed M4b-04, M4b-05 and M4c-12 with a doc sentence.
 11. **Conntrack events** (done, `phase1-conntrack-events`): M6a-04, then the rates of M6a-03 on top of it.
+12. **Final cleanup** (done, `phase1-final-cleanup`): the 13 items decided on 2026-10-04 but never bundled above — CC-03, CC-05, CC-06, M0-03, M2-03, M2-08, M3-04, M4-02, M4-07, M4c-10, M5b-02, M5b-03, M6b-12.
 
 ## Cross-cutting
 
-### CC-03 `internal/linkexport` has no unit tests
-- Status: new
-- Severity: low
-- Reason: test-gap. It is covered only through the CLI (`cmd/chaosgw/wg_test.go:204`) and the API 404 path.
-- Evidence: `internal/linkexport/`.
-- Task: add `linkexport_test.go`. Cover a link with static routes: the `.conf` holds the peer, the endpoint and the AllowedIPs; the BIRD snippet passes `bird -p` (skip when bird is missing).
-- Acceptance: local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### CC-05 CI actions trigger Node 20 deprecation warnings
-- Status: new
-- Severity: low
-- Reason: forgotten.
-- Evidence: `.github/workflows/*.yml` (`checkout@v4`, `setup-go@v5`, `build-push-action@v6`, …).
-- Task: bump each action to its current major version and check the release notes for breaking inputs.
-- Acceptance: CI green without the deprecation annotations.
-- Needs maintainer: no
-- Effort: S
-
-### CC-06 The scheduled nightly has never run on `main`
-- Status: new
-- Severity: low
-- Reason: env-limit. The workflow reached `main` after its 02:17 UTC slot.
-- Evidence: `gh run list --workflow nightly.yml`.
-- Task: after 2026-10-04 02:17 UTC, check that a `schedule` run exists and is green (fuzz and appliance). If it did not start, check the cron syntax and the default branch. See also M5b-01.
-- Acceptance: a green scheduled run.
-- Needs maintainer: no
-- Effort: S
-
-Also seen: the doc comment of `vmrun.GuestOptions` mentions a `Verbose` field that does not exist (`internal/testbed/vmrun/guest.go`). Fix it when touching the file.
+Removed from the old list: CC-01, CC-02 (closed in work package 9). CC-03 (`internal/linkexport` unit
+tests) — closed with `internal/linkexport/linkexport_test.go`, covering a link with static routes
+(the remote `.conf`: peer, endpoint, AllowedIPs; the BIRD snippet against a real `bird -p`) and the
+no-routing error case. CC-04 (closed in work package 8). CC-05 (Node 20 deprecation warnings) —
+every action in `.github/workflows/*.yml` bumped to its current major version (checkout v7, setup-go
+v7, setup-node v7, setup-python v7, upload-artifact v7, cache v6, the Docker actions v4-v7); checked
+each for breaking input changes against what this repo actually passes, none apply. CC-06 (the
+scheduled nightly on `main`) — a `schedule`-triggered run exists and is green (run 37189011437,
+2026-10-04T08:28:05Z); the workaround note in M5b-01 is now historical. Also fixed in passing: the
+doc comment of `vmrun.GuestOptions` mentioned a `Verbose` field that does not exist
+(`internal/testbed/vmrun/guest.go`).
 
 ## M0 (spikes, plan, docs)
 
-### M0-03 ESP32 QEMU fork not evaluated
-- Status: open
-- Severity: low
-- Reason: deferred — §4.5 calls it "a candidate … has to be evaluated first"; no milestone owns it.
-- Evidence: plan.md:1168.
-- Task: remove the sentence about the Espressif QEMU fork from §4.5 (plan.md:1168); firmware tests keep using real devices.
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: remove the ESP32 QEMU candidate from §4.5 (see the revised task).
-- Effort: S
-
-Removed from the old list: "Devcontainer rebuild never verified" — wrong: CI builds `.devcontainer/Dockerfile` on every run (jobs `testbed-vm`, `testbed-privileged`); only the `start.sh rebuild` wrapper is untested. "Q1 evidence outdated" moved to M1-01, "Nightly kernel matrix" to M1-02.
+Removed from the old list: "Devcontainer rebuild never verified" — wrong: CI builds `.devcontainer/Dockerfile` on every run (jobs `testbed-vm`, `testbed-privileged`); only the `start.sh rebuild` wrapper is untested. "Q1 evidence outdated" moved to M1-01, "Nightly kernel matrix" to M1-02. M0-03 (ESP32 QEMU fork) — the candidate sentence removed from plan.md §4.5; firmware tests keep using real devices.
 
 ## M1 (repository, CI, testbed)
 
@@ -188,7 +162,7 @@ Verdict: done. The scope is delivered, the M1 tests pass in CI, and the plan/doc
 
 ## M2 (domain model, persistence)
 
-Verdict: incomplete. Every scope and test item is implemented and tested; open is documentation and small gaps (revision retention and the validation rules/codes are done).
+Verdict: done. Every scope and test item is implemented and tested.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -201,29 +175,15 @@ Verdict: incomplete. Every scope and test item is implemented and tested; open i
 | T: validation, precedence rows, E1–E8/E12, round-trip, corrupted files, examples, pointers and codes | done | `TestEveryPrecedenceLevel…`, `TestE1…`–`TestE12…`, corrupt_test.go, crash_test.go, `TestEveryExampleFileIsCheckedByTheDomain` |
 | Retention 200 revisions (§3.6) | done | `internal/engine/owner.go` `pruneRevisions`; `TestCommittedRevisionsArePrunedToTheRetention` |
 
-### M2-03 "Configured address beats a lease" not confirmed
-- Status: open
-- Severity: low
-- Reason: needs-decision — identity resolution ranks a configured address above a DHCP lease, stronger than §2.3 says.
-- Evidence: `internal/domain/observed.go:106-113`; `TestTwoDevicesClaimingOneAddressTheStrongerClaimWins`.
-- Task: keep: add a sentence to plan §2.3 and development.md "DHCP and devices"; change: swap `claimLease`/`claimExplicit` and update the test.
-- Acceptance: doc review (plus a unit test if changed).
-- Needs maintainer: decided 2026-10-04: (a) configuration wins (current behaviour); document it.
-- Effort: S
-
-### M2-08 Persistence layout differs from plan §3.6
-- Status: new
-- Severity: low
-- Reason: needs-decision — §3.6 specifies `/etc/chaos-gateway/{config.json,revisions/}`, `/var/lib/chaos-gateway/{secrets,runs,captures,state}`, `/var/log/chaos-gateway/audit.jsonl`; the code uses flags and named volumes at `/var/lib/chaosgw/{state,secrets,api}`; revisions also have `<id>.status.json`.
-- Evidence: plan.md:891-903; `deploy/compose.api.yaml`; `store.revPath`/`statusPath` (store.go:133-138).
-- Task: per the decision, update §3.6 to the real paths, volumes and status files, or switch the compose files to bind mounts at the §3.6 paths in M28 (record in the M28 scope).
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: (b) bind mounts at the §3.6 paths in M28. Amend §3.6 now for the status files and the path flags, and add the switch to the M28 scope.
-- Effort: S
+Removed from the old list: M2-03 ("configured address beats a lease") — documented as intended in
+plan.md §2.3 and docs/development.md ("DHCP and devices"); the code's existing, stronger behaviour is
+unchanged. M2-08 (persistence layout vs. plan §3.6) — plan.md §3.6 rewritten to the real current
+paths (`/var/lib/chaosgw/{state,secrets,api,service}`, revision status files, `audit.jsonl`); the
+switch to bind mounts at these paths is now in the M28 scope.
 
 ## M3 (executor and state reader)
 
-Verdict: incomplete. All scope and test items exist; open is the per-process generation decision.
+Verdict: done. All scope and test items exist.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -237,19 +197,13 @@ Verdict: incomplete. All scope and test items exist; open is the per-process gen
 | Container hardening profile | done | `deploy/compose.executor.yaml`; `TestExecutorContainerHardeningProfile` |
 | T: integration reads the gateway namespace; out-of-scope rejected; fuzz 5 min/nightly; version mismatch | done | testbed `TestExecutorReadsTheGatewayNamespace`; `TestDecodeRejects`; `FuzzDecode`/`FuzzFrame`, Makefile, nightly.yml |
 
-### M3-04 Executor generation restarts at 0
-- Status: open
-- Severity: low
-- Reason: needs-decision — `Outcome.Generation` is per process; nothing in the plan requires persistence (the API generation lives in the engine, see M5-01).
-- Evidence: `internal/executor/exec.go:57-60,251-262`.
-- Task: doc comment on `Outcome.Generation`: "counts mutating requests since this executor started; not persistent".
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: (B) document the counter as per-process.
-- Effort: S
+Removed from the old list: M3-04 (executor generation restarts at 0) — documented as per-process,
+not persistent, on `Outcome.Generation` itself (`internal/executor/exec.go`); the persisted
+generation lives in the engine (M5-01).
 
 ## M4 (compiler, preview, safe apply)
 
-Verdict: incomplete. All scope and test items exist and pass; open are a spec/code mismatch and a documented deferral.
+Verdict: done. All scope and test items exist and pass.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -263,27 +217,9 @@ Verdict: incomplete. All scope and test items exist and pass; open are a spec/co
 | T: golden, client reaches server, protection, management route, verify manipulation, injected failure, rollback, set change, uplink change, immutable snapshots, observer during apply | done | see the test names in `internal/{compiler,apply,engine}` |
 | T: preview matches applied state | done | `TestPreviewShowsTheChangeAndChangesNothing` compares the previewed plan and diff with what `apply.BuildPlan`/`apply.Diff` build from the same pre-apply state |
 
-### M4-02 The management matrix endpoint differs from the spec
-- Status: open
-- Severity: low
-- Reason: needs-decision — the spec says endpoint `management` is "`Management.allowed_sources` and the management interface subnet"; the code uses only `allowed_sources` when they are set.
-- Evidence: api/openapi.yaml:2560 vs :2294; `internal/compiler/compile.go:315-334`; `rules.go:277-281`.
-- Task: (A) change the description at openapi.yaml:2560 to "`Management.allowed_sources`, or the management interface subnet when none are given"; run `make check-spec check-generated check-clients`. (B) add a set `mgmt_net` (allowed_sources ∪ interface subnet) used only in `matrixRules`, golden update, `TestTheManagementEndpointIncludesTheInterfaceSubnet`.
-- Acceptance: doc review + `make check-spec` (A) or local unit test (B).
-- Needs maintainer: decided 2026-10-04: (A) the spec follows the code.
-- Effort: S
-
-### M4-07 `chaosgw apply --file` without `--state-dir` has no rollback
-- Status: open
-- Severity: low
-- Reason: deferred — documented (development.md:210); without a store there is nothing to restore.
-- Evidence: `cmd/chaosgw/apply.go`.
-- Task: print a warning on stderr when `--state-dir` is missing; assert it in `TestApplyFileFailures`.
-- Acceptance: `go test ./cmd/chaosgw`.
-- Needs maintainer: decided 2026-10-04: (B) warn on stderr.
-- Effort: S
-
-Removed from the old list: "tc tokens allow `/` and `..`" — wrong: `..` is rejected (`internal/executor/validate.go:423`, test "tc path traversal token"). "Supervisor helper deferred to M8a" (Covered later) — wrong: the supervisor exists and is used; only the reader pool and time stamps go to M8a, overlay removal on stop to M27.
+Removed from the old list: "tc tokens allow `/` and `..`" — wrong: `..` is rejected (`internal/executor/validate.go:423`, test "tc path traversal token"). "Supervisor helper deferred to M8a" (Covered later) — wrong: the supervisor exists and is used; only the reader pool and time stamps go to M8a, overlay removal on stop to M27. M4-02 (management matrix endpoint vs. spec) — the spec's description now follows the code
+(`Management.allowed_sources`, or the interface subnet when none are given). M4-07 (`apply --file`
+without `--state-dir` has no rollback) — now warns on stderr, asserted in `TestApplyFileFailures`.
 
 ## M4b (WireGuard networks and clients)
 
@@ -300,7 +236,7 @@ Verdict: done. All plan tests exist and passed in CI (run 37147106957); two form
 
 ## M4c (dynamic routing, BIRD)
 
-Verdict: incomplete. The high bug (external mode) is fixed; one low item remains (the effective route in the preview, moved to M8a `/explain`).
+Verdict: done. The high bug (external mode) is fixed; every scope and test item exists and passes.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -318,15 +254,9 @@ Verdict: incomplete. The high bug (external mode) is fixed; one low item remains
 | Remote-side snippet in link exports | done | `bird/remote.go`, `internal/linkexport`, API `format=bird` |
 | T: three sites, learned only into own tables, filters (BGP and OSPF), max-prefix, link down, withdrawal, config change, invalid snippet, failed apply, confirm-timeout rollback | done | see the M4c test names in `internal/engine`, `internal/apply` |
 
-### M4c-10 The preview does not show the effective route for a destination
-- Status: open
-- Severity: low
-- Reason: needs-decision — §2.2.2 promises it; no milestone schedules it.
-- Evidence: docs/plan.md:230; `internal/engine/api.go:110-150`.
-- Task: amend the M8a scope (`/explain`) to include the table-100 lookup (`ip route get <dst> from <src> iif <dev>` via an executor read) and change §2.2.2 to "shown by explain".
-- Acceptance: doc review.
-- Needs maintainer: decided 2026-10-04: (a) move it to M8a `/explain`.
-- Effort: S (doc) / M (code)
+Removed from the old list: M4c-10 (the preview does not show the effective route for a destination)
+— moved to M8a's `/explain` scope; plan.md §2.2.2 now says "shown by explain" instead of promising
+it in the preview.
 
 ## M5 (REST API v1)
 
@@ -346,27 +276,13 @@ Verdict: done. Every scope and test item exists and all 41 `x-milestone: M5` ope
 
 ## M5b (appliance VM harness, level 2)
 
-Verdict: incomplete. Scope done; the level-2 smoke is green with the current deploy config (24.04 and 26.04, three and two ports, run 37171706227, on branch `phase1-deploy-pin-health`, which also added BIRD to the deployment); still open are an SSH check that reuses an old connection and the checksum verification.
+Verdict: done. Scope done; the level-2 smoke is green with the current deploy config (24.04 and 26.04, three and two ports, run 37171706227, on branch `phase1-deploy-pin-health`, which also added BIRD to the deployment).
 
-### M5b-02 Anti-lockout check reuses the old SSH connection
-- Status: open (reworded: not a no-op, but it runs over the connection opened before the apply, which conntrack keeps)
-- Severity: low
-- Reason: test-gap — no new connection from the management network after the apply.
-- Evidence: `internal/appliance/appliance_test.go:250-251`, `vm.go:109-124`.
-- Task: `func (v *VM) DialFresh(ctx) error` in `vm.go` (new `ssh.Dial`, run `true`, close); replace `must("true")` with it; also assert the client namespace cannot open TCP 22 on the gateway's LAN address (`nc -z -w 3 <GatewayLAN> 22` fails).
-- Acceptance: nightly appliance; `go vet -tags appliance ./internal/appliance`.
-- Needs maintainer: no
-- Effort: S
-
-### M5b-03 Cloud image checksums not signature-verified
-- Status: open
-- Severity: low
-- Reason: forgotten — `SHA256SUMS` trusted via HTTPS only.
-- Evidence: `internal/appliance/images.go:61-68`.
-- Task: commit the Ubuntu cloud-image signing key as `internal/appliance/testdata/ubuntu-cloudimage-keyring.gpg`; fetch `SHA256SUMS.gpg` and verify (`gpgv --keyring <file>` or an OpenPGP library); unit test with a locally generated key (httptest) for pass and fail.
-- Acceptance: local unit test; nightly appliance green.
-- Needs maintainer: no
-- Effort: S
+Removed from the old list: M5b-02 (anti-lockout check reused the old SSH connection) — `VM.DialFresh`
+opens a brand new connection and runs `true` over it; the client namespace's inability to reach SSH
+on the gateway's LAN address is asserted alongside it (real verification needs the nightly appliance
+job). M5b-03 (cloud image checksums not signature-verified) — `Fetch` now checks `SHA256SUMS.gpg`
+against Ubuntu's own signing key with `gpgv` before trusting `SHA256SUMS` at all.
 
 (Q1 and the level-2 wording of the plan: see M1-01.)
 
@@ -393,7 +309,7 @@ Removed from the old list: M6a-03 (`started_at` needs a verified conntrack times
 
 ## M6b (DNS proxy and service namespace)
 
-Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI; open is a port default.
+Verdict: done. Scope and tests exist and the DNS testbed test passed in CI.
 
 | Plan item | Status | Evidence |
 |---|---|---|
@@ -412,17 +328,9 @@ Verdict: incomplete. Scope and tests exist and the DNS testbed test passed in CI
 | T: holder restart healed | done | |
 | T: fail closed | done | named in the plan's M7 test list |
 
-### M6b-12 `ui_port` default in the spec (443) differs from the code
-- Status: open
-- Severity: low
-- Reason: needs-decision — M6b made the API's own port (`--port`, 8443) the default of the gateway's input rules; the spec still says `default: 443`.
-- Evidence: api/openapi.yaml:2296-2300; `compiler.Input.DefaultUIPort`, `cmd/chaosgw/api.go`.
-- Task: replace `default: 443` with the description "Default - the port the API listens on (8443 in the shipped compose files)"; `make generate`.
-- Acceptance: `make check-generated`.
-- Needs maintainer: decided 2026-10-04: (a) the spec follows the code.
-- Effort: S
-
-Removed from the old list: "Query log in memory only" — the plan asks only for `/dns/queries` with a device filter (§2.13); persistence is not required.
+Removed from the old list: "Query log in memory only" — the plan asks only for `/dns/queries` with a device filter (§2.13); persistence is not required. M6b-12 (`ui_port` spec default vs. the code) —
+replaced the stale `default: 443` with a description naming the real default (the API's own port,
+8443 in the shipped compose files).
 
 ## Covered later
 

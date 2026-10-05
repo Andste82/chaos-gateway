@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "9644cbe1dc17a3b9",
+  "hash": "00d0b028108f8f25",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -126,6 +126,10 @@
     },
     {
       "name": "nf_conntrack_acct",
+      "value": 1
+    },
+    {
+      "name": "nf_conntrack_timestamp",
       "value": 1
     },
     {

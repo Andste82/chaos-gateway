@@ -515,6 +515,33 @@ func TestFlowsAreListedWithTheirDevice(t *testing.T) {
 	}
 }
 
+// M6a-03 test: a flow's started_at comes from conntrack's ktimestamp extension when the kernel
+// reports it, and is zero (left out, not guessed at) when it does not.
+func TestFlowsCarryTheirStartTimeWhenConntrackReportsIt(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=45566 dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=45566 packets=4 bytes=500 start=1700000000000000000 [ASSURED] mark=0 use=1\n")
+	flows, err := h.e.Flows(context.Background())
+	if err != nil || len(flows) != 1 {
+		t.Fatalf("%+v %v", flows, err)
+	}
+	if want := time.Unix(0, 1700000000000000000).UTC(); !flows[0].StartedAt.Equal(want) {
+		t.Errorf("got %v, want %v", flows[0].StartedAt, want)
+	}
+
+	// no `start=` field (nf_conntrack_timestamp off, or an older conntrack-tools): zero, not guessed
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=45566 dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=45566 packets=4 bytes=500 [ASSURED] mark=0 use=1\n")
+	flows, err = h.e.Flows(context.Background())
+	if err != nil || len(flows) != 1 {
+		t.Fatalf("%+v %v", flows, err)
+	}
+	if !flows[0].StartedAt.IsZero() {
+		t.Errorf("got %v, want zero", flows[0].StartedAt)
+	}
+}
+
 // M6a-13 test: two concurrent pings from the same device to the same destination have different
 // echo ids; their flows must not collide into one id.
 // M6a-18 test: a host behind a LAN network's own downstream router is discovered by its address, the
@@ -536,6 +563,65 @@ func TestAHostBehindALANDownstreamRouterIsDiscovered(t *testing.T) {
 	if d == nil || !d.Online {
 		t.Fatalf("the host behind the LAN downstream route was not discovered: %+v", h.e.Snapshot().Devices)
 	}
+}
+
+// M6a-04 test: a scripted conntrack event, not the regular poll interval, is what makes a new
+// connection show up: PollObserved runs with an interval far longer than this test's deadline, so
+// only FollowConntrack's watch can explain the discovered device appearing.
+func TestAConntrackEventTriggersAnObservationWithoutWaitingForThePoll(t *testing.T) {
+	// plain newHarness/start, not dhcpHarness: a DHCP retry goroutine also uses the fake clock and
+	// would be a second confounding timer alongside the ones this test means to drive by hand.
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(withDHCPAndDevice))
+	// mustApply's commit already called TriggerObserve, which buffers one trigger in a channel
+	// that ObserveNow (h.observe, above) never drains, since it reads independently of it. Left
+	// alone, PollObserved's loop would consume that leftover the instant it starts and run its own
+	// 100ms debounce for that reason alone — a confound that would let this test pass even if the
+	// conntrack event below did nothing. Start the poller, let it drain and settle that leftover
+	// first, then only start following conntrack once the slate is clean.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := h.e.PollObserved(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.BlockUntil(2) // the hour-long ticker, and the debounce for the commit's own leftover trigger
+	h.clk.Advance(100 * time.Millisecond)
+	waitStatus(t, h, func(s *engine.Snapshot) bool { return len(s.Devices) > 0 }) // the leftover settles
+
+	if err := h.e.FollowConntrack(ctx, 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !h.k.HasConntrackWatch() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !h.k.HasConntrackWatch() {
+		t.Fatal("the watch never opened")
+	}
+	for _, dv := range h.e.Snapshot().Devices {
+		if dv.Origin == model.DeviceOriginDiscovered && len(dv.Addresses) > 0 && dv.Addresses[0].String() == "10.30.0.5" {
+			t.Fatalf("the device already exists before the event: %+v", dv)
+		}
+	}
+
+	// gateway.yaml's IoT network has a downstream route 10.30.0.0/24 via 10.10.0.2
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.30.0.5 dst=203.0.113.10 sport=1 dport=2 packets=1 bytes=60 src=203.0.113.10 dst=10.30.0.5 sport=2 dport=1 packets=1 bytes=60 [ASSURED] mark=0 use=1\n")
+	h.k.ScriptConntrackEvent(`[NEW] tcp      6 120 SYN_SENT src=10.30.0.5 dst=203.0.113.10 sport=1 dport=2 src=203.0.113.10 dst=10.30.0.5 sport=2 dport=1 id=1`)
+
+	h.clk.BlockUntil(2) // the poller's hour-long ticker, and FollowConntrack's own debounce timer
+	h.clk.Advance(50 * time.Millisecond)
+	h.clk.BlockUntil(2)                   // the ticker again, and PollObserved's own debounce after the trigger
+	h.clk.Advance(100 * time.Millisecond) // matches the unexported debounce in observe.go
+
+	waitStatus(t, h, func(s *engine.Snapshot) bool {
+		for _, dv := range s.Devices {
+			if dv.Origin == model.DeviceOriginDiscovered && len(dv.Addresses) > 0 && dv.Addresses[0].String() == "10.30.0.5" {
+				return dv.Online
+			}
+		}
+		return false
+	})
 }
 
 func TestConcurrentICMPFlowsDoNotCollide(t *testing.T) {

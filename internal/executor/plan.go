@@ -292,7 +292,9 @@ func ReadCommand(o *Read) Command {
 			c.Args = append(c.Args, "dev", o.Dev)
 		}
 	case ReadConntrack:
-		c.Tool, c.Args = ToolConntrack, []string{"-L", "-f", "ipv4"}
+		// M6a-03: `ktimestamp` adds each entry's start time (nanoseconds since the epoch), read
+		// only when `nf_conntrack_timestamp` is on; otherwise the field is simply absent.
+		c.Tool, c.Args = ToolConntrack, []string{"-L", "-f", "ipv4", "-o", "ktimestamp"}
 	case ReadSysctl:
 		c.Tool, c.Args = ToolSysctl, []string{"-n", sysctlPath(o.Name, o.Dev)}
 	case ReadDockerUser:
@@ -307,8 +309,20 @@ func sysctlPath(name, dev string) string {
 		return "net/ipv4/ip_forward"
 	case "nf_conntrack_acct":
 		return "net/netfilter/nf_conntrack_acct"
+	case "nf_conntrack_timestamp":
+		return "net/netfilter/nf_conntrack_timestamp"
 	}
 	return "net/ipv6/conf/" + dev + "/" + name
+}
+
+// watchCommand builds the invocation for a watch (M6a-04). `-o id` names each event's own entry
+// id (never to be confused with an ICMP echo id); `-o ktimestamp` carries each entry's start time
+// (M6a-03), the same field a ReadConntrack read also asks for.
+func watchCommand(what, ns string) (Command, error) {
+	if what != WhatConntrack {
+		return Command{}, fmt.Errorf("watch: unknown kind %q", what)
+	}
+	return Command{Tool: ToolConntrack, Args: []string{"-E", "-o", "id,ktimestamp"}, NS: ns}, nil
 }
 
 func planLinks(o *Links) []Step {

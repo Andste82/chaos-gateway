@@ -481,3 +481,43 @@ func TestFlowsOfADeviceAreListed(t *testing.T) {
 		t.Errorf("accounting is off: upload %+v, download %+v", f.Upload, f.Download)
 	}
 }
+
+// M6a-04 test: a new connection's traffic reaches the device's observed state (flows_active, the
+// byte rates) within a few hundred milliseconds, not whenever the regular poll next runs — the
+// poll interval here is an hour, far longer than this test's own deadline, so only the conntrack
+// watch can explain a fast result. (GET /flows itself already reads conntrack live on every call,
+// with or without this feature, so it is not what distinguishes the watch from plain polling; the
+// device's cached observed state is.)
+func TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll(t *testing.T) {
+	b := newDHCPBed(t)
+	b.apply(dhcpOn)
+	if err := b.e.PollObserved(context.Background(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.e.FollowConntrack(context.Background(), 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	b.top.Server.Start("python3", "-m", "http.server", "8080", "--bind", testbed.ServerAddr)
+	ip, ok := waitBound(t, b.udhcpc(b.top.A, 8), 30*time.Second)
+	if !ok {
+		t.Fatal("no lease")
+	}
+	b.top.A.Must("ip", "route", "replace", "default", "via", testbed.LAN0Gateway)
+	d := b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return len(d.Addresses) > 0 })
+	if d.FlowsActive != 0 {
+		t.Fatalf("flows already active before any connection: %+v", d)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := b.top.A.Run(context.Background(), "curl", "-s", "-m", "3", "-o", "/dev/null", fmt.Sprintf("http://%s:8080/", testbed.ServerAddr)); err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	// waitDevice itself enforces the 300ms deadline (it fails the test if it is not met)
+	got := b.waitDevice(testbed.ClientAMAC, 300*time.Millisecond, func(d *engine.DeviceState) bool { return d.FlowsActive > 0 })
+	if got.Addresses[0].String() != ip {
+		t.Errorf("%+v, ip %s", got, ip)
+	}
+}

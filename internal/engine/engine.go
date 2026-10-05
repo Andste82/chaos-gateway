@@ -173,7 +173,17 @@ type Engine struct {
 	// lastObsErrLog is when a failed read of the observed state was last logged, to warn at most
 	// once per observeErrLogInterval instead of once per poll.
 	lastObsErrLog time.Time
+	// conntrackWatching is set while FollowConntrack's stream is up (M6a-04): the ticker-driven
+	// poll then only refreshes conntrack at conntrackFallback, trusting the stream for the rest.
+	conntrackWatching atomic.Bool
+	conntrackMu       sync.Mutex
+	lastConntrack     time.Time
 }
+
+// conntrackFallback is how rarely the regular poll still re-reads conntrack on its own, once
+// FollowConntrack's stream is up: the stream already triggers a read on every real change, so this
+// is only the safety net for a stream that silently stalls without dropping its connection.
+const conntrackFallback = 10 * time.Second
 
 // observeErrLogInterval bounds how often a persistent failure to read the observed state is logged.
 const observeErrLogInterval = time.Minute

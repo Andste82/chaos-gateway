@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -191,6 +192,96 @@ func (e *Engine) FollowNeighbors(ctx context.Context, debounce time.Duration) er
 		return nil
 	})
 	return nil
+}
+
+// FollowConntrack makes the engine read the observed state when a connection appears, changes or
+// closes (M6a-04): after a burst of events the poller reads once, instead of waiting for its own
+// interval. It falls back to that interval alone when the engine's Exec cannot stream (apply.Local,
+// some tests); a watch that ends on its own (the executor restarted, the connection broke) is
+// reopened after a short backoff, the same way a dropped request connection is elsewhere. It runs
+// until ctx ends.
+func (e *Engine) FollowConntrack(ctx context.Context, debounce time.Duration) error {
+	if !e.started {
+		return errors.New("engine: not started")
+	}
+	w, ok := e.cfg.Exec.(apply.Watcher)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-e.ctx.Done():
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+	e.sup.Go(ctx, "engine.follow-conntrack", func(ctx context.Context) error {
+		for ctx.Err() == nil {
+			events, stop, err := w.Watch(ctx, executor.WhatConntrack, e.cfg.Namespace)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				e.cfg.Log.Warn("cannot watch conntrack; polling alone until it reconnects", "error", err)
+				select {
+				case <-e.cfg.Clock.After(10 * time.Second):
+					continue
+				case <-ctx.Done():
+					return nil
+				}
+			}
+			e.conntrackWatching.Store(true)
+			e.debounceConntrack(ctx, events, debounce)
+			stop()
+			e.conntrackWatching.Store(false)
+			if ctx.Err() != nil {
+				return nil
+			}
+			select {
+			case <-e.cfg.Clock.After(time.Second):
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		return nil
+	})
+	return nil
+}
+
+// debounceConntrack reads from a conntrack watch until it closes or ctx ends, triggering an
+// observation once per burst of events (the same debouncing internal/observer does for netlink).
+func (e *Engine) debounceConntrack(ctx context.Context, events <-chan json.RawMessage, debounce time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		}
+		t := e.cfg.Clock.NewTimer(debounce)
+	burst:
+		for {
+			select {
+			case <-t.C():
+				break burst
+			case _, ok := <-events:
+				if !ok {
+					t.Stop()
+					e.TriggerObserve()
+					return
+				}
+				t.Stop()
+				t = e.cfg.Clock.NewTimer(debounce)
+			case <-ctx.Done():
+				t.Stop()
+				return
+			}
+		}
+		e.TriggerObserve()
+	}
 }
 
 // FollowHost makes the engine follow changes of the host (the uplink's address and gateway, the

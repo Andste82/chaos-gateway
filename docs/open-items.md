@@ -4,11 +4,10 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 
 ## Result
 
-**Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green. Work packages 1-10 of the "Suggested work packages" list below are done (merged, or for package 9 committed directly as plan/doc fixes); package 11 remains. What remains is a mix of:
+**Phase 1 is not completely implemented.** Every milestone delivers its main scope, and every test the plan lists exists. CI on `main` is green. All 11 "Suggested work packages" below are done (merged, or for package 9 committed directly as plan/doc fixes). What remains is a mix of small items that were decided on 2026-10-04 but never bundled into a work package:
 
-- conntrack followed through events instead of polled (package 11, effort L);
 - test gaps where a plan test exists only weakly (M5b, CC-03);
-- small env-limited or deferred items with no further action needed beyond a decision already recorded.
+- small env-limited or deferred items with no further action needed beyond a decision already recorded (mostly one-line doc or spec edits: M0-03, M2-03, M2-08, M3-04, M4-02, M4-07, M4c-10, M6b-12, CC-05, CC-06).
 
 | Milestone | Verdict | Open items | High | Medium | Decided 2026-10-04 |
 |---|---|---|---|---|---|
@@ -21,7 +20,7 @@ Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/pla
 | M4c Dynamic routing | incomplete | 1 | 0 | 0 | 1 |
 | M5 REST API | done | 0 | 0 | 0 | 0 |
 | M5b Appliance harness | incomplete | 2 | 0 | 0 | 0 |
-| M6a DHCP, devices | incomplete | 2 | 0 | 1 | 1 |
+| M6a DHCP, devices | done | 0 | 0 | 0 | 0 |
 | M6b DNS, service namespace | incomplete | 1 | 0 | 0 | 1 |
 | Cross-cutting | – | 3 | 0 | 0 | 0 |
 
@@ -114,7 +113,7 @@ Ordered by value. Each package is one branch and one PR, and stays green in CI.
    - all `plan-error` items once their decisions are made: M1-01, M1-06, M1-10, M3-06, M4-09, M4b-03, M4b-07, M4b-08, M4c-11, M4c-16, M5-07, M5-23, M6a-07 (doc part), M6a-10, M6a-12, M6a-23, M6a-24, M6b-04 (M7 test), M6b-11;
    - doc items M0-01, M0-02, M3-07, M4-08, M4b-06, M6b-09, CC-01, CC-02.
 10. **Decided changes** (done, `phase1-decided-changes`): M3-01, M4c-02, M4c-04, M4c-05, M5-02, M5-03, M5-10, M6a-09, M6b-02; closed M4b-04, M4b-05 and M4c-12 with a doc sentence.
-11. **Conntrack events** (effort L): M6a-04, then the rates of M6a-03 on top of it.
+11. **Conntrack events** (done, `phase1-conntrack-events`): M6a-04, then the rates of M6a-03 on top of it.
 
 ## Cross-cutting
 
@@ -373,15 +372,15 @@ Verdict: incomplete. Scope done; the level-2 smoke is green with the current dep
 
 ## M6a (DHCP and device discovery)
 
-Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open are conntrack events and a verified `started_at` format.
+Verdict: done. Every plan test exists (testbed tests passed in CI); conntrack is followed through events with a polling fallback, and `started_at` is parsed and exposed.
 
 | Plan item | Status | Evidence |
 |---|---|---|
 | Kea container, pinned version | done | `deploy/Dockerfile`, `.devcontainer/Dockerfile` (`ARG KEA_VERSION`) |
 | One subnet per network, pools, reservations via `config-set`, DHCP on/off | done | `internal/compiler/dhcp.go`, `internal/kea`; `TestTheClientDrivesARealKea`; testbed `TestDhcpOffOnOneNetworkLeavesItSilent` |
 | Lease events via `run_script` | done | `cmd/chaosgw/keahook.go`, `api/devices.go:312`; `TestACommittedHookCarriesEveryLease`; a Unix datagram socket to the API, HTTP only as a fallback, not a fork per lease (M6a-09) |
-| Flow observer on conntrack events | partial | polled every second (M6a-04) |
-| Flows API | done, gap | `started_at` needs a format verified on a real kernel (M6a-03) |
+| Flow observer on conntrack events | done | `Engine.FollowConntrack` watches `conntrack -E` through the executor's `Watch`/`Event` frames, debounced into `TriggerObserve`; the 1 s poll is a fallback after 10 s without a watch (M6a-04) |
+| Flows API | done | `started_at` parsed from `conntrack -o ktimestamp`'s `start=` field (`nf_conntrack_timestamp`), exposed as `Flow.StartedAt`/`started_at` (M6a-03); the real kernel field format still needs confirming once this runs in CI (see "Deviations" in the merged PR) |
 | Discovery from leases, neighbors, conntrack, WG clients | done | discovery by address also covers a LAN network's own downstream routes |
 | Identity events, incremental updates | done | `owner.go`, `applyloop.go`; `device_identity_changed` carries its generation |
 | Manual device merge | done (as a revision per the spec) | `domain/observed.go:278`; moving overlays to the configured device waits for M8a (plan.md updated) |
@@ -390,28 +389,7 @@ Verdict: incomplete. Every plan test exists (testbed tests passed in CI); open a
 | T: lease, MAC/IP, reservation, DHCP off, discovered vs configured, identity within 1 s, flows | done | `internal/engine/integration_dhcp_test.go` |
 | T: burst debounced into one identity update | done | `TestABurstOfNeighborChangesIsOneIdentityUpdate` |
 
-### M6a-03 `started_at` needs a verified conntrack timestamp format
-- Status: open (narrowed 2026-10-04: `network` now also matches WireGuard interfaces and routed client/link networks, `service` is set for traffic redirected to the DNS proxy, and `DeviceObserved.upload_bps`/`download_bps`/`flows_active` are filled from conntrack's per-address byte counters — done, see `phase1-devices-flows`)
-- Severity: low
-- Reason: test-gap — `started_at` needs `nf_conntrack_timestamp` enabled and parsing `conntrack -L -o ktimestamp`, whose exact field name and format cannot be verified without a real kernel; left out rather than guessed at.
-- Evidence: `internal/engine/observe.go` (`Flow.Service`, `Flow.Network` done; no `StartedAt`); `internal/linux/conntrack.go`.
-- Task: in a CI testbed run (or a privileged container), enable `nf_conntrack_timestamp`, capture `conntrack -L -o ktimestamp` output and confirm the field, parse it into `Flow.StartedAt`, add `started_at` to `flowView`.
-- Acceptance: CI testbed; local unit test.
-- Needs maintainer: no
-- Effort: S
-
-### M6a-04 Conntrack is polled, not followed through events
-- Status: open
-- Severity: medium
-- Reason: needs-decision — the M6a scope and §3.1/§3.4 name conntrack events; the code runs `conntrack -L` every second and on each `GET /flows`; the executor protocol has no streaming read.
-- Evidence: `engine/observe.go:123,259`; `executor/plan.go:295`.
-- Task: 1. Executor: add a streaming read. The protocol is request/response today, so add a new request kind on its own connection: `{"type":"watch","what":"conntrack","namespace":...}` after the hello. The server runs `conntrack -E -o id` (fixed path, argument array, in the target namespace) as a child of that connection and sends one JSON line per event (`new`/`update`/`destroy` with the parsed tuple, `internal/linux/conntrack.go`). It kills the child when the connection closes or the executor stops. Watches are reads: they do not take the write queue, need the same peer-credential check, and are limited to a few per client. 2. Client: `executor.Client.Watch(ctx, what, ns) (<-chan json.RawMessage, error)`, plus `executor.Redialing` support with reconnect. 3. Engine: `FollowConntrack(ctx, debounce)`, like `FollowNeighbors`, triggers `TriggerObserve` (debounced 100 ms). The 1 s `conntrack -L` poll becomes a fallback every 10 s. 4. kernelsim: a scripted event source for unit tests. 5. Tests: an executor unit test of the watch lifecycle with a fake runner (the child is killed on close; goleak), an engine unit test that an event triggers an observation, and a testbed test that a new flow from client A appears in `GET /flows` within 300 ms without waiting for the poll. 6. Wire it in `cmd/chaosgw/api.go`. Document it in docs/development.md (executor operations, M6a).
-- Acceptance: doc review (a) or a CI testbed test that a new flow triggers an observation within 200 ms (b).
-- Needs maintainer: decided 2026-10-04: (b) implement conntrack events now (see the revised task).
-- Effort: S (a) / L (b)
-
-
-Removed from the old list: "Only the first MAC is reserved" — the spec defines `fixed_ip` as "DHCP reservation for the device's first MAC" (openapi.yaml:2752). "Executor priority only unit-tested" — plan §3.11 prescribes exactly that (fake-executor test). "Online ignores leases" → M6a-24.
+Removed from the old list: M6a-03 (`started_at` needs a verified conntrack timestamp format) and M6a-04 (conntrack polled, not followed through events) — both closed by `phase1-conntrack-events` (work package 11), which added `Engine.FollowConntrack` watching `conntrack -E` through a new executor `Watch`/`Event` frame pair, debounced into `TriggerObserve` with the 1 s poll kept as a 10 s fallback, and parses `Flow.StartedAt`/API `started_at` from `conntrack -o ktimestamp`'s `start=` field. "Only the first MAC is reserved" — the spec defines `fixed_ip` as "DHCP reservation for the device's first MAC" (openapi.yaml:2752). "Executor priority only unit-tested" — plan §3.11 prescribes exactly that (fake-executor test). "Online ignores leases" → M6a-24.
 
 ## M6b (DNS proxy and service namespace)
 

@@ -46,10 +46,12 @@ func (e *Engine) PollObserved(ctx context.Context, interval time.Duration) error
 		tick := e.cfg.Clock.NewTicker(interval)
 		defer tick.Stop()
 		for {
+			fromTick := false
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-tick.C():
+				fromTick = true
 			case <-e.observeNow:
 				// a burst of triggers is one reading: wait a moment for the rest of the burst
 				select {
@@ -65,7 +67,7 @@ func (e *Engine) PollObserved(ctx context.Context, interval time.Duration) error
 					}
 				}
 			}
-			if err := e.readObserved(ctx); err != nil && ctx.Err() == nil {
+			if err := e.readObserved(ctx, fromTick); err != nil && ctx.Err() == nil {
 				e.cfg.Log.Warn("cannot read the observed state", "error", err)
 			}
 		}
@@ -86,11 +88,13 @@ func (e *Engine) TriggerObserve() {
 
 // ObserveNow reads and hands the observation to the state owner, returning when it has taken it
 // (tests; the poller does the same on its own).
-func (e *Engine) ObserveNow(ctx context.Context) error { return e.readObservedWait(ctx, true) }
+func (e *Engine) ObserveNow(ctx context.Context) error { return e.readObservedWait(ctx, true, false) }
 
-func (e *Engine) readObserved(ctx context.Context) error { return e.readObservedWait(ctx, false) }
+func (e *Engine) readObserved(ctx context.Context, fromTick bool) error {
+	return e.readObservedWait(ctx, false, fromTick)
+}
 
-func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
+func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) error {
 	ctx, cancel := context.WithTimeout(ctx, observeTimeout)
 	defer cancel()
 	snap := e.Snapshot()
@@ -119,8 +123,12 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 		}
 		obs.Neighbors = append(obs.Neighbors, domain.Neighbor{IP: ip, MAC: n.LLAddr, Interface: n.Dev, Network: nid, Stale: n.Stale()})
 	}
-	// the connections: addresses that are in use, and hosts behind tunnels
-	if cout, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadConntrack}); err == nil && len(cout.Data) > 0 {
+	// the connections: addresses that are in use, and hosts behind tunnels. Once a watch streams
+	// (M6a-04), the ticker's own re-read is a fallback only, at most every conntrackFallback: the
+	// watch already triggers a fresh read whenever something actually changed.
+	if fromTick && e.conntrackWatching.Load() && e.conntrackFresh() {
+		obs.Active = e.lastActive()
+	} else if cout, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadConntrack}); err == nil && len(cout.Data) > 0 {
 		var flows []linux.Conntrack
 		if json.Unmarshal(cout.Data[0], &flows) == nil {
 			behind := routedPrefixes(snap)
@@ -146,6 +154,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait bool) error {
 			sort.Slice(obs.UnknownSources, func(i, j int) bool { return obs.UnknownSources[i].Less(obs.UnknownSources[j]) })
 		}
 		e.setActive(obs.Active)
+		e.markConntrackRead()
 	} else if err != nil {
 		// a failed read is not "no connections": the addresses that were in use stay in use
 		e.logObserveError(err)
@@ -189,6 +198,21 @@ func (e *Engine) lastActive() map[netip.Addr]bool {
 		out[a] = true
 	}
 	return out
+}
+
+// conntrackFresh reports whether conntrack was read within conntrackFallback (M6a-04): while a
+// watch streams, the ticker-driven poll trusts that to notice a real change and skips a read it
+// would otherwise redo every second for nothing.
+func (e *Engine) conntrackFresh() bool {
+	e.conntrackMu.Lock()
+	defer e.conntrackMu.Unlock()
+	return !e.lastConntrack.IsZero() && e.cfg.Clock.Now().Sub(e.lastConntrack) < conntrackFallback
+}
+
+func (e *Engine) markConntrackRead() {
+	e.conntrackMu.Lock()
+	e.lastConntrack = e.cfg.Clock.Now()
+	e.conntrackMu.Unlock()
 }
 
 // bridgeNetworks maps the bridge of each local test network to its network.
@@ -296,6 +320,9 @@ type Flow struct {
 	Download     Traffic
 	// Service is set when the flow is redirected into the service namespace (plan §3.3).
 	Service string
+	// StartedAt is when the connection was first tracked (M6a-03); zero when `nf_conntrack_timestamp`
+	// has not reported it yet (just after the gateway starts, before the first full apply).
+	StartedAt time.Time
 }
 
 // Traffic is the volume of one direction of a flow.
@@ -349,6 +376,7 @@ func (e *Engine) Flows(ctx context.Context) ([]Flow, error) {
 			continue // not a flow of a test network
 		}
 		f.ID = flowID(c)
+		f.StartedAt = c.StartedAt
 		flows = append(flows, f)
 	}
 	sort.Slice(flows, func(i, j int) bool { return flows[i].ID < flows[j].ID })

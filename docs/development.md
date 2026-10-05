@@ -637,6 +637,17 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   machine with unit tests) keeps the registry of discovered devices (the UUID is a hash of the MAC, so it
   is stable across restarts), resolves identity with `domain.ResolveIdentity`, sets online state and
   emits `device_discovered`, `device_online`, `device_offline` and `device_identity_changed`.
+- **Conntrack events (M6a-04).** `Engine.FollowConntrack` asks the executor to watch conntrack
+  (`conntrack -E`, the executor's `Watch`/`Event` frames over the same Unix socket as ordinary
+  requests, one dedicated connection per watch) and debounces the events into `TriggerObserve`, the
+  same way `FollowNeighbors` debounces netlink neighbor events. While the watch is up, a ticked
+  (non-triggered) poll skips its own conntrack read and reuses the last flows for up to 10 s
+  (`conntrackFallback`); past that, or when the watch is down (unsupported executor, or the watch
+  dropped and is being redialed), the ticked poll reads conntrack itself as before, so flows never
+  go stale for longer than the fallback window. `GET /flows` and `Engine.Flows()` always read conntrack
+  live on demand, independent of the watch or the poller. Each flow also carries `StartedAt`
+  (M6a-03, `nf_conntrack_timestamp`, read with `conntrack -o ktimestamp`'s `start=` field) and the API
+  exposes it as `started_at` when the kernel reports one.
 - **Identity updates.** A change of the addresses of known devices makes a desired state flagged
   `IdentityOnly`; the apply loop then sends `NftAddElements` and `NftDelElements` for the changed sets
   instead of rebuilding the ruleset, and verifies. A device that has no set yet (a new one) needs a full

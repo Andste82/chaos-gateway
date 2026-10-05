@@ -767,6 +767,95 @@ func TestIdentityUpdatesGoBeforeQueuedPlansAndNeverRunConcurrently(t *testing.T)
 	}
 }
 
+// M6a-04 test: a watch never enters the request queue (it runs alongside an ordinary request
+// without waiting for it), and stopping it kills the streamed command instead of leaking it.
+func TestWatchStreamsEventsAndStoppingItKillsTheCommand(t *testing.T) {
+	fs := newFakeStreamer()
+	e := newExec(t, fs)
+
+	events, stop, err := e.Watch(context.Background(), WhatConntrack, "gw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmds := fs.commands(); len(cmds) != 1 || cmds[0].Tool != ToolConntrack || cmds[0].NS != "gw" {
+		t.Fatalf("%+v", cmds)
+	}
+
+	// an ordinary request is not blocked by the open watch
+	if _, err := e.Do(context.Background(), &Sysctl{Entries: []SysctlEntry{{Name: "ip_forward", Value: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	fs.scripted <- `[NEW] tcp      6 120 SYN_SENT src=10.10.0.10 dst=203.0.113.10 sport=1 dport=80 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=1 id=1`
+	select {
+	case ev := <-events:
+		if ev.Type != "new" || ev.Original.Src != "10.10.0.10" {
+			t.Errorf("%+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event")
+	}
+
+	// a line the parser rejects is skipped, not delivered as a zero-value event
+	fs.scripted <- "garbage"
+	fs.scripted <- `[DESTROY] tcp      6 src=10.10.0.10 dst=203.0.113.10 sport=1 dport=80 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=1 id=1`
+	select {
+	case ev := <-events:
+		if ev.Type != "destroy" {
+			t.Errorf("%+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event")
+	}
+
+	stop()
+	if !fs.stopped.Load() {
+		t.Error("stop did not reach the streamed command")
+	}
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Error("an event after stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the event channel did not close")
+	}
+}
+
+// M6a-04 test: the executor itself stopping ends every open watch too (goleak in TestMain catches
+// a leaked reader if it does not).
+func TestClosingTheExecutorEndsAnOpenWatch(t *testing.T) {
+	fs := newFakeStreamer()
+	e := newExec(t, fs)
+	events, _, err := e.Watch(context.Background(), WhatConntrack, "gw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Error("an event after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the event channel did not close")
+	}
+}
+
+func TestWatchRejectsAnUnknownKind(t *testing.T) {
+	e := newExec(t, newFakeStreamer())
+	if _, _, err := e.Watch(context.Background(), "nonsense", "gw"); err == nil {
+		t.Error("accepted")
+	}
+}
+
+func TestWatchNeedsAStreamingRunner(t *testing.T) {
+	e := newExec(t, &fakeRunner{})
+	if _, _, err := e.Watch(context.Background(), WhatConntrack, "gw"); err == nil {
+		t.Error("accepted without a Streamer")
+	}
+}
+
 func TestADeleteOfElementsIsValidatedLikeAnAdd(t *testing.T) {
 	for name, in := range map[string]string{
 		"a bad set name":  `{"type":"nft_del_elements","set":"x y","elements":["10.0.0.1"]}`,

@@ -38,11 +38,30 @@ type Hello struct {
 
 // Frame is one line on the wire. A line has exactly one of the members set.
 type Frame struct {
-	Hello    *Hello       `json:"hello,omitempty"`
-	Request  *Request     `json:"request,omitempty"`
-	Response *Response    `json:"response,omitempty"`
-	Error    *RemoteError `json:"error,omitempty"` // connection-level error; the sender closes
+	Hello    *Hello        `json:"hello,omitempty"`
+	Request  *Request      `json:"request,omitempty"`
+	Response *Response     `json:"response,omitempty"`
+	Watch    *WatchRequest `json:"watch,omitempty"`
+	Event    *WatchEvent   `json:"event,omitempty"`
+	Error    *RemoteError  `json:"error,omitempty"` // connection-level error; the sender closes
 }
+
+// WatchRequest asks the executor to stream events on this connection instead of answering
+// requests (M6a-04): the one message a watch connection ever sends after its hello. The executor
+// answers with one Frame.Event per line until the connection closes or the executor stops.
+type WatchRequest struct {
+	What string `json:"what"` // "conntrack"
+	NS   string `json:"ns,omitempty"`
+}
+
+// WatchEvent is one event of a watch: the raw JSON of the parsed record (for "conntrack",
+// internal/linux.ConntrackEvent).
+type WatchEvent struct {
+	Data json.RawMessage `json:"data"`
+}
+
+// WhatConntrack is the one watchable kind WatchRequest.What accepts so far.
+const WhatConntrack = "conntrack"
 
 // Request asks the executor to run operations as one batch.
 type Request struct {

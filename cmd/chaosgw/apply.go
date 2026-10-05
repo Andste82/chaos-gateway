@@ -51,6 +51,10 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "chaosgw apply: --dry-run and --state-dir exclude each other")
 		return 2
 	}
+	if !*dryRun && *stateDir == "" {
+		// M4-07: without a store there is nothing to roll back to on a later failure.
+		fmt.Fprintln(stderr, "chaosgw apply: warning: no --state-dir given, this apply cannot be rolled back")
+	}
 	raw, err := os.ReadFile(*file)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)

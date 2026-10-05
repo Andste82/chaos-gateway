@@ -146,6 +146,8 @@ func TestApplyFileFailures(t *testing.T) {
 		"no executor":       {[]string{"apply", "--file", configFile(t), "--socket", sock + ".none"}, 1, "cannot reach the executor"},
 		"dry run and state": {[]string{"apply", "--file", "x", "--dry-run", "--state-dir", "y"}, 2, "exclude each other"},
 		"extra argument":    {[]string{"apply", "--file", "x", "extra"}, 2, "usage"},
+		// M4-07: no --state-dir means a later failure cannot be rolled back; this still succeeds.
+		"no state dir": {[]string{"apply", "--file", configFile(t), "--socket", sock, "--executor-uid", uid()}, 0, "cannot be rolled back"},
 	} {
 		code, _, errOut := runCmd(c.args...)
 		if code != c.code || !strings.Contains(errOut, c.msg) {

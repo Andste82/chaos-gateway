@@ -58,7 +58,7 @@ type GuestOptions struct {
 	WorkDir string
 	// Emulated says the VM runs without hardware virtualization (testbed.EmulatedEnv).
 	Emulated bool
-	// Run is an optional -test.run expression; Verbose adds -test.v output.
+	// Run is an optional -test.run expression.
 	Run string
 	// TestTimeout is the per-package -test.timeout.
 	TestTimeout string

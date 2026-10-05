@@ -1,6 +1,7 @@
 package linkexport
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,7 +100,7 @@ func TestRemoteBirdErrorsWithoutRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoteBird(provisioned, sec, linkID(t, provisioned), "wg-gw"); err != ErrNoRouting {
+	if _, err := RemoteBird(provisioned, sec, linkID(t, provisioned), "wg-gw"); !errors.Is(err, ErrNoRouting) {
 		t.Errorf("got %v, want ErrNoRouting", err)
 	}
 }

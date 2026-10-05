@@ -2301,7 +2301,7 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
-          default: 443
+          description: Default - the port the API listens on (8443 in the shipped compose files).
 
     NetworkType:
       type: string
@@ -2562,7 +2562,7 @@ components:
 
     MatrixEndpoint:
       type: object
-      description: 'Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources` and the management interface subnet; the control plane itself is governed by gateway protection, not by the matrix).'
+      description: 'Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix).'
       minProperties: 1
       maxProperties: 1
       properties:

@@ -24,7 +24,9 @@ import (
 // Outcome is the result of a request.
 type Outcome struct {
 	// Generation counts the requests that changed kernel state. It bumps once per request, also
-	// when the request failed half-way: the state may have changed then.
+	// when the request failed half-way: the state may have changed then. It counts mutating
+	// requests since this executor started; it is not persistent (decided 2026-10-04, M3-04) — the
+	// API's own generation, which is persisted, lives in the engine (see M5-01).
 	Generation uint64 `json:"generation"`
 	// Completed is the number of operations of the request that ran to the end.
 	Completed int `json:"completed"`

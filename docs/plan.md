@@ -227,7 +227,7 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
   - **Custom snippets:** per protocol, raw BIRD configuration can be added for cases the model does not cover; it is validated by `bird -p` and marked as "unmanaged" in the UI.
   - **Other routing daemons:** the routing layer is an adapter (generate configuration, reload, read status). BIRD is the only adapter in the plan; FRR is possible later. As a fallback, **external mode** imports routes that another daemon writes into a designated kernel table, with the same import filters.
 - Spike S15: BGP over a WireGuard link learned the site's prefixes in 4.5 s; default route, management prefix and gateway-own prefixes were filtered, and nothing reached the main table. OSPF (point to point, multicast hellos) works over WireGuard too (7.8 s). A tunnel blackout withdrew the routes after 6 s (hold time 9 s); after restore they were back in 2.5 s.
-- **Observability:** neighbor/session state, received and announced prefixes, route changes as events and in the activity log; the effective route for a destination is shown in the preview.
+- **Observability:** neighbor/session state, received and announced prefixes, route changes as events and in the activity log; the effective route for a destination is shown by `explain` (M8a), not the preview.
 - **Routing faults:** tunnel faults, access rules on routing traffic (e.g. drop TCP 179) and link disable make convergence testable: "site B loses its link for 20 s — do devices reconnect after re-convergence?".
 
 **V1 test networks are IPv4-only.** The gateway sends no router advertisements, offers no DHCPv6 and drops all forwarded IPv6 traffic. Devices only have link-local IPv6 addresses, so dual-stack devices fall back to IPv4. This is intended: faults and rules must never be bypassable, and a device reaching its server over an unimpaired IPv6 path would invalidate the test. On all interfaces it owns, Chaos Gateway disables router-advertisement acceptance, so its own services cannot leave over IPv6 either; the DNS proxy removes AAAA records from answers.
@@ -237,7 +237,7 @@ Why two kinds: WireGuard's cryptokey routing binds every prefix to exactly one p
 ## 2.3 Devices and Discovery
 
 - Discovery sources: DHCP leases, the neighbor table (ARP/ND), conntrack (a flow observer on conntrack events, also used for the device view, hostname-set refresh and checks); for WireGuard networks the configured clients (identity: tunnel address and public key; online = recent handshake) and conntrack for hosts in client networks and behind links (identity: IP address).
-- Configured devices have a name, MAC and optional fixed IP (DHCP reservation). Discovered devices appear automatically and can be adopted with one click.
+- Configured devices have a name, MAC and optional fixed IP (DHCP reservation). Discovered devices appear automatically and can be adopted with one click. When a device's configured address and an observed DHCP lease disagree, the configured address wins (M2-03).
 - The device view shows: online state, IP, lease, current flows (destination, protocol, bytes, state), traffic rates, active rules/faults, captures.
 - Rules and faults address the **device**, not an address. The compiler translates the device's current identifiers into match sets (see §3.3). The MAC address is the most stable identifier but is only visible for devices on the same L2 segment as the gateway. Devices behind another router, WireGuard peers and probes are identified by IP address or peer instead.
 - **Identity changes during a test:** DHCP lease events, neighbor-table changes and WireGuard client changes update the observed state. The executor applies them as incremental map-element operations through the same serialized queue as full applies (no ruleset rebuild; target ≤ 1 s) and bumps the generation; a full apply always uses the latest observed state, so an apply can never restore an outdated address. Faults stay attached to the device when it gets a new IP, e.g. after the "force new IP" DHCP action. The old address stays mapped to the device while conntrack still has connections from it, unless it is leased to another device — then the new holder wins. DNS-derived hostname-set entries keyed on the old address are re-keyed.
@@ -888,19 +888,23 @@ Chaos Gateway owns the interfaces **assigned to test networks**. The operating s
 
 ## 3.6 Persistence
 
-Docker volumes (bind mounts on the host, backed up like any directory):
+Docker named volumes in V1 (decided 2026-10-04, M2-08: switched to bind mounts at these same paths
+in M28):
 
 ```
-/etc/chaos-gateway/
-    config.json            pointer to the active revision
-    revisions/000042.json  immutable revisions (incl. profiles and scenarios)
-/var/lib/chaos-gateway/
-    secrets/               0600
-    runs/<id>/             events.jsonl, report.json, report.xml, captures
-    captures/
-    state/                 last-known-good marker, record of runs aborted by a restart
-/var/log/chaos-gateway/    audit.jsonl (service logs go to the container log)
+/var/lib/chaosgw/state/
+    config.json                    pointer to the active revision
+    revisions/000042.json          immutable revision (incl. profiles and scenarios)
+    revisions/000042.status.json   its status (active/candidate/last-known-good, ...)
+/var/lib/chaosgw/secrets/          0600 (WireGuard keys, PSKs)
+/var/lib/chaosgw/api/              audit.jsonl, idempotency keys
+/var/lib/chaosgw/service/          service-namespace token and holder PID file
 ```
+
+Run/event history, captures and a dedicated audit-log volume are not in V1's actual layout; the audit
+log lives in `audit.jsonl` under the API's own data directory above, and the service log goes to the
+container log. (`runs/`, `captures/` and a separate `/var/log/chaos-gateway/` move to the milestones
+that produce them.)
 
 - Writes are atomic: write a temp file, fsync, rename.
 - Schema version in every file, with migrations on upgrade.
@@ -1182,8 +1186,6 @@ Link events are simulated by setting one end of a veth pair down; the other end 
 | **2** | **appliance VMs** (QEMU/KVM) from Ubuntu 24.04 and 26.04 cloud images, gateway VM with three virtio NICs (uplink, test LAN, management) connected via tap and bridges to client/server namespaces or VMs | host setup, Docker and the compose deployment, preflight, interface assignment, coexistence with netplan, setup wizard, reboot, last-known-good, safe mode, image updates and migrations, `DOCKER-USER` handling, two- and three-port topologies | nightly on hosted GitHub runners with `/dev/kvm` (D33), from M5b on |
 | **3** | **hardware lab**: Raspberry Pi 4/5, x86 mini PC, real NICs, managed switch, real ESP32 devices (later a WiFi AP) | performance targets (§3.10), timing precision, NIC drivers and offloads, real firmware behavior, long-running tests | when hardware is available (not in V1 infrastructure) |
 
-A candidate for levels 1–2 is Espressif's QEMU fork, which can run ESP32 firmware with an emulated Ethernet interface. That would allow testing real ESP-IDF firmware against the gateway without hardware; it has to be evaluated first.
-
 ### Feature → minimum level
 
 | Feature | Level |
@@ -1354,7 +1356,9 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M6a, M6b, S2, S10, S11, S16.
 
 **M8a — Overlays** (M)
-- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint; coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start); a revision that deletes a referenced object applies with `?force=true`, listing `references[]` in `validation_failed` otherwise, and emits `overlay_orphaned` for the removed overlays (§2.1.1); a merge revision moves overlays of the covered discovered device to the configured one.
+- Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint, including the effective route for a destination (a
+table-100 lookup via an executor read, `ip route get <dst> from <src> iif <dev>`; decided 2026-10-04,
+M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start); a revision that deletes a referenced object applies with `?force=true`, listing `references[]` in `validation_failed` otherwise, and emits `overlay_orphaned` for the removed overlays (§2.1.1); a merge revision moves overlays of the covered discovered device to the configured one.
 - Tests: golden tests for precedence (E1–E8, E12; E9 and E10 follow in M10, E11 in M21) and tc output; TTL and lease expiry remove overlays and emit events (fake clock); writing an overlay with an existing key replaces it and keeps the id; `reset` only touches the caller's overlays; a restart drops overlays; `explain` returns the expected winner per family; coalescing (§3.11): 200 concurrent overlay writes need far fewer applies than writes, every writer gets a generation that contains its change, and the final kernel state equals the compile of the final snapshot; an injected executor failure reverts the batch and every waiting writer gets `apply_failed`; an invalid write (e.g. `capacity_exceeded`) is rejected without affecting concurrent valid writes; a counter read completes while a long plan runs; deleting a referenced object without `?force` is rejected listing `references[]`, with `?force=true` it succeeds and emits `overlay_orphaned`; merging a discovered device moves its overlays to the configured device.
 - Depends on: M7.
 
@@ -1480,7 +1484,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M5b, M8b.
 
 **M28 — Container deployment** (M)
-- Scope: multi-arch image (amd64/arm64), `compose.yaml` with the containers and privileges of §3.8, health checks and start order, final host-setup script (modules, `ip_forward`, netplan hints), preflight in the executor, setup token in the container log, update script that waits for `system/busy`, refusal of newer schemas, teardown.
+- Scope: multi-arch image (amd64/arm64), `compose.yaml` with the containers and privileges of §3.8, health checks and start order, final host-setup script (modules, `ip_forward`, netplan hints), preflight in the executor, setup token in the container log, update script that waits for `system/busy`, refusal of newer schemas, teardown. Switches the named volumes to bind mounts at the §3.6 paths (decided 2026-10-04, M2-08).
 - Tests: level-2 smoke tests on Ubuntu 24.04 and 26.04 hosts (two- and three-port topologies): host setup, `compose up`, setup wizard, reboot, image update during an idle and during an active run; the arm64 image starts and passes the functional smoke test in emulated level 1b; the non-exec containers run without privileges (checked from the container runtime); the DNS proxy coexists with the host's own systemd-resolved (M6b-06; the testbed only stands one in for it); the holder's PID file reused by another real container process is refused by the executor, not attached (M6b-10; the testbed cannot reuse a PID on demand); the Kea container starts from compose, the API configures it, a client gets a lease, and the hook posts with the real token (M6a-10; the appliance smoke only deploys the executor otherwise).
 - Depends on: M5b, M14, M27, S7.
 

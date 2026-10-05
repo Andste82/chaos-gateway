@@ -615,6 +615,12 @@ Kea (plan §2.7) runs in its own container (`deploy/compose.kea.yaml`: host netw
 `/var/lib/kea` and starts it from a configuration without scopes). The API configures it; the engine
 learns what the gateway sees and works out which device has which address (plan §2.3).
 
+**Configured address vs. a DHCP lease (M2-03).** `domain.ResolveIdentity` ranks a device's configured
+address above an observed lease for the same device: `claimExplicit` always wins over `claimLease`
+when both claim an address. This is intentionally stronger than plan §2.3's wording, which only
+describes discovery; decided 2026-10-04 to keep the current (stronger) behaviour and document it here,
+see `TestTwoDevicesClaimingOneAddressTheStrongerClaimWins`.
+
 Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Dockerfile` and
 `.devcontainer/Dockerfile`), the current Ubuntu 26.04 package version; the image build checks `kea-dhcp4
 -V` against it and fails on a mismatch. Bump the two `ARG`s together when the package updates.

@@ -262,8 +262,17 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	if strings.TrimSpace(body) != "client="+appliance.GatewayUp {
 		t.Errorf("the server saw %q, want the gateway's uplink address %s (NAT)", strings.TrimSpace(body), appliance.GatewayUp)
 	}
-	// the management access survived the apply (anti-lockout): SSH still works
-	must("true")
+	// the management access survived the apply (anti-lockout): a brand new SSH connection from the
+	// management network still works (not just the one WaitSSH opened before the apply, which
+	// conntrack would keep open regardless - M5b-02)
+	if err := vm.DialFresh(ctx); err != nil {
+		t.Fatalf("a fresh SSH connection after the apply: %v", err)
+	}
+	// the client network is not the management network: it must not reach SSH on the gateway's LAN
+	// address at all
+	if _, err := client("nc", "-z", "-w", "3", appliance.GatewayLAN, "22"); err == nil {
+		t.Error("the client namespace could open TCP 22 on the gateway's LAN address")
+	}
 }
 
 func hArgv(h appliance.Host) []string {

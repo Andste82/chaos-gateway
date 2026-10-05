@@ -4,14 +4,28 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+// cloudImageKeyring is Ubuntu's "UEC Image Automatic Signing Key <cdimage@ubuntu.com>"
+// (fingerprint D2EB 4462 6FDD C30B 513D 5BB7 1A5D 6C4C 7DB8 7C81), fetched from
+// keyserver.ubuntu.com and verified against the fingerprint published at
+// https://ubuntu.com/docs/public-images/public-images-how-to/verify-image-checksum/ (M5b-03).
+//
+//go:embed testdata/ubuntu-cloudimage-keyring.gpg
+var cloudImageKeyring []byte
+
+// verifyKeyring is the keyring Fetch trusts; a package variable so tests can substitute a
+// throwaway key instead of the real Ubuntu one.
+var verifyKeyring = cloudImageKeyring
 
 // Release is an Ubuntu release the appliance is tested on.
 type Release struct {
@@ -60,6 +74,13 @@ func Fetch(ctx context.Context, client *http.Client, cacheDir string, r Release)
 	}
 	sums, err := get(ctx, client, r.BaseURL+"SHA256SUMS")
 	if err != nil {
+		return "", err
+	}
+	sig, err := get(ctx, client, r.BaseURL+"SHA256SUMS.gpg")
+	if err != nil {
+		return "", err
+	}
+	if err := verifySums(sums, sig, verifyKeyring); err != nil {
 		return "", err
 	}
 	want, ok := ParseSums(string(sums))[r.File]
@@ -118,6 +139,35 @@ func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 		return nil, fmt.Errorf("appliance: %s: %s", url, res.Status)
 	}
 	return io.ReadAll(io.LimitReader(res.Body, 64<<20))
+}
+
+// verifySums checks sig as a detached PGP signature of sums, trusting only the given keyring
+// (M5b-03: SHA256SUMS was trusted over HTTPS only, with nothing to stop a compromised mirror or
+// CDN from serving a different image and a matching, self-consistent checksum file).
+func verifySums(sums, sig, keyring []byte) error {
+	bin, err := exec.LookPath("gpgv")
+	if err != nil {
+		return fmt.Errorf("appliance: gpgv is not installed, cannot verify SHA256SUMS: %w", err)
+	}
+	dir, err := os.MkdirTemp("", "chaosgw-gpgv-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	kr, sf, gf := filepath.Join(dir, "keyring.gpg"), filepath.Join(dir, "SHA256SUMS"), filepath.Join(dir, "SHA256SUMS.gpg")
+	for _, f := range []struct {
+		path string
+		data []byte
+	}{{kr, keyring}, {sf, sums}, {gf, sig}} {
+		if err := os.WriteFile(f.path, f.data, 0o600); err != nil {
+			return err
+		}
+	}
+	out, err := exec.Command(bin, "--keyring", kr, gf, sf).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("appliance: SHA256SUMS signature check failed: %w\n%s", err, out)
+	}
+	return nil
 }
 
 func fileSum(path string) (string, error) {

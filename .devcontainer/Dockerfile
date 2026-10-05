@@ -37,7 +37,7 @@ ARG BIRD_VERSION=2.18-1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 nftables iptables conntrack ethtool kmod procps psmisc \
     iputils-ping iputils-tracepath arping bind9-dnsutils netcat-openbsd socat \
-    iperf3 mosquitto-clients openssl tcpdump tshark \
+    iperf3 mosquitto-clients openssl tcpdump tshark gnupg \
     busybox-static udhcpc \
     wireguard-tools "bird2=${BIRD_VERSION}" \
     "kea-dhcp4-server=${KEA_VERSION}" kea-admin \

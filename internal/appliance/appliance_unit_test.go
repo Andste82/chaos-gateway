@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -15,6 +17,62 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
+
+// throwawayKey is a freshly generated PGP key for M5b-03's tests: a self-contained GNUPGHOME, so
+// nothing touches the real one, and never persisted to disk outside t.TempDir().
+type throwawayKey struct {
+	home, email string
+}
+
+func newThrowawayKey(t *testing.T) *throwawayKey {
+	t.Helper()
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Skip("gpg is not installed")
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "gpg-agent.conf"), []byte("allow-loopback-pinentry\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := &throwawayKey{home: home, email: "chaosgw-test@example.com"}
+	k.run(t, "--quick-generate-key", k.email, "default", "default", "never")
+	return k
+}
+
+func (k *throwawayKey) run(t *testing.T, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("gpg", append([]string{"--batch", "--pinentry-mode", "loopback", "--passphrase", ""}, args...)...)
+	cmd.Env = append(os.Environ(), "GNUPGHOME="+k.home)
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("gpg %v: %v\n%s", args, err, ee.Stderr)
+		}
+		t.Fatalf("gpg %v: %v", args, err)
+	}
+	return out
+}
+
+// publicKeyring exports this key's public part, in the binary format gpgv's --keyring expects.
+func (k *throwawayKey) publicKeyring(t *testing.T) []byte {
+	t.Helper()
+	return k.run(t, "--export", k.email)
+}
+
+// sign produces a detached, binary PGP signature of data.
+func (k *throwawayKey) sign(t *testing.T, data []byte) []byte {
+	t.Helper()
+	in := filepath.Join(t.TempDir(), "data")
+	if err := os.WriteFile(in, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k.run(t, "--detach-sign", in)
+	sig, err := os.ReadFile(in + ".sig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
 
 func TestParseSums(t *testing.T) {
 	h := strings.Repeat("a", 64)
@@ -33,13 +91,26 @@ func TestTheReleasesAreTheOnesOfThePlan(t *testing.T) {
 	}
 }
 
-func fakeMirror(t *testing.T, content string) (*httptest.Server, *atomic.Int32, Release) {
+func sumsOf(sum [32]byte) []byte { return []byte(hex.EncodeToString(sum[:]) + " *img.img\n") }
+
+// fakeMirror serves a signed SHA256SUMS (M5b-03): a throwaway key signs it, and verifyKeyring is
+// pointed at that key's public part for the test's duration, so Fetch's real signature check runs
+// against something other than the real Ubuntu key.
+func fakeMirror(t *testing.T, content string) (*httptest.Server, *atomic.Int32, Release, *throwawayKey) {
 	t.Helper()
+	key := newThrowawayKey(t)
+	saved := verifyKeyring
+	verifyKeyring = key.publicKeyring(t)
+	t.Cleanup(func() { verifyKeyring = saved })
+
 	sum := sha256.Sum256([]byte(content))
 	var downloads atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(hex.EncodeToString(sum[:]) + " *img.img\n"))
+		_, _ = w.Write(sumsOf(sum))
+	})
+	mux.HandleFunc("/SHA256SUMS.gpg", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(key.sign(t, sumsOf(sum)))
 	})
 	mux.HandleFunc("/img.img", func(w http.ResponseWriter, r *http.Request) {
 		downloads.Add(1)
@@ -47,11 +118,11 @@ func fakeMirror(t *testing.T, content string) (*httptest.Server, *atomic.Int32, 
 	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return ts, &downloads, Release{Name: "t", BaseURL: ts.URL + "/", File: "img.img"}
+	return ts, &downloads, Release{Name: "t", BaseURL: ts.URL + "/", File: "img.img"}, key
 }
 
 func TestFetchDownloadsVerifiesAndCaches(t *testing.T) {
-	ts, downloads, rel := fakeMirror(t, "the image")
+	ts, downloads, rel, _ := fakeMirror(t, "the image")
 	dir := t.TempDir()
 	p, err := Fetch(context.Background(), ts.Client(), dir, rel)
 	if err != nil {
@@ -77,12 +148,18 @@ func TestFetchDownloadsVerifiesAndCaches(t *testing.T) {
 }
 
 func TestFetchRefusesAWrongChecksumAndKeepsNothing(t *testing.T) {
-	ts, _, rel := fakeMirror(t, "the image")
-	// the mirror serves other bytes than the sums promise
+	ts, _, rel, key := fakeMirror(t, "the image")
+	// the mirror serves other bytes than the sums promise, correctly signed (the signature itself
+	// is valid here - M5b-03's own checks are covered separately, this is the pre-existing
+	// checksum-mismatch case)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
 		sum := sha256.Sum256([]byte("something else"))
-		_, _ = w.Write([]byte(hex.EncodeToString(sum[:]) + " *img.img\n"))
+		_, _ = w.Write(sumsOf(sum))
+	})
+	mux.HandleFunc("/SHA256SUMS.gpg", func(w http.ResponseWriter, r *http.Request) {
+		sum := sha256.Sum256([]byte("something else"))
+		_, _ = w.Write(key.sign(t, sumsOf(sum)))
 	})
 	mux.HandleFunc("/img.img", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("the image")) })
 	bad := httptest.NewServer(mux)
@@ -100,6 +177,42 @@ func TestFetchRefusesAWrongChecksumAndKeepsNothing(t *testing.T) {
 	rel.File = "missing.img"
 	if _, err := Fetch(context.Background(), bad.Client(), dir, rel); err == nil || !strings.Contains(err.Error(), "does not list") {
 		t.Errorf("%v", err)
+	}
+}
+
+// M5b-03 test: SHA256SUMS is only trusted once gpgv confirms a signature from the configured
+// keyring - a self-consistent but unsigned (or wrongly signed) checksum file is refused, even
+// though it still matches the image byte for byte.
+func TestFetchRefusesSHA256SUMSWithoutAValidSignature(t *testing.T) {
+	ts, _, rel, _ := fakeMirror(t, "the image")
+	dir := t.TempDir()
+
+	other := newThrowawayKey(t) // signs with a key verifyKeyring does not trust
+	mux := http.NewServeMux()
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
+		sum := sha256.Sum256([]byte("the image"))
+		_, _ = w.Write(sumsOf(sum))
+	})
+	mux.HandleFunc("/SHA256SUMS.gpg", func(w http.ResponseWriter, r *http.Request) {
+		sum := sha256.Sum256([]byte("the image"))
+		_, _ = w.Write(other.sign(t, sumsOf(sum)))
+	})
+	mux.HandleFunc("/img.img", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("the image")) })
+	wrongKey := httptest.NewServer(mux)
+	defer wrongKey.Close()
+	rel.BaseURL = wrongKey.URL + "/"
+	if _, err := Fetch(context.Background(), wrongKey.Client(), dir, rel); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("a checksum file signed by an untrusted key: %v", err)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("files stay after a failed signature check: %v", ents)
+	}
+
+	// the baseline: the same content, correctly signed by the trusted key, passes (pins that the
+	// failure above is really about the signature, not some other difference)
+	rel.BaseURL = ts.URL + "/"
+	if _, err := Fetch(context.Background(), ts.Client(), dir, rel); err != nil {
+		t.Fatalf("correctly signed SHA256SUMS was refused: %v", err)
 	}
 }
 

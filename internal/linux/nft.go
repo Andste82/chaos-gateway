@@ -127,6 +127,48 @@ func (s *NftSet) Elements() []string {
 // as the plain address. Verify normalizes both sides with it.
 func NormalizeElement(e string) string { return strings.TrimSuffix(e, "/32") }
 
+// Pairs returns the key/value elements of a map, normalized like Elements: the key as an address,
+// a prefix or a concatenation joined with ".", the value as a decimal number (a "mark" map, such
+// as the identity map) or the name of the chain a "verdict" element (a classification map) jumps
+// to.
+func (s *NftSet) Pairs() map[string]string {
+	out := make(map[string]string, len(s.Elem))
+	for _, raw := range s.Elem {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			continue
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		e, ok := m["elem"].(map[string]any)
+		if !ok {
+			continue
+		}
+		out[NormalizeElement(elemString(e["key"]))] = mapValueString(e["val"])
+	}
+	return out
+}
+
+// mapValueString renders a map element's data as nft prints it: a decimal number as itself, a
+// jump verdict as the chain's name.
+func mapValueString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case map[string]any:
+		if j, ok := x["jump"].(map[string]any); ok {
+			if t, ok := j["target"].(string); ok {
+				return t
+			}
+		}
+	}
+	return ""
+}
+
 func normalizeElem(raw json.RawMessage) string {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {

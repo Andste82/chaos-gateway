@@ -17,34 +17,35 @@ type Mismatch struct {
 
 func (m Mismatch) String() string { return m.Subsystem + ": " + m.Detail }
 
-// VerifyDeviceSets compares only the target's device sets with the kernel's nft sets (M6a-11): an
-// identity-only update touches set elements and nothing else, so checking the rest of the ruleset,
-// let alone links, routes or sysctls, would not catch anything an element update could get wrong.
-func VerifyDeviceSets(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
+// VerifyIdentityMap compares only the target's identity map with the kernel's nft map (M6a-11,
+// migrated from the Phase 1 per-device sets to the single map of plan §3.3 by M7): an
+// identity-only update touches map elements and nothing else, so checking the rest of the
+// ruleset, let alone links, routes or sysctls, would not catch anything an element update could
+// get wrong.
+func VerifyIdentityMap(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 	var mm []Mismatch
-	wantSets := map[string]compiler.SetDef{}
-	for _, s := range t.Nft.Sets {
-		wantSets[s.Name] = s
+	if t.IdentityMap == "" {
+		return mm
 	}
-	for dev, name := range t.DeviceSets {
-		want, ok := wantSets[name]
-		if !ok {
-			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s is not in the target", dev, name)})
-			continue
+	got := rs.Set(t.IdentityMap)
+	if got == nil {
+		return []Mismatch{{"nftables", fmt.Sprintf("identity map %s is missing", t.IdentityMap)}}
+	}
+	have := got.Pairs()
+	want := map[string]string{}
+	for _, e := range t.Nft.Maps {
+		if e.Name == t.IdentityMap {
+			for _, el := range e.Elements {
+				want[linux.NormalizeElement(el.Key)] = el.Value
+			}
 		}
-		got := rs.Set(name)
-		if got == nil {
-			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s is missing", dev, name)})
-			continue
-		}
-		have := got.Elements()
-		wantEl := make([]string, 0, len(want.Elements))
-		for _, e := range want.Elements {
-			wantEl = append(wantEl, linux.NormalizeElement(e))
-		}
-		sort.Strings(wantEl)
-		if strings.Join(have, ",") != strings.Join(wantEl, ",") {
-			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("device %s: set %s holds %v, want %v", dev, name, have, wantEl)})
+	}
+	if len(have) != len(want) {
+		mm = append(mm, Mismatch{"nftables", fmt.Sprintf("identity map %s holds %d elements, want %d", t.IdentityMap, len(have), len(want))})
+	}
+	for k, v := range want {
+		if hv, ok := have[k]; !ok || hv != v {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("identity map %s: key %s is %q, want %q", t.IdentityMap, k, hv, v)})
 		}
 	}
 	return mm
@@ -269,6 +270,42 @@ func verifyNft(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 	for name := range haveSets {
 		if _, ok := wantSets[name]; !ok {
 			bad("unexpected set %s", name)
+		}
+	}
+	wantMaps := map[string]compiler.MapDef{}
+	for _, m := range t.Nft.Maps {
+		wantMaps[m.Name] = m
+	}
+	haveMaps := map[string]*linux.NftSet{}
+	for _, o := range rs.Objects {
+		if o.Map != nil {
+			haveMaps[o.Map.Name] = o.Map
+		}
+	}
+	for name, want := range wantMaps {
+		got, ok := haveMaps[name]
+		if !ok {
+			bad("map %s is missing", name)
+			continue
+		}
+		have := got.Pairs()
+		wantEl := map[string]string{}
+		for _, e := range want.Elements {
+			wantEl[linux.NormalizeElement(e.Key)] = e.Value
+		}
+		if len(have) != len(wantEl) {
+			bad("map %s holds %d elements, want %d", name, len(have), len(wantEl))
+			continue
+		}
+		for k, v := range wantEl {
+			if hv, ok := have[k]; !ok || hv != v {
+				bad("map %s: key %s is %q, want %q", name, k, hv, v)
+			}
+		}
+	}
+	for name := range haveMaps {
+		if _, ok := wantMaps[name]; !ok {
+			bad("unexpected map %s", name)
 		}
 	}
 	haveCounters := rs.Counters()

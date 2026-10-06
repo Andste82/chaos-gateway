@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
@@ -47,9 +49,42 @@ type SetDef struct {
 	Dynamic bool `json:"dynamic,omitempty"`
 }
 
+// MapDef is a named map: a key (one or more concatenated nft types) to a value (plan §3.3). Like
+// SetDef its name carries a short hash of the definition, so a changed key or value type creates a
+// new map instead of a failing `add map`. A map is always flushed and refilled at a full apply,
+// like the Phase 1 per-device sets it replaces for device identity (dhcp.go); an identity-only or
+// classification-only change updates its elements directly instead (executor.NftAddMapElements,
+// NftDelMapElements), the map counterpart of a SetDef's incremental element update.
+type MapDef struct {
+	Name string `json:"name"`
+	// KeyType is the map's key: one nft type, or several for a concatenated key (the lookup chain's
+	// device, destination, protocol and port, plan §3.3).
+	KeyType []string `json:"key_type"`
+	// ValueType is the map's data type: "mark" for a plain integer value (the identity map's device
+	// numeral) or "verdict" for a map whose elements jump to a chain (a classification map).
+	ValueType string `json:"value_type"`
+	// Elements are the compiled content, flushed and refilled at every apply. A MapElement's Key
+	// joins KeyType's parts with " . " (nft's own concatenation syntax); its Value is a decimal
+	// integer for ValueType "mark", or the chain an element jumps to for ValueType "verdict".
+	Elements []MapElement `json:"elements,omitempty"`
+}
+
+// MapElement is one key/value pair of a MapDef.
+type MapElement struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// hashMapName is hashName for a MapDef: a changed key or value type creates a new map name.
+func hashMapName(base string, keyType []string, valueType string) string {
+	h := sha256.Sum256([]byte(strings.Join(keyType, ".") + "|" + valueType))
+	return base + "_" + hex.EncodeToString(h[:3])
+}
+
 // Nft is the target of the nftables table `inet chaosgw`.
 type Nft struct {
 	Sets     []SetDef `json:"sets"`
+	Maps     []MapDef `json:"maps,omitempty"`
 	Counters []string `json:"counters"`
 	Chains   []Chain  `json:"chains"`
 	// Generation is the comment of the single rule of the chain `generation`.
@@ -101,6 +136,13 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		}
 		cmds = append(cmds, cmd("add", "set", f))
 	}
+	for _, m := range n.Maps {
+		typ := any(m.KeyType[0])
+		if len(m.KeyType) > 1 {
+			typ = m.KeyType
+		}
+		cmds = append(cmds, cmd("add", "map", map[string]any{"name": m.Name, "type": typ, "map": m.ValueType}))
+	}
 	for _, c := range n.chains() {
 		f := map[string]any{"name": c.Name}
 		if c.Base != nil {
@@ -120,6 +162,12 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 			cmds = append(cmds, cmd("add", "element", map[string]any{"name": s.Name, "elem": setElements(s)}))
 		}
 	}
+	for _, m := range n.Maps {
+		cmds = append(cmds, cmd("flush", "map", map[string]any{"name": m.Name}))
+		if len(m.Elements) > 0 {
+			cmds = append(cmds, cmd("add", "element", map[string]any{"name": m.Name, "elem": mapElements(m)}))
+		}
+	}
 	for _, c := range n.chains() {
 		for _, r := range c.Rules {
 			cmds = append(cmds, cmd("add", "rule", map[string]any{"chain": c.Name, "expr": r.Expr, "comment": r.Comment}))
@@ -132,30 +180,34 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		for _, c := range n.chains() {
 			keepChain[c.Name] = true
 		}
-		keepSet, keepCounter := map[string]bool{}, map[string]bool{}
+		keepSet, keepMap, keepCounter := map[string]bool{}, map[string]bool{}, map[string]bool{}
 		for _, s := range n.Sets {
 			keepSet[s.Name] = true
+		}
+		for _, m := range n.Maps {
+			keepMap[m.Name] = true
 		}
 		for _, c := range n.Counters {
 			keepCounter[c] = true
 		}
-		var oldChains, oldSets, oldCounters []string
+		var oldChains, oldSets, oldMaps, oldCounters []string
 		for _, o := range current.Objects {
 			switch {
 			case o.Chain != nil && !keepChain[o.Chain.Name]:
 				oldChains = append(oldChains, o.Chain.Name)
 			case o.Set != nil && !keepSet[o.Set.Name]:
 				oldSets = append(oldSets, o.Set.Name)
-			case o.Map != nil && !keepSet[o.Map.Name]:
-				oldSets = append(oldSets, o.Map.Name)
+			case o.Map != nil && !keepMap[o.Map.Name]:
+				oldMaps = append(oldMaps, o.Map.Name)
 			case o.Counter != nil && !keepCounter[o.Counter.Name]:
 				oldCounters = append(oldCounters, o.Counter.Name)
 			}
 		}
 		sort.Strings(oldChains)
 		sort.Strings(oldSets)
+		sort.Strings(oldMaps)
 		sort.Strings(oldCounters)
-		// a removed chain is emptied first: its rules may refer to sets and counters that go too
+		// a removed chain is emptied first: its rules may refer to sets, maps and counters that go too
 		for _, c := range oldChains {
 			cmds = append(cmds, cmd("flush", "chain", map[string]any{"name": c}))
 		}
@@ -164,6 +216,9 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		}
 		for _, s := range oldSets {
 			cmds = append(cmds, cmd("delete", "set", map[string]any{"name": s}))
+		}
+		for _, m := range oldMaps {
+			cmds = append(cmds, cmd("delete", "map", map[string]any{"name": m}))
 		}
 		for _, c := range oldCounters {
 			cmds = append(cmds, cmd("delete", "counter", map[string]any{"name": c}))
@@ -200,6 +255,52 @@ func setElement(typ, e string) any {
 		}
 	}
 	return e
+}
+
+// mapElements renders the compiled content of a map: each MapElement's Key becomes a concatenation
+// of its " . "-joined parts (or the bare part alone, for a one-field key), and its Value becomes
+// the data: a decimal number for a "mark" map, a jump to the chain it names for a "verdict" map.
+func mapElements(m MapDef) []any {
+	out := make([]any, 0, len(m.Elements))
+	for _, e := range m.Elements {
+		out = append(out, map[string]any{"elem": map[string]any{"key": mapKeyExpr(e.Key), "val": mapValueExpr(m.ValueType, e.Value)}})
+	}
+	return out
+}
+
+// mapKeyExpr renders a map key: " . "-joined parts concatenated, a single part as itself. An
+// address part becomes a prefix object, like setElement.
+func mapKeyExpr(key string) any {
+	parts := strings.Split(key, " . ")
+	if len(parts) == 1 {
+		return mapKeyPart(parts[0])
+	}
+	out := make([]any, len(parts))
+	for i, p := range parts {
+		out[i] = mapKeyPart(p)
+	}
+	return map[string]any{"concat": out}
+}
+
+func mapKeyPart(part string) any {
+	if addr, bits, ok := splitPrefix(part); ok {
+		return map[string]any{"prefix": map[string]any{"addr": addr, "len": bits}}
+	}
+	if n, err := strconv.Atoi(part); err == nil {
+		return n
+	}
+	return part
+}
+
+// mapValueExpr renders a map element's data per the map's value type.
+func mapValueExpr(valueType, value string) any {
+	if valueType == "verdict" {
+		return map[string]any{"jump": map[string]any{"target": value}}
+	}
+	if n, err := strconv.Atoi(value); err == nil {
+		return n
+	}
+	return value
 }
 
 func splitPrefix(s string) (string, int, bool) {

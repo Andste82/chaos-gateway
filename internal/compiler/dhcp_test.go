@@ -3,6 +3,7 @@ package compiler
 import (
 	"encoding/json"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -146,14 +147,28 @@ func TestReservationsComeFromDevicesWithAFixedAddress(t *testing.T) {
 	}
 }
 
-func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
+// identityPairs returns the compiled identity map's key→value pairs (plan §3.3).
+func identityPairs(tg *Target) map[string]string {
+	out := map[string]string{}
+	for _, m := range tg.Nft.Maps {
+		if m.Name == tg.IdentityMap {
+			for _, e := range m.Elements {
+				out[e.Key] = e.Value
+			}
+		}
+	}
+	return out
+}
+
+func TestEveryDeviceHasAnEntryInTheIdentityMap(t *testing.T) {
 	mac := []string{"02:00:00:00:00:31"}
+	discID := "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 	id := &domain.Identity{
 		Addresses: map[string][]netip.Addr{
-			devA:                                   {netip.MustParseAddr("10.10.0.31"), netip.MustParseAddr("10.10.0.32")},
-			"bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb": {netip.MustParseAddr("10.10.0.99")},
+			devA:   {netip.MustParseAddr("10.10.0.31"), netip.MustParseAddr("10.10.0.32")},
+			discID: {netip.MustParseAddr("10.10.0.99")},
 		},
-		Discovered: []domain.DiscoveredDevice{{ID: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", IPs: []netip.Addr{netip.MustParseAddr("10.10.0.99")}}},
+		Discovered: []domain.DiscoveredDevice{{ID: discID, IPs: []netip.Addr{netip.MustParseAddr("10.10.0.99")}}},
 	}
 	cfg := loadConfig(t, "gateway.yaml")
 	addDevice(cfg, devA, model.Device{Name: "esp32-42", Identifiers: &model.DeviceIdentifiers{Macs: &mac}})
@@ -161,30 +176,30 @@ func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}
-	if len(tg.DeviceSets) != 2 {
-		t.Fatalf("%v", tg.DeviceSets)
+	if len(tg.DeviceNums) != 2 {
+		t.Fatalf("%v", tg.DeviceNums)
 	}
-	elems := map[string][]string{}
-	for _, s := range tg.Nft.Sets {
-		elems[s.Name] = s.Elements
+	if tg.IdentityMap == "" || !strings.HasPrefix(tg.IdentityMap, "ident4_") {
+		t.Fatalf("identity map name %q", tg.IdentityMap)
 	}
-	a, d := tg.DeviceSets[devA], tg.DeviceSets["bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"]
-	if !strings.HasPrefix(a, "dev_aaaaaaaa1111_") || strings.Join(elems[a], ",") != "10.10.0.31,10.10.0.32" || strings.Join(elems[d], ",") != "10.10.0.99" {
-		t.Errorf("%v %v", tg.DeviceSets, elems)
+	pairs := identityPairs(tg)
+	numA := strconv.Itoa(tg.DeviceNums[devA])
+	numD := strconv.Itoa(tg.DeviceNums[discID])
+	if pairs["10.10.0.31"] != numA || pairs["10.10.0.32"] != numA || pairs["10.10.0.99"] != numD {
+		t.Errorf("%v (devA=%s, disc=%s)", pairs, numA, numD)
 	}
-	// without observed state the sets exist and are empty; the name does not depend on the content
+	// without observed state the map exists and is empty; its name and the device numbers do not
+	// depend on the content
 	tg2 := Compile(Input{Config: cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 2}})
-	if tg2.DeviceSets[devA] != a || len(elems[a]) == 0 {
-		t.Errorf("%v", tg2.DeviceSets)
+	if tg2.IdentityMap != tg.IdentityMap || tg2.DeviceNums[devA] != tg.DeviceNums[devA] {
+		t.Errorf("%v %v", tg2.IdentityMap, tg2.DeviceNums)
 	}
-	for _, s := range tg2.Nft.Sets {
-		if s.Name == a && len(s.Elements) != 0 {
-			t.Errorf("%v", s.Elements)
-		}
+	if len(identityPairs(tg2)) != 0 {
+		t.Errorf("%v", identityPairs(tg2))
 	}
-	// the transaction has the sets, and nft's parser accepts them (nftsyntax_test runs the full check)
+	// the transaction has the map, and nft's parser accepts it (nftsyntax_test runs the full check)
 	tx, err := tg.Nft.Transaction(nil)
-	if err != nil || !strings.Contains(string(tx), a) {
+	if err != nil || !strings.Contains(string(tx), tg.IdentityMap) {
 		t.Errorf("%v", err)
 	}
 	var doc any
@@ -193,10 +208,10 @@ func TestEveryDeviceHasASetOfItsAddresses(t *testing.T) {
 	}
 }
 
-// M6a-17 test: a discovered device's sighted address is not automatically its set's content; only
-// the resolved identity's claim is, so an address another device has already won (the stronger claim,
-// plan §2.3) does not leak into the discovered device's set too.
-func TestAnAddressIsInOneDeviceSetOnly(t *testing.T) {
+// M6a-17 test: a discovered device's sighted address is not automatically mapped to it; only the
+// resolved identity's claim is, so an address another device has already won (the stronger claim,
+// plan §2.3) does not leak into the discovered device's own entries too.
+func TestAnAddressIsInTheIdentityMapOnce(t *testing.T) {
 	mac := []string{"02:00:00:00:00:31"}
 	discID := "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 	id := &domain.Identity{
@@ -211,15 +226,11 @@ func TestAnAddressIsInOneDeviceSetOnly(t *testing.T) {
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}
-	elems := map[string][]string{}
-	for _, s := range tg.Nft.Sets {
-		elems[s.Name] = s.Elements
+	pairs := identityPairs(tg)
+	if pairs["10.10.0.50"] != strconv.Itoa(tg.DeviceNums[devA]) {
+		t.Errorf("10.10.0.50: %v, want devA's number", pairs)
 	}
-	a, d := tg.DeviceSets[devA], tg.DeviceSets[discID]
-	if strings.Join(elems[a], ",") != "10.10.0.50" {
-		t.Errorf("devA's set: %v", elems[a])
-	}
-	if len(elems[d]) != 0 {
-		t.Errorf("the discovered device's set should be empty (its sighting lost to devA), got %v", elems[d])
+	if len(pairs) != 1 {
+		t.Errorf("the discovered device's sighting should not add its own entry (it lost to devA): %v", pairs)
 	}
 }

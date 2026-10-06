@@ -3,8 +3,9 @@ package engine_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -253,33 +254,45 @@ func TestDevicesAppearAndTheirAddressesFollowThem(t *testing.T) {
 	}
 }
 
-// deviceSetElements returns the elements of a device's set in the kernel.
+// deviceSetElements returns the addresses the device's entry in the identity map holds, in the
+// kernel (plan §3.3: the single identity map replaced the Phase 1 per-device sets this helper
+// originally read, M6a-07/M7).
 func (h *harness) deviceSetElements(dev string) string {
 	h.t.Helper()
 	v, ok := h.tryDeviceSetElements(dev)
 	if !ok {
-		h.t.Fatalf("no set for device %s in the kernel", dev)
+		h.t.Fatalf("no identity map entry for device %s in the kernel", dev)
 	}
 	return v
 }
 
-// tryDeviceSetElements is deviceSetElements without the hard failure, for polling a set that may not
-// exist in the kernel yet.
+// tryDeviceSetElements is deviceSetElements without the hard failure, for polling a map that may
+// not hold the device's entry yet.
 func (h *harness) tryDeviceSetElements(dev string) (string, bool) {
 	h.t.Helper()
 	s := h.e.Snapshot()
 	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
-	name := tg.DeviceSets[dev]
+	num, ok := tg.DeviceNums[dev]
+	if !ok {
+		return "", false
+	}
 	st, err := apply.ReadState(context.Background(), apply.Local{E: h.ex}, "", apply.Want{})
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	for _, o := range st.Nft.Objects {
-		if o.Set != nil && o.Set.Name == name {
+		if o.Map != nil && o.Map.Name == tg.IdentityMap {
 			var el []string
-			for _, e := range o.Set.Elem {
-				el = append(el, strings.Trim(fmt.Sprint(e), `"`))
+			want := strconv.Itoa(num)
+			for k, v := range o.Map.Pairs() {
+				if v == want {
+					el = append(el, k)
+				}
 			}
+			if len(el) == 0 {
+				return "", false
+			}
+			sort.Strings(el)
 			return strings.Join(el, ","), true
 		}
 	}

@@ -52,6 +52,15 @@ type nftSet struct {
 	elems []json.RawMessage
 }
 
+// nftMap is a named map (plan §3.3): a key type (possibly several, concatenated) to a value type
+// ("mark" for a plain integer, "verdict" for an element that jumps to a chain). Elements are the
+// raw `{"elem":{"key":...,"val":...}}` objects nft itself uses.
+type nftMap struct {
+	keyType   json.RawMessage
+	valueType string
+	elems     []json.RawMessage
+}
+
 type nftChain struct {
 	base  map[string]any
 	rules []nftRule
@@ -64,12 +73,18 @@ type nftRule struct {
 
 type nftTable struct {
 	sets     map[string]*nftSet
+	maps     map[string]*nftMap
 	counters map[string]int64
 	chains   map[string]*nftChain
 }
 
 func (t *nftTable) clone() *nftTable {
-	n := &nftTable{sets: map[string]*nftSet{}, counters: map[string]int64{}, chains: map[string]*nftChain{}}
+	n := &nftTable{sets: map[string]*nftSet{}, maps: map[string]*nftMap{}, counters: map[string]int64{}, chains: map[string]*nftChain{}}
+	for k, m := range t.maps {
+		c := *m
+		c.elems = append([]json.RawMessage(nil), m.elems...)
+		n.maps[k] = &c
+	}
 	for k, s := range t.sets {
 		c := *s
 		c.elems = append([]json.RawMessage(nil), s.elems...)

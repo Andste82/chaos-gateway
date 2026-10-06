@@ -48,6 +48,19 @@
       "add": {
         "set": {
           "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "classify_nets_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
           "name": "ifs_cg_bf4feb",
           "table": "chaosgw",
           "type": "ifname"
@@ -84,6 +97,75 @@
           "name": "mgmt_src_8743d6",
           "table": "chaosgw",
           "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "map": {
+          "family": "inet",
+          "map": "verdict",
+          "name": "cls_dev_d6cdc6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "map": {
+          "family": "inet",
+          "map": "verdict",
+          "name": "cls_devdest_a38e25",
+          "table": "chaosgw",
+          "type": [
+            "ipv4_addr",
+            "ipv4_addr"
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "map": {
+          "family": "inet",
+          "map": "verdict",
+          "name": "cls_devdestport_e7e915",
+          "table": "chaosgw",
+          "type": [
+            "ipv4_addr",
+            "ipv4_addr",
+            "inet_proto",
+            "inet_service"
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "map": {
+          "family": "inet",
+          "map": "verdict",
+          "name": "cls_devport_2399e9",
+          "table": "chaosgw",
+          "type": [
+            "ipv4_addr",
+            "inet_proto",
+            "inet_service"
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "hook": "prerouting",
+          "name": "classify",
+          "policy": "accept",
+          "prio": -150,
+          "table": "chaosgw",
+          "type": "filter"
         }
       }
     },
@@ -139,6 +221,15 @@
       "flush": {
         "chain": {
           "family": "inet",
+          "name": "classify",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
           "name": "forward",
           "table": "chaosgw"
         }
@@ -167,6 +258,44 @@
         "chain": {
           "family": "inet",
           "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "classify_nets_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "10.10.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "10.20.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "10.30.0.0",
+                "len": 24
+              }
+            }
+          ],
+          "family": "inet",
+          "name": "classify_nets_8743d6",
           "table": "chaosgw"
         }
       }
@@ -259,6 +388,284 @@
           ],
           "family": "inet",
           "name": "mgmt_src_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "map": {
+          "family": "inet",
+          "name": "cls_dev_d6cdc6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "map": {
+          "family": "inet",
+          "name": "cls_devdest_a38e25",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "map": {
+          "family": "inet",
+          "name": "cls_devdestport_e7e915",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "map": {
+          "family": "inet",
+          "name": "cls_devport_2399e9",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "b6c70c0a0a68",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "family": "ip",
+                    "key": "saddr"
+                  }
+                },
+                "op": "!=",
+                "right": "@classify_nets_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "family": "ip",
+                    "key": "daddr"
+                  }
+                },
+                "op": "!=",
+                "right": "@classify_nets_8743d6"
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "4fbcc130c227",
+          "expr": [
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "|": [
+                    {
+                      "\u0026": [
+                        {
+                          "meta": {
+                            "key": "mark"
+                          }
+                        },
+                        4294901759
+                      ]
+                    },
+                    {
+                      "\u003c\u003c": [
+                        {
+                          "ct": {
+                            "key": "direction"
+                          }
+                        },
+                        16
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "44e979f52e01",
+          "expr": [
+            {
+              "vmap": {
+                "data": "@cls_devdestport_e7e915",
+                "key": {
+                  "concat": [
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "family": "ip",
+                        "key": "saddr"
+                      }
+                    },
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "family": "ip",
+                        "key": "daddr"
+                      }
+                    },
+                    {
+                      "meta": {
+                        "key": "l4proto"
+                      }
+                    },
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "key": "proto-dst"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "0fae127b35e1",
+          "expr": [
+            {
+              "vmap": {
+                "data": "@cls_devdest_a38e25",
+                "key": {
+                  "concat": [
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "family": "ip",
+                        "key": "saddr"
+                      }
+                    },
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "family": "ip",
+                        "key": "daddr"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "a6b7ed581560",
+          "expr": [
+            {
+              "vmap": {
+                "data": "@cls_devport_2399e9",
+                "key": {
+                  "concat": [
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "family": "ip",
+                        "key": "saddr"
+                      }
+                    },
+                    {
+                      "meta": {
+                        "key": "l4proto"
+                      }
+                    },
+                    {
+                      "ct": {
+                        "dir": "original",
+                        "key": "proto-dst"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "39afb689b4d0",
+          "expr": [
+            {
+              "vmap": {
+                "data": "@cls_dev_d6cdc6",
+                "key": {
+                  "ct": {
+                    "dir": "original",
+                    "family": "ip",
+                    "key": "saddr"
+                  }
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
           "table": "chaosgw"
         }
       }

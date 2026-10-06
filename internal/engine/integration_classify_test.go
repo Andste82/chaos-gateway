@@ -134,6 +134,16 @@ func (g *wgGW) applyWithClassifyIDs(ids []int) *compiler.Target {
 	if tg.HasErrors() {
 		g.t.Fatalf("%+v", tg.Problems)
 	}
+	// This executor is its own process, independent of the engine's: it has never assigned these
+	// interfaces itself (assignment is in-memory, per executor, internal/executor/exec.go's
+	// e.scope), so without this, apply.Apply's own BuildPlan would see every interface the engine
+	// already created as one that exists but does not belong to Chaos Gateway from this
+	// executor's point of view, and refuse to touch it. Assigning first, through the same
+	// executor, makes the Apply below's own state read see them as already ours - exactly what
+	// the engine's own first-ever apply already established in the kernel.
+	if _, err := ex.Do(ctx, &executor.AssignInterfaces{Target: executor.Target{NS: g.top.GW.Name}, Devs: tg.Interfaces, OSOwned: tg.OSOwned}); err != nil {
+		g.t.Fatalf("assign interfaces: %v", err)
+	}
 	actx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if _, err := apply.Apply(actx, ex, g.top.GW.Name, tg); err != nil {

@@ -209,11 +209,15 @@ func TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination(t *
 	if !pingOK(g.top.RC, testbed.ClientNetHost, testbed.ClientAAddr) {
 		t.Fatalf("the client network cannot reach A\n%s", g.wgShow())
 	}
-	if n := classifyProbePackets(t, g.top.GW, wgIf, idInit, 0); n == 0 {
-		t.Error("the client's upload (arriving over the tunnel) was not classified")
+	// egress is measured on the destination side's own interface, like
+	// TestClassificationAcrossTwoTestNetworks: the client's upload (dir 0) heads towards A, so it
+	// egresses the IoT bridge; A's reply (dir 1) heads back towards the client, so it egresses the
+	// WireGuard interface.
+	if n := classifyProbePackets(t, g.top.GW, iotIf, idInit, 0); n == 0 {
+		t.Error("the client's upload (egressing the IoT bridge towards A) was not classified")
 	}
-	if n := classifyProbePackets(t, g.top.GW, iotIf, idInit, 1); n == 0 {
-		t.Error("A's reply (leaving through the IoT bridge, download) was not classified")
+	if n := classifyProbePackets(t, g.top.GW, wgIf, idInit, 1); n == 0 {
+		t.Error("A's reply (egressing over the tunnel back to the client, download) was not classified")
 	}
 
 	// the client network host as destination: A initiates towards it instead.
@@ -222,11 +226,13 @@ func TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination(t *
 	if !pingOK(g.top.A, "", testbed.ClientNetHost) {
 		t.Fatalf("A cannot reach the client network\n%s", g.wgShow())
 	}
-	if n := classifyProbePackets(t, g.top.GW, iotIf, idDest, 0); n == 0 {
-		t.Error("A's upload (leaving through the IoT bridge) was not classified")
+	// this time A initiates: A's upload (dir 0) heads towards the client, egressing the WireGuard
+	// interface; the client's reply (dir 1) heads back towards A, egressing the IoT bridge.
+	if n := classifyProbePackets(t, g.top.GW, wgIf, idDest, 0); n == 0 {
+		t.Error("A's upload (egressing over the tunnel towards the client) was not classified")
 	}
-	if n := classifyProbePackets(t, g.top.GW, wgIf, idDest, 1); n == 0 {
-		t.Error("the client network's reply (leaving over the tunnel, download) was not classified")
+	if n := classifyProbePackets(t, g.top.GW, iotIf, idDest, 1); n == 0 {
+		t.Error("the client network's reply (egressing the IoT bridge back to A, download) was not classified")
 	}
 }
 
@@ -265,10 +271,12 @@ func TestClassificationOverAWireGuardLink(t *testing.T) {
 	if !pingOK(g.top.A, "", testbed.SiteNetHost) {
 		t.Fatalf("A cannot reach the remote site over the link\n%s", g.wgShow())
 	}
-	if n := classifyProbePackets(t, g.top.GW, iotIf, id, 0); n == 0 {
-		t.Error("A's upload (leaving through the IoT bridge) was not classified")
+	// A initiates: A's upload (dir 0) heads towards the site, egressing the link interface; the
+	// site's reply (dir 1) heads back towards A, egressing the IoT bridge.
+	if n := classifyProbePackets(t, g.top.GW, linkIf, id, 0); n == 0 {
+		t.Error("A's upload (egressing over the link towards the site) was not classified")
 	}
-	if n := classifyProbePackets(t, g.top.GW, linkIf, id, 1); n == 0 {
-		t.Error("the site's reply (leaving over the link, download) was not classified")
+	if n := classifyProbePackets(t, g.top.GW, iotIf, id, 1); n == 0 {
+		t.Error("the site's reply (egressing the IoT bridge back to A, download) was not classified")
 	}
 }

@@ -213,6 +213,80 @@ func (o NftDelElements) validate() error {
 	return NftAddElements{Target: o.Target, Set: o.Set, Elements: o.Elements}.validate()
 }
 
+// mapValueToken is the data of a map element: a decimal mark value, or the name of the chain a
+// verdict-valued element jumps to.
+var mapValueToken = regexp.MustCompile(`^[0-9]{1,10}$|^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`)
+
+func (o NftAddMapElements) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if !setName.MatchString(o.Map) {
+		return fmt.Errorf("invalid map name %q", o.Map)
+	}
+	if len(o.Elements) == 0 || len(o.Elements) > maxNftItems {
+		return fmt.Errorf("%d elements, want 1..%d", len(o.Elements), maxNftItems)
+	}
+	for _, e := range o.Elements {
+		if !validMapKey(e.Key) {
+			return fmt.Errorf("invalid map key %q", e.Key)
+		}
+		if !mapValueToken.MatchString(e.Value) {
+			return fmt.Errorf("invalid map value %q", e.Value)
+		}
+	}
+	return nil
+}
+
+func (o NftDelMapElements) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if !setName.MatchString(o.Map) {
+		return fmt.Errorf("invalid map name %q", o.Map)
+	}
+	if len(o.Keys) == 0 || len(o.Keys) > maxNftItems {
+		return fmt.Errorf("%d keys, want 1..%d", len(o.Keys), maxNftItems)
+	}
+	for _, k := range o.Keys {
+		if !validMapKey(k) {
+			return fmt.Errorf("invalid map key %q", k)
+		}
+	}
+	return nil
+}
+
+// mapKeyPart is one " . "-joined component of a map key that is not an address or a prefix: a
+// protocol name or number, or a port number (plan §3.3's lookup chain: device, destination,
+// protocol, port).
+var mapKeyPart = regexp.MustCompile(`^[0-9]{1,5}$|^[a-z][a-z0-9]{0,15}$`)
+
+// validMapKey accepts a plain element (an address, a prefix or a MAC, as validElement) or 2 to 4
+// such components concatenated with " . ", the device's address first: the key of a
+// classification map (plan §3.3). " . " (not a bare ".") keeps the split unambiguous next to the
+// dots inside an address.
+func validMapKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	if !strings.Contains(k, " . ") {
+		return validElement(k)
+	}
+	parts := strings.Split(k, " . ")
+	if len(parts) < 2 || len(parts) > 4 {
+		return false
+	}
+	if !validElement(parts[0]) {
+		return false
+	}
+	for _, p := range parts[1:] {
+		if !validElement(p) && !mapKeyPart.MatchString(p) {
+			return false
+		}
+	}
+	return true
+}
+
 func validElement(e string) bool {
 	if a, err := netip.ParseAddr(e); err == nil {
 		return a.Zone() == ""

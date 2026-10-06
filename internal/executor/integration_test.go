@@ -264,6 +264,57 @@ func TestIncrementalSetUpdates(t *testing.T) {
 	}
 }
 
+// TestIncrementalMapUpdates is TestIncrementalSetUpdates for the map counterpart added in M7
+// (plan §3.3): the identity map's device numeral (a plain integer value) and a classification
+// map's element (a verdict that jumps to a per-id chain).
+func TestIncrementalMapUpdates(t *testing.T) {
+	g := startGateway(t)
+	extra := `,{"add":{"map":{"family":"inet","table":"chaosgw","name":"ident4","type":"ipv4_addr","map":"mark"}}},` +
+		`{"add":{"map":{"family":"inet","table":"chaosgw","name":"cls_dev","type":"ipv4_addr","map":"verdict"}}},` +
+		`{"add":{"chain":{"family":"inet","table":"chaosgw","name":"mark_7"}}},` +
+		`{"add":{"rule":{"family":"inet","table":"chaosgw","chain":"mark_7","expr":[{"return":null}]}}}`
+	g.must(&executor.NftApply{Target: tgt(g.ns), Ruleset: []byte(nftRuleset(extra))})
+	gen := g.must().Generation
+
+	out := g.must(&executor.NftAddMapElements{Target: tgt(g.ns), Map: "ident4", Elements: []executor.NftMapElement{{Key: "10.10.0.31", Value: "3"}}})
+	if out.Generation != gen+1 {
+		t.Errorf("generation %d -> %d", gen, out.Generation)
+	}
+	if list := g.top.GW.Must("nft", "list", "map", "inet", "chaosgw", "ident4"); !strings.Contains(list, "10.10.0.31") || !strings.Contains(list, "3") {
+		t.Errorf("identity map content:\n%s", list)
+	}
+	rs := read[linux.Ruleset](t, g, executor.Read{What: executor.ReadNft})
+	if m := rs.Set("ident4"); m == nil || len(m.Elem) != 1 {
+		t.Errorf("parsed map: %+v", m)
+	} else if p := m.Pairs(); p["10.10.0.31"] != "3" {
+		t.Errorf("pairs: %v", p)
+	}
+
+	// the classification map's element jumps to an existing chain
+	g.must(&executor.NftAddMapElements{Target: tgt(g.ns), Map: "cls_dev", Elements: []executor.NftMapElement{{Key: "10.10.0.31", Value: "mark_7"}}})
+	if list := g.top.GW.Must("nft", "list", "map", "inet", "chaosgw", "cls_dev"); !strings.Contains(list, "10.10.0.31") || !strings.Contains(list, "mark_7") {
+		t.Errorf("classification map content:\n%s", list)
+	}
+	// a jump to a chain that does not exist is refused
+	if _, err := g.c.Do(context.Background(), &executor.NftAddMapElements{Target: tgt(g.ns), Map: "cls_dev", Elements: []executor.NftMapElement{{Key: "10.10.0.32", Value: "mark_404"}}}); err == nil {
+		t.Error("a jump to a missing chain must fail")
+	}
+
+	// a device's address changes: delete the old key, add the new one, in one incremental request
+	g.must(&executor.NftDelMapElements{Target: tgt(g.ns), Map: "ident4", Keys: []string{"10.10.0.31"}})
+	g.must(&executor.NftAddMapElements{Target: tgt(g.ns), Map: "ident4", Elements: []executor.NftMapElement{{Key: "10.10.0.77", Value: "3"}}})
+	if list := g.top.GW.Must("nft", "list", "map", "inet", "chaosgw", "ident4"); strings.Contains(list, "10.10.0.31") || !strings.Contains(list, "10.10.0.77") {
+		t.Errorf("after the address change:\n%s", list)
+	}
+	// deleting a key that is not there fails, and a map that does not exist is an error
+	if _, err := g.c.Do(context.Background(), &executor.NftDelMapElements{Target: tgt(g.ns), Map: "ident4", Keys: []string{"10.10.0.31"}}); err == nil {
+		t.Error("deleting an absent key must fail")
+	}
+	if _, err := g.c.Do(context.Background(), &executor.NftAddMapElements{Target: tgt(g.ns), Map: "nope", Elements: []executor.NftMapElement{{Key: "10.10.0.31", Value: "1"}}}); err == nil {
+		t.Error("a missing map must fail")
+	}
+}
+
 func TestRoutingInOwnTablesWithOwnTag(t *testing.T) {
 	g := startGateway(t)
 	g.top.GW.Sysctl("net.ipv4.ip_forward", "1") // the testbed gateway is unconfigured here; `route get` of a forwarded packet needs it

@@ -69,6 +69,14 @@ func Plan(op Operation) ([]Step, error) {
 		return planElements("add", o.Target, o.Set, o.Elements, o.TimeoutSeconds)
 	case *NftDelElements:
 		return planElements("delete", o.Target, o.Set, o.Elements, 0)
+	case *NftAddMapElements:
+		return planMapElements("add", o.Target, o.Map, o.Elements)
+	case *NftDelMapElements:
+		var elems []NftMapElement
+		for _, k := range o.Keys {
+			elems = append(elems, NftMapElement{Key: k})
+		}
+		return planMapElements("delete", o.Target, o.Map, elems)
 	case *Routing:
 		return planRouting(o), nil
 	case *TC:
@@ -121,6 +129,62 @@ func planElements(verb string, tg Target, set string, elements []string, timeout
 		return nil, err
 	}
 	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(b), NS: tg.NS}}}, nil
+}
+
+// planMapElements builds the add/delete transaction for elements of a named map (plan §3.3, §3.4):
+// the map counterpart of planElements. On delete, every NftMapElement carries only its Key.
+func planMapElements(verb string, tg Target, mapName string, elements []NftMapElement) ([]Step, error) {
+	elems := make([]any, len(elements))
+	for i, e := range elements {
+		key := mapKeyExpr(e.Key)
+		if verb == "delete" {
+			elems[i] = key
+			continue
+		}
+		elems[i] = map[string]any{"elem": map[string]any{"key": key, "val": mapValueExpr(e.Value)}}
+	}
+	doc := map[string]any{"nftables": []any{map[string]any{verb: map[string]any{"element": map[string]any{
+		"family": NftFamily, "table": NftTable, "name": mapName, "elem": elems,
+	}}}}}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(b), NS: tg.NS}}}, nil
+}
+
+// mapKeyExpr renders a map key: a single part as itself (an address becomes a prefix object, like
+// planElements), several " . "-joined parts as a concatenation.
+func mapKeyExpr(key string) any {
+	parts := strings.Split(key, " . ")
+	if len(parts) == 1 {
+		return mapKeyPartExpr(parts[0])
+	}
+	out := make([]any, len(parts))
+	for i, p := range parts {
+		out[i] = mapKeyPartExpr(p)
+	}
+	return map[string]any{"concat": out}
+}
+
+func mapKeyPartExpr(part string) any {
+	if p, err := netip.ParsePrefix(part); err == nil {
+		return map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
+	}
+	if n, err := strconv.Atoi(part); err == nil {
+		return n
+	}
+	return part
+}
+
+// mapValueExpr renders a map element's data: a decimal value as the integer it names (a "mark"
+// map, such as the identity map), anything else as a jump to the chain it names (a "verdict" map,
+// one of the classification maps).
+func mapValueExpr(value string) any {
+	if n, err := strconv.Atoi(value); err == nil {
+		return n
+	}
+	return map[string]any{"jump": map[string]any{"target": value}}
 }
 
 // planRouting writes one `ip -batch` per address family: routes first (replace) or last (delete),

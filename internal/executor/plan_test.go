@@ -73,6 +73,52 @@ func TestPlanAddElements(t *testing.T) {
 	}
 }
 
+// TestPlanAddMapElements is TestPlanAddElements for the map counterpart added in M7 (plan §3.3):
+// a decimal value renders as a plain number (the identity map), a non-decimal one as a jump to
+// the chain it names (a classification map), and a " . "-joined key as a concatenation.
+func TestPlanAddMapElements(t *testing.T) {
+	steps := mustPlan(t, `{"type":"nft_add_map_elements","map":"ident4","elements":[{"key":"10.10.0.31","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"}]}`)
+	var doc struct {
+		Nftables []struct {
+			Add struct {
+				Element struct {
+					Family, Table, Name string
+					Elem                []map[string]any
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(steps[0].Cmd.Stdin), &doc); err != nil {
+		t.Fatal(err)
+	}
+	el := doc.Nftables[0].Add.Element
+	if el.Family != "inet" || el.Table != "chaosgw" || el.Name != "ident4" || len(el.Elem) != 2 {
+		t.Fatalf("%+v", el)
+	}
+	first := el.Elem[0]["elem"].(map[string]any)
+	if first["key"] != "10.10.0.31" || first["val"] != float64(3) {
+		t.Errorf("identity element: %v", first)
+	}
+	second := el.Elem[1]["elem"].(map[string]any)
+	key, ok := second["key"].(map[string]any)["concat"].([]any)
+	if !ok || len(key) != 4 || key[0] != "10.10.0.31" || key[1] != "203.0.113.10" || key[2] != float64(6) || key[3] != float64(443) {
+		t.Errorf("classification key: %v", second["key"])
+	}
+	val, ok := second["val"].(map[string]any)["jump"].(map[string]any)
+	if !ok || val["target"] != "mark_7" {
+		t.Errorf("classification value: %v", second["val"])
+	}
+}
+
+// TestPlanDelMapElements proves a delete carries only the key, no value.
+func TestPlanDelMapElements(t *testing.T) {
+	steps := mustPlan(t, `{"type":"nft_del_map_elements","map":"ident4","keys":["10.10.0.31"]}`)
+	stdin := steps[0].Cmd.Stdin
+	if !strings.Contains(stdin, `"name":"ident4"`) || !strings.Contains(stdin, `"elem":["10.10.0.31"]`) {
+		t.Errorf("%s", stdin)
+	}
+}
+
 func TestPlanRoutingGolden(t *testing.T) {
 	steps := mustPlan(t, `{"type":"routing","namespace":"gw","routes":[
 	  {"action":"replace","family":4,"table":100,"dst":"default","via":"10.0.0.1","dev":"wan0","metric":10},

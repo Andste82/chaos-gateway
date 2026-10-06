@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -521,5 +522,73 @@ func TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll(t *testing.T) {
 	got := b.waitDevice(testbed.ClientAMAC, 3*time.Second, func(d *engine.DeviceState) bool { return d.FlowsActive > 0 })
 	if got.Addresses[0].String() != ip {
 		t.Errorf("%+v, ip %s", got, ip)
+	}
+}
+
+// identityMapAddress returns the address the real kernel's identity map holds for dev's device
+// number (plan §3.3's single identity map, M7), or ok=false when there is none yet.
+func (b *dhcpBed) identityMapAddress(dev string) (addr string, ok bool) {
+	b.t.Helper()
+	s := b.e.Snapshot()
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
+	num, known := tg.DeviceNums[dev]
+	if !known {
+		return "", false
+	}
+	st, err := apply.ReadState(context.Background(), apply.Local{E: b.ex}, b.top.GW.Name, apply.Want{})
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	for _, o := range st.Nft.Objects {
+		if o.Map != nil && o.Map.Name == tg.IdentityMap {
+			want := strconv.Itoa(num)
+			for k, v := range o.Map.Pairs() {
+				if v == want {
+					return k, true
+				}
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// M7 test: after a forced address change, the device's entry in the real kernel's identity map
+// follows within one second (plan §3.3's acceptance list, plan §2.3's "identity changes take a
+// second at most") - the actual nftables map element, not only the API event that
+// TestAnAddressChangeIsAnEventWithinASecond already covers.
+func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.T) {
+	b := newDHCPBed(t)
+	b.apply(dhcpOn)
+	b.follow()
+	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+	dev := engine.DeviceID(testbed.ClientAMAC)
+	b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return len(d.Addresses) > 0 && d.Online })
+	if addr, ok := b.identityMapAddress(dev); !ok || addr != testbed.ClientAAddr {
+		t.Fatalf("setup: the identity map holds %q, ok=%v", addr, ok)
+	}
+
+	// A gets another address (the old one is gone: no connection holds it)
+	b.top.A.Must("ip", "addr", "flush", "dev", "eth0")
+	b.top.A.Must("ip", "addr", "add", "10.10.0.99/24", "dev", "eth0")
+	b.top.A.Must("ip", "route", "add", "default", "via", testbed.LAN0Gateway)
+	start := time.Now()
+	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+
+	deadline := time.Now().Add(5 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		addr, ok := b.identityMapAddress(dev)
+		last = addr
+		if ok && addr == "10.10.0.99" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if last != "10.10.0.99" {
+		t.Fatalf("the identity map never followed the address change: holds %q", last)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the identity map followed after %v, the target is one second", took)
 	}
 }

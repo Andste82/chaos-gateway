@@ -685,3 +685,86 @@ func TestAFailingConntrackReadIsReported(t *testing.T) {
 		t.Errorf("%+v", d)
 	}
 }
+
+// blockingNftExec wraps an apply.Exec and blocks, once, right before the first NftApply it sees -
+// before calling the wrapped Exec at all, so nothing of the kernel simulation's own state (which a
+// kernelsim.Kernel call this blocks would otherwise hold its lock on) is touched while blocked.
+// TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress uses it to force a full apply's own
+// write to still be "in flight" while something else about the kernel changes.
+type blockingNftExec struct {
+	inner   apply.Exec
+	entered chan struct{}
+	resume  chan struct{}
+	armed   bool
+	once    sync.Once
+}
+
+func (b *blockingNftExec) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	if b.armed {
+		for _, op := range ops {
+			if _, ok := op.(*executor.NftApply); ok {
+				b.once.Do(func() { close(b.entered); <-b.resume })
+				break
+			}
+		}
+	}
+	return b.inner.Do(ctx, ops...)
+}
+
+// M7 test: a concurrent full apply does not restore a device's stale address (plan §3.3's
+// acceptance list). An unrelated configuration change triggers a full apply, compiled with
+// whatever identity was current right then; while that apply's own nft write is still in flight
+// (blocked here deterministically, above the kernel simulation so the device's address can still
+// change underneath it), the device's real address changes. Once the full apply's write lands -
+// with the address that was current when it was compiled, exactly the stale value a bug would leave
+// behind - an observation discovers the real change and corrects the kernel with an incremental
+// element diff (engine's identityOps): the full apply's own write is not left as the final state.
+func TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress(t *testing.T) {
+	h := newHarness(t)
+	be := &blockingNftExec{inner: apply.Local{E: h.ex}, entered: make(chan struct{}), resume: make(chan struct{})}
+	e, err := engine.New(engine.Config{Store: h.st, Exec: be, Clock: h.clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e
+	t.Cleanup(e.Close)
+
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.barrier()
+	if got := h.deviceSetElements(devID); got != "10.10.0.31" {
+		t.Fatalf("setup: the identity map holds %q", got)
+	}
+
+	// an unrelated change (the uplink gateway): a full, non-incremental apply, compiled with the
+	// identity (10.10.0.31) that is current right now.
+	r2 := h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		c.Uplink.Gateway = ptr("203.0.113.20")
+	})
+	be.armed = true
+	done := make(chan error, 1)
+	go func() { _, err := h.apply(r2); done <- err }()
+	<-be.entered
+
+	// the device moves while that full apply's write is still blocked mid-flight.
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.77", macCfg)})
+
+	close(be.resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := h.deviceSetElements(devID); got != "10.10.0.31" {
+		t.Fatalf("setup: the full apply did not write the expected (stale) address: %q", got)
+	}
+	// only now does an observation discover the real change and correct it.
+	h.observe()
+	h.barrier()
+	if got := h.deviceSetElements(devID); got != "10.10.0.77" {
+		t.Errorf("the full apply's stale write was not corrected: the identity map holds %q", got)
+	}
+}

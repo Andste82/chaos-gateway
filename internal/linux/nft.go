@@ -130,7 +130,9 @@ func NormalizeElement(e string) string { return strings.TrimSuffix(e, "/32") }
 // Pairs returns the key/value elements of a map, normalized like Elements: the key as an address,
 // a prefix or a concatenation joined with ".", the value as a decimal number (a "mark" map, such
 // as the identity map) or the name of the chain a "verdict" element (a classification map) jumps
-// to.
+// to. A map element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array
+// of arrays with exactly two elements is expected"), confirmed against a real captured `nft -j
+// list map` ("elem": [[9001, {"drop": null}], ...]).
 func (s *NftSet) Pairs() map[string]string {
 	out := make(map[string]string, len(s.Elem))
 	for _, raw := range s.Elem {
@@ -138,15 +140,11 @@ func (s *NftSet) Pairs() map[string]string {
 		if err := json.Unmarshal(raw, &v); err != nil {
 			continue
 		}
-		m, ok := v.(map[string]any)
-		if !ok {
+		pair, ok := v.([]any)
+		if !ok || len(pair) != 2 {
 			continue
 		}
-		e, ok := m["elem"].(map[string]any)
-		if !ok {
-			continue
-		}
-		out[NormalizeElement(elemString(e["key"]))] = mapValueString(e["val"])
+		out[NormalizeElement(elemString(pair[0]))] = mapValueString(pair[1])
 	}
 	return out
 }

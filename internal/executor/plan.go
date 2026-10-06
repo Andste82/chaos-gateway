@@ -141,7 +141,11 @@ func planMapElements(verb string, tg Target, mapName string, elements []NftMapEl
 			elems[i] = key
 			continue
 		}
-		elems[i] = map[string]any{"elem": map[string]any{"key": key, "val": mapValueExpr(e.Value)}}
+		// A map element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an
+		// array of arrays with exactly two elements is expected"), not an object with "key"/"val"
+		// fields - confirmed against a real captured `nft -j list map` ("elem": [[9001, {"drop":
+		// null}], ...]) after the object form was rejected by the real kernel ("Invalid argument").
+		elems[i] = []any{key, mapValueExpr(e.Value)}
 	}
 	doc := map[string]any{"nftables": []any{map[string]any{verb: map[string]any{"element": map[string]any{
 		"family": NftFamily, "table": NftTable, "name": mapName, "elem": elems,

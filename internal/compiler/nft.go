@@ -257,13 +257,16 @@ func setElement(typ, e string) any {
 	return e
 }
 
-// mapElements renders the compiled content of a map: each MapElement's Key becomes a concatenation
-// of its " . "-joined parts (or the bare part alone, for a one-field key), and its Value becomes
-// the data: a decimal number for a "mark" map, a jump to the chain it names for a "verdict" map.
+// mapElements renders the compiled content of a map: each entry is a [key, value] pair
+// (libnftables-json's SET_ELEM: "for mappings, an array of arrays with exactly two elements is
+// expected" - confirmed against a real captured `nft -j list map`, "elem": [[9001, {"drop":
+// null}], ...]). The key becomes a concatenation of its " . "-joined parts (or the bare part
+// alone, for a one-field key), and the value becomes the data: a decimal number for a "mark" map,
+// a jump to the chain it names for a "verdict" map.
 func mapElements(m MapDef) []any {
 	out := make([]any, 0, len(m.Elements))
 	for _, e := range m.Elements {
-		out = append(out, map[string]any{"elem": map[string]any{"key": mapKeyExpr(e.Key), "val": mapValueExpr(m.ValueType, e.Value)}})
+		out = append(out, []any{mapKeyExpr(e.Key), mapValueExpr(m.ValueType, e.Value)})
 	}
 	return out
 }

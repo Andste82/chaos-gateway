@@ -432,18 +432,16 @@ func walk(e any, pred func(any) bool) bool {
 
 func refersTo(e any, ref string) bool { s, ok := e.(string); return ok && s == ref }
 
-// mapElemKey returns the normalized key part of a map element (`{"elem":{"key":...,"val":...}}`,
-// or, for a delete, the bare key), so two elements can be compared regardless of their value.
+// mapElemKey returns the normalized key part of a map element (an add's `[key, value]` pair, or,
+// for a delete, the bare key), so two elements can be compared regardless of their value.
 func mapElemKey(raw json.RawMessage) string {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return string(raw)
 	}
-	if m, ok := v.(map[string]any); ok {
-		if e, ok := m["elem"].(map[string]any); ok {
-			b, _ := json.Marshal(e["key"])
-			return string(b)
-		}
+	if pair, ok := v.([]any); ok && len(pair) == 2 {
+		b, _ := json.Marshal(pair[0])
+		return string(b)
 	}
 	b, _ := json.Marshal(v)
 	return string(b)

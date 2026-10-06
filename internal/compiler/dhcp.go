@@ -3,6 +3,7 @@ package compiler
 import (
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,12 +173,15 @@ func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (k
 	return sub, true
 }
 
-// compileDeviceSets gives every device a set of its current addresses (`dev_<id>`): configured
-// devices, WireGuard clients and probes from the index, discovered devices from the observed state.
-// Rules and faults of later milestones match the sets, so a device keeps its faults when its address
-// changes (plan §2.3); an identity change is then one incremental element update, a full apply fills
-// the sets from the latest observed state.
-func (t *Target) compileDeviceSets(idx *domain.Index, id *domain.Identity) {
+// compileIdentity builds the identity map (plan §3.3): every known device's current addresses
+// mapped to its numeral, in one nftables map (`ident4`) instead of the Phase 1 per-device address
+// sets M6a-07 deferred replacing (`dev_<id>`, one `nft add set` and one verified object per
+// device). Known devices are configured devices, WireGuard clients and probes from the index, and
+// discovered devices from the observed state. A device's address change is then one incremental
+// element update of the single map (executor.NftAddMapElements/NftDelMapElements), the map
+// counterpart of what the old per-device sets already did one set at a time; a full apply fills it
+// from the latest observed state, like compileKea and compileRouting already do.
+func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity) {
 	addrs := map[string][]string{}
 	names := map[string]bool{}
 	for did := range idx.Devices {
@@ -201,18 +205,22 @@ func (t *Target) compileDeviceSets(idx *domain.Index, id *domain.Identity) {
 	if len(names) == 0 {
 		return
 	}
-	t.DeviceSets = map[string]string{}
 	var ids []string
 	for did := range names {
 		ids = append(ids, did)
 	}
 	sort.Strings(ids)
-	for _, did := range ids {
-		el := addrs[did]
+	t.DeviceNums = map[string]int{}
+	md := MapDef{KeyType: []string{"ipv4_addr"}, ValueType: "mark"}
+	for num, did := range ids {
+		t.DeviceNums[did] = num + 1 // 0 is reserved for "no device"
+		el := append([]string(nil), addrs[did]...)
 		sort.Strings(el)
-		s := SetDef{Type: "ipv4_addr", Elements: el}
-		s.Name = hashName("dev_"+strings.ReplaceAll(did, "-", "")[:12], s.Type, s.Flags)
-		t.deviceSets = append(t.deviceSets, s)
-		t.DeviceSets[did] = s.Name
+		for _, a := range el {
+			md.Elements = append(md.Elements, MapElement{Key: a, Value: strconv.Itoa(num + 1)})
+		}
 	}
+	md.Name = hashMapName("ident4", md.KeyType, md.ValueType)
+	t.identityMap = md
+	t.IdentityMap = md.Name
 }

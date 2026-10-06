@@ -40,6 +40,41 @@ func ctState(states ...string) any {
 	return inSet(ctKey("state"), list)
 }
 
+// ctOriginal is a ct key read in the connection's original direction, unaffected by NAT (plan
+// §3.3): the same for a reply as for the packet that opened the connection.
+func ctOriginal(key string) any {
+	return map[string]any{"ct": map[string]any{"key": key, "dir": "original"}}
+}
+
+// ctOriginalIP is ctOriginal for an address field: the "inet" table family needs the family
+// qualifier to tell an IPv4 from an IPv6 address (nft's `ct original ip saddr`).
+func ctOriginalIP(key string) any {
+	return map[string]any{"ct": map[string]any{"key": key, "family": "ip", "dir": "original"}}
+}
+
+func bitAnd(a, b any) any { return map[string]any{"&": []any{a, b}} }
+func bitOr(a, b any) any  { return map[string]any{"|": []any{a, b}} }
+func lshift(a, b any) any { return map[string]any{"<<": []any{a, b}} }
+
+// concat is a concatenated key expression (plan §3.3's lookup chain): several fields matched or
+// looked up together, e.g. device, destination, protocol and port.
+func concat(parts ...any) any { return map[string]any{"concat": parts} }
+
+// markSet is "meta mark set <value>" (the MSS clamp rule already uses the same "mangle"
+// statement, for the TCP MSS option instead of the mark).
+func markSet(value any) any {
+	return map[string]any{"mangle": map[string]any{"key": meta("mark"), "value": value}}
+}
+
+// vmap is a verdict-map lookup statement: it jumps to the chain the matching key names, or, when
+// no key matches, lets the rule fall through to the next one (plan §3.3's first-match lookup
+// chain) — confirmed against nft's own parser (`nft -c`), since a map lookup cannot be combined
+// with other expressions such as the bitwise ops that write the fault id (`-- Expression type map
+// not allowed in context`): every classification level is its own small jump target chain instead.
+func vmap(key any, mapName string) any {
+	return map[string]any{"vmap": map[string]any{"key": key, "data": setRef(mapName)}}
+}
+
 // ---- endpoints of the access matrix --------------------------------------------------------
 
 type endpoint struct {
@@ -49,7 +84,7 @@ type endpoint struct {
 // compileNft builds the table `inet chaosgw`: gateway protection (input), the access matrix and
 // the IPv6 block (forward), masquerade (postrouting), the MSS clamp on WireGuard interfaces and
 // the generation chain.
-func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef) {
+func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef, testClassifyIDs []int) {
 	mkSet := func(base string, elems []string) SetDef {
 		s := SetDef{Type: "ifname", Elements: elems}
 		s.Name = hashName(base, s.Type, s.Flags)
@@ -76,7 +111,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		t.Nft.Sets = append(t.Nft.Sets, ifsWG)
 	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
-	t.Nft.Sets = append(t.Nft.Sets, t.deviceSets...)
+	if t.identityMap.Name != "" {
+		t.Nft.Maps = append(t.Nft.Maps, t.identityMap)
+	}
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
 	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop"}
 
@@ -201,6 +238,13 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		t.Nft.Counters = append(t.Nft.Counters, "mss_clamp")
 		sort.Strings(t.Nft.Counters)
 	}
+
+	// ---- classification (plan §3.3, M7): the fault-id/direction mark on prerouting, for test,
+	// WireGuard and remote-network traffic only ---------------------------------------------
+	t.compileClassify(testClassifyIDs)
+	sort.Slice(t.Nft.Maps, func(i, j int) bool { return t.Nft.Maps[i].Name < t.Nft.Maps[j].Name })
+	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
+
 	// sorted by name, as the kernel lists them: the preview diff compares line by line
 	sort.Slice(t.Nft.Chains, func(i, j int) bool { return t.Nft.Chains[i].Name < t.Nft.Chains[j].Name })
 }

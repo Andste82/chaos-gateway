@@ -59,6 +59,23 @@ func (k *Kernel) nftList() any {
 		}
 		out = append(out, map[string]any{"set": m})
 	}
+	var mapNames []string
+	for n := range t.maps {
+		mapNames = append(mapNames, n)
+	}
+	sort.Strings(mapNames)
+	for _, n := range mapNames {
+		mp := t.maps[n]
+		var typ any
+		_ = json.Unmarshal(mp.keyType, &typ)
+		m := map[string]any{"family": "inet", "table": "chaosgw", "name": n, "handle": next(), "type": typ, "map": mp.valueType}
+		if len(mp.elems) > 0 {
+			elems := make([]json.RawMessage, len(mp.elems))
+			copy(elems, mp.elems)
+			m["elem"] = elems
+		}
+		out = append(out, map[string]any{"map": m})
+	}
 	var chainNames []string
 	for n := range t.chains {
 		chainNames = append(chainNames, n)
@@ -120,7 +137,7 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 			return t, nftErr("table: only add is simulated")
 		}
 		if t == nil {
-			t = &nftTable{sets: map[string]*nftSet{}, counters: map[string]int64{}, chains: map[string]*nftChain{}}
+			t = &nftTable{sets: map[string]*nftSet{}, maps: map[string]*nftMap{}, counters: map[string]int64{}, chains: map[string]*nftChain{}}
 		}
 		return t, nil
 	}
@@ -176,36 +193,110 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 		default:
 			return t, nftErr(command + " set is not simulated")
 		}
+	case "map":
+		switch command {
+		case "add":
+			typ := f["type"]
+			val := str(f, "map")
+			if old, ok := t.maps[name]; ok {
+				if string(old.keyType) != string(typ) || old.valueType != val {
+					return t, nftErr("File exists")
+				}
+				return t, nil
+			}
+			t.maps[name] = &nftMap{keyType: typ, valueType: val}
+		case "flush":
+			m, ok := t.maps[name]
+			if !ok {
+				return t, nftErr("No such file or directory")
+			}
+			m.elems = nil
+		case "delete":
+			if _, ok := t.maps[name]; !ok {
+				return t, nftErr("No such file or directory")
+			}
+			if usedBy(t, func(e any) bool { return refersTo(e, "@"+name) }) {
+				return t, nftErr("Device or resource busy")
+			}
+			delete(t.maps, name)
+		default:
+			return t, nftErr(command + " map is not simulated")
+		}
 	case "element":
-		s, ok := t.sets[name]
+		if s, ok := t.sets[name]; ok {
+			if command != "add" && command != "delete" {
+				return t, nftErr("No such file or directory")
+			}
+			var elems []json.RawMessage
+			_ = json.Unmarshal(f["elem"], &elems)
+			if command == "delete" {
+				for _, e := range elems {
+					found := false
+					for i, x := range s.elems {
+						if string(x) == string(e) {
+							s.elems = append(s.elems[:i:i], s.elems[i+1:]...)
+							found = true
+							break
+						}
+					}
+					if !found {
+						return t, nftErr("No such file or directory") // nft refuses to delete an element that is not there
+					}
+				}
+				return t, nil
+			}
+			for _, e := range elems {
+				dup := false
+				for _, x := range s.elems {
+					dup = dup || string(x) == string(e)
+				}
+				if !dup {
+					s.elems = append(s.elems, e)
+				}
+			}
+			return t, nil
+		}
+		m, ok := t.maps[name]
 		if !ok || (command != "add" && command != "delete") {
 			return t, nftErr("No such file or directory")
 		}
-		var elems []json.RawMessage
-		_ = json.Unmarshal(f["elem"], &elems)
+		var raw []json.RawMessage
+		_ = json.Unmarshal(f["elem"], &raw)
 		if command == "delete" {
-			for _, e := range elems {
+			for _, e := range raw {
+				k := mapElemKey(e)
 				found := false
-				for i, x := range s.elems {
-					if string(x) == string(e) {
-						s.elems = append(s.elems[:i:i], s.elems[i+1:]...)
+				for i, x := range m.elems {
+					if mapElemKey(x) == k {
+						m.elems = append(m.elems[:i:i], m.elems[i+1:]...)
 						found = true
 						break
 					}
 				}
 				if !found {
-					return t, nftErr("No such file or directory") // nft refuses to delete an element that is not there
+					return t, nftErr("No such file or directory")
 				}
 			}
 			return t, nil
 		}
-		for _, e := range elems {
-			dup := false
-			for _, x := range s.elems {
-				dup = dup || string(x) == string(e)
+		for _, e := range raw {
+			var v any
+			if err := json.Unmarshal(e, &v); err == nil {
+				if err := checkRefs(t, v); err != nil {
+					return t, err
+				}
 			}
-			if !dup {
-				s.elems = append(s.elems, e)
+			k := mapElemKey(e)
+			replaced := false
+			for i, x := range m.elems {
+				if mapElemKey(x) == k {
+					m.elems[i] = e
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				m.elems = append(m.elems, e)
 			}
 		}
 	case "chain":
@@ -266,19 +357,31 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 	return t, nil
 }
 
-// checkRefs fails when an expression names a set or counter that does not exist.
+// checkRefs fails when an expression names a set, map, chain or counter that does not exist.
 func checkRefs(t *nftTable, e any) error {
 	switch x := e.(type) {
 	case string:
 		if strings.HasPrefix(x, "@") {
-			if _, ok := t.sets[x[1:]]; !ok {
-				return nftErr("No such file or directory: set " + x[1:])
+			n := x[1:]
+			_, isSet := t.sets[n]
+			_, isMap := t.maps[n]
+			if !isSet && !isMap {
+				return nftErr("No such file or directory: set " + n)
 			}
 		}
 	case map[string]any:
 		if n, ok := x["counter"].(string); ok {
 			if _, ok := t.counters[n]; !ok {
 				return nftErr("No such file or directory: counter " + n)
+			}
+		}
+		for _, verb := range []string{"jump", "goto"} {
+			if j, ok := x[verb].(map[string]any); ok {
+				if n, ok := j["target"].(string); ok {
+					if _, ok := t.chains[n]; !ok {
+						return nftErr("No such file or directory: chain " + n)
+					}
+				}
 			}
 		}
 		for _, v := range x {
@@ -328,6 +431,23 @@ func walk(e any, pred func(any) bool) bool {
 }
 
 func refersTo(e any, ref string) bool { s, ok := e.(string); return ok && s == ref }
+
+// mapElemKey returns the normalized key part of a map element (`{"elem":{"key":...,"val":...}}`,
+// or, for a delete, the bare key), so two elements can be compared regardless of their value.
+func mapElemKey(raw json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	if m, ok := v.(map[string]any); ok {
+		if e, ok := m["elem"].(map[string]any); ok {
+			b, _ := json.Marshal(e["key"])
+			return string(b)
+		}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
 
 // printedElems renders the elements as nft prints them: a single-address interval element (a /32
 // prefix) comes out as the bare address.

@@ -49,6 +49,12 @@ type Input struct {
 	// Identity is which addresses belong to which device right now (observed state); nil before
 	// anything was observed.
 	Identity *domain.Identity
+	// TestClassifyIDs pre-creates the per-id mark-writing chain of the classification mechanism
+	// (plan §3.3, M7) for each id named here. M7 has no fault resolution yet (that is M8a onward),
+	// so nothing makes the compiler choose a classification id on its own; a test applies a target
+	// with one of these and then adds classification-map elements for it with
+	// executor.NftAddMapElements, to prove the lookup chain and the mark layout end-to-end.
+	TestClassifyIDs []int
 	// ServiceNS is the name of the service namespace the gateway services run in; empty compiles
 	// no service namespace (and no DNS redirect).
 	ServiceNS string
@@ -141,10 +147,23 @@ type Target struct {
 	Service *ServiceNS `json:"service,omitempty"`
 	// Kea is the DHCP configuration; nil when no network has DHCP switched on.
 	Kea *KeaTarget `json:"kea,omitempty"`
-	// DeviceSets maps a device (configured or discovered) to its nftables set of addresses.
-	DeviceSets map[string]string `json:"device_sets,omitempty"`
-	deviceSets []SetDef
-	Interfaces []string `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
+	// IdentityMap is the nftables map that holds every known device's current addresses mapped to
+	// its numeral (plan §3.3): the single structure that replaces the Phase 1 per-device address
+	// sets (M6a-07), so a device's address change is one map-element update instead of a full apply.
+	IdentityMap string `json:"identity_map,omitempty"`
+	// DeviceNums maps a device (configured or discovered) to the small integer IdentityMap uses as
+	// its value for that device's addresses. Stable only within one Target: a device added or
+	// removed renumbers them, which is why a changed device set still needs a full apply.
+	DeviceNums  map[string]int `json:"device_nums,omitempty"`
+	identityMap MapDef
+	// ClassifyNets is the nftables set of test, WireGuard and remote-network prefixes that guards
+	// the classification chain (plan §3.3): classification never reads or writes the mark of
+	// anything outside it.
+	ClassifyNets string `json:"classify_nets,omitempty"`
+	// ClassifyMaps maps a lookup-chain level ("devdestport", "devdest", "devport", "dev", plan
+	// §3.3) to its nftables map name.
+	ClassifyMaps map[string]string `json:"classify_maps,omitempty"`
+	Interfaces   []string          `json:"interfaces"` // assigned to Chaos Gateway: bridges, ports, uplink
 	// OSOwned is the subset of Interfaces that is assigned (tc, routing, offloads, DOCKER-USER) but
 	// not Chaos Gateway's own in the stricter sense: the uplink, and the management interface when
 	// it is a NIC of its own (M3-01). links, sysctl, wireguard and service_ns refuse them.
@@ -263,8 +282,8 @@ func Compile(in Input) *Target {
 	t.compileRouting(cfg, idx)
 	t.compileBird(cfg, idx)
 	t.compileKea(cfg, idx)
-	t.compileDeviceSets(idx, in.Identity)
-	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
+	t.compileIdentity(idx, in.Identity)
+	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets, in.TestClassifyIDs)
 	t.finish()
 	return t
 }

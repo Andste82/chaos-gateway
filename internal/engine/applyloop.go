@@ -130,73 +130,81 @@ func (e *Engine) applyIdentity(ctx context.Context, old, next *compiler.Target) 
 			return false, err
 		}
 	}
-	// the generation of the rules did not change: an identity update only ever touches set elements,
-	// so verifying it only needs the sets, not the rest of the state (M6a-11).
+	// the generation of the rules did not change: an identity update only ever touches the identity
+	// map's elements, so verifying it only needs that map, not the rest of the state (M6a-11).
 	next.Nft.Generation = old.Nft.Generation
 	rs, err := apply.ReadSets(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return false, err
 	}
-	if mm := apply.VerifyDeviceSets(next, rs); len(mm) > 0 {
+	if mm := apply.VerifyIdentityMap(next, rs); len(mm) > 0 {
 		return false, fmt.Errorf("the kernel does not match after an identity update: %s", mm[0])
 	}
 	return true, nil
 }
 
-// identityOps compares the device sets of two targets. It fails with errNotIncremental when the sets
-// differ in anything but their elements.
+// identityOps compares the identity map of two targets (plan §3.3). It fails with
+// errNotIncremental when anything but the map's elements differs: a different map name (a device
+// was added or removed, which renumbers every DeviceNums entry) needs the full apply.
 func identityOps(ns string, old, next *compiler.Target) ([]executor.Operation, error) {
-	if len(old.DeviceSets) != len(next.DeviceSets) {
+	if old.IdentityMap == "" || next.IdentityMap == "" || old.IdentityMap != next.IdentityMap {
 		return nil, errNotIncremental
 	}
-	oldSets := map[string]compiler.SetDef{}
-	for _, s := range old.Nft.Sets {
-		oldSets[s.Name] = s
+	if len(old.DeviceNums) != len(next.DeviceNums) {
+		return nil, errNotIncremental
 	}
-	var names []string
-	for dev, name := range next.DeviceSets {
-		if old.DeviceSets[dev] != name {
+	for dev, num := range next.DeviceNums {
+		if old.DeviceNums[dev] != num {
 			return nil, errNotIncremental
 		}
-		names = append(names, name)
 	}
-	sort.Strings(names)
-	newSets := map[string]compiler.SetDef{}
-	for _, s := range next.Nft.Sets {
-		newSets[s.Name] = s
+	oldEl := mapElementsByName(old, old.IdentityMap)
+	newEl := mapElementsByName(next, next.IdentityMap)
+	have := map[string]string{}
+	for _, e := range oldEl {
+		have[e.Key] = e.Value
 	}
+	want := map[string]string{}
+	for _, e := range newEl {
+		want[e.Key] = e.Value
+	}
+	var add []executor.NftMapElement
+	var del []string
+	for k, v := range want {
+		if hv, ok := have[k]; !ok {
+			add = append(add, executor.NftMapElement{Key: k, Value: v})
+		} else if hv != v {
+			// a map add refuses a key that already exists, even with a different value: delete it
+			// first, in the same incremental request.
+			del = append(del, k)
+			add = append(add, executor.NftMapElement{Key: k, Value: v})
+		}
+	}
+	for k := range have {
+		if _, ok := want[k]; !ok {
+			del = append(del, k)
+		}
+	}
+	sort.Slice(add, func(i, j int) bool { return add[i].Key < add[j].Key })
+	sort.Strings(del)
 	var ops []executor.Operation
 	tg := executor.Target{NS: ns}
-	for _, name := range names {
-		a, b := oldSets[name], newSets[name]
-		if a.Name == "" || b.Name == "" {
-			return nil, errNotIncremental
-		}
-		have := map[string]bool{}
-		for _, x := range a.Elements {
-			have[x] = true
-		}
-		want := map[string]bool{}
-		for _, x := range b.Elements {
-			want[x] = true
-		}
-		var add, del []string
-		for _, x := range b.Elements {
-			if !have[x] {
-				add = append(add, x)
-			}
-		}
-		for _, x := range a.Elements {
-			if !want[x] {
-				del = append(del, x)
-			}
-		}
-		if len(add) > 0 {
-			ops = append(ops, &executor.NftAddElements{Target: tg, Set: name, Elements: add})
-		}
-		if len(del) > 0 {
-			ops = append(ops, &executor.NftDelElements{Target: tg, Set: name, Elements: del})
-		}
+	// delete before add: a key whose value changed is in both lists, and a map add refuses a key
+	// that still exists.
+	if len(del) > 0 {
+		ops = append(ops, &executor.NftDelMapElements{Target: tg, Map: old.IdentityMap, Keys: del})
+	}
+	if len(add) > 0 {
+		ops = append(ops, &executor.NftAddMapElements{Target: tg, Map: next.IdentityMap, Elements: add})
 	}
 	return ops, nil
+}
+
+func mapElementsByName(t *compiler.Target, name string) []compiler.MapElement {
+	for _, m := range t.Nft.Maps {
+		if m.Name == name {
+			return m.Elements
+		}
+	}
+	return nil
 }

@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "aed96003c8507631",
+  "hash": "c6bc5b153565ccff",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -42,6 +42,13 @@
       "nat": false
     }
   ],
+  "classify_nets": "classify_nets_8743d6",
+  "classify_maps": {
+    "dev": "cls_dev_d6cdc6",
+    "devdest": "cls_devdest_a38e25",
+    "devdestport": "cls_devdestport_e7e915",
+    "devport": "cls_devport_2399e9"
+  },
   "interfaces": [
     "br-iot",
     "br-lab",
@@ -165,6 +172,18 @@
   "nft": {
     "sets": [
       {
+        "name": "classify_nets_8743d6",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "elements": [
+          "10.10.0.0/24",
+          "10.20.0.0/24",
+          "10.30.0.0/24"
+        ]
+      },
+      {
         "name": "ifs_cg_bf4feb",
         "type": "ifname",
         "elements": [
@@ -199,6 +218,42 @@
         ]
       }
     ],
+    "maps": [
+      {
+        "name": "cls_dev_d6cdc6",
+        "key_type": [
+          "ipv4_addr"
+        ],
+        "value_type": "verdict"
+      },
+      {
+        "name": "cls_devdest_a38e25",
+        "key_type": [
+          "ipv4_addr",
+          "ipv4_addr"
+        ],
+        "value_type": "verdict"
+      },
+      {
+        "name": "cls_devdestport_e7e915",
+        "key_type": [
+          "ipv4_addr",
+          "ipv4_addr",
+          "inet_proto",
+          "inet_service"
+        ],
+        "value_type": "verdict"
+      },
+      {
+        "name": "cls_devport_2399e9",
+        "key_type": [
+          "ipv4_addr",
+          "inet_proto",
+          "inet_service"
+        ],
+        "value_type": "verdict"
+      }
+    ],
     "counters": [
       "forward_drop",
       "input_drop",
@@ -206,6 +261,217 @@
       "nat_0b7c6a3e"
     ],
     "chains": [
+      {
+        "name": "classify",
+        "base": {
+          "type": "filter",
+          "hook": "prerouting",
+          "prio": -150,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "dir": "original",
+                      "family": "ip",
+                      "key": "saddr"
+                    }
+                  },
+                  "op": "!=",
+                  "right": "@classify_nets_8743d6"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "dir": "original",
+                      "family": "ip",
+                      "key": "daddr"
+                    }
+                  },
+                  "op": "!=",
+                  "right": "@classify_nets_8743d6"
+                }
+              },
+              {
+                "return": null
+              }
+            ],
+            "comment": "b6c70c0a0a68"
+          },
+          {
+            "expr": [
+              {
+                "mangle": {
+                  "key": {
+                    "meta": {
+                      "key": "mark"
+                    }
+                  },
+                  "value": {
+                    "|": [
+                      {
+                        "\u0026": [
+                          {
+                            "meta": {
+                              "key": "mark"
+                            }
+                          },
+                          4294901759
+                        ]
+                      },
+                      {
+                        "\u003c\u003c": [
+                          {
+                            "ct": {
+                              "key": "direction"
+                            }
+                          },
+                          16
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "comment": "4fbcc130c227"
+          },
+          {
+            "expr": [
+              {
+                "vmap": {
+                  "data": "@cls_devdestport_e7e915",
+                  "key": {
+                    "concat": [
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "family": "ip",
+                          "key": "saddr"
+                        }
+                      },
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "family": "ip",
+                          "key": "daddr"
+                        }
+                      },
+                      {
+                        "meta": {
+                          "key": "l4proto"
+                        }
+                      },
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "key": "proto-dst"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "return": null
+              }
+            ],
+            "comment": "44e979f52e01"
+          },
+          {
+            "expr": [
+              {
+                "vmap": {
+                  "data": "@cls_devdest_a38e25",
+                  "key": {
+                    "concat": [
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "family": "ip",
+                          "key": "saddr"
+                        }
+                      },
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "family": "ip",
+                          "key": "daddr"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "return": null
+              }
+            ],
+            "comment": "0fae127b35e1"
+          },
+          {
+            "expr": [
+              {
+                "vmap": {
+                  "data": "@cls_devport_2399e9",
+                  "key": {
+                    "concat": [
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "family": "ip",
+                          "key": "saddr"
+                        }
+                      },
+                      {
+                        "meta": {
+                          "key": "l4proto"
+                        }
+                      },
+                      {
+                        "ct": {
+                          "dir": "original",
+                          "key": "proto-dst"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "return": null
+              }
+            ],
+            "comment": "a6b7ed581560"
+          },
+          {
+            "expr": [
+              {
+                "vmap": {
+                  "data": "@cls_dev_d6cdc6",
+                  "key": {
+                    "ct": {
+                      "dir": "original",
+                      "family": "ip",
+                      "key": "saddr"
+                    }
+                  }
+                }
+              },
+              {
+                "return": null
+              }
+            ],
+            "comment": "39afb689b4d0"
+          }
+        ]
+      },
       {
         "name": "forward",
         "base": {

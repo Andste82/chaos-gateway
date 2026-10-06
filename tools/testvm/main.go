@@ -3,6 +3,7 @@
 //	testvm preflight           can this machine run the testbed directly (level 1)?
 //	testvm run [flags] [pkgs]  run the tests: directly (level 1) or in a VM (level 1b)
 //	testvm sweep [-force]      remove namespaces a crashed direct run left behind
+//	testvm vm <command>        a persistent VM for the fast loop: up, run, exec, status, down
 //
 // `run -mode auto` (the default) chooses by the preflight: where namespaces and kernel modules
 // are available (a privileged container, a VM) the tests run directly; everywhere else, such as
@@ -38,7 +39,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: testvm preflight | testvm run [flags] [packages]")
+		fmt.Fprintln(stderr, "usage: testvm preflight | testvm run [flags] [packages] | testvm vm <command>")
 		return 2
 	}
 	switch args[0] {
@@ -57,6 +58,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runTests(ctx, args[1:], stdout, stderr)
 	case "sweep":
 		return sweep(ctx, args[1:], stdout, stderr)
+	case "vm":
+		return vmCommand(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "testvm: unknown command %q\n", args[0])
 		return 2

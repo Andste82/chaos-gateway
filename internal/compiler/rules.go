@@ -46,10 +46,17 @@ func ctOriginal(key string) any {
 	return map[string]any{"ct": map[string]any{"key": key, "dir": "original"}}
 }
 
-// ctOriginalIP is ctOriginal for an address field: the "inet" table family needs the family
-// qualifier to tell an IPv4 from an IPv6 address (nft's `ct original ip saddr`).
+// ctOriginalIP is ctOriginal for an address field: the "inet" table family needs the protocol
+// qualifier to tell an IPv4 from an IPv6 address (nft's `ct original ip saddr`). The qualifier is
+// part of the ct key itself ("ip saddr", "ip daddr"), not a separate "family" field: nft's JSON
+// parser (src/parser_json.c's json_parse_ct_expr) only ever reads "key" and "dir" for a ct
+// expression, so a "family" field (as libnftables-json(5) describes for "rt"/"xfrm" expressions,
+// not "ct") is silently ignored, and the bare key "saddr"/"daddr" leaves the protocol version
+// undetermined ("cannot determine ip protocol version, use \"ip saddr\" or \"ip6 saddr\"
+// instead" - confirmed against nftables' own source, src/ct.c's ct_templates: NFT_CT_SRC_IP's
+// token is the literal string "ip saddr").
 func ctOriginalIP(key string) any {
-	return map[string]any{"ct": map[string]any{"key": key, "family": "ip", "dir": "original"}}
+	return map[string]any{"ct": map[string]any{"key": "ip " + key, "dir": "original"}}
 }
 
 func bitAnd(a, b any) any { return map[string]any{"&": []any{a, b}} }

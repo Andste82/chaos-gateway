@@ -75,7 +75,10 @@ func TestPlanAddElements(t *testing.T) {
 
 // TestPlanAddMapElements is TestPlanAddElements for the map counterpart added in M7 (plan §3.3):
 // a decimal value renders as a plain number (the identity map), a non-decimal one as a jump to
-// the chain it names (a classification map), and a " . "-joined key as a concatenation.
+// the chain it names (a classification map), and a " . "-joined key as a concatenation. Each
+// element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array of arrays
+// with exactly two elements is expected"), not an object with "key"/"val" fields - confirmed
+// against a real captured `nft -j list map` ("elem": [[9001, {"drop": null}], ...]).
 func TestPlanAddMapElements(t *testing.T) {
 	steps := mustPlan(t, `{"type":"nft_add_map_elements","map":"ident4","elements":[{"key":"10.10.0.31","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"}]}`)
 	var doc struct {
@@ -83,7 +86,7 @@ func TestPlanAddMapElements(t *testing.T) {
 			Add struct {
 				Element struct {
 					Family, Table, Name string
-					Elem                []map[string]any
+					Elem                []json.RawMessage
 				}
 			}
 		}
@@ -95,18 +98,24 @@ func TestPlanAddMapElements(t *testing.T) {
 	if el.Family != "inet" || el.Table != "chaosgw" || el.Name != "ident4" || len(el.Elem) != 2 {
 		t.Fatalf("%+v", el)
 	}
-	first := el.Elem[0]["elem"].(map[string]any)
-	if first["key"] != "10.10.0.31" || first["val"] != float64(3) {
+	var first [2]any
+	if err := json.Unmarshal(el.Elem[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if first[0] != "10.10.0.31" || first[1] != float64(3) {
 		t.Errorf("identity element: %v", first)
 	}
-	second := el.Elem[1]["elem"].(map[string]any)
-	key, ok := second["key"].(map[string]any)["concat"].([]any)
-	if !ok || len(key) != 4 || key[0] != "10.10.0.31" || key[1] != "203.0.113.10" || key[2] != float64(6) || key[3] != float64(443) {
-		t.Errorf("classification key: %v", second["key"])
+	var second [2]any
+	if err := json.Unmarshal(el.Elem[1], &second); err != nil {
+		t.Fatal(err)
 	}
-	val, ok := second["val"].(map[string]any)["jump"].(map[string]any)
+	key, ok := second[0].(map[string]any)["concat"].([]any)
+	if !ok || len(key) != 4 || key[0] != "10.10.0.31" || key[1] != "203.0.113.10" || key[2] != float64(6) || key[3] != float64(443) {
+		t.Errorf("classification key: %v", second[0])
+	}
+	val, ok := second[1].(map[string]any)["jump"].(map[string]any)
 	if !ok || val["target"] != "mark_7" {
-		t.Errorf("classification value: %v", second["val"])
+		t.Errorf("classification value: %v", second[1])
 	}
 }
 

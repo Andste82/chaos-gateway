@@ -432,15 +432,14 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "b6c70c0a0a68",
+          "comment": "379e51a33962",
           "expr": [
             {
               "match": {
                 "left": {
                   "ct": {
                     "dir": "original",
-                    "family": "ip",
-                    "key": "saddr"
+                    "key": "ip saddr"
                   }
                 },
                 "op": "!=",
@@ -452,8 +451,7 @@
                 "left": {
                   "ct": {
                     "dir": "original",
-                    "family": "ip",
-                    "key": "daddr"
+                    "key": "ip daddr"
                   }
                 },
                 "op": "!=",
@@ -518,7 +516,7 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "44e979f52e01",
+          "comment": "fb6301eea4c9",
           "expr": [
             {
               "vmap": {
@@ -528,15 +526,13 @@
                     {
                       "ct": {
                         "dir": "original",
-                        "family": "ip",
-                        "key": "saddr"
+                        "key": "ip saddr"
                       }
                     },
                     {
                       "ct": {
                         "dir": "original",
-                        "family": "ip",
-                        "key": "daddr"
+                        "key": "ip daddr"
                       }
                     },
                     {
@@ -567,7 +563,7 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "0fae127b35e1",
+          "comment": "fd87e79e1d88",
           "expr": [
             {
               "vmap": {
@@ -577,15 +573,13 @@
                     {
                       "ct": {
                         "dir": "original",
-                        "family": "ip",
-                        "key": "saddr"
+                        "key": "ip saddr"
                       }
                     },
                     {
                       "ct": {
                         "dir": "original",
-                        "family": "ip",
-                        "key": "daddr"
+                        "key": "ip daddr"
                       }
                     }
                   ]
@@ -605,7 +599,7 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "a6b7ed581560",
+          "comment": "512ab7a8c8a2",
           "expr": [
             {
               "vmap": {
@@ -615,8 +609,7 @@
                     {
                       "ct": {
                         "dir": "original",
-                        "family": "ip",
-                        "key": "saddr"
+                        "key": "ip saddr"
                       }
                     },
                     {
@@ -647,7 +640,7 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "39afb689b4d0",
+          "comment": "3a2f836afb74",
           "expr": [
             {
               "vmap": {
@@ -655,8 +648,7 @@
                 "key": {
                   "ct": {
                     "dir": "original",
-                    "family": "ip",
-                    "key": "saddr"
+                    "key": "ip saddr"
                   }
                 }
               }

@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "0959a9cdd63c5a58",
+  "hash": "1cd927d60a0a95fe",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -274,8 +274,7 @@
                   "left": {
                     "ct": {
                       "dir": "original",
-                      "family": "ip",
-                      "key": "saddr"
+                      "key": "ip saddr"
                     }
                   },
                   "op": "!=",
@@ -287,8 +286,7 @@
                   "left": {
                     "ct": {
                       "dir": "original",
-                      "family": "ip",
-                      "key": "daddr"
+                      "key": "ip daddr"
                     }
                   },
                   "op": "!=",
@@ -299,7 +297,7 @@
                 "return": null
               }
             ],
-            "comment": "b6c70c0a0a68"
+            "comment": "379e51a33962"
           },
           {
             "expr": [
@@ -349,15 +347,13 @@
                       {
                         "ct": {
                           "dir": "original",
-                          "family": "ip",
-                          "key": "saddr"
+                          "key": "ip saddr"
                         }
                       },
                       {
                         "ct": {
                           "dir": "original",
-                          "family": "ip",
-                          "key": "daddr"
+                          "key": "ip daddr"
                         }
                       },
                       {
@@ -379,7 +375,7 @@
                 "return": null
               }
             ],
-            "comment": "44e979f52e01"
+            "comment": "fb6301eea4c9"
           },
           {
             "expr": [
@@ -391,15 +387,13 @@
                       {
                         "ct": {
                           "dir": "original",
-                          "family": "ip",
-                          "key": "saddr"
+                          "key": "ip saddr"
                         }
                       },
                       {
                         "ct": {
                           "dir": "original",
-                          "family": "ip",
-                          "key": "daddr"
+                          "key": "ip daddr"
                         }
                       }
                     ]
@@ -410,7 +404,7 @@
                 "return": null
               }
             ],
-            "comment": "0fae127b35e1"
+            "comment": "fd87e79e1d88"
           },
           {
             "expr": [
@@ -422,8 +416,7 @@
                       {
                         "ct": {
                           "dir": "original",
-                          "family": "ip",
-                          "key": "saddr"
+                          "key": "ip saddr"
                         }
                       },
                       {
@@ -445,7 +438,7 @@
                 "return": null
               }
             ],
-            "comment": "a6b7ed581560"
+            "comment": "512ab7a8c8a2"
           },
           {
             "expr": [
@@ -455,8 +448,7 @@
                   "key": {
                     "ct": {
                       "dir": "original",
-                      "family": "ip",
-                      "key": "saddr"
+                      "key": "ip saddr"
                     }
                   }
                 }
@@ -465,7 +457,7 @@
                 "return": null
               }
             ],
-            "comment": "39afb689b4d0"
+            "comment": "3a2f836afb74"
           }
         ]
       },

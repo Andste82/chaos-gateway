@@ -76,7 +76,14 @@ func TestVMExecAndRunExplainThatNoVMIsUp(t *testing.T) {
 func TestVMUpRefusesAVMThatIsAlreadyThere(t *testing.T) {
 	dir := t.TempDir()
 	d := vmrun.VMDir(dir)
-	self, err := vmrun.NewProcRef(os.Getpid())
+	// a child, not this process: under qemu-user (the arm64 job) the emulator synthesizes
+	// /proc/<own pid>/stat, only another process shows the kernel's values
+	child := exec.Command("sleep", "300")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	self, err := vmrun.NewProcRef(child.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,13 +44,27 @@ func TestParseProcStatFindsTheStartTimeEvenWithAnOddCommandName(t *testing.T) {
 	}
 }
 
-func TestAProcRefIsAliveOnlyAsTheSameProcess(t *testing.T) {
-	self, err := NewProcRef(os.Getpid())
+// liveProc starts a process that lives for the test and returns its reference. The tests never
+// use their own process for this: under qemu-user (the arm64 job) /proc/<own pid>/stat is
+// synthesized by the emulator, not read from the kernel, so only a child shows the real values.
+func liveProc(t *testing.T) ProcRef {
+	t.Helper()
+	cmd := exec.Command("sleep", "300")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	ref, err := NewProcRef(cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ref
+}
+
+func TestAProcRefIsAliveOnlyAsTheSameProcess(t *testing.T) {
+	self := liveProc(t)
 	if !self.Alive() {
-		t.Error("this process must be alive")
+		t.Error("a running process must be alive")
 	}
 	// the same pid with another start time is a different process: a reused pid
 	if (ProcRef{PID: self.PID, Start: self.Start + 1}).Alive() {
@@ -358,7 +372,7 @@ func upDir(t *testing.T, pids []ProcRef, ready bool) VMDir {
 }
 
 func TestTheStatusFollowsTheFilesAndTheProcess(t *testing.T) {
-	self, _ := NewProcRef(os.Getpid())
+	self := liveProc(t)
 
 	st, err := upDir(t, nil, false).Status()
 	if err != nil || st.State != StateDown {
@@ -396,7 +410,7 @@ func TestTheStatusFollowsTheFilesAndTheProcess(t *testing.T) {
 }
 
 func TestJobsAreRefusedWithAMessageThatSaysWhatToDo(t *testing.T) {
-	self, _ := NewProcRef(os.Getpid())
+	self := liveProc(t)
 	cases := map[string]VMDir{
 		"no VM is up":   upDir(t, nil, false),
 		"still booting": upDir(t, []ProcRef{self}, false),

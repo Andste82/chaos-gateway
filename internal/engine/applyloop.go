@@ -153,6 +153,11 @@ func (e *Engine) applyIdentity(ctx context.Context, old, next *compiler.Target) 
 // errNotIncremental when anything but the map's elements differs: a different map name (a device
 // was added or removed, which renumbers every DeviceNums entry) needs the full apply.
 func identityOps(ns string, old, next *compiler.Target) ([]executor.Operation, error) {
+	if old.IdentityMap == "" && next.IdentityMap == "" {
+		// no device is known before or after (the identity map is only compiled for a known device):
+		// there is nothing in the kernel to update, which must not cost a full apply
+		return nil, nil
+	}
 	if old.IdentityMap == "" || next.IdentityMap == "" || old.IdentityMap != next.IdentityMap {
 		return nil, errNotIncremental
 	}

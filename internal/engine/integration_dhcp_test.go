@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -535,32 +536,35 @@ func TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll(t *testing.T) {
 	}
 }
 
-// identityMapAddress returns the address the real kernel's identity map holds for dev's device
-// number (plan §3.3's single identity map, M7), or ok=false when there is none yet.
-func (b *dhcpBed) identityMapAddress(dev string) (addr string, ok bool) {
+// identityMapAddresses returns the addresses the real kernel's identity map holds for dev's device
+// number (plan §3.3's single identity map, M7), sorted; none when the device has no entry yet. A
+// device can hold two for a while: the gateway's neighbor entry for an address a host has just left
+// lingers until it is garbage-collected.
+func (b *dhcpBed) identityMapAddresses(dev string) []string {
 	b.t.Helper()
 	s := b.e.Snapshot()
 	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
 	num, known := tg.DeviceNums[dev]
 	if !known {
-		return "", false
+		return nil
 	}
 	st, err := apply.ReadState(context.Background(), apply.Local{E: b.ex}, b.top.GW.Name, apply.Want{})
 	if err != nil {
 		b.t.Fatal(err)
 	}
+	var out []string
 	for _, o := range st.Nft.Objects {
 		if o.Map != nil && o.Map.Name == tg.IdentityMap {
 			want := strconv.Itoa(num)
 			for k, v := range o.Map.Pairs() {
 				if v == want {
-					return k, true
+					out = append(out, k)
 				}
 			}
-			return "", false
 		}
 	}
-	return "", false
+	sort.Strings(out)
+	return out
 }
 
 // M7 test: after a forced address change, the device's entry in the real kernel's identity map
@@ -578,12 +582,12 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	// (identityConvergeWindow), not an element update, so the map may need a moment
 	setupDeadline := time.Now().Add(15 * time.Second)
 	for {
-		addr, ok := b.identityMapAddress(dev)
-		if ok && addr == testbed.ClientAAddr {
+		addrs := b.identityMapAddresses(dev)
+		if contains(addrs, testbed.ClientAAddr) {
 			break
 		}
 		if time.Now().After(setupDeadline) {
-			t.Fatalf("setup: the identity map holds %q, ok=%v", addr, ok)
+			t.Fatalf("setup: the identity map holds %v", addrs)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -596,17 +600,16 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
 
 	deadline := time.Now().Add(5 * time.Second)
-	var last string
+	var last []string
 	for time.Now().Before(deadline) {
-		addr, ok := b.identityMapAddress(dev)
-		last = addr
-		if ok && addr == "10.10.0.99" {
+		last = b.identityMapAddresses(dev)
+		if contains(last, "10.10.0.99") {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if last != "10.10.0.99" {
-		t.Fatalf("the identity map never followed the address change: holds %q", last)
+	if !contains(last, "10.10.0.99") {
+		t.Fatalf("the identity map never followed the address change: holds %v", last)
 	}
 	// The budget is looser than TestAnAddressChangeIsAnEventWithinASecond's one second: that test
 	// only waits for the in-memory event the observe step emits directly, while this one also

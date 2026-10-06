@@ -5,6 +5,7 @@ package engine_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -114,7 +115,16 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	// the engine's own log, shown when the test fails: a fallback from an incremental identity update
+	// to a full apply is only visible there
+	engineLog := &lockedBuffer{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("engine log:\n%s", engineLog.String())
+		}
+	})
 	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: top.GW.Name, Clock: &clock.Real{},
+		Log:  slog.New(slog.NewTextHandler(engineLog, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		DHCP: &engine.KeaDHCP{Client: kc, Base: base}})
 	if err != nil {
 		t.Fatal(err)

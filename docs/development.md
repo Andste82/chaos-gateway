@@ -851,6 +851,80 @@ proxy; the TLS responder (M21) joins it later.
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
   `/internal/dns/resolutions` (M20), per-device query statistics.
 
+## Classification (M7)
+
+Plan §3.3's lookup chain (`internal/compiler/classify.go`): on prerouting, write the winning fault's
+id and the packet's direction into reserved mark bits, for test/WireGuard/remote-network traffic
+only. M7 itself resolves no real fault — that is M8a onward — so the mechanism is proven with a
+per-id mark-writing chain a test points a map element at (`TestClassifyIDs`), ready for M8a to drive
+with `domain.Resolve`'s winners instead.
+
+- **Mark bits.** Bits 4-15 hold the fault id (12 bits, up to the 4095 of plan §3.3's capacity limit),
+  bit 16 the direction (0 = original/upload, 1 = reply/download, read from `ct direction`). Bits
+  17-19 (PMTU), 20 (service selection, already compiled by M6b but not yet written by real traffic,
+  see `docs/open-items.md` P2-M7-01) and 21-23 (reserved) are untouched by this chain; so are bits 0-3
+  and 24-31. `MarkKeepOnIDWrite` (0xffff000f) is the mask kept when the id is (re)written: it leaves
+  the direction bit alone. `TestMarkMasksKeepTheDirectionBit` pins this against spike S15's bug
+  (0xfffe000f), which cleared the direction bit on every classification and gave both directions of a
+  connection the upload side's parameters.
+- **The guard.** A set of test, WireGuard and remote-network prefixes (`classify_nets`, built from
+  every bridge's and WireGuard interface's address and routes) decides whether a packet is classified
+  at all: neither the source nor the destination (the conntrack original tuple, so NAT does not
+  defeat it) being in that set returns at once, before the mark is read or written. The gateway's own
+  traffic — management, updates, BIRD, the WireGuard underlay — is never touched here, unless a
+  tunnel fault targets it from M10 onward.
+- **The lookup chain.** Four nftables verdict maps, most specific first: device+destination+port,
+  device+destination, device+port, device — the granularities the current domain model supports
+  without groups or networks. Group- and network-level selectors (plan §3.3 levels 5-10) need the
+  access-matrix/fault-resolution machinery M8a/M9 bring; `docs/open-items.md` P2-M7-02 tracks the
+  deferral. Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
+  `inet_proto`, `inet_service`, as needed) and its value is a verdict that jumps to a per-id chain
+  (`mark_<id>`) and returns; a classification map cannot combine the lookup with the bitwise mark
+  write in one nft statement (confirmed against the real `nft` parser), hence the extra indirection
+  instead of a map whose value is the shifted id itself. All four maps are empty in M7 — nothing
+  resolves a real fault yet — and `TestClassifyIDs` is the only way to populate a per-id chain and a
+  map element pointing at it before M8a exists.
+- **Identity map.** The Phase 1 per-device address sets (`dev_<id>`, M6a-07) are replaced by one
+  nftables map, `ident4` (address → device number), built by `compileIdentity` from the same known
+  devices (configured, WireGuard clients, probes, and discovered devices from the observed state) the
+  old per-device sets used. `DeviceNums` assigns each device a small stable number (0 reserved for
+  "no device"); the classification maps above are meant to be keyed on device number once group
+  resolution needs it, but M7's own four maps still key on address directly, since without faults to
+  resolve there is nothing yet that must look a device number back up. A device's address change is
+  now one incremental element update of this single map, the same way `applyloop.go`'s `identityOps`
+  already diffed per-device sets one at a time in M6a: a changed key is deleted and re-added in the
+  same incremental request (a map add refuses an existing key), a full apply still fills the map from
+  the latest observed state. `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
+  a full apply, with the same object-cleanup handling `nft.go`'s `Transaction` already had for sets,
+  and a latent bug fixed there: a removed map was deleted with `delete set`, not `delete map`);
+  `kernelsim` simulates map objects (add/flush/delete, element add/delete, jump-target and
+  set/map reference checks) so the apply and engine test suites exercise the new mechanism without a
+  real kernel; `verify.go`'s `VerifyIdentityMap` replaces `VerifyDeviceSets`.
+- **Tests.** `classify_test.go` covers the mask, the guard, the single direction-bit write, the lookup
+  chain's order, `TestClassifyIDs`' per-id chains, `classifyNets`' coverage of test/WireGuard/remote
+  prefixes, and that the chain runs before the service redirect (`ClassifyPriority` -150, before
+  `service.go`'s prerouting at -100) without touching its mark. In the testbed,
+  `internal/apply/integration_classify_test.go` sets up a tc class per (id, direction), selected by a
+  filter on exactly the mark bits this chain writes, and checks per-class counters increase only for
+  matching traffic in both directions, behind NAT, across two test networks, with non-test
+  (management) traffic's mark left untouched, and with a map element change moving an already
+  established, long-lived connection to its new class without waiting for it to end ("per packet, not
+  per connection", plan §3.3: see `TestClassificationMarksOnlyMatchingTrafficBehindNAT`,
+  `TestClassificationAcrossTwoTestNetworks`, `TestNonTestTrafficKeepsItsMarkUntouched`,
+  `TestAMapChangeMovesAnEstablishedConnectionToItsNewClass`).
+  `internal/engine/integration_classify_test.go` runs the same tc-probe mechanism for a WireGuard
+  client network host, as both initiator and destination, and over a WireGuard link
+  (`TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination`,
+  `TestClassificationOverAWireGuardLink`). `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`
+  checks the real kernel's identity-map entry (not only the API event) follows a forced address
+  change within a second, and `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` (over the
+  simulated kernel, a `blockingNftExec` wrapper above the kernel's own lock) proves a full apply
+  racing an incremental identity update does not win with the stale address.
+- **Not in M7:** real fault ids (M8a onward), group- and network-level selectors (M8a/M9), the output
+  hook and IFB for tunnel faults (M10), writing the service-selection mark bit from real traffic
+  (M20/M21, P2-M7-01) and the connections-redirected-to-a-gateway-service classification test that
+  goes with it.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

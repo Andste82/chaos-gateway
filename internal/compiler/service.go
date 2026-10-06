@@ -17,8 +17,11 @@ const (
 	// ServiceTable routes selected traffic into the namespace, with a prohibit route as the fallback
 	// so that selected traffic fails closed when the namespace is missing.
 	ServiceTable = 102
-	// ServiceMark is the routing-mark bit that selects a service (bit 20); the classification of M7
-	// sets it.
+	// ServiceMark is the routing-mark bit that selects a service (bit 20). M7's classification
+	// mechanism never touches it (its masks only ever read or write bits 4-16, see classify.go's
+	// MarkKeepOnIDWrite/MarkKeepOnDirectionWrite): writing it for real redirected traffic is
+	// deferred to the milestone with the real redirect-interaction test (docs/open-items.md
+	// P2-M7-01).
 	ServiceMark = "0x100000/0x100000"
 	// ServiceRulePriority is before the rules of the policy table, so a marked packet is looked up in
 	// ServiceTable first.

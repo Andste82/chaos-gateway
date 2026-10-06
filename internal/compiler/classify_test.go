@@ -193,6 +193,47 @@ func TestClassifyNetsCoversTestAndWireGuardAndRemoteNetworks(t *testing.T) {
 	}
 }
 
+// TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark proves M7's classification mechanism
+// does not interact with the M6b-04 "fail closed via mark" path it must not disturb: the classify
+// chain's prerouting hook runs before the service redirect's own prerouting chain (so "right after
+// classification" from plan §3.3 is satisfiable later), and writing a test classification id, with
+// the service-selection bit already set beforehand, leaves that bit untouched (ServiceMark, bit 20)
+// - MarkKeepOnIDWrite and MarkKeepOnDirectionWrite only ever clear bits 4-16. See
+// docs/open-items.md P2-M7-01: M7 itself never sets bit 20 for real traffic either.
+func TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark(t *testing.T) {
+	tg := compileWG(t, func(_ *model.Configuration, in *Input) {
+		in.ServiceNS = "cgsvc"
+		in.TestClassifyIDs = []int{7}
+	})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	cc := findChain(tg, ClassifyChain)
+	sc := findChain(tg, "prerouting") // the service redirect's own chain (service.go)
+	if cc == nil || sc == nil {
+		t.Fatalf("classify=%v service=%v", cc, sc)
+	}
+	if cc.Base == nil || sc.Base == nil || cc.Base.Prio >= sc.Base.Prio {
+		t.Errorf("classify chain must run before the service redirect: classify prio %+v, service prio %+v", cc.Base, sc.Base)
+	}
+	const serviceBit = uint32(1) << 20
+	if MarkKeepOnIDWrite&serviceBit == 0 {
+		t.Error("MarkKeepOnIDWrite clears the service-selection bit (bit 20): classification would undo a service selection")
+	}
+	if MarkKeepOnDirectionWrite&serviceBit == 0 {
+		t.Error("MarkKeepOnDirectionWrite clears the service-selection bit (bit 20)")
+	}
+	// the per-id mark chain itself only ORs in the id bits; it cannot clear bit 20 either.
+	mc := findChain(tg, MarkChainName(7))
+	if mc == nil || len(mc.Rules) != 1 {
+		t.Fatalf("%+v", mc)
+	}
+	b, _ := json.Marshal(mc.Rules[0].Expr)
+	if s := string(b); !strings.Contains(s, "4294901775") { // 0xffff000f: keeps bit 20
+		t.Errorf("mark_7 chain: %s", s)
+	}
+}
+
 func findChain(tg *Target, name string) *Chain {
 	for i := range tg.Nft.Chains {
 		if tg.Nft.Chains[i].Name == name {

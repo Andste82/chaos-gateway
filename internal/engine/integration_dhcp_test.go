@@ -564,8 +564,18 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
 	dev := engine.DeviceID(testbed.ClientAMAC)
 	b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return len(d.Addresses) > 0 && d.Online })
-	if addr, ok := b.identityMapAddress(dev); !ok || addr != testbed.ClientAAddr {
-		t.Fatalf("setup: the identity map holds %q, ok=%v", addr, ok)
+	// a device that has just appeared reaches the kernel through the throttled full apply
+	// (identityConvergeWindow), not an element update, so the map may need a moment
+	setupDeadline := time.Now().Add(15 * time.Second)
+	for {
+		addr, ok := b.identityMapAddress(dev)
+		if ok && addr == testbed.ClientAAddr {
+			break
+		}
+		if time.Now().After(setupDeadline) {
+			t.Fatalf("setup: the identity map holds %q, ok=%v", addr, ok)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// A gets another address (the old one is gone: no connection holds it)

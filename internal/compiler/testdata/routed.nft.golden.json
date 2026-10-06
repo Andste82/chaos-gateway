@@ -471,8 +471,19 @@
       "add": {
         "rule": {
           "chain": "classify",
-          "comment": "4fbcc130c227",
+          "comment": "f786c01aac77",
           "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "direction"
+                  }
+                },
+                "op": "==",
+                "right": "reply"
+              }
+            },
             {
               "mangle": {
                 "key": {
@@ -483,25 +494,53 @@
                 "value": {
                   "|": [
                     {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901759
-                      ]
+                      "meta": {
+                        "key": "mark"
+                      }
                     },
+                    65536
+                  ]
+                }
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "classify",
+          "comment": "d8f65d492e8c",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "direction"
+                  }
+                },
+                "op": "==",
+                "right": "original"
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "\u0026": [
                     {
-                      "\u003c\u003c": [
-                        {
-                          "ct": {
-                            "key": "direction"
-                          }
-                        },
-                        16
-                      ]
-                    }
+                      "meta": {
+                        "key": "mark"
+                      }
+                    },
+                    4294901759
                   ]
                 }
               }

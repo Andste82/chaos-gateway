@@ -867,6 +867,13 @@ with `domain.Resolve`'s winners instead.
   the direction bit alone. `TestMarkMasksKeepTheDirectionBit` pins this against spike S15's bug
   (0xfffe000f), which cleared the direction bit on every classification and gave both directions of a
   connection the upload side's parameters.
+- **Direction bit.** Written by two mutually exclusive rules at the top of the lookup chain
+  (`ct direction reply` sets bit 16, `ct direction original` clears it), not by one
+  `mark | ct direction << 16` expression: the kernel refuses to shift the 1-byte `ct direction`
+  inside a bitwise expression (EOPNOTSUPP on 6.8.0-142, the minimum supported kernel), which fails the
+  whole atomic nft batch. `nft -c` in the dev container cannot catch this (no `CAP_NET_ADMIN`);
+  reproduce kernel rejections with `make test-vm ARGS='-no-kvm -run <regex>'` or by bisecting the
+  JSON batch with `nft -j -c -f -` inside `vng -r 6.8.0-142-generic --disable-kvm --exec ...`.
 - **The guard.** A set of test, WireGuard and remote-network prefixes (`classify_nets`, built from
   every bridge's and WireGuard interface's address and routes) decides whether a packet is classified
   at all: neither the source nor the destination (the conntrack original tuple, so NAT does not

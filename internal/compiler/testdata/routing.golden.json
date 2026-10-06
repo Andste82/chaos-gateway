@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "6e70613d4349a597",
+  "hash": "56738044cc314bba",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -489,6 +489,17 @@
           {
             "expr": [
               {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "direction"
+                    }
+                  },
+                  "op": "==",
+                  "right": "reply"
+                }
+              },
+              {
                 "mangle": {
                   "key": {
                     "meta": {
@@ -498,31 +509,52 @@
                   "value": {
                     "|": [
                       {
-                        "\u0026": [
-                          {
-                            "meta": {
-                              "key": "mark"
-                            }
-                          },
-                          4294901759
-                        ]
+                        "meta": {
+                          "key": "mark"
+                        }
                       },
-                      {
-                        "\u003c\u003c": [
-                          {
-                            "ct": {
-                              "key": "direction"
-                            }
-                          },
-                          16
-                        ]
-                      }
+                      65536
                     ]
                   }
                 }
               }
             ],
-            "comment": "4fbcc130c227"
+            "comment": "f786c01aac77"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "direction"
+                    }
+                  },
+                  "op": "==",
+                  "right": "original"
+                }
+              },
+              {
+                "mangle": {
+                  "key": {
+                    "meta": {
+                      "key": "mark"
+                    }
+                  },
+                  "value": {
+                    "\u0026": [
+                      {
+                        "meta": {
+                          "key": "mark"
+                        }
+                      },
+                      4294901759
+                    ]
+                  }
+                }
+              }
+            ],
+            "comment": "d8f65d492e8c"
           },
           {
             "expr": [

@@ -71,19 +71,34 @@ func TestClassifyChainGuardsNonTestTraffic(t *testing.T) {
 	}
 }
 
-// TestClassifyChainWritesTheDirectionBitOnce proves the direction-write statement runs
-// unconditionally (for test traffic) and uses ct direction shifted into bit 16, keeping the id
-// bits untouched.
+// TestClassifyChainWritesTheDirectionBitOnce pins the direction-write rules: two mutually
+// exclusive rules, reply sets bit 16 (mark | 0x10000) and original clears it (mark & 0xfffeffff),
+// each keeping every other mark bit. A single `mark | ct direction << 16` expression is refused by
+// the kernel (EOPNOTSUPP on 6.8.0-142, found by the level 1b testbed job), so no shift of ct
+// direction may appear anywhere in the chain.
 func TestClassifyChainWritesTheDirectionBitOnce(t *testing.T) {
 	tg := compileClassifyTarget(t, nil)
 	c := findChain(tg, ClassifyChain)
-	if len(c.Rules) < 2 {
+	if len(c.Rules) < 3 {
 		t.Fatalf("%+v", c.Rules)
 	}
-	b, _ := json.Marshal(c.Rules[1].Expr)
-	s := string(b)
-	if !strings.Contains(s, `"mangle"`) || !strings.Contains(s, `"mark"`) || !strings.Contains(s, `"direction"`) || !strings.Contains(s, ",16]") {
-		t.Errorf("direction rule: %s", s)
+	reply, _ := json.Marshal(c.Rules[1].Expr)
+	orig, _ := json.Marshal(c.Rules[2].Expr)
+	wantReply := `[{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},65536]}}}]`
+	wantOrig := `[{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"\u0026":[{"meta":{"key":"mark"}},4294901759]}}}]`
+	if string(reply) != wantReply {
+		t.Errorf("reply rule:\n got %s\nwant %s", reply, wantReply)
+	}
+	if string(orig) != wantOrig {
+		t.Errorf("original rule:\n got %s\nwant %s", orig, wantOrig)
+	}
+	if MarkKeepOnDirectionWrite != 0xfffeffff || markDirMaskBits != 0x10000 {
+		t.Errorf("direction masks: %#x, %#x", MarkKeepOnDirectionWrite, markDirMaskBits)
+	}
+	for _, r := range c.Rules {
+		if b, _ := json.Marshal(r.Expr); strings.Contains(string(b), `"<<"`) {
+			t.Errorf("a shift in the classify chain: %s", b)
+		}
 	}
 }
 
@@ -92,8 +107,8 @@ func TestClassifyChainWritesTheDirectionBitOnce(t *testing.T) {
 func TestClassifyLookupChainOrder(t *testing.T) {
 	tg := compileClassifyTarget(t, nil)
 	c := findChain(tg, ClassifyChain)
-	// rules[0] is the guard, [1] the direction write, [2..5] the four lookup levels.
-	if len(c.Rules) != 6 {
+	// rules[0] is the guard, [1] and [2] the direction write, [3..6] the four lookup levels.
+	if len(c.Rules) != 7 {
 		t.Fatalf("%d rules: %+v", len(c.Rules), c.Rules)
 	}
 	wantMaps := []string{tg.ClassifyMaps["devdestport"], tg.ClassifyMaps["devdest"], tg.ClassifyMaps["devport"], tg.ClassifyMaps["dev"]}
@@ -101,7 +116,7 @@ func TestClassifyLookupChainOrder(t *testing.T) {
 		if name == "" {
 			t.Fatalf("level %d has no map", i)
 		}
-		b, _ := json.Marshal(c.Rules[2+i].Expr)
+		b, _ := json.Marshal(c.Rules[3+i].Expr)
 		s := string(b)
 		if !strings.Contains(s, `"vmap"`) || !strings.Contains(s, "@"+name) || !strings.Contains(s, `"return"`) {
 			t.Errorf("level %d (%s): %s", i, name, s)

@@ -50,7 +50,13 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				if incremental, ierr = e.applyIdentity(ctx, last.target, target); ierr != nil {
 					e.cfg.Log.Warn("an identity update failed: applying everything", "error", ierr)
 					incremental = false
+				} else if !incremental {
+					e.cfg.Log.Debug("an identity update needs a full apply", "generation", d.Generation, "reason", identityStructuralChange(last.target, target))
 				}
+			} else if d.IdentityOnly {
+				e.cfg.Log.Debug("an identity update cannot be incremental", "generation", d.Generation, "has_last", last != nil,
+					"same_config", last != nil && last.d.Config == d.Config, "same_revision", last != nil && last.d.Revision == d.Revision,
+					"same_host", last != nil && hostEqual(last.d.Host, d.Host))
 			}
 			if !incremental {
 				_, err = apply.Apply(ctx, e.cfg.Exec, e.cfg.Namespace, target)
@@ -207,4 +213,23 @@ func mapElementsByName(t *compiler.Target, name string) []compiler.MapElement {
 		}
 	}
 	return nil
+}
+
+// identityStructuralChange says why identityOps refused to update the identity map in place, for the
+// debug log: a changed device set renumbers the identity map's values (DeviceNums).
+func identityStructuralChange(old, next *compiler.Target) string {
+	switch {
+	case old.IdentityMap == "" || next.IdentityMap == "":
+		return "no identity map"
+	case old.IdentityMap != next.IdentityMap:
+		return "another identity map"
+	case len(old.DeviceNums) != len(next.DeviceNums):
+		return fmt.Sprintf("the number of devices changed from %d to %d", len(old.DeviceNums), len(next.DeviceNums))
+	}
+	for dev, num := range next.DeviceNums {
+		if old.DeviceNums[dev] != num {
+			return fmt.Sprintf("device %s was renumbered from %d to %d", dev, old.DeviceNums[dev], num)
+		}
+	}
+	return "unknown"
 }

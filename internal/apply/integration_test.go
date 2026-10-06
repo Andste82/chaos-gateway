@@ -79,7 +79,7 @@ func (g *gw) apply(tg *compiler.Target) *apply.Result {
 // dump shows the gateway's state for a failing test.
 func (g *gw) dump() string {
 	var b strings.Builder
-	for _, c := range [][]string{{"ip", "-br", "link"}, {"ip", "-br", "addr"}, {"ip", "rule"}, {"ip", "route", "show", "table", "100"}, {"nft", "list", "ruleset"}} {
+	for _, c := range [][]string{{"ip", "-br", "link"}, {"ip", "-br", "addr"}, {"ip", "rule"}, {"ip", "route", "show", "table", "100"}, {"nft", "list", "ruleset"}, {"dmesg"}} {
 		out, _ := g.top.GW.Run(context.Background(), c[0], c[1:]...)
 		b.WriteString("$ " + strings.Join(c, " ") + "\n" + out + "\n")
 	}

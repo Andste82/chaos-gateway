@@ -220,7 +220,7 @@ func mapElementsByName(t *compiler.Target, name string) []compiler.MapElement {
 func identityStructuralChange(old, next *compiler.Target) string {
 	switch {
 	case old.IdentityMap == "" || next.IdentityMap == "":
-		return "no identity map"
+		return fmt.Sprintf("no identity map (before: %q with %d devices, after: %q with %d devices)", old.IdentityMap, len(old.DeviceNums), next.IdentityMap, len(next.DeviceNums))
 	case old.IdentityMap != next.IdentityMap:
 		return "another identity map"
 	case len(old.DeviceNums) != len(next.DeviceNums):

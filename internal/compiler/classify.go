@@ -102,9 +102,14 @@ func (t *Target) compileClassify(testIDs []int) {
 			match(ctOriginalIP("daddr"), "!=", setRef(netsSet.Name)),
 			verdict("return"),
 		),
-		// the direction bit is written once, unconditionally, before the lookup chain: every level
-		// below keeps it (MarkKeepOnIDWrite), so it survives whichever level ends up matching.
-		newRule(markSet(bitOr(bitAnd(meta("mark"), int64(MarkKeepOnDirectionWrite)), lshift(ctKey("direction"), 16)))),
+		// the direction bit is written once, before the lookup chain: every level below keeps it
+		// (MarkKeepOnIDWrite), so it survives whichever level ends up matching. It takes two
+		// mutually exclusive rules, not one `mark | ct direction << 16` expression: ct direction is
+		// a 1-byte value and the kernel (checked on 6.8.0-142, the minimum supported kernel)
+		// refuses to shift it inside a bitwise expression (EOPNOTSUPP), which fails the whole
+		// atomic nft batch. Both rules keep every other mark bit.
+		newRule(match(ctKey("direction"), "==", "reply"), markSet(bitOr(meta("mark"), int64(markDirMaskBits)))),
+		newRule(match(ctKey("direction"), "==", "original"), markSet(bitAnd(meta("mark"), int64(MarkKeepOnDirectionWrite)))),
 	)
 	c.Rules = append(c.Rules,
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devdestport"]), verdict("return")),

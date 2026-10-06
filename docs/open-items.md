@@ -452,11 +452,23 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   the set waits out `identityConvergeWindow`), so the gap looks like real subprocess and
   scheduling latency on a shared, non-dedicated CI runner, the same category of noise plan.md's
   own "Timing precision" item (§3.1) and D9 already name for timing-sensitive tests: exact numbers
-  need real, dedicated hardware (H1), which is explicitly out of scope for now.
+  need real, dedicated hardware (H1), which is explicitly out of scope for now. The level 1b (VM)
+  job shows the same test degrading further, in step with that job's own total runtime: three
+  consecutive runs on the same PR took 10 m, 14 m and 17 m, and the test's own margin over its
+  (already loosened) 3 s bound went from 4.7 s to never converging within the test's 5 s polling
+  loop at all - on a VM instance that was visibly getting more loaded each time, not randomly
+  flaky. `TestABurstOfNeighborChangesIsOneIdentityUpdate` (already on the pre-approved flaky list,
+  unrelated to M7: it exercises M6a-07's pre-existing neighbor-burst debounce, which M7 does not
+  touch) failed alongside it on every one of those runs, further evidence this is the runner being
+  overloaded rather than a new, M7-specific regression.
 - Evidence: CI run 37525100078, job "testbed (level 1, privileged container)":
   `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` logged "the identity map
   followed after 1.956427894s, the target is one second"; the same run's
-  `TestAnAddressChangeIsAnEventWithinASecond` passed at 0.88 s. `internal/engine/owner.go`,
+  `TestAnAddressChangeIsAnEventWithinASecond` passed at 0.88 s. CI run 37537539633 (PR 29), job
+  "testbed (level 1b, VM)", reran twice after its first failure: the 14 m rerun logged "...followed
+  after 4.737352475s, the target is three seconds"; the 17 m rerun after that logged "the identity
+  map never followed the address change: holds \"10.10.0.11\"" (the old address, never updated
+  within the test's 5 s setup-and-assert loop). `internal/engine/owner.go`,
   `internal/engine/applyloop.go`.
 - Task: chosen interpretation — keep the test (it is the one named in M7's own acceptance list and
   it still proves the map follows, and does so without caching a stale value), but loosen its

@@ -124,12 +124,14 @@ func TestGoldenRoutedGateway(t *testing.T) {
 	golden(t, "routed.nft", pretty)
 }
 
+// twoPortMod puts the management on the uplink side: one interface is both (plan §2.2).
+func twoPortMod(cfg *model.Configuration, _ *Host) {
+	cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+	cfg.Management.AllowedSources = nil // default: the connected subnet of the interface
+}
+
 func TestGoldenTwoPortTopology(t *testing.T) {
-	// management on the uplink side: one interface is both (plan §2.2)
-	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
-		cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
-		cfg.Management.AllowedSources = nil // default: the connected subnet of the interface
-	})
+	tg := compileBasic(t, twoPortMod)
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}

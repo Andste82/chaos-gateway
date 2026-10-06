@@ -105,6 +105,85 @@ Things to know:
   direct` run left behind (level 1b always gets a fresh VM, so it is never affected). It refuses
   while another `testvm` or compiled test binary is running, unless `-force` is given.
 
+### Fast kernel loop (persistent VM)
+
+A testbed failure that only shows in CI costs a round of 10-20 minutes per guess. The persistent
+VM turns the loop into minutes: boot once, then build, run and poke in the same running kernel.
+Use the cheapest tool that can show the problem:
+
+1. **kernelsim unit tests** (`go test`, seconds) for logic: what the compiler emits, what the
+   engine decides. They cannot know what the kernel accepts.
+2. **The persistent VM** for anything about the real kernel: nftables, tc, netem, WireGuard,
+   conntrack. This is the default for debugging a failing testbed test.
+3. **CI** to confirm. Do not push diagnostic commits to find out what the kernel does: reproduce
+   it in the VM first.
+
+```
+make vm-up                                  # once: boots the VM in the background
+make vm-test ARGS='-run TestX ./internal/apply'     # build the test binary, run it in the VM
+make vm-exec CMD='nft list ruleset'         # any command in the guest (files are shared)
+make vm-status                              # state, kernel, uptime, queue
+make vm-down                                # power off; `-now` kills at once
+```
+
+The same as `go run ./tools/testvm vm up|run|exec|status|down`. `vm up` takes `-kernel`, `-mem`,
+`-cpus` and `-no-kvm` (KVM is used where `/dev/kvm` exists); `vm run` takes the flags of `run`
+that make sense for a booted VM (`-run`, `-tags`, `-test-timeout`, `-keep`, `-allow-skip`).
+`vm exec` takes `-timeout` and `-C <dir>` (default: the current directory; the guest sees the
+host's files at the same paths), and one argument is a shell command line, several are an
+argument vector.
+
+How it works (`internal/testbed/vmrun/persist.go`): the VM directory (`/tmp/chaosgw-vm`, or
+`TESTVM_VM_DIR` / `-dir`) is shared with the guest. The guest runs a serve loop that takes
+`q/<id>.job` files, runs them with `sh` and writes `q/<id>.out` and `q/<id>.rc`; the host writes a
+job as `.tmp` and renames it, so a half-written job is never run. `vm run` builds the test
+binaries on the host exactly like `run -mode vm` and queues one job that runs them. The VM
+processes are recorded in `pids` together with their start time, so a pid that was reused by an
+unrelated process is never killed.
+
+Measured on the development VPS (6 CPUs, no KVM, software emulation, 2 CPUs and 2 GiB for the VM):
+
+| step | time |
+|---|---|
+| `vm up`, cold boot to a ready guest | 5 min 50 s |
+| `vm exec -- uname -r` | 2-4 s |
+| `vm run` of `TestFirstApplyOnARealKernel` (a full real apply; the test itself takes 112 s emulated) | 130 s |
+| `vm run` of the kernel gate below, passing | 50 s |
+
+Things to know:
+
+- **One job at a time.** Jobs run in the order they were queued; a second `vm run` waits for the
+  first. Run one VM at a time: each takes 2 GiB and two CPUs, and a second would slow both.
+- **State carries over.** The guest is not reset between jobs. The testbed tests create
+  and remove their own namespaces, but a command you run with `vm exec` (an `ip netns add`, a
+  loaded module) stays until `vm down`.
+- **Stopping.** `vm down` asks the guest to power off and kills what is left of the recorded
+  processes. Never stop the VM with `pkill -f qemu` or `pkill -f testvm`: `-f` matches the shell
+  that runs the command (and other people's VMs). A VM whose process died shows as `stale` in
+  `vm status`; `vm down` clears it. `vm up` removes the run directories of earlier runs; a failed
+  `vm run` keeps its own for inspection.
+- **Emulated timing.** Without KVM the guest sets `CHAOSGW_TESTBED_EMULATED=1`, so accuracy
+  assertions (`testbed.Accurate()`) are not checked: a green run here proves the logic, CI on a
+  KVM runner proves the numbers.
+
+**Bisecting a batch the kernel refuses.** The kernel rejects a whole nftables transaction for one
+command and says only `Could not process rule: Operation not supported`. Milestone M7 lost six CI
+rounds to one rule that shifted the one-byte `ct direction` value (`ct direction << 16`). To find
+such a command by hand:
+
+1. capture the batch: in a kernelsim test set `k.Fail = func(argv []string, stdin string) *executor.Result`
+   that stores `stdin` when `argv[0] == "nft"` and the arguments contain `-f`, and return `nil`;
+2. ask the kernel without changing anything: `nft -j -c -f - < batch.json` in `make vm-exec`;
+3. a prefix of the batch is a valid batch, so bisect on the number of commands.
+
+`TestEveryCompiledRulesetIsAcceptedByTheKernel` (`internal/compiler/nftkernel_test.go`, build tag
+`testbed`) does all of this for every configuration in `transactionScenarios`
+(`nftsyntax_test.go`): it checks each compiled transaction with `nft -c` in a fresh namespace and,
+when the kernel refuses, bisects and prints the first refused command with its index (and every
+other refused one, each found by repeated bisection). Add a scenario there when a milestone adds a
+kind of ruleset. Run it with `make vm-test ARGS='-run TestEveryCompiled ./internal/compiler'`
+before the first push of any change to the compiler's nftables output.
+
 ### Writing a testbed test
 
 ```go

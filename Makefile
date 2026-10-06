@@ -5,6 +5,7 @@
 #   make test-testbed     levels 1/1b: the namespace testbed, directly or in a VM, chosen automatically
 #   make test-vm          level 1b: always in a QEMU VM (the unprivileged devcontainer)
 #   make test-privileged  level 1: directly (needs a privileged container or a VM)
+#   make vm-up / vm-test / vm-exec / vm-down   the fast loop: one persistent VM, many runs
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -22,7 +23,7 @@ RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
         check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm test-appliance \
-        test-privileged test-arm64 test-e2e build build-web dev image clean
+        test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image clean
 
 help: ## list the targets
 	@awk -F ':.*## ' '/^[a-zA-Z0-9_-]+:.*## /{printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -109,6 +110,22 @@ test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (ne
 
 test-vm: ## the namespace testbed in a QEMU VM (level 1b)
 	$(GO) run ./tools/testvm run -mode vm $(ARGS)
+
+vm-up: ## boot the persistent test VM (minutes once; then vm-test and vm-exec take seconds) — ARGS='-no-kvm ...'
+	$(GO) run ./tools/testvm vm up $(ARGS)
+
+vm-down: ## power the persistent test VM off
+	$(GO) run ./tools/testvm vm down $(ARGS)
+
+vm-status: ## state, kernel, uptime and queue of the persistent test VM
+	$(GO) run ./tools/testvm vm status
+
+vm-test: ## build testbed tests and run them in the persistent VM — ARGS='-run TestX ./internal/apply'
+	$(GO) run ./tools/testvm vm run $(ARGS)
+
+vm-exec: ## run a command in the persistent VM — CMD='nft list ruleset'
+	@test -n "$(CMD)" || { echo "usage: make vm-exec CMD='command line'"; exit 2; }
+	$(GO) run ./tools/testvm vm exec -- $(CMD)
 
 test-privileged: ## the namespace testbed directly (level 1; needs privileges)
 	$(GO) run ./tools/testvm run -mode direct $(ARGS)

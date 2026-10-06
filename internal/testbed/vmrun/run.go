@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Andste82/chaos-gateway/internal/clock"
 )
 
 // DefaultKernel is the oldest supported kernel, the Ubuntu 24.04 GA kernel (plan D1).
@@ -50,6 +52,8 @@ type Config struct {
 	NoKVM bool
 	// Stdout receives the guest's console and the summary; Stderr the host-side progress.
 	Stdout, Stderr io.Writer
+	// Clock is the time source of the persistent VM's waits; nil means the real clock.
+	Clock clock.Clock
 }
 
 func (c *Config) defaults() {
@@ -104,18 +108,7 @@ func KernelInstalled(release string) bool {
 // VNGArgs returns the arguments of vng that boot the guest and run the guest script. The
 // command line of the guest kernel is limited, so --exec only names the script.
 func VNGArgs(c Config, kvm bool) []string {
-	args := []string{"-r", c.Kernel}
-	if !kvm {
-		args = append(args, "--disable-kvm")
-	}
-	return append(args,
-		"--memory", c.Memory,
-		"--cpus", strconv.Itoa(c.CPUs),
-		// the explicit guest=host form: with a bare absolute path vng computes a relative guest
-		// path and rejects it ("path must be defined inside a valid overlay")
-		"--rwdir="+c.WorkDir+"="+c.WorkDir,
-		"--exec", "sh "+ShellQuote(filepath.Join(c.WorkDir, "guest.sh")),
-	)
+	return VNGScriptArgs(c, kvm, filepath.Join(c.WorkDir, "guest.sh"))
 }
 
 // IsTerminal reports whether f is a terminal.
@@ -261,15 +254,8 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 }
 
 func run(ctx context.Context, c Config) (Summary, error) {
-	units, err := TestbedPackages(ctx, c.Dir, c.Tags, c.Packages)
+	units, err := Build(ctx, c)
 	if err != nil {
-		return Summary{}, err
-	}
-	if len(units) == 0 {
-		return Summary{}, fmt.Errorf("no package with tests under the tags %v matches %v", c.Tags, c.Packages)
-	}
-	fmt.Fprintf(c.Stderr, "vmrun: building %d test binaries\n", len(units))
-	if err := buildUnits(ctx, c, units); err != nil {
 		return Summary{}, err
 	}
 

@@ -370,5 +370,65 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | Reader pool and operation time stamps (M3 deferral) | M8a |
 | Overlay removal on stop | M27 |
 | M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
-| M6b: classification sets the service mark (bit 20) that table 102 routes on | M7 |
+| M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (P2-M7-01) |
 | M6b: TLS responder joins the service namespace | M21 |
+
+## Phase 2 open items
+
+### P2-M7-01 Should M7 write the service-selection mark (bit 20), or keep deferring it?
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. This file's own deferral table (above) assigned "classification sets the
+  service mark (bit 20) that table 102 routes on" to M7. But M7's detailed task text says the
+  redirect-interaction test belongs to M20/M21 and asks only not to break the existing M6b
+  service-namespace redirect path, which today reaches `svc0` through the DNAT in
+  `service.go`'s `prerouting` chain (prio -100) and table 100's connected route to the pair's
+  subnet, never through the fwmark/table 102 path that is already compiled (`ServiceMark`,
+  `ServiceTable`, M6b-04's test) but unused by real traffic.
+- Evidence: `internal/compiler/service.go` (`serviceRedirect`, `serviceRouting`); `internal/api/e2e_dns_test.go` M6b-04 (`ip route get ... mark 0x100000` is the test's own synthetic mark, not one real traffic carries); `internal/compiler/classify.go` (M7's new `classify` chain runs at prio -150, before `service.go`'s prerouting at -100, so "right after classification" is satisfiable there).
+- Task: chosen interpretation — M7 leaves bit 20 unset, exactly as Phase 1 left it: the new `classify`
+  chain's masks (`MarkKeepOnIDWrite`, `MarkKeepOnDirectionWrite`) only ever touch bits 4-16, so
+  nothing in M7 clears or sets bit 20 either. Writing it (`mark set mark | 0x00100000` next to the
+  DNAT in `serviceRedirect`) is deferred to whichever milestone adds the real redirect-interaction
+  test (M20/M21 per the task text), because setting it changes which policy-routing rule wins for
+  real DNS/TLS traffic (`ServiceRulePriority` 900 sits before the policy table's rule 1000), a
+  behavior change this environment cannot verify against a real kernel (no privileged network
+  namespaces here; `nft -c`/`go vet` only check syntax, not kernel routing behavior).
+- Acceptance: a maintainer either confirms the deferral (and this file's table is corrected, as
+  done above) or asks for bit 20 to be written now, with a testbed test added that the existing
+  M6b-04 scenario (DNS through the service namespace, and failing closed without it) still passes
+  with the mark set on real traffic.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M7-02 Classification maps are keyed by address, not by the identity map's device number
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. "Identity maps keyed by address → device id REPLACE the per-device
+  nftables sets used in Phase 1 for DHCP/device classification" can be read as meaning the
+  classification lookup-chain maps themselves should be keyed by the device's numeral (stable
+  across an address change), with only one indirection (the identity map) ever needing an element
+  update. What is implemented instead follows plan §3.3's literal key tuples (`ct original ip
+  saddr`, …): the classification maps (`cls_dev`, `cls_devdest`, `cls_devport`,
+  `cls_devdestport`) are keyed directly by the device's current address, and the identity map
+  (`ident4`, address → device number) is a separate structure that nothing yet consumes — it only
+  replaces the Phase 1 per-device address sets (`dhcp.go`'s old `dev_<id>` sets), as M6a-07
+  deferred.
+- Evidence: `internal/compiler/classify.go` (`compileClassify`, `classifyLevels`);
+  `internal/compiler/dhcp.go` (`compileIdentity`). Confirmed against the real `nft -c` parser
+  (not simulated): a map lookup cannot be combined with other expressions such as the bitwise ops
+  that write the fault id (`Expression type map not allowed in context (RHS, STMT, PRIMARY)`), so
+  either design needs one small chain per classification id either way (`MarkChainName`) — keying
+  by device number would not avoid that, only move which map's element changes on an address
+  change (today: every level's entry for that device's old/new address; with the indirection:
+  only the identity map's one entry).
+- Task: chosen interpretation — keep address-keyed classification maps (simpler, and the plan's
+  own key tuples read literally); M8a, which first populates these maps from
+  `domain.Resolve`'s winners, is the natural point to revisit this if per-device churn at scale
+  (many destinations/ports per device) turns out to need the device-number indirection instead.
+- Acceptance: a maintainer confirms the interpretation, or asks for the device-number indirection
+  before M8a builds on the current map shape.
+- Needs maintainer: yes
+- Effort: S (design confirmation only; M8a does the rework if the answer changes)

@@ -10,18 +10,20 @@ const goodNft = `{"nftables":[{"add":{"table":{"family":"inet","name":"chaosgw"}
 
 func TestDecodeAcceptsEveryOperationType(t *testing.T) {
 	for name, in := range map[string]string{
-		TypeNftApply:       `{"type":"nft_apply","ruleset":` + goodNft + `}`,
-		TypeNftAddElements: `{"type":"nft_add_elements","namespace":"ns1","set":"dns_a","elements":["192.0.2.1","10.0.0.0/8","aa:bb:cc:dd:ee:ff"],"timeout_seconds":60}`,
-		TypeNftDelElements: `{"type":"nft_del_elements","set":"dev_a1b2c3","elements":["10.10.0.5"]}`,
-		TypeRouting:        `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"default","via":"10.0.0.1","dev":"wan0","metric":10},{"action":"replace","family":6,"table":102,"dst":"::/0","type":"prohibit"}],"rules":[{"action":"add","family":4,"priority":1000,"from":"10.10.0.0/24","fwmark":"0x10/0xff","iif":"lan0","table":100}]}`,
-		TypeTC:             `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["htb","default","10"]},{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]},{"object":"qdisc","action":"add","dev":"wan0","parent":"1:10","handle":"10:","args":["netem","delay","50ms","10ms","loss","1%"]},{"object":"filter","action":"add","dev":"wan0","parent":"1:","args":["protocol","ip","prio","1","u32","match","ip","src","10.0.0.0/24","flowid","1:10"]},{"object":"qdisc","action":"add","dev":"lan0","parent":"ingress"}]}`,
-		TypeOffloads:       `{"type":"offloads","devs":["wan0","lan0"]}`,
-		TypeDockerUser:     `{"type":"docker_user","action":"ensure","devs":["br-lan0"]}`,
-		TypeAssign:         `{"type":"assign_interfaces","devs":["wan0","lan0","br-lan0"]}`,
-		TypeRead:           `{"type":"read","what":"routes","table":"100","dev":"wan0"}`,
-		TypeLinks:          `{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"up","name":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"},{"action":"addr_delete","name":"br-lan0","cidr":"10.9.0.1/24"},{"action":"release","name":"lan1"},{"action":"down","name":"lan1"},{"action":"delete_bridge","name":"br-old"}]}`,
-		TypeServiceNS:      `{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30","holder_pid":4242}`,
-		TypeSysctl:         `{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"br-lan0","value":0},{"name":"disable_ipv6","dev":"lan0","value":1}]}`,
+		TypeNftApply:          `{"type":"nft_apply","ruleset":` + goodNft + `}`,
+		TypeNftAddElements:    `{"type":"nft_add_elements","namespace":"ns1","set":"dns_a","elements":["192.0.2.1","10.0.0.0/8","aa:bb:cc:dd:ee:ff"],"timeout_seconds":60}`,
+		TypeNftDelElements:    `{"type":"nft_del_elements","set":"dev_a1b2c3","elements":["10.10.0.5"]}`,
+		TypeNftAddMapElements: `{"type":"nft_add_map_elements","namespace":"ns1","map":"ident4_ab12cd","elements":[{"key":"10.10.0.5","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"}]}`,
+		TypeNftDelMapElements: `{"type":"nft_del_map_elements","map":"ident4_ab12cd","keys":["10.10.0.5"]}`,
+		TypeRouting:           `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"default","via":"10.0.0.1","dev":"wan0","metric":10},{"action":"replace","family":6,"table":102,"dst":"::/0","type":"prohibit"}],"rules":[{"action":"add","family":4,"priority":1000,"from":"10.10.0.0/24","fwmark":"0x10/0xff","iif":"lan0","table":100}]}`,
+		TypeTC:                `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["htb","default","10"]},{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]},{"object":"qdisc","action":"add","dev":"wan0","parent":"1:10","handle":"10:","args":["netem","delay","50ms","10ms","loss","1%"]},{"object":"filter","action":"add","dev":"wan0","parent":"1:","args":["protocol","ip","prio","1","u32","match","ip","src","10.0.0.0/24","flowid","1:10"]},{"object":"qdisc","action":"add","dev":"lan0","parent":"ingress"}]}`,
+		TypeOffloads:          `{"type":"offloads","devs":["wan0","lan0"]}`,
+		TypeDockerUser:        `{"type":"docker_user","action":"ensure","devs":["br-lan0"]}`,
+		TypeAssign:            `{"type":"assign_interfaces","devs":["wan0","lan0","br-lan0"]}`,
+		TypeRead:              `{"type":"read","what":"routes","table":"100","dev":"wan0"}`,
+		TypeLinks:             `{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"up","name":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"},{"action":"addr_delete","name":"br-lan0","cidr":"10.9.0.1/24"},{"action":"release","name":"lan1"},{"action":"down","name":"lan1"},{"action":"delete_bridge","name":"br-old"}]}`,
+		TypeServiceNS:         `{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30","holder_pid":4242}`,
+		TypeSysctl:            `{"type":"sysctl","entries":[{"name":"ip_forward","value":1},{"name":"accept_ra","dev":"br-lan0","value":0},{"name":"disable_ipv6","dev":"lan0","value":1}]}`,
 	} {
 		op, err := Decode([]byte(in))
 		if err != nil {
@@ -145,6 +147,17 @@ func TestDecodeRejects(t *testing.T) {
 		{"no elements", `{"type":"nft_add_elements","set":"s","elements":[]}`},
 		{"negative timeout", `{"type":"nft_add_elements","set":"s","elements":["1.2.3.4"],"timeout_seconds":-1}`},
 		{"element with zone", `{"type":"nft_add_elements","set":"s","elements":["fe80::1%eth0"]}`},
+
+		// map elements (plan §3.3, M7)
+		{"map key is a command", `{"type":"nft_add_map_elements","map":"m","elements":[{"key":"1.2.3.4; flush ruleset","value":"1"}]}`},
+		{"map key part is a hostname", `{"type":"nft_add_map_elements","map":"m","elements":[{"key":"1.2.3.4 . example.org","value":"1"}]}`},
+		{"map key with too many parts", `{"type":"nft_add_map_elements","map":"m","elements":[{"key":"1.2.3.4 . 5.6.7.8 . 6 . 443 . 1","value":"1"}]}`},
+		{"map key with an empty part", `{"type":"nft_add_map_elements","map":"m","elements":[{"key":"1.2.3.4 . ","value":"1"}]}`},
+		{"map name with newline", `{"type":"nft_add_map_elements","map":"m\nflush","elements":[{"key":"1.2.3.4","value":"1"}]}`},
+		{"map value is a command", `{"type":"nft_add_map_elements","map":"m","elements":[{"key":"1.2.3.4","value":"1; flush ruleset"}]}`},
+		{"map no elements", `{"type":"nft_add_map_elements","map":"m","elements":[]}`},
+		{"map del no keys", `{"type":"nft_del_map_elements","map":"m","keys":[]}`},
+		{"map del key is a command", `{"type":"nft_del_map_elements","map":"m","keys":["1.2.3.4; flush ruleset"]}`},
 
 		// routing scope
 		{"table main", `{"type":"routing","routes":[{"action":"replace","family":4,"table":254,"dst":"default","via":"10.0.0.1"}]}`},

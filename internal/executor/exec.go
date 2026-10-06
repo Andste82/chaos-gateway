@@ -255,7 +255,7 @@ func isIdentityUpdate(ops []Operation) bool {
 	}
 	for _, op := range ops {
 		switch op.(type) {
-		case *NftAddElements, *NftDelElements:
+		case *NftAddElements, *NftDelElements, *NftAddMapElements, *NftDelMapElements:
 		default:
 			return false
 		}

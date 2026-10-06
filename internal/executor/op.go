@@ -10,20 +10,22 @@ import (
 
 // Operation types: the closed set the executor accepts.
 const (
-	TypeNftApply       = "nft_apply"
-	TypeNftAddElements = "nft_add_elements"
-	TypeNftDelElements = "nft_del_elements"
-	TypeRouting        = "routing"
-	TypeTC             = "tc"
-	TypeOffloads       = "offloads"
-	TypeDockerUser     = "docker_user"
-	TypeAssign         = "assign_interfaces"
-	TypeLinks          = "links"
-	TypeSysctl         = "sysctl"
-	TypeWireGuard      = "wireguard"
-	TypeBird           = "bird"
-	TypeServiceNS      = "service_ns"
-	TypeRead           = "read"
+	TypeNftApply          = "nft_apply"
+	TypeNftAddElements    = "nft_add_elements"
+	TypeNftDelElements    = "nft_del_elements"
+	TypeNftAddMapElements = "nft_add_map_elements"
+	TypeNftDelMapElements = "nft_del_map_elements"
+	TypeRouting           = "routing"
+	TypeTC                = "tc"
+	TypeOffloads          = "offloads"
+	TypeDockerUser        = "docker_user"
+	TypeAssign            = "assign_interfaces"
+	TypeLinks             = "links"
+	TypeSysctl            = "sysctl"
+	TypeWireGuard         = "wireguard"
+	TypeBird              = "bird"
+	TypeServiceNS         = "service_ns"
+	TypeRead              = "read"
 )
 
 // Operation is one typed request. Exactly one of the implementations below.
@@ -70,6 +72,38 @@ type NftAddElements struct {
 	Elements []string `json:"elements"`
 	// TimeoutSeconds is the lifetime of the elements; 0 means the set's default.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+// NftMapElement is one element of a named map of the table: Key is the element's key, one nft
+// literal token per field joined with " . " (nft's own concatenation syntax, chosen because it
+// stays unambiguous next to the dots inside an address), for instance "10.10.0.31" (the identity
+// map) or "10.10.0.31 . 203.0.113.10 . 6 . 443" (device, destination, protocol and port: the most
+// specific level of the classification lookup chain, plan §3.3). Value is the data: a decimal
+// integer for a map whose value type is "mark" (the identity map's device numeral), or the name of
+// a chain the element jumps to for a map whose value type is "verdict" (a classification map; the
+// chain must already exist in the kernel, e.g. one the compiler created for a resolved fault id).
+type NftMapElement struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// NftAddMapElements adds or replaces elements of an existing map of the table: the map counterpart
+// of NftAddElements, used for the identity map (an address's device changes) and the
+// classification maps (a device's winning fault id changes) without a full nft reload (plan §3.3,
+// §3.4): an identity or classification change is one element update, not a structural apply.
+type NftAddMapElements struct {
+	Target
+	Map      string          `json:"map"`
+	Elements []NftMapElement `json:"elements"`
+}
+
+// NftDelMapElements deletes elements from a map of the table by key; the data is not needed to
+// delete. nft refuses to delete an element that is not in the map, and the whole request fails
+// then (like NftDelElements).
+type NftDelMapElements struct {
+	Target
+	Map  string   `json:"map"`
+	Keys []string `json:"keys"`
 }
 
 // Route is a route in one of Chaos Gateway's tables. The executor tags it with its own protocol.
@@ -321,35 +355,39 @@ const (
 	ReadDockerUser = "docker_user"
 )
 
-func (NftApply) OpType() string         { return TypeNftApply }
-func (NftAddElements) OpType() string   { return TypeNftAddElements }
-func (NftDelElements) OpType() string   { return TypeNftDelElements }
-func (Routing) OpType() string          { return TypeRouting }
-func (TC) OpType() string               { return TypeTC }
-func (Offloads) OpType() string         { return TypeOffloads }
-func (DockerUser) OpType() string       { return TypeDockerUser }
-func (AssignInterfaces) OpType() string { return TypeAssign }
-func (Links) OpType() string            { return TypeLinks }
-func (Sysctl) OpType() string           { return TypeSysctl }
-func (WireGuard) OpType() string        { return TypeWireGuard }
-func (Bird) OpType() string             { return TypeBird }
-func (ServiceNS) OpType() string        { return TypeServiceNS }
-func (Read) OpType() string             { return TypeRead }
+func (NftApply) OpType() string          { return TypeNftApply }
+func (NftAddElements) OpType() string    { return TypeNftAddElements }
+func (NftDelElements) OpType() string    { return TypeNftDelElements }
+func (NftAddMapElements) OpType() string { return TypeNftAddMapElements }
+func (NftDelMapElements) OpType() string { return TypeNftDelMapElements }
+func (Routing) OpType() string           { return TypeRouting }
+func (TC) OpType() string                { return TypeTC }
+func (Offloads) OpType() string          { return TypeOffloads }
+func (DockerUser) OpType() string        { return TypeDockerUser }
+func (AssignInterfaces) OpType() string  { return TypeAssign }
+func (Links) OpType() string             { return TypeLinks }
+func (Sysctl) OpType() string            { return TypeSysctl }
+func (WireGuard) OpType() string         { return TypeWireGuard }
+func (Bird) OpType() string              { return TypeBird }
+func (ServiceNS) OpType() string         { return TypeServiceNS }
+func (Read) OpType() string              { return TypeRead }
 
-func (NftApply) Mutates() bool         { return true }
-func (NftAddElements) Mutates() bool   { return true }
-func (NftDelElements) Mutates() bool   { return true }
-func (Routing) Mutates() bool          { return true }
-func (TC) Mutates() bool               { return true }
-func (Offloads) Mutates() bool         { return true }
-func (DockerUser) Mutates() bool       { return true }
-func (AssignInterfaces) Mutates() bool { return true }
-func (Links) Mutates() bool            { return true }
-func (Sysctl) Mutates() bool           { return true }
-func (WireGuard) Mutates() bool        { return true }
-func (ServiceNS) Mutates() bool        { return true }
-func (o Bird) Mutates() bool           { return o.Action == "apply" }
-func (Read) Mutates() bool             { return false }
+func (NftApply) Mutates() bool          { return true }
+func (NftAddElements) Mutates() bool    { return true }
+func (NftDelElements) Mutates() bool    { return true }
+func (NftAddMapElements) Mutates() bool { return true }
+func (NftDelMapElements) Mutates() bool { return true }
+func (Routing) Mutates() bool           { return true }
+func (TC) Mutates() bool                { return true }
+func (Offloads) Mutates() bool          { return true }
+func (DockerUser) Mutates() bool        { return true }
+func (AssignInterfaces) Mutates() bool  { return true }
+func (Links) Mutates() bool             { return true }
+func (Sysctl) Mutates() bool            { return true }
+func (WireGuard) Mutates() bool         { return true }
+func (ServiceNS) Mutates() bool         { return true }
+func (o Bird) Mutates() bool            { return o.Action == "apply" }
+func (Read) Mutates() bool              { return false }
 
 // Envelope is the wire form of an operation: the type and the operation's own fields side by side.
 type envelope struct {
@@ -382,6 +420,10 @@ func Decode(data []byte) (Operation, error) {
 		op = &NftAddElements{}
 	case TypeNftDelElements:
 		op = &NftDelElements{}
+	case TypeNftAddMapElements:
+		op = &NftAddMapElements{}
+	case TypeNftDelMapElements:
+		op = &NftDelMapElements{}
 	case TypeRouting:
 		op = &Routing{}
 	case TypeTC:

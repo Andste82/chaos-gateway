@@ -63,11 +63,6 @@ func classifyProbePackets(t *testing.T, ns *testbed.Namespace, dev string, id, d
 			continue
 		}
 		if n, ok := tcPacketCount(e); ok {
-			if n == 0 {
-				// temporary diagnostic (M7 WireGuard classify investigation): show every class's
-				// count, not just the one that is zero, to see where the traffic actually landed.
-				t.Logf("class %s on %s is 0; all classes on %s:\n%s", want, dev, dev, out)
-			}
 			return n
 		}
 		t.Fatalf("class %s has no packet count: %+v", want, e)
@@ -168,29 +163,6 @@ func wgIfName(t *testing.T, tg *compiler.Target, netID string) string {
 	return ""
 }
 
-// dumpClassifyDebug is a temporary diagnostic for the M7 WireGuard classify test investigation:
-// it logs the real kernel's classify chain, the dev-level classification map and the conntrack
-// table, so a failure shows what the kernel actually did instead of only that a tc class is 0.
-func dumpClassifyDebug(t *testing.T, g *wgGW, tg *compiler.Target) {
-	t.Helper()
-	ctx := context.Background()
-	if out, err := g.top.GW.Run(ctx, "nft", "-j", "list", "chain", "inet", "chaosgw", "classify"); err == nil {
-		t.Logf("classify chain:\n%s", out)
-	} else {
-		t.Logf("list classify chain: %v", err)
-	}
-	if out, err := g.top.GW.Run(ctx, "nft", "-j", "list", "map", "inet", "chaosgw", tg.ClassifyMaps["dev"]); err == nil {
-		t.Logf("dev map %s:\n%s", tg.ClassifyMaps["dev"], out)
-	} else {
-		t.Logf("list dev map: %v", err)
-	}
-	if out, err := g.top.GW.Run(ctx, "conntrack", "-L", "-n"); err == nil {
-		t.Logf("conntrack:\n%s", out)
-	} else {
-		t.Logf("conntrack -L: %v", err)
-	}
-}
-
 func bridgeIfName(t *testing.T, tg *compiler.Target, netID string) string {
 	t.Helper()
 	for _, b := range tg.Bridges {
@@ -237,7 +209,6 @@ func TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination(t *
 	if !pingOK(g.top.RC, testbed.ClientNetHost, testbed.ClientAAddr) {
 		t.Fatalf("the client network cannot reach A\n%s", g.wgShow())
 	}
-	dumpClassifyDebug(t, g, tg) // temporary diagnostic (M7 WireGuard classify investigation)
 	if n := classifyProbePackets(t, g.top.GW, wgIf, idInit, 0); n == 0 {
 		t.Error("the client's upload (arriving over the tunnel) was not classified")
 	}

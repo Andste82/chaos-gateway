@@ -25,8 +25,7 @@ func asApplyFailed(err error, target **engine.ErrApplyFailed) bool { return erro
 // M8a on a real kernel: an overlay written through the state owner reaches the kernel's nftables
 // (the mark chain of its fault id, the named counters, the classification map elements), a
 // replacement changes the elements, and a delete, a reset and a TTL take everything away again. The
-// tc tree is not applied by the engine before M8b; the tests that install it are in
-// integration_classify_test.go.
+// tc tree is applied and verified with them since M8b (integration_faults_test.go measures the traffic).
 func TestOverlaysReachTheRealKernelAndLeaveItAgain(t *testing.T) {
 	r := newReal(t, nil)
 	if _, err := r.apply(r.revision(nil), engine.ApplyOptions{}); err != nil {

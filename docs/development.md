@@ -421,8 +421,7 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
   isolation. Docker that starts after the last apply is not noticed until the next one.
 - **Gateway protection** closes the UI port for everything but the management sources and drops
   all but DHCP, DNS and ping from test networks. SSH stays with the operating system.
-- Not yet compiled: device identity maps and classification (M7, M8a), faults (M8b), the PMTU
-  mirror tables (M10).
+- Not yet compiled: the PMTU mirror tables (M10).
 - A failed `chaosgw apply --file` without `--state-dir` leaves the kernel as the failed apply left
   it; with `--state-dir` the engine restores the previous revision.
 - `Rollback` and `Observe` return when the owner has taken the command; `Barrier` waits for the
@@ -1450,6 +1449,54 @@ counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
   dropped = what left the upload queue. What `ping` itself receives is not a measure (a burst of replies
   overruns its socket buffer: 2000 to 2500 of 4000 on the emulated kernel with no drop in the queues). The
   outcome and the cost are in P2-M8a-02.
+
+### Measurement tests of the fault engine (M8b)
+
+Plan §4.3 in the code: `internal/testbed/probe.go` and `stats.go`, the tests in
+`internal/engine/integration_faults_*_test.go`. Every test writes its faults through the engine's
+overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are the product's.
+
+- **One-way probes.** A ping gives the sum of the two directions, and the faults are per direction. A
+  probe is a numbered UDP datagram with the sender's clock; the echo (`testbed.StartEcho`) answers with the
+  upload delay it computed and its own clock, the sender computes the download delay (all namespaces of a
+  bed share one machine and so one clock). The echo logs every datagram it gets, so the loss of each
+  direction is counted exactly: `ProbeResult.UpLoss` is what the upload lost, `DownLoss` what the download
+  lost of the datagrams that arrived. `Echo.Probe` sends a fixed number; `Echo.Begin` starts a run that goes
+  on while the test changes faults and `Stop` ends it (the load of the tests below). A host behind a client
+  (remote network) sends from its own address (`ProbeOptions.Src`).
+- **Statistics.** `BinomialBounds` is the central 99.9 % interval of the count of lost packets (`CheckLoss`),
+  `CheckLatency` the tolerance of ±2 ms + 5 %, `CheckSpread` compares the 5th to 95th percentile spread
+  of the upload with that of a uniform jitter (1.8 x jitter; the plan gives no tolerance for the spread,
+  the test's own is 0.5 to 1.5 times plus 2 ms). `Statistically` is the flakiness policy: an attempt that
+  fails is run once more (the attempt measures anew), only a second failure fails the test, and the
+  message carries both measurements.
+- **What runs where.** The functional assertions always run: the effect is present, the upload is
+  longer than the download by about the configured difference, the loss is there and only in the
+  direction it was configured, a flow the fault does not name loses nothing and did not get more than
+  25 ms slower than before the fault. The accuracy assertions (median within ±2 ms + 5 %, spread, loss in the
+  interval, unaffected flows within ±2 ms + 5 % of before) run when `testbed.Accurate()`, with N = 2000 probes
+  (6 ms apart; at least 200 for the delay) instead of 120 under emulation.
+- **The acceptance list of the plan, by test** (`make vm-test ARGS='-run "..." -tags testbed -test-timeout 120m ./internal/engine'`;
+  an overlay write takes tens of seconds on the emulated kernel, so a test takes minutes):
+
+| plan M8b test | test |
+|---|---|
+| measurement, device scope (+ a ping's round trip) | `TestADeviceFaultImpairsThatDeviceAsConfiguredAndNoOther` |
+| measurement, group scope (members in two networks) | `TestAGroupFaultImpairsEveryMemberOfTheGroupAndNoOther` |
+| measurement, network scope | `TestANetworkFaultImpairsEveryDeviceOfTheNetworkAndNoOtherNetwork` |
+| between two test networks | `TestFaultsBetweenTwoTestNetworksFollowTheInitiatorAndTheDirection` |
+| test network and WireGuard client network | `TestFaultsBetweenATestNetworkAndAWireGuardClientNetworkAreMeasuredPerDirection` |
+| route learned via BGP | `TestAFaultOnTrafficOverARouteLearnedByBGPIsMeasuredPerDirection` |
+| isolation (every fault test above) | `expectUnaffected`: a device or flow the fault does not name, measured before and after |
+| updating one fault does not disturb others | `TestUpdatingOneFaultDoesNotDisturbTheOthers` |
+| 600 ms fault changed under load loses no queued packet | `TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket` (engine, sent = delivered + the fault's own drops) and `TestChangingAFaultOf600msUnderLoadLosesNoPacket` (apply) |
+| make before break | `TestSwitchingADeviceToANewFaultIdThroughTheEngineLosesNoPacketAndTheOldClassesGoLater` (engine) and `TestMovingADeviceToANewFaultIdLosesNoPacketAndTheOldClassesGoLater` (apply), `internal/apply/tcapply_test.go` for the plans |
+| golden tests for the `tc -j` normalizer | `internal/linux/tcnorm_test.go` on `internal/linux/testdata/tc` |
+| a write returns after the kernel verified; an injected tc failure reverts | `TestAnOverlayWriteWaitsForTheKernelsTreeAndAFailedTCOperationTakesItBack` (real kernel), `internal/engine/tc_test.go` (simulated) |
+
+  The engine resolves the addresses of configured devices into its identity only when it observes the
+  host, so the tests with devices and groups start the engine on the real clock and `PollObserved`
+  (`resolveDevices`) before they write a fault.
 
 ### Coalescing and the reader pool (M8a)
 

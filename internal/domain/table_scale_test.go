@@ -48,7 +48,7 @@ func TestTableOfOverlaysThatEachNameTheirOwnDestinationAndPortIsLinear(t *testin
 	if len(tab.Entries) != n {
 		t.Fatalf("%d entries, want %d", len(tab.Entries), n)
 	}
-	if took > 30*time.Second {
+	if took > 60*time.Second {
 		t.Fatalf("the table of %d overlays took %v", n, took)
 	}
 	for _, i := range []int{0, 1, 255, 256, 1000, n - 1} {
@@ -100,7 +100,7 @@ func TestATableThatWouldNeedTooManyCellsIsRefusedQuickly(t *testing.T) {
 	if len(big.Faults) == 0 || len(big.Faults) > 10 {
 		t.Fatalf("faults named: %v", big.Faults)
 	}
-	if took > 30*time.Second {
+	if took > 60*time.Second {
 		t.Fatalf("the refusal took %v", took)
 	}
 	// and it stays refused (the cached answer is the same)

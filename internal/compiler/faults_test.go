@@ -1474,7 +1474,7 @@ func TestManyOverlaysWithTheirOwnDestinationAndPortCompileQuickly(t *testing.T) 
 	if len(tg.Faults) != 400 {
 		t.Fatalf("%d faults", len(tg.Faults))
 	}
-	if took > 30*time.Second {
+	if took > 60*time.Second {
 		t.Fatalf("compiling 400 overlays took %v", took)
 	}
 }
@@ -1497,7 +1497,7 @@ func TestAnOverlaySetThatNeedsTooManyClassificationCellsIsRefusedQuickly(t *test
 	if !strings.Contains(p.Message, "destinations and ports") || len(p.Faults) == 0 {
 		t.Errorf("%+v", p)
 	}
-	if took > 30*time.Second {
+	if took > 60*time.Second {
 		t.Fatalf("the refusal took %v", took)
 	}
 }

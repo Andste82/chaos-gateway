@@ -104,6 +104,9 @@ type Preview struct {
 	NeedsConfirmation bool
 	// Target is the compiled target.
 	Target *compiler.Target
+	// References are the active overlays the revision would orphan: applying it needs force, which
+	// removes them. The target is compiled without them.
+	References []OverlayReference
 }
 
 // Preview compiles a candidate against the current snapshot and compares it with the kernel,
@@ -124,7 +127,14 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	}
 	p.NeedsConfirmation = LockoutRelevant(snap.Config, cfg)
 	id := snap.Identity
-	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, snap.Overlays, snap.FaultIDs))
+	// the overlays as the apply would leave them: without the orphans, merged devices moved
+	overlays := snap.Overlays
+	if snap.Config != nil {
+		orphans, merges := revisionImpact(snap.Config, cfg, snap.Overlays, id.Discovered)
+		p.References = referencesOf(orphans)
+		overlays = overlaysAfter(snap.Overlays, orphans, merges)
+	}
+	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs))
 	p.Target, p.Problems = tg, tg.Problems
 	if tg.HasErrors() {
 		return p, nil

@@ -150,6 +150,7 @@ func (s *Server) problemFor(err error) *problem {
 		af       *engine.ErrApplyFailed
 		unsup    *engine.UnsupportedOverlayError
 		comp     *engine.CompileError
+		orphans  *engine.ErrOverlaysOrphaned
 	)
 	switch {
 	case errors.As(err, &conflict):
@@ -184,6 +185,9 @@ func (s *Server) problemFor(err error) *problem {
 			return p
 		}
 		return newProblem(model.ErrorCodeValidationFailed, "%s", comp.Error())
+	case errors.As(err, &orphans):
+		refs := blockingReferences(orphans.References)
+		return newProblem(model.ErrorCodeValidationFailed, "%s", orphans.Error()).with(func(b *model.Problem) { b.References = &refs })
 	case errors.Is(err, engine.ErrOverlayNotFound):
 		return newProblem(model.ErrorCodeNotFound, "no such overlay (it never existed, or it was removed or has expired)")
 	case errors.Is(err, engine.ErrOverlayForbidden):

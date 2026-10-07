@@ -448,3 +448,74 @@ func TestARetriedOverlayWriteWithTheSameKeyIsReplayed(t *testing.T) {
 		t.Errorf("%d overlays", n)
 	}
 }
+
+// A revision that deletes an object an active overlay refers to is refused with validation_failed
+// and the references; with force it applies, removes the overlays and says which.
+func TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced(t *testing.T) {
+	g := ready(t)
+	devID := "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	add := g.mustPatch(map[string]any{"devices": map[string]any{devID: map[string]any{
+		"name": "esp32-42", "identifiers": map[string]any{"macs": []string{"02:00:00:00:00:31"}},
+	}}})
+	if r := g.apply(add); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	admin := g.token
+	g.mintToken("overlays")
+	ov := g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"fault":{"latency":"40ms"}}`)
+	keep := g.mustCreateOverlay(iotFault)
+	g.token = admin
+	del := g.mustPatch(map[string]any{"devices": map[string]any{devID: nil}})
+
+	r := g.apply(del)
+	if r.Status != 422 || r.code(t) != "validation_failed" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	refs, _ := r.json(t)["references"].([]any)
+	if len(refs) != 1 {
+		t.Fatalf("references %s", r.Body)
+	}
+	ref := refs[0].(map[string]any)
+	if ref["kind"] != "overlay" || ref["id"] != ov["id"] || ref["object"] != "/devices/"+devID || ref["owner"].(map[string]any)["type"] != "token" {
+		t.Errorf("reference %v", ref)
+	}
+	if n := len(g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)); n != 2 {
+		t.Errorf("a refused apply left %d overlays", n)
+	}
+	if g.activeID() != add {
+		t.Errorf("the active revision is %d", g.activeID())
+	}
+	// the preview shows the same references
+	pv := g.do("POST", "/revisions/"+itoa(del)+"/preview", nil, nil, nil)
+	if pv.Status != 200 {
+		t.Fatalf("%d %s", pv.Status, pv.Body)
+	}
+	if prefs, _ := pv.json(t)["references"].([]any); len(prefs) != 1 || prefs[0].(map[string]any)["id"] != ov["id"] {
+		t.Errorf("preview references %s", pv.Body)
+	}
+
+	// force=true: the revision applies and the overlay goes, the other one stays
+	r = g.do("POST", "/revisions/"+itoa(del)+"/apply?force=true", nil, nil, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	removed, _ := r.json(t)["removed_overlays"].([]any)
+	if len(removed) != 1 || removed[0] != ov["id"] {
+		t.Errorf("removed_overlays %s", r.Body)
+	}
+	items := g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != keep["id"] {
+		t.Errorf("overlays %v", items)
+	}
+	if g.do("GET", "/overlays/"+ov["id"].(string), nil, nil, nil).Status != 404 {
+		t.Error("the orphaned overlay is still there")
+	}
+	e, _, _ := g.log.List(auditFilter(), "", 10)
+	found := false
+	for _, x := range e {
+		found = found || (x.Action == "revision.apply" && strings.Contains(x.Detail, "removed 1 overlays"))
+	}
+	if !found {
+		t.Errorf("the audit log does not say that an overlay was removed: %+v", e)
+	}
+}

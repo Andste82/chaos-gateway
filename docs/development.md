@@ -1159,10 +1159,27 @@ install it with the executor.
   each map entry back into the configuration it only looked at; with the state owner validating an
   overlay while the apply loop compiled, `-race` reported it. A read-only visit does not write any more
   (`TestIsNormalizedAndTheWorldOnlyReadTheConfiguration`).
-- **Not yet** (the next steps of M8a): deleting a referenced object with `?force=true` and
-  `overlay_orphaned`, and the move of overlays after a merge revision (the domain functions
-  `OrphanedOverlays` and `DiscoveredMerges` and `Store.Orphan` and `Retarget` exist); applying the tc
-  tree and verifying it (M8b).
+- **What applying a revision does to overlays** (`internal/engine/overlays_revision.go`). Overlays are
+  not part of a revision, so the state owner decides it in the step that starts the apply
+  (`startApply`), against the committed configuration and the discovered devices of the identity.
+  A revision that deletes an object an active overlay refers to is refused with
+  `*ErrOverlaysOrphaned` (`validation_failed` with `references[]`, one entry per overlay and deleted
+  object: `kind: overlay`, `id`, `owner`, `object` as the JSON pointer in the active configuration);
+  nothing changes and the candidate stays. With `ApplyOptions.Force` (`?force=true`) the overlays are
+  removed in the same desired state the revision makes, the answer lists them (`removed_overlays`,
+  `Applied.RemovedOverlays`) and each announces `overlay_orphaned` (with the deleted `objects`) once
+  that generation is verified. A merge (`domain.DiscoveredMerges`: a configured device now owns the
+  MAC or address of a discovered one) moves the overlays of the discovered device to the configured
+  one (`Store.Retarget`: same id, same age, `overlay_updated` with reason `moved`; two overlays that
+  then share a key leave the newer one, the other is `overlay_removed` with reason `merged`). A merge
+  orphans nothing, so it needs no force. Both go through the overlay marks, so an apply that fails
+  takes them back with the other unconfirmed overlay changes: the orphans return, the moves are
+  undone. `Preview` reports the same `references` and compiles the target without the orphans and
+  with the moved targets, so a refusal is never a compile error of the overlay that the revision
+  orphans. Runs are not part of this yet (`aborted_runs` follows with M15). Tests:
+  `internal/engine/overlays_revision_test.go`, `TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced`
+  in `internal/api/overlays_test.go`.
+- **Not yet** (the next steps of M8a): applying the tc tree and verifying it (M8b).
 
 ### Coalescing and the reader pool (M8a)
 

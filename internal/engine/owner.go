@@ -213,6 +213,9 @@ type owner struct {
 	identityThrottled    bool
 	// ov is the overlay store and what waits for the kernel to confirm its changes (overlays.go).
 	ov *overlayState
+	// batch is the run of overlay writes that is being taken in; it is closed (checked and made one
+	// generation) before anything else is handled.
+	batch *putBatch
 }
 
 type pendingState struct {
@@ -244,6 +247,20 @@ func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 	}
 	o.publish()
 	for {
+		if o.batch != nil {
+			// overlay writes are being taken in: take what is already waiting, and check them together
+			// when nothing is (or the batch is full, or another kind of command comes)
+			select {
+			case c := <-e.cmds:
+				if _, put := c.(cmdOverlayPut); !put || len(o.batch.items) >= maxPutBatch {
+					o.finishBatch()
+				}
+				o.handle(ctx, c)
+			default:
+				o.finishBatch()
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			o.shutdown()

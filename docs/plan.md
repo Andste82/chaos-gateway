@@ -1071,7 +1071,7 @@ Rules:
   3. execution plans from the apply loop (overlay changes and revision applies; there is at most one in flight, because there is one apply loop).
 
   A running operation is never interrupted; a revision apply is one operation (§2.14 consistency model).
-- **Status:** M3 implements the single writer as one FIFO queue in which reads run too. Priorities between identity updates and plans follow with M6a, the reader pool and operation time stamps with M8a, the concurrent DNS-set path (persistent netlink connection) with M20.
+- **Status:** M3 implements the single writer as one FIFO queue in which reads run too. Priorities between identity updates and plans came with M6a, the reader pool and operation time stamps with M8a (a read-only request runs on one of four reader slots beside the writer; the outcome of every request carries `enqueued_at` and `started_at`), the concurrent DNS-set path (persistent netlink connection) follows with M20.
 - **DNS-derived set updates** use their own persistent netlink connection and may run *concurrently* with a plan: the kernel serializes nftables transactions, and applies never flush DNS-derived sets (S11). Exception: if the running plan replaces a set (changed definition, hashed name, §3.2), updates for that set wait for the plan and then go into the new set.
 - **Identity updates are never concurrent with a plan**, because a plan flushes and rewrites the compiled maps; a plan always uses the latest observed state (§2.3).
 - **Reads** (counters, `nft -j list`, `tc -s`, `wg show`, `birdc`) run in a small pool of reader goroutines in parallel to the writer. Reads that are part of verify belong to the write operation.

@@ -42,7 +42,11 @@ type harness struct {
 
 func ptr[T any](v T) *T { return &v }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessRunner(t, nil) }
+
+// newHarnessRunner is newHarness with the executor running its commands through wrap(kernel), for
+// tests that hold or count what reaches the kernel.
+func newHarnessRunner(t *testing.T, wrap func(*kernelsim.Kernel) executor.Runner) *harness {
 	t.Helper()
 	k := kernelsim.New()
 	k.AddLink("lan0", "02:00:00:00:00:01", "veth", true)
@@ -53,7 +57,11 @@ func newHarness(t *testing.T) *harness {
 	k.SetAddr("mgmt0", "192.168.56.1/24")
 	k.SetMainDefault("192.168.56.254", "mgmt0")
 	k.AddDockerChain()
-	ex, err := executor.New(k)
+	var run executor.Runner = k
+	if wrap != nil {
+		run = wrap(k)
+	}
+	ex, err := executor.New(run)
 	if err != nil {
 		t.Fatal(err)
 	}

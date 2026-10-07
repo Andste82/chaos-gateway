@@ -178,6 +178,7 @@ type Engine struct {
 	cancel          context.CancelFunc
 	core            sync.WaitGroup // the state owner and the apply loop
 	done            chan struct{}  // closed when both have returned
+	ready           chan struct{}  // closed when the state owner has published its first snapshot
 	started         bool
 	polling         atomic.Bool
 	pollingRouting  atomic.Bool
@@ -247,7 +248,7 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
 	e := &Engine{cfg: cfg, cmds: make(chan command, 64), wake: make(chan struct{}, 1), results: make(chan applyResult, 8),
-		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{})}
+		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{}), ready: make(chan struct{})}
 	if e.sup == nil {
 		// a panic in the state owner or the apply loop stops the engine: the commands that wait
 		// get ErrClosed, and the process (which watches Done) restarts and recompiles from the
@@ -312,6 +313,13 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.sup.Go(ctx, "engine.dhcp", e.runDHCPRetry)
 	}
 	go func() { e.core.Wait(); close(e.done) }()
+	// the first snapshot holds the host and the active revision: whoever asks for a snapshot or a
+	// preview after Start must not see the empty one of an owner that has not run yet
+	select {
+	case <-e.ready:
+	case <-e.done:
+	case <-ctx.Done():
+	}
 	return nil
 }
 

@@ -535,3 +535,78 @@ func TestTheStoreIsSafeForConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A renewal is not part of what a failed apply takes back: the checkpoints a store can be restored
+// to are brought along by Renew.
+func TestARenewalSurvivesRestoringACheckpointTakenBeforeIt(t *testing.T) {
+	f := newFixture(t)
+	ov := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, lease: 10s}`).Overlay
+	before := f.store.Checkpoint()
+	f.clk.Advance(8 * time.Second)
+	if _, err := f.store.Renew(ov.Id, before); err != nil { // runs out at 18 s
+		t.Fatal(err)
+	}
+	f.store.Restore(before)
+	f.clk.Advance(3 * time.Second) // 11 s
+	if got := f.store.Expire(); len(got) != 0 {
+		t.Fatalf("the restore undid the renewal: %v", ids(got))
+	}
+	if got, _ := f.store.Get(ov.Id); got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(f.clk.Now().Add(7*time.Second)) {
+		t.Fatalf("lease_expires_at = %v", got.LeaseExpiresAt)
+	}
+	f.clk.Advance(8 * time.Second) // 19 s
+	if got := f.store.Expire(); len(got) != 1 || got[0].Reason != ReasonLease {
+		t.Fatalf("expired = %+v", got)
+	}
+}
+
+func TestACheckpointWithoutTheRenewalIsStillOlderThanOne(t *testing.T) {
+	// the renewal only moves a deadline later: a checkpoint is never given an earlier one, and an
+	// overlay that is not in a checkpoint is not added to it
+	f := newFixture(t)
+	ov := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, lease: 10s}`).Overlay
+	empty := New(Options{Clock: f.clk}).Checkpoint()
+	f.clk.Advance(5 * time.Second)
+	if _, err := f.store.Renew(ov.Id, empty); err != nil {
+		t.Fatal(err)
+	}
+	f.store.Restore(empty)
+	if f.store.Len() != 0 {
+		t.Fatal("an overlay that was not in the checkpoint came back")
+	}
+	again := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, lease: 10s}`).Overlay
+	first := f.store.Checkpoint()
+	f.clk.Advance(5 * time.Second)
+	if _, err := f.store.Renew(again.Id, first); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Advance(2 * time.Second)
+	if _, err := f.store.Renew(again.Id, first); err != nil { // a second renewal moves it on, never back
+		t.Fatal(err)
+	}
+	f.store.Restore(first)
+	f.clk.Advance(9 * time.Second) // 16 s after the write, 9 after the second renewal
+	if got := f.store.Expire(); len(got) != 0 {
+		t.Fatalf("expired %v", ids(got))
+	}
+}
+
+// A replaced overlay that is taken back keeps the renewals made to its id in between.
+func TestARenewalBeforeAReplacementThatIsTakenBackStays(t *testing.T) {
+	f := newFixture(t)
+	ov := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, lease: 10s}`).Overlay
+	before := f.store.Checkpoint()
+	f.clk.Advance(8 * time.Second)
+	if _, err := f.store.Renew(ov.Id, before); err != nil {
+		t.Fatal(err)
+	}
+	f.put(admin, `{target: {device: esp32-42}, fault: {latency: 200ms}, lease: 4s}`) // replaces; lease 4 s from 8 s
+	f.store.Restore(before)
+	f.clk.Advance(3 * time.Second) // 11 s
+	if got := f.store.Expire(); len(got) != 0 {
+		t.Fatalf("expired %v", ids(got))
+	}
+	if got, _ := f.store.Get(ov.Id); got.Fault == nil || *got.Fault.Latency != "100ms" {
+		t.Fatalf("the replacement is still active: %+v", got.Fault)
+	}
+}

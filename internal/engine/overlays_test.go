@@ -646,3 +646,148 @@ func TestExplainTakesTheRouteFromTheKernelAndJudgesAccess(t *testing.T) {
 		t.Errorf("%+v", ex)
 	}
 }
+
+// A renewal moves a deadline and nothing else; a write of another owner that fails to apply, or is
+// refused after it was stored, takes the store back to an earlier checkpoint. The renewal must
+// survive that, or a client that keeps its lease alive loses the overlay to somebody else's error.
+func TestARenewedLeaseSurvivesAFailedApplyOfAnotherWrite(t *testing.T) {
+	h := startedWithRevision(t)
+	res := h.mustPut(alice, iotLatency+"\nlease: 10s")
+	h.clk.Advance(8 * time.Second)
+	if _, err := h.e.RenewOverlay(context.Background(), res.Overlay.Id, &alice); err != nil { // runs out at 18 s
+		t.Fatal(err)
+	}
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(stdin, "mark_2") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 20ms}")
+	var af *engine.ErrApplyFailed
+	if !errors.As(err, &af) {
+		t.Fatalf("got %v", err)
+	}
+	h.k.Fail = nil
+	h.clk.Advance(3 * time.Second) // 11 s after the write: the first lease would have run out
+	if s := h.barrier(); len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {
+		t.Fatalf("the renewal was undone by the failed apply of another write: %+v", s.Overlays)
+	}
+	if got := h.e.Snapshot().Overlays[0].LeaseExpiresAt; !got.Equal(h.clk.Now().Add(7 * time.Second)) {
+		t.Errorf("the lease runs out at %v, want 7 s from now", got)
+	}
+	h.clk.Advance(8 * time.Second) // 19 s: past the renewed lease
+	h.waitOverlays(0)
+}
+
+func TestARenewedLeaseSurvivesAWriteThatTheCompilerRefuses(t *testing.T) {
+	h := newHarness(t)
+	h.startWith(engine.Config{ClassLimit: 6})
+	h.mustApply(h.revision(nil))
+	res := h.mustPut(alice, iotLatency+"\nlease: 10s")
+	h.mustPut(alice, "target: {network: Lab}\nfault: {latency: 10ms}")
+	h.clk.Advance(8 * time.Second)
+	if _, err := h.e.RenewOverlay(context.Background(), res.Overlay.Id, &alice); err != nil {
+		t.Fatal(err)
+	}
+	var cerr *engine.CompileError
+	if _, err := h.put(bob, "target: {network: IoT}\nfault: {latency: 30ms, destination: {cidr: 198.51.100.1/32}}"); !errors.As(err, &cerr) {
+		t.Fatalf("got %v, want capacity_exceeded", err)
+	}
+	h.clk.Advance(3 * time.Second)
+	s := h.barrier()
+	found := false
+	for _, o := range s.Overlays {
+		if o.Id == res.Overlay.Id {
+			found = true
+			if !o.LeaseExpiresAt.Equal(h.clk.Now().Add(7 * time.Second)) {
+				t.Errorf("the lease runs out at %v, want 7 s from now", o.LeaseExpiresAt)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the renewal was undone by a refused write: %+v", s.Overlays)
+	}
+}
+
+func TestAReplacementThatFailsToApplyKeepsTheRenewalOfTheOverlayItReplaced(t *testing.T) {
+	h := startedWithRevision(t)
+	res := h.mustPut(alice, iotLatency+"\nlease: 10s")
+	h.clk.Advance(8 * time.Second)
+	if _, err := h.e.RenewOverlay(context.Background(), res.Overlay.Id, &alice); err != nil {
+		t.Fatal(err)
+	}
+	failed := false
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && stdin != "" && !failed { // the transaction of the replacement, not the restore
+			failed = true
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	// the same key with other parameters: a replacement, which restarts the lease, then fails
+	_, err := h.put(alice, "target: {network: IoT}\nfault: {latency: 250ms}\nlease: 4s")
+	var af *engine.ErrApplyFailed
+	if !errors.As(err, &af) {
+		t.Fatalf("got %v", err)
+	}
+	h.k.Fail = nil
+	h.clk.Advance(3 * time.Second) // 11 s: only the renewal keeps the original overlay
+	s := h.barrier()
+	if len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {
+		t.Fatalf("the original overlay is gone: %+v", s.Overlays)
+	}
+	if got := s.Overlays[0].LeaseExpiresAt; !got.Equal(h.clk.Now().Add(7 * time.Second)) {
+		t.Errorf("the lease runs out at %v, want 7 s from now (10 s lease renewed at 8 s)", got)
+	}
+}
+
+// A token with the overlays scope must not be able to stall the state owner: a burst of writes
+// that each name their own destination or port, more than the classification can hold, is answered
+// (accepted until the limit, then capacity_exceeded) in a bounded time, and the state stays valid.
+func TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimitAndQuickly(t *testing.T) {
+	h := startedWithRevision(t)
+	const n = 400
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			owner := model.Owner{Type: "token", Id: fmt.Sprintf("tok-%d", i)}
+			if i%2 == 0 { // its own destination only
+				_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {latency: 50ms, destination: {cidr: 11.%d.%d.0/24}}", (i/256)%256, i%256))
+			} else { // its own port only
+				_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {loss: 1%%, protocol: tcp, ports: [%d]}", 1000+i))
+			}
+		}()
+	}
+	wg.Wait()
+	took := time.Since(start)
+	accepted, refused := 0, 0
+	for i, err := range errs {
+		var cerr *engine.CompileError
+		switch {
+		case err == nil:
+			accepted++
+		case errors.As(err, &cerr) && cerr.Problems[0].Code == compiler.CodeCapacityExceeded:
+			refused++
+		default:
+			t.Errorf("write %d: %v", i, err)
+		}
+	}
+	if accepted == 0 || refused == 0 {
+		t.Fatalf("accepted %d, refused %d: the limit was not reached or not enforced", accepted, refused)
+	}
+	// the cubic compile took minutes for this; the bound is far above what the machines need (the
+	// ARM64 job is emulated), it only has to tell minutes from seconds
+	if took > 90*time.Second {
+		t.Errorf("%d writes took %v", n, took)
+	}
+	t.Logf("%d accepted, %d refused, %v", accepted, refused, took)
+	if got := len(h.barrier().Overlays); got != accepted {
+		t.Errorf("%d overlays active, %d accepted", got, accepted)
+	}
+	h.verifyKernelWithOverlays()
+}

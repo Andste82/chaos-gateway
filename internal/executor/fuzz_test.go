@@ -25,7 +25,7 @@ var fuzzSeeds = []string{
 	`{"type":"read","what":"route_get","dst":"203.0.113.9 oif lo","src":"10.10.0.31"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"ruleset":null}}]}}`,
 	`{"type":"routing","rules":[{"action":"delete","family":4,"priority":32766,"table":254}]}`,
-	`{"type":"tc","entries":[{"object":"qdisc","action":"add","dev":"wan0\n","parent":"root","args":["netem;id"]}]}`,
+	`{"type":"tc","entries":[{"object":"qdisc","action":"add","dev":"wan0\n","parent":"root","handle":"1:","args":["netem;id"]}]}`,
 	`{"type":"offloads","devs":["a"],"devs":["b"]}`,
 	`{"type":"links","entries":[{"action":"add_bridge","name":"br-lan0"},{"action":"enslave","name":"lan0","master":"br-lan0"},{"action":"addr_replace","name":"br-lan0","cidr":"10.10.0.1/24"}]}`,
 	`{"type":"sysctl","entries":[{"name":"accept_ra","dev":"br-lan0","value":0}]}`,
@@ -38,6 +38,13 @@ var fuzzSeeds = []string{
 	`{"type":"read","what":"bird","instance":"chaosgw"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"table":{"family":"ip","name":"nat","Family":"inet","Name":"chaosgw"}}}]}}`,
 	`{"type":"tc","entries":[{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]}]}`,
+	// M8b: the operations of the fault engine, complete netem sets, in-place changes, deletions
+	`{"type":"tc","namespace":"gw","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["htb","default","1"]},{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:24","args":["htb","rate","10gbit","quantum","60000"]},{"object":"qdisc","action":"replace","dev":"wan0","parent":"1:24","handle":"24:","args":["netem","limit","5000","delay","50ms","10ms","0%","distribution","normal","loss","random","1%","25%","reorder","0%","0%","duplicate","0%","0%","corrupt","0%","0%","rate","0bit"]},{"object":"filter","action":"replace","dev":"wan0","parent":"1:","handle":"0x000a0/0x1fff0","args":["protocol","ip","prio","1","fw","flowid","1:24"]}]}`,
+	`{"type":"tc","entries":[{"object":"qdisc","action":"change","dev":"wan0","parent":"1:24","handle":"24:","args":["netem","limit","1000","delay","0ms","0ms","0%","loss","gemodel","1%","10%","70%","0.1%","reorder","25%","0%","duplicate","0%","0%","corrupt","0.1%","0%","rate","2Mbit"]}]}`,
+	`{"type":"tc","entries":[{"object":"filter","action":"delete","dev":"wan0","parent":"1:","handle":"0x100a0/0x1fff0","args":["protocol","ip","prio","1","fw"]},{"object":"class","action":"delete","dev":"wan0","classid":"1:25"},{"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"1:"}]}`,
+	`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"1:24","handle":"24:","args":["netem","limit","1000","delay","1ms","distribution","../../etc/passwd"]}]}`,
+	`{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"8001:"}]}`,
+	`{"type":"read","what":"tc","dev":"wan0"}`,
 	``, `{}`, `[]`, `null`, `{"type":null}`, `{"type":"read"`, "\x00",
 }
 
@@ -112,6 +119,9 @@ func checkStdin(t *testing.T, op Operation, c Command) {
 			f := strings.Fields(l)
 			if len(f) < 2 || !verbs[f[0]] || strings.ContainsAny(l, "\r\x00;|&$`<>\"'\\") {
 				t.Fatalf("batch line %q of %T is not a plain command", l, op)
+			}
+			if c.Tool == ToolTC {
+				checkTCLineInScope(t, l)
 			}
 			if c.Tool == ToolIP && !strings.Contains(l, "proto 201") && !strings.Contains(l, "protocol 201") {
 				t.Fatalf("routing line without the protocol tag: %q", l)

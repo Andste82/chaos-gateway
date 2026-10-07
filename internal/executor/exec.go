@@ -552,7 +552,7 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		if err != nil {
 			return nil, err
 		}
-		if r.Exit != 0 && (!s.Idempotent || !onlyBenign(r.Stderr)) {
+		if r.Exit != 0 && (!s.Idempotent || !benign(s.Cmd.Tool, r.Stderr)) {
 			stderr := r.Stderr
 			if s.NeedsConfig {
 				// the message of a rejected configuration may quote a key
@@ -565,6 +565,34 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, e.verifyOffloads(ctx, o)
 	}
 	return nil, nil
+}
+
+// benign reports whether a failed idempotent step only said that nothing was left to do.
+func benign(tool Tool, stderr string) bool {
+	if tool == ToolTC {
+		return onlyBenignTC(stderr)
+	}
+	return onlyBenign(stderr)
+}
+
+// onlyBenignTC is onlyBenign for a `tc -force -batch` of deletions. The answers below were read
+// from the kernel (6.8, iproute2 6.19, docs/development.md "tc operations on the kernel"): they all
+// mean "this object is not there (any more)". Anything else, "HTB class in use" first of all, is
+// a failure.
+func onlyBenignTC(stderr string) bool {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "", strings.HasPrefix(line, "Command failed"), line == "We have an error talking to the kernel":
+		case strings.HasSuffix(line, "No such file or directory"):
+		case line == "Error: Specified class not found.", line == "Error: Failed to find qdisc with specified handle.",
+			line == "Error: Specified filter handle not found.", line == "Error: Cannot find specified filter chain.",
+			line == "Error: Parent Qdisc doesn't exists.", line == "Error: Invalid handle.":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // onlyBenign reports whether every error line of an `ip -force -batch` run is an "already
@@ -711,6 +739,9 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		}
 		return json.Marshal(st)
 	}
+	if o.What == ReadTC {
+		return e.readTC(ctx, o)
+	}
 	cmd := ReadCommand(o)
 	r, err := e.run.Run(ctx, cmd)
 	if err != nil {
@@ -771,6 +802,30 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	}
 	b, err := json.Marshal(v)
 	return b, err
+}
+
+// readTC reads the three listings of one interface and returns them normalized. The listings are
+// three tool runs one after the other, so a packet can move between two of them: the counters of
+// the qdiscs and the classes are not from one instant. The configuration is what verification
+// compares, and it does not change by itself.
+func (e *Executor) readTC(ctx context.Context, o *Read) (json.RawMessage, error) {
+	var out [3][]byte
+	for i, kind := range []string{"qdisc", "class", "filter"} {
+		cmd := tcListing(o, kind)
+		r, err := e.run.Run(ctx, cmd)
+		if err != nil {
+			return nil, err
+		}
+		if r.Exit != 0 {
+			return nil, &CommandError{Cmd: cmd, Exit: r.Exit, Stderr: r.Stderr}
+		}
+		out[i] = []byte(r.Stdout)
+	}
+	tree, err := linux.NormalizeTC(o.Dev, out[0], out[1], out[2])
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(tree)
 }
 
 func (e *Executor) assign(devs, osOwned []string) error {

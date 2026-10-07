@@ -98,7 +98,7 @@ func TestErrorCodesTravelToTheClient(t *testing.T) {
 		}
 		return re.Code
 	}
-	_, err := c.Do(ctx, mustDecode(t, `{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"eth0","parent":"root"}]}`))
+	_, err := c.Do(ctx, mustDecode(t, `{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"eth0","parent":"root","handle":"1:"}]}`))
 	if code(err) != CodeScope {
 		t.Errorf("scope violation: %v", err)
 	}

@@ -36,7 +36,7 @@ func ops(t *testing.T, in ...string) []Operation {
 
 const (
 	assignWan = `{"type":"assign_interfaces","devs":["wan0","lan0"]}`
-	tcWan     = `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","args":["netem","delay","10ms"]}]}`
+	tcWan     = `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["netem","delay","10ms"]}]}`
 	nftOp     = `{"type":"nft_apply","ruleset":` + goodNft + `}`
 )
 
@@ -172,7 +172,7 @@ func TestScopeIsCheckedBeforeAnythingRuns(t *testing.T) {
 	gen := e.Generation()
 	// the nft apply is fine, the tc entry names an interface that is not assigned
 	out, err := e.DoBatch(context.Background(), ops(t, nftOp,
-		`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"enp3s0","parent":"root","args":["netem","delay","10ms"]}]}`))
+		`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"enp3s0","parent":"root","handle":"1:","args":["netem","delay","10ms"]}]}`))
 	if !errors.Is(err, ErrOutOfScope) {
 		t.Fatalf("want ErrOutOfScope, got %v", err)
 	}
@@ -191,7 +191,7 @@ func TestScopeRejectsUnassignedInterfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, in := range map[string]string{
-		"tc dev":               `{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"eth0","parent":"root"}]}`,
+		"tc dev":               `{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"eth0","parent":"root","handle":"1:"}]}`,
 		"tc mirred target":     `{"type":"tc","entries":[{"object":"filter","action":"add","dev":"wan0","parent":"ffff:","args":["protocol","ip","u32","match","u32","0","0","action","mirred","egress","redirect","dev","eth0"]}]}`,
 		"tc dangling dev":      `{"type":"tc","entries":[{"object":"filter","action":"add","dev":"wan0","parent":"ffff:","args":["u32","dev"]}]}`,
 		"route dev":            `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"10.0.0.0/8","dev":"eth0"}]}`,
@@ -240,7 +240,7 @@ func TestOSOwnedInterfacesTakeOnlyTrafficControlRoutesAndOffloads(t *testing.T) 
 		t.Fatal(err)
 	}
 	for name, in := range map[string]string{
-		"tc":          `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","args":["netem","delay","10ms"]}]}`,
+		"tc":          `{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["netem","delay","10ms"]}]}`,
 		"route dev":   `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"10.0.0.0/8","dev":"wan0"}]}`,
 		"offloads":    `{"type":"offloads","devs":["wan0"]}`,
 		"docker_user": `{"type":"docker_user","action":"ensure","devs":["wan0"]}`,
@@ -283,7 +283,7 @@ func TestNamespaceIsPassedToEveryCommand(t *testing.T) {
 	e := newExec(t, fr)
 	_, err := e.DoBatch(context.Background(), ops(t, assignWan,
 		`{"type":"nft_apply","namespace":"gw1","ruleset":`+goodNft+`}`,
-		`{"type":"tc","namespace":"gw1","entries":[{"object":"qdisc","action":"delete","dev":"wan0","parent":"root"}]}`,
+		`{"type":"tc","namespace":"gw1","entries":[{"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"1:"}]}`,
 		`{"type":"read","namespace":"gw1","what":"rules"}`))
 	if err != nil {
 		t.Fatal(err)

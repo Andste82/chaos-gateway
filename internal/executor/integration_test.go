@@ -31,6 +31,16 @@ type gateway struct {
 func startGateway(t *testing.T) *gateway {
 	t.Helper()
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false))
+	c, sock := startExecutor(t)
+	g := &gateway{t: t, top: top, c: c, ns: top.GW.Name, sock: sock}
+	g.must(&executor.AssignInterfaces{Devs: []string{"wan0", "lan0", "lan1", "br-lan0", "br-lan1"}})
+	return g
+}
+
+// startExecutor starts the real executor on a socket in a temp directory and returns a client and
+// the socket's path. Which namespace its operations target is up to each operation.
+func startExecutor(t *testing.T) (*executor.Client, string) {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "cgx")
 	if err != nil {
 		t.Fatal(err)
@@ -56,9 +66,7 @@ func startGateway(t *testing.T) *gateway {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	g := &gateway{t: t, top: top, c: c, ns: top.GW.Name, sock: filepath.Join(dir, "e.sock")}
-	g.must(&executor.AssignInterfaces{Devs: []string{"wan0", "lan0", "lan1", "br-lan0", "br-lan1"}})
-	return g
+	return c, filepath.Join(dir, "e.sock")
 }
 
 func tctx(t *testing.T) context.Context {
@@ -455,7 +463,7 @@ func TestTrafficControlOnAssignedInterfaces(t *testing.T) {
 
 	// scope: an interface that is not assigned is out of reach, even named as a second device
 	for name, e := range map[string]executor.TCEntry{
-		"mgmt0":      {Object: "qdisc", Action: "delete", Dev: "mgmt0", Parent: "root"},
+		"mgmt0":      {Object: "qdisc", Action: "delete", Dev: "mgmt0", Parent: "root", Handle: "1:"},
 		"mirred dev": {Object: "filter", Action: "add", Dev: "lan0", Parent: "ffff:", Args: []string{"protocol", "ip", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", "mgmt0"}},
 	} {
 		_, err := g.c.Do(context.Background(), &executor.TC{Target: tgt(g.ns), Entries: []executor.TCEntry{e}})
@@ -470,7 +478,7 @@ func TestTrafficControlOnAssignedInterfaces(t *testing.T) {
 
 	// remove: the default qdisc returns
 	g.must(&executor.TC{Target: tgt(g.ns), Entries: []executor.TCEntry{
-		{Object: "qdisc", Action: "delete", Dev: "wan0", Parent: "root"},
+		{Object: "qdisc", Action: "delete", Dev: "wan0", Parent: "root", Handle: "1:"},
 		{Object: "qdisc", Action: "delete", Dev: "lan0", Parent: "ingress"},
 	}})
 	if q := read[[]linux.Qdisc](t, g, executor.Read{What: executor.ReadQdiscs, Dev: "wan0"}); hasKind(q, "htb") || hasKind(q, "netem") {

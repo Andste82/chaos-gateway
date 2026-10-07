@@ -4271,6 +4271,9 @@ components:
             rule:
               allOf: [{$ref: '#/components/schemas/Uuid'}]
               description: Overlay or configured rule id.
+            reason:
+              type: string
+              description: Which entry or default decided, in words.
         faults:
           type: array
           description: One entry per family (families without candidates are omitted).
@@ -4297,10 +4300,15 @@ components:
             pmtu_table: {type: integer, minimum: 0, maximum: 7}
         route:
           type: object
+          description: The route the kernel takes for the packet (`ip route get`, through the policy rules); absent for a hostname destination or a source without an address.
           properties:
             table: {type: integer}
             gateway: {$ref: '#/components/schemas/Ipv4'}
             interface: {type: string}
+            unreachable:
+              type: boolean
+              description: The kernel has no route (or a prohibit or blackhole route) for the packet.
+            error: {type: string, description: 'The kernel''s message when `unreachable`.'}
 
     # ============================================================ runs
     RunStatus:

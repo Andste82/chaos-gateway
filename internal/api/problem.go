@@ -148,6 +148,8 @@ func (s *Server) problemFor(err error) *problem {
 		ve       domain.ValidationErrors
 		pe       *domain.ParseError
 		af       *engine.ErrApplyFailed
+		unsup    *engine.UnsupportedOverlayError
+		comp     *engine.CompileError
 	)
 	switch {
 	case errors.As(err, &conflict):
@@ -175,6 +177,25 @@ func (s *Server) problemFor(err error) *problem {
 			return newProblem(model.ErrorCodeVerifyFailed, "%s", firstLine(af.Error()))
 		}
 		return newProblem(model.ErrorCodeApplyFailed, "%s", firstLine(af.Error()))
+	case errors.As(err, &unsup):
+		return newProblem(model.ErrorCodeUnsupportedFeature, "%s", unsup.Error())
+	case errors.As(err, &comp):
+		if p := problemsToError(comp.Problems); p != nil {
+			return p
+		}
+		return newProblem(model.ErrorCodeValidationFailed, "%s", comp.Error())
+	case errors.Is(err, engine.ErrOverlayNotFound):
+		return newProblem(model.ErrorCodeNotFound, "no such overlay (it never existed, or it was removed or has expired)")
+	case errors.Is(err, engine.ErrOverlayForbidden):
+		return newProblem(model.ErrorCodeForbidden, "the overlay belongs to another owner: a token with the scope overlays only changes its own")
+	case errors.Is(err, engine.ErrOverlayNoLease):
+		return newProblem(model.ErrorCodeValidationFailed, "the overlay has no lease to renew")
+	case errors.Is(err, engine.ErrTooManyOverlays):
+		return newProblem(model.ErrorCodeCapacityExceeded, "too many active overlays: remove some, or let them expire")
+	case errors.Is(err, engine.ErrNoConfiguration):
+		return newProblem(model.ErrorCodeNotFound, "there is no active revision yet")
+	case errors.Is(err, engine.ErrUnknownDevice):
+		return newProblem(model.ErrorCodeNotFound, "%s", err)
 	case errors.Is(err, engine.ErrClosed):
 		return newProblem(model.ErrorCodeUnavailable, "the gateway engine is not running")
 	}

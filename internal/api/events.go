@@ -64,7 +64,8 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeWireguardPeerOnline, model.EventTypeWireguardPeerOffline, model.EventTypeRoutingSessionChanged,
 		model.EventTypeRoutingRoutesChanged, model.EventTypeObservedChanged,
 		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
-		model.EventTypeEventsLost,
+		model.EventTypeEventsLost, model.EventTypeOverlayCreated, model.EventTypeOverlayUpdated, model.EventTypeOverlayRemoved,
+		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 	} {
 		m[string(t)] = true
 	}
@@ -149,6 +150,22 @@ func describe(ev engine.Event) string {
 		return "device " + str("name") + " has a new address"
 	case "dhcp_lease":
 		return "DHCP " + str("event") + " " + str("ip") + " for " + str("mac")
+	case "overlay_created":
+		return "overlay " + str("overlay") + " created"
+	case "overlay_updated":
+		if r := str("reason"); r == "moved" {
+			return "overlay " + str("overlay") + " moved to another device"
+		}
+		return "overlay " + str("overlay") + " replaced"
+	case "overlay_removed":
+		if r := str("reason"); r != "" && r != "deleted" {
+			return "overlay " + str("overlay") + " removed (" + r + ")"
+		}
+		return "overlay " + str("overlay") + " removed"
+	case "overlay_expired":
+		return "overlay " + str("overlay") + " expired (" + str("reason") + ")"
+	case "overlay_orphaned":
+		return "overlay " + str("overlay") + " removed: its target was deleted"
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

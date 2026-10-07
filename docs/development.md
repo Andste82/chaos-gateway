@@ -949,9 +949,10 @@ also changes two things said here: the maps are interval maps, and an element `g
 
 ## Overlays and precedence (M8a)
 
-The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps, and the
-compiler's side of it (the last subsection). The API, the engine's state owner and the apply loop are
-the next steps.
+The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps, the
+compiler's side of it (the subsection "Faults in the compiler") and the state owner's and the API's
+side ("Overlays in the engine and over the API"). Coalescing, the reader pool, orphaning and the
+merge of discovered devices are the next steps.
 
 - **Store** (`internal/overlay`). Holds the active overlays in memory; a restart starts empty
   (plan §2.1.1). `Put` takes an owner and a validated request (`domain.ValidateOverlay`, references
@@ -1086,9 +1087,83 @@ install it with the executor.
   `TestAReorderedLookupChainIsNotTheLookupChain`). The executor accepts verdict elements only for
   `mark_0` to `mark_4095` (`TestDecodeRejects`), range keys and `0xa0/0x1fff0`-style filter
   handles.
-- **Not in this step:** the overlay store's use by the engine, the API, `explain`, coalescing, the
-  reader pool, `reset`, orphaning (the next steps of M8a); applying and verifying the tc tree, in-place
-  updates and make-before-break (M8b).
+- **Not in this step:** applying and verifying the tc tree, in-place updates and make-before-break
+  (M8b). The engine, API and `explain` side follows below; what is still open of M8a is listed there.
+
+### Overlays in the engine and over the API (M8a)
+
+- **Commands** (`internal/engine/overlays.go`). `PutOverlay`, `DeleteOverlay`, `RenewOverlay`,
+  `ResetOverlays` and the expirer's `cmdOverlayExpire` go to the state owner, which alone writes the
+  `overlay.Store`. A write is validated there (`domain.ValidateOverlay` against the configuration the
+  kernel runs, the discovered devices count as known), the store's content is compiled once to see
+  whether the target still fits (`capacity_exceeded`, `fault_invalid`: the write is refused and the
+  store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
+  desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
+  compiler together with the fault ids of its last verified target, so ids stay stable).
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: rule M9, WireGuard
+  action and the mtu and tunnel families M10, profile M11, DNS M20, TLS M21, DHCP M23) are refused
+  with `unsupported_feature` before they reach the owner.
+- **Verify and take back.** The writer is answered when the apply loop has verified a generation
+  that is at least the one of its change, with that generation (`OverlayResult.Generation`: it can be
+  newer than the one the change made, when later changes were applied together with it). The owner
+  keeps a store checkpoint per unconfirmed change and the last verified one; when an apply that
+  contains an unconfirmed change fails, the store is restored to the verified checkpoint, every
+  waiting writer gets `ErrApplyFailed` (`apply_failed` over the API), and a restore desired state is
+  made, which supersedes everything converged since. The events of a change (`overlay_created`,
+  `overlay_updated` with reason `replaced` or `moved`, `overlay_removed` with reason `deleted` or
+  `reset`, `overlay_expired` with reason `ttl` or `lease`, `overlay_orphaned`) go out when the change
+  is verified, with the generation it made, the actor and the subject; a change that is taken back
+  never announced itself. Renewing a lease moves a deadline only: no generation, no event, no apply.
+- **Expiry** is the `overlay.Expirer` on the engine's injected clock: it arms one timer for the next
+  deadline, re-armed after every change and renewal; when it fires, `cmdOverlayExpire` makes the
+  owner call `Store.Expire`. The tests move the fake clock (`TestTheTTLRemovesAnOverlayAndAnEventSaysSo`,
+  `TestALeaseNeedsRenewingAndRunsOnTheMonotonicClock`, which also jumps the wall clock).
+- **Restart.** The store lives in the owner and nowhere else, so a new engine starts without
+  overlays and recompiles the kernel from the committed revision and the observed state
+  (`TestARestartDropsTheOverlays`, `TestARestartOfTheAPIDropsTheOverlays`).
+- **Snapshot.** `Snapshot.Overlays` (what the desired state holds, oldest first), `Faults`, `FaultIDs`,
+  `Winners` (which faults win for some traffic) and `FaultEpochs` (the generation in which a fault first
+  appeared in an applied target: the epoch of its counters, which restart when the fault is new)
+  come from the last applied target; the API reads the snapshot and, for the counters, the named nft
+  counters through one executor read per response (`Engine.ReadCounters`).
+- **API** (`internal/api/overlays.go`). `POST /overlays` answers 201 with `Location`, or 200 when the
+  key existed (the overlay keeps its id), both with `Chaos-Generation`; `GET /overlays` filters by
+  kind, owner (`self` or an owner id), device (overlays whose target contains it) and network;
+  `DELETE` and `renew` are limited to the caller's own overlays for a token with the scope
+  `overlays`, the scope `full` and the admin may touch every overlay; `POST /reset` removes the
+  caller's overlays, `?owner=all` needs the scope `full` (403 otherwise) and reports
+  `aborted_runs: 0` until M15. The owner is the token itself, or the admin user for what the UI does
+  (plan §2.15); runs become owners with M15. Create, replace, delete and reset are audited
+  (`overlay.create`, `overlay.replace`, `overlay.delete`, `overlay.reset`, `overlay.apply_failed`);
+  a renewal is a heartbeat and is not. An overlay's `state` is `effective`, or `overridden` when it
+  wins nowhere (P2-M8a-06), its `counters` the sum of the named counters of its faults.
+  `GET /faults` and `/faults/{id}` show the configured faults with their state, counters and, for an
+  overridden one, the faults that beat it (the winners over the devices of its scope at a destination
+  and port it selects); a revision other than the active one shows the configuration alone.
+  `GET /capabilities` lists the `fault` overlay kind and the `impairment` family.
+- **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
+  the moment: the source (a device by name or UUID, configured or discovered, or an address that the
+  identity maps to a device), the access verdict (`domain.World.AccessVerdict`: the gateway's
+  protection for traffic to the gateway, then the matrix; access rules join with M9, P2-M8a-07), the
+  winner and the overridden candidates of every family that has candidates (`domain.World.Resolve`),
+  the fault id and the two marks the compiler gave the impairment winner, `dns_proxy` for a query to
+  the gateway's own address on port 53, and the route. The route is the kernel's answer to
+  `ip route get DST from SRC iif IF` (the executor read `route_get`: plain IPv4 arguments only, the
+  interface is the one the source's network arrives on), so the policy rules and the tables they
+  select are evaluated by the kernel and not re-implemented; `table` is 100 for traffic from a test
+  network, and "no route" is an answer (`unreachable`, with the kernel's message), not an error. A
+  hostname destination has no address to look up: no route (and no kernel section) until M20 resolves
+  names.
+- **A data race this found.** `domain.IsNormalized` (every compile calls it through `NewWorld`) stored
+  each map entry back into the configuration it only looked at; with the state owner validating an
+  overlay while the apply loop compiled, `-race` reported it. A read-only visit does not write any more
+  (`TestIsNormalizedAndTheWorldOnlyReadTheConfiguration`).
+- **Not yet** (the next steps of M8a): coalescing is what the loop already does (it compiles the
+  latest desired state), but the tests for 200 concurrent writes and the counters of applies are
+  missing; the executor reader pool and operation time stamps; deleting a referenced object with
+  `?force=true` and `overlay_orphaned`, and the move of overlays after a merge revision (the domain
+  functions `OrphanedOverlays` and `DiscoveredMerges` and `Store.Orphan` and `Retarget` exist); applying
+  the tc tree and verifying it (M8b).
 
 ## Generated code
 

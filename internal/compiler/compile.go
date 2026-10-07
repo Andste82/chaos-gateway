@@ -174,6 +174,10 @@ type Target struct {
 	// Faults are the fault ids in use, sorted by id: the winners of the impairment family with the
 	// netem configuration of each direction.
 	Faults []Fault `json:"faults,omitempty"`
+	// Winners are the keys (`layer:id:family`) of the faults that win for some traffic of some source
+	// (domain.Table), also those that impair nothing and so have no id: a fault that is not here is
+	// overridden everywhere. Sorted.
+	Winners []string `json:"winners,omitempty"`
 	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault
 	// impairs anything.
 	TC         *TCTarget `json:"tc,omitempty"`

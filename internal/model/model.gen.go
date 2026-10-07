@@ -3486,6 +3486,9 @@ type Explanation struct {
 	Access struct {
 		Layer ExplanationAccessLayer `json:"layer"`
 
+		// Reason Which entry or default decided, in words.
+		Reason *string `json:"reason,omitempty"`
+
 		// Rule Overlay or configured rule id.
 		Rule *Uuid `json:"rule,omitempty"`
 
@@ -3521,10 +3524,17 @@ type Explanation struct {
 		MarkUpload *string `json:"mark_upload,omitempty"`
 		PmtuTable  *int    `json:"pmtu_table,omitempty"`
 	} `json:"kernel,omitempty"`
+
+	// Route The route the kernel takes for the packet (`ip route get`, through the policy rules); absent for a hostname destination or a source without an address.
 	Route *struct {
+		// Error The kernel's message when `unreachable`.
+		Error     *string `json:"error,omitempty"`
 		Gateway   *Ipv4   `json:"gateway,omitempty"`
 		Interface *string `json:"interface,omitempty"`
 		Table     *int    `json:"table,omitempty"`
+
+		// Unreachable The kernel has no route (or a prohibit or blackhole route) for the packet.
+		Unreachable *bool `json:"unreachable,omitempty"`
 	} `json:"route,omitempty"`
 
 	// Service Whether the connection is redirected into the service namespace.

@@ -290,6 +290,11 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		}
 	}
 
+	for k := range winners {
+		t.Winners = append(t.Winners, k)
+	}
+	sort.Strings(t.Winners)
+
 	// ---- stable ids -------------------------------------------------------------------------
 	keys := make([]string, 0, len(keySet))
 	for k := range keySet {

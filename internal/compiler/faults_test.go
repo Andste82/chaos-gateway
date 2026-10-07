@@ -1406,3 +1406,36 @@ func TestACompileWithThousandsOfDevicesIsFast(t *testing.T) {
 		t.Errorf("compiling 2000 devices took %s", took)
 	}
 }
+
+// Winners names every fault that wins for some traffic, also one that impairs nothing and so has no
+// id, and leaves out one that is overridden everywhere: the API's `state` of an overlay.
+func TestWinnersAreTheFaultsThatWinSomewhere(t *testing.T) {
+	w := newFaultWorld(t)
+	network := w.overlay(`{target: {network: IoT}, fault: {latency: 100ms}}`, 0)
+	neutral := w.overlay(`{target: {device: esp32-42}, fault: {destination: {cidr: 203.0.113.0/24}, latency: 0ms}}`, time.Second)
+	// two global faults at the same level: the newer one wins everywhere (D26), the older nowhere
+	shadowed := w.overlay(`{target: {global: true}, fault: {loss: 1%}}`, 2*time.Second)
+	newer := w.overlay(`{target: {global: true}, fault: {latency: 30ms}}`, 3*time.Second)
+	tg := w.compile(nil)
+	want := []string{"overlay:" + neutral.Id.String() + ":impairment", "overlay:" + network.Id.String() + ":impairment", "overlay:" + newer.Id.String() + ":impairment"}
+	got := map[string]bool{}
+	for _, k := range tg.Winners {
+		got[k] = true
+	}
+	for _, k := range want {
+		if !got[k] {
+			t.Errorf("%s is missing from %v", k, tg.Winners)
+		}
+	}
+	if got["overlay:"+shadowed.Id.String()+":impairment"] {
+		t.Errorf("a global fault that a newer one shadows everywhere wins nowhere: %v", tg.Winners)
+	}
+	if len(tg.Faults) != 2 {
+		t.Errorf("the network fault and the newer global one have an id: %+v", tg.Faults)
+	}
+	for i := 1; i < len(tg.Winners); i++ {
+		if tg.Winners[i-1] >= tg.Winners[i] {
+			t.Errorf("not sorted: %v", tg.Winners)
+		}
+	}
+}

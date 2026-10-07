@@ -89,6 +89,7 @@ func (s *Server) GetState(c *gin.Context) {
 		ActiveRevision: snap.Revision,
 		BootID:         s.cfg.BootID,
 		LastKnownGood:  s.lastKnownGood(),
+		OverlaysActive: len(snap.Overlays),
 	}
 	if p := snap.Pending; p != nil {
 		st.PendingConfirm = &pendingConfirm{Deadline: p.Deadline.UTC(), Revision: p.Revision}
@@ -126,8 +127,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 	c.JSON(200, model.Capabilities{
 		Version:       s.cfg.Version,
 		Features:      Features,
-		OverlayKinds:  []model.OverlayKind{},
-		FaultFamilies: []model.FaultFamily{},
+		OverlayKinds:  engine.SupportedOverlayKinds,
+		FaultFamilies: engine.SupportedFaultFamilies,
 		StepTypes:     []string{},
 		CheckTypes:    []string{},
 	})
@@ -135,7 +136,7 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
 // M6a provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows"}
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "explain"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {

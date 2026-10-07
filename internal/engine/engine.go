@@ -118,6 +118,8 @@ type Snapshot struct {
 	// allocation by key (the next compile keeps it) and FaultEpochs the generation in which each
 	// fault, by key, first appeared: the epoch of its counters (they restart when a fault is new).
 	Faults []compiler.Fault
+	// Winners are the keys of the faults that win for some traffic (compiler.Target.Winners).
+	Winners map[string]bool
 	// Management is the management interface and the sources that reach the control plane in the
 	// last applied target (`explain` judges traffic to the gateway with it).
 	Management  compiler.Management

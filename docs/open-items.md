@@ -624,3 +624,40 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   distribution of the traffic follows.
 - Needs maintainer: no
 - Effort: S
+
+### P2-M8a-06 An overlay or fault that wins only for a part of its selector is shown as effective
+
+- Status: new
+- Severity: low
+- Reason: deferred (to M13, the faults screen, which is the first consumer). The spec's `EffectState`
+  has four values (`effective`, `partially_overridden`, `overridden`, `disabled`). M8a decides
+  `effective` and `overridden` from one fact the compiler reports: whether the fault wins for any
+  traffic of any source (`Target.Winners`). Telling "wins for all of its traffic" from "wins for
+  some" needs the coverage of every selector against every other one, which the per-source tables
+  contain (`domain.Table`) but the compiler does not report per fault.
+- Evidence: `internal/api/overlays.go` (`overlayContext.effectOf`), `internal/compiler/faults.go`
+  (`Target.Winners`). `explain` answers the question per destination exactly.
+- Task: M13 adds the per-fault coverage to the compiler's output (the number of table entries a
+  fault wins out of those it matches) and the API reports `partially_overridden` from it.
+- Acceptance: a test where a device fault covers part of a network fault's selector shows the
+  network fault as `partially_overridden` and the device fault as `effective`.
+- Needs maintainer: no
+- Effort: S
+
+### P2-M8a-07 `explain` judges access by the matrix and the gateway's protection, not by access rules
+
+- Status: new
+- Severity: low
+- Reason: deferred (to M9). The spec's `access.layer` can name `overlay_rule` and `config_rule`, but
+  access rules do not take effect before M9 (the compiler does not compile them, overlays of kind
+  `rule` are refused), so naming one as the reason would claim something the kernel does not do.
+  `domain.World.AccessVerdict` reproduces the compiler's forward chain at the level of one address
+  pair (gateway protection, explicit matrix entries with the more specific endpoint first, the
+  clients' `reachable` lists, the two-port guard, the default); `ResolveAccess` exists in the domain
+  layer and joins in with M9.
+- Evidence: `internal/domain/access.go`, `TestTheAccessVerdictFollowsTheMatrixAndItsDefault`.
+- Task: M9 puts `ResolveAccess` in front of the matrix in `Engine.Explain` and compiles the rules.
+- Acceptance: M9's test that a drop rule is what `explain` names as the decider.
+- Needs maintainer: no
+- Effort: S
+

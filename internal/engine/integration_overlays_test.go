@@ -16,10 +16,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-type (
-	applyExec  = apply.Exec
-	executorOp = []executor.Operation
-)
+type applyExec = apply.Exec
 
 var errInjected = errors.New("injected executor failure")
 
@@ -66,41 +63,50 @@ func TestOverlaysReachTheRealKernelAndLeaveItAgain(t *testing.T) {
 		t.Error(err)
 	}
 
-	// a replacement keeps the id and the chain and moves the selector: the kernel follows
-	again := put("target: {network: IoT}\nfault: {latency: 200ms, destination: {cidr: 198.51.100.0/24}}\nttl: 90s")
+	// a replacement keeps the id, and with it the fault id, the chain and the counters
+	again := put("target: {network: IoT}\nfault: {latency: 200ms, destination: {cidr: 203.0.113.0/24}}\nttl: 90s")
 	if again.Created || again.Overlay.Id != res.Overlay.Id {
 		t.Fatalf("%+v", again)
 	}
-	nft = r.nft()
-	if !strings.Contains(nft, "198.51.100.0/24") || strings.Contains(nft, "203.0.113.0/24") || !strings.Contains(nft, "chain "+compiler.MarkChainName(f.ID)) {
+	if s := r.e.Snapshot(); len(s.Faults) != 1 || s.Faults[0].ID != f.ID || s.Faults[0].CounterUp != f.CounterUp {
+		t.Fatalf("faults after the replacement: %+v, before %+v", s.Faults, f)
+	}
+	if nft := r.nft(); !strings.Contains(nft, "chain "+compiler.MarkChainName(f.ID)) {
 		t.Errorf("after the replacement:\n%s", nft)
 	}
 
-	// a second owner's overlay on the other network, then the TTL (the fake clock) of the first
+	// another destination is another overlay (the selector is part of the key), with its own id and
+	// elements; the other owner's overlay on the other network is a third
+	second := put("target: {network: IoT}\nfault: {latency: 50ms, destination: {cidr: 198.51.100.0/24}}")
+	if !second.Created || second.Overlay.Id == res.Overlay.Id {
+		t.Fatalf("%+v", second)
+	}
 	other := model.Owner{Type: "token", Id: "33333333-3333-4333-8333-333333333333"}
 	if _, err := r.e.PutOverlay(ctx, engine.OverlayWrite{Owner: other, Request: overlayRequest(t, "target: {network: Lab}\nfault: {loss: 3%}")}); err != nil {
 		t.Fatal(err)
 	}
+	if nft := r.nft(); !strings.Contains(nft, "198.51.100.0/24") || !strings.Contains(nft, "203.0.113.0/24") || strings.Count(nft, "chain mark_") != 3 {
+		t.Errorf("three faults:\n%s", nft)
+	}
+
+	// the TTL of the first (the fake clock): its elements and its chain go, the others stay
 	r.clk.Advance(91 * time.Second)
 	deadline := time.Now().Add(time.Minute)
-	for len(r.e.Snapshot().Overlays) != 1 && time.Now().Before(deadline) {
+	for len(r.e.Snapshot().Overlays) != 2 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if _, err := r.e.Barrier(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.e.Snapshot().Overlays; len(got) != 1 || got[0].Owner.Id != other.Id {
+	if got := r.e.Snapshot().Overlays; len(got) != 2 {
 		t.Fatalf("after the TTL: %+v", got)
 	}
-	if strings.Contains(r.nft(), "198.51.100.0/24") {
-		t.Error("the expired overlay's element is still in the kernel")
-	}
-	if n := strings.Count(r.nft(), "chain mark_"); n != 1 {
-		t.Errorf("%d mark chains, want the one of the other owner's fault:\n%s", n, r.nft())
+	if nft := r.nft(); strings.Contains(nft, "203.0.113.0/24") || !strings.Contains(nft, "198.51.100.0/24") || strings.Count(nft, "chain mark_") != 2 {
+		t.Errorf("after the TTL of the first overlay:\n%s", nft)
 	}
 
 	// reset of all owners leaves the kernel as it was before any overlay
-	if rr, err := r.e.ResetOverlays(ctx, nil, owner); err != nil || rr.Removed != 1 {
+	if rr, err := r.e.ResetOverlays(ctx, nil, owner); err != nil || rr.Removed != 2 {
 		t.Fatalf("%+v %v", rr, err)
 	}
 	if strings.Contains(r.nft(), "chain mark_") {

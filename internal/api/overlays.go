@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/Andste82/chaos-gateway/internal/audit"
@@ -271,7 +270,7 @@ func (s *Server) CreateOverlay(c *gin.Context, _ model.CreateOverlayParams) {
 // remove its own overlays; the full scope any.
 func (s *Server) DeleteOverlay(c *gin.Context, overlayId openapi_types.UUID) {
 	p := principalOf(c)
-	res, err := s.cfg.Engine.DeleteOverlay(context.WithoutCancel(contextOf(c)), uuid.UUID(overlayId), ownerLimit(p), actorOf(p))
+	res, err := s.cfg.Engine.DeleteOverlay(context.WithoutCancel(contextOf(c)), overlayId, ownerLimit(p), actorOf(p))
 	if err != nil {
 		s.fail(c, err)
 		return
@@ -284,7 +283,7 @@ func (s *Server) DeleteOverlay(c *gin.Context, overlayId openapi_types.UUID) {
 // RenewOverlay implements POST /overlays/{overlayId}/renew: the heartbeat of an owner that holds a
 // lease. It changes nothing in the kernel.
 func (s *Server) RenewOverlay(c *gin.Context, overlayId openapi_types.UUID) {
-	res, err := s.cfg.Engine.RenewOverlay(contextOf(c), uuid.UUID(overlayId), ownerLimit(principalOf(c)))
+	res, err := s.cfg.Engine.RenewOverlay(contextOf(c), overlayId, ownerLimit(principalOf(c)))
 	if err != nil {
 		s.fail(c, err)
 		return

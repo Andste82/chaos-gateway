@@ -1019,8 +1019,8 @@ steps.
   by `compiler.MaxClassElements` (8192); each is `capacity_exceeded` naming the faults that select by
   destination only or by port only (their product is what grows). Sources that the same candidates
   apply to share one table (`Table.Cells` is 0 for the later ones). The worst accepted set compiles
-  in about 0.1 s; `TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimitAndQuickly`
-  throws 400 writes of the worst kind at the engine.
+  in about 0.1 s; `TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimit`
+  throws such a burst at the engine.
 
 ### Faults in the compiler (M8a)
 

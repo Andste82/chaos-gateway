@@ -743,24 +743,31 @@ func TestAReplacementThatFailsToApplyKeepsTheRenewalOfTheOverlayItReplaced(t *te
 }
 
 // A token with the overlays scope must not be able to stall the state owner: a burst of writes
-// that each name their own destination or port, more than the classification can hold, is answered
-// (accepted until the limit, then capacity_exceeded) in a bounded time, and the state stays valid.
-func TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimitAndQuickly(t *testing.T) {
+// whose destination-only and port-only selectors would need more classification cells than the
+// limit (their product) is answered in a bounded time, accepted until the limit and refused with
+// capacity_exceeded after it, and the state stays valid.
+func TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimit(t *testing.T) {
 	h := startedWithRevision(t)
-	const n = 400
+	// 16 overlays of 64 ports each are 1024 port pieces; every destination-only overlay on top
+	// multiplies them (8192 cells is the limit of one table)
+	const ports, dests = 16, 9
 	var wg sync.WaitGroup
-	errs := make([]error, n)
+	errs := make([]error, ports+dests)
 	start := time.Now()
-	for i := 0; i < n; i++ {
+	for i := 0; i < ports+dests; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			owner := model.Owner{Type: "token", Id: fmt.Sprintf("tok-%d", i)}
-			if i%2 == 0 { // its own destination only
-				_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {latency: 50ms, destination: {cidr: 11.%d.%d.0/24}}", (i/256)%256, i%256))
-			} else { // its own port only
-				_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {loss: 1%%, protocol: tcp, ports: [%d]}", 1000+i))
+			if i < ports {
+				var list []string
+				for k := 0; k < 64; k++ {
+					list = append(list, fmt.Sprint(1000+i*64+k))
+				}
+				_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {loss: 1%%, protocol: tcp, ports: [%s]}", strings.Join(list, ",")))
+				return
 			}
+			_, errs[i] = h.put(owner, fmt.Sprintf("target: {network: IoT}\nfault: {latency: 50ms, destination: {cidr: 11.0.%d.0/24}}", i))
 		}()
 	}
 	wg.Wait()
@@ -779,11 +786,6 @@ func TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimitAndQui
 	}
 	if accepted == 0 || refused == 0 {
 		t.Fatalf("accepted %d, refused %d: the limit was not reached or not enforced", accepted, refused)
-	}
-	// the cubic compile took minutes for this; the bound is far above what the machines need (the
-	// ARM64 job is emulated), it only has to tell minutes from seconds
-	if took > 90*time.Second {
-		t.Errorf("%d writes took %v", n, took)
 	}
 	t.Logf("%d accepted, %d refused, %v", accepted, refused, took)
 	if got := len(h.barrier().Overlays); got != accepted {

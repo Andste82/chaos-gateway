@@ -348,20 +348,116 @@ func (o *owner) compileProblems() []compiler.Problem {
 	return out
 }
 
+// maxPutBatch bounds how many overlay writes are accepted before they are checked together: a
+// burst is checked in a few compiles, and the first writers of a very large one do not wait for
+// the last.
+const maxPutBatch = 256
+
+// putBatch is a run of overlay writes the state owner has accepted into the store but not yet
+// compiled: it takes every write that is already waiting in the command channel, then checks them
+// with one dry compile (plan §3.11 item 3, group commit). The check is what makes a burst cheap: a
+// compile of N overlays is paid once per batch, not once per write.
+type putBatch struct {
+	// gen is the generation of the batch: the writes of a batch are one change of the desired state
+	// and share it. Nothing else makes a generation while the batch is open, so it is known up front.
+	gen uint64
+	// before is the store's content before the first write, to go back to when the check fails.
+	before *overlay.Checkpoint
+	items  []pendingPut
+}
+
+type pendingPut struct {
+	cmd cmdOverlayPut
+	ch  overlay.Change
+}
+
+// overlayPut validates a write and takes it into the open batch (starting one when there is none).
+// It does not answer: the batch does, when it is checked (finishBatch).
 func (o *owner) overlayPut(c cmdOverlayPut) {
+	req, ok := o.validPut(c)
+	if !ok {
+		return
+	}
+	if o.batch == nil {
+		o.batch = &putBatch{gen: o.gen + 1, before: o.lastCheckpoint()}
+	}
+	ch, err := o.ov.store.Put(c.w.Owner, req, overlay.PutOptions{Generation: int64(o.batch.gen), Run: c.w.Run})
+	if err != nil {
+		o.reply(c.reply, OverlayResult{}, err)
+		return
+	}
+	o.batch.items = append(o.batch.items, pendingPut{cmd: c, ch: ch})
+}
+
+// validPut checks a write against the live configuration; it answers the writer itself when the
+// write is refused.
+func (o *owner) validPut(c cmdOverlayPut) (*model.OverlayRequest, bool) {
 	cfg := o.liveConfig()
 	if cfg == nil {
 		o.reply(c.reply, OverlayResult{}, ErrNoConfiguration)
-		return
+		return nil, false
 	}
 	req, verrs := domain.ValidateOverlay(cfg, &c.w.Request, domain.WithDiscovered(o.discoveredIDs()...))
 	if len(verrs) > 0 {
 		o.reply(c.reply, OverlayResult{}, domain.ValidationErrors(verrs))
+		return nil, false
+	}
+	return req, true
+}
+
+// finishBatch checks the open batch with a dry compile of the store as it is now. When it passes,
+// the batch is one new desired state and one generation, and every writer waits for the apply that
+// contains it. When it does not, the batch is taken back and the writes are made one at a time, as
+// if they had arrived one by one: the writes that are valid are accepted, the ones the compiler
+// refuses (capacity_exceeded) are answered with that, and neither affects the other.
+func (o *owner) finishBatch() {
+	b := o.batch
+	if b == nil {
+		return
+	}
+	o.batch = nil
+	defer func() { o.publish(); o.flush() }()
+	o.refreshOverlays()
+	ps := o.compileProblems()
+	if len(ps) == 0 {
+		changes := make([]actedChange, len(b.items))
+		for i, it := range b.items {
+			changes[i] = actedChange{Change: it.ch, actor: writeActor(it.cmd.w)}
+		}
+		o.overlayChanged(changes)
+		for _, it := range b.items {
+			o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: it.cmd.reply,
+				res: OverlayResult{Overlay: it.ch.Overlay, Created: it.ch.Type == overlay.Created}})
+		}
+		return
+	}
+	o.ov.store.Restore(b.before)
+	o.refreshOverlays()
+	if len(b.items) == 1 {
+		o.reply(b.items[0].cmd.reply, OverlayResult{}, &CompileError{Problems: ps})
+		return
+	}
+	for _, it := range b.items {
+		o.putOne(it.cmd)
+	}
+}
+
+func writeActor(w OverlayWrite) model.Actor {
+	if w.Actor.Id == "" {
+		return w.Owner
+	}
+	return w.Actor
+}
+
+// putOne makes one write complete in itself: validated, stored, compiled with the store as it is and,
+// when it is valid, a desired state of its own.
+func (o *owner) putOne(c cmdOverlayPut) {
+	req, ok := o.validPut(c)
+	if !ok {
 		return
 	}
 	before := o.lastCheckpoint()
-	gen := o.gen + 1
-	ch, err := o.ov.store.Put(c.w.Owner, req, overlay.PutOptions{Generation: int64(gen), Run: c.w.Run})
+	ch, err := o.ov.store.Put(c.w.Owner, req, overlay.PutOptions{Generation: int64(o.gen + 1), Run: c.w.Run})
 	if err != nil {
 		o.reply(c.reply, OverlayResult{}, err)
 		return
@@ -373,11 +469,7 @@ func (o *owner) overlayPut(c cmdOverlayPut) {
 		o.reply(c.reply, OverlayResult{}, &CompileError{Problems: ps})
 		return
 	}
-	actor := c.w.Actor
-	if actor.Id == "" {
-		actor = c.w.Owner
-	}
-	o.overlayChanged([]overlay.Change{ch}, actor)
+	o.overlayChanged([]actedChange{{Change: ch, actor: writeActor(c.w)}})
 	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply,
 		res: OverlayResult{Overlay: ch.Overlay, Created: ch.Type == overlay.Created}})
 }
@@ -398,7 +490,7 @@ func (o *owner) overlayDelete(c cmdOverlayDelete) {
 		return
 	}
 	o.refreshOverlays()
-	o.overlayChanged([]overlay.Change{ch}, c.actor)
+	o.overlayChanged(acted([]overlay.Change{ch}, c.actor))
 	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, res: OverlayResult{Overlay: ch.Overlay}})
 }
 
@@ -431,7 +523,7 @@ func (o *owner) overlayReset(c cmdOverlayReset) {
 		return
 	}
 	o.refreshOverlays()
-	o.overlayChanged(changes, c.actor)
+	o.overlayChanged(acted(changes, c.actor))
 	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, res: OverlayResult{Removed: len(changes)}})
 }
 
@@ -443,17 +535,31 @@ func (o *owner) overlayExpire() {
 		return
 	}
 	o.refreshOverlays()
-	o.overlayChanged(changes, model.Actor{Type: "system", Id: "system"})
+	o.overlayChanged(acted(changes, model.Actor{Type: "system", Id: "system"}))
+}
+
+// actedChange is a change of the store with who caused it.
+type actedChange struct {
+	overlay.Change
+	actor model.Actor
+}
+
+func acted(changes []overlay.Change, actor model.Actor) []actedChange {
+	out := make([]actedChange, len(changes))
+	for i, ch := range changes {
+		out[i] = actedChange{Change: ch, actor: actor}
+	}
+	return out
 }
 
 // overlayChanged records changes the store has made: a generation, a new desired state, the events
 // that follow once it is verified, and the next deadline.
-func (o *owner) overlayChanged(changes []overlay.Change, actor model.Actor) {
+func (o *owner) overlayChanged(changes []actedChange) {
 	cfg, rev := o.liveConfig(), o.liveRevision()
 	d := o.nextDesired(cfg, rev)
 	mark := overlayMark{gen: d.Generation, after: o.ov.store.Checkpoint()}
 	for _, ch := range changes {
-		mark.events = append(mark.events, overlayEvent{typ: ch.Event(), data: overlayEventData(ch, d.Generation, actor)})
+		mark.events = append(mark.events, overlayEvent{typ: ch.Event(), data: overlayEventData(ch.Change, d.Generation, ch.actor)})
 	}
 	o.ov.marks = append(o.ov.marks, mark)
 	o.converge(d)

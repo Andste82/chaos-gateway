@@ -238,8 +238,8 @@ nightly workflow runs them for an hour each. A crashing input lands in
 
 All operations the compiler needs are implemented (`links`, `sysctl`, `wireguard`, `bird` and
 `service_ns` followed in M4-M6b). Still deferred: the persistent netlink connection for
-DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20), and the reader
-pool with operation time stamps (M8a). Which interfaces count as assigned is decided by whoever
+DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20). The reader pool
+and the operation time stamps came with M8a (see "Coalescing and the reader pool (M8a)"). Which interfaces count as assigned is decided by whoever
 may call `assign_interfaces`: loopback and Docker's devices are
 refused, the rest is trusted to the (root or allowed-uid) caller. An assigned interface can also be
 named OS-owned (`os_owned`, a subset of the assigned devices): the uplink, and the management
@@ -951,8 +951,9 @@ also changes two things said here: the maps are interval maps, and an element `g
 
 The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps, the
 compiler's side of it (the subsection "Faults in the compiler") and the state owner's and the API's
-side ("Overlays in the engine and over the API"). Coalescing, the reader pool, orphaning and the
-merge of discovered devices are the next steps.
+side ("Overlays in the engine and over the API"). Coalescing and the reader pool are described under
+"Coalescing and the reader pool (M8a)"; orphaning and the merge of discovered devices are the next
+steps.
 
 - **Store** (`internal/overlay`). Holds the active overlays in memory; a restart starts empty
   (plan §2.1.1). `Put` takes an owner and a validated request (`domain.ValidateOverlay`, references
@@ -1158,12 +1159,54 @@ install it with the executor.
   each map entry back into the configuration it only looked at; with the state owner validating an
   overlay while the apply loop compiled, `-race` reported it. A read-only visit does not write any more
   (`TestIsNormalizedAndTheWorldOnlyReadTheConfiguration`).
-- **Not yet** (the next steps of M8a): coalescing is what the loop already does (it compiles the
-  latest desired state), but the tests for 200 concurrent writes and the counters of applies are
-  missing; the executor reader pool and operation time stamps; deleting a referenced object with
-  `?force=true` and `overlay_orphaned`, and the move of overlays after a merge revision (the domain
-  functions `OrphanedOverlays` and `DiscoveredMerges` and `Store.Orphan` and `Retarget` exist); applying
-  the tc tree and verifying it (M8b).
+- **Not yet** (the next steps of M8a): deleting a referenced object with `?force=true` and
+  `overlay_orphaned`, and the move of overlays after a merge revision (the domain functions
+  `OrphanedOverlays` and `DiscoveredMerges` and `Store.Orphan` and `Retarget` exist); applying the tc
+  tree and verifying it (M8b).
+
+### Coalescing and the reader pool (M8a)
+
+Plan §3.11 in the code, with the tests that pin it (`internal/engine/coalesce_test.go`,
+`internal/executor/readers_test.go`).
+
+- **The apply loop** was already a group commit: it compiles the latest desired state, so whatever the
+  state owner decides while an apply runs goes into the next one. A writer returns when a verified
+  apply has a generation at least as new as its change, and gets that generation
+  (`settleOverlays`). An executor failure takes back every unconfirmed change and answers every
+  waiting writer with `apply_failed`.
+- **Validation is batched, too.** Checking a write means a dry compile of the whole store
+  (`capacity_exceeded`, a fault that cannot be built), so one compile per write grows with the square
+  of a burst: 100 writes cost about 0.9 s of the owner's time on a development machine, more than
+  the plan's budget for the whole burst. The state owner therefore keeps a `putBatch` open: an
+  overlay write is validated and stored at once but not answered, the owner takes the writes that are
+  already waiting in its command channel (at most 256, and it never waits for more), and one dry compile
+  checks them all. When it passes, the batch is one generation and one desired state, and the
+  writers share that generation as the generation of their change. When it does not, the batch is
+  taken back and its writes are made one at a time with their own compile, as if they had arrived one
+  by one: the valid ones are accepted, the ones the compiler refuses are answered with
+  `capacity_exceeded`, and neither affects the other. Every other command closes the batch first, so
+  nothing is reordered. 100 writes now cost one apply and about 0.5 s on the simulated kernel
+  (0.9 s under `-race`); 200 held writes cost two applies.
+- **The executor's reader pool.** A request that consists of `read` operations only does not enter
+  the writer's queue: it runs at once, in the goroutine of the caller, on one of four reader slots
+  (`readerSlots`) beside whatever the writer does. A request that mixes reads and writes is a write.
+  The writer still takes identity updates before plans and runs one operation at a time. `Close`
+  refuses new reads and waits for the running ones. Reads that verify an apply are made by the apply
+  loop after the apply returned, so they see its result; a read made by someone else can see the middle
+  of a plan, which the kernel tools apply step by step.
+- **One connection per concurrent read.** The server answers a connection's requests in order, so
+  a read behind a plan on the same connection would still wait. `executor.Client` therefore opens
+  extra connections for read-only requests (at most four, dialed on demand, kept idle, closed with the
+  client; a client that was not made by `Dial` has none). They go through the same handshake and
+  peer-credential check as the main one, and a read falls back to the main connection when no extra
+  one can be made.
+- **Operation time stamps.** `executor.Outcome` carries `Enqueued` and `Started` (wall time of the
+  executor's clock, `WithClock`), and `QueueWait()` is the difference. A request that waited behind a
+  plan shows it; a read has no wait for the writer. The fields are additive, so the protocol version
+  stays 1. The scenario engine will use them for the queue wait of a step and `step_late` (§2.10).
+- **The simulator** (`kernelsim`) used to parse every existing map element for every new one, which
+  made a burst of hundreds of fault elements quadratic in the test, not in the product; it indexes the
+  keys once per operation now.
 
 ## Generated code
 

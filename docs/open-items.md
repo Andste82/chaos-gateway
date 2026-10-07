@@ -367,7 +367,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | Stubs: `chaosgw tls`, `chaosctl` beyond `version` | M21, M18 |
 | Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
 | Identity maps (address → device), classification and faults not compiled yet | M7, M8a, M8b |
-| Reader pool and operation time stamps (M3 deferral) | M8a |
+| ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | Overlay removal on stop | M27 |
 | M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
 | M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (P2-M7-01) |

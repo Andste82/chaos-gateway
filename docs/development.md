@@ -1029,8 +1029,7 @@ steps.
 chains with counters and a tc tree. It is still a pure function: the engine gives it the overlays
 (`Input.Overlays`), the allocation of the previous compile (`Input.FaultIDs`) and the limits
 (`Input.ClassLimit`, `Input.QueueBudget`), and gets `Target.Faults`, `Target.FaultIDs` (feed it back)
-and `Target.TC`. Applying the tc tree is not part of `apply.Apply` yet (M8b); the testbed tests
-install it with the executor.
+and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b, "The tc tree in the apply").
 
 - **What is resolved** (`compiler/faults.go`). For every source of traffic (`World.Sources`: each
   device with its addresses, each range that identifies a device, the stretches of the networks'
@@ -1081,7 +1080,7 @@ install it with the executor.
   correlation stays 25%) and the loss model, so every correlation is written, and `loss random 0% 0%`
   does clear a gemodel; `reorder 0%` without a delay is fine, `reorder 25%` without one is refused;
   `distribution` without a jitter is refused (`distribution specified but no latency and jitter
-  values`, found by the tc gate, so the compiler drops it) and `uniform` has no table (P2-M8a-05);
+  values`, found by the tc gate, so the compiler drops it) and `uniform` has no table (a leaf that goes back to uniform is made again, see "The tc tree in the apply");
   `htb rate 10gbit` without a `quantum` warns "quantum of class ... is big"; interval maps with
   concatenated ranges, prefixes, protocols and port ranges are accepted by the kernel, and nft
   prints an aligned range as a prefix, a one-address range as the address and `53-53` as `53`.
@@ -1108,8 +1107,9 @@ install it with the executor.
   `TestAReorderedLookupChainIsNotTheLookupChain`). The executor accepts verdict elements only for
   `mark_0` to `mark_4095` (`TestDecodeRejects`), range keys and `0xa0/0x1fff0`-style filter
   handles.
-- **Not in this step:** applying and verifying the tc tree, in-place updates and make-before-break
-  (M8b). The engine, API and `explain` side follows below; what is still open of M8a is listed there.
+- **Applying the tree** is `apply.Apply`'s job since M8b (in-place updates, make-before-break, verify:
+  "The tc tree in the apply" below). The engine, API and `explain` side of M8a follows below; what is
+  still open of M8a is listed there.
 
 ### Overlays in the engine and over the API (M8a)
 
@@ -1201,14 +1201,14 @@ install it with the executor.
   orphans. Runs are not part of this yet (`aborted_runs` follows with M15). Tests:
   `internal/engine/overlays_revision_test.go`, `TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced`
   in `internal/api/overlays_test.go`.
-- **Not in M8a:** applying the tc tree to the kernel at all (`apply.Apply` neither applies nor verifies `Target.TC`; the testbed tests install it with the executor), in-place tc updates, make-before-break when a fault's id changes, and measurement tests of the impaired traffic (M8b). M8b's first step (the reader, the normalizer and the executor's tc operations) is described under "tc state and tc operations (M8b)".
+- **Not in M8a:** applying the tc tree to the kernel (`apply.Apply` did not apply or verify `Target.TC`; the testbed tests installed it with the executor), in-place tc updates, make-before-break when a fault's id changes, and measurement tests of the impaired traffic. M8b does them: the reader, the normalizer and the executor's tc operations are under "tc state and tc operations (M8b)", the apply under "The tc tree in the apply (M8b)".
 
 ## tc state and tc operations (M8b)
 
 The first step of M8b, the one every later step stands on: reading the kernel's tc state in a form
 that can be compared with the compiler's tree, and the executor operations that change it. Applying
-the tree (`apply.Apply`), make-before-break, the engine's verify and the queue statistics follow in
-the next steps; until then the tree is installed only by the testbed tests.
+the tree (`apply.Apply`) and make-before-break are described in "The tc tree in the apply (M8b)"
+below; the queue statistics follow in a later step.
 
 ### The `tc -j` normalizer
 
@@ -1282,7 +1282,7 @@ before the code was written and pinned by tests (`internal/executor/tcops_integr
 | `class delete` while a filter selects it | refused: `HTB class in use`. Delete the filter first. The leaf qdisc goes with the class. |
 | `filter delete` | needs `parent`, `handle` (the selector with its mask), `protocol P prio N fw`; deleting the last filter removes the chain. |
 | HTB root: `change`, `replace` (identical or not) or `add` when it exists | `Change operation not supported by specified qdisc` / `Exclusivity flag on`: the root is created once and left alone. |
-| root `add` over a root the host put there (mq, fq_codel) | refused: `NLM_F_REPLACE needed to override`. `replace` takes the root over (with the host's queues below it). `qdisc delete ... root handle 1:` gives the default qdisc back. **The apply has to use `replace`, not `add`, when the interface's root is not ours** (the compiler's `Entries(dev, withRoot)` says `add`; the apply step changes that). |
+| root `add` over a root the host put there (mq, fq_codel) | refused: `NLM_F_REPLACE needed to override`. `replace` takes the root over (with the host's queues below it). `qdisc delete ... root handle 1:` gives the default qdisc back. **The apply uses `replace`, not `add`, when the interface's root is not ours** (`add` is only right on a `noqueue`, which the compiler's `Entries(dev, withRoot)` assumes; proven on a bridge, a dummy and an interface with Chaos Gateway's own root). |
 | `delete` of what is not there | exit 2 and one of: `RTNETLINK answers: No such file or directory`, `Error: Specified class not found.`, `Error: Failed to find qdisc with specified handle.`, `Error: Specified filter handle not found.`, `Error: Cannot find specified filter chain.`, `Error: Parent Qdisc doesn't exists.`, `Error: Invalid handle.` (also the answer for a root with a handle that is not there) and, for the default qdisc, `Cannot delete qdisc with handle of zero`, which the executor never sends. All but the last are "benign" in a deletion step (below). |
 | a duplicating netem with any other netem on the interface | refused in either order: `netem: cannot mix duplicating netems with other netems in tree` (P2-M8b-01). |
 
@@ -1312,6 +1312,93 @@ Rejection cases are in `tcops_test.go` (`TestTCRejectsWhatLeavesTheOwnTree`, ove
 `decode_test.go`; the fuzz targets check that every tc line of an accepted operation stays in the own
 handles (`checkTCLineInScope`), and have seeds with a complete netem set, an in-place change and a run of
 deletions.
+
+### The tc tree in the apply (M8b)
+
+`apply.Apply` carries `Target.TC` into the kernel and verifies it like the rest of the state.
+Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal/engine/applyloop.go`.
+
+- **Reading.** `ReadState` lists the qdiscs (one tool run) of every interface the target names
+  (`Target.TCCandidates`: the bridges, the WireGuard interfaces, the uplink, the service namespace's
+  host side) and of every assigned one, and reads the whole tc state (`ReadTC`, with counters) only of
+  those that hold a root `1:`. `State.TC` maps an interface to its tree; an interface without one is
+  not in it. The interfaces of the host's own (the management NIC, the ports) cost one tool run each.
+- **The diff** (`planTC`) compares the target's normalized tree (`TCTarget.Norm`) with the interface's
+  own subtree (`NormTree.Subtree("1:")`) object by object and plans per interface:
+  the root (`qdisc replace ... root handle 1: htb default 1`, only when `1:` is not there: `replace`
+  creates it and takes over the host's `noqueue` or `mq`; an HTB root is never changed), the default
+  class, and per class of the target the class, the netem leaf and the `fw` filter, each written
+  (`replace`) only when it is missing or its configuration differs. A class and a leaf that exist are
+  changed in place, so their queue, their counters and their seed stay; the unchanged ones are not
+  written at all, which is why a re-apply of an unchanged target runs no tc command
+  (`TestAReApplyOfTheSameTargetTouchesNoTC`, and on the real kernel the seeds of all qdiscs stay).
+  Damage that the kernel cannot repair in place is repaired first, by deleting and creating again: a
+  root of another kind or default class, a class whose parent or kind is wrong or whose leaf is not
+  the compiler's netem, a filter that is not the target's. These drop queued packets, but they are
+  not objects a fault put there.
+- **Order inside the apply.** Links, sysctls, offloads and routes as before, then the tc operation
+  that creates and changes (on ALL interfaces, before anything classifies into a new class), then
+  the nftables transaction, then (only without a retirer) the deletion of what the target no longer
+  wants, then DOCKER-USER and the rest. The plan text (`Plan.Summary`, the preview) says
+  `tc: br-iot: 6 objects created, 2 changed in place; ...`.
+- **Make before break, the second half.** A class that no fault id uses any more (`TCStale`) is not
+  deleted by the apply that stops classifying into it. `ApplyWith(..., retirer)` hands it to the
+  `Retirer`, which deletes it (its filters first, then the class; the leaf goes with it) when
+  `largest delay + jitter of any netem leaf in the kernel or in the target + 1 s` (`Plan.Grace`) have
+  passed on the injected clock since it first saw the class. When no fault impairs anything the whole
+  tree is stale: the root goes (and with it everything below), and the interface has its own queue
+  again. `Retirer.Reap` looks at the leaf before it deletes: a class whose qdisc still has a backlog
+  is looked at again every second, for at most five minutes (`retireBacklogCap`: a netem with a low
+  rate can hold a queue for minutes; after that the class goes with its queue). A class that is
+  already gone, or whose interface is gone or no longer assigned, is forgotten; a deletion that
+  fails is retried every second for half an hour. `Apply` without a retirer (the one-shot
+  `chaosgw apply`, tests) deletes the stale class right after the transaction.
+- **What the retirer remembers.** Only when it first saw each stale class, and which distribution
+  table each leaf was last given (below). Every apply recomputes the stale set from the live tc
+  state, so a class that a fault wants again drops out (nothing is deleted, its queue stays), an
+  apply that failed half-way or a restore of the previous revision leaves nothing behind that the next
+  apply does not find, and after a restart of the gateway the classes it finds stale get their time
+  from the first apply: they go later than needed, never earlier.
+- **Fault ids.** `compiler.Input.RetiringIDs` (the engine passes `Retirer.IDs()`) keeps a new fault
+  from taking an id whose class is still waiting, so old and new ids differ for as long as both are in
+  the kernel, not only across one transition.
+- **The distribution table** is not in the listing (P2-M8b-02), and a change that names none keeps the
+  old table. The retirer therefore remembers the table it gave each leaf. A leaf that is to be uniform
+  with a jitter (the only thing a table shapes) while it holds or may hold a table is made again
+  (delete, create: a new seed, the queue is dropped); a leaf that is to get a table gets it
+  in place; one that the retirer did not create (the first apply after a restart) counts as one that
+  may hold a table, but is left alone when it is already what the target says
+  (`TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`).
+- **Verify.** `apply.Verify` compares every interface of the target and every interface with a
+  tree: the wanted tree equals the observed own subtree (`linux.CompareTC`), an interface that is not
+  to hold a tree holds none. What the apply left standing for the retirer (`State.TCRetiring`, set by
+  `ApplyWith` from `Plan.Stale`; `Engine.RetiringTC()` for the tests of the engine) is accepted as
+  unexpected, nothing else.
+- **The engine** (`runApplyLoop`) owns the retirer, calls `ApplyWith` and arms a timer on the engine's
+  clock for the next deletion (`Retirer.Next`); the timer's case in the loop's `select` runs
+  `Reap` and arms the next. An overlay write is answered after the apply that contains it verified,
+  and that verify includes the tc tree; a failing tc operation (`apply: execute`) takes the batch back
+  like every other failure, and nothing of the failed plan is handed to the retirer.
+- **kernelsim** (`internal/apply/kernelsim/tc.go`) simulates the tc tool for the cases above: it keeps
+  the root, classes, leaves and filters per interface, answers `-s -j qdisc|class|filter show` in the
+  recorded format (so the real normalizer reads it), refuses what the kernel refuses (a second root,
+  a class a filter selects, a class below a root that is not there), makes the answers of a
+  `-force` batch the executor knows as benign, keeps the seed through a `replace` of a leaf and draws a
+  new one for a new leaf. It does not queue packets (`SetTCStats` sets backlog and counters for the
+  tests of the retirer), does not keep the attributes of a `change` that is not given (the compiler's
+  sets are complete) and does not know a distribution table.
+- **Tests.** `tcapply_test.go` (simulated kernel: apply and verify on all interfaces, re-apply,
+  in-place change, moved id with the order tc-before-nft, grace period and backlog guard, a whole tree
+  that goes, restart, injected failure, repair, preview) and `internal/engine/tc_test.go` (the engine:
+  the tree is in the kernel when the write returns, classes stay for `largest delay + 1 s` on the fake
+  clock, a failed tc operation reverts the write). On the real kernel
+  `tcapply_integration_test.go` (tag `testbed`: the verified tree, a re-apply that changes no seed,
+  a 600 ms fault changed twice (to 900 ms and 50 ms) under load with every datagram of a numbered UDP
+  stream delivered and no drop counted, a move of the fault id under load with the same conservation
+  and every datagram counted by the old or the new class, the old classes' deletion, the tree that
+  goes with the last fault, a normal distribution going back to uniform). The load is a sender that
+  runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
+  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution" -tags testbed -test-timeout 30m ./internal/apply'`.
 
 ### Coalescing and the reader pool (M8a)
 

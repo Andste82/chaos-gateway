@@ -605,32 +605,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: yes
 - Effort: S
 
-### P2-M8a-05 Going back to a uniform delay distribution needs the netem qdisc to be re-created
-
-- Status: new
-- Severity: low
-- Reason: deferred (to M8b, which applies the tree in place). `tc` has no table for "uniform", and
-  netem keeps its distribution table through a `change`, so a fault whose `distribution` changes
-  from normal/pareto/paretonormal to uniform cannot be updated in place: the qdisc has to be
-  deleted and created again (which drops what is queued in it), or the fault moved to a new id. The
-  compiled configuration says what it wants (`Netem.Distribution`, empty for uniform); proven on
-  the kernel in the persistent VM that a missing distribution keeps neither loss models, nor
-  correlations (those are reset by the complete parameter set) but cannot be shown to reset the
-  table (it is not visible in `tc` output).
-- Evidence: `internal/compiler/netem.go` (`Netem.Distribution`), VM session of M8a. M8b measured
-  the table itself (150 echoes through a delay of 200 ms ± 100 ms, share outside the band of
-  roughly 90 to 310 ms): a normal table gives about a third (30 %, 34 %), a `change` and a `replace`
-  without a distribution keep it (34 %, 35 %), a `replace` to `pareto` swaps it (10 %), and only a
-  deleted and created qdisc is uniform (2 %); pinned by
-  `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`. The listing cannot show the table
-  (P2-M8b-02).
-- Task: M8b's diff treats a change of the distribution to uniform as "replace the leaf" (or moves
-  the fault to a new id with make-before-break).
-- Acceptance: a test in M8b that changes a fault from `normal` to uniform and shows the delay
-  distribution of the traffic follows.
-- Needs maintainer: no
-- Effort: S
-
 ### P2-M8a-06 An overlay or fault that wins only for a part of its selector is shown as effective
 
 - Status: new
@@ -701,24 +675,70 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ### P2-M8b-02 Verification cannot see the HTB quantum or the netem distribution table
 
-- Status: new
+- Status: new (the distribution half is handled by the apply: see Task)
 - Severity: low
-- Reason: deferred (decided together with the apply step of M8b). `tc -j` does not print an HTB
-  class's `quantum` (the kernel does not report it) and does not print a netem qdisc's distribution
-  table at all; both only matter through what the traffic does. The normalizer (`linux.NormTree`)
-  therefore compares rate, ceil, prio and every printed netem attribute, but a class whose quantum
-  was changed from outside, or a leaf whose table is not the one the target names, looks right.
-  Proven in the VM: a `change` or `replace` that names no distribution keeps the old table (the share
-  of round trips outside delay ± jitter stays at a third for a normal table, `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`);
-  only a qdisc that is created again is uniform (this is P2-M8a-05).
+- Reason: deferred. `tc -j` does not print an HTB class's `quantum` (the kernel does not report it)
+  and does not print a netem qdisc's distribution table at all; both only matter through what the
+  traffic does. The normalizer (`linux.NormTree`) therefore compares rate, ceil, prio and every
+  printed netem attribute, but a class whose quantum was changed from outside, or a leaf whose table
+  is not the one the target names, looks right. Proven in the VM: a `change` or `replace` that names
+  no distribution keeps the old table (the share of round trips outside delay ± jitter stays at a
+  third for a normal table, `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`); only a
+  qdisc that is created again is uniform.
 - Evidence: `internal/linux/tcnorm.go` (`NormClass` has no quantum; `NetemSpec` has no distribution),
   the recorded listings under `internal/linux/testdata/tc`.
-- Task: the apply step decides the distribution of a leaf from the target it applied last (the engine
-  keeps it with the fault ids) and, where it does not know (the first apply after a restart, a leaf it
-  did not create), treats a target without a table as "re-create the leaf", which drops its queue once.
-  The class quantum is a constant of the compiler (`TCClassQuantum`) written whenever a class is
-  created; it is not verified.
-- Acceptance: the M8b test that changes a fault from `normal` to uniform shows the delay distribution
-  following; a restart of the engine with a table in the kernel and none in the target ends uniform.
+- Task: done for the apply (M8b): the `apply.Retirer` remembers the table it gave each leaf and makes
+  a leaf that is to be uniform with a jitter again when it holds or may hold one
+  (`TestTheDistributionOfAFaultFollowsAChangeBackToUniform`, `TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`).
+  What stays open: a table that someone else put on a leaf, or that survived a restart of the
+  gateway, is not seen when the leaf already has the configuration the target names (the apply leaves
+  such a leaf alone, because re-creating every uniform leaf at every start would drop queues for
+  nothing); it is replaced at the next change of that leaf. The class quantum is a constant of the
+  compiler (`TCClassQuantum`), written whenever a class is created, not verified.
+- Acceptance: a restart of the engine with a table in the kernel and a target without one ends uniform
+  at the first change of the leaf; or a maintainer decides that the apply re-creates leaves it did not
+  create.
+- Needs maintainer: no
+- Effort: S
+
+### P2-M8b-03 Make-before-break holds old and new classes at once, and its time limits are choices
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §3.2 says the old classes go "after the largest configured delay
+  plus 1 s". Three things in it are not numbers of the plan. (1) The classes of the old and the new
+  ids exist side by side for that time, so an interface can carry up to twice the class limit
+  (`Input.ClassLimit` counts the target's classes, P2-M8a-04) for a moment; the compiler does not
+  count the ones that wait. (2) A class that still has packets after its time (a netem with a low
+  rate queues for minutes: 1000 packets of 1500 bytes at 100 kbit/s are two minutes) is looked at
+  again every second and goes with its queue after five minutes (`retireBacklogCap`). (3) A
+  deletion that keeps failing is tried for half an hour (`retireGiveUp`). An interface that leaves
+  Chaos Gateway's control (the uplink changes) loses its tree in the apply itself, with the packets
+  queued in it, because nobody can delete anything on it later.
+- Evidence: `internal/apply/retire.go`, `internal/apply/tcplan.go` (`planTC`, `immediate`),
+  `TestADeletionWaitsForTheQueuedPacketsUpToACap`, `TestAQueueThatNeverDrainsIsDeletedAfterTheCap`.
+- Task: chosen interpretation — the three limits above, as constants. A maintainer confirms them, or
+  asks for the class limit to cover the transient (a limit of half the number per interface would
+  make 1000 on x86 effectively 500).
+- Acceptance: a maintainer confirms the limits; or a test in the compiler counts retiring classes
+  against `ClassLimit` and the engine refuses a write that would exceed it with `capacity_exceeded`.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M8b-04 The tc state of every assigned interface is read at every apply and every verify
+
+- Status: new
+- Severity: low
+- Reason: deferred (measure first). An apply reads the qdisc listing of every assigned interface
+  (one `tc` run each, to find a tree that is no longer wanted) and the whole tc state (three runs)
+  of the ones that hold a tree, before it plans and again to verify. With three interfaces carrying
+  the tree and a handful of ports that is about 20 tool runs per apply, which matters on a Raspberry
+  Pi when an overlay burst costs one apply per few writes.
+- Evidence: `internal/apply/state.go` (`readTC`).
+- Task: if the measurement of M8b's performance step shows it, read the qdisc listing of all
+  interfaces in one run (`tc -j qdisc show` without a device) and keep which interfaces carry a tree
+  from the last apply, reading only those and the target's.
+- Acceptance: the cost of an apply with ten assigned interfaces is measured on the arm64 runner and
+  stays within the budget of plan §3.11.
 - Needs maintainer: no
 - Effort: S

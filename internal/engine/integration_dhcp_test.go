@@ -384,7 +384,12 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 	if err := b.e.PollObserved(context.Background(), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.e.FollowNeighbors(context.Background(), 50*time.Millisecond); err != nil {
+	// The debounce is what the test is about, not its production value: a burst of 80 netlink
+	// operations must land in one window. With 50 ms a stalled CI runner (a descheduled VM) splits
+	// the burst into two windows and the engine correctly makes two identity updates, so the window
+	// is wide enough that only a stall of half a second could split it.
+	const debounce = 500 * time.Millisecond
+	if err := b.e.FollowNeighbors(context.Background(), debounce); err != nil {
 		t.Fatal(err)
 	}
 
@@ -428,7 +433,7 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 		fmt.Fprintf(&move, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 150+i, mac(i))
 	}
 	b.top.GW.MustStdin(move.String(), "ip", "-batch", "-")
-	time.Sleep(2 * time.Second) // the debounce plus a margin to settle
+	time.Sleep(debounce + 2*time.Second) // the debounce plus a margin to settle
 
 	if got := b.e.Snapshot().Generation - gen; got != 1 {
 		t.Errorf("the burst made %d generations, want exactly 1", got)

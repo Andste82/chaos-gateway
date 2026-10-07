@@ -53,7 +53,7 @@ type nftSet struct {
 }
 
 // nftMap is a named map (plan §3.3): a key type (possibly several, concatenated) to a value type
-// ("mark" for a plain integer, "verdict" for an element that jumps to a chain). Elements are the
+// ("mark" for a plain integer, "verdict" for an element that goes to a chain). Elements are the
 // raw `{"elem":{"key":...,"val":...}}` objects nft itself uses.
 type nftMap struct {
 	keyType   json.RawMessage

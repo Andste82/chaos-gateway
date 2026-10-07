@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/wireguard"
@@ -136,24 +136,29 @@ func (e *Engine) applyIdentity(ctx context.Context, old, next *compiler.Target) 
 			return false, err
 		}
 	}
-	// the generation of the rules did not change: an identity update only ever touches the identity
-	// map's elements, so verifying it only needs that map, not the rest of the state (M6a-11).
+	// the generation of the rules did not change: an identity update only ever touches the elements
+	// of maps (the identity map and the classification maps that name the same addresses), so
+	// verifying it only needs the maps, not the rest of the state (M6a-11).
 	next.Nft.Generation = old.Nft.Generation
 	rs, err := apply.ReadSets(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return false, err
 	}
-	if mm := apply.VerifyIdentityMap(next, rs); len(mm) > 0 {
+	if mm := apply.VerifyMaps(next, rs); len(mm) > 0 {
 		return false, fmt.Errorf("the kernel does not match after an identity update: %s", mm[0])
 	}
 	return true, nil
 }
 
-// identityOps compares the identity map of two targets (plan §3.3). It fails with
-// errNotIncremental when anything but the map's elements differs: a different map name (a device
-// was added or removed, which renumbers every DeviceNums entry) needs the full apply.
+// identityOps compares the maps of two targets (plan §3.3). The identity map is updated with
+// element operations of its own; the classification maps, whose elements are keyed by the same
+// addresses and so follow a device that gets a new one, in one atomic transaction (an interval map
+// cannot take an element that overlaps one that is still there, so deletes and adds must be one
+// commit). It fails with errNotIncremental when anything but the elements of maps differs: a
+// different map name (a device was added or removed, which renumbers every DeviceNums entry), a
+// fault that appeared or went (other ids, chains, counters, tc classes).
 func identityOps(ns string, old, next *compiler.Target) ([]executor.Operation, error) {
-	if old.IdentityMap == "" && next.IdentityMap == "" {
+	if old.IdentityMap == "" && next.IdentityMap == "" && sameFaultStructure(old, next) && noMapElementsDiffer(old, next) {
 		// no device is known before or after (the identity map is only compiled for a known device):
 		// there is nothing in the kernel to update, which must not cost a full apply
 		return nil, nil
@@ -169,55 +174,93 @@ func identityOps(ns string, old, next *compiler.Target) ([]executor.Operation, e
 			return nil, errNotIncremental
 		}
 	}
-	oldEl := mapElementsByName(old, old.IdentityMap)
-	newEl := mapElementsByName(next, next.IdentityMap)
-	have := map[string]string{}
-	for _, e := range oldEl {
-		have[e.Key] = e.Value
+	if !sameFaultStructure(old, next) {
+		return nil, errNotIncremental
 	}
-	want := map[string]string{}
-	for _, e := range newEl {
-		want[e.Key] = e.Value
-	}
-	var add []executor.NftMapElement
-	var del []string
-	for k, v := range want {
-		if hv, ok := have[k]; !ok {
-			add = append(add, executor.NftMapElement{Key: k, Value: v})
-		} else if hv != v {
-			// a map add refuses a key that already exists, even with a different value: delete it
-			// first, in the same incremental request.
-			del = append(del, k)
-			add = append(add, executor.NftMapElement{Key: k, Value: v})
-		}
-	}
-	for k := range have {
-		if _, ok := want[k]; !ok {
-			del = append(del, k)
-		}
-	}
-	sort.Slice(add, func(i, j int) bool { return add[i].Key < add[j].Key })
-	sort.Strings(del)
 	var ops []executor.Operation
 	tg := executor.Target{NS: ns}
-	// delete before add: a key whose value changed is in both lists, and a map add refuses a key
-	// that still exists.
-	if len(del) > 0 {
-		ops = append(ops, &executor.NftDelMapElements{Target: tg, Map: old.IdentityMap, Keys: del})
+	var cls []compiler.MapUpdate
+	for _, m := range next.Nft.Maps {
+		before := mapByName(old, m.Name)
+		if before == nil {
+			return nil, errNotIncremental
+		}
+		u := compiler.DiffMap(*before, m)
+		if u.Empty() {
+			continue
+		}
+		if m.Name != next.IdentityMap {
+			cls = append(cls, u)
+			continue
+		}
+		// delete before add: a key whose value changed is in both lists, and a map add refuses a
+		// key that still exists.
+		if len(u.Delete) > 0 {
+			ops = append(ops, &executor.NftDelMapElements{Target: tg, Map: old.IdentityMap, Keys: u.Delete})
+		}
+		if len(u.Add) > 0 {
+			ops = append(ops, &executor.NftAddMapElements{Target: tg, Map: next.IdentityMap, Elements: toExecElements(u.Add)})
+		}
 	}
-	if len(add) > 0 {
-		ops = append(ops, &executor.NftAddMapElements{Target: tg, Map: next.IdentityMap, Elements: add})
+	if len(cls) > 0 {
+		tx, err := next.Nft.ElementTransaction(cls)
+		if err != nil {
+			return nil, errNotIncremental
+		}
+		ops = append(ops, &executor.NftApply{Target: tg, Ruleset: tx})
 	}
 	return ops, nil
 }
 
-func mapElementsByName(t *compiler.Target, name string) []compiler.MapElement {
-	for _, m := range t.Nft.Maps {
-		if m.Name == name {
-			return m.Elements
+func toExecElements(in []compiler.MapElement) []executor.NftMapElement {
+	out := make([]executor.NftMapElement, len(in))
+	for i, e := range in {
+		out[i] = executor.NftMapElement{Key: e.Key, Value: e.Value}
+	}
+	return out
+}
+
+func mapByName(t *compiler.Target, name string) *compiler.MapDef {
+	for i := range t.Nft.Maps {
+		if t.Nft.Maps[i].Name == name {
+			return &t.Nft.Maps[i]
 		}
 	}
 	return nil
+}
+
+// sameFaultStructure reports whether two targets differ in nothing but the elements of maps: the
+// same sets, chains and counters, the same maps (name, key, value and flags), the same fault ids
+// with the same configurations and the same tc tree.
+func sameFaultStructure(old, next *compiler.Target) bool {
+	strip := func(t *compiler.Target) string {
+		n := t.Nft
+		n.Generation = ""
+		n.Maps = append([]compiler.MapDef(nil), n.Maps...)
+		for i := range n.Maps {
+			n.Maps[i].Elements = nil
+		}
+		b, _ := json.Marshal(struct {
+			Nft      compiler.Nft
+			Faults   []compiler.Fault
+			FaultIDs map[string]int
+			TC       *compiler.TCTarget
+			Classify map[string]string
+		}{n, t.Faults, t.FaultIDs, t.TC, t.ClassifyMaps})
+		return string(b)
+	}
+	return strip(old) == strip(next)
+}
+
+// noMapElementsDiffer reports whether no map has other elements in the new target.
+func noMapElementsDiffer(old, next *compiler.Target) bool {
+	for _, m := range next.Nft.Maps {
+		b := mapByName(old, m.Name)
+		if b == nil || !compiler.DiffMap(*b, m).Empty() {
+			return false
+		}
+	}
+	return true
 }
 
 // identityStructuralChange says why identityOps refused to update the identity map in place, for the
@@ -230,6 +273,8 @@ func identityStructuralChange(old, next *compiler.Target) string {
 		return "another identity map"
 	case len(old.DeviceNums) != len(next.DeviceNums):
 		return fmt.Sprintf("the number of devices changed from %d to %d", len(old.DeviceNums), len(next.DeviceNums))
+	case !sameFaultStructure(old, next):
+		return "the faults, their ids or the tc tree changed"
 	}
 	for dev, num := range next.DeviceNums {
 		if old.DeviceNums[dev] != num {

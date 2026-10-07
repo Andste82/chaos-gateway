@@ -17,35 +17,31 @@ type Mismatch struct {
 
 func (m Mismatch) String() string { return m.Subsystem + ": " + m.Detail }
 
-// VerifyIdentityMap compares only the target's identity map with the kernel's nft map (M6a-11,
-// migrated from the Phase 1 per-device sets to the single map of plan §3.3 by M7): an
-// identity-only update touches map elements and nothing else, so checking the rest of the
-// ruleset, let alone links, routes or sysctls, would not catch anything an element update could
-// get wrong.
-func VerifyIdentityMap(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
+// VerifyMaps compares the elements of every map of the target with the kernel's (M6a-11, migrated
+// from the Phase 1 per-device sets to the maps of plan §3.3 by M7): an identity-only update touches
+// the elements of maps (the identity map and the classification maps keyed by the same
+// addresses) and nothing else, so checking the rest of the ruleset, let alone links, routes or
+// sysctls, would not catch anything an element update could get wrong.
+func VerifyMaps(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 	var mm []Mismatch
-	if t.IdentityMap == "" {
-		return mm
-	}
-	got := rs.Set(t.IdentityMap)
-	if got == nil {
-		return []Mismatch{{"nftables", fmt.Sprintf("identity map %s is missing", t.IdentityMap)}}
-	}
-	have := got.Pairs()
-	want := map[string]string{}
-	for _, e := range t.Nft.Maps {
-		if e.Name == t.IdentityMap {
-			for _, el := range e.Elements {
-				want[linux.NormalizeElement(el.Key)] = el.Value
-			}
+	for _, def := range t.Nft.Maps {
+		got := rs.Set(def.Name)
+		if got == nil {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("map %s is missing", def.Name)})
+			continue
 		}
-	}
-	if len(have) != len(want) {
-		mm = append(mm, Mismatch{"nftables", fmt.Sprintf("identity map %s holds %d elements, want %d", t.IdentityMap, len(have), len(want))})
-	}
-	for k, v := range want {
-		if hv, ok := have[k]; !ok || hv != v {
-			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("identity map %s: key %s is %q, want %q", t.IdentityMap, k, hv, v)})
+		have := got.Pairs()
+		want := map[string]string{}
+		for _, el := range def.Elements {
+			want[linux.NormalizeElement(el.Key)] = el.Value
+		}
+		if len(have) != len(want) {
+			mm = append(mm, Mismatch{"nftables", fmt.Sprintf("map %s holds %d elements, want %d", def.Name, len(have), len(want))})
+		}
+		for k, v := range want {
+			if hv, ok := have[k]; !ok || hv != v {
+				mm = append(mm, Mismatch{"nftables", fmt.Sprintf("map %s: key %s is %q, want %q", def.Name, k, hv, v)})
+			}
 		}
 	}
 	return mm

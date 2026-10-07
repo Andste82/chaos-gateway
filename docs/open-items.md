@@ -496,11 +496,18 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   second" stays the dedicated-hardware target, confirmed once H1 runs), or asks for the
   convergence path itself to be profiled and sped up so the original one-second bound holds on
   shared CI hardware too.
-- M8a re-check in the persistent VM (kernel 6.8.0-142, software emulation, 2 CPUs; timing is not
-  realistic there, see docs/development.md): see the figure in docs/development.md "Overlays and
-  precedence (M8a)", measured with the classification maps now in the incremental path. The
-  conclusion does not change: the bound stays 3 s on shared CI hardware and 1 s is the target for
-  dedicated hardware (H1).
+- M8a re-check in the persistent VM (kernel 6.8.0-142, software emulation, 2 CPUs, 2026-10-07):
+  no figure can be had there. `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`
+  fails in its setup ("the identity map holds []": the first full apply, which under emulation
+  takes longer than the test's wait, was cancelled, `apply execute: context canceled`) on `main`
+  exactly as on the M8a branch, and so do `TestAReservationIsHonored`,
+  `TestAnAddressChangeIsAnEventWithinASecond` and `TestABurstOfNeighborChangesIsOneIdentityUpdate`
+  (same engine log lines, same failing assertions, run on both trees one after the other in the same
+  VM). The other 72 tests of the engine package pass there, as do the 85 of `internal/apply`.
+  What M8a changes on the path is one more executor round trip, and only when classification
+  elements move (the atomic `nft -j -f` of the element transaction next to the identity map's own
+  delete and add); `ReadSets` for the verification is unchanged. The conclusion does not change:
+  the bound stays 3 s on shared CI hardware and 1 s is the target for dedicated hardware (H1).
 - Needs maintainer: yes
 - Effort: S (bound confirmation) to M (profiling/optimizing the convergence path, if asked for)
 

@@ -178,6 +178,10 @@ Things to know:
   A full run of the engine package takes about an hour (`make vm-test ARGS='-tags testbed
   -test-timeout 150m ./internal/engine'`; the client gives up after `-vm-timeout`, default 1 h,
   while the guest goes on: the output is in `/tmp/chaosgw-vm/q/<job>.out` when it ends).
+  One more in `internal/api`: `TestAHolderRestartIsHealedWithoutHelp` (DNS proxy and service
+  namespace; its 20 to 30 s waits are shorter than the emulated restart; same failure on `main`,
+  checked 2026-10-07). A whole `internal/api` run under emulation takes longer than the default
+  20 min guest timeout: pass `-test-timeout 90m` or select tests with `-run`.
 
 **Bisecting a batch the kernel refuses.** The kernel rejects a whole nftables transaction for one
 command and says only `Could not process rule: Operation not supported`. Milestone M7 lost six CI

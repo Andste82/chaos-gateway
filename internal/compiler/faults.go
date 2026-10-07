@@ -169,14 +169,19 @@ func (t *Target) resolveWinner(c domain.Candidate) (resolvedFault, bool) {
 // assignFaultIDs gives every key a stable id from 1 to MaxID. A key that had an id keeps it. A new
 // key takes the lowest id that the previous allocation did not use at all, so an id that was
 // just released is not handed to another fault while packets queued under it may still be in
-// flight (make-before-break, M8b); only when none is left does it take a released one. ok is false
-// when there are more keys than ids.
-func assignFaultIDs(keys []string, prev map[string]int) (ids map[string]int, ok bool) {
+// flight (make-before-break, M8b); only when none is left does it take a released one. The ids in
+// retiring are treated as if the previous allocation still used them: their classes are still in the
+// kernel (the apply deletes them only after the packets queued in them have left), so a new fault
+// must not take one over. ok is false when there are more keys than ids.
+func assignFaultIDs(keys []string, prev map[string]int, retiring []int) (ids map[string]int, ok bool) {
 	sort.Strings(keys)
 	ids = make(map[string]int, len(keys))
 	used := map[int]bool{}
 	prevUsed := map[int]bool{}
 	for _, id := range prev {
+		prevUsed[id] = true
+	}
+	for _, id := range retiring {
 		prevUsed[id] = true
 	}
 	for _, k := range keys {
@@ -340,7 +345,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	for k := range keySet {
 		keys = append(keys, k)
 	}
-	ids, ok := assignFaultIDs(keys, in.FaultIDs)
+	ids, ok := assignFaultIDs(keys, in.FaultIDs, in.RetiringIDs)
 	if !ok {
 		t.capacityProblem(faults, fmt.Sprintf("%d faults need an id each, the mark layout has %d", len(keys), MarkIDMax), func(f *Fault) int { return 1 })
 		return

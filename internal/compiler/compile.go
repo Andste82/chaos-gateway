@@ -58,6 +58,9 @@ type Input struct {
 	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
 	// stable while the winning fault stays the same"). Nil allocates from scratch.
 	FaultIDs map[string]int
+	// RetiringIDs are the fault ids whose tc classes are still in the kernel waiting for their
+	// deletion (make-before-break, plan §3.2): a fault that is new does not take one of them.
+	RetiringIDs []int
 	// ClassLimit is the number of tc classes one interface may carry (plan §3.3, D18); 0 uses
 	// DefaultClassLimit.
 	ClassLimit int

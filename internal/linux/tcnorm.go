@@ -1032,40 +1032,80 @@ func (t *NormTree) Subtree(rootHandle string) *NormTree {
 	return out
 }
 
-// DiffTC lists the differences between a wanted and an observed tree, comparing configuration only
-// (Spec). Each entry names the object and says what is missing, unexpected or different; the
-// result is sorted and empty when the two are the same.
-func DiffTC(want, have *NormTree) []string {
+// TCDelta is one difference between a wanted and an observed tree.
+type TCDelta struct {
+	// Kind is "missing", "unexpected" or "different".
+	Kind string
+	// Key identifies the object (NormQdisc.Key, NormClass.Key, NormFilter.Key).
+	Key string
+	// Want and Have are the configuration as text (Line); empty on the side that has none.
+	Want, Have string
+	// Class is the class the object belongs to: the class itself, a qdisc below it, a filter that
+	// selects it ("1:24"); empty for the root qdisc and for objects that belong to no class.
+	Class string
+}
+
+func (d TCDelta) String() string {
+	switch d.Kind {
+	case "missing":
+		return "missing: " + d.Want
+	case "unexpected":
+		return "unexpected: " + d.Have
+	}
+	return fmt.Sprintf("different: want %s, have %s", d.Want, d.Have)
+}
+
+// CompareTC compares a wanted and an observed tree, configuration only (Spec), and returns the
+// differences sorted by key.
+func CompareTC(want, have *NormTree) []TCDelta {
 	w, h := index(want.Spec()), index(have.Spec())
-	var out []string
+	var out []TCDelta
 	for k, wl := range w {
 		hl, ok := h[k]
 		switch {
 		case !ok:
-			out = append(out, "missing: "+wl)
-		case hl != wl:
-			out = append(out, fmt.Sprintf("different: want %s, have %s", wl, hl))
+			out = append(out, TCDelta{Kind: "missing", Key: k, Want: wl.line, Class: wl.class})
+		case hl.line != wl.line:
+			out = append(out, TCDelta{Kind: "different", Key: k, Want: wl.line, Have: hl.line, Class: wl.class})
 		}
 	}
 	for k, hl := range h {
 		if _, ok := w[k]; !ok {
-			out = append(out, "unexpected: "+hl)
+			out = append(out, TCDelta{Kind: "unexpected", Key: k, Have: hl.line, Class: hl.class})
 		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+// DiffTC lists the differences between a wanted and an observed tree, comparing configuration only
+// (Spec). Each entry names the object and says what is missing, unexpected or different; the
+// result is sorted and empty when the two are the same.
+func DiffTC(want, have *NormTree) []string {
+	var out []string
+	for _, d := range CompareTC(want, have) {
+		out = append(out, d.String())
 	}
 	sort.Strings(out)
 	return out
 }
 
-func index(t *NormTree) map[string]string {
-	m := map[string]string{}
+type indexed struct{ line, class string }
+
+func index(t *NormTree) map[string]indexed {
+	m := map[string]indexed{}
 	for _, q := range t.Qdiscs {
-		m[q.Key()] = q.Line()
+		c := ""
+		if q.Parent != "root" && strings.Contains(q.Parent, ":") && !strings.HasPrefix(q.Parent, "ffff") {
+			c = q.Parent
+		}
+		m[q.Key()] = indexed{q.Line(), c}
 	}
 	for _, c := range t.Classes {
-		m[c.Key()] = c.Line()
+		m[c.Key()] = indexed{c.Line(), c.ID}
 	}
 	for _, f := range t.Filters {
-		m[f.Key()] = f.Line()
+		m[f.Key()] = indexed{f.Line(), f.Flowid}
 	}
 	return m
 }

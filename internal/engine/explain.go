@@ -68,9 +68,8 @@ type ExplainDestination struct {
 type ExplainAccess struct {
 	Verdict string `json:"verdict"`
 	Layer   string `json:"layer"`
-	// Reason says which entry or default decided (not part of the spec's schema: kept out of the
-	// JSON, the API may add it to a later version).
-	Reason string `json:"-"`
+	// Reason says which entry or default decided.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ExplainFamily is the resolution of one family.

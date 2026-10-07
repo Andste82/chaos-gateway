@@ -541,6 +541,11 @@ func (o *owner) trackFaults(t *compiler.Target, gen uint64) {
 	}
 	o.ov.born = born
 	o.snap.Faults = t.Faults
+	win := make(map[string]bool, len(t.Winners))
+	for _, k := range t.Winners {
+		win[k] = true
+	}
+	o.snap.Winners = win
 	o.snap.FaultIDs = t.FaultIDs
 	o.snap.FaultEpochs = born
 }

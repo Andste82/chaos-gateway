@@ -96,6 +96,8 @@ type options struct {
 	// holderPID is the process whose namespace becomes the service namespace (M6b-03: a real one, not
 	// the simulated kernel's bookkeeping)
 	holderPID func() int
+	// classLimit overrides the number of tc classes one interface may carry (0: the default)
+	classLimit int
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -158,7 +160,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if o.execWrap != nil {
 		eng = o.execWrap(eng)
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID,
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID, ClassLimit: o.classLimit,
 		GenerationFile: filepath.Join(root, "api", "generation")})
 	if err != nil {
 		t.Fatal(err)

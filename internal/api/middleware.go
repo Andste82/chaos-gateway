@@ -212,6 +212,6 @@ func (s *Server) idempotent() gin.HandlerFunc {
 }
 
 // idempotentOps are the operations that take an Idempotency-Key in this build.
-var idempotentOps = map[string]bool{"createRevision": true}
+var idempotentOps = map[string]bool{"createRevision": true, "createOverlay": true}
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

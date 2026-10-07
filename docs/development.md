@@ -174,9 +174,15 @@ Things to know:
   `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (a cancelled first apply: "context
   canceled") and `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` (the test
   runs 260 s, WireGuard rekeys every 120 s and the test takes that for a changed session). The rest
-  of the engine package (72 tests), `internal/apply` (85), the executor (219) and the compiler pass.
-  A full run of the engine package takes about an hour (`make vm-test ARGS='-tags testbed
-  -test-timeout 150m ./internal/engine'`; the client gives up after `-vm-timeout`, default 1 h,
+  of the engine package, `internal/apply`, the executor and the compiler pass.
+  One more since M8b, `TestAHundredWritesWithoutAHeldExecutorAreQuick`: its 5 s bound is far from
+  what a native or KVM run needs (about 0.3 s) but an emulated apply of 100 faults takes 6.9 s since
+  every apply reads the tc state of all assigned interfaces before and after (P2-M8b-04), where
+  `main` needed 3.3 s (measured on 2026-10-07 in the same VM, one apply each). The bound is not
+  widened: it guards against a cost that grows with the square of the burst, and the run that
+  counts is the native one.
+  A full run of the engine package takes about two hours since M8b (`make vm-test ARGS='-tags testbed
+  -test-timeout 170m -vm-timeout 4h ./internal/engine'`; the client gives up after `-vm-timeout`, default 1 h,
   while the guest goes on: the output is in `/tmp/chaosgw-vm/q/<job>.out` when it ends).
   One more in `internal/api`: `TestAHolderRestartIsHealedWithoutHelp` (DNS proxy and service
   namespace; its 20 to 30 s waits are shorter than the emulated restart; same failure on `main`,

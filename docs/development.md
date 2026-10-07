@@ -1183,7 +1183,7 @@ install it with the executor.
   orphans. Runs are not part of this yet (`aborted_runs` follows with M15). Tests:
   `internal/engine/overlays_revision_test.go`, `TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced`
   in `internal/api/overlays_test.go`.
-- **Not yet** (the next steps of M8a): applying the tc tree and verifying it (M8b).
+- **Not in M8a:** in-place tc updates, make-before-break when a fault's parameters change, and measurement tests of the impaired traffic (M8b). M8a applies the complete tc tree of the compiled target as a whole and verifies it.
 
 ### Coalescing and the reader pool (M8a)
 

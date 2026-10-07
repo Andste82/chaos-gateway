@@ -137,6 +137,11 @@ func (h *harness) verifyKernelWithOverlays() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	// the classes of fault ids that went stay until their time has passed (make-before-break)
+	st.TCRetiring = map[string]bool{}
+	for _, r := range h.e.RetiringTC() {
+		st.TCRetiring[r.Key()] = true
+	}
 	if mm := apply.Verify(tg, st); len(mm) != 0 {
 		h.t.Fatalf("the kernel does not match the compile of the snapshot: %v", mm)
 	}

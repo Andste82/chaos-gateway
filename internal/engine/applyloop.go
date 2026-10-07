@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/wireguard"
 
@@ -32,10 +34,40 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// ids is the allocation of fault ids of the last target that was applied and verified: the next
 	// compile hands it back, so a fault that is still there keeps its id (plan §3.3)
 	var ids map[string]int
+	// the retirer deletes the tc classes of fault ids that no longer exist once the packets queued in
+	// them have left (make-before-break, plan §3.2); it runs on the injected clock
+	retirer := e.retirer
+	var retire clock.Timer
+	var retireC <-chan time.Time
+	defer func() {
+		if retire != nil {
+			retire.Stop()
+		}
+	}()
+	arm := func() {
+		if retire != nil {
+			retire.Stop()
+			retire, retireC = nil, nil
+		}
+		if d, ok := retirer.Next(); ok {
+			retire = e.cfg.Clock.NewTimer(d)
+			retireC = retire.C()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-retireC:
+			retireC = nil
+			n, err := retirer.Reap(ctx, e.cfg.Exec, e.cfg.Namespace)
+			if err != nil {
+				e.cfg.Log.Warn("deleting retired tc classes failed: it is tried again", "error", err)
+			} else if n > 0 {
+				e.cfg.Log.Debug("retired tc classes deleted", "count", n)
+			}
+			arm()
+			continue
 		case <-e.wake:
 		}
 		for {
@@ -44,7 +76,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				break
 			}
 			done = d.Generation
-			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids))
+			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, retirer.IDs()))
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			incremental := false
@@ -62,7 +94,8 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 					"same_host", last != nil && hostEqual(last.d.Host, d.Host))
 			}
 			if !incremental {
-				_, err = apply.Apply(ctx, e.cfg.Exec, e.cfg.Namespace, target)
+				_, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
+				arm()
 			}
 			took := e.cfg.Clock.Monotonic() - start
 			if err != nil {
@@ -94,9 +127,9 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 //
 // The overlays are the active ones of the desired state (never part of a revision) and ids the
 // allocation of fault ids of the previous apply.
-func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int) compiler.Input {
+func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
-		Overlays: overlays, FaultIDs: ids, ClassLimit: e.cfg.ClassLimit}
+		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is

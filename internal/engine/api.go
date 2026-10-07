@@ -134,7 +134,7 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 		p.References = referencesOf(orphans)
 		overlays = overlaysAfter(snap.Overlays, orphans, merges)
 	}
-	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs))
+	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs, e.retirer.IDs()))
 	p.Target, p.Problems = tg, tg.Problems
 	if tg.HasErrors() {
 		return p, nil

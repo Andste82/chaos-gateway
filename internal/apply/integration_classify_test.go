@@ -543,3 +543,44 @@ func chainOf(tg *compiler.Target, name string) *compiler.Chain {
 	}
 	return nil
 }
+
+// Plan §3.2: the named counters of a fault survive every apply and stay monotonic. A full apply
+// flushes the maps and the chains, not the counters; one of a removed fault goes with it.
+func TestTheCountersOfAFaultSurviveAnApplyAndGoWithTheFault(t *testing.T) {
+	g := newGateway(t)
+	g.withDevices()
+	o := g.overlay(`{target: {device: dev-a}, fault: {latency: 1ms}}`)
+	tg := g.compileFaults(o)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	g.apply(tg)
+	f := faultOf(t, tg, o, "")
+	if r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 3, 200*time.Millisecond); r.Loss() != 0 {
+		t.Fatalf("A cannot reach the server: %s", g.dump())
+	}
+	before := counterPackets(t, g.top.GW, f.CounterUp)
+	if before == 0 {
+		t.Fatal("the counter counted nothing")
+	}
+	// the same faults again: a full apply (new generation) that rewrites chains and maps
+	tg2 := g.compileFaults(o)
+	if tg2.Hash != tg.Hash {
+		t.Fatalf("the same input compiled to another target: %s / %s", tg.Hash, tg2.Hash)
+	}
+	g.apply(tg2)
+	if after := counterPackets(t, g.top.GW, f.CounterUp); after < before {
+		t.Errorf("the counter went back from %d to %d", before, after)
+	}
+	if r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 2, 200*time.Millisecond); r.Loss() != 0 {
+		t.Fatalf("%s", g.dump())
+	}
+	if after := counterPackets(t, g.top.GW, f.CounterUp); after <= before {
+		t.Errorf("the counter did not go on counting after the apply: %d -> %d", before, after)
+	}
+	// the fault is removed: its counters are deleted with it
+	g.apply(g.compileFaults())
+	if out, err := g.top.GW.Run(context.Background(), "nft", "list", "counter", "inet", "chaosgw", f.CounterUp); err == nil {
+		t.Errorf("the counter of the removed fault is still there: %s", out)
+	}
+}

@@ -1382,3 +1382,27 @@ func TestDiffMapAndTheElementTransaction(t *testing.T) {
 		t.Errorf("the executor's scope refuses the element transaction: %v", err)
 	}
 }
+
+// A write of an overlay recompiles everything, so the compiler must not be quadratic in the
+// devices: 2000 devices with a per-device queue each, and destination and port entries on top.
+func TestACompileWithThousandsOfDevicesIsFast(t *testing.T) {
+	w := newFaultWorld(t)
+	addrs := map[string][]string{}
+	for i := 0; i < 2000; i++ {
+		addrs[fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x100+i)] = []string{fmt.Sprintf("10.10.%d.%d", i/250, 2+i%250)}
+	}
+	w.setAddrs(addrs)
+	w.overlay(`{target: {network: IoT}, fault: {latency: 100ms, rate: 2Mbit}}`, 0)
+	w.overlay(`{target: {global: true}, fault: {destination: {cidr: 203.0.113.0/24}, loss: 1%}}`, time.Second)
+	w.overlay(`{target: {global: true}, fault: {protocol: tcp, ports: [8883], latency: 20ms}}`, 2*time.Second)
+	start := time.Now()
+	tg := w.compile(func(in *Input) { in.ClassLimit = 100000 })
+	took := time.Since(start)
+	t.Logf("2000 devices: %d ids, %d classes, compiled in %s", len(tg.Faults), len(tg.TC.Classes), took)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems[0])
+	}
+	if took > 10*time.Second {
+		t.Errorf("compiling 2000 devices took %s", took)
+	}
+}

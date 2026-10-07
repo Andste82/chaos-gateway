@@ -608,3 +608,36 @@ func TestExplainNamesTheWinnerPerFamilyAndTheOverriddenFaults(t *testing.T) {
 		t.Errorf("an unknown device: %v", err)
 	}
 }
+
+func TestExplainTakesTheRouteFromTheKernelAndJudgesAccess(t *testing.T) {
+	h := startedWithRevision(t)
+	ctx := context.Background()
+	ex, err := h.e.Explain(ctx, engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.31"), Dst: "198.51.100.7", Protocol: "tcp", Port: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// traffic from a test network is looked up in table 100 (the policy rules decide, the kernel answers)
+	if ex.Route == nil || ex.Route.Table != 100 || ex.Route.Gateway != "203.0.113.10" || ex.Route.Interface != "wan0" || ex.Route.Unreachable {
+		t.Errorf("route %+v", ex.Route)
+	}
+	if ex.Access.Verdict != "allow" || ex.Access.Layer != "access_matrix" || ex.Access.Reason == "" {
+		t.Errorf("access %+v", ex.Access)
+	}
+	if ex.Source.Network == nil || ex.Source.Network.Name != "IoT" || ex.Kernel != nil || len(ex.Faults) != 0 || ex.Service != "none" {
+		t.Errorf("%+v", ex)
+	}
+	// traffic to the gateway itself is the gateway protection's business
+	ex, err = h.e.Explain(ctx, engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.31"), Dst: "10.10.0.1", Protocol: "tcp", Port: 22})
+	if err != nil || ex.Access.Verdict != "drop" || ex.Access.Layer != "gateway_protection" {
+		t.Errorf("%+v %v", ex.Access, err)
+	}
+	// a hostname has no address to look up
+	ex, err = h.e.Explain(ctx, engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.31"), Dst: "example.com"})
+	if err != nil || ex.Route != nil || ex.Destination == nil || ex.Destination.Hostname != "example.com" {
+		t.Errorf("%+v %v", ex, err)
+	}
+	// neither a device nor a source address: nothing to explain
+	if ex, err := h.e.Explain(ctx, engine.ExplainQuery{Dst: "198.51.100.7"}); err == nil {
+		t.Errorf("%+v", ex)
+	}
+}

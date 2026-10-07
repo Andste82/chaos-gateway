@@ -218,7 +218,9 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		return AccessExplanation{}, false
 	}
-	for _, it := range items {
+	if len(items) > 0 {
+		// the first entry that matches decides; what a client's reachable list implies stands behind the guard
+		it := items[0]
 		if it.implicit {
 			if g, ok := guard(); ok {
 				return g

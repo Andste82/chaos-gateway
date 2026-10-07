@@ -19,9 +19,9 @@ import (
 //   - Overlays always win over the configuration (D24): for every family the matching overlays
 //     are resolved first; only without one, the matching configured faults.
 //   - Within a layer the most specific scope wins (the ten levels of the plan).
-//   - At the same level a fault beats a part of an activated profile, and then the newer
-//     entry wins (D26: no explicit priorities). "Newer" is created_at for configured faults and
-//     updated_at for overlays.
+//   - On the same scope and level a fault beats a part of an activated profile; across scopes of
+//     the same level the newer entry wins (D26: no explicit priorities). "Newer" is created_at for
+//     configured faults and updated_at for overlays.
 //   - Parameters are never merged: the winner's complete set applies.
 //   - Faults of different families combine.
 //   - Faults act on the initiator's traffic (initiator semantics): the query's source is the
@@ -583,25 +583,66 @@ func reason(winner, loser Candidate) string {
 // sameScope reports whether two candidates apply to the very same scope.
 func sameScope(a, b Candidate) bool { return scopeKey(&a.Scope) == scopeKey(&b.Scope) }
 
-// better reports whether a beats b within one layer: the more specific level; at the same level a
-// fault beats a part of an activated profile on the same scope (E8); then the newer one (D26);
-// at the very same time the higher id, which is the newer one for time-ordered UUIDs (v7) and
-// otherwise just a stable choice.
-func better(a, b Candidate) bool {
-	if a.Level != b.Level {
-		return a.Level < b.Level
-	}
-	if a.IsProfilePart() != b.IsProfilePart() && sameScope(a, b) {
-		return !a.IsProfilePart()
-	}
+// newer reports whether a is newer than b (D26): by time, then, at the very same time, by the
+// higher id, which is the newer one for time-ordered UUIDs (v7) and otherwise just a stable
+// choice.
+func newer(a, b Candidate) bool {
 	if !a.Since.Equal(b.Since) {
 		return a.Since.After(b.Since)
 	}
 	return a.ID > b.ID
 }
 
-func sortCandidates(cs []Candidate) {
-	sort.SliceStable(cs, func(i, j int) bool { return better(cs[i], cs[j]) })
+// champion reports whether a beats b on the very same scope and level: a fault beats a part of
+// an activated profile (E8), and otherwise the newer entry wins.
+func champion(a, b Candidate) bool {
+	if a.IsProfilePart() != b.IsProfilePart() {
+		return !a.IsProfilePart()
+	}
+	return newer(a, b)
+}
+
+// winnerOf picks the winner of one layer's candidates: the most specific level; on that level
+// every scope first puts forward its champion (a fault before a profile part, then the newer
+// entry), and the newest champion wins (D26, E6, E8). The rule "a fault beats a profile part"
+// holds on the same scope only, so it is applied per scope, not as a pairwise order: a pairwise
+// order over all candidates of the level would not be transitive (a beats b on one scope, b is
+// newer than c, c is newer than a) and the winner would depend on the input order.
+func winnerOf(cs []Candidate) int {
+	level := cs[0].Level
+	for _, c := range cs {
+		if c.Level < level {
+			level = c.Level
+		}
+	}
+	champions := map[string]int{} // scope → index of its champion
+	for i, c := range cs {
+		if c.Level != level {
+			continue
+		}
+		key := scopeKey(&c.Scope)
+		if cur, ok := champions[key]; !ok || champion(c, cs[cur]) {
+			champions[key] = i
+		}
+	}
+	win := -1
+	for _, key := range sortedKeys(champions) {
+		if i := champions[key]; win < 0 || newer(cs[i], cs[win]) {
+			win = i
+		}
+	}
+	return win
+}
+
+// rankLosers orders the candidates that lost, for the explanation: the most specific level first,
+// then the newer ones.
+func rankLosers(cs []Candidate) {
+	sort.SliceStable(cs, func(i, j int) bool {
+		if cs[i].Level != cs[j].Level {
+			return cs[i].Level < cs[j].Level
+		}
+		return newer(cs[i], cs[j])
+	})
 }
 
 // resolveFamily applies the rules to the candidates of one family.
@@ -620,16 +661,23 @@ func resolveFamily(family string, matching []Candidate) (FamilyResult, bool) {
 	if len(overlays)+len(configs) == 0 {
 		return FamilyResult{}, false
 	}
-	sortCandidates(overlays)
-	sortCandidates(configs)
-	ranked := configs
+	// overlays before configuration (D24): a configured fault is only considered without an overlay
+	winning, other := configs, overlays
 	if len(overlays) > 0 {
-		ranked = append(overlays, configs...) // overlays before configuration (D24)
+		winning, other = overlays, configs
 	}
-	res := FamilyResult{Family: family}
-	win := ranked[0]
-	res.Winner = &win
-	for _, loser := range ranked[1:] {
+	wi := winnerOf(winning)
+	win := winning[wi]
+	res := FamilyResult{Family: family, Winner: &win}
+	var losers []Candidate
+	for i, c := range winning {
+		if i != wi {
+			losers = append(losers, c)
+		}
+	}
+	rankLosers(losers)
+	rankLosers(other)
+	for _, loser := range append(losers, other...) {
 		res.Overridden = append(res.Overridden, Overridden{Candidate: loser, Reason: reason(win, loser)})
 	}
 	return res, true

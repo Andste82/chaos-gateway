@@ -166,6 +166,18 @@ Things to know:
 - **Emulated timing.** Without KVM the guest sets `CHAOSGW_TESTBED_EMULATED=1`, so accuracy
   assertions (`testbed.Accurate()`) are not checked: a green run here proves the logic, CI on a
   KVM runner proves the numbers.
+- **Tests that fail under emulation on `main` as well** (checked on 2026-10-07 by running them on
+  `main` and on the M8a branch one after the other in the same VM, same log lines): five tests of
+  `internal/engine` whose own waits are shorter than a software-emulated full apply takes, or
+  longer than a WireGuard rekey: `TestAReservationIsHonored`, `TestAnAddressChangeIsAnEventWithinASecond`,
+  `TestABurstOfNeighborChangesIsOneIdentityUpdate`,
+  `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (a cancelled first apply: "context
+  canceled") and `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` (the test
+  runs 260 s, WireGuard rekeys every 120 s and the test takes that for a changed session). The rest
+  of the engine package (72 tests), `internal/apply` (85), the executor (219) and the compiler pass.
+  A full run of the engine package takes about an hour (`make vm-test ARGS='-tags testbed
+  -test-timeout 150m ./internal/engine'`; the client gives up after `-vm-timeout`, default 1 h,
+  while the guest goes on: the output is in `/tmp/chaosgw-vm/q/<job>.out` when it ends).
 
 **Bisecting a batch the kernel refuses.** The kernel rejects a whole nftables transaction for one
 command and says only `Could not process rule: Operation not supported`. Milestone M7 lost six CI

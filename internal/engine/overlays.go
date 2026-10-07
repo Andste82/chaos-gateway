@@ -504,7 +504,14 @@ func (o *owner) overlayRenew(c cmdOverlayRenew) {
 		o.reply(c.reply, OverlayResult{}, ErrOverlayForbidden)
 		return
 	}
-	renewed, err := o.ov.store.Renew(c.id)
+	// the renewal also goes into every checkpoint the store can still be taken back to, so that
+	// a failed apply or a refused write of somebody else does not undo it
+	cps := make([]*overlay.Checkpoint, 0, len(o.ov.marks)+1)
+	cps = append(cps, o.ov.verified)
+	for _, m := range o.ov.marks {
+		cps = append(cps, m.after)
+	}
+	renewed, err := o.ov.store.Renew(c.id, cps...)
 	if err != nil {
 		o.reply(c.reply, OverlayResult{}, err)
 		return

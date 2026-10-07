@@ -379,7 +379,13 @@ func (s *Store) Orphan(ids []uuid.UUID) []Change {
 // Renew restarts the lease of an overlay: it runs out one lease interval after now. It changes
 // nothing in the kernel and is no replacement, so the overlay keeps its UpdatedAt and generation
 // and the change produces no event.
-func (s *Store) Renew(id uuid.UUID) (model.Overlay, error) {
+//
+// A renewal is not a change of the desired state that a failed apply takes back: a client that
+// keeps its lease alive must not lose the overlay because somebody else's write failed. The
+// checkpoints the caller may Restore later are therefore given too; the overlay in each of them
+// (the same id, whatever its body then) gets the renewed deadline when that is later than the one
+// it has.
+func (s *Store) Renew(id uuid.UUID, checkpoints ...*Checkpoint) (model.Overlay, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.byID[id]
@@ -389,7 +395,15 @@ func (s *Store) Renew(id uuid.UUID) (model.Overlay, error) {
 	if e.lease <= 0 {
 		return model.Overlay{}, ErrNoLease
 	}
-	e.leaseAt = s.clk.Monotonic() + e.lease
+	mono := s.clk.Monotonic()
+	e.leaseAt = mono + e.lease
+	for _, c := range checkpoints {
+		if i, ok := c.byID[id]; ok {
+			if ce := &c.entries[i]; ce.lease > 0 && mono+ce.lease > ce.leaseAt {
+				ce.leaseAt = mono + ce.lease
+			}
+		}
+	}
 	return s.viewLocked(e), nil
 }
 
@@ -522,15 +536,19 @@ func newerEntry(a, b *entry) bool {
 
 // Checkpoint is a copy of the store's content at one moment: the state owner takes one before it
 // changes the overlays and goes back to it when the change cannot be applied to the kernel
-// (Restore). It is immutable.
-type Checkpoint struct{ entries []entry }
+// (Restore). Only Store.Renew changes one (the deadline of a lease), under the store's lock.
+type Checkpoint struct {
+	entries []entry
+	byID    map[uuid.UUID]int
+}
 
 // Checkpoint copies the active overlays with their deadlines.
 func (s *Store) Checkpoint() *Checkpoint {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := &Checkpoint{entries: make([]entry, 0, len(s.byID))}
+	c := &Checkpoint{entries: make([]entry, 0, len(s.byID)), byID: make(map[uuid.UUID]int, len(s.byID))}
 	for _, e := range s.byID {
+		c.byID[e.ov.Id] = len(c.entries)
 		c.entries = append(c.entries, *e)
 	}
 	return c

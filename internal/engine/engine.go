@@ -125,6 +125,12 @@ type Snapshot struct {
 	Management  compiler.Management
 	FaultIDs    map[string]int
 	FaultEpochs map[string]int64
+	// TCDevs are the interfaces that hold the tc tree of the last applied target, QueueEpochs the
+	// epoch of every netem queue on them by QueueKey (the generation of the apply that made its leaf),
+	// and CounterEpoch the epoch of the nft counters as a whole (queues.go).
+	TCDevs       []string
+	QueueEpochs  map[string]int64
+	CounterEpoch int64
 	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
 	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
 	ObserveError string

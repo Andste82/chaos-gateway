@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
 // M8a: overlays over the API. Every response is checked against the spec by the harness.
@@ -517,5 +519,87 @@ func TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced(t *testing.T
 	}
 	if !found {
 		t.Errorf("the audit log does not say that an overlay was removed: %+v", e)
+	}
+}
+
+// The queues of an overlay and of a configured fault: one per interface of the tree and direction, with
+// the kernel's counters and the epoch of the leaf (M8b).
+func TestAnOverlayAndAFaultShowTheirNetemQueuesWithEpochs(t *testing.T) {
+	g := ready(t)
+	fid := "5f1c7a9e-6d3b-4e8a-9c2f-1a2b3c4d5e6f"
+	rev := g.mustPatch(map[string]any{"faults": map[string]any{fid: map[string]any{
+		"name": "slow-lab", "source": map[string]any{"network": "IoT"}, "latency": "150ms", "destination": map[string]any{"cidr": "192.0.2.0/24"},
+	}}})
+	if r := g.apply(rev); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"100ms","loss":"1%","destination":{"cidr":"198.51.100.0/24"}}}`)
+	id := ov["id"].(string)
+	var oid, cid int
+	for _, f := range g.e.Snapshot().Faults {
+		if f.Source == id {
+			oid = f.ID
+		} else {
+			cid = f.ID
+		}
+	}
+	if oid == 0 || cid == 0 {
+		t.Fatalf("faults %+v", g.e.Snapshot().Faults)
+	}
+	devs := g.e.Snapshot().TCDevs
+	if len(devs) < 2 {
+		t.Fatalf("the tree is on %v", devs)
+	}
+	leaf := func(fid int, dir compiler.Direction) string {
+		return strings.TrimPrefix(compiler.ClassIDOf(fid, dir), "1:") + ":"
+	}
+	g.k.SetTCStats(devs[0], leaf(oid, compiler.Upload), linux.NormStats{Bytes: 14200, Packets: 100, Drops: 4, Overlimits: 1, Backlog: 2900, Qlen: 2})
+	g.k.SetTCStats(devs[1], leaf(cid, compiler.Download), linux.NormStats{Bytes: 600, Packets: 3})
+
+	queues := func(v map[string]any) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		qs, _ := v["queues"].([]any)
+		for _, q := range qs {
+			m := q.(map[string]any)
+			out[m["interface"].(string)+" "+m["direction"].(string)] = m
+		}
+		return out
+	}
+	got := g.do("GET", "/overlays/"+id, nil, nil, nil)
+	if got.Status != 200 {
+		t.Fatalf("%d %s", got.Status, got.Body)
+	}
+	qs := queues(got.json(t))
+	if len(qs) != 2*len(devs) {
+		t.Fatalf("%d queues, want upload and download on each of three interfaces: %s", len(qs), got.Body)
+	}
+	up := qs[devs[0]+" upload"]
+	if up["sent_packets"] != float64(100) || up["sent_bytes"] != float64(14200) || up["dropped_packets"] != float64(4) ||
+		up["overlimits"] != float64(1) || up["backlog_packets"] != float64(2) || up["backlog_bytes"] != float64(2900) || up["epoch"] == nil || up["epoch"] == float64(0) {
+		t.Errorf("the upload queue of br-iot: %v", up)
+	}
+	if d := qs[devs[0]+" download"]; d["sent_packets"] != float64(0) || d["epoch"] != up["epoch"] {
+		t.Errorf("the download queue of br-iot: %v", d)
+	}
+	// the queues of the configured fault are not the overlay's
+	cf := g.do("GET", "/faults/slow-lab", nil, nil, nil).json(t)
+	cq := queues(cf)
+	if len(cq) != 2*len(devs) || cq[devs[1]+" download"]["sent_packets"] != float64(3) || cq[devs[0]+" upload"]["sent_packets"] != float64(0) {
+		t.Errorf("the queues of the configured fault: %v", cf["queues"])
+	}
+	lst := g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)
+	if len(lst) != 1 || len(queues(lst[0].(map[string]any))) != 2*len(devs) {
+		t.Errorf("the list of overlays: %v", lst)
+	}
+
+	// a replacement changes the parameters in place: same queues, same epoch, same counters
+	g.createOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"250ms","loss":"2%","destination":{"cidr":"198.51.100.0/24"}}}`)
+	again := queues(g.do("GET", "/overlays/"+id, nil, nil, nil).json(t))
+	if again[devs[0]+" upload"]["epoch"] != up["epoch"] || again[devs[0]+" upload"]["sent_packets"] != float64(100) {
+		t.Errorf("a replacement restarted the queue: %v, was %v", again[devs[0]+" upload"], up)
+	}
+	// the state carries the epoch of the counters as a whole
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["counter_epoch"] == nil || st["counter_epoch"] == float64(0) {
+		t.Errorf("state %v", st)
 	}
 }

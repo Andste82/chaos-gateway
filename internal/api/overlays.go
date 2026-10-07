@@ -12,12 +12,15 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -48,6 +51,8 @@ func ownerLimit(p *Principal) *model.Owner {
 type overlayContext struct {
 	snap     *engine.Snapshot
 	counters map[string]engine.CounterValue
+	// queues are the counters of the netem leaves by engine.QueueKey; nil when they could not be read
+	queues map[string]linux.NormStats
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -62,6 +67,14 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 			return oc
 		}
 		oc.counters = cs
+		if len(oc.snap.TCDevs) > 0 {
+			qs, err := s.cfg.Engine.ReadQueues(ctx)
+			if err != nil {
+				s.log.Warn("cannot read the fault queues", "error", err)
+			} else {
+				oc.queues = qs
+			}
+		}
 	}
 	return oc
 }
@@ -104,6 +117,51 @@ func (oc overlayContext) counterOf(layer, source string) *model.Counter {
 	return &c
 }
 
+// queuesOf lists the netem queues the faults of one source feed: one per interface of the tree and
+// direction the fault impairs, with the counters the kernel holds for it and the epoch of the leaf. A
+// queue the kernel does not hold (read failed, or not applied yet) is left out. Nil without any.
+func (oc overlayContext) queuesOf(layer, source string) []model.QueueStats {
+	if oc.queues == nil {
+		return nil
+	}
+	var out []model.QueueStats
+	for _, i := range oc.faultsOf(layer, source) {
+		f := oc.snap.Faults[i]
+		for _, dir := range []compiler.Direction{compiler.Upload, compiler.Download} {
+			if (dir == compiler.Upload && f.Upload == nil) || (dir == compiler.Download && f.Download == nil) {
+				continue
+			}
+			class := compiler.ClassIDOf(f.ID, dir)
+			for _, dev := range oc.snap.TCDevs {
+				key := engine.QueueKey(dev, class)
+				st, ok := oc.queues[key]
+				if !ok {
+					continue
+				}
+				q := model.QueueStats{
+					Interface:      ptr(dev),
+					Direction:      ptr(model.Upload),
+					SentPackets:    ptr(int64(st.Packets)),
+					SentBytes:      ptr(int64(st.Bytes)),
+					DroppedPackets: ptr(int64(st.Drops)),
+					Overlimits:     ptr(int64(st.Overlimits)),
+					BacklogPackets: ptr(int64(st.Qlen)),
+					BacklogBytes:   ptr(int64(st.Backlog)),
+					Epoch:          ptr(oc.snap.QueueEpochs[key]),
+				}
+				if dir == compiler.Download {
+					q.Direction = ptr(model.Download)
+				}
+				if id, err := uuid.Parse(f.Device); err == nil && f.Device != "" {
+					q.Device = &id
+				}
+				out = append(out, q)
+			}
+		}
+	}
+	return out
+}
+
 // effectOf says whether the fault wins for some traffic: `effective`, or `overridden` when another
 // fault beats it everywhere. A fault that wins only for a part of its selector is shown as
 // effective (the explanation of a single destination says more).
@@ -124,6 +182,9 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		st := oc.effectOf("overlay", ov.Id.String(), fam)
 		ov.State = &st
 		ov.Counters = oc.counterOf("overlay", ov.Id.String())
+		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
+			ov.Queues = &q
+		}
 	}
 	return ov
 }
@@ -329,11 +390,12 @@ func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 // ---- faults
 
 type faultView struct {
-	ID           string            `json:"id"`
-	Config       model.ConfigFault `json:"config"`
-	State        model.EffectState `json:"state"`
-	OverriddenBy []model.FaultRef  `json:"overridden_by,omitempty"`
-	Counters     *model.Counter    `json:"counters,omitempty"`
+	ID           string             `json:"id"`
+	Config       model.ConfigFault  `json:"config"`
+	State        model.EffectState  `json:"state"`
+	OverriddenBy []model.FaultRef   `json:"overridden_by,omitempty"`
+	Counters     *model.Counter     `json:"counters,omitempty"`
+	Queues       []model.QueueStats `json:"queues,omitempty"`
 }
 
 func faultFamilyOf(f model.ConfigFault) string {
@@ -364,6 +426,7 @@ func (s *Server) faultViews(ctx context.Context, v view) []faultView {
 		case v.active:
 			fv.State = oc.effectOf("config", id, faultFamilyOf(f))
 			fv.Counters = oc.counterOf("config", id)
+			fv.Queues = oc.queuesOf("config", id)
 			if fv.State == model.EffectStateOverridden && world != nil {
 				fv.OverriddenBy = s.overriddenBy(oc.snap, world, id, f)
 			}

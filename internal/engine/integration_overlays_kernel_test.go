@@ -138,23 +138,16 @@ func (r *real) verifyKernel() *compiler.Target {
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	// the classes of fault ids that went, or of an apply that failed after its tc operation, stay
+	// for the retirer (make-before-break)
+	st.TCRetiring = map[string]bool{}
+	for _, c := range r.e.RetiringTC() {
+		st.TCRetiring[c.Key()] = true
+	}
 	if mm := apply.Verify(tg, st); len(mm) != 0 {
 		r.t.Fatalf("the kernel does not match the compile of the snapshot: %v", mm)
 	}
 	return tg
-}
-
-// installTC puts the compiled tc tree on the interfaces it names, as the fault engine will (M8b).
-func (r *real) installTC(tg *compiler.Target) {
-	r.t.Helper()
-	if tg.TC == nil {
-		r.t.Fatal("the target has no tc tree")
-	}
-	for _, dev := range tg.TC.Devs {
-		if _, err := r.ex.Do(context.Background(), &executor.TC{Target: executor.Target{NS: r.top.GW.Name}, Entries: tg.TC.Entries(dev, true)}); err != nil {
-			r.t.Fatalf("install the tc tree on %s: %v\n%s", dev, err, strings.Join(tg.TC.Lines(dev), "\n"))
-		}
-	}
 }
 
 // classTotal sums the packets of a class over the interfaces the tree is on (the packets of one
@@ -253,7 +246,6 @@ func TestAnOverlayShapesTheTrafficOfItsScopeOnARealKernel(t *testing.T) {
 			}
 		}
 	}
-	r.installTC(tg)
 	iotUp, iotDown := classOfFault(t, tg, fi, compiler.Upload), classOfFault(t, tg, fi, compiler.Download)
 	labUp, labDown := classOfFault(t, tg, fl, compiler.Upload), classOfFault(t, tg, fl, compiler.Download)
 
@@ -383,12 +375,10 @@ func TestTwoHundredConcurrentOverlayWritesOnARealKernelEndInTheCompileOfTheFinal
 		t.Fatalf("%d overlays and %d faults, want %d", len(final.Overlays), len(final.Faults), n)
 	}
 
-	tg := r.verifyKernel()
+	r.verifyKernel() // the tc tree of the final snapshot, 200 faults with a class per direction, included
 	if got := strings.Count(r.nft(), "chain mark_"); got != n {
 		t.Errorf("the kernel has %d mark chains, want %d", got, n)
 	}
-	// the tc tree of the final snapshot, 200 faults with a class per direction, is accepted too
-	r.installTC(tg)
 }
 
 // plan M8a: a counter read completes while a long plan runs. The writer holds a real nft
@@ -501,6 +491,11 @@ func TestAFailedBatchIsRevertedOnARealKernelAndEveryWriterGetsApplyFailed(t *tes
 	}
 	if got := collect(events, engine.EventOverlayCreated); len(got) != 0 {
 		t.Errorf("overlays that never became active announced themselves: %d events", len(got))
+	}
+	// the tc operation of the failed batch ran before its nftables transaction was refused: the 20
+	// classes it made are stale now and wait for the retirer, which is all the verify accepts
+	if len(r.e.RetiringTC()) == 0 {
+		t.Error("the classes of the failed batch are not known to the retirer")
 	}
 	r.verifyKernel()
 	if got := strings.Count(r.nft(), "chain mark_"); got != 1 {

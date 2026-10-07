@@ -5,7 +5,6 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -102,13 +101,6 @@ func (g *wgGW) applyWithFaults(overlays ...model.Overlay) *compiler.Target {
 	defer cancel()
 	if _, err := apply.Apply(actx, ex, g.top.GW.Name, tg); err != nil {
 		g.t.Fatalf("apply with faults: %v", err)
-	}
-	if tg.TC != nil {
-		for _, dev := range tg.TC.Devs {
-			if _, err := ex.Do(ctx, &executor.TC{Target: executor.Target{NS: g.top.GW.Name}, Entries: tg.TC.Entries(dev, true)}); err != nil {
-				g.t.Fatalf("install the tc tree on %s: %v\n%s", dev, err, strings.Join(tg.TC.Lines(dev), "\n"))
-			}
-		}
 	}
 	return tg
 }

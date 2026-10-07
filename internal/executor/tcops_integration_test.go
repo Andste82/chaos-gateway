@@ -402,7 +402,7 @@ func TestTheRootCannotBeChangedAndAForeignRootIsReplacedNotAdded(t *testing.T) {
 
 // The distribution table of a netem qdisc is not shown by tc and is kept through every change and
 // replace that does not name one: a fault that goes back to a uniform delay needs the qdisc to be created
-// again (P2-M8a-05). Measured as the share of round trips outside the band delay +- jitter (plus a margin
+// again (the apply makes the leaf again). Measured as the share of round trips outside the band delay +- jitter (plus a margin
 // for noise): a uniform jitter has none, a normal one about a third.
 func TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt(t *testing.T) {
 	bed := testbed.New(t)

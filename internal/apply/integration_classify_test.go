@@ -24,8 +24,7 @@ import (
 // devices of the testbed are resolved by the domain layer, the compiler gives each winner its id,
 // fills the lookup maps and builds the tc tree, and the tests install that tree and read the
 // counters of its classes (plan: "a test tc class per (id, direction), per-class counters increase
-// only for matching traffic"). Applying the tc tree is not part of apply.Apply yet (M8b), so
-// installTC does it with the executor, the way the fault engine will.
+// only for matching traffic"). apply.Apply puts the tc tree on the kernel (M8b).
 
 // classifyDevices are the devices the tests give faults to: A and B in the IoT network, C in Lab,
 // and the management peer, which is no test traffic at all.
@@ -113,9 +112,9 @@ func classOf(t *testing.T, tg *compiler.Target, id int, dir compiler.Direction) 
 	return compiler.TCClass{}
 }
 
-// installTC puts the target's tc tree on the interfaces. A root that is already there stays (HTB
-// cannot be changed in place), everything else is replaced, so it can be called again after the
-// target changed, which adds the classes of new ids.
+// installTC puts the target's tc tree on interfaces the apply does not put it on (the management
+// interface, where the guard of the classification is what is tested). A root that is already there
+// stays (HTB cannot be changed in place), everything else is replaced.
 func (g *gw) installTC(tg *compiler.Target, devs ...string) {
 	g.t.Helper()
 	if tg.TC == nil {
@@ -230,7 +229,6 @@ func TestClassificationMarksOnlyMatchingTrafficBehindNAT(t *testing.T) {
 		t.Fatalf("%+v", tg.Problems)
 	}
 	g.apply(tg)
-	g.installTC(tg)
 	f := faultOf(t, tg, o, "")
 	iotIf := bridgeIf(t, tg, classifyIotID)
 	up, down := classOf(t, tg, f.ID, compiler.Upload), classOf(t, tg, f.ID, compiler.Download)
@@ -292,7 +290,6 @@ func TestClassificationAcrossTwoTestNetworks(t *testing.T) {
 		t.Fatalf("%+v", tg.Problems)
 	}
 	g.apply(tg)
-	g.installTC(tg)
 	f := faultOf(t, tg, o, "")
 	iotIf := bridgeIf(t, tg, classifyIotID)
 	labIf := bridgeIf(t, tg, classifyLabID)
@@ -334,7 +331,7 @@ func TestNonTestTrafficKeepsItsMarkUntouched(t *testing.T) {
 	}
 	g.apply(tg)
 	// the management interface is where the peer's packets leave
-	g.installTC(tg, append(tg.TC.Devs, "mgmt0")...)
+	g.installTC(tg, "mgmt0")
 	peerUp, peerDown := classOf(t, tg, peer.ID, compiler.Upload), classOf(t, tg, peer.ID, compiler.Download)
 
 	if r := testbed.MustPing(t, g.top.Mgmt, testbed.MgmtGateway, 3, 200*time.Millisecond); r.Loss() != 0 {
@@ -388,7 +385,6 @@ func TestAMapChangeMovesAnEstablishedConnectionToItsNewClass(t *testing.T) {
 		t.Fatalf("%+v", tgOld.Problems)
 	}
 	g.apply(tgOld)
-	g.installTC(tgOld)
 	iotIf := bridgeIf(t, tgOld, classifyIotID)
 	fOld := faultOf(t, tgOld, oOld, "")
 	oldUp, oldDown := classOf(t, tgOld, fOld.ID, compiler.Upload), classOf(t, tgOld, fOld.ID, compiler.Download)
@@ -411,15 +407,15 @@ func TestAMapChangeMovesAnEstablishedConnectionToItsNewClass(t *testing.T) {
 	if fNew.ID == fOld.ID {
 		t.Fatalf("the new fault took the old id %d: the classes could not be told apart", fOld.ID)
 	}
-	g.installTC(tgNew)
-	g.apply(tgNew)
+	g.applyRetiring(tgNew)
 
 	newUp, newDown := classOf(t, tgNew, fNew.ID, compiler.Upload), classOf(t, tgNew, fNew.ID, compiler.Download)
 	waitClassPackets(t, g.top.GW, "wan0", newUp, 5*time.Second, "the same connection's later packets were never classified under the new id")
 	if n := classPackets(t, g.top.GW, iotIf, newDown); n == 0 {
 		t.Error("the connection's later reply packets were not classified under the new id")
 	}
-	// the old class still exists (the fault engine removes it later) but nothing new arrives in it
+	// the old class still exists (the retirer removes it after the largest delay plus a second) but
+	// nothing new arrives in it
 	time.Sleep(500 * time.Millisecond)
 	settled := classPackets(t, g.top.GW, iotIf, oldDown)
 	time.Sleep(1 * time.Second)
@@ -470,7 +466,6 @@ func TestTheMoreSpecificLevelWinsWhenTwoLevelsHoldEntries(t *testing.T) {
 	g := newGateway(t)
 	tg, def, specific := g.twoLevelFaults()
 	g.apply(tg)
-	g.installTC(tg)
 	iotIf := bridgeIf(t, tg, classifyIotID)
 	defUp, defDown := classOf(t, tg, def.ID, compiler.Upload), classOf(t, tg, def.ID, compiler.Download)
 	specUp, specDown := classOf(t, tg, specific.ID, compiler.Upload), classOf(t, tg, specific.ID, compiler.Download)
@@ -520,7 +515,6 @@ func TestAReorderedLookupChainIsCaught(t *testing.T) {
 	}
 	c.Rules[3], c.Rules[4], c.Rules[5], c.Rules[6] = c.Rules[6], c.Rules[3], c.Rules[4], c.Rules[5]
 	g.apply(tg)
-	g.installTC(tg)
 	defUp := classOf(t, tg, def.ID, compiler.Upload)
 	specUp := classOf(t, tg, specific.ID, compiler.Upload)
 

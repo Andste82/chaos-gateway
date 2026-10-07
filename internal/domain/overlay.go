@@ -282,3 +282,17 @@ func tunnelKey(t *model.TunnelRef) string {
 	}
 	return "?"
 }
+
+// CloneOverlayRequest returns a deep copy of a request: a store keeps its own copy, so a caller
+// that reuses the request cannot change an active overlay.
+func CloneOverlayRequest(r *model.OverlayRequest) model.OverlayRequest { return clone(*r) }
+
+// RequestOf returns the request part of an overlay: what was written, without the fields the
+// store adds.
+func RequestOf(o *model.Overlay) model.OverlayRequest {
+	return model.OverlayRequest{
+		Target: o.Target, Ttl: o.Ttl, Lease: o.Lease,
+		Profile: o.Profile, Fault: o.Fault, Rule: o.Rule, Dns: o.Dns, Tls: o.Tls,
+		Dhcp: o.Dhcp, Wireguard: o.Wireguard,
+	}
+}

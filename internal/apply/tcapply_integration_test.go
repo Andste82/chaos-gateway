@@ -387,6 +387,8 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 	g := newGateway(t)
 	g.withDevices()
 	const delay, jitter = 100 * time.Millisecond, 20 * time.Millisecond
+	// the latency tolerance of plan §4.3 (±2 ms + 5 %) on top of the jitter
+	const slack = 2*time.Millisecond + delay/20
 	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms, distribution: normal}}}`)
 	tg := g.compileFaults(o)
 	g.applyRetiring(tg)
@@ -399,11 +401,16 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 		if r.Received < 140 {
 			t.Fatalf("received %d of %d", r.Received, r.Sent)
 		}
-		return outsideShare(r, delay, jitter+5*time.Millisecond)
+		return outsideShare(r, delay, jitter+slack)
 	}
-	if s := measure(); s < 0.08 {
-		t.Errorf("a normal distribution with sigma = jitter should put about a fifth of the round trips outside delay ± (jitter + 5 ms), %.0f%% were", s*100)
-	}
+	// about 18 % of 150 round trips are outside (sigma = jitter, 1.35 sigma): 8 % is three sigma below;
+	// the flakiness policy of plan §4.3 applies all the same
+	testbed.Statistically(t, "a normal distribution", func() error {
+		if s := measure(); s < 0.08 {
+			return fmt.Errorf("a normal distribution with sigma = jitter should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100)
+		}
+		return nil
+	})
 
 	// the same fault, uniform: the apply has to make the leaf again, because the table survives a change
 	changed := g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms}}}`)
@@ -418,9 +425,9 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 	if testbed.Accurate() && share > 0 {
 		// flakiness policy of plan §4.3: repeat once, a second failure fails
 		if share = measure(); share > 0 {
-			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 25 ms", share*100)
+			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", share*100)
 		}
 	} else if !testbed.Accurate() {
-		t.Logf("emulated: %.0f%% of the round trips outside delay ± 25 ms (not asserted)", share*100)
+		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", share*100)
 	}
 }

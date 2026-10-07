@@ -113,7 +113,7 @@ func ParseNft(data []byte) (*Ruleset, error) {
 
 // Elements returns the elements of the set as normalized strings, sorted: addresses as they are,
 // prefixes as addr/len, ranges as a-b, timeouts dropped (they are runtime data), concatenations
-// joined with ".". It is the form verify compares.
+// joined with " . " (nft's own syntax, the form the compiler writes keys in). It is the form verify compares.
 func (s *NftSet) Elements() []string {
 	out := make([]string, 0, len(s.Elem))
 	for _, raw := range s.Elem {
@@ -128,8 +128,8 @@ func (s *NftSet) Elements() []string {
 func NormalizeElement(e string) string { return strings.TrimSuffix(e, "/32") }
 
 // Pairs returns the key/value elements of a map, normalized like Elements: the key as an address,
-// a prefix or a concatenation joined with ".", the value as a decimal number (a "mark" map, such
-// as the identity map) or the name of the chain a "verdict" element (a classification map) jumps
+// a prefix, a range "first-last" or a concatenation joined with " . ", the value as a decimal number (a "mark" map, such
+// as the identity map) or the name of the chain a "verdict" element (a classification map) goes
 // to. A map element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array
 // of arrays with exactly two elements is expected"), confirmed against a real captured `nft -j
 // list map` ("elem": [[9001, {"drop": null}], ...]).
@@ -150,7 +150,7 @@ func (s *NftSet) Pairs() map[string]string {
 }
 
 // mapValueString renders a map element's data as nft prints it: a decimal number as itself, a
-// jump verdict as the chain's name.
+// goto (or jump) verdict as the chain's name.
 func mapValueString(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -158,9 +158,11 @@ func mapValueString(v any) string {
 	case float64:
 		return strconv.FormatFloat(x, 'f', -1, 64)
 	case map[string]any:
-		if j, ok := x["jump"].(map[string]any); ok {
-			if t, ok := j["target"].(string); ok {
-				return t
+		for _, verb := range []string{"goto", "jump"} {
+			if j, ok := x[verb].(map[string]any); ok {
+				if t, ok := j["target"].(string); ok {
+					return t
+				}
 			}
 		}
 	}
@@ -198,7 +200,7 @@ func elemString(v any) string {
 			for i, p := range c {
 				parts[i] = elemString(p)
 			}
-			return strings.Join(parts, ".")
+			return strings.Join(parts, " . ")
 		}
 	}
 	b, _ := json.Marshal(v)

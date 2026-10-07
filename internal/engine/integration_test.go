@@ -63,8 +63,19 @@ const realClock = true
 
 func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec, opts ...bool) *real {
 	t.Helper()
+	return newRealRunner(t, nil, wrap, opts...)
+}
+
+// newRealRunner is newReal with a wrapper around the executor's runner, the layer that runs the
+// real nft and ip commands: a test can hold or time a command there while the kernel stays real.
+func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, opts ...bool) *real {
+	t.Helper()
+	var runner executor.Runner = executor.NewExecRunner()
+	if wrapRunner != nil {
+		runner = wrapRunner(runner)
+	}
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false))
-	ex, err := executor.New(executor.NewExecRunner())
+	ex, err := executor.New(runner)
 	if err != nil {
 		t.Fatal(err)
 	}

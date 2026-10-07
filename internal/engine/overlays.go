@@ -338,7 +338,7 @@ func (o *owner) compileProblems() []compiler.Problem {
 		cp := *o.identity
 		id = &cp
 	}
-	tg := compiler.Compile(o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs))
+	tg := compiler.Compile(o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.e.retirer.IDs()))
 	var out []compiler.Problem
 	for _, p := range tg.Problems {
 		if p.Severity == compiler.SevError && (p.Code == compiler.CodeCapacityExceeded || p.Code == compiler.CodeFaultInvalid) {

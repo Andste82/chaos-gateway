@@ -171,6 +171,9 @@ type Engine struct {
 	// desired is what the apply loop converges to; written by the state owner only.
 	desired atomic.Pointer[desired]
 	results chan applyResult
+	// retirer holds the tc classes that no fault id uses any more until the packets queued in them
+	// have left (plan §3.2); the apply loop is its only writer.
+	retirer *apply.Retirer
 	events  *bus
 	sup     *supervisor.Supervisor
 
@@ -260,9 +263,16 @@ func New(cfg Config) (*Engine, error) {
 			}
 		})
 	}
+	e.retirer = apply.NewRetirer(cfg.Clock)
 	e.snap.Store(&Snapshot{})
 	return e, nil
 }
+
+// RetiringTC lists the tc classes (and trees) the kernel still holds although the applied target does
+// not want them: make-before-break keeps the classes of a fault id that went until the largest
+// configured delay plus a second have passed (plan §3.2). The kernel matches the target exactly
+// except for these.
+func (e *Engine) RetiringTC() []apply.Retiring { return e.retirer.Pending() }
 
 // Snapshot returns the current snapshot. It is safe to call from any goroutine and never blocks.
 func (e *Engine) Snapshot() *Snapshot { return e.snap.Load() }

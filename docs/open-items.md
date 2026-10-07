@@ -480,3 +480,37 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   shared CI hardware too.
 - Needs maintainer: yes
 - Effort: S (bound confirmation) to M (profiling/optimizing the convergence path, if asked for)
+
+### P2-M8a-01 Group and network scopes are folded into per-source tables, not given lookup levels
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §3.3 lists the lookup chain as "…4. device; 5. then the same for
+  groups and networks, then any source + destination/port, then global", maps keyed on the
+  conntrack original tuple. M8a's resolver (`domain.World.Table`) does not give groups, networks,
+  "any" and global their own lookup levels: it folds every scope that applies to a source into that
+  source's table, so the compiled maps keep the four device levels of M7 and hold the *resolved*
+  winner per key (which is what §3.3 says the maps must hold). A device that belongs to the
+  network IoT gets the network fault's entries in its own table; addresses no device owns
+  (`Sources`: "stretches") get a table of their own, built from the network, remote-network, "any"
+  and global scopes only, so a device that is not known yet is covered until discovery adds it.
+  Reading §3.3 literally would need extra source-prefix-keyed maps for the levels 5–10.
+- Evidence: `internal/domain/table.go` (`Table`), `internal/domain/sources.go` (`Sources`);
+  `TestTheLookupChainGivesWhatResolveSays` compares the first-match lookup of a table with
+  `World.Resolve` for random worlds (several hundred thousand traffic samples per run, ten scopes,
+  both layers, profiles, all selector shapes). Entries per table: one per destination piece and
+  protocol/port piece that changes the winner, so a network-wide fault with no selector costs one
+  entry per device (the level-4 default), and an `uplink` destination costs one entry per gap
+  between the known prefixes. The cost of a table is about 85 µs.
+- Task: chosen interpretation — keep the folding. It is what makes the precedence rules (D24,
+  E1) hold with a first-match lookup, because the winner of a key can come from any scope; with
+  separate group/network levels an overlay at a less specific scope could never override a more
+  specific configured fault, which is exactly what §3.3 says the compiler must handle. The price is
+  map size (devices × entries instead of one network entry). If the compiler step finds that too
+  large (many devices, many network-wide selectors), an optimisation is to drop a device's entries
+  that equal what its stretch's table gives (`Table.Signature` makes the comparison cheap).
+- Acceptance: a maintainer confirms the folding, or asks for source-prefix-keyed network/global
+  levels (then `Sources` and `Table` produce them separately and the property test checks the
+  chain of both).
+- Needs maintainer: yes
+- Effort: S (confirmation) to M (separate levels)

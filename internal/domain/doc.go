@@ -6,7 +6,8 @@
 //     (refs.go, validate*.go)
 //   - the built-in profiles (builtin.go)
 //   - precedence resolution per fault family, overlays before configuration (resolve.go)
-//   - overlay requests and their keys (overlay.go)
+//   - the resolution as lookup tables per source of traffic, the compiler's input (table.go, sources.go)
+//   - overlay requests and their keys (overlay.go), the overlays a revision orphans or moves (orphans.go)
 //   - the observed state and device identity (observed.go)
 //   - the domain diff of two configurations (diff.go)
 //

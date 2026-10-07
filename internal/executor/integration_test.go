@@ -339,6 +339,20 @@ func TestRoutingInOwnTablesWithOwnTag(t *testing.T) {
 	if out, err := g.top.GW.Run(tctx(t), "ip", "route", "get", "10.98.1.1", "from", testbed.ClientAAddr, "iif", "br-lan0"); err == nil || !strings.Contains(out, "Permission denied") { // the kernel reports a prohibit route as EACCES
 		t.Errorf("prohibit route: %q %v", out, err)
 	}
+	// the same questions through the executor's route_get read (M8a, explain): the kernel's answer,
+	// parsed; a route that does not exist or is prohibited is an answer, not a failed read
+	rg := read[linux.RouteGet](t, g, executor.Read{What: executor.ReadRouteGet, Dst: "10.99.1.1", Src: testbed.ClientAAddr, Dev: "br-lan0"})
+	if rg.Table != "100" || rg.Gateway != testbed.ServerAddr || rg.Dev != "wan0" || rg.Unreachable || rg.Iif != "br-lan0" {
+		t.Errorf("route_get: %+v", rg)
+	}
+	rg = read[linux.RouteGet](t, g, executor.Read{What: executor.ReadRouteGet, Dst: "10.98.1.1", Src: testbed.ClientAAddr, Dev: "br-lan0"})
+	if !rg.Unreachable || !strings.Contains(rg.Error, "Permission denied") {
+		t.Errorf("route_get of a prohibit route: %+v", rg)
+	}
+	rg = read[linux.RouteGet](t, g, executor.Read{What: executor.ReadRouteGet, Dst: "192.0.2.77"})
+	if rg.Unreachable || rg.Dev != "mgmt0" || rg.Gateway != testbed.MgmtPeer {
+		t.Errorf("route_get from the gateway itself: %+v", rg)
+	}
 	// the state as the executor reports it, with the executor's protocol tag
 	rules := read[[]linux.Rule](t, g, executor.Read{What: executor.ReadRules})
 	var own int

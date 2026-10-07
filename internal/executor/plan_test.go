@@ -217,18 +217,20 @@ func TestPlanOffloadsAndDockerUser(t *testing.T) {
 
 func TestReadCommands(t *testing.T) {
 	for in, want := range map[string]string{
-		`{"type":"read","what":"links"}`:                             "ip -j -d link show",
-		`{"type":"read","what":"links","dev":"lan0"}`:                "ip -j -d link show dev lan0",
-		`{"type":"read","what":"addrs"}`:                             "ip -j addr show",
-		`{"type":"read","what":"routes"}`:                            "ip -j route show table all",
-		`{"type":"read","what":"routes","table":"100","dev":"wan0"}`: "ip -j route show table 100 dev wan0",
-		`{"type":"read","what":"rules"}`:                             "ip -j rule show",
-		`{"type":"read","what":"nft"}`:                               "nft -j list table inet chaosgw",
-		`{"type":"read","what":"qdiscs","dev":"wan0"}`:               "tc -j qdisc show dev wan0",
-		`{"type":"read","what":"classes"}`:                           "tc -j class show",
-		`{"type":"read","what":"filters","dev":"wan0"}`:              "tc -j filter show dev wan0",
-		`{"type":"read","what":"offloads","dev":"wan0"}`:             "ethtool -k wan0",
-		`{"type":"read","namespace":"gw","what":"rules"}`:            "[gw] ip -j rule show",
+		`{"type":"read","what":"links"}`:                                                         "ip -j -d link show",
+		`{"type":"read","what":"links","dev":"lan0"}`:                                            "ip -j -d link show dev lan0",
+		`{"type":"read","what":"addrs"}`:                                                         "ip -j addr show",
+		`{"type":"read","what":"routes"}`:                                                        "ip -j route show table all",
+		`{"type":"read","what":"routes","table":"100","dev":"wan0"}`:                             "ip -j route show table 100 dev wan0",
+		`{"type":"read","what":"rules"}`:                                                         "ip -j rule show",
+		`{"type":"read","what":"route_get","dst":"203.0.113.9"}`:                                 "ip -4 -j route get 203.0.113.9",
+		`{"type":"read","what":"route_get","dst":"203.0.113.9","src":"10.10.0.31","dev":"br-a"}`: "ip -4 -j route get 203.0.113.9 from 10.10.0.31 iif br-a",
+		`{"type":"read","what":"nft"}`:                                                           "nft -j list table inet chaosgw",
+		`{"type":"read","what":"qdiscs","dev":"wan0"}`:                                           "tc -j qdisc show dev wan0",
+		`{"type":"read","what":"classes"}`:                                                       "tc -j class show",
+		`{"type":"read","what":"filters","dev":"wan0"}`:                                          "tc -j filter show dev wan0",
+		`{"type":"read","what":"offloads","dev":"wan0"}`:                                         "ethtool -k wan0",
+		`{"type":"read","namespace":"gw","what":"rules"}`:                                        "[gw] ip -j rule show",
 	} {
 		if got := ReadCommand(mustDecode(t, in).(*Read)).String(); got != want {
 			t.Errorf("%s:\n got %q\nwant %q", in, got, want)

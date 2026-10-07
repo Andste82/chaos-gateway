@@ -89,6 +89,19 @@ func decode[T any](out executor.Outcome, i int, what string) (T, error) {
 	return v, nil
 }
 
+// ReadRouteGet asks the kernel which route a packet takes: the destination dst, from the source
+// address src when it is not empty, arriving on interface iif when that is not empty (`ip route
+// get dst from src iif iif`: the policy rules and the tables they select decide, as they do for
+// forwarded traffic). A destination the kernel has no route for is an answer, not an error
+// (RouteGet.Unreachable). One executor round trip.
+func ReadRouteGet(ctx context.Context, ex Exec, ns, dst, src, iif string) (*linux.RouteGet, error) {
+	out, err := ex.Do(ctx, &executor.Read{Target: executor.Target{NS: ns}, What: executor.ReadRouteGet, Dst: dst, Src: src, Dev: iif})
+	if err != nil {
+		return nil, fmt.Errorf("look up the route to %s: %w", dst, err)
+	}
+	return decode[*linux.RouteGet](out, 0, "route get")
+}
+
 // ReadSets reads only the kernel's nft table (one executor round trip), for checking device set
 // elements after an identity-only update (M6a-11): the rest of the state is not expected to have
 // changed, and reading it too would cost several more round trips for nothing.

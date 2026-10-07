@@ -228,6 +228,17 @@ func TestDecodeRejects(t *testing.T) {
 		{"read unknown", `{"type":"read","what":"bridges"}`},
 		{"read offloads without dev", `{"type":"read","what":"offloads"}`},
 		{"read table of links", `{"type":"read","what":"links","table":"main"}`},
+		{"route_get without dst", `{"type":"read","what":"route_get"}`},
+		{"route_get with a prefix", `{"type":"read","what":"route_get","dst":"10.0.0.0/8"}`},
+		{"route_get with an IPv6 destination", `{"type":"read","what":"route_get","dst":"2001:db8::1"}`},
+		{"route_get with a keyword in dst", `{"type":"read","what":"route_get","dst":"1.2.3.4 oif lo"}`},
+		{"route_get with a keyword in src", `{"type":"read","what":"route_get","dst":"1.2.3.4","src":"1.2.3.4 table 100"}`},
+		{"route_get with a zone", `{"type":"read","what":"route_get","dst":"::ffff:1.2.3.4"}`},
+		{"route_get with an ingress interface but no source", `{"type":"read","what":"route_get","dst":"1.2.3.4","dev":"br-a"}`},
+		{"route_get with a table", `{"type":"read","what":"route_get","dst":"1.2.3.4","table":"100"}`},
+		{"route_get with a bad interface", `{"type":"read","what":"route_get","dst":"1.2.3.4","src":"1.1.1.1","dev":"a b"}`},
+		{"dst on a links read", `{"type":"read","what":"links","dst":"1.2.3.4"}`},
+		{"src on a routes read", `{"type":"read","what":"routes","src":"1.2.3.4"}`},
 		{"read table injection", `{"type":"read","what":"routes","table":"main dev lo"}`},
 	} {
 		op, err := Decode([]byte(c.in))

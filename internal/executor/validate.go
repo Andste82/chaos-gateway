@@ -906,7 +906,7 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRouteGet, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS); err != nil {
 		return err
 	}
 	if o.What == ReadServiceNS {
@@ -935,11 +935,46 @@ func (o Read) validate() error {
 	} else if o.Instance != "" {
 		return errors.New("instance is only for bird reads")
 	}
+	if o.What == ReadRouteGet {
+		if err := o.checkRouteGet(); err != nil {
+			return err
+		}
+	} else if o.Dst != "" || o.Src != "" {
+		return errors.New("dst and src are only for route_get reads")
+	}
 	if (o.What == ReadOffloads || o.What == ReadWireGuard) && o.Dev == "" {
 		return errors.New(o.What + " needs a dev")
 	}
 	if o.Table != "" && (o.What != ReadRoutes || !readTbl.MatchString(o.Table)) {
 		return fmt.Errorf("invalid table %q", o.Table)
+	}
+	return nil
+}
+
+// checkRouteGet validates the arguments of a route_get read: a plain IPv4 destination (a prefix, a
+// zone or a keyword would change what `ip route get` does), an optional plain IPv4 source and, with
+// an ingress interface, the source the packet carries.
+func (o Read) checkRouteGet() error {
+	plain := func(what, v string) error {
+		a, err := netip.ParseAddr(v)
+		if err != nil || !a.Is4() || a.String() != v {
+			return fmt.Errorf("%s %q is not an IPv4 address", what, v)
+		}
+		return nil
+	}
+	if err := plain("dst", o.Dst); err != nil {
+		return err
+	}
+	if o.Src != "" {
+		if err := plain("src", o.Src); err != nil {
+			return err
+		}
+	}
+	if o.Dev != "" && o.Src == "" {
+		return errors.New("a route_get read with an ingress interface needs the source address")
+	}
+	if o.Table != "" {
+		return errors.New("a route_get read follows the policy rules: it takes no table")
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,10 +295,15 @@ func (k *Kernel) RemoveLink(name string) {
 	}
 }
 
-// SetMainDefault sets the OS-owned default route of the main table.
+// SetMainDefault sets the OS-owned default route of the main table; without a device the main
+// table has none.
 func (k *Kernel) SetMainDefault(via, dev string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if dev == "" {
+		k.defaultMain = nil
+		return
+	}
 	k.defaultMain = []route{{table: "", dst: "default", via: via, dev: dev}}
 }
 
@@ -590,6 +596,8 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 		}
 		out = append(out, map[string]any{"priority": 32766, "src": "all", "table": "main"}, map[string]any{"priority": 32767, "src": "all", "table": "default"})
 		return jsonOut(out)
+	case len(a) >= 3 && a[0] == "route" && a[1] == "get":
+		return k.routeGet(a[2:])
 	case len(a) >= 2 && a[0] == "route" && a[1] == "show":
 		var out []map[string]any
 		for _, r := range k.defaultMain {
@@ -1057,4 +1065,121 @@ func hexMark(v string) string {
 		return v
 	}
 	return fmt.Sprintf("0x%x", n)
+}
+
+// routeGet answers `ip -j route get DST [from SRC] [iif DEV]` by walking the policy rules in
+// priority order and taking the longest matching prefix of the table a matching rule selects, the
+// way the kernel's FIB lookup does. Rules with a mark never match (a route get has no mark); the
+// connected routes of the links' addresses count as routes of the main table.
+func (k *Kernel) routeGet(a []string) (executor.Result, error) {
+	dst, rest := a[0], a[1:]
+	var src, iif string
+	for len(rest) >= 2 {
+		switch rest[0] {
+		case "from":
+			src = rest[1]
+		case "iif":
+			iif = rest[1]
+		default:
+			return fail("unsupported route get argument %q", rest[0])
+		}
+		rest = rest[2:]
+	}
+	dstIP, err := netip.ParseAddr(dst)
+	if err != nil {
+		return fail("route get: bad destination %q", dst)
+	}
+	var srcIP netip.Addr
+	if src != "" {
+		if srcIP, err = netip.ParseAddr(src); err != nil {
+			return fail("route get: bad source %q", src)
+		}
+	}
+	if iif != "" {
+		if _, ok := k.links[iif]; !ok {
+			return executor.Result{Exit: 1, Stderr: "Cannot find device \"" + iif + "\"\n"}, nil
+		}
+	}
+	rs := append([]rule(nil), k.rules...)
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].prio < rs[j].prio })
+	rs = append(rs, rule{prio: 32766, table: "main"})
+	inPrefix := func(spec string, ip netip.Addr) bool {
+		if spec == "" {
+			return true
+		}
+		if !strings.Contains(spec, "/") {
+			spec += "/32"
+		}
+		p, err := netip.ParsePrefix(spec)
+		return err == nil && ip.IsValid() && p.Contains(ip)
+	}
+	for _, r := range rs {
+		if r.fwmark != "" || r.oif != "" || (r.iif != "" && r.iif != iif) || !inPrefix(r.from, srcIP) || !inPrefix(r.to, dstIP) {
+			continue
+		}
+		best, ok := k.lookup(r.table, dstIP)
+		if !ok {
+			continue
+		}
+		switch best.typ {
+		case "blackhole":
+			return executor.Result{Exit: 2, Stderr: "RTNETLINK answers: Invalid argument\n"}, nil
+		case "unreachable":
+			return executor.Result{Exit: 2, Stderr: "RTNETLINK answers: No route to host\n"}, nil
+		case "prohibit":
+			return executor.Result{Exit: 2, Stderr: "RTNETLINK answers: Permission denied\n"}, nil
+		}
+		m := map[string]any{"dst": dst, "dev": best.dev, "flags": []string{}, "cache": []string{}}
+		if best.via != "" {
+			m["gateway"] = best.via
+		}
+		if src != "" {
+			m["from"] = src
+		}
+		if iif != "" {
+			m["iif"] = iif
+		}
+		if r.table != "main" && r.table != "" {
+			m["table"] = r.table
+		}
+		return jsonOut([]map[string]any{m})
+	}
+	return executor.Result{Exit: 2, Stderr: "RTNETLINK answers: Network is unreachable\n"}, nil
+}
+
+// lookup finds the longest-prefix route of a table for an address.
+func (k *Kernel) lookup(table string, ip netip.Addr) (route, bool) {
+	var cands []route
+	switch table {
+	case "main", "254", "":
+		cands = append(cands, k.defaultMain...)
+		for _, l := range k.sortedLinks() {
+			for _, ad := range l.addrs {
+				if p, err := netip.ParsePrefix(ad); err == nil {
+					cands = append(cands, route{dst: p.Masked().String(), dev: l.name})
+				}
+			}
+		}
+	}
+	for _, r := range k.routes {
+		if r.table == table || (table == "main" && r.table == "") {
+			cands = append(cands, r)
+		}
+	}
+	best, bits, found := route{}, -1, false
+	for _, r := range cands {
+		spec := r.dst
+		if spec == "default" {
+			spec = "0.0.0.0/0"
+		}
+		if !strings.Contains(spec, "/") {
+			spec += "/32"
+		}
+		p, err := netip.ParsePrefix(spec)
+		if err != nil || !p.Contains(ip) || p.Bits() <= bits {
+			continue
+		}
+		best, bits, found = r, p.Bits(), true
+	}
+	return best, found
 }

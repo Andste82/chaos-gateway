@@ -519,3 +519,34 @@ func newerEntry(a, b *entry) bool {
 	}
 	return a.ov.Id.String() > b.ov.Id.String()
 }
+
+// Checkpoint is a copy of the store's content at one moment: the state owner takes one before it
+// changes the overlays and goes back to it when the change cannot be applied to the kernel
+// (Restore). It is immutable.
+type Checkpoint struct{ entries []entry }
+
+// Checkpoint copies the active overlays with their deadlines.
+func (s *Store) Checkpoint() *Checkpoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := &Checkpoint{entries: make([]entry, 0, len(s.byID))}
+	for _, e := range s.byID {
+		c.entries = append(c.entries, *e)
+	}
+	return c
+}
+
+// Restore makes the store hold exactly what the checkpoint holds: overlays written since are gone,
+// overlays removed since are back with their ids, bodies and deadlines (monotonic, so they have
+// not moved). Time stamps keep increasing: the store does not take its `stamp` back.
+func (s *Store) Restore(c *Checkpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byID = make(map[uuid.UUID]*entry, len(c.entries))
+	s.byKey = make(map[string]*entry, len(c.entries))
+	for i := range c.entries {
+		e := c.entries[i]
+		s.byID[e.ov.Id] = &e
+		s.byKey[e.key] = &e
+	}
+}

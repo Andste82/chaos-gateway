@@ -124,7 +124,7 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	}
 	p.NeedsConfirmation = LockoutRelevant(snap.Config, cfg)
 	id := snap.Identity
-	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id))
+	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, snap.Overlays, snap.FaultIDs))
 	p.Target, p.Problems = tg, tg.Problems
 	if tg.HasErrors() {
 		return p, nil

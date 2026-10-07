@@ -52,6 +52,9 @@ type Config struct {
 	// DefaultUIPort is the port the API listens on when the configuration names no `ui_port`: the
 	// gateway's input rules let the management network and the services reach exactly this port.
 	DefaultUIPort int
+	// ClassLimit is the number of tc classes one interface may carry; 0 uses the compiler's default
+	// for the architecture (plan §3.3).
+	ClassLimit int
 	// GenerationFile persists the generation counter's high-water mark across restarts (plan
 	// openapi.yaml convention: "monotonic integer, never reused"). Empty keeps it per-process.
 	GenerationFile string
@@ -107,6 +110,19 @@ type Snapshot struct {
 	// ServiceError is why the service namespace does not have the holder the configuration wants,
 	// empty when it does (M6b-02): a dead holder degrades instead of failing every apply.
 	ServiceError string
+	// Overlays are the active overlays (plan §2.1.1), oldest first: what the desired state holds, which
+	// can be a change that the apply loop has not verified yet. Nothing in it is modified.
+	Overlays []model.Overlay
+	// Faults are the fault ids of the last applied target: the winners of the impairment family with
+	// the netem configuration of each direction and the names of their counters. FaultIDs is the
+	// allocation by key (the next compile keeps it) and FaultEpochs the generation in which each
+	// fault, by key, first appeared: the epoch of its counters (they restart when a fault is new).
+	Faults []compiler.Fault
+	// Management is the management interface and the sources that reach the control plane in the
+	// last applied target (`explain` judges traffic to the gateway with it).
+	Management  compiler.Management
+	FaultIDs    map[string]int
+	FaultEpochs map[string]int64
 	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
 	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
 	ObserveError string

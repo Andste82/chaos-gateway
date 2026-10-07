@@ -29,6 +29,9 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// last is the last desired state that was applied and verified, with its target: an identity
 	// change is applied against it incrementally
 	var last *appliedState
+	// ids is the allocation of fault ids of the last target that was applied and verified: the next
+	// compile hands it back, so a fault that is still there keeps its id (plan §3.3)
+	var ids map[string]int
 	for {
 		select {
 		case <-ctx.Done():
@@ -41,7 +44,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				break
 			}
 			done = d.Generation
-			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity))
+			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids))
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			incremental := false
@@ -67,6 +70,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				last = nil
 			} else {
 				last = &appliedState{d: d, target: target}
+				ids = target.FaultIDs
 			}
 			dhcpErr := ""
 			if err == nil && !incremental {
@@ -87,8 +91,12 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 
 // input builds the compiler's input. The public keys of the WireGuard interfaces come from the
 // secrets store; a network without one is reported by the compiler.
-func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity) compiler.Input {
-	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort}
+//
+// The overlays are the active ones of the desired state (never part of a revision) and ids the
+// allocation of fault ids of the previous apply.
+func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int) compiler.Input {
+	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
+		Overlays: overlays, FaultIDs: ids, ClassLimit: e.cfg.ClassLimit}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is

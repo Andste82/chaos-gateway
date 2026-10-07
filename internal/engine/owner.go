@@ -31,6 +31,9 @@ type desired struct {
 	// IdentityOnly marks a desired state that differs from the one before only in the identity: the
 	// apply loop then changes set elements instead of rebuilding the ruleset.
 	IdentityOnly bool
+	// Overlays are the active overlays of this generation (never part of a revision): the compiler
+	// resolves them over the configuration.
+	Overlays []model.Overlay
 	// RolledBack marks a desired state that restores the committed revision after a commit-confirm
 	// rollback (timeout, or an unconfirmed revision found at restart), for AppliedInfo.RolledBack
 	// (M5-22).
@@ -208,6 +211,8 @@ type owner struct {
 	// whether one is already scheduled to run at the end of the current window (M6a-07).
 	lastIdentityConverge time.Time
 	identityThrottled    bool
+	// ov is the overlay store and what waits for the kernel to confirm its changes (overlays.go).
+	ov *overlayState
 }
 
 type pendingState struct {
@@ -223,6 +228,7 @@ type barrier struct {
 
 func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 	o := &owner{e: e, host: init.host, problem: map[string]bool{}, tracker: newTracker()}
+	o.initOverlays()
 	o.snap.Host = init.host
 	o.genPath = e.cfg.GenerationFile
 	o.gen = init.genReserved
@@ -254,6 +260,7 @@ func (o *owner) shutdown() {
 	if o.timer != nil {
 		o.timer.Stop()
 	}
+	o.ov.expirer.Stop()
 }
 
 // armTimeout makes the owner roll the revision back when the confirmation window runs out. The
@@ -382,7 +389,7 @@ func (o *owner) converge(d *desired) {
 // nextDesired returns a desired state with a fresh generation for the given configuration.
 func (o *owner) nextDesired(cfg *model.Configuration, rev int64) *desired {
 	o.bumpGen()
-	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity}
+	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity, Overlays: o.ov.list}
 }
 
 // bumpGen advances the generation counter and persists a new reservation block once it runs past
@@ -448,6 +455,16 @@ func (o *owner) handle(ctx context.Context, c command) {
 	case cmdBarrier:
 		o.barriers = append(o.barriers, barrier{gen: o.gen, reply: c.reply})
 		o.releaseBarriers()
+	case cmdOverlayPut:
+		o.overlayPut(c)
+	case cmdOverlayDelete:
+		o.overlayDelete(c)
+	case cmdOverlayRenew:
+		o.overlayRenew(c)
+	case cmdOverlayReset:
+		o.overlayReset(c)
+	case cmdOverlayExpire:
+		o.overlayExpire()
 	}
 }
 
@@ -517,6 +534,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.WireGuardInterfaces = r.target.WireGuard
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
+		o.snap.Management = r.target.Management
 		o.snap.Service = r.target.Service
 		o.snap.ServiceError = ""
 		if h := o.snap.ServiceHealth; r.target.Service != nil && h != nil && !h.HolderExists {
@@ -531,6 +549,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		if r.target.Kea != nil {
 			o.snap.KeaNetworks = r.target.Kea.Networks
 		}
+		o.trackFaults(r.target, r.d.Generation)
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})
@@ -542,6 +561,9 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.event(EventApplyFailed, map[string]any{"generation": r.d.Generation, "revision": r.d.Revision, "error": r.err.Error()})
 	}
 
+	// the overlay changes this apply carries are confirmed, or taken back when it failed: before the
+	// revision flow below builds a restore, which must not contain them
+	reverted := o.settleOverlays(r)
 	if run := o.running; run != nil {
 		switch {
 		case run.failure == nil && r.d.Generation >= run.d.Generation && r.err == nil:
@@ -568,6 +590,11 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 			})
 			o.startQueued()
 		}
+	}
+	if reverted && o.current != nil {
+		// the kernel is to run the restored overlays: this supersedes every desired state made since
+		// the failed one, which may hold the changes that were taken back
+		o.converge(o.nextDesired(o.current.Config, o.current.Revision))
 	}
 	if r.err != nil && o.running == nil && o.pending == nil {
 		o.scheduleRetry()

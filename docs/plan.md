@@ -1351,6 +1351,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 ## Phase 2 — Faults (core value)
 
 **M7 — Classification layer** (M)
+- **Status:** done — merged (PR #29, `ef9fea5`). Convention for Phase 2: a milestone gets this line, right under its heading, once its PR has merged to `main` with green CI.
 - Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting, only for test traffic, direction bit, identity updates as incremental map operations from the observed state; identity maps keyed by address → device id replace the per-device sets of Phase 1, so a new device is an element update too. No IFB and no output-hook classification here: gateway services are reached through `svc0` egress (D29, S16); the output hook and IFB are only used for tunnel faults (M10).
 - Tests: with a test tc class per (id, direction), per-class counters increase only for matching traffic, in both directions, behind NAT, across two test networks, for a host in a WireGuard client network (as initiator and as destination), and over a WireGuard link (connections redirected to gateway services are tested with the first redirect in M20/M21); a map change moves an established connection to its new class (observed via the class counters); after a forced address change the device's map entry follows within 1 s and a concurrent full apply does not restore the old address; non-test traffic keeps its mark untouched; golden test of the id masks (direction bit kept); fail closed via mark: a redirected packet resolves into `svc0` with the service namespace up, into the `prohibit` fallback without it.
 - Depends on: M6a, M6b, S2, S10, S11, S16.
@@ -1383,6 +1384,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M10.
 
 **H1 — Hardware validation** (S, **when hardware is available**; not required for the V1 release)
+- **Status:** dropped from scope for now — no target hardware available; revisit once hardware exists. Not a milestone this pipeline works towards until then.
 - Scope: run the measurement suite and the S8 performance scripts on a Raspberry Pi 4/5 and an x86 mini PC with real NICs: throughput with 50 and 250 faults (500 HTB classes), cost of disabled offloads, loss accuracy on a real NIC, DNS proxy queries per second, fault accuracy; after M15 also scenario step timing on ARM64.
 - Tests: results recorded; §3.10 targets and the ARM64 timing tolerance confirmed or adjusted. Until H1 has run, the Raspberry Pi targets are published as unvalidated.
 - Depends on: M11 (step timing: M15); hardware.

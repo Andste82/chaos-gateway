@@ -25,7 +25,25 @@ type Client struct {
 	// own: a long-lived watch must not block, or be blocked by, this Client's ordinary requests.
 	path string
 	opt  DialOptions
+
+	// rd holds the connections reads use: a read must not wait for the request that is on the main
+	// connection (plan §3.11, M8a). They are dialed on demand, at most maxReaderConns at once, and
+	// kept idle for the next read.
+	rd readerConns
 }
+
+// readerConns is a bounded pool of extra connections for read-only requests.
+type readerConns struct {
+	mu     sync.Mutex
+	idle   []*Client
+	closed bool
+	// permits bounds the connections in use; nil until the first read
+	permits chan struct{}
+}
+
+// maxReaderConns is how many reads one client has in flight at once; the executor serves as many
+// reads beside its writer (readerSlots).
+const maxReaderConns = 4
 
 // DialOptions tune Dial.
 type DialOptions struct {
@@ -100,12 +118,96 @@ func remoteErr(e *RemoteError) error {
 	return e
 }
 
-// Close closes the connection.
-func (c *Client) Close() error { return c.conn.Close() }
+// Close closes the connection and the reader connections.
+func (c *Client) Close() error {
+	c.rd.mu.Lock()
+	c.rd.closed = true
+	idle := c.rd.idle
+	c.rd.idle = nil
+	c.rd.mu.Unlock()
+	for _, rc := range idle {
+		_ = rc.conn.Close()
+	}
+	return c.conn.Close()
+}
 
-// Do runs the operations as one request. After a context error the client must be closed. On a failed request the outcome still carries the
-// generation and the number of completed operations.
+// Do runs the operations as one request. After a context error the client must be closed. On a
+// failed request the outcome still carries the generation and the number of completed operations.
+//
+// A request of reads only goes over a reader connection of its own, so it does not wait for the
+// request that is on the main connection, and the executor answers it beside its writer (plan
+// §3.11). A client that was not made by Dial has no such connections and uses the one it has.
 func (c *Client) Do(ctx context.Context, ops ...Operation) (Outcome, error) {
+	if c.path != "" && isReadOnly(ops) {
+		return c.doRead(ctx, ops)
+	}
+	return c.do(ctx, ops...)
+}
+
+// doRead runs a read-only request on a reader connection. A connection that failed in any way but
+// an error of the executor is closed, because it may be out of step with the executor; when no
+// extra connection can be made the read goes over the main one.
+func (c *Client) doRead(ctx context.Context, ops []Operation) (Outcome, error) {
+	c.rd.mu.Lock()
+	if c.rd.permits == nil {
+		c.rd.permits = make(chan struct{}, maxReaderConns)
+	}
+	permits := c.rd.permits
+	c.rd.mu.Unlock()
+	select {
+	case permits <- struct{}{}:
+	case <-ctx.Done():
+		return Outcome{}, ctx.Err()
+	}
+	defer func() { <-permits }()
+	rc, err := c.readerConn(ctx)
+	if err != nil {
+		return c.do(ctx, ops...)
+	}
+	out, err := rc.do(ctx, ops...)
+	var re *RemoteError
+	if err != nil && !errors.As(err, &re) {
+		_ = rc.conn.Close()
+		return out, err
+	}
+	c.rd.mu.Lock()
+	if c.rd.closed {
+		c.rd.mu.Unlock()
+		_ = rc.conn.Close()
+		return out, err
+	}
+	c.rd.idle = append(c.rd.idle, rc)
+	c.rd.mu.Unlock()
+	return out, err
+}
+
+func (c *Client) readerConn(ctx context.Context) (*Client, error) {
+	c.rd.mu.Lock()
+	if n := len(c.rd.idle); n > 0 {
+		rc := c.rd.idle[n-1]
+		c.rd.idle = c.rd.idle[:n-1]
+		c.rd.mu.Unlock()
+		return rc, nil
+	}
+	closed := c.rd.closed
+	c.rd.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", c.path)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := handshake(ctx, conn, c.opt)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return rc, nil
+}
+
+// do runs the request on this client's own connection.
+func (c *Client) do(ctx context.Context, ops ...Operation) (Outcome, error) {
 	raw := make([]json.RawMessage, len(ops))
 	for i, op := range ops {
 		b, err := Encode(op)

@@ -15,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
@@ -32,6 +34,21 @@ type Outcome struct {
 	Completed int `json:"completed"`
 	// Data holds the result of each Read operation, in order.
 	Data []json.RawMessage `json:"data,omitempty"`
+	// Enqueued is when the executor accepted the request and Started when it began to run it: the
+	// difference is the time the request waited for the writer (plan §3.11, "operation time
+	// stamps"). Both are wall-clock times of the executor's clock; a request that never started
+	// (refused, cancelled while queued) has no Started. A read has none to wait for: it starts at
+	// once, or waits only for one of the reader slots.
+	Enqueued time.Time `json:"enqueued_at,omitzero"`
+	Started  time.Time `json:"started_at,omitzero"`
+}
+
+// QueueWait is how long the request waited before it started, zero when it did not start.
+func (o Outcome) QueueWait() time.Duration {
+	if o.Enqueued.IsZero() || o.Started.IsZero() {
+		return 0
+	}
+	return o.Started.Sub(o.Enqueued)
 }
 
 // Executor runs requests one at a time, in arrival order. It is the single writer of the
@@ -53,8 +70,15 @@ type Executor struct {
 		mu           sync.Mutex
 		high, normal []*job
 	}
-	wake    chan struct{} // an enqueued job
-	slots   chan struct{} // bounds the queue: a request waits for a slot
+	wake  chan struct{} // an enqueued job
+	slots chan struct{} // bounds the queue: a request waits for a slot
+	clock clock.Clock   // time stamps of the operations
+	// readers bounds the reads that run beside the writer; rmu, rwg and closed let Close wait for
+	// the ones that are running and refuse new ones.
+	readers chan struct{}
+	rmu     sync.Mutex
+	rwg     sync.WaitGroup
+	closed  bool
 	done    chan struct{} // closed by Close
 	stopped chan struct{} // closed when the worker has returned
 	once    sync.Once
@@ -63,9 +87,11 @@ type Executor struct {
 }
 
 type job struct {
-	ctx context.Context
-	ops []Operation
-	out chan jobResult
+	ctx      context.Context
+	ops      []Operation
+	out      chan jobResult
+	enqueued time.Time
+	started  time.Time
 }
 
 type jobResult struct {
@@ -91,6 +117,9 @@ func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
 // (<dir>/<instance>.conf and .ctl): a directory shared with the BIRD container.
 func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir } }
 
+// WithClock sets the clock of the operation time stamps; the default is the system clock.
+func WithClock(c clock.Clock) Option { return func(e *Executor) { e.clock = c } }
+
 // WithStateFile makes the set of assigned interfaces survive restarts.
 func WithStateFile(path string) Option { return func(e *Executor) { e.state = path } }
 
@@ -102,7 +131,7 @@ func WithNetnsInode(f func(path string) (uint64, bool)) Option {
 
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
-	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), done: make(chan struct{}), stopped: make(chan struct{})}
+	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), readers: make(chan struct{}, readerSlots), clock: clock.NewReal(), done: make(chan struct{}), stopped: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
@@ -115,10 +144,16 @@ func New(run Runner, opts ...Option) (*Executor, error) {
 
 // Close stops the executor: the request that is running finishes (an operation is never
 // interrupted, plan §3.11), queued requests are dropped with ErrClosed. Close returns when the
-// worker has stopped.
+// worker has stopped and the reads that were running have ended.
 func (e *Executor) Close() {
-	e.once.Do(func() { close(e.done) })
+	e.once.Do(func() {
+		close(e.done)
+		e.rmu.Lock()
+		e.closed = true
+		e.rmu.Unlock()
+	})
 	<-e.stopped
+	e.rwg.Wait()
 }
 
 // Scope returns the executor's scope.
@@ -142,11 +177,20 @@ func (e *Executor) Do(ctx context.Context, op Operation) (Outcome, error) {
 // DoBatch runs operations in order as one request. All operations are checked against the scope
 // before the first one runs; the first failure stops the request. An empty batch returns the
 // current generation.
+//
+// A request that consists of reads only does not enter the writer's queue: it runs at once on one
+// of the reader slots, beside whatever the writer is doing (plan §3.11 "Reads ... run in a small
+// pool of reader goroutines in parallel to the writer"). Such a read sees whatever the kernel holds
+// at that moment, which can be the middle of a plan the kernel tools apply step by step. The reads
+// that verify an apply are made by the caller after the apply returned, so they see its result.
 func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error) {
 	select {
 	case <-e.done:
 		return Outcome{}, ErrClosed
 	default:
+	}
+	if isReadOnly(ops) {
+		return e.doRead(ctx, ops)
 	}
 	j := &job{ctx: ctx, ops: ops, out: make(chan jobResult, 1)}
 	select {
@@ -156,6 +200,7 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	case <-ctx.Done():
 		return Outcome{Generation: e.Generation()}, ctx.Err()
 	}
+	j.enqueued = e.clock.Now()
 	e.enqueue(j)
 	select {
 	case r := <-j.out:
@@ -173,6 +218,46 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 		// request that already started has to finish for the kernel state to stay consistent
 		return Outcome{Generation: e.Generation()}, ctx.Err()
 	}
+}
+
+// readerSlots is how many reads run beside the writer at once.
+const readerSlots = 4
+
+// isReadOnly reports whether a request consists of reads only (at least one).
+func isReadOnly(ops []Operation) bool {
+	if len(ops) == 0 {
+		return false
+	}
+	for _, op := range ops {
+		if _, ok := op.(*Read); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// doRead runs a read-only request on a reader slot, in the goroutine of the caller. It waits for a
+// slot (never for the writer), and gives up with the context.
+func (e *Executor) doRead(ctx context.Context, ops []Operation) (Outcome, error) {
+	enqueued := e.clock.Now()
+	select {
+	case e.readers <- struct{}{}:
+	case <-e.done:
+		return Outcome{}, ErrClosed
+	case <-ctx.Done():
+		return Outcome{Generation: e.Generation(), Enqueued: enqueued}, ctx.Err()
+	}
+	defer func() { <-e.readers }()
+	e.rmu.Lock()
+	if e.closed {
+		e.rmu.Unlock()
+		return Outcome{}, ErrClosed
+	}
+	e.rwg.Add(1)
+	e.rmu.Unlock()
+	defer e.rwg.Done()
+	res := e.execute(&job{ctx: ctx, ops: ops, enqueued: enqueued, started: e.clock.Now()})
+	return res.outcome, res.err
 }
 
 // Watch streams events of the named kind in the given namespace (M6a-04): it never enters the
@@ -302,6 +387,7 @@ func (e *Executor) worker() {
 		default:
 		}
 		if j := e.pop(); j != nil {
+			j.started = e.clock.Now()
 			j.out <- e.execute(j)
 			continue
 		}
@@ -323,6 +409,7 @@ func (e *Executor) execute(j *job) (res jobResult) {
 			e.mu.Unlock()
 		}
 		out.Generation = e.Generation()
+		out.Enqueued, out.Started = j.enqueued, j.started
 		res.outcome = out
 	}()
 	// a panic in an operation is a failed request, not the end of the only writer; the stack is

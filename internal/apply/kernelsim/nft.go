@@ -267,21 +267,29 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 		}
 		var raw []json.RawMessage
 		_ = json.Unmarshal(f["elem"], &raw)
+		// the elements' keys are worked out once: a burst of thousands of elements must not parse
+		// every existing element for every new one
+		index := make(map[string]int, len(m.elems))
+		for i, x := range m.elems {
+			index[mapElemKey(x)] = i
+		}
 		if command == "delete" {
 			for _, e := range raw {
 				k := mapElemKey(e)
-				found := false
-				for i, x := range m.elems {
-					if mapElemKey(x) == k {
-						m.elems = append(m.elems[:i:i], m.elems[i+1:]...)
-						found = true
-						break
-					}
-				}
-				if !found {
+				if _, found := index[k]; !found {
 					return t, nftErr("No such file or directory")
 				}
+				// delete in place by key: rebuild once below
+				m.elems[index[k]] = nil
+				delete(index, k)
 			}
+			kept := make([]json.RawMessage, 0, len(index))
+			for _, x := range m.elems {
+				if x != nil {
+					kept = append(kept, x)
+				}
+			}
+			m.elems = kept
 			return t, nil
 		}
 		for _, e := range raw {
@@ -292,17 +300,12 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 				}
 			}
 			k := mapElemKey(e)
-			replaced := false
-			for i, x := range m.elems {
-				if mapElemKey(x) == k {
-					m.elems[i] = e
-					replaced = true
-					break
-				}
+			if i, replaced := index[k]; replaced {
+				m.elems[i] = e
+				continue
 			}
-			if !replaced {
-				m.elems = append(m.elems, e)
-			}
+			index[k] = len(m.elems)
+			m.elems = append(m.elems, e)
 		}
 	case "chain":
 		switch command {

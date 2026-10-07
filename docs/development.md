@@ -14,7 +14,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM |
 | `internal/model` | generated Go types of `api/openapi.yaml`: the domain model (no hand-written code) |
 | `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
-| `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution, overlays and their keys, observed state and device identity, candidate creation (merge patch), domain diff |
+| `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution and the classification tables built from it, overlays and their keys, the overlays a revision orphans or moves, observed state and device identity, candidate creation (merge patch), domain diff |
+| `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -931,6 +932,59 @@ with `domain.Resolve`'s winners instead.
   hook and IFB for tunnel faults (M10), writing the service-selection mark bit from real traffic
   (M20/M21, P2-M7-01) and the connections-redirected-to-a-gateway-service classification test that
   goes with it.
+
+## Overlays and precedence (M8a)
+
+The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps. The
+API, the engine's state owner, the compiler's tc output and the kernel tests are the next steps.
+
+- **Store** (`internal/overlay`). Holds the active overlays in memory; a restart starts empty
+  (plan §2.1.1). `Put` takes an owner and a validated request (`domain.ValidateOverlay`, references
+  as UUIDs); the key is `domain.OverlayKey` (owner, kind, target, selector, family part of a
+  fault's selector); an existing key is replaced, keeping id and `created_at` (change `Updated`,
+  HTTP 200), otherwise the overlay is new (`Created`, 201). `updated_at` increases strictly, even
+  with a standing or backward-jumping wall clock, so "newer wins" (D26) is a total order. TTL and
+  lease deadlines are monotonic (`clock.Clock.Monotonic`); `expires_at` and `lease_expires_at` are
+  derived from them for display. `Renew` restarts a lease (no event, no generation); a replacement
+  restarts both timers. Mutations return `Change`s (`Created`, `Updated`, `Removed`, `Expired`,
+  `Orphaned`, with a reason and the event name of the spec); the store sends nothing itself. The
+  store is a passive structure with its own mutex; the state owner is its only writer, publishes the
+  changes and assigns the generation (`PutOptions.Generation`). Expiry is one call, `Expire`; `NextDeadline` and
+  `Expirer` (a timer on the injected clock that calls back) let the state owner schedule it. Nothing
+  removes an overlay implicitly, so a write that arrives before the expiry command is ordered
+  before it. `Reset(owner)` removes one owner's overlays (`nil`: all, for `?owner=all`; the caller
+  checks the scope), `Delete`, `Orphan(ids)` and `Retarget(moves, generation)` complete it.
+  `Retarget` moves overlays between devices after a merge revision; two overlays that then share a
+  key keep the newer one (reason `merged`).
+- **What a revision does to overlays** (`domain/orphans.go`). `OrphanedOverlays(current, next,
+  overlays)` lists the overlays that refer to an object of the current configuration that the next
+  one lacks, with the JSON pointers of the deleted objects for `references[]`; the engine rejects the
+  revision with `validation_failed` unless `?force=true`, then calls `Store.Orphan`. A discovered
+  device is no object of the configuration. `DiscoveredMerges(next, discovered)` maps a discovered
+  device that `next` now covers (by MAC, or by address) to the configured device that owns the
+  identifiers; the engine calls `Store.Retarget` with it before it looks for orphans.
+- **Precedence** (`domain/resolve.go`). One winner per family per query, overlays before
+  configuration, ten levels, newer wins on the same level (D26), no merging of parameters. The pick
+  within a level is per scope: each scope puts forward its champion (a fault beats a profile part
+  of the same scope, E8; otherwise the newer entry), and the newest champion wins. A pairwise order
+  over all candidates is not transitive (E6 and E8 together) and made the winner depend on the
+  input order; `TestTheWinnerOfALevelDoesNotDependOnTheInputOrder` pins the fix. The tests E1–E8
+  and E12 exist twice: as pure domain tests (`resolve_test.go`, with the example configuration) and
+  through the store (`internal/overlay/precedence_test.go`: write, replace, expire, reset, then
+  resolve); E9 and E10 follow in M10, E11 in M21. E5 resolves the DNS family, which only takes
+  effect in the kernel from M20; its resolution is already tested.
+- **Classification tables** (`domain/table.go`, `domain/sources.go`). `World.Sources(identity)` lists
+  the sources of traffic (every device with its addresses, every address range that identifies a
+  device, and the stretches of network addresses that no device owns); `World.Table(source,
+  family)` turns the resolution into the entries of the four lookup levels of plan §3.3 for the
+  families that select by destination, protocol and port (impairment, MTU). The destination space
+  (IPv4) and the protocol/port space are cut at the boundaries of the faults' selectors into
+  disjoint pieces, each piece is resolved with the same rules as `Resolve`, and the entries are
+  the minimum that makes the first-match lookup give the resolved winner everywhere. `Table.Lookup`
+  simulates the chain; `TestTheLookupChainGivesWhatResolveSays` checks it against `Resolve` for
+  random worlds. `uplink` is the complement of the known prefixes; hostnames are not in a table
+  (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. See
+  `docs/open-items.md` P2-M8a-01 for why group and network scopes are folded into the tables.
 
 ## Generated code
 

@@ -1,0 +1,36 @@
+{
+  "dev": "v0",
+  "qdiscs": [
+    {
+      "handle": "0:",
+      "parent": "8002:1",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "0:",
+      "parent": "8002:2",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "0:",
+      "parent": "8002:3",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "0:",
+      "parent": "8002:4",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "8002:",
+      "parent": "root",
+      "kind": "mq"
+    }
+  ],
+  "classes": [],
+  "filters": []
+}

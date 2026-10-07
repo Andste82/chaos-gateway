@@ -1,0 +1,265 @@
+{
+  "dev": "dum0",
+  "qdiscs": [
+    {
+      "handle": "1:",
+      "parent": "root",
+      "kind": "htb",
+      "htb": {
+        "default": 1,
+        "r2q": 10,
+        "direct_qlen": 1000
+      }
+    },
+    {
+      "handle": "24:",
+      "parent": "1:24",
+      "kind": "netem",
+      "netem": {
+        "limit": 5000,
+        "delay": 0.05,
+        "jitter": 0.01,
+        "delay_corr": 0,
+        "loss": 0.01,
+        "loss_corr": 0.25,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 0,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 5995060100893859484
+    },
+    {
+      "handle": "25:",
+      "parent": "1:25",
+      "kind": "netem",
+      "netem": {
+        "limit": 1000,
+        "delay": 0.02,
+        "jitter": 0.005,
+        "delay_corr": 0,
+        "loss": 0,
+        "loss_corr": 0,
+        "gemodel": {
+          "p": 0.01,
+          "r": 0.1,
+          "one_minus_h": 0.7,
+          "one_minus_k": 0.001
+        },
+        "reorder": 0.25,
+        "reorder_corr": 0,
+        "gap": 1,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0.001,
+        "corrupt_corr": 0,
+        "rate": 250000,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 8653821996530855066
+    },
+    {
+      "handle": "26:",
+      "parent": "1:26",
+      "kind": "netem",
+      "netem": {
+        "limit": 1000,
+        "delay": 0.6,
+        "jitter": 0,
+        "delay_corr": 0,
+        "loss": 0,
+        "loss_corr": 0,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 0,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 6107435199679081235
+    },
+    {
+      "handle": "27:",
+      "parent": "1:27",
+      "kind": "netem",
+      "netem": {
+        "limit": 1000,
+        "delay": 0,
+        "jitter": 0,
+        "delay_corr": 0,
+        "loss": 1,
+        "loss_corr": 0,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 0,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 2502556247017012219
+    },
+    {
+      "handle": "28:",
+      "parent": "1:28",
+      "kind": "netem",
+      "netem": {
+        "limit": 1000,
+        "delay": 0,
+        "jitter": 0,
+        "delay_corr": 0,
+        "loss": 0,
+        "loss_corr": 0,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 0,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 4815368840370035277
+    }
+  ],
+  "classes": [
+    {
+      "id": "1:1",
+      "parent": "1:",
+      "kind": "htb",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    },
+    {
+      "id": "1:24",
+      "parent": "1:",
+      "kind": "htb",
+      "leaf": "24:",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    },
+    {
+      "id": "1:25",
+      "parent": "1:",
+      "kind": "htb",
+      "leaf": "25:",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    },
+    {
+      "id": "1:26",
+      "parent": "1:",
+      "kind": "htb",
+      "leaf": "26:",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    },
+    {
+      "id": "1:27",
+      "parent": "1:",
+      "kind": "htb",
+      "leaf": "27:",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    },
+    {
+      "id": "1:28",
+      "parent": "1:",
+      "kind": "htb",
+      "leaf": "28:",
+      "rate": 1250000000,
+      "ceil": 1250000000,
+      "prio": 0,
+      "burst": 1680,
+      "cburst": 1680
+    }
+  ],
+  "filters": [
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 160,
+      "mask": 131056,
+      "flowid": "1:24"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 176,
+      "mask": 131056,
+      "flowid": "1:26"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 192,
+      "mask": 131056,
+      "flowid": "1:28"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 65696,
+      "mask": 131056,
+      "flowid": "1:25"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 65712,
+      "mask": 131056,
+      "flowid": "1:27"
+    }
+  ]
+}

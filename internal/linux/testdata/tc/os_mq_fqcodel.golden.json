@@ -1,0 +1,36 @@
+{
+  "dev": "v0",
+  "qdiscs": [
+    {
+      "handle": "0:",
+      "parent": "8001:2",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "0:",
+      "parent": "8001:3",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "0:",
+      "parent": "8001:4",
+      "kind": "pfifo_fast",
+      "options": "{\"bands\":3,\"multiqueue\":false,\"priomap\":[1,2,2,2,1,2,0,0,1,1,1,1,1,1,1,1]}"
+    },
+    {
+      "handle": "8001:",
+      "parent": "root",
+      "kind": "mq"
+    },
+    {
+      "handle": "8003:",
+      "parent": "8001:1",
+      "kind": "fq_codel",
+      "options": "{\"drop_batch\":64,\"ecn\":true,\"flows\":1024,\"interval\":99999,\"limit\":10240,\"memory_limit\":33554432,\"quantum\":1514,\"target\":4999}"
+    }
+  ],
+  "classes": [],
+  "filters": []
+}

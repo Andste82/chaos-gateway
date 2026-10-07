@@ -1,0 +1,43 @@
+{
+  "dev": "dum1",
+  "qdiscs": [
+    {
+      "handle": "1:",
+      "parent": "root",
+      "kind": "htb",
+      "htb": {
+        "default": 1,
+        "r2q": 10,
+        "direct_qlen": 1000
+      }
+    },
+    {
+      "handle": "30:",
+      "parent": "1:30",
+      "kind": "netem",
+      "netem": {
+        "limit": 1000,
+        "delay": 0.02,
+        "jitter": 0.005,
+        "delay_corr": 0,
+        "loss": 0,
+        "loss_corr": 0,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0.05,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 0,
+        "packet_overhead": 0,
+        "cell_size": 0,
+        "cell_overhead": 0,
+        "ecn": false
+      },
+      "seed": 4739288157723690361
+    }
+  ],
+  "classes": [],
+  "filters": []
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/wireguard"
 
+	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -169,6 +170,9 @@ type applyResult struct {
 	took   time.Duration
 	// dhcpErr is why the DHCP server did not take the configuration; it does not fail the apply.
 	dhcpErr string
+	// plan is what a full apply did (or tried): nil for an identity update, which changes only
+	// elements of maps. It is set when the apply failed after the plan was built.
+	plan *apply.Plan
 }
 
 // inflight is a revision apply the state owner waits for.
@@ -192,6 +196,8 @@ type owner struct {
 	// genReserved is the mark already written: ensureGenReserved writes a new one once gen passes it.
 	genPath     string
 	genReserved uint64
+	// counterEpoch is the epoch of the nft counters (trackCounters), 0 before the first apply.
+	counterEpoch int64
 	// committed is the active revision: what the kernel runs when nothing else is going on.
 	committed *desired
 	// current is what the apply loop was told to converge to.
@@ -601,7 +607,9 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		if r.target.Kea != nil {
 			o.snap.KeaNetworks = r.target.Kea.Networks
 		}
+		o.trackCounters(r.plan, r.d.Generation)
 		o.trackFaults(r.target, r.d.Generation)
+		o.trackQueues(r.target, r.plan, r.d.Generation, false)
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})
@@ -610,6 +618,9 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.event(EventApplied, map[string]any{"generation": r.d.Generation, "revision": r.d.Revision, "hash": r.target.Hash})
 	} else {
 		o.snap.LastError = r.err.Error()
+		// what a failed apply did to the counters and the leaves is not known: they start new epochs
+		o.trackCounters(r.plan, r.d.Generation)
+		o.trackQueues(nil, r.plan, r.d.Generation, true)
 		o.event(EventApplyFailed, map[string]any{"generation": r.d.Generation, "revision": r.d.Revision, "error": r.err.Error()})
 	}
 

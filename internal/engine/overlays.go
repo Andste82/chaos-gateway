@@ -261,12 +261,14 @@ type overlayState struct {
 	// born is the generation in which a fault (by key) first appeared in an applied target: the
 	// epoch of its counters.
 	born map[string]int64
+	// queueBorn is the same for the netem leaves, by QueueKey (queues.go).
+	queueBorn map[string]int64
 }
 
 func (o *owner) initOverlays() {
 	e := o.e
 	st := overlay.New(overlay.Options{Clock: e.cfg.Clock})
-	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}}
+	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}, queueBorn: map[string]int64{}}
 	o.ov.expirer = overlay.NewExpirer(st, e.cfg.Clock, func() {
 		go func() {
 			select {

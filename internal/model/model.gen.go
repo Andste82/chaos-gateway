@@ -3751,8 +3751,10 @@ type FlowPage struct {
 
 // GatewayState defines model for GatewayState.
 type GatewayState struct {
-	ActiveRevision   int64   `json:"active_revision"`
-	BootId           *string `json:"boot_id,omitempty"`
+	ActiveRevision int64   `json:"active_revision"`
+	BootId         *string `json:"boot_id,omitempty"`
+
+	// CounterEpoch Epoch of the named nftables counters as a whole; changes when they start over (the table was made anew, or the gateway restarted and cannot tell). The epoch of one counter is in its `Counter`.
 	CounterEpoch     *int64  `json:"counter_epoch,omitempty"`
 	DegradedNetworks *[]Uuid `json:"degraded_networks,omitempty"`
 	Generation       int64   `json:"generation"`
@@ -4610,17 +4612,29 @@ type ProfileViewPage struct {
 // Protocol defines model for Protocol.
 type Protocol string
 
-// QueueStats defines model for QueueStats.
+// QueueStats The counters of one netem queue: the leaf below the class of one fault id and direction on one
+// interface, as the kernel counts them when the object is read. `epoch` is the generation of the
+// apply that made the queue; it changes whenever the queue is created again (its counters start at
+// zero), so two readings with the same epoch may be subtracted and readings with different ones
+// must not be. A change of the fault's parameters keeps the queue and its epoch.
 type QueueStats struct {
+	BacklogBytes *int64 `json:"backlog_bytes,omitempty"`
+
+	// BacklogPackets Packets held in the queue now.
 	BacklogPackets *int64 `json:"backlog_packets,omitempty"`
 
 	// Device Set for per-device queues (D18).
-	Device         *Uuid                `json:"device,omitempty"`
-	Direction      *QueueStatsDirection `json:"direction,omitempty"`
-	DroppedPackets *int64               `json:"dropped_packets,omitempty"`
-	Epoch          *int64               `json:"epoch,omitempty"`
-	Interface      *string              `json:"interface,omitempty"`
-	Overlimits     *int64               `json:"overlimits,omitempty"`
+	Device    *Uuid                `json:"device,omitempty"`
+	Direction *QueueStatsDirection `json:"direction,omitempty"`
+
+	// DroppedPackets Packets the queue dropped, the loss the fault configures and the packets that did not fit into the queue limit.
+	DroppedPackets *int64  `json:"dropped_packets,omitempty"`
+	Epoch          *int64  `json:"epoch,omitempty"`
+	Interface      *string `json:"interface,omitempty"`
+	Overlimits     *int64  `json:"overlimits,omitempty"`
+
+	// SentBytes Bytes of the packets that left the queue.
+	SentBytes *int64 `json:"sent_bytes,omitempty"`
 
 	// SentPackets Packets that left the queue (i.e. were delayed and sent).
 	SentPackets *int64 `json:"sent_packets,omitempty"`

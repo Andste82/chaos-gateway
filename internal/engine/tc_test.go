@@ -195,3 +195,108 @@ func TestAFailureOfATCOperationRevertsTheOverlayWrite(t *testing.T) {
 	h.mustPut(bob, "target: {network: Lab}\nfault: {latency: 40ms}")
 	h.verifyKernelWithOverlays()
 }
+
+// An apply that comes while classes wait for their deletion does not move the deletion: the old
+// classes go at the time they were due, on the fake clock, and the new fault's classes stay.
+func TestAnApplyBeforeTheDeletionFiresLeavesItsTimeAlone(t *testing.T) {
+	h := startedWithRevision(t)
+	a := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 200ms}")
+	if _, err := h.e.DeleteOverlay(context.Background(), a.Overlay.Id, nil, admin); err != nil {
+		t.Fatal(err)
+	}
+	// due in 1.2 s (200 ms + 1 s)
+	h.clk.Advance(700 * time.Millisecond)
+	h.mustPut(bob, "target: {network: Lab}\nfault: {latency: 50ms, loss: 2%}")
+	var left time.Duration
+	for _, p := range h.e.RetiringTC() {
+		if p.Class != "" {
+			left = p.In
+			break
+		}
+	}
+	if left != 500*time.Millisecond {
+		for _, p := range h.e.RetiringTC() {
+			t.Logf("%s %v", p.Key(), p.In)
+		}
+		t.Fatalf("the classes of the deleted fault are due in %v after the next apply, want 500 ms (%+v)", left, h.e.RetiringTC())
+	}
+	h.verifyKernelWithOverlays()
+	h.clk.Advance(499 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if got := h.tcClasses("br-iot"); got != 4 {
+		t.Fatalf("%d classes 1 ms before the deletion, want the old two and the new two", got)
+	}
+	h.clk.Advance(time.Millisecond)
+	h.waitRetired()
+	if got := h.tcClasses("br-iot"); got != 2 {
+		t.Errorf("%d classes after the deletion, want the new fault's two", got)
+	}
+	h.verifyKernelWithOverlays()
+}
+
+// A fault that is written again while its old classes wait gets other ids (make-before-break: the
+// packets queued in the old classes are not mixed with the new ones), and the old classes still go at
+// the time they were due.
+func TestAFaultThatComesBackBeforeTheDeletionHasNewClassesAndTheOldOnesGoOnTime(t *testing.T) {
+	h := startedWithRevision(t)
+	a := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 200ms}")
+	id := h.e.Snapshot().Faults[0].ID
+	if _, err := h.e.DeleteOverlay(context.Background(), a.Overlay.Id, nil, admin); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.Advance(400 * time.Millisecond)
+	h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 200ms}")
+	if got := h.e.Snapshot().Faults[0].ID; got == id {
+		t.Fatalf("the fault came back with the id %d of the classes that are still retiring", id)
+	}
+	if got := h.tcClasses("br-iot"); got != 4 {
+		t.Fatalf("%d classes, want the old two and the new two", got)
+	}
+	h.clk.Advance(799 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if got := h.tcClasses("br-iot"); got != 4 {
+		t.Fatalf("%d classes 1 ms before the old ones are due", got)
+	}
+	h.clk.Advance(time.Millisecond)
+	h.waitRetired()
+	if got := h.tcClasses("br-iot"); got != 2 {
+		t.Errorf("%d classes, want the fault's two", got)
+	}
+	h.verifyKernelWithOverlays()
+}
+
+// A restart with classes that wait for their deletion: the new engine finds them in its first apply
+// and deletes them one grace period after that, on its own clock.
+func TestAfterARestartTheLeftoverClassesAreDeletedByTheNextFullApply(t *testing.T) {
+	h := startedWithRevision(t)
+	a := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 300ms}")
+	if _, err := h.e.DeleteOverlay(context.Background(), a.Overlay.Id, nil, admin); err != nil {
+		t.Fatal(err)
+	}
+	if h.tcClasses("br-iot") != 2 || len(h.e.RetiringTC()) == 0 {
+		t.Fatal("the classes did not wait")
+	}
+	h.e.Close()
+	// the same kernel, a new process: it knows nothing of what was waiting
+	h.start()
+	h.barrier()
+	if h.tcClasses("br-iot") != 2 {
+		t.Fatal("the new engine deleted the classes before their time")
+	}
+	if len(h.e.RetiringTC()) == 0 {
+		t.Fatal("the new engine does not know that the classes are leftovers")
+	}
+	h.clk.Advance(1299 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if h.tcClasses("br-iot") != 2 {
+		t.Fatal("the classes went before the largest delay (300 ms) plus a second")
+	}
+	h.clk.Advance(time.Millisecond)
+	h.waitRetired()
+	for _, dev := range tcDevs {
+		if got := len(h.tcTree(dev).Qdiscs); got != 0 {
+			t.Errorf("%s still has %d qdiscs of the tree", dev, got)
+		}
+	}
+	h.verifyKernelWithOverlays()
+}

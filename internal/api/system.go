@@ -90,6 +90,7 @@ func (s *Server) GetState(c *gin.Context) {
 		BootID:         s.cfg.BootID,
 		LastKnownGood:  s.lastKnownGood(),
 		OverlaysActive: len(snap.Overlays),
+		CounterEpoch:   snap.CounterEpoch,
 	}
 	if p := snap.Pending; p != nil {
 		st.PendingConfirm = &pendingConfirm{Deadline: p.Deadline.UTC(), Revision: p.Revision}

@@ -79,6 +79,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, retirer.IDs()))
 			start := e.cfg.Clock.Monotonic()
 			var err error
+			var plan *apply.Plan
 			incremental := false
 			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) {
 				var ierr error
@@ -94,7 +95,11 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 					"same_host", last != nil && hostEqual(last.d.Host, d.Host))
 			}
 			if !incremental {
-				_, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
+				var res *apply.Result
+				res, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
+				if res != nil {
+					plan = res.Plan
+				}
 				arm()
 			}
 			took := e.cfg.Clock.Monotonic() - start
@@ -109,7 +114,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if err == nil && !incremental {
 				dhcpErr = e.syncDHCP(ctx, target)
 			}
-			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr}
+			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan}
 			if err == nil && incremental && last != nil {
 				res.dhcpErr = e.dhcp.errorNow()
 			}

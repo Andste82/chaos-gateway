@@ -46,6 +46,12 @@ type State struct {
 	Bird *executor.BirdState
 	// Service is the service namespace; nil when none was asked for.
 	Service *ServiceState
+	// TC is the tc state of every interface that holds a qdisc tree of Chaos Gateway's own (a root
+	// qdisc with the handle 1:), whole and with counters; an interface without one is not in the map.
+	TC map[string]*linux.NormTree
+	// TCRetiring are the classes (and trees) that the target no longer wants but that still stand
+	// because the make-before-break deletion has not come yet; Verify accepts them (Apply sets it).
+	TCRetiring map[string]bool
 }
 
 // ServiceState is the service namespace as it is now.
@@ -66,6 +72,10 @@ type ServiceState struct {
 type Want struct {
 	Sysctls  []executor.SysctlEntry
 	Offloads []string
+	// TCDevs are the interfaces the target puts its tc tree on (compiler.Target.TCCandidates). The tc
+	// state is read for them and for every other assigned interface that holds a tree of Chaos
+	// Gateway's own, so a tree that is no longer wanted is found.
+	TCDevs []string
 	// BirdInstance is the instance to read; empty reads none.
 	BirdInstance string
 	// ServiceNS is the service namespace to read and ServicePeerIf the interface inside it; empty
@@ -201,6 +211,10 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		}
 	}
 
+	if s.TC, err = readTC(ctx, ex, ns, s, want.TCDevs); err != nil {
+		return nil, err
+	}
+
 	if want.ServiceNS != "" {
 		s.Service = readService(ctx, ex, want.ServiceNS, want.ServicePeerIf, want.ServiceHolderPID)
 	}
@@ -246,6 +260,66 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		s.Sysctl[k] = n
 	}
 	return s, nil
+}
+
+// readTC reads the tc state of the interfaces that may hold a tree of Chaos Gateway's own: the ones
+// the target names and every assigned one (a tree on an interface the target no longer uses has to be
+// found). The qdisc listing of each is one tool run; only an interface with a root qdisc 1: gets the
+// whole read (qdiscs, classes, filters, with counters).
+func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) (map[string]*linux.NormTree, error) {
+	var devs []string
+	for _, d := range union(wanted, s.Assigned) {
+		if _, ok := s.Links[d]; ok {
+			devs = append(devs, d)
+		}
+	}
+	trees := map[string]*linux.NormTree{}
+	if len(devs) == 0 {
+		return trees, nil
+	}
+	ops := make([]executor.Operation, len(devs))
+	for i, d := range devs {
+		ops[i] = read(ns, executor.ReadQdiscs, d)
+	}
+	out, err := ex.Do(ctx, ops...)
+	if err != nil {
+		return nil, fmt.Errorf("read the qdiscs: %w", err)
+	}
+	var withTree []string
+	for i, d := range devs {
+		qs, err := decode[[]linux.Qdisc](out, i, "qdiscs "+d)
+		if err != nil {
+			return nil, err
+		}
+		for _, q := range qs {
+			// the entries of a listing that names a device belong to it; `dev` is empty when a
+			// version does not print it
+			if q.Handle == compiler.TCRootHandle && q.Root && (q.Dev == "" || q.Dev == d) {
+				withTree = append(withTree, d)
+				break
+			}
+		}
+	}
+	if len(withTree) == 0 {
+		return trees, nil
+	}
+	ops = ops[:0]
+	for _, d := range withTree {
+		ops = append(ops, read(ns, executor.ReadTC, d))
+	}
+	if out, err = ex.Do(ctx, ops...); err != nil {
+		return nil, fmt.Errorf("read the tc state: %w", err)
+	}
+	for i, d := range withTree {
+		t, err := decode[*linux.NormTree](out, i, "tc "+d)
+		if err != nil {
+			return nil, err
+		}
+		if t != nil {
+			trees[d] = t
+		}
+	}
+	return trees, nil
 }
 
 // readService reads the service namespace. A namespace that cannot be read is a namespace that does

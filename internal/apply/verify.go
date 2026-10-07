@@ -212,6 +212,8 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 		}
 	}
 
+	verifyTC(t, s, bad)
+
 	return append(mm, verifyNft(t, s.Nft)...)
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -17,6 +18,14 @@ import (
 type Plan struct {
 	Ops     []executor.Operation
 	Summary []string
+	// Stale are the tc classes (or whole trees) the target no longer wants that the plan leaves
+	// standing: make-before-break (plan §3.2). They are deleted Grace after the apply, by a Retirer.
+	// Empty for a plan made by BuildPlan, which deletes them at once.
+	Stale []TCStale
+	Grace time.Duration
+	// Dists is the distribution table ("normal", "" for none) every leaf of the target holds once the
+	// plan has run, by "interface handle"; a leaf whose table is not known is left out.
+	Dists map[string]string
 }
 
 // Empty reports whether the plan changes nothing but the generation: no link, route or
@@ -37,8 +46,22 @@ var ownProto = strconv.Itoa(executor.ProtoTag)
 
 // BuildPlan compares the target with the current state and plans the difference. The order is
 // fixed: interfaces and their scope, links and addresses, sysctls, offloads, routes and rules,
-// the nftables transaction, DOCKER-USER (plan §2.14: "apply runs in a fixed order").
+// the tc classes and leaves to create or change, the nftables transaction, the tc classes to delete,
+// DOCKER-USER (plan §2.14: "apply runs in a fixed order"). A tc class the target no longer wants is
+// deleted in the plan itself, right after the transaction (no packet is queued in it afterwards, but
+// those that were are lost: use BuildPlanRetiring where that matters).
 func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
+	return buildPlan(t, s, ns, false, nil)
+}
+
+// BuildPlanRetiring is BuildPlan for an apply with a Retirer: a tc class the target no longer wants
+// stays (Plan.Stale) and is deleted later, when the packets queued in it have left (make-before-break,
+// plan §3.2).
+func BuildPlanRetiring(t *compiler.Target, s *State, ns string) (*Plan, error) {
+	return buildPlan(t, s, ns, true, nil)
+}
+
+func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[string]string) (*Plan, error) {
 	if t.HasErrors() {
 		return nil, fmt.Errorf("the target has errors: %s", t.Errors()[0].Message)
 	}
@@ -296,6 +319,13 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 		p.Ops = append(p.Ops, fresh)
 	}
 
+	// ---- tc: create and change, before the classification switches -------------------------
+	tp := planTC(t, s, removed, mem)
+	p.Grace, p.Dists = tp.grace, tp.dists
+	if len(tp.before) > 0 {
+		add("tc: "+strings.Join(tp.words, "; "), &executor.TC{Target: tg, Entries: tp.before})
+	}
+
 	// ---- nftables: one atomic transaction -------------------------------------------------
 	tx, err := t.Nft.Transaction(s.Nft)
 	if err != nil {
@@ -303,6 +333,25 @@ func BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
 	}
 	add(fmt.Sprintf("nftables: table inet chaosgw, %d chains, %d sets, %d counters, generation %q",
 		len(t.Nft.AllChains()), len(t.Nft.Sets), len(t.Nft.Counters), t.Nft.Generation), &executor.NftApply{Target: tg, Ruleset: json.RawMessage(tx)})
+
+	// ---- tc: what the target no longer wants -----------------------------------------------
+	var gone []executor.TCEntry
+	var goneWords, retiring []string
+	for _, st := range tp.stale {
+		if retire && !tp.immediate[st.Key()] {
+			p.Stale = append(p.Stale, st)
+			retiring = append(retiring, st.String())
+			continue
+		}
+		gone = append(gone, staleEntries(st, ownTree(s, st.Dev))...)
+		goneWords = append(goneWords, st.String())
+	}
+	if len(gone) > 0 {
+		add("tc: delete "+strings.Join(goneWords, ", "), &executor.TC{Target: tg, Entries: gone})
+	}
+	if len(retiring) > 0 {
+		note("tc: %s stay for %s (the packets queued in them are delivered), then go", strings.Join(retiring, ", "), p.Grace.Round(time.Millisecond))
+	}
 
 	// ---- DOCKER-USER ----------------------------------------------------------------------
 	if s.DockerUser.ChainExists {

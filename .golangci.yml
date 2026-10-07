@@ -43,6 +43,11 @@ linters:
       - path: _test\.go$
         linters:
           - forbidigo
+      # test infrastructure: it measures real packets on a real kernel, which only the real clock can
+      # time (probe runs, waiting for an echo); no engine logic depends on it
+      - path: ^internal/testbed/
+        linters:
+          - forbidigo
       # internal/clock is the real implementation the rule exists to make everything else use
       - path: ^internal/clock/
         linters:

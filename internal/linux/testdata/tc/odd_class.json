@@ -1,0 +1,1 @@
+[{"class":"htb","handle":"1:10","parent":"1:5","leaf":"0x10","prio":0,"rate":1250000,"ceil":2500000,"burst":1600,"cburst":1600},{"class":"htb","handle":"1:5","root":true,"rate":12500000,"ceil":25000000,"burst":15360,"cburst":1600}]

@@ -1,0 +1,95 @@
+{
+  "dev": "dum2",
+  "qdiscs": [
+    {
+      "handle": "1:",
+      "parent": "root",
+      "kind": "htb",
+      "htb": {
+        "default": 16,
+        "r2q": 5,
+        "direct_qlen": 1000
+      }
+    },
+    {
+      "handle": "10:",
+      "parent": "1:10",
+      "kind": "netem",
+      "netem": {
+        "limit": 500,
+        "delay": 0.01,
+        "jitter": 0,
+        "delay_corr": 0,
+        "loss": 0.005,
+        "loss_corr": 0,
+        "reorder": 0,
+        "reorder_corr": 0,
+        "gap": 0,
+        "duplicate": 0,
+        "duplicate_corr": 0,
+        "corrupt": 0,
+        "corrupt_corr": 0,
+        "rate": 125000,
+        "packet_overhead": 20,
+        "cell_size": 10,
+        "cell_overhead": 5,
+        "slot": {
+          "min_delay": 0.001,
+          "max_delay": 0.002,
+          "packets": 10,
+          "bytes": 0
+        },
+        "ecn": true
+      },
+      "seed": 7181084653370958795
+    }
+  ],
+  "classes": [
+    {
+      "id": "1:5",
+      "parent": "1:",
+      "kind": "htb",
+      "rate": 12500000,
+      "ceil": 25000000,
+      "prio": 0,
+      "burst": 15360,
+      "cburst": 1600
+    },
+    {
+      "id": "1:10",
+      "parent": "1:5",
+      "kind": "htb",
+      "leaf": "10:",
+      "rate": 1250000,
+      "ceil": 2500000,
+      "prio": 0,
+      "burst": 1600,
+      "cburst": 1600
+    }
+  ],
+  "filters": [
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 1,
+      "kind": "fw",
+      "mark": 7,
+      "mask": 4294967295,
+      "flowid": "1:5"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 5,
+      "kind": "u32",
+      "options": "{\"bkt\":\"0\",\"fh\":\"800::800\",\"flowid\":\"1:10\",\"key_ht\":\"800\",\"match\":{\"mask\":\"ffffff00\",\"off\":12,\"offmask\":\"\",\"value\":\"a000000\"},\"not_in_hw\":true,\"order\":2048}"
+    },
+    {
+      "parent": "1:",
+      "protocol": "ip",
+      "pref": 5,
+      "kind": "u32",
+      "options": "{\"fh\":\"800:\",\"ht_divisor\":1}"
+    }
+  ]
+}

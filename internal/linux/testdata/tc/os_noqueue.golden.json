@@ -1,0 +1,12 @@
+{
+  "dev": "v1",
+  "qdiscs": [
+    {
+      "handle": "0:",
+      "parent": "root",
+      "kind": "noqueue"
+    }
+  ],
+  "classes": [],
+  "filters": []
+}

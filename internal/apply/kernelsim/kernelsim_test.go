@@ -72,3 +72,26 @@ func TestIPBatchForceContinuesAndReportsEveryFailure(t *testing.T) {
 		t.Error("with -force the line after a failure still runs")
 	}
 }
+
+// A map is told apart by its flags like by its type: `add map` of an existing map with other flags
+// fails in the kernel and with it the whole transaction, which is why the compiler's map names
+// carry a hash of the flags. The simulator also lists them, so verify can compare them.
+func TestAMapWithOtherFlagsIsRefusedAndTheFlagsAreListed(t *testing.T) {
+	k := New()
+	add := func(flags string) executor.Result {
+		return nft(t, k, `{"nftables":[{"add":{"table":{"family":"inet","name":"chaosgw"}}},{"add":{"map":{"family":"inet","table":"chaosgw","name":"m","type":"ipv4_addr","map":"verdict"`+flags+`}}}]}`)
+	}
+	if r := add(`,"flags":["interval"]`); r.Exit != 0 {
+		t.Fatal(r.Stderr)
+	}
+	if r := add(`,"flags":["interval"]`); r.Exit != 0 {
+		t.Fatalf("the same map again: %s", r.Stderr)
+	}
+	if r := add(``); r.Exit == 0 {
+		t.Error("the same map without its flags was accepted")
+	}
+	r, _ := k.Run(context.Background(), executor.Command{Tool: executor.ToolNft, Args: []string{"-j", "list", "table", "inet", "chaosgw"}})
+	if !strings.Contains(r.Stdout, `"flags":["interval"]`) {
+		t.Errorf("the flags are not listed: %s", r.Stdout)
+	}
+}

@@ -284,6 +284,9 @@ func verifyNft(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 			bad("map %s is missing", name)
 			continue
 		}
+		if strings.Join(got.Flags, ",") != strings.Join(want.Flags, ",") {
+			bad("map %s has the flags %v, want %v", name, got.Flags, want.Flags)
+		}
 		have := got.Pairs()
 		wantEl := map[string]string{}
 		for _, e := range want.Elements {

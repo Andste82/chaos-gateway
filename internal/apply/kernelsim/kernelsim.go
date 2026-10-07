@@ -58,6 +58,7 @@ type nftSet struct {
 type nftMap struct {
 	keyType   json.RawMessage
 	valueType string
+	flags     []string
 	elems     []json.RawMessage
 }
 

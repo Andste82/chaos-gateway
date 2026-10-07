@@ -69,6 +69,9 @@ func (k *Kernel) nftList() any {
 		var typ any
 		_ = json.Unmarshal(mp.keyType, &typ)
 		m := map[string]any{"family": "inet", "table": "chaosgw", "name": n, "handle": next(), "type": typ, "map": mp.valueType}
+		if len(mp.flags) > 0 {
+			m["flags"] = mp.flags
+		}
 		if len(mp.elems) > 0 {
 			elems := make([]json.RawMessage, len(mp.elems))
 			copy(elems, mp.elems)
@@ -198,13 +201,15 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 		case "add":
 			typ := f["type"]
 			val := str(f, "map")
+			var flags []string
+			_ = json.Unmarshal(f["flags"], &flags)
 			if old, ok := t.maps[name]; ok {
-				if string(old.keyType) != string(typ) || old.valueType != val {
+				if string(old.keyType) != string(typ) || old.valueType != val || !reflect.DeepEqual(old.flags, flags) {
 					return t, nftErr("File exists")
 				}
 				return t, nil
 			}
-			t.maps[name] = &nftMap{keyType: typ, valueType: val}
+			t.maps[name] = &nftMap{keyType: typ, valueType: val, flags: flags}
 		case "flush":
 			m, ok := t.maps[name]
 			if !ok {

@@ -3,6 +3,7 @@ package compiler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -207,6 +208,35 @@ func assignFaultIDs(keys []string, prev map[string]int) (ids map[string]int, ok 
 	return ids, true
 }
 
+// Limits of the classification maps. A table is limited by domain.MaxTableCells; the tables of all
+// sources that differ by MaxCompileCells; the elements of the maps by MaxClassElements.
+const (
+	MaxCompileCells  = 1 << 15
+	MaxClassElements = 1 << 13
+	maxClassRows     = 1 << 18
+)
+
+// classificationProblem reports capacity_exceeded for a limit of the classification maps.
+func (t *Target) classificationProblem(msg string, faults []string) {
+	t.Problems = append(t.Problems, Problem{Severity: SevError, Code: CodeCapacityExceeded, Message: msg, Faults: faults})
+}
+
+// sourceName describes a source of traffic for messages.
+func sourceName(idx *domain.Index, s domain.Source) string {
+	switch {
+	case s.Device != "":
+		if d, ok := idx.Devices[s.Device]; ok && d.Name != "" {
+			return "device " + d.Name
+		}
+		return "device " + s.Device
+	case len(s.Addrs) > 0:
+		return "the source " + s.Addrs[0].String()
+	case len(s.Ranges) > 0:
+		return "the addresses " + s.Ranges[0].String()
+	}
+	return "a source"
+}
+
 // compileFaults resolves the winning impairment faults and builds the classification maps, the
 // per-id chains with their counters and the tc tree.
 func (t *Target) compileFaults(in Input, idx *domain.Index) {
@@ -237,10 +267,20 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	keySet := map[string]bool{}
 	faults := map[string]*Fault{}
 	hostnames := map[string]bool{}
+	cells := 0
 	for i, src := range sources {
 		tab, err := w.Table(src, domain.FamilyImpairment)
 		if err != nil {
+			var big *domain.TableTooLargeError
+			if errors.As(err, &big) {
+				t.classificationProblem(fmt.Sprintf("the faults of %s select so many different destinations and ports that the classification maps would need more than %d cells; remove some of the faults that name a destination or ports", sourceName(idx, src), domain.MaxTableCells), big.Faults)
+				return
+			}
 			t.errorf(CodeFaultInvalid, "", "the table of a source cannot be built: %v", err)
+			return
+		}
+		if cells += tab.Cells; cells > MaxCompileCells {
+			t.classificationProblem(fmt.Sprintf("the classification of all sources needs more than %d cells (the work of the tables that differ); remove some of the faults that name a destination or ports", MaxCompileCells), nil)
 			return
 		}
 		tables[i] = tab
@@ -647,6 +687,10 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 			for _, s := range spans[i] {
 				rows = append(rows, clsRow{level: e.Level, src: s, dest: dest, port: port, id: id})
 			}
+			if len(rows) > maxClassRows {
+				t.classificationProblem(fmt.Sprintf("the classification maps would need more than %d elements before they are merged; remove some of the faults that name a destination or ports", maxClassRows), nil)
+				return
+			}
 		}
 	}
 	// sources with the same entries and touching addresses become one element
@@ -677,6 +721,10 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 		merged = append(merged, cur)
 	}
 
+	if len(merged) > MaxClassElements {
+		t.classificationProblem(fmt.Sprintf("the classification maps would need %d elements, the limit is %d; remove some of the faults that name a destination or ports", len(merged), MaxClassElements), nil)
+		return
+	}
 	sort.Slice(merged, func(i, j int) bool {
 		a, b := merged[i], merged[j]
 		if a.level != b.level {

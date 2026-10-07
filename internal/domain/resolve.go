@@ -67,6 +67,9 @@ type World struct {
 
 	candOnce sync.Once
 	cands    []Candidate // candidates(), computed once: a World never changes
+
+	tabMu    sync.Mutex
+	tabCache map[string]tableResult // Table's results by the candidates they were built from
 }
 
 // NewWorld prepares a resolution. The configuration must be normalized (see Normalize): it

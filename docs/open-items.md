@@ -779,3 +779,24 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   stays within the budget of plan §3.11.
 - Needs maintainer: no
 - Effort: S
+
+### P2-M8b-06 The plan gives no tolerance for the spread of a jitter, and none for "no change" of an unaffected flow
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §4.3 says to compare "the spread with the configured jitter" and that an
+  isolation measurement "must show no change", and defines tolerances only for the median (±2 ms + 5 %),
+  the loss (99.9 % binomial interval) and the rate (±10 %). The measurement tests need a number for both.
+- Evidence: `internal/testbed/stats.go` (`CheckSpread`, `SpreadOfUniform`), `internal/engine/integration_faults_test.go`
+  (`expectUnaffected`).
+- Task: chosen interpretation — the spread is the width between the 5th and the 95th percentile of the
+  upload delay, 1.8 x jitter for netem's default uniform distribution; it passes within 0.5 to 1.5 times
+  that plus 2 ms (wide on purpose: with 200 to 2000 probes the percentiles are stable to a few percent, and
+  the point is to tell a jitter from none and from a wrong one). An unaffected flow is "unchanged" when its
+  median in each direction is within ±2 ms + 5 % of what the same flow measured before the fault, and it
+  lost nothing. Under emulation, which has tens of milliseconds of noise, the same measurement only asserts
+  that the flow did not get more than 25 ms slower.
+- Acceptance: a maintainer confirms the numbers, or names others; if the nightly measurements on KVM show
+  that the spread bounds are never near their limits, they can be tightened.
+- Needs maintainer: yes
+- Effort: S

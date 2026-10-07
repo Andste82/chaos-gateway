@@ -24,8 +24,9 @@ import (
 // tunnel) a packet happens to leave through. See internal/apply/integration_classify_test.go for the
 // NAT and two-test-network cases. Since M8a the ids are real: overlays are resolved into faults,
 // the compiler gives each its id, and the tests read the counters of the classes of the compiled tc
-// tree, which they install with a second, independent executor on top of the tunnel the engine
-// already brought up (applying the tc tree is not part of the engine's apply path before M8b).
+// tree, which they apply with a second, independent executor (apply.Apply) on top of the tunnel the
+// engine already brought up: the ids stay the ones the test compiled. The engine applies the tree itself
+// since M8b; the tests that go through its overlay writes are in integration_faults_test.go.
 
 // classifyExec is a second, independent executor pointed at the same real namespace.
 func classifyExec(t *testing.T) apply.Exec {

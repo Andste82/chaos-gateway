@@ -39,6 +39,12 @@ type kernelGate struct {
 	// fail, when set, makes the nft transactions it names fail the way the kernel's nft would,
 	// without reaching the kernel
 	fail func(c executor.Command) bool
+	// tcMatch, when set, names the tc batches that the gate holds (while tcHold is armed) or fails
+	// (tcFail) before they reach the kernel
+	tcMatch   func(c executor.Command) bool
+	tcHold    chan struct{}
+	tcEntered chan struct{}
+	tcFail    bool
 }
 
 func (g *kernelGate) wrap(inner executor.Runner) executor.Runner {
@@ -47,6 +53,26 @@ func (g *kernelGate) wrap(inner executor.Runner) executor.Runner {
 }
 
 func (g *kernelGate) Run(ctx context.Context, c executor.Command) (executor.Result, error) {
+	if c.Tool == executor.ToolTC && c.Stdin != "" {
+		g.mu.Lock()
+		match, hold, entered, failTC := g.tcMatch, g.tcHold, g.tcEntered, g.tcFail
+		g.mu.Unlock()
+		if match != nil && match(c) {
+			if hold != nil {
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				select {
+				case <-hold:
+				case <-ctx.Done():
+				}
+			}
+			if failTC {
+				return executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}, nil
+			}
+		}
+	}
 	if c.Tool == executor.ToolNft && c.Stdin != "" {
 		g.mu.Lock()
 		g.writes++
@@ -95,6 +121,31 @@ func (g *kernelGate) release() {
 		close(g.hold)
 		g.hold = nil
 	}
+}
+
+// holdTC makes the tc batches that match wait until releaseTC is called, and tells when one waits.
+func (g *kernelGate) holdTC(match func(c executor.Command) bool) (entered <-chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.tcMatch, g.tcHold, g.tcEntered = match, make(chan struct{}), make(chan struct{}, 1)
+	return g.tcEntered
+}
+
+func (g *kernelGate) releaseTC() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.tcHold != nil {
+		close(g.tcHold)
+		g.tcHold = nil
+	}
+	g.tcMatch = nil
+}
+
+// failTC makes the tc batches that match fail the way tc would, without reaching the kernel.
+func (g *kernelGate) failTC(match func(c executor.Command) bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.tcMatch, g.tcFail = match, match != nil
 }
 
 func (g *kernelGate) setFail(f func(c executor.Command) bool) {

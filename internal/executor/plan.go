@@ -175,6 +175,17 @@ func mapKeyPartExpr(part string) any {
 	if p, err := netip.ParsePrefix(part); err == nil {
 		return map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
 	}
+	// a range "first-last" of addresses or ports (an interval map element)
+	if lo, hi, ok := strings.Cut(part, "-"); ok {
+		if _, err := netip.ParseAddr(lo); err == nil {
+			return map[string]any{"range": []any{lo, hi}}
+		}
+		a, e1 := strconv.Atoi(lo)
+		b, e2 := strconv.Atoi(hi)
+		if e1 == nil && e2 == nil {
+			return map[string]any{"range": []any{a, b}}
+		}
+	}
 	if n, err := strconv.Atoi(part); err == nil {
 		return n
 	}
@@ -182,13 +193,13 @@ func mapKeyPartExpr(part string) any {
 }
 
 // mapValueExpr renders a map element's data: a decimal value as the integer it names (a "mark"
-// map, such as the identity map), anything else as a jump to the chain it names (a "verdict" map,
+// map, such as the identity map), anything else as a goto to the chain it names (a "verdict" map,
 // one of the classification maps).
 func mapValueExpr(value string) any {
 	if n, err := strconv.Atoi(value); err == nil {
 		return n
 	}
-	return map[string]any{"jump": map[string]any{"target": value}}
+	return map[string]any{"goto": map[string]any{"target": value}}
 }
 
 // planRouting writes one `ip -batch` per address family: routes first (replace) or last (delete),

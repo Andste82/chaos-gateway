@@ -74,7 +74,7 @@ func TestPlanAddElements(t *testing.T) {
 }
 
 // TestPlanAddMapElements is TestPlanAddElements for the map counterpart added in M7 (plan §3.3):
-// a decimal value renders as a plain number (the identity map), a non-decimal one as a jump to
+// a decimal value renders as a plain number (the identity map), a non-decimal one as a goto to
 // the chain it names (a classification map), and a " . "-joined key as a concatenation. Each
 // element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array of arrays
 // with exactly two elements is expected"), not an object with "key"/"val" fields - confirmed
@@ -113,7 +113,7 @@ func TestPlanAddMapElements(t *testing.T) {
 	if !ok || len(key) != 4 || key[0] != "10.10.0.31" || key[1] != "203.0.113.10" || key[2] != float64(6) || key[3] != float64(443) {
 		t.Errorf("classification key: %v", second[0])
 	}
-	val, ok := second[1].(map[string]any)["jump"].(map[string]any)
+	val, ok := second[1].(map[string]any)["goto"].(map[string]any)
 	if !ok || val["target"] != "mark_7" {
 		t.Errorf("classification value: %v", second[1])
 	}
@@ -395,5 +395,65 @@ func TestServiceNamespaceRefusesWhatIsNotLinkLocal(t *testing.T) {
 		if _, err := Decode(raw); err == nil {
 			t.Errorf("%s: accepted\n%s", name, raw)
 		}
+	}
+}
+
+// A classification map is an interval map (plan §3.3): the key parts may be ranges of addresses and
+// ports, which nft takes as {"range": [first, last]}.
+func TestPlanMapElementsWithRanges(t *testing.T) {
+	steps := mustPlan(t, `{"type":"nft_add_map_elements","map":"cls","elements":[{"key":"10.0.0.5-10.0.0.9 . 203.0.113.0/24 . tcp . 80-443","value":"mark_12"}]}`)
+	var doc struct {
+		Nftables []struct {
+			Add struct {
+				Element struct{ Elem []json.RawMessage }
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(steps[0].Cmd.Stdin), &doc); err != nil {
+		t.Fatal(err)
+	}
+	var pair [2]map[string]any
+	if err := json.Unmarshal(doc.Nftables[0].Add.Element.Elem[0], &pair); err != nil {
+		t.Fatal(err)
+	}
+	parts := pair[0]["concat"].([]any)
+	if len(parts) != 4 {
+		t.Fatalf("%v", parts)
+	}
+	if r := parts[0].(map[string]any)["range"].([]any); r[0] != "10.0.0.5" || r[1] != "10.0.0.9" {
+		t.Errorf("address range: %v", parts[0])
+	}
+	if p := parts[1].(map[string]any)["prefix"].(map[string]any); p["addr"] != "203.0.113.0" || p["len"] != float64(24) {
+		t.Errorf("prefix: %v", parts[1])
+	}
+	if parts[2] != "tcp" {
+		t.Errorf("protocol: %v", parts[2])
+	}
+	if r := parts[3].(map[string]any)["range"].([]any); r[0] != float64(80) || r[1] != float64(443) {
+		t.Errorf("port range: %v", parts[3])
+	}
+}
+
+// A filter handle may carry the mask of the mark bits fw looks at (plan §3.3: 0x000a0/0x1fff0).
+func TestFilterHandleWithAMask(t *testing.T) {
+	for h, ok := range map[string]bool{
+		"0xa0/0x1fff0":      true,
+		"0x100a0/0x1fff0":   true,
+		"0x10":              true,
+		"0xa0/":             false,
+		"0xa0/0x":           false,
+		"0xa0/1fff0":        false,
+		"0xa0/0x1fff0/0x1":  false,
+		"0xa0/0x1fff0; ls":  false,
+		"0xa0/0x1ffffffff0": false,
+	} {
+		if got := validFilterHandle(h); got != ok {
+			t.Errorf("validFilterHandle(%q) = %v, want %v", h, got, ok)
+		}
+	}
+	steps := mustPlan(t, `{"type":"tc","entries":[{"object":"filter","action":"replace","dev":"wan0","parent":"1:","handle":"0xa0/0x1fff0","args":["protocol","ip","prio","1","fw","flowid","1:2a"]}]}`)
+	want := "filter replace dev wan0 parent 1: handle 0xa0/0x1fff0 protocol ip prio 1 fw flowid 1:2a\n"
+	if got := steps[0].Cmd.Stdin; got != want {
+		t.Errorf("tc line %q, want %q", got, want)
 	}
 }

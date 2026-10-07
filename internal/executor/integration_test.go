@@ -266,7 +266,7 @@ func TestIncrementalSetUpdates(t *testing.T) {
 
 // TestIncrementalMapUpdates is TestIncrementalSetUpdates for the map counterpart added in M7
 // (plan §3.3): the identity map's device numeral (a plain integer value) and a classification
-// map's element (a verdict that jumps to a per-id chain).
+// map's element (a verdict that goes to a per-id chain).
 func TestIncrementalMapUpdates(t *testing.T) {
 	g := startGateway(t)
 	extra := `,{"add":{"map":{"family":"inet","table":"chaosgw","name":"ident4","type":"ipv4_addr","map":"mark"}}},` +

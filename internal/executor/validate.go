@@ -213,9 +213,31 @@ func (o NftDelElements) validate() error {
 	return NftAddElements{Target: o.Target, Set: o.Set, Elements: o.Elements}.validate()
 }
 
-// mapValueToken is the data of a map element: a decimal mark value, or the name of the chain a
-// verdict-valued element jumps to.
-var mapValueToken = regexp.MustCompile(`^[0-9]{1,10}$|^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`)
+// MarkChainPrefix starts the name of every per-fault chain the compiler creates (plan §3.3): the
+// chain that writes a fault id into the mark and returns. It is the only kind of chain a verdict
+// map element of the classification maps may jump to, so an element cannot be pointed at one of
+// the gateway's rule chains (input, forward, ...).
+const MarkChainPrefix = "mark_"
+
+// MaxFaultID is the highest fault id of the mark layout (12 bits, plan §3.3).
+const MaxFaultID = 4095
+
+// mapValueToken is the data of a map element: a decimal mark value (the identity map's device
+// numeral), or the name of the per-fault chain a verdict-valued element jumps to: mark_<id>, the
+// compiler's own chain names, id 0 to MaxFaultID.
+var mapValueToken = regexp.MustCompile(`^[0-9]{1,10}$|^` + MarkChainPrefix + `[0-9]{1,4}$`)
+
+// validMapValue reports whether v is a decimal mark value or the name of a mark chain.
+func validMapValue(v string) bool {
+	if !mapValueToken.MatchString(v) {
+		return false
+	}
+	if id, ok := strings.CutPrefix(v, MarkChainPrefix); ok {
+		n, err := strconv.Atoi(id)
+		return err == nil && n <= MaxFaultID && (id == "0" || id[0] != '0')
+	}
+	return true
+}
 
 func (o NftAddMapElements) validate() error {
 	if err := o.Target.validate(); err != nil {
@@ -231,8 +253,8 @@ func (o NftAddMapElements) validate() error {
 		if !validMapKey(e.Key) {
 			return fmt.Errorf("invalid map key %q", e.Key)
 		}
-		if !mapValueToken.MatchString(e.Value) {
-			return fmt.Errorf("invalid map value %q", e.Value)
+		if !validMapValue(e.Value) {
+			return fmt.Errorf("invalid map value %q (want a decimal number or a chain %s0 to %s%d)", e.Value, MarkChainPrefix, MarkChainPrefix, MaxFaultID)
 		}
 	}
 	return nil
@@ -256,35 +278,72 @@ func (o NftDelMapElements) validate() error {
 	return nil
 }
 
-// mapKeyPart is one " . "-joined component of a map key that is not an address or a prefix: a
-// protocol name or number, or a port number (plan §3.3's lookup chain: device, destination,
-// protocol, port).
+// mapKeyPart is one " . "-joined component of a map key that is not an address, a prefix or a
+// range: a protocol name or number, or a port number (plan §3.3's lookup chain: device,
+// destination, protocol, port).
 var mapKeyPart = regexp.MustCompile(`^[0-9]{1,5}$|^[a-z][a-z0-9]{0,15}$`)
 
-// validMapKey accepts a plain element (an address, a prefix or a MAC, as validElement) or 2 to 4
-// such components concatenated with " . ", the device's address first: the key of a
-// classification map (plan §3.3). " . " (not a bare ".") keeps the split unambiguous next to the
-// dots inside an address.
+// validMapKeyPart accepts what one component of a classification map key may be: an address, a
+// prefix, an address range "first-last" (the interval maps of plan §3.3 hold ranges, so that
+// overlapping selectors can be split into disjoint pieces), a protocol, a port or a port range.
+func validMapKeyPart(p string) bool {
+	if validElement(p) || mapKeyPart.MatchString(p) {
+		return true
+	}
+	lo, hi, ok := strings.Cut(p, "-")
+	if !ok {
+		return false
+	}
+	if a, err := netip.ParseAddr(lo); err == nil {
+		b, err := netip.ParseAddr(hi)
+		return err == nil && a.Is4() && b.Is4() && a.Zone() == "" && b.Zone() == "" && a.Compare(b) <= 0
+	}
+	if !portToken.MatchString(lo) || !portToken.MatchString(hi) {
+		return false
+	}
+	l, _ := strconv.Atoi(lo)
+	h, _ := strconv.Atoi(hi)
+	return l <= h && h <= 65535
+}
+
+var portToken = regexp.MustCompile(`^[0-9]{1,5}$`)
+
+// validMapKey accepts a plain element (an address, a prefix or a MAC, as validElement, or an
+// address range) or 2 to 4 components concatenated with " . ", the device's address first: the
+// key of a classification map (plan §3.3). " . " (not a bare ".") keeps the split unambiguous
+// next to the dots inside an address.
 func validMapKey(k string) bool {
 	if k == "" {
 		return false
 	}
 	if !strings.Contains(k, " . ") {
-		return validElement(k)
+		return validElement(k) || validAddrRange(k)
 	}
 	parts := strings.Split(k, " . ")
 	if len(parts) < 2 || len(parts) > 4 {
 		return false
 	}
-	if !validElement(parts[0]) {
+	if !validElement(parts[0]) && !validAddrRange(parts[0]) {
 		return false
 	}
 	for _, p := range parts[1:] {
-		if !validElement(p) && !mapKeyPart.MatchString(p) {
+		if !validMapKeyPart(p) {
 			return false
 		}
 	}
 	return true
+}
+
+// validAddrRange reports whether p is an address range "first-last".
+func validAddrRange(p string) bool {
+	lo, _, ok := strings.Cut(p, "-")
+	if !ok {
+		return false
+	}
+	if _, err := netip.ParseAddr(lo); err != nil {
+		return false
+	}
+	return validMapKeyPart(p)
 }
 
 func validElement(e string) bool {
@@ -527,9 +586,10 @@ func (e TCEntry) validate() error {
 	return nil
 }
 
-var filterHandle = regexp.MustCompile(`^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10}|[0-9a-fA-F]{1,3}::?[0-9a-fA-F]{1,3})$`)
+var filterHandle = regexp.MustCompile(`^(0x[0-9a-fA-F]{1,8}(/0x[0-9a-fA-F]{1,8})?|[0-9]{1,10}|[0-9a-fA-F]{1,3}::?[0-9a-fA-F]{1,3})$`)
 
-// validFilterHandle accepts the handle forms filters use: a number (fw), or u32's 800::801.
+// validFilterHandle accepts the handle forms filters use: a number (fw), a number with a mask
+// ("0xa0/0x1fff0": fw selects the mark bits of the mask, plan §3.3), or u32's 800::801.
 func validFilterHandle(h string) bool { return filterHandle.MatchString(h) }
 
 func kindList() string {

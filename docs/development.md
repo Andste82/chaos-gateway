@@ -856,9 +856,9 @@ proxy; the TLS responder (M21) joins it later.
 
 Plan §3.3's lookup chain (`internal/compiler/classify.go`): on prerouting, write the winning fault's
 id and the packet's direction into reserved mark bits, for test/WireGuard/remote-network traffic
-only. M7 itself resolves no real fault — that is M8a onward — so the mechanism is proven with a
-per-id mark-writing chain a test points a map element at (`TestClassifyIDs`), ready for M8a to drive
-with `domain.Resolve`'s winners instead.
+only. M7 built the mechanism and proved it with test ids; since M8a the maps are driven by the
+winners of `domain.Resolve` and the ids are real (see "Faults in the compiler (M8a)" below, which
+also changes two things said here: the maps are interval maps, and an element `goto`s its chain).
 
 - **Mark bits.** Bits 4-15 hold the fault id (12 bits, up to the 4095 of plan §3.3's capacity limit),
   bit 16 the direction (0 = original/upload, 1 = reply/download, read from `ct direction`). Bits
@@ -887,11 +887,13 @@ with `domain.Resolve`'s winners instead.
   access-matrix/fault-resolution machinery M8a/M9 bring; `docs/open-items.md` P2-M7-02 tracks the
   deferral. Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
   `inet_proto`, `inet_service`, as needed) and its value is a verdict that jumps to a per-id chain
-  (`mark_<id>`) and returns; a classification map cannot combine the lookup with the bitwise mark
+  (`mark_<id>`) and ends; a classification map cannot combine the lookup with the bitwise mark
   write in one nft statement (confirmed against the real `nft` parser), hence the extra indirection
-  instead of a map whose value is the shifted id itself. All four maps are empty in M7 — nothing
-  resolves a real fault yet — and `TestClassifyIDs` is the only way to populate a per-id chain and a
-  map element pointing at it before M8a exists.
+  instead of a map whose value is the shifted id itself. (M7 wrote `jump` here and a `return` after
+  the lookup. A jump comes back to the next RULE of the calling chain, not to the rest of the rule,
+  so with two levels holding an entry for the same traffic both ran and the last one won. M8a's
+  real faults showed it, `TestTheMoreSpecificLevelWinsWhenTwoLevelsHoldEntries` caught it on the
+  kernel, and the elements now `goto` their chain, which ends the base chain's evaluation.)
 - **Identity map.** The Phase 1 per-device address sets (`dev_<id>`, M6a-07) are replaced by one
   nftables map, `ident4` (address → device number), built by `compileIdentity` from the same known
   devices (configured, WireGuard clients, probes, and discovered devices from the observed state) the
@@ -912,15 +914,15 @@ with `domain.Resolve`'s winners instead.
   chain's order, `TestClassifyIDs`' per-id chains, `classifyNets`' coverage of test/WireGuard/remote
   prefixes, and that the chain runs before the service redirect (`ClassifyPriority` -150, before
   `service.go`'s prerouting at -100) without touching its mark. In the testbed,
-  `internal/apply/integration_classify_test.go` sets up a tc class per (id, direction), selected by a
-  filter on exactly the mark bits this chain writes, and checks per-class counters increase only for
+  `internal/apply/integration_classify_test.go` gives devices real faults (overlays), installs the
+  compiled tc tree and checks the per-class counters (and the faults' own nft counters) increase only for
   matching traffic in both directions, behind NAT, across two test networks, with non-test
-  (management) traffic's mark left untouched, and with a map element change moving an already
+  (management) traffic's mark left untouched, and with a change of the maps moving an already
   established, long-lived connection to its new class without waiting for it to end ("per packet, not
   per connection", plan §3.3: see `TestClassificationMarksOnlyMatchingTrafficBehindNAT`,
   `TestClassificationAcrossTwoTestNetworks`, `TestNonTestTrafficKeepsItsMarkUntouched`,
   `TestAMapChangeMovesAnEstablishedConnectionToItsNewClass`).
-  `internal/engine/integration_classify_test.go` runs the same tc-probe mechanism for a WireGuard
+  `internal/engine/integration_classify_test.go` runs the same checks for a WireGuard
   client network host, as both initiator and destination, and over a WireGuard link
   (`TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination`,
   `TestClassificationOverAWireGuardLink`). `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`
@@ -935,8 +937,9 @@ with `domain.Resolve`'s winners instead.
 
 ## Overlays and precedence (M8a)
 
-The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps. The
-API, the engine's state owner, the compiler's tc output and the kernel tests are the next steps.
+The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps, and the
+compiler's side of it (the last subsection). The API, the engine's state owner and the apply loop are
+the next steps.
 
 - **Store** (`internal/overlay`). Holds the active overlays in memory; a restart starts empty
   (plan §2.1.1). `Put` takes an owner and a validated request (`domain.ValidateOverlay`, references
@@ -985,6 +988,95 @@ API, the engine's state owner, the compiler's tc output and the kernel tests are
   random worlds. `uplink` is the complement of the known prefixes; hostnames are not in a table
   (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. See
   `docs/open-items.md` P2-M8a-01 for why group and network scopes are folded into the tables.
+
+### Faults in the compiler (M8a)
+
+`compiler.Compile` turns the winning impairment faults into ids, classification elements, mark
+chains with counters and a tc tree. It is still a pure function: the engine gives it the overlays
+(`Input.Overlays`), the allocation of the previous compile (`Input.FaultIDs`) and the limits
+(`Input.ClassLimit`, `Input.QueueBudget`), and gets `Target.Faults`, `Target.FaultIDs` (feed it back)
+and `Target.TC`. Applying the tc tree is not part of `apply.Apply` yet (M8b); the testbed tests
+install it with the executor.
+
+- **What is resolved** (`compiler/faults.go`). For every source of traffic (`World.Sources`: each
+  device with its addresses, each range that identifies a device, the stretches of the networks'
+  addresses that no device owns) the impairment family's `Table` gives the winner per piece of the
+  destination and port space. MTU, DNS, TLS, DHCP, tunnel faults and rules are not compiled here; a
+  fault that names a hostname is left out with a `hostname_unresolved` warning (M20).
+- **Fault ids.** One id (12 bits, 1 to 4095; 0 is "no fault") per winning fault, per matched device
+  when the fault has a rate, an explicit queue limit or keep order in either direction (D18); the
+  addresses no device owns share one id per winning fault (P2-M8a-03). The key is
+  `layer:overlay-or-fault-uuid:family[@device]`. A key that had an id keeps it
+  (`Input.FaultIDs`), a new key takes the lowest id the previous allocation did not use at all (a
+  released id is not handed out again while packets queued under it may still be in flight; the
+  make-before-break of M8b relies on old and new ids differing), and only when none is left a released
+  one. A fault that impairs nothing (`latency: 0ms`) still wins and shadows the less specific faults:
+  its elements go to the chain `mark_0`, which clears the id; it has no class.
+- **Classification maps.** The four maps of M7 are `flags interval` maps: an element is a range of
+  source addresses, a range of destinations, a protocol and a range of ports, disjoint from every
+  other element of its map, because the compiler splits overlapping selectors (`Table`) and the
+  sources' claims (`partitionSources`: a device's own address, then the smaller range, then the
+  stretch). Elements are written in the form nft prints them (an address, a prefix when a range is
+  exactly one, `first-last`, `tcp`/`udp`/`icmp`, ports as `n` or `first-last`), so verify can compare
+  them with `nft -j list`; sources with the same entries and touching addresses become one element.
+  A hostname, `mtu`, `dns` ... is not an element. `TestTheCompiledLookupGivesTheResolvedWinner`
+  compares the whole path (Resolve, ids, elements, the first-match lookup) for random worlds
+  (75,600 lookups per run); `TestNoTwoElementsOfAClassificationMapOverlap` checks the elements.
+- **Mark chains and counters.** `mark_<id>` writes the id (mask `0xffff000f`), counts the packet in
+  the named counters `fault_<hash of key>_up` and `_down` (by `ct direction`) and ends. The counters
+  are named by the fault's key, not by its id, so they survive every apply and every renumbering and
+  are deleted with the fault (plan §3.2).
+- **The tc tree** (`compiler/tc.go`, `compiler/netem.go`), identical on every interface classified
+  traffic leaves through (the bridges, the WireGuard interfaces, the uplink, `svc0`'s host side): an
+  HTB root `1:` with default class `1:1`, per active (id, direction) a class `1:<0x10+2·id+dir>`
+  (`rate 10gbit quantum 60000`: HTB only classifies; limits are netem's), a netem leaf whose
+  handle is the class's minor, and an `fw` filter `handle 0x000a0/0x1fff0` (id 10 upload,
+  `0x100a0/0x1fff0` download; `protocol ip prio 1`, `flowid` the class). A direction the fault does
+  not impair has no class and meets the default one. The netem configuration is always complete:
+  `limit`, `delay D J 0%`, `distribution` (only with a jitter), `loss random P C` or
+  `loss gemodel p r 1-h 1-k`, `reorder P 0%`, `duplicate P 0%`, `corrupt P 0%`, `rate R` with `0bit`
+  for none. Blackout is `loss 100%`, flapping compiles its up phase and `Netem.Down()` is the blackout
+  (M8b toggles), `keep_order` is a rate (the fault's, else 1 Gbit/s). The queue limit is the explicit one,
+  or delay+jitter × rate / 1500 bytes (rate: the fault's, else 1 Gbit/s), at least 1000 and at most the
+  class's share of the interface's memory budget (P2-M8a-02).
+- **What the VM proved first** (kernel 6.8.0-142, iproute2 6.19, nftables 1.1.6), before any compiler code
+  was written around it: an HTB root cannot be replaced or changed once it exists (`Change
+  operation not supported by specified qdisc`, so the root entry is `add` and only when it is missing
+  — `TCTarget.Entries(dev, withRoot)`), while classes, netem leaves and `fw` filters accept `replace`
+  repeatedly; a netem change keeps the correlations it is not given (`loss random 100%` after a 25%
+  correlation stays 25%) and the loss model, so every correlation is written, and `loss random 0% 0%`
+  does clear a gemodel; `reorder 0%` without a delay is fine, `reorder 25%` without one is refused;
+  `distribution` without a jitter is refused (`distribution specified but no latency and jitter
+  values`, found by the tc gate, so the compiler drops it) and `uniform` has no table (P2-M8a-05);
+  `htb rate 10gbit` without a `quantum` warns "quantum of class ... is big"; interval maps with
+  concatenated ranges, prefixes, protocols and port ranges are accepted by the kernel, and nft
+  prints an aligned range as a prefix, a one-address range as the address and `53-53` as `53`.
+- **Capacity.** More fault ids than 4095, or more classes than `Input.ClassLimit` (default 1000 on
+  x86, 200 on ARM64, counting the default class, P2-M8a-04), is a `capacity_exceeded` problem (an
+  error: the target is not applied). It names the scope of the biggest cause (`Problem.Scope`, "network
+  IoT") and lists the overlays or faults that contribute (`Problem.Faults`, the biggest first).
+- **Incremental identity updates** (`engine/applyloop.go`). The classification maps are keyed by
+  address, so a device's new address changes their elements too. `identityOps` diffs every map
+  (`compiler.DiffMap`), applies the identity map as before and the classification maps in one atomic
+  nft transaction (`Nft.ElementTransaction`: deletes first, then adds; an interval map takes no element
+  that overlaps one still there), and takes the full apply as soon as anything but map elements
+  differs (a fault that came or went: another id, chain, counter or class). `apply.VerifyMaps` checks
+  all maps afterwards. P2-M7-02 records the decision to keep the address keys, with the churn figure.
+- **Kernel gates.** The fault scenarios (`faults-mixed`, `faults-nested`, `faults-neutral`) are in
+  `transactionScenarios`, so `TestEveryCompiledRulesetIsAcceptedByTheKernel` runs them through
+  `nft -c`; `TestEveryCompiledTCTreeIsAcceptedByTheKernel` runs the executor's own `tc -batch`
+  lines for each tree twice on dummy interfaces and reads qdiscs and filters back
+  (`make vm-test ARGS='-run TestEveryCompiled -tags testbed ./internal/compiler'`). Both belong in
+  front of any change to the compiler's nft or tc output.
+- **M7's tests** use real faults now (`TestClassifyIDs` is gone). New: the more specific level wins
+  when two levels hold entries (`TestTheMoreSpecificLevelWinsWhenTwoLevelsHoldEntries`) and a
+  reordered chain is caught (`TestAReorderedLookupChainIsCaught`, on the kernel, and the structural
+  `TestAReorderedLookupChainIsNotTheLookupChain`). The executor accepts verdict elements only for
+  `mark_0` to `mark_4095` (`TestDecodeRejects`), range keys and `0xa0/0x1fff0`-style filter
+  handles.
+- **Not in this step:** the overlay store's use by the engine, the API, `explain`, coalescing, the
+  reader pool, `reset`, orphaning (the next steps of M8a); applying and verifying the tc tree, in-place
+  updates and make-before-break (M8b).
 
 ## Generated code
 

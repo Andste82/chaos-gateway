@@ -399,12 +399,15 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   done above) or asks for bit 20 to be written now, with a testbed test added that the existing
   M6b-04 scenario (DNS through the service namespace, and failing closed without it) still passes
   with the mark set on real traffic.
+- M8a: unchanged. The faults compile to ids and tc classes, the `mark_<id>` chains only touch
+  bits 4-16 (`TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark` with a real fault), and
+  nothing writes bit 20 yet.
 - Needs maintainer: yes
 - Effort: S
 
 ### P2-M7-02 Classification maps are keyed by address, not by the identity map's device number
 
-- Status: new
+- Status: decided in M8a (kept), confirmation open
 - Severity: low
 - Reason: needs-decision. "Identity maps keyed by address → device id REPLACE the per-device
   nftables sets used in Phase 1 for DHCP/device classification" can be read as meaning the
@@ -430,8 +433,23 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   (many destinations/ports per device) turns out to need the device-number indirection instead.
 - Acceptance: a maintainer confirms the interpretation, or asks for the device-number indirection
   before M8a builds on the current map shape.
-- Needs maintainer: yes
-- Effort: S (design confirmation only; M8a does the rework if the answer changes)
+- M8a outcome (decided with evidence, 2026-10-07): keep the address-keyed maps. M8a built them
+  out as interval maps (a range of source addresses, a range of destinations, protocol, a port
+  range), and the churn test `TestAnAddressChangeChangesAHandfulOfElements` measures what a device
+  that gets a new address costs: 250 devices, each with its own per-device queue (rate fault on the
+  network) and two further faults with destination and port entries, one device moves to another
+  address: 6 element changes in all maps (the identity map and the classification maps), no fault id
+  renumbered, no tc class touched. The elements that name the address are the device's own and the
+  two stretches next to it that are cut at its old and new address. A device-number indirection
+  would turn those 6 into 1-2 but would need the identity lookup on every packet and a second
+  level of maps, and it would not help the destination and port entries, which are the bulk of a
+  table. `TestAnElementTransactionMovesIntervalElementsOnTheRealKernel` shows on a real kernel that
+  such a move (delete and add in one transaction, even where the new element overlaps one that was
+  there) leaves the maps exactly as a full apply would. The engine's identity update takes these
+  element changes too (`identityOps`): a device's address change is incremental also while faults
+  are active.
+- Needs maintainer: confirmation only
+- Effort: S (design confirmation only)
 
 ### P2-M7-03 The identity map's one-second convergence target, measured on a shared CI runner
 
@@ -478,6 +496,11 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   second" stays the dedicated-hardware target, confirmed once H1 runs), or asks for the
   convergence path itself to be profiled and sped up so the original one-second bound holds on
   shared CI hardware too.
+- M8a re-check in the persistent VM (kernel 6.8.0-142, software emulation, 2 CPUs; timing is not
+  realistic there, see docs/development.md): see the figure in docs/development.md "Overlays and
+  precedence (M8a)", measured with the classification maps now in the incremental path. The
+  conclusion does not change: the bound stays 3 s on shared CI hardware and 1 s is the target for
+  dedicated hardware (H1).
 - Needs maintainer: yes
 - Effort: S (bound confirmation) to M (profiling/optimizing the convergence path, if asked for)
 
@@ -514,3 +537,83 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   chain of both).
 - Needs maintainer: yes
 - Effort: S (confirmation) to M (separate levels)
+
+### P2-M8a-02 The queue limit's packet size, memory budget and link speed are assumptions of the compiler
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.5 says the compiler computes the queue limit "from delay × rate,
+  where rate is the fault's rate or, without one, the egress interface's link speed capped at 1
+  Gbit/s, and caps the result by a memory budget per interface". The compiler does not know the
+  speed of an interface (the host description has no speed), and the plan names neither a packet
+  size nor a budget.
+- Evidence: `internal/compiler/netem.go` (`computedLimit`, `KeepOrderRate`, `QueuePacketSize`,
+  `DefaultQueueBudget`), `TestQueueLimitsAreComputedFromDelayAndRate`.
+- Task: chosen interpretation — the rate of a fault without one is the cap itself, 1 Gbit/s; the
+  packet size is 1500 bytes (an Ethernet MTU); the budget is 256 MiB per interface (`Input.QueueBudget`),
+  shared by the active classes of the interface, never below netem's own default of 1000 packets
+  (so a tree of thousands of classes keeps 1000 each and may exceed the budget; the class limit is
+  what bounds the memory then), and an explicit `queue_limit` is never changed. `keep_order`
+  without a rate uses the same 1 Gbit/s as netem's `rate`. Link speed from `ethtool` (and 100
+  Mbit/s links) is a later refinement.
+- Acceptance: a maintainer confirms the three numbers, or names others; or asks for the link speed
+  to be read from the host.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M8a-03 Unknown addresses of a network share one queue per fault, not per scope or per stretch
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.4: "Addresses in a network that are not (yet) known as devices
+  share one queue per scope until discovery adds them." A fault with a rate on a network has one id
+  per device (D18). The addresses of the network that no device owns are cut into several stretches
+  by the devices in between, and a fault can name several scopes that reach them.
+- Evidence: `internal/compiler/faults.go` (`compileFaults`: per-device key `...@shared`),
+  `TestARateFaultOnANetworkGetsOneIDPerDeviceAndOneForTheUnknownOnes`.
+- Task: chosen interpretation — the winning fault (an overlay or a configured fault, which has one
+  scope) gets one shared id for all the addresses of all stretches it reaches, however many stretches
+  the devices cut them into, so "per scope" is "per winning fault".
+- Acceptance: a maintainer confirms, or asks for one queue per stretch.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M8a-04 The class limit counts the default class and applies to every interface alike
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §3.3: "The compiler enforces a configurable class limit per
+  interface (default 1000 on x86 ...) and reports capacity_exceeded with the scope that caused it."
+  Every interface carries the same tree (the direction bit makes (id, direction) -> class the same
+  on all of them), so the number of classes is the same everywhere; it is not the number of
+  classes of one interface that carries traffic.
+- Evidence: `internal/compiler/faults.go` (`compileTC`), `TestTooManyClassesAreRefusedWithTheScopeThatCausedIt`.
+- Task: chosen interpretation — the limit counts the classes of the tree, including the default
+  class (a tree of 999 fault classes fits the default limit of 1000), one limit for all interfaces.
+  The scope in the problem is that of the fault that needs the most classes; the problem also
+  lists every fault that contributes, the biggest first, so the API can name the overlay that tipped
+  the balance.
+- Acceptance: a maintainer confirms or asks for a count per interface (which would need a tree that
+  differs between interfaces).
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M8a-05 Going back to a uniform delay distribution needs the netem qdisc to be re-created
+
+- Status: new
+- Severity: low
+- Reason: deferred (to M8b, which applies the tree in place). `tc` has no table for "uniform", and
+  netem keeps its distribution table through a `change`, so a fault whose `distribution` changes
+  from normal/pareto/paretonormal to uniform cannot be updated in place: the qdisc has to be
+  deleted and created again (which drops what is queued in it), or the fault moved to a new id. The
+  compiled configuration says what it wants (`Netem.Distribution`, empty for uniform); proven on
+  the kernel in the persistent VM that a missing distribution keeps neither loss models, nor
+  correlations (those are reset by the complete parameter set) but cannot be shown to reset the
+  table (it is not visible in `tc` output).
+- Evidence: `internal/compiler/netem.go` (`Netem.Distribution`), VM session of M8a.
+- Task: M8b's diff treats a change of the distribution to uniform as "replace the leaf" (or moves
+  the fault to a new id with make-before-break).
+- Acceptance: a test in M8b that changes a fault from `normal` to uniform and shows the delay
+  distribution of the traffic follows.
+- Needs maintainer: no
+- Effort: S

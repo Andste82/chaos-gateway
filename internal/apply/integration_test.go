@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -29,6 +30,8 @@ type gw struct {
 	seq uint64
 	// ids is the fault id allocation of the last compile, fed back so ids stay stable (plan §3.3)
 	ids map[string]int
+	// ret is the retirer of applyRetiring
+	ret *apply.Retirer
 }
 
 func newGateway(t *testing.T) *gw {
@@ -68,6 +71,21 @@ func (g *gw) compile(mods ...func(*compiler.Input)) *compiler.Target {
 	tg := compiler.Compile(in)
 	g.ids = tg.FaultIDs
 	return tg
+}
+
+// applyRetiring is the engine's apply: a class that no fault id uses any more stays for the retirer.
+func (g *gw) applyRetiring(tg *compiler.Target) *apply.Result {
+	g.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if g.ret == nil {
+		g.ret = apply.NewRetirer(&clock.Real{})
+	}
+	res, err := apply.ApplyWith(ctx, g.exec(), g.ns(), tg, g.ret)
+	if err != nil {
+		g.t.Fatalf("apply: %v\n%s", err, g.dump())
+	}
+	return res
 }
 
 func (g *gw) apply(tg *compiler.Target) *apply.Result {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
-	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/testbed"
 )
 
@@ -45,8 +44,8 @@ func TestAnOverlayCreatedOverTheAPIIsInTheKernelAndItsCountersComeBack(t *testin
 		}
 	}
 
-	// the compiled tc tree of the active state (the same compile the apply loop does), installed the
-	// way the fault engine will (M8b)
+	// the compiled tc tree of the active state (the same compile the apply loop does); the engine put it
+	// in the kernel before the write was answered (M8b)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	pv, err := g.e.Preview(ctx, g.activeID())
@@ -58,13 +57,6 @@ func TestAnOverlayCreatedOverTheAPIIsInTheKernelAndItsCountersComeBack(t *testin
 		t.Fatalf("the active state has no tc tree: %+v", pv.Problems)
 	}
 	var up, down string
-	for _, dev := range tg.TC.Devs {
-		steps, err := executor.Plan(&executor.TC{Target: executor.Target{}, Entries: tg.TC.Entries(dev, true)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		top.GW.MustStdin(steps[0].Cmd.Stdin, "tc", steps[0].Cmd.Args...)
-	}
 	for _, c := range tg.TC.Classes {
 		if c.ID == f.ID && c.Dir == compiler.Upload {
 			up = c.ClassID()

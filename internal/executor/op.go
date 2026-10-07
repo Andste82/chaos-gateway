@@ -311,7 +311,7 @@ type Bird struct {
 // Read queries kernel state through the standard tools.
 type Read struct {
 	Target
-	What  string `json:"what"` // links | addrs | routes | rules | nft | qdiscs | classes | filters | offloads
+	What  string `json:"what"` // links | addrs | routes | rules | nft | qdiscs | classes | filters | tc | offloads
 	Dev   string `json:"dev,omitempty"`
 	Table string `json:"table,omitempty"` // routes: table name or number, empty means all
 	// Dst and Src are the IPv4 addresses of a route_get read: the destination to look up and the
@@ -342,6 +342,9 @@ const (
 	ReadQdiscs   = "qdiscs"
 	ReadClasses  = "classes"
 	ReadFilters  = "filters"
+	// ReadTC returns the whole tc state of one interface, with counters, in the normalized form of
+	// linux.NormTree (`tc -s -j` qdisc, class and filter listings, normalized). Dev is required.
+	ReadTC       = "tc"
 	ReadOffloads = "offloads"
 	// ReadSysctl returns the value of one parameter (Name, Dev) as a number.
 	ReadSysctl = "sysctl"

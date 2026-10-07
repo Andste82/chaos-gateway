@@ -172,16 +172,20 @@ func TestPlanTCGolden(t *testing.T) {
 	  {"object":"qdisc","action":"replace","dev":"wan0","parent":"1:10","handle":"10:","args":["netem","delay","50ms","loss","1%"]},
 	  {"object":"filter","action":"add","dev":"wan0","parent":"1:","handle":"0x10","args":["protocol","ip","prio","1","fw","flowid","1:10"]},
 	  {"object":"qdisc","action":"add","dev":"lan0","parent":"ingress"},
-	  {"object":"qdisc","action":"delete","dev":"wan0","parent":"root"}]}`)
+	  {"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"1:"}]}`)
 	want := `qdisc replace dev wan0 root handle 1: htb default 10
 class replace dev wan0 parent 1: classid 1:10 htb rate 1mbit
 qdisc replace dev wan0 parent 1:10 handle 10: netem delay 50ms loss 1%
 filter add dev wan0 parent 1: handle 0x10 protocol ip prio 1 fw flowid 1:10
 qdisc add dev lan0 ingress
-qdisc delete dev wan0 root
 `
-	if len(steps) != 1 || steps[0].Cmd.Tool != ToolTC || strings.Join(steps[0].Cmd.Args, " ") != "-batch -" || steps[0].Cmd.Stdin != want || steps[0].Cmd.NS != "gw" {
+	if len(steps) != 2 || steps[0].Cmd.Tool != ToolTC || strings.Join(steps[0].Cmd.Args, " ") != "-batch -" || steps[0].Cmd.Stdin != want || steps[0].Cmd.NS != "gw" || steps[0].Idempotent {
 		t.Fatalf("%+v\n%s", steps[0].Cmd, steps[0].Cmd.Stdin)
+	}
+	// deletions are a step of their own: `-force` lets one answer of "not there" pass without
+	// keeping the lines behind it from running, and the step is idempotent
+	if st := steps[1]; !st.Idempotent || strings.Join(st.Cmd.Args, " ") != "-force -batch -" || st.Cmd.Stdin != "qdisc delete dev wan0 root handle 1:\n" || st.Cmd.NS != "gw" {
+		t.Fatalf("%+v", st)
 	}
 }
 

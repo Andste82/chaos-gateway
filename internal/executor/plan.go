@@ -276,27 +276,55 @@ func ruleLine(r Rule) string {
 	return strings.Join(f, " ")
 }
 
+// planTC turns the entries into `tc -batch` steps. Entries run in the order given; a run of deletions
+// is a step of its own, `tc -force -batch`, marked idempotent: deleting what is already gone (a class a
+// previous apply removed, a filter that was never there) is the state the caller asked for, and with
+// -force one such answer does not keep the lines after it from running. Every other answer of a
+// deletion, and every failure of the other entries, is an error (see onlyBenignTC).
 func planTC(o *TC) []Step {
+	var steps []Step
 	var lines []string
-	for _, e := range o.Entries {
-		l := []string{e.Object, e.Action, "dev", e.Dev}
-		switch e.Parent {
-		case "":
-		case "root", "ingress", "clsact":
-			l = append(l, e.Parent)
-		default:
-			l = append(l, "parent", e.Parent)
+	var deleting bool
+	flush := func() {
+		if len(lines) == 0 {
+			return
 		}
-		if e.Handle != "" {
-			l = append(l, "handle", e.Handle)
+		args := []string{"-batch", "-"}
+		if deleting {
+			args = []string{"-force", "-batch", "-"}
 		}
-		if e.ClassID != "" {
-			l = append(l, "classid", e.ClassID)
-		}
-		l = append(l, e.Args...)
-		lines = append(lines, strings.Join(l, " "))
+		steps = append(steps, Step{Idempotent: deleting, Cmd: Command{Tool: ToolTC, Args: args, Stdin: strings.Join(lines, "\n") + "\n", NS: o.NS}})
+		lines = nil
 	}
-	return []Step{{Cmd: Command{Tool: ToolTC, Args: []string{"-batch", "-"}, Stdin: strings.Join(lines, "\n") + "\n", NS: o.NS}}}
+	for _, e := range o.Entries {
+		if (e.Action == "delete") != deleting {
+			flush()
+			deleting = e.Action == "delete"
+		}
+		lines = append(lines, tcLine(e))
+	}
+	flush()
+	return steps
+}
+
+// tcLine is one entry as a line of a tc batch (without the leading "tc").
+func tcLine(e TCEntry) string {
+	l := []string{e.Object, e.Action, "dev", e.Dev}
+	switch e.Parent {
+	case "":
+	case "root", "ingress", "clsact":
+		l = append(l, e.Parent)
+	default:
+		l = append(l, "parent", e.Parent)
+	}
+	if e.Handle != "" {
+		l = append(l, "handle", e.Handle)
+	}
+	if e.ClassID != "" {
+		l = append(l, "classid", e.ClassID)
+	}
+	l = append(l, e.Args...)
+	return strings.Join(l, " ")
 }
 
 func planDockerUser(o *DockerUser) []Step {
@@ -369,6 +397,9 @@ func ReadCommand(o *Read) Command {
 		if o.Dev != "" {
 			c.Args = append(c.Args, "dev", o.Dev)
 		}
+	case ReadTC:
+		// the qdisc listing; readTC asks for the other two with tcListing
+		return tcListing(o, "qdisc")
 	case ReadOffloads:
 		c.Tool, c.Args = ToolEthtool, []string{"-k", o.Dev}
 	case ReadWireGuard:
@@ -388,6 +419,12 @@ func ReadCommand(o *Read) Command {
 		c.Tool, c.Args = ToolIptables, []string{"-w", "5", "-S", DockerUserChain}
 	}
 	return c
+}
+
+// tcListing is one of the three listings a tc read consists of: qdisc, class or filter, with
+// counters and JSON output, for the one interface of the read.
+func tcListing(o *Read, kind string) Command {
+	return Command{Tool: ToolTC, Args: []string{"-s", "-j", kind, "show", "dev", o.Dev}, NS: o.NS}
 }
 
 func sysctlPath(name, dev string) string {

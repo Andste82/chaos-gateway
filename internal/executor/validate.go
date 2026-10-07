@@ -583,7 +583,10 @@ func (e TCEntry) validate() error {
 	if e.Object == "filter" && (e.Parent == "root") {
 		return errors.New("a filter hangs below a handle, not root")
 	}
-	return nil
+	if err := e.checkOwnHandles(); err != nil {
+		return err
+	}
+	return e.checkTCArgs()
 }
 
 var filterHandle = regexp.MustCompile(`^(0x[0-9a-fA-F]{1,8}(/0x[0-9a-fA-F]{1,8})?|[0-9]{1,10}|[0-9a-fA-F]{1,3}::?[0-9a-fA-F]{1,3})$`)
@@ -906,7 +909,7 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRouteGet, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRouteGet, ReadRules, ReadNft, ReadQdiscs, ReadClasses, ReadFilters, ReadTC, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS); err != nil {
 		return err
 	}
 	if o.What == ReadServiceNS {
@@ -942,7 +945,7 @@ func (o Read) validate() error {
 	} else if o.Dst != "" || o.Src != "" {
 		return errors.New("dst and src are only for route_get reads")
 	}
-	if (o.What == ReadOffloads || o.What == ReadWireGuard) && o.Dev == "" {
+	if (o.What == ReadOffloads || o.What == ReadWireGuard || o.What == ReadTC) && o.Dev == "" {
 		return errors.New(o.What + " needs a dev")
 	}
 	if o.Table != "" && (o.What != ReadRoutes || !readTbl.MatchString(o.Table)) {

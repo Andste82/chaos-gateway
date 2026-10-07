@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -713,5 +714,51 @@ func TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe(t *testing
 	change(uniform2)
 	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
 		t.Fatalf("an unchanged leaf was touched:\n%s", x.tcLog())
+	}
+}
+
+// The plan says which leaves it makes new (their counters start at zero) and whether the nft table is
+// new: what the engine's counter epochs follow.
+func TestThePlanNamesTheLeavesItMakesNewAndATableThatIsNew(t *testing.T) {
+	const normal = `{target: {device: dev-a}, fault: {latency: 100ms, jitter: 20ms, distribution: normal}}`
+	const uniform = `{target: {device: dev-a}, fault: {latency: 100ms, jitter: 20ms}}`
+	const slower = `{target: {device: dev-a}, fault: {latency: 150ms, jitter: 20ms}}`
+	x := newTCEnv(t)
+	o := x.overlay(normal)
+	tg := x.compileWith(o)
+	res := x.applyRetiring(tg)
+	if !res.Plan.NftNew {
+		t.Error("the first apply did not find the nft table new")
+	}
+	var want []string
+	for _, c := range tg.TC.Classes {
+		for _, d := range tcDevs {
+			want = append(want, d+" "+c.ClassID())
+		}
+	}
+	got := append([]string(nil), res.Plan.QueuesCreated...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") || len(want) != 2*len(tcDevs) {
+		t.Errorf("the first plan makes %v new, want %v", got, want)
+	}
+	change := func(body string) *apply.Result {
+		n := x.overlay(body)
+		o.Target, o.Fault = n.Target, n.Fault
+		return x.applyRetiring(x.compileWith(o))
+	}
+	// the same target again, and a change in place: no leaf is new, the table is not
+	if res = x.applyRetiring(x.compileWith(o)); res.Plan.NftNew || len(res.Plan.QueuesCreated) != 0 {
+		t.Errorf("a re-apply: %+v %v", res.Plan.NftNew, res.Plan.QueuesCreated)
+	}
+	if res = change(`{target: {device: dev-a}, fault: {latency: 120ms, jitter: 20ms, distribution: normal}}`); len(res.Plan.QueuesCreated) != 0 {
+		t.Errorf("a change in place makes %v new", res.Plan.QueuesCreated)
+	}
+	// a table that has to go: the leaves are deleted and made again
+	if res = change(uniform); len(res.Plan.QueuesCreated) != len(want) {
+		t.Errorf("normal -> uniform makes %v new, want all %d leaves", res.Plan.QueuesCreated, len(want))
+	}
+	if res = change(slower); len(res.Plan.QueuesCreated) != 0 {
+		t.Errorf("a change of a uniform leaf makes %v new", res.Plan.QueuesCreated)
 	}
 }

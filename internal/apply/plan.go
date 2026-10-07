@@ -26,6 +26,13 @@ type Plan struct {
 	// Dists is the distribution table ("normal", "" for none) every leaf of the target holds once the
 	// plan has run, by "interface handle"; a leaf whose table is not known is left out.
 	Dists map[string]string
+	// QueuesCreated are the netem leaves the plan makes new, as "interface class" ("dum0 1:24"):
+	// their counters start at zero when it has run. A leaf the plan changes in place is not in it,
+	// its counters go on (the kernel keeps them across a replace).
+	QueuesCreated []string
+	// NftNew is true when the kernel has no nftables table of Chaos Gateway's own yet: every named
+	// counter starts at zero with this plan.
+	NftNew bool
 }
 
 // Empty reports whether the plan changes nothing but the generation: no link, route or
@@ -321,7 +328,8 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 
 	// ---- tc: create and change, before the classification switches -------------------------
 	tp := planTC(t, s, removed, mem)
-	p.Grace, p.Dists = tp.grace, tp.dists
+	p.Grace, p.Dists, p.QueuesCreated = tp.grace, tp.dists, tp.created
+	p.NftNew = s.Nft == nil || len(s.Nft.Tables()) == 0
 	if len(tp.before) > 0 {
 		add("tc: "+strings.Join(tp.words, "; "), &executor.TC{Target: tg, Entries: tp.before})
 	}

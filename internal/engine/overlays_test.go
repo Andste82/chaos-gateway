@@ -132,7 +132,7 @@ func (h *harness) verifyKernelWithOverlays() {
 		h.t.Fatal(err)
 	}
 	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs,
-		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation}})
+		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation}, ClassLimit: h.classLimit})
 	st, err = apply.ReadState(ctx, apply.Local{E: h.ex}, "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
 	if err != nil {
 		h.t.Fatal(err)
@@ -507,6 +507,11 @@ func TestAnOverlayThatExceedsTheClassLimitIsRefusedAndNothingChanges(t *testing.
 func (h *harness) startWith(cfg engine.Config) {
 	h.t.Helper()
 	cfg.Store, cfg.Exec, cfg.Clock = h.st, apply.Local{E: h.ex}, h.clk
+	if cfg.ClassLimit == 0 {
+		// not the architecture default: a burst of 200 overlays does not fit the 200 classes of ARM64
+		cfg.ClassLimit = compiler.DefaultClassLimitX86
+	}
+	h.classLimit = cfg.ClassLimit
 	e, err := engine.New(cfg)
 	if err != nil {
 		h.t.Fatal(err)

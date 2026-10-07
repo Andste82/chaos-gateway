@@ -38,6 +38,8 @@ type harness struct {
 	e    *engine.Engine
 	base *model.Configuration
 	dir  string
+	// classLimit is the class limit the engine was started with (0: the architecture default)
+	classLimit int
 }
 
 func ptr[T any](v T) *T { return &v }

@@ -314,6 +314,10 @@ type Read struct {
 	What  string `json:"what"` // links | addrs | routes | rules | nft | qdiscs | classes | filters | offloads
 	Dev   string `json:"dev,omitempty"`
 	Table string `json:"table,omitempty"` // routes: table name or number, empty means all
+	// Dst and Src are the IPv4 addresses of a route_get read: the destination to look up and the
+	// source address of the packet; Dev is then the interface the packet arrives on (`iif`).
+	Dst string `json:"dst,omitempty"`
+	Src string `json:"src,omitempty"`
 	// Name selects the parameter of a sysctl read (ip_forward | accept_ra | disable_ipv6).
 	Name string `json:"name,omitempty"`
 	// Instance names the BIRD instance of a bird read.
@@ -326,9 +330,13 @@ type Read struct {
 
 // Read targets.
 const (
-	ReadLinks    = "links"
-	ReadAddrs    = "addrs"
-	ReadRoutes   = "routes"
+	ReadLinks  = "links"
+	ReadAddrs  = "addrs"
+	ReadRoutes = "routes"
+	// ReadRouteGet asks the kernel which route a packet takes (`ip -j route get Dst from Src iif
+	// Dev`, RouteGetResult): the policy rules and the tables they select, as the forwarding path
+	// evaluates them. It changes nothing.
+	ReadRouteGet = "route_get"
 	ReadRules    = "rules"
 	ReadNft      = "nft"
 	ReadQdiscs   = "qdiscs"

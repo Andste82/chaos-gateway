@@ -674,3 +674,53 @@ func TestRenamingANetworkMovesItsPortsToTheNewBridge(t *testing.T) {
 		t.Error("br-lab still exists after the rename")
 	}
 }
+
+// ReadRouteGet answers "which route does this packet take" the way `ip route get` does: the policy
+// rules decide the table (traffic from a test network is looked up in table 100, plan §2.2), the
+// longest prefix of that table the route, and no route is an answer, not an error.
+func TestTheRouteAPacketTakesIsReadFromTheKernel(t *testing.T) {
+	e := newEnv(t)
+	tg := e.compile()
+	e.apply(tg)
+	ctx := context.Background()
+
+	r, err := apply.ReadRouteGet(ctx, e.exec(), "", "198.51.100.7", "10.10.0.31", "br-iot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Unreachable || r.Table != "100" || r.Gateway != "203.0.113.10" || r.Dev != "wan0" || r.Iif != "br-iot" {
+		t.Errorf("from a test network to the Internet: %+v", r)
+	}
+	// the destination is in the other test network: table 100 holds its connected route
+	r, err = apply.ReadRouteGet(ctx, e.exec(), "", "10.20.0.5", "10.10.0.31", "br-iot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Unreachable || r.Table != "100" || r.Dev != "br-lab" || r.Gateway != "" {
+		t.Errorf("between the test networks: %+v", r)
+	}
+	// a downstream route of the network
+	r, err = apply.ReadRouteGet(ctx, e.exec(), "", "10.30.0.9", "10.20.0.31", "br-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Table != "100" || r.Gateway != "10.10.0.2" || r.Dev != "br-iot" {
+		t.Errorf("a downstream route: %+v", r)
+	}
+	// without a source the lookup is the gateway's own (main table)
+	r, err = apply.ReadRouteGet(ctx, e.exec(), "", "192.168.56.9", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Unreachable || r.Dev != "mgmt0" || (r.Table != "" && r.Table != "main") {
+		t.Errorf("a host route of the main table: %+v", r)
+	}
+	// an interface that does not exist is an error, an address nothing routes is an answer
+	if _, err := apply.ReadRouteGet(ctx, e.exec(), "", "198.51.100.7", "10.10.0.31", "nonesuch"); err == nil {
+		t.Error("an unknown ingress interface was accepted")
+	}
+	e.k.SetMainDefault("", "")
+	if r, err = apply.ReadRouteGet(ctx, e.exec(), "", "198.51.100.7", "", ""); err != nil || !r.Unreachable || r.Error == "" {
+		t.Errorf("no route: %+v %v", r, err)
+	}
+}

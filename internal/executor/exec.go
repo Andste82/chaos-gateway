@@ -629,6 +629,10 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r.Exit != 0 && o.What == ReadRouteGet && routeGetNoRoute(r.Stderr) {
+		// no route is an answer to "which route does this packet take", not a failure of the read
+		return json.Marshal(&linux.RouteGet{Dst: o.Dst, From: o.Src, Iif: o.Dev, Unreachable: true, Error: strings.TrimSpace(r.Stderr)})
+	}
 	if r.Exit != 0 {
 		// a missing table is an empty state, not a failure: the ruleset is created on the first apply
 		if o.What == ReadDockerUser && strings.Contains(r.Stderr, "No chain/target/match by that name") {
@@ -647,6 +651,8 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		v, err = linux.ParseAddrs([]byte(r.Stdout))
 	case ReadRoutes:
 		v, err = linux.ParseRoutes([]byte(r.Stdout))
+	case ReadRouteGet:
+		v, err = linux.ParseRouteGet([]byte(r.Stdout))
 	case ReadRules:
 		v, err = linux.ParseRules([]byte(r.Stdout))
 	case ReadNft:
@@ -921,4 +927,18 @@ func realInode(path string) (uint64, bool) {
 		return 0, false
 	}
 	return st.Ino, true
+}
+
+// routeGetNoRoute reports whether `ip route get` failed because the kernel has no route for the
+// packet (as opposed to a missing interface or a malformed request, which stay errors). The
+// answers are the errno texts of the route lookup: ENETUNREACH ("Network is unreachable"), EHOSTUNREACH
+// ("No route to host", also the answer of a packet the reverse-path check refuses), EINVAL for a
+// blackhole route ("Invalid argument") and EACCES for a prohibit route ("Permission denied").
+func routeGetNoRoute(stderr string) bool {
+	for _, m := range []string{"Network is unreachable", "No route to host", "Invalid argument", "Permission denied"} {
+		if strings.Contains(stderr, m) {
+			return true
+		}
+	}
+	return false
 }

@@ -351,6 +351,14 @@ func ReadCommand(o *Read) Command {
 		if o.Dev != "" {
 			c.Args = append(c.Args, "dev", o.Dev)
 		}
+	case ReadRouteGet:
+		c.Tool, c.Args = ToolIP, []string{"-4", "-j", "route", "get", o.Dst}
+		if o.Src != "" {
+			c.Args = append(c.Args, "from", o.Src)
+		}
+		if o.Dev != "" {
+			c.Args = append(c.Args, "iif", o.Dev)
+		}
 	case ReadRules:
 		c.Tool, c.Args = ToolIP, []string{"-j", "rule", "show"}
 	case ReadNft:

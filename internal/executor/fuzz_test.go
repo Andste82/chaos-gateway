@@ -21,6 +21,8 @@ var fuzzSeeds = []string{
 	`{"type":"assign_interfaces","devs":["wan0","lan0"]}`,
 	`{"type":"assign_interfaces","devs":["wan0","lan0"],"os_owned":["wan0"]}`,
 	`{"type":"read","what":"routes","table":"100"}`,
+	`{"type":"read","what":"route_get","dst":"203.0.113.9","src":"10.10.0.31","dev":"br-lan0"}`,
+	`{"type":"read","what":"route_get","dst":"203.0.113.9 oif lo","src":"10.10.0.31"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"ruleset":null}}]}}`,
 	`{"type":"routing","rules":[{"action":"delete","family":4,"priority":32766,"table":254}]}`,
 	`{"type":"tc","entries":[{"object":"qdisc","action":"add","dev":"wan0\n","parent":"root","args":["netem;id"]}]}`,

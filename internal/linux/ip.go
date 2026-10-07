@@ -132,3 +132,34 @@ func ParseRoutes(data []byte) ([]Route, error) { return parseList[Route]("ip rou
 
 // ParseRules parses `ip -j rule show`.
 func ParseRules(data []byte) ([]Rule, error) { return parseList[Rule]("ip rule", data) }
+
+// RouteGet is the answer of `ip -j route get DST [from SRC iif DEV]`: the route the kernel picks for
+// one packet, after the policy rules.
+type RouteGet struct {
+	Dst     string `json:"dst"`
+	From    string `json:"from"`
+	Gateway string `json:"gateway"`
+	Dev     string `json:"dev"`
+	// Table is the routing table the lookup ended in; empty means main.
+	Table   string `json:"table"`
+	PrefSrc string `json:"prefsrc"`
+	Iif     string `json:"iif"`
+	// Type is "unicast" (empty), "local", "blackhole", "unreachable" or "prohibit".
+	Type string `json:"type"`
+	// Unreachable is set by the executor when the kernel finds no route (the tool exits with an
+	// error then, which is an answer here); Error holds the tool's message.
+	Unreachable bool   `json:"unreachable,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// ParseRouteGet parses `ip -j route get`: one entry.
+func ParseRouteGet(data []byte) (*RouteGet, error) {
+	l, err := parseList[RouteGet]("ip route get", data)
+	if err != nil {
+		return nil, err
+	}
+	if len(l) == 0 {
+		return nil, fmt.Errorf("parse ip route get: no route in the answer")
+	}
+	return &l[0], nil
+}

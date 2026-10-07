@@ -534,17 +534,17 @@ func assertSortedIDs(fs []Fault) bool {
 }
 
 func TestAssignFaultIDs(t *testing.T) {
-	ids, ok := assignFaultIDs([]string{"c", "a", "b"}, nil)
+	ids, ok := assignFaultIDs([]string{"c", "a", "b"}, nil, nil)
 	if !ok || ids["a"] != 1 || ids["b"] != 2 || ids["c"] != 3 {
 		t.Errorf("%v", ids)
 	}
 	// keep what was, add the new one above, skip released ids
-	ids, ok = assignFaultIDs([]string{"a", "c", "d"}, map[string]int{"a": 1, "b": 2, "c": 3})
+	ids, ok = assignFaultIDs([]string{"a", "c", "d"}, map[string]int{"a": 1, "b": 2, "c": 3}, nil)
 	if !ok || ids["a"] != 1 || ids["c"] != 3 || ids["d"] != 4 {
 		t.Errorf("%v", ids)
 	}
 	// a damaged previous allocation (a duplicate, an out-of-range id) does not give two keys one id
-	ids, ok = assignFaultIDs([]string{"a", "b", "c"}, map[string]int{"a": 5, "b": 5, "c": 99999})
+	ids, ok = assignFaultIDs([]string{"a", "b", "c"}, map[string]int{"a": 5, "b": 5, "c": 99999}, nil)
 	if !ok || len(map[int]bool{ids["a"]: true, ids["b"]: true, ids["c"]: true}) != 3 || ids["c"] > MarkIDMax || ids["c"] < 1 {
 		t.Errorf("%v", ids)
 	}
@@ -553,10 +553,10 @@ func TestAssignFaultIDs(t *testing.T) {
 	for i := 0; i < MarkIDMax; i++ {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
 	}
-	if ids, ok = assignFaultIDs(keys, nil); !ok || len(ids) != MarkIDMax {
+	if ids, ok = assignFaultIDs(keys, nil, nil); !ok || len(ids) != MarkIDMax {
 		t.Fatalf("%d ids, ok %v", len(ids), ok)
 	}
-	if _, ok = assignFaultIDs(append(keys, "one too many"), nil); ok {
+	if _, ok = assignFaultIDs(append(keys, "one too many"), nil, nil); ok {
 		t.Error("4096 keys got ids")
 	}
 	// reusing released ids when nothing else is free
@@ -566,7 +566,7 @@ func TestAssignFaultIDs(t *testing.T) {
 	}
 	next := append([]string{}, keys[1:]...)
 	next = append(next, "fresh")
-	if ids, ok = assignFaultIDs(next, prev); !ok || ids["fresh"] != 1 {
+	if ids, ok = assignFaultIDs(next, prev, nil); !ok || ids["fresh"] != 1 {
 		t.Errorf("fresh got %d (ok %v), want the released 1", ids["fresh"], ok)
 	}
 }

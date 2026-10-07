@@ -16,8 +16,8 @@ const tcClassRateBytes = 1_250_000_000
 
 // Norm is the configuration of the netem qdisc as the listing shows it. Two things are not visible:
 // the distribution table (a qdisc keeps its table through a change, so it is not part of the
-// comparison; changing to uniform needs the qdisc to be created again, P2-M8a-05), and the
-// flapping phase, which is the fault engine's business and not a netem attribute.
+// comparison; the apply remembers which table it gave a leaf and makes the leaf again to go back to
+// uniform), and the flapping phase, which is the fault engine's business and not a netem attribute.
 func (n Netem) Norm() linux.NetemSpec {
 	s := linux.NetemSpec{
 		Limit:         n.Limit,

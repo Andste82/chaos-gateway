@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -89,6 +90,21 @@ func (c TCClass) FilterHandle() string { return fmt.Sprintf("0x%05x/0x%05x", c.M
 // classMinor numbers the classes of a fault id: two minors per id, upload then download.
 func classMinor(id int, dir Direction) int { return tcFirstMinor + 2*id + int(dir) }
 
+// ClassIDToFault is the inverse of the class numbering: the fault id and direction of a class id in tc
+// notation ("1:24"); false for the default class and for anything that is not a class of a fault.
+func ClassIDToFault(classID string) (id int, dir Direction, ok bool) {
+	maj, min, found := strings.Cut(classID, ":")
+	if !found || maj != "1" {
+		return 0, 0, false
+	}
+	m, err := strconv.ParseUint(min, 16, 32)
+	if err != nil || m < tcFirstMinor+2 || m > tcFirstMinor+2*MarkIDMax+1 {
+		return 0, 0, false
+	}
+	n := int(m) - tcFirstMinor
+	return n / 2, Direction(n % 2), true
+}
+
 // MarkOf is the mark value of a fault id and direction (what the classification chain writes).
 func MarkOf(id int, dir Direction) uint32 {
 	return uint32(id)<<MarkIDShift | uint32(dir)<<MarkDirectionBit
@@ -170,6 +186,10 @@ func (tc *TCTarget) ClassesPerDevice() int {
 	}
 	return len(tc.Classes) + 1
 }
+
+// TCCandidates lists the interfaces the tc tree is (or, with no active fault, would be) installed on:
+// the apply reads them, to put the tree there or to take a tree that is no longer wanted away.
+func (t *Target) TCCandidates() []string { return t.tcDevs() }
 
 // tcDevs lists the interfaces a classified packet can leave through.
 func (t *Target) tcDevs() []string {

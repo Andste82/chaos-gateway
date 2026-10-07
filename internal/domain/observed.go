@@ -129,13 +129,11 @@ func (c claim) beats(o claim) bool {
 	return c.device < o.device
 }
 
-// ResolveIdentity works out the addresses of all devices from the configuration and the
-// observed state. prev is the result of the last resolution: an address that a device had and
-// that still carries connections stays mapped to it, unless it now belongs to another device.
-// The configuration must be normalized.
-func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Identity {
-	idx, _ := BuildIndex(cfg)
-	macs := map[string]string{} // MAC → device
+// deviceMACs maps the MAC addresses of the devices of the namespace to the device. The first
+// configured device that lists a MAC keeps it, and a probe never takes over the MAC of a
+// configured device.
+func deviceMACs(idx *Index, probes map[string]ProbeObservation) map[string]string {
+	macs := map[string]string{}
 	for _, id := range sortedKeys(idx.Devices) {
 		d := idx.Devices[id]
 		if d.Device != nil {
@@ -146,14 +144,23 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			}
 		}
 	}
-	for _, id := range sortedKeys(obs.Probes) {
-		// a probe never takes over the MAC of a configured device
-		if m := lower(obs.Probes[id].MAC); m != "" {
+	for _, id := range sortedKeys(probes) {
+		if m := lower(probes[id].MAC); m != "" {
 			if _, taken := macs[m]; !taken {
 				macs[m] = id
 			}
 		}
 	}
+	return macs
+}
+
+// ResolveIdentity works out the addresses of all devices from the configuration and the
+// observed state. prev is the result of the last resolution: an address that a device had and
+// that still carries connections stays mapped to it, unless it now belongs to another device.
+// The configuration must be normalized.
+func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Identity {
+	idx, _ := BuildIndex(cfg)
+	macs := deviceMACs(idx, obs.Probes)
 
 	claims := map[netip.Addr][]claim{}
 	add := func(ip netip.Addr, c claim) {

@@ -227,7 +227,8 @@ accepts a closed set of operations (`nft_apply`, `nft_add_elements`, `nft_del_el
 (`executor.Decode`) is strict and is where most of the scope is enforced:
 nftables only `inet chaosgw`, routes and rules only in tables 100-110 and always with protocol tag
 201, tc arguments only from a token allowlist without the keywords that override the validated
-fields. What depends on run-time state, the interfaces assigned to Chaos Gateway, is checked by the
+fields, in Chaos Gateway's own handles (root `1:`, classes `1:<minor>`, leaves `<minor>:`, filters
+on `1:`, M8b; see "tc state and tc operations (M8b)"). What depends on run-time state, the interfaces assigned to Chaos Gateway, is checked by the
 executor's worker before the first operation of a request runs. The `ip`, `tc` and `iptables`
 batches are built from validated fields only, never from text sent by the caller.
 
@@ -1200,7 +1201,117 @@ install it with the executor.
   orphans. Runs are not part of this yet (`aborted_runs` follows with M15). Tests:
   `internal/engine/overlays_revision_test.go`, `TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced`
   in `internal/api/overlays_test.go`.
-- **Not in M8a:** in-place tc updates, make-before-break when a fault's parameters change, and measurement tests of the impaired traffic (M8b). M8a applies the complete tc tree of the compiled target as a whole and verifies it.
+- **Not in M8a:** applying the tc tree to the kernel at all (`apply.Apply` neither applies nor verifies `Target.TC`; the testbed tests install it with the executor), in-place tc updates, make-before-break when a fault's id changes, and measurement tests of the impaired traffic (M8b). M8b's first step (the reader, the normalizer and the executor's tc operations) is described under "tc state and tc operations (M8b)".
+
+## tc state and tc operations (M8b)
+
+The first step of M8b, the one every later step stands on: reading the kernel's tc state in a form
+that can be compared with the compiler's tree, and the executor operations that change it. Applying
+the tree (`apply.Apply`), make-before-break, the engine's verify and the queue statistics follow in
+the next steps; until then the tree is installed only by the testbed tests.
+
+### The `tc -j` normalizer
+
+`linux.NormalizeTC(dev, qdiscs, classes, filters)` (`internal/linux/tcnorm.go`) turns the three
+listings of one interface into a `linux.NormTree`; the executor's read `tc` (`ReadTC`, `Dev`
+required) runs `tc -s -j qdisc|class|filter show dev X` and returns it. What it does, and why each
+step was needed (all of it read from real output, recorded by `internal/linux/testdata/tc/record.sh`
+on kernel 6.8.0-142 with iproute2 6.19.0 into the fixtures next to it):
+
+- **One identity per object.** A qdisc is `handle` + `parent` (`root`, `ingress`, `clsact` or a class),
+  a class its id with the parent qdisc or class, a filter its parent, priority and selector. The tool
+  prints no `dev` when it is asked for one interface (the caller names it; with all interfaces the
+  entries of the other ones are dropped), a class under the root as `"root":true` without a parent,
+  a class's `leaf` as `"0x24"` (older versions: `"24:"`), the classid of a filter as `classid` and
+  the selector of an `fw` filter as `{"fw":{"mark":"0xa0","mask":"0x1fff0"}}` (older: `handle`), and
+  a bare header entry before each filter. The order is not stable (classes come out in hash order);
+  the normalizer sorts by number (`1:5` before `1:24`).
+- **The values the kernel reports.** Probabilities are 32-bit fractions in the kernel and `%g`
+  floats with six significant digits in the listing: 99.99999 % reads back as `1`, 0.0001 % as
+  `1.00001e-06`, 33.333333 % as `0.333333`. Delays are seconds with the same six digits
+  (`12.345678 s` prints `12.3457`), rates bytes per second (`7bit` is no rate). `NetemProb`,
+  `NetemTime` and `NetemRate` compute what the listing prints for a request, so that the compiler's
+  side (`compiler.TCTarget.Norm`, `compiler.Netem.Norm`) and the kernel's side meet. Both sides are
+  compared as `float64` after the same rounding; nothing is parsed back into percents.
+  `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports` applies 21 shapes (the edge values above,
+  every distribution, gemodel, rate truncation, a 12 s delay) to a real kernel, then changes the same
+  leaves in place to each other's shape and to the neutral set, and requires the normalized state to
+  equal the prediction every time; `TestEveryCompiledTCTreeIsAcceptedByTheKernel` does the same for
+  every compiled scenario.
+- **Configuration apart from state.** `NormTree.Spec()` drops what is not configuration: counters
+  (`Stats`, only with `-s`), the netem `seed`, the `burst`/`cburst` the kernel computes from the rate,
+  and the HTB root's `r2q` and `direct_qlen` (the kernel's defaults, the latter the interface's
+  queue length). `DiffTC(want, have)` compares Specs and lists missing, unexpected and different
+  objects, one line each. `Subtree("1:")` is the own tree: the root `1:` and everything below it;
+  the host's `mq` with its queues, a `noqueue` and the `ingress` qdisc are not part of it.
+- **The seed is the identity of a netem instance.** The kernel draws a random seed when the qdisc is
+  created and keeps it through every `change` and `replace` (fifteen listings of one qdisc between
+  as many changes: one seed; two creations of the same handles: two seeds). It is not compared, but a different seed with
+  unchanged handles says that someone created the qdisc again, which is what a counter epoch has to
+  notice (the next steps use it next to the epochs they set themselves). iproute2 versions before
+  6.x do not print it (`Seed` is then 0).
+- **Nothing is dropped silently.** A netem option the code does not know (`slot` distribution,
+  `loss state`, whatever a later iproute2 adds) ends in `Extra` as canonical JSON, a filter of another
+  kind keeps its options canonical; a listing that does not parse or whose handle is not hex is an
+  error. `FuzzNormalizeTC` runs the normalizer on arbitrary bytes.
+- **What the listing cannot show.** The HTB class's `quantum` and the netem distribution table are not
+  printed at all (P2-M8b-02). The `-s` counters of the three listings come from three tool runs and are
+  not one instant.
+
+Counters, as the recordings show them (`NormStats`): a netem qdisc's `packets` and `bytes` count what
+left it, so a packet that waits for its delay is not in them but in `backlog`/`qlen`; `drops` counts
+everything the qdisc dropped, the loss it is configured to produce and the packets that did not fit
+its limit alike (`overlimits` stays 0: 25 packets into a limit of 10 are `drops 25`); the HTB root's
+and classes' counters count at enqueue into the class. A class's leaf is not in its counters
+(`lended`, `borrowed`, `tokens` are HTB's own).
+
+### tc operations on the kernel
+
+What the kernel does with the operations the fault engine will use, measured in the persistent VM
+before the code was written and pinned by tests (`internal/executor/tcops_integration_test.go`, tag
+`testbed`; run them with `make vm-test ARGS='-run "TestAChangeKeeps|TestReplacingALeaf|TestDeleting|TestDeleteOrder|TestTheRootCannot|TestADistribution" -tags testbed ./internal/executor'`).
+
+| operation | result |
+|---|---|
+| `qdisc change/replace` of a netem leaf that exists, same kind | in place: queue, counters, seed and the release time of the packets already queued stay. 30 packets waiting in a 4 s queue stayed 30 through a change to 100 ms and left at the old time. A lower `limit` than the queue holds drops nothing queued; the packets that arrive over the limit are the qdisc's `drops`. |
+| ... attributes it is not given | `change` sends netem's base structure every time and resets what is not given: `limit` (to 1000), `delay` and `jitter`, `loss` and `duplicate` (the probabilities) and the reorder `gap` (so a `reorder` that stays has gap 0 and does nothing). The optional attributes stay unless they are given: the **correlations** (a delay's, a loss's, a duplicate's: `loss random 1%` after a 50 % correlation is 1 % at 50 %), `reorder`, `corrupt`, `rate` (with its overheads), a loss model and the **distribution table**. The listing hides the correlation of a loss or a duplicate while its probability is 0. A loss model is replaced only by a `loss` that names the other one. Only the compiler's complete parameter set resets everything, including a gemodel (`TestAChangeKeepsWhatItIsNotGivenForTheOptionalAttributes`, one attribute at a time). |
+| `qdisc replace` under the handle of a leaf with another kind (`pfifo`) | refused: `Invalid qdisc name`; the leaf and its queue are untouched. Another kind needs a delete and an add (or a new handle). The compiler's leaves are always netem, so this does not occur in the tree. |
+| `qdisc delete` of a leaf, then add | the queued packets are gone with it (they appear in no counter), the new qdisc starts at zero with a new seed. This is why a delayed delete after "largest delay + 1 s" exists in plan §3.2. |
+| distribution | a `change` or `replace` without `distribution` keeps the old table; `distribution pareto` swaps it; only a created qdisc is uniform. |
+| `class replace/change` of an HTB class with identical or changed parameters | in place: the leaf, the queue and the counters stay. |
+| `class delete` while a filter selects it | refused: `HTB class in use`. Delete the filter first. The leaf qdisc goes with the class. |
+| `filter delete` | needs `parent`, `handle` (the selector with its mask), `protocol P prio N fw`; deleting the last filter removes the chain. |
+| HTB root: `change`, `replace` (identical or not) or `add` when it exists | `Change operation not supported by specified qdisc` / `Exclusivity flag on`: the root is created once and left alone. |
+| root `add` over a root the host put there (mq, fq_codel) | refused: `NLM_F_REPLACE needed to override`. `replace` takes the root over (with the host's queues below it). `qdisc delete ... root handle 1:` gives the default qdisc back. **The apply has to use `replace`, not `add`, when the interface's root is not ours** (the compiler's `Entries(dev, withRoot)` says `add`; the apply step changes that). |
+| `delete` of what is not there | exit 2 and one of: `RTNETLINK answers: No such file or directory`, `Error: Specified class not found.`, `Error: Failed to find qdisc with specified handle.`, `Error: Specified filter handle not found.`, `Error: Cannot find specified filter chain.`, `Error: Parent Qdisc doesn't exists.`, `Error: Invalid handle.` (also the answer for a root with a handle that is not there) and, for the default qdisc, `Cannot delete qdisc with handle of zero`, which the executor never sends. All but the last are "benign" in a deletion step (below). |
+| a duplicating netem with any other netem on the interface | refused in either order: `netem: cannot mix duplicating netems with other netems in tree` (P2-M8b-01). |
+
+**Executor operations.** The operation is still `tc` with `TCEntry` entries (`object` qdisc | class |
+filter, `action` add | replace | change | delete), now closed in two more ways (`tcgrammar.go`):
+
+- *Own handles.* A root qdisc has the handle `1:` (also for `delete`), a class `1:<minor>` below `1:` or
+  another class, a qdisc below a class `<minor>:` (its handle is the minor of its parent), a filter hangs
+  below `1:` and may select only a class of the tree, plus `ingress`/`clsact` and the filters of `ffff:`
+  as before. An entry that names the host's `mq` (`8001:`), the handle zero or another tree is refused
+  by the decoder, on any assigned interface including the uplink, so a scope that is right for the
+  interface cannot reach what the operating system put there.
+- *Grammar of the kinds the compiler emits.* `netem` takes `limit`, `delay`, `distribution
+  normal|pareto|paretonormal` (a file name is not a table: `distribution` is an enumeration),
+  `loss [random|gemodel]`, `reorder`, `gap`, `duplicate`, `corrupt`, `rate`, `seed`, `ecn`, each at most once, with
+  values of the right shape (durations with a unit, percentages up to 100, rates with a unit); `htb`
+  qdisc `default`, `r2q`, `direct_qlen`; `htb` class `rate` (required), `ceil`, `burst`, `cburst`,
+  `prio`, `quantum`; an `fw` filter is `protocol P prio N fw [flowid C]` with a handle. Other kinds keep the
+  token rules. A deletion takes no arguments (a filter: `protocol P prio N fw|u32`).
+- *Deletions are idempotent.* The plan puts a run of deletions into a step of its own, `tc -force
+  -batch -`, marked idempotent: with `-force` one "not there" answer does not keep the lines behind it
+  from running, and a step whose every error line is one of the answers listed above succeeds; any other
+  answer (`HTB class in use` first of all) fails the operation. The other entries are one `tc -batch -`
+  step as before and stop at the first failure.
+
+Rejection cases are in `tcops_test.go` (`TestTCRejectsWhatLeavesTheOwnTree`, over 60 cases) and
+`decode_test.go`; the fuzz targets check that every tc line of an accepted operation stays in the own
+handles (`checkTCLineInScope`), and have seeds with a complete netem set, an in-place change and a run of
+deletions.
 
 ### Coalescing and the reader pool (M8a)
 

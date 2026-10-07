@@ -46,7 +46,8 @@ var (
 // ownMinor returns the minor of a class id of the own tree ("1:24" -> "24").
 func ownMinor(classID string) (string, bool) {
 	maj, min, ok := strings.Cut(classID, ":")
-	if !ok || maj != ownMajor || !hexNum.MatchString(min) {
+	// minor 0 is the qdisc itself ("1:0" is "1:")
+	if !ok || maj != ownMajor || !hexNum.MatchString(min) || sameHex(min, "0") {
 		return "", false
 	}
 	return min, true

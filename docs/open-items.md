@@ -617,7 +617,13 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   the kernel in the persistent VM that a missing distribution keeps neither loss models, nor
   correlations (those are reset by the complete parameter set) but cannot be shown to reset the
   table (it is not visible in `tc` output).
-- Evidence: `internal/compiler/netem.go` (`Netem.Distribution`), VM session of M8a.
+- Evidence: `internal/compiler/netem.go` (`Netem.Distribution`), VM session of M8a. M8b measured
+  the table itself (150 echoes through a delay of 200 ms ± 100 ms, share outside the band of
+  roughly 90 to 310 ms): a normal table gives about a third (30 %, 34 %), a `change` and a `replace`
+  without a distribution keep it (34 %, 35 %), a `replace` to `pareto` swaps it (10 %), and only a
+  deleted and created qdisc is uniform (2 %); pinned by
+  `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`. The listing cannot show the table
+  (P2-M8b-02).
 - Task: M8b's diff treats a change of the distribution to uniform as "replace the leaf" (or moves
   the fault to a new id with make-before-break).
 - Acceptance: a test in M8b that changes a fault from `normal` to uniform and shows the delay
@@ -661,3 +667,58 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: no
 - Effort: S
 
+
+### P2-M8b-01 A duplicating netem cannot share an interface's tree with any other netem
+
+- Status: new
+- Severity: medium (for M10; none for M8b, whose faults have no duplicate)
+- Reason: needs-decision. Plan §3.3 builds one HTB tree per interface with a netem leaf per active
+  (fault id, direction), and §2.2 lists `duplicate` among the faults. The kernel (6.8.0-142, the
+  minimum supported one; `check_netem_in_tree`) refuses a netem with a duplicate probability above
+  zero as soon as another netem exists on the same interface, and refuses any netem while another one
+  on the interface duplicates: `Error: netem: cannot mix duplicating netems with other netems in
+  tree.` The check is per interface (a duplicating leaf on another interface is fine) and is made on
+  creation and on every change, so it also bites during an in-place update (changing leaf B to
+  `duplicate 5%` while leaf A exists fails; deleting A first lets it through). With the compiler's
+  complete parameter sets every leaf says `duplicate 0%`, which is not duplicating and is fine; one
+  fault with a duplicate probability on any interface breaks the tree of that interface for every other
+  fault there.
+- Evidence: VM session of M8b (`make vm-exec`, orders: plain A and B, then B to `duplicate 5%`: refused;
+  A deleted, B to `duplicate 5%`: accepted; C added beside the duplicating B: refused, with and
+  without duplicate); `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports` puts the duplicating shape on
+  an interface of its own for that reason.
+- Task: decide how M10 realizes `duplicate` next to other faults. Candidates: (a) the compiler
+  reports `capacity_exceeded`/`fault_invalid` for a duplicate fault whenever its tree would hold
+  another netem (honest, but then duplicate works only on an otherwise unimpaired interface); (b)
+  the duplicate is done by a second mechanism that the kernel does not count as netem (a `mirred`
+  mirror of the packet back to the same egress); the check walks every qdisc of the device, so a
+  netem anywhere below the root counts. M8b's apply must in any case order
+  its operations so that a transition never has two netems with one duplicating (delete before add).
+- Acceptance: M10's duplicate test passes with a second fault active on the same interface, or the
+  restriction is documented in the API (a `capacity_exceeded` problem that names it) and tested.
+- Needs maintainer: yes
+- Effort: M
+
+### P2-M8b-02 Verification cannot see the HTB quantum or the netem distribution table
+
+- Status: new
+- Severity: low
+- Reason: deferred (decided together with the apply step of M8b). `tc -j` does not print an HTB
+  class's `quantum` (the kernel does not report it) and does not print a netem qdisc's distribution
+  table at all; both only matter through what the traffic does. The normalizer (`linux.NormTree`)
+  therefore compares rate, ceil, prio and every printed netem attribute, but a class whose quantum
+  was changed from outside, or a leaf whose table is not the one the target names, looks right.
+  Proven in the VM: a `change` or `replace` that names no distribution keeps the old table (the share
+  of round trips outside delay ± jitter stays at a third for a normal table, `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`);
+  only a qdisc that is created again is uniform (this is P2-M8a-05).
+- Evidence: `internal/linux/tcnorm.go` (`NormClass` has no quantum; `NetemSpec` has no distribution),
+  the recorded listings under `internal/linux/testdata/tc`.
+- Task: the apply step decides the distribution of a leaf from the target it applied last (the engine
+  keeps it with the fault ids) and, where it does not know (the first apply after a restart, a leaf it
+  did not create), treats a target without a table as "re-create the leaf", which drops its queue once.
+  The class quantum is a constant of the compiler (`TCClassQuantum`) written whenever a class is
+  created; it is not verified.
+- Acceptance: the M8b test that changes a fault from `normal` to uniform shows the delay distribution
+  following; a restart of the engine with a table in the kernel and none in the target ends uniform.
+- Needs maintainer: no
+- Effort: S

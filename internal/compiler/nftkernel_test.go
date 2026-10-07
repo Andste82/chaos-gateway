@@ -137,6 +137,17 @@ func TestEveryCompiledTCTreeIsAcceptedByTheKernel(t *testing.T) {
 					t.Errorf("round %d: tc warns: %s", round, out)
 				}
 			}
+			// the normalized state of the interface is exactly the compiler's prediction of it (M8b):
+			// this is what verification will compare, so every attribute the compiler emits has to be
+			// one the listing shows the way Norm says
+			have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
+				[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := linux.DiffTC(tg.TC.Norm(dev), have.Subtree(TCRootHandle)); len(d) != 0 {
+				t.Errorf("the kernel holds another tree than the compiler predicts:\n%s", strings.Join(d, "\n"))
+			}
 			var qdiscs []struct{ Kind, Handle, Parent string }
 			if err := json.Unmarshal([]byte(ns.Must("tc", "-j", "qdisc", "show", "dev", dev)), &qdiscs); err != nil {
 				t.Fatal(err)
@@ -262,5 +273,102 @@ func TestAnElementTransactionMovesIntervalElementsOnTheRealKernel(t *testing.T) 
 				t.Errorf("map %s: %s is %q, want %q", m.Name, k, have[k], v)
 			}
 		}
+	}
+}
+
+// applyTC runs the executor's own plan for a tree on an interface of a namespace and reads the
+// state back in the normalized form.
+func applyTC(t *testing.T, ns *testbed.Namespace, tc *TCTarget, dev string, withRoot bool) *linux.NormTree {
+	t.Helper()
+	steps, err := executor.Plan(&executor.TC{Target: executor.Target{}, Entries: tc.Entries(dev, withRoot)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := ns.Command(ctx, "tc", steps[0].Cmd.Args...)
+	cmd.Stdin = strings.NewReader(steps[0].Cmd.Stdin)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the kernel refuses the tc tree: %v\n%s\n%s", err, out, steps[0].Cmd.Stdin)
+	}
+	have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
+		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return have.Subtree(TCRootHandle)
+}
+
+// What the compiler predicts the kernel reports is right for every shape of netem configuration,
+// including the values at the edges of what a listing can show: probabilities of a few millionths of
+// a percent and just below 100 %, a delay of one microsecond and of twelve seconds, rates the kernel
+// truncates to no rate at all. The same tree is then changed in place to each shape in turn (the
+// same handles, `replace`), so what the second round predicts has to hold for a qdisc that had other
+// values, too. A duplicating netem goes on an interface of its own: the kernel refuses to mix it with
+// other netems in one tree (P2-M8b-01).
+func TestTheNormOfEveryNetemShapeIsWhatTheKernelReports(t *testing.T) {
+	bed := testbed.New(t)
+	ms := time.Millisecond
+	shapes := []Netem{
+		{Limit: 1000},
+		{Limit: 5000, Delay: 100 * ms},
+		{Limit: 1000, Delay: 50 * ms, Jitter: 10 * ms, Distribution: "normal"},
+		{Limit: 1000, Delay: 50 * ms, Jitter: 50 * ms, Distribution: "pareto"},
+		{Limit: 1000, Delay: 50 * ms, Jitter: 20 * ms, Distribution: "paretonormal"},
+		{Limit: 1000, Delay: time.Microsecond},
+		{Limit: 1000, Delay: 1500 * time.Microsecond, Jitter: 400 * time.Microsecond},
+		{Limit: 1000, Delay: 12*time.Second + 345678*time.Microsecond},
+		{Limit: 1000, Loss: 0.0001},
+		{Limit: 1000, Loss: 33.333333, LossCorr: 12.3456789},
+		{Limit: 1000, Loss: 99.99999},
+		{Limit: 1000, Loss: 100},
+		{Limit: 1000, Delay: 10 * ms, Gemodel: &Gemodel{P: 1, R: 10, LossBad: 100, LossGood: 0}},
+		{Limit: 1000, Delay: 10 * ms, Gemodel: &Gemodel{P: 0.5, R: 25, LossBad: 70, LossGood: 0.1}},
+		{Limit: 1000, Delay: 10 * ms, Reorder: 25},
+		{Limit: 1000, Delay: 10 * ms, Reorder: 0.00000001},
+		{Limit: 1000, Corrupt: 0.1},
+		{Limit: 1000, Rate: 7},
+		{Limit: 1000, Rate: 2_500_000},
+		{Limit: 1000, Rate: 1_000_000_000},
+		{Limit: 12345, Delay: 600 * ms, Loss: 1, Rate: 8_000_000},
+	}
+	mk := func(shapes []Netem, offset int) *TCTarget {
+		tc := &TCTarget{Devs: []string{"d0"}}
+		for i, n := range shapes {
+			id := i + 1 + offset
+			tc.Classes = append(tc.Classes, TCClass{ID: id, Dir: Upload, Minor: classMinor(id, Upload), Mark: MarkOf(id, Upload), Netem: n})
+		}
+		return tc
+	}
+	ns := bed.Add("tcnorm")
+	ns.Must("ip", "link", "add", "d0", "type", "dummy")
+	ns.Must("ip", "link", "set", "d0", "up")
+	// first round: every shape on its own class
+	tc := mk(shapes, 0)
+	if d := linux.DiffTC(tc.Norm("d0"), applyTC(t, ns, tc, "d0", true)); len(d) != 0 {
+		t.Errorf("first apply:\n%s", strings.Join(d, "\n"))
+	}
+	// second round: the same classes, every class gets the shape of its neighbour
+	rot := append(append([]Netem{}, shapes[1:]...), shapes[0])
+	tc2 := mk(rot, 0)
+	if d := linux.DiffTC(tc2.Norm("d0"), applyTC(t, ns, tc2, "d0", false)); len(d) != 0 {
+		t.Errorf("change in place:\n%s", strings.Join(d, "\n"))
+	}
+	// and a complete reset to the neutral set: nothing of the earlier shape survives
+	neutral := make([]Netem, len(shapes))
+	for i := range neutral {
+		neutral[i] = Netem{Limit: 1000}
+	}
+	tc3 := mk(neutral, 0)
+	if d := linux.DiffTC(tc3.Norm("d0"), applyTC(t, ns, tc3, "d0", false)); len(d) != 0 {
+		t.Errorf("reset to neutral:\n%s", strings.Join(d, "\n"))
+	}
+	// duplicating netems alone on an interface
+	ns.Must("ip", "link", "add", "d1", "type", "dummy")
+	ns.Must("ip", "link", "set", "d1", "up")
+	dup := mk([]Netem{{Limit: 1000, Delay: 20 * ms, Duplicate: 5}}, 0)
+	dup.Devs = []string{"d1"}
+	if d := linux.DiffTC(dup.Norm("d1"), applyTC(t, ns, dup, "d1", true)); len(d) != 0 {
+		t.Errorf("duplicate:\n%s", strings.Join(d, "\n"))
 	}
 }

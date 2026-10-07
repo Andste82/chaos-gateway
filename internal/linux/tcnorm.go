@@ -230,7 +230,7 @@ func isHex(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
@@ -300,6 +300,12 @@ func NormalizeTC(dev string, qdiscs, classes, filters []byte) (*NormTree, error)
 	}
 	t.sort()
 	return t, nil
+}
+
+// Sorted puts the objects in the order NormalizeTC returns them (by number) and returns the tree.
+func (t *NormTree) Sorted() *NormTree {
+	t.sort()
+	return t
 }
 
 func (t *NormTree) sort() {
@@ -880,7 +886,8 @@ func hex32(s string) (uint32, error) {
 }
 
 // Spec returns a copy of the tree with everything that is not configuration removed: counters,
-// seeds, and the burst sizes the kernel derives from the rate. Two trees are the same
+// seeds, the burst sizes the kernel derives from the rate, and the HTB root's r2q and direct queue
+// length (the kernel's defaults, the latter taken from the interface's queue length). Two trees are the same
 // configuration exactly when their Specs are deeply equal (and their Lines are).
 func (t *NormTree) Spec() *NormTree {
 	if t == nil {
@@ -889,6 +896,12 @@ func (t *NormTree) Spec() *NormTree {
 	c := &NormTree{Dev: t.Dev, Qdiscs: make([]NormQdisc, len(t.Qdiscs)), Classes: make([]NormClass, len(t.Classes)), Filters: append([]NormFilter{}, t.Filters...)}
 	for i, q := range t.Qdiscs {
 		q.Seed, q.Stats = 0, nil
+		if q.HTB != nil {
+			// what an HTB qdisc created with only a default class takes from the kernel and the interface
+			h := *q.HTB
+			h.R2Q, h.DirectQlen = 0, 0
+			q.HTB = &h
+		}
 		c.Qdiscs[i] = q
 	}
 	for i, cl := range t.Classes {
@@ -937,7 +950,10 @@ func (q NormQdisc) Line() string {
 	s := q.Key() + " " + q.Kind
 	switch {
 	case q.HTB != nil:
-		s += fmt.Sprintf(" default=%#x r2q=%d direct_qlen=%d", q.HTB.Default, q.HTB.R2Q, q.HTB.DirectQlen)
+		s += fmt.Sprintf(" default=%#x", q.HTB.Default)
+		if q.HTB.R2Q != 0 || q.HTB.DirectQlen != 0 {
+			s += fmt.Sprintf(" r2q=%d direct_qlen=%d", q.HTB.R2Q, q.HTB.DirectQlen)
+		}
 	case q.Netem != nil:
 		s += " " + q.Netem.String()
 	case q.Options != "":

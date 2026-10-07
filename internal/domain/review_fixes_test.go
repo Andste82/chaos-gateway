@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -449,4 +450,30 @@ func TestEveryValidationCodeIsDocumented(t *testing.T) {
 			t.Errorf("code %q is not documented in development.md", c)
 		}
 	}
+}
+
+// A published snapshot is shared between goroutines and never written to: asking whether a
+// configuration is normalized is a read, and used to store every map entry back (a data race that
+// -race finds as soon as the compiler and the state owner look at the same configuration).
+func TestIsNormalizedAndTheWorldOnlyReadTheConfiguration(t *testing.T) {
+	cfg, errs := Normalize(exampleConfiguration(t))
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				if !IsNormalized(cfg) {
+					t.Error("not normalized")
+				}
+				if _, err := NewWorld(cfg, nil); err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

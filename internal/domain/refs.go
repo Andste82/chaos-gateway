@@ -13,9 +13,11 @@ import (
 // points into and a pointer to the string, which the function may rewrite.
 type refFunc func(path string, kind Kind, ref *string)
 
-// eachEntry calls f for every value of a map in key order. f gets a copy of the value; the
-// (possibly changed) copy is stored back, so f may rewrite references in place.
-func eachEntry[V any](m *map[string]V, base string, f func(path string, v *V)) {
+// eachEntry calls f for every value of a map in key order. f gets a copy of the value; with
+// rewrite the (possibly changed) copy is stored back, so f may rewrite references in place. A
+// read-only visit never writes: the configuration it looks at may be shared between goroutines (a
+// published snapshot), and even storing an unchanged value back into a map is a data race.
+func eachEntry[V any](m *map[string]V, base string, rewrite bool, f func(path string, v *V)) {
 	if m == nil || *m == nil {
 		return
 	}
@@ -27,7 +29,9 @@ func eachEntry[V any](m *map[string]V, base string, f func(path string, v *V)) {
 	for _, k := range keys {
 		v := (*m)[k]
 		f(schema.Pointer(base, k), &v)
-		(*m)[k] = v
+		if rewrite {
+			(*m)[k] = v
+		}
 	}
 }
 
@@ -147,9 +151,10 @@ func visitProfile(path string, p *model.Profile, fn refFunc) {
 }
 
 // visitConfiguration calls fn for every reference of a configuration. Network is a union, so a
-// hub network is decoded, visited and stored back.
-func visitConfiguration(cfg *model.Configuration, fn refFunc) {
-	eachEntry(cfg.Networks, "/networks", func(path string, n *model.Network) {
+// hub network is decoded, visited and stored back. Without rewrite, fn only reads and the
+// configuration is not written to.
+func visitConfiguration(cfg *model.Configuration, rewrite bool, fn refFunc) {
+	eachEntry(cfg.Networks, "/networks", rewrite, func(path string, n *model.Network) {
 		disc, _ := n.Discriminator()
 		if disc != "wireguard" {
 			return
@@ -158,7 +163,7 @@ func visitConfiguration(cfg *model.Configuration, fn refFunc) {
 		if err != nil || wg.Clients == nil {
 			return
 		}
-		eachEntry(wg.Clients, path+"/clients", func(cpath string, c *model.WireGuardClient) {
+		eachEntry(wg.Clients, path+"/clients", rewrite, func(cpath string, c *model.WireGuardClient) {
 			if c.Reachable != nil {
 				for i := range *c.Reachable {
 					visitEndpoint(schema.Pointer(cpath+"/reachable", itoa(i)), &(*c.Reachable)[i], fn)
@@ -176,7 +181,7 @@ func visitConfiguration(cfg *model.Configuration, fn refFunc) {
 		}
 	}
 	if cfg.Routing != nil {
-		eachEntry(cfg.Routing.Protocols, "/routing/protocols", func(path string, p *model.RoutingProtocol) {
+		eachEntry(cfg.Routing.Protocols, "/routing/protocols", rewrite, func(path string, p *model.RoutingProtocol) {
 			visitRef(path+"/link", KindLink, &p.Link, fn)
 			if p.Announce != nil {
 				for i := range *p.Announce {
@@ -188,30 +193,30 @@ func visitConfiguration(cfg *model.Configuration, fn refFunc) {
 			}
 		})
 	}
-	eachEntry(cfg.Devices, "/devices", func(path string, d *model.Device) {
+	eachEntry(cfg.Devices, "/devices", rewrite, func(path string, d *model.Device) {
 		visitRef(path+"/network", KindNetwork, d.Network, fn)
 	})
-	eachEntry(cfg.Groups, "/groups", func(path string, g *model.Group) {
+	eachEntry(cfg.Groups, "/groups", rewrite, func(path string, g *model.Group) {
 		if g.Members != nil {
 			for i := range *g.Members {
 				visitRef(schema.Pointer(path+"/members", itoa(i)), KindDevice, &(*g.Members)[i], fn)
 			}
 		}
 	})
-	eachEntry(cfg.Probes, "/probes", func(path string, p *model.Probe) {
+	eachEntry(cfg.Probes, "/probes", rewrite, func(path string, p *model.Probe) {
 		fn(path+"/network", KindNetwork, &p.Network)
 	})
-	eachEntry(cfg.AccessRules, "/access_rules", func(path string, r *model.AccessRule) {
+	eachEntry(cfg.AccessRules, "/access_rules", rewrite, func(path string, r *model.AccessRule) {
 		visitScope(path+"/source", &r.Source, fn)
 		visitDestination(path+"/destination", r.Destination, fn)
 	})
-	eachEntry(cfg.Faults, "/faults", func(path string, f *model.ConfigFault) {
+	eachEntry(cfg.Faults, "/faults", rewrite, func(path string, f *model.ConfigFault) {
 		visitScope(path+"/source", f.Source, fn)
 		visitDestination(path+"/destination", f.Destination, fn)
 		visitTunnel(path+"/tunnel", f.Tunnel, fn)
 	})
-	eachEntry(cfg.Profiles, "/profiles", func(path string, p *model.Profile) { visitProfile(path, p, fn) })
-	eachEntry(cfg.Scenarios, "/scenarios", func(path string, s *model.Scenario) { visitScenario(path, s, fn) })
+	eachEntry(cfg.Profiles, "/profiles", rewrite, func(path string, p *model.Profile) { visitProfile(path, p, fn) })
+	eachEntry(cfg.Scenarios, "/scenarios", rewrite, func(path string, s *model.Scenario) { visitScenario(path, s, fn) })
 }
 
 // visitOverlayRequest calls fn for every reference of an overlay request.
@@ -229,7 +234,7 @@ func visitOverlayRequest(r *model.OverlayRequest, fn refFunc) {
 // not whether a reference resolves to an existing object.
 func IsNormalized(cfg *model.Configuration) bool {
 	normalized := true
-	visitConfiguration(cfg, func(_ string, _ Kind, ref *string) {
+	visitConfiguration(cfg, false, func(_ string, _ Kind, ref *string) {
 		if _, err := uuid.Parse(*ref); err != nil || len(*ref) != 36 {
 			normalized = false
 		}
@@ -250,7 +255,7 @@ func Normalize(cfg *model.Configuration, opts ...Option) (*model.Configuration, 
 // resolveRefs rewrites the references of cfg in place and reports those that do not resolve.
 func resolveRefs(cfg *model.Configuration, idx *Index) []model.ValidationError {
 	var errs []model.ValidationError
-	visitConfiguration(cfg, func(path string, kind Kind, ref *string) {
+	visitConfiguration(cfg, true, func(path string, kind Kind, ref *string) {
 		if id, ok := idx.Resolve(kind, *ref); ok {
 			*ref = id
 			return

@@ -349,7 +349,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M5: `capacity_exceeded` never produced | M8a, M10 |
 | M5: `target_busy` never produced | M15 |
 | M5: IPv6 management addresses never bound | M32 |
-| M5: `counter_epoch` always 0 | M8b |
+| ~~M5: `counter_epoch` always 0~~ — done in M8b (P2-M8b-05 for what it means) | M8b |
 | M5: capabilities lists (`overlay_kinds`, `fault_families`, `step_types`) empty | M8a, M15 |
 | M5b: netplan hints are static text | M28 |
 | M5b: only the executor is deployed, x86-64 only | M28 |
@@ -366,7 +366,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
 | Stubs: `chaosgw tls`, `chaosctl` beyond `version` | M21, M18 |
 | Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
-| Identity maps (address → device), classification and faults not compiled yet | M7, M8a, M8b |
+| ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | Overlay removal on stop | M27 |
 | M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
@@ -547,7 +547,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ### P2-M8a-02 The queue limit's packet size, memory budget and link speed are assumptions of the compiler
 
-- Status: new
+- Status: measured in M8b (the numbers are kept), confirmation open
 - Severity: low
 - Reason: needs-decision. Plan §2.5 says the compiler computes the queue limit "from delay × rate,
   where rate is the fault's rate or, without one, the egress interface's link speed capped at 1
@@ -563,6 +563,18 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   what bounds the memory then), and an explicit `queue_limit` is never changed. `keep_order`
   without a rate uses the same 1 Gbit/s as netem's `rate`. Link speed from `ethtool` (and 100
   Mbit/s links) is a later refinement.
+- Measured in M8b (real kernel 6.8.0-142, `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops`):
+  a burst of 4000 packets through a 600 ms fault. Without a queue limit the compiler's limit (44739
+  packets, the budget share of four classes) holds all of it, with no drop in either direction. With the
+  limit of 1000 (netem's own default, which is also what a limit below it is raised to) the queue passes
+  the first 2000 and drops the other 2000 while the first wait: a 600 ms fault with the default limit
+  is a rate limit of about 1667 packets per second (about 20 Mbit/s of 1500-byte packets) that nobody
+  configured, which is why the computed limit exists. The price is memory: a full queue of 44739 packets
+  holds up to that many socket buffers (an estimate, not measured: about 2 KiB each with the packet itself, so up to roughly 90 MB
+  for one queue), and the budget of 256 MiB per interface is shared by the queues of the interface, so a
+  burst through one queue is covered but many full queues are bounded by the budget, not by the delay.
+  The packet size of 1500 bytes under-counts small packets (a queue of 64-byte packets holds
+  more of them than the delay x rate estimate), which only makes the limit larger in packets than needed.
 - Acceptance: a maintainer confirms the three numbers, or names others; or asks for the link speed
   to be read from the host.
 - Needs maintainer: yes
@@ -722,6 +734,31 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   make 1000 on x86 effectively 500).
 - Acceptance: a maintainer confirms the limits; or a test in the compiler counts retiring classes
   against `ClassLimit` and the engine refuses a write that would exceed it with `capacity_exceeded`.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M8b-05 The counter epochs are generations, and a restart starts a new one
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.12 says nft counters reset only on reboot, which the API reports as
+  a counter epoch, and that a re-created netem queue starts a new epoch. It does not say what the
+  epoch's value is, nor what a restart of the gateway (not of the machine) does. The spec has
+  `GatewayState.counter_epoch`, `Counter.epoch` and `QueueStats.epoch`, all integers.
+- Evidence: `internal/engine/queues.go` (`trackQueues`, `trackCounters`), `TestTheCounterEpochOfTheStateChangesWithARestartOnly`,
+  `TestAQueueKeepsItsEpochThroughAChangeAndStartsAnotherWhenTheLeafIsMadeAgain`.
+- Task: chosen interpretation — an epoch is the generation (persisted, so never reused) of the apply
+  that made the object: a leaf made new (a new class, a leaf deleted and made again, P2-M8a-05), a fault
+  that is new in an applied target, the nft table when an apply finds it missing. The state's
+  `counter_epoch` is that of the table as a whole. A gateway that restarts cannot tell whether the
+  counters it finds are the ones it left (it keeps no counter state, and the kernel shows no creation
+  time), so its first apply starts new epochs for every queue and fault, although the counters did survive;
+  a consumer then discards one delta, never subtracts across a reset. After an apply that failed, the
+  queues that were there start new epochs too. The statistics are read from the kernel when the API is
+  asked, not polled and not stored.
+- Acceptance: a maintainer confirms; or asks for epochs that survive a restart (the engine would then
+  have to store the epoch of every queue and fault with the checkpoint, and compare the kernel's counters
+  with the stored ones to notice a reset it did not cause).
 - Needs maintainer: yes
 - Effort: S
 

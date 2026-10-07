@@ -36,6 +36,8 @@ type applyResultBody struct {
 	Generation      int64      `json:"generation"`
 	DurationMs      int64      `json:"duration_ms"`
 	ConfirmDeadline *time.Time `json:"confirm_deadline,omitempty"`
+	// RemovedOverlays are the overlays a forced apply removed (event overlay_orphaned).
+	RemovedOverlays []model.Uuid `json:"removed_overlays,omitempty"`
 }
 
 func applyResult(a engine.Applied) applyResultBody {
@@ -44,6 +46,7 @@ func applyResult(a engine.Applied) applyResultBody {
 		d := a.ConfirmDeadline.UTC()
 		r.ConfirmDeadline = &d
 	}
+	r.RemovedOverlays = a.RemovedOverlays
 	return r
 }
 
@@ -260,6 +263,9 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	if p.Base != 0 {
 		body["base"] = p.Base
 	}
+	if len(p.References) > 0 {
+		body["references"] = blockingReferences(p.References)
+	}
 	c.JSON(200, body)
 }
 
@@ -311,17 +317,33 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 		return
 	}
 	// the apply is not the client's to cancel: the engine goes on, and so does the record of it
-	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), revisionId, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout})
+	force := params.Force != nil && *params.Force
+	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), revisionId, engine.ApplyOptions{
+		ConfirmTimeout: s.cfg.ConfirmTimeout, Force: force, Actor: actorOf(principalOf(c))})
 	if err != nil {
 		s.record(c, "revision.apply_failed", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, firstLine(err.Error()))
 		s.fail(c, err)
 		return
 	}
-	s.record(c, "revision.apply", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, res.Status)
+	detail := res.Status
+	if n := len(res.RemovedOverlays); n > 0 {
+		detail = fmt.Sprintf("%s, removed %d overlays", res.Status, n)
+	}
+	s.record(c, "revision.apply", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, detail)
 	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": revisionId, "status": res.Status,
 		"actor": actorOf(principalOf(c)), "subject": engine.Subject{Kind: "revision", ID: itoa(revisionId)}})
 	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
 	c.JSON(200, applyResult(res))
+}
+
+// blockingReferences are the overlays a revision would orphan, as the spec's BlockingReference.
+func blockingReferences(refs []engine.OverlayReference) []model.BlockingReference {
+	out := make([]model.BlockingReference, 0, len(refs))
+	for _, r := range refs {
+		owner := r.Overlay.Owner
+		out = append(out, model.BlockingReference{Kind: model.BlockingReferenceKindOverlay, Id: r.Overlay.Id, Owner: &owner, Object: r.Object})
+	}
+	return out
 }
 
 // ConfirmRevision implements POST /revisions/{revisionId}/confirm.

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Andste82/chaos-gateway/internal/domain"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
@@ -16,6 +18,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/overlay"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
@@ -63,6 +66,11 @@ type ApplyOptions struct {
 	// setup (M5-03), which LockoutRelevant never flags since there is no prior configuration to
 	// compare against, yet a wrong management interface there locks the admin out just the same.
 	ForceConfirm bool
+	// Force applies a revision that deletes objects active overlays refer to: those overlays are
+	// removed (event overlay_orphaned). Without it such a revision is refused (*ErrOverlaysOrphaned).
+	Force bool
+	// Actor is who applies the revision, for the events of the overlays it removes or moves.
+	Actor model.Actor
 }
 
 // Applied is the result of Apply.
@@ -73,6 +81,9 @@ type Applied struct {
 	Status          string
 	ConfirmDeadline time.Time
 	Duration        time.Duration
+	// RemovedOverlays are the ids of the overlays a forced apply removed because the revision
+	// deleted what they refer to.
+	RemovedOverlays []uuid.UUID
 }
 
 type applyReply struct {
@@ -170,6 +181,8 @@ type inflight struct {
 	// restoreGen is the generation of that restore.
 	failure    error
 	restoreGen uint64
+	// removed are the overlays this apply orphaned.
+	removed []uuid.UUID
 }
 
 type owner struct {
@@ -531,8 +544,29 @@ func (o *owner) startApply(c cmdApply) {
 		o.fail(c, &store.ErrRevisionConflict{Active: active})
 		return
 	}
+	// the overlays: a revision that deletes what an overlay refers to is refused, or removes the
+	// overlay (force); a merge moves the overlays of the discovered device. Both are part of the
+	// desired state this apply makes, and are taken back with it when it fails.
+	changes, err := o.revisionOverlays(cfg, c.opts.Force, o.gen+1)
+	if err != nil {
+		o.fail(c, err)
+		return
+	}
+	var removed []uuid.UUID
+	if len(changes) > 0 {
+		for i := range changes {
+			changes[i].actor = c.opts.Actor
+			if changes[i].Type == overlay.Orphaned {
+				removed = append(removed, changes[i].Overlay.Id)
+			}
+		}
+		o.refreshOverlays()
+	}
 	d := o.nextDesired(cfg, c.rev)
-	o.running = &inflight{cmd: c, d: d, started: o.now(), cfg: cfg}
+	if len(changes) > 0 {
+		o.markOverlays(d.Generation, changes)
+	}
+	o.running = &inflight{cmd: c, d: d, started: o.now(), cfg: cfg, removed: removed}
 	o.converge(d)
 	o.publish()
 }
@@ -663,7 +697,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 		o.armTimeout(rev, timeout)
 		o.event(EventConfirmPending, map[string]any{"revision": rev, "deadline": deadline})
 		o.running = nil
-		res := Applied{Revision: rev, Generation: r.d.Generation, Status: "pending_confirm", ConfirmDeadline: deadline, Duration: took}
+		res := Applied{Revision: rev, Generation: r.d.Generation, Status: "pending_confirm", ConfirmDeadline: deadline, Duration: took, RemovedOverlays: run.removed}
 		o.later(func() { c.reply <- applyReply{res: res} })
 		o.startQueued()
 		return
@@ -682,7 +716,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 	o.prune(run.cfg)
 	o.snap.Revision, o.snap.Config = run.d.Revision, run.d.Config
 	o.running = nil
-	res := Applied{Revision: c.rev, Generation: r.d.Generation, Status: "active", Duration: took}
+	res := Applied{Revision: c.rev, Generation: r.d.Generation, Status: "active", Duration: took, RemovedOverlays: run.removed}
 	o.later(func() { c.reply <- applyReply{res: res} })
 	o.startQueued()
 }

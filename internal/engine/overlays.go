@@ -542,6 +542,8 @@ func (o *owner) overlayExpire() {
 type actedChange struct {
 	overlay.Change
 	actor model.Actor
+	// objects are the deleted objects an orphaned overlay referred to (JSON pointers).
+	objects []string
 }
 
 func acted(changes []overlay.Change, actor model.Actor) []actedChange {
@@ -557,12 +559,22 @@ func acted(changes []overlay.Change, actor model.Actor) []actedChange {
 func (o *owner) overlayChanged(changes []actedChange) {
 	cfg, rev := o.liveConfig(), o.liveRevision()
 	d := o.nextDesired(cfg, rev)
-	mark := overlayMark{gen: d.Generation, after: o.ov.store.Checkpoint()}
+	o.markOverlays(d.Generation, changes)
+	o.converge(d)
+}
+
+// markOverlays records that the store changed in generation gen: until the kernel confirms that
+// generation the change can be taken back, and its events wait.
+func (o *owner) markOverlays(gen uint64, changes []actedChange) {
+	mark := overlayMark{gen: gen, after: o.ov.store.Checkpoint()}
 	for _, ch := range changes {
-		mark.events = append(mark.events, overlayEvent{typ: ch.Event(), data: overlayEventData(ch.Change, d.Generation, ch.actor)})
+		data := overlayEventData(ch.Change, gen, ch.actor)
+		if len(ch.objects) > 0 {
+			data["objects"] = ch.objects
+		}
+		mark.events = append(mark.events, overlayEvent{typ: ch.Event(), data: data})
 	}
 	o.ov.marks = append(o.ov.marks, mark)
-	o.converge(d)
 	o.ov.expirer.Rearm()
 }
 

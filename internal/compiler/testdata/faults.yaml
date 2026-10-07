@@ -1,0 +1,48 @@
+# The routed gateway of the testbed (plan §4.2): two test networks, an uplink with an explicit
+# gateway and a management interface.
+schema_version: 1
+uplink:
+  interface: {name: wan0}
+  gateway: 203.0.113.10
+management:
+  interface: {name: mgmt0}
+  allowed_sources: [192.168.56.0/24]
+networks:
+  0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21:
+    type: lan
+    name: IoT
+    interfaces: [{name: lan0, mac: '02:00:00:00:00:01'}]
+    address: 10.10.0.1/24
+    routes:
+      - {destination: 10.30.0.0/24, via: 10.10.0.2}
+  1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32:
+    type: lan
+    name: Lab
+    interfaces: [{name: lan1, mac: '02:00:00:00:01:01'}]
+    address: 10.20.0.1/24
+    nat: false
+
+# devices, groups and a configured fault for the fault compiler's tests (M8a)
+devices:
+  1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a:
+    name: esp32-42
+    identifiers:
+      macs: ['24:0a:c4:00:00:42']
+    network: IoT
+    fixed_ip: 10.10.0.42
+  2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b:
+    name: esp32-43
+    identifiers:
+      macs: ['24:0a:c4:00:00:43']
+    network: IoT
+    fixed_ip: 10.10.0.43
+  3a4b5c6d-7e8f-4a9b-8c0d-1e2f3a4b5c6d:
+    name: lab-host
+    identifiers:
+      macs: ['24:0a:c4:00:01:50']
+    network: Lab
+    fixed_ip: 10.20.0.50
+groups:
+  3f4a5b6c-7d8e-4f9a-0b1c-2d3e4f5a6b7c:
+    name: sensors
+    members: [esp32-42, esp32-43]

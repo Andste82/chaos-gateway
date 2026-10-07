@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "a359619223e81096",
+  "hash": "aa75f9c7778dc3a0",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -44,10 +44,10 @@
   ],
   "classify_nets": "classify_nets_8743d6",
   "classify_maps": {
-    "dev": "cls_dev_d6cdc6",
-    "devdest": "cls_devdest_a38e25",
-    "devdestport": "cls_devdestport_e7e915",
-    "devport": "cls_devport_2399e9"
+    "dev": "cls_dev_14ef7f",
+    "devdest": "cls_devdest_e28fbe",
+    "devdestport": "cls_devdestport_576968",
+    "devport": "cls_devport_1e10ac"
   },
   "interfaces": [
     "br-iot",
@@ -217,38 +217,50 @@
     ],
     "maps": [
       {
-        "name": "cls_dev_d6cdc6",
+        "name": "cls_dev_14ef7f",
         "key_type": [
           "ipv4_addr"
         ],
-        "value_type": "verdict"
+        "value_type": "verdict",
+        "flags": [
+          "interval"
+        ]
       },
       {
-        "name": "cls_devdest_a38e25",
+        "name": "cls_devdest_e28fbe",
         "key_type": [
           "ipv4_addr",
           "ipv4_addr"
         ],
-        "value_type": "verdict"
+        "value_type": "verdict",
+        "flags": [
+          "interval"
+        ]
       },
       {
-        "name": "cls_devdestport_e7e915",
+        "name": "cls_devdestport_576968",
         "key_type": [
           "ipv4_addr",
           "ipv4_addr",
           "inet_proto",
           "inet_service"
         ],
-        "value_type": "verdict"
+        "value_type": "verdict",
+        "flags": [
+          "interval"
+        ]
       },
       {
-        "name": "cls_devport_2399e9",
+        "name": "cls_devport_1e10ac",
         "key_type": [
           "ipv4_addr",
           "inet_proto",
           "inet_service"
         ],
-        "value_type": "verdict"
+        "value_type": "verdict",
+        "flags": [
+          "interval"
+        ]
       }
     ],
     "counters": [
@@ -373,7 +385,7 @@
             "expr": [
               {
                 "vmap": {
-                  "data": "@cls_devdestport_e7e915",
+                  "data": "@cls_devdestport_576968",
                   "key": {
                     "concat": [
                       {
@@ -402,18 +414,15 @@
                     ]
                   }
                 }
-              },
-              {
-                "return": null
               }
             ],
-            "comment": "fb6301eea4c9"
+            "comment": "b7c50f5494b4"
           },
           {
             "expr": [
               {
                 "vmap": {
-                  "data": "@cls_devdest_a38e25",
+                  "data": "@cls_devdest_e28fbe",
                   "key": {
                     "concat": [
                       {
@@ -431,18 +440,15 @@
                     ]
                   }
                 }
-              },
-              {
-                "return": null
               }
             ],
-            "comment": "fd87e79e1d88"
+            "comment": "5cfbe6576d0f"
           },
           {
             "expr": [
               {
                 "vmap": {
-                  "data": "@cls_devport_2399e9",
+                  "data": "@cls_devport_1e10ac",
                   "key": {
                     "concat": [
                       {
@@ -465,18 +471,15 @@
                     ]
                   }
                 }
-              },
-              {
-                "return": null
               }
             ],
-            "comment": "512ab7a8c8a2"
+            "comment": "5a568df3ac8b"
           },
           {
             "expr": [
               {
                 "vmap": {
-                  "data": "@cls_dev_d6cdc6",
+                  "data": "@cls_dev_14ef7f",
                   "key": {
                     "ct": {
                       "dir": "original",
@@ -484,12 +487,9 @@
                     }
                   }
                 }
-              },
-              {
-                "return": null
               }
             ],
-            "comment": "3a2f836afb74"
+            "comment": "ec864b94052f"
           }
         ]
       },

@@ -61,11 +61,14 @@ type MapDef struct {
 	// device, destination, protocol and port, plan §3.3).
 	KeyType []string `json:"key_type"`
 	// ValueType is the map's data type: "mark" for a plain integer value (the identity map's device
-	// numeral) or "verdict" for a map whose elements jump to a chain (a classification map).
+	// numeral) or "verdict" for a map whose elements go to a chain (a classification map).
 	ValueType string `json:"value_type"`
+	// Flags are the map's flags; "interval" lets keys be ranges and prefixes (the classification
+	// maps, whose elements are disjoint ranges, plan §3.2 "overlapping selectors").
+	Flags []string `json:"flags,omitempty"`
 	// Elements are the compiled content, flushed and refilled at every apply. A MapElement's Key
 	// joins KeyType's parts with " . " (nft's own concatenation syntax); its Value is a decimal
-	// integer for ValueType "mark", or the chain an element jumps to for ValueType "verdict".
+	// integer for ValueType "mark", or the chain an element goes to for ValueType "verdict".
 	Elements []MapElement `json:"elements,omitempty"`
 }
 
@@ -75,9 +78,10 @@ type MapElement struct {
 	Value string `json:"value"`
 }
 
-// hashMapName is hashName for a MapDef: a changed key or value type creates a new map name.
-func hashMapName(base string, keyType []string, valueType string) string {
-	h := sha256.Sum256([]byte(strings.Join(keyType, ".") + "|" + valueType))
+// hashMapName is hashName for a MapDef: a changed key type, value type or flag creates a new map
+// name (`add map` fails for an existing map of the same name with other flags).
+func hashMapName(base string, keyType []string, valueType string, flags []string) string {
+	h := sha256.Sum256([]byte(strings.Join(keyType, ".") + "|" + valueType + "|" + fmt.Sprint(flags)))
 	return base + "_" + hex.EncodeToString(h[:3])
 }
 
@@ -141,7 +145,11 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		if len(m.KeyType) > 1 {
 			typ = m.KeyType
 		}
-		cmds = append(cmds, cmd("add", "map", map[string]any{"name": m.Name, "type": typ, "map": m.ValueType}))
+		f := map[string]any{"name": m.Name, "type": typ, "map": m.ValueType}
+		if len(m.Flags) > 0 {
+			f["flags"] = m.Flags
+		}
+		cmds = append(cmds, cmd("add", "map", f))
 	}
 	for _, c := range n.chains() {
 		f := map[string]any{"name": c.Name}
@@ -262,7 +270,7 @@ func setElement(typ, e string) any {
 // expected" - confirmed against a real captured `nft -j list map`, "elem": [[9001, {"drop":
 // null}], ...]). The key becomes a concatenation of its " . "-joined parts (or the bare part
 // alone, for a one-field key), and the value becomes the data: a decimal number for a "mark" map,
-// a jump to the chain it names for a "verdict" map.
+// a goto to the chain it names for a "verdict" map.
 func mapElements(m MapDef) []any {
 	out := make([]any, 0, len(m.Elements))
 	for _, e := range m.Elements {
@@ -289,6 +297,16 @@ func mapKeyPart(part string) any {
 	if addr, bits, ok := splitPrefix(part); ok {
 		return map[string]any{"prefix": map[string]any{"addr": addr, "len": bits}}
 	}
+	// "first-last": an interval element (addresses or ports)
+	if lo, hi, ok := strings.Cut(part, "-"); ok {
+		if a, err := strconv.Atoi(lo); err == nil {
+			if b, err := strconv.Atoi(hi); err == nil {
+				return map[string]any{"range": []any{a, b}}
+			}
+		} else {
+			return map[string]any{"range": []any{lo, hi}}
+		}
+	}
 	if n, err := strconv.Atoi(part); err == nil {
 		return n
 	}
@@ -298,7 +316,11 @@ func mapKeyPart(part string) any {
 // mapValueExpr renders a map element's data per the map's value type.
 func mapValueExpr(valueType, value string) any {
 	if valueType == "verdict" {
-		return map[string]any{"jump": map[string]any{"target": value}}
+		// goto, not jump: after a jump the kernel continues with the NEXT RULE of the calling chain
+		// (the rest of the rule that did the lookup is not run), so the lookup chain's next level would
+		// run too and overwrite the mark. A goto does not come back: the chain ends, and with it the
+		// base chain's evaluation (plan §3.3 first match; proven in the VM, M8a).
+		return map[string]any{"goto": map[string]any{"target": value}}
 	}
 	if n, err := strconv.Atoi(value); err == nil {
 		return n
@@ -319,4 +341,78 @@ func splitPrefix(s string) (string, int, bool) {
 		}
 	}
 	return "", 0, false
+}
+
+// MapUpdate is the change of the elements of one map between two targets: the keys to delete and
+// the elements to add. A key whose value changed is in both lists (a map add refuses a key that
+// still exists), so Delete runs first.
+type MapUpdate struct {
+	Map    string       `json:"map"`
+	Delete []string     `json:"delete,omitempty"`
+	Add    []MapElement `json:"add,omitempty"`
+}
+
+// Empty reports whether the update changes nothing.
+func (u MapUpdate) Empty() bool { return len(u.Delete) == 0 && len(u.Add) == 0 }
+
+// DiffMap compares the elements of two maps of the same definition. Keys and values are compared as
+// the compiler wrote them, which is the canonical form nft prints.
+func DiffMap(old, next MapDef) MapUpdate {
+	have := make(map[string]string, len(old.Elements))
+	for _, e := range old.Elements {
+		have[e.Key] = e.Value
+	}
+	want := make(map[string]string, len(next.Elements))
+	for _, e := range next.Elements {
+		want[e.Key] = e.Value
+	}
+	u := MapUpdate{Map: next.Name}
+	for k, v := range want {
+		if hv, ok := have[k]; !ok {
+			u.Add = append(u.Add, MapElement{Key: k, Value: v})
+		} else if hv != v {
+			u.Delete = append(u.Delete, k)
+			u.Add = append(u.Add, MapElement{Key: k, Value: v})
+		}
+	}
+	for k := range have {
+		if _, ok := want[k]; !ok {
+			u.Delete = append(u.Delete, k)
+		}
+	}
+	sort.Slice(u.Add, func(i, j int) bool { return u.Add[i].Key < u.Add[j].Key })
+	sort.Strings(u.Delete)
+	return u
+}
+
+// ElementTransaction is the nftables JSON of one atomic transaction that applies the updates to the
+// maps of the target: the deletes first, then the adds, in one batch, so a packet never sees a
+// half-changed classification (an element that moves is deleted and added in the same commit). It
+// is for interval maps, where an element cannot be added while an overlapping one still exists.
+func (n Nft) ElementTransaction(updates []MapUpdate) ([]byte, error) {
+	defs := map[string]MapDef{}
+	for _, m := range n.Maps {
+		defs[m.Name] = m
+	}
+	var cmds []any
+	for _, u := range updates {
+		if _, ok := defs[u.Map]; !ok {
+			return nil, fmt.Errorf("compiler: the target has no map %s", u.Map)
+		}
+		if len(u.Delete) > 0 {
+			keys := make([]any, len(u.Delete))
+			for i, k := range u.Delete {
+				keys[i] = mapKeyExpr(k)
+			}
+			cmds = append(cmds, cmd("delete", "element", map[string]any{"name": u.Map, "elem": keys}))
+		}
+	}
+	for _, u := range updates {
+		if len(u.Add) > 0 {
+			d := defs[u.Map]
+			d.Elements = u.Add
+			cmds = append(cmds, cmd("add", "element", map[string]any{"name": u.Map, "elem": mapElements(d)}))
+		}
+	}
+	return json.Marshal(map[string]any{"nftables": cmds})
 }

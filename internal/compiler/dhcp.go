@@ -220,7 +220,7 @@ func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity) {
 			md.Elements = append(md.Elements, MapElement{Key: a, Value: strconv.Itoa(num + 1)})
 		}
 	}
-	md.Name = hashMapName("ident4", md.KeyType, md.ValueType)
+	md.Name = hashMapName("ident4", md.KeyType, md.ValueType, md.Flags)
 	t.identityMap = md
 	t.IdentityMap = md.Name
 }

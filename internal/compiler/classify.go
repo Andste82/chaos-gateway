@@ -4,14 +4,22 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+
+	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
-// This file is the classification mechanism of plan §3.3 (milestone M7): on prerouting, for test,
-// WireGuard and remote-network traffic only, write the winning fault's id and the packet's
-// direction into reserved mark bits, through a lookup chain of nftables maps keyed on the
-// conntrack original tuple. M7 itself resolves no real fault (that is M8a onward): the mechanism
-// is proven with a per-id mark-writing chain that a test points a map element at (TestClassifyIDs),
-// ready for M8a to drive with domain.Resolve's winners instead.
+// This file is the classification mechanism of plan §3.3 (milestones M7 and M8a): on prerouting,
+// for test, WireGuard and remote-network traffic only, write the winning fault's id and the
+// packet's direction into reserved mark bits, through a lookup chain of nftables maps keyed on the
+// conntrack original tuple. The maps' elements are the resolved winners (faults.go); the chain
+// `mark_<id>` an element goes to writes the id and counts the packet.
+//
+// First match wins by `goto`, not `jump`. After a jump the kernel continues with the next rule of the
+// calling chain (what follows the lookup in the same rule is never run), so a `return` after the
+// lookup does not stop the chain, and the next level, if it holds an entry for the same traffic,
+// overwrites the id. M7 had that latent defect: its levels never held two entries for the same
+// traffic until real faults filled them. A goto leaves the base chain for good: the chain it names
+// runs, and when it ends the base chain's evaluation ends with it, accept.
 
 // Mark bit layout (plan §3.3): bits 4-15 hold the fault id (12 bits, up to 4095), bit 16 the
 // direction (0 = original/upload, 1 = reply/download, from `ct direction`). Bits 17-19 (PMTU),
@@ -47,50 +55,59 @@ const ClassifyChain = "classify"
 // fields are populated, and before the service redirect's DNAT (service.go's "prerouting", -100).
 const ClassifyPriority = -150
 
-// markChainPrefix names the per-id chain a classification map's element jumps to.
-const markChainPrefix = "mark_"
+// markChainPrefix names the per-id chain a classification map's element goes to.
+const markChainPrefix = executor.MarkChainPrefix
 
-// MarkChainName is the chain a classification map element for this id jumps to; it writes the id
+// MarkChainName is the chain a classification map element for this id goes to; it writes the id
 // into bits 4-15 and returns. The chain must exist before an element names it (plan §3.3): the
-// compiler creates one for every id TestClassifyIDs or (from M8a) a resolved fault names.
+// compiler creates one for every id a resolved fault holds, and mark_0 where a fault that impairs
+// nothing shadows another.
 func MarkChainName(id int) string { return fmt.Sprintf("%s%d", markChainPrefix, id) }
 
 // classifyLevels is the lookup chain's granularity, most specific first (plan §3.3, levels 1-4):
-// device+destination+port, device+destination, device+port, device. The domain model's groups and
-// networks (levels 5-8) and the two source-less levels (any+destination/port, global, 9-10) are
-// not implemented yet: the access-matrix/fault-resolution machinery to expand a group or a network
-// into this kind of map does not exist before M8a/M9 (see docs/open-items.md P2-M7-01).
+// device+destination+port, device+destination, device+port, device. The maps hold the resolved
+// winner per key, and the sources' groups, networks and global scopes are folded into the sources'
+// own entries (domain.World.Table, docs/open-items.md P2-M8a-01), so these four are all the chain
+// needs. The maps are interval maps: an element is a range of source addresses (a device's
+// addresses, or the addresses of a stretch no device owns), a range of destinations and a range of
+// ports, disjoint from every other element of its map (plan §3.2, "overlapping selectors").
 var classifyLevels = []struct {
+	level int
 	field string
 	key   []string
 }{
-	{"devdestport", []string{"ipv4_addr", "ipv4_addr", "inet_proto", "inet_service"}},
-	{"devdest", []string{"ipv4_addr", "ipv4_addr"}},
-	{"devport", []string{"ipv4_addr", "inet_proto", "inet_service"}},
-	{"dev", []string{"ipv4_addr"}},
+	{1, "devdestport", []string{"ipv4_addr", "ipv4_addr", "inet_proto", "inet_service"}},
+	{2, "devdest", []string{"ipv4_addr", "ipv4_addr"}},
+	{3, "devport", []string{"ipv4_addr", "inet_proto", "inet_service"}},
+	{4, "dev", []string{"ipv4_addr"}},
 }
 
 // compileClassify builds the classification mechanism: the guard set of test/WireGuard/remote
-// prefixes, the lookup chain's maps (empty: M7 resolves no fault) and the "classify" chain itself.
-// TestClassifyIDs' per-id chains let a test exercise the mechanism end-to-end before M8a exists.
-func (t *Target) compileClassify(testIDs []int) {
+// prefixes, the lookup chain's maps with the elements compileFaults resolved, the per-id chains
+// and counters, and the "classify" chain itself.
+func (t *Target) compileClassify() {
 	netsSet := SetDef{Type: "ipv4_addr", Flags: []string{"interval"}, Elements: t.classifyNets()}
 	netsSet.Name = hashName("classify_nets", netsSet.Type, netsSet.Flags)
 	t.Nft.Sets = append(t.Nft.Sets, netsSet)
 	t.ClassifyNets = netsSet.Name
 
 	t.ClassifyMaps = map[string]string{}
-	for _, lv := range classifyLevels {
-		md := MapDef{KeyType: lv.key, ValueType: "verdict"}
-		md.Name = hashMapName("cls_"+lv.field, md.KeyType, md.ValueType)
+	fb := t.faultBuild
+	if fb == nil {
+		fb = &faultBuild{}
+	}
+	for i, lv := range classifyLevels {
+		md := MapDef{KeyType: lv.key, ValueType: "verdict", Flags: []string{"interval"}}
+		if i < len(fb.maps) {
+			md.Elements = fb.maps[i].Elements
+		}
+		md.Name = hashMapName("cls_"+lv.field, md.KeyType, md.ValueType, md.Flags)
 		t.Nft.Maps = append(t.Nft.Maps, md)
 		t.ClassifyMaps[lv.field] = md.Name
 	}
-
-	ids := uniqueSortedIDs(testIDs)
-	for _, id := range ids {
-		t.Nft.Chains = append(t.Nft.Chains, markChain(id))
-	}
+	t.Nft.Chains = append(t.Nft.Chains, fb.chains...)
+	t.Nft.Counters = append(t.Nft.Counters, fb.counters...)
+	sort.Strings(t.Nft.Counters)
 
 	c := Chain{Name: ClassifyChain, Base: &BaseChain{Type: "filter", Hook: "prerouting", Prio: ClassifyPriority, Policy: "accept"}}
 	c.Rules = append(c.Rules,
@@ -112,34 +129,27 @@ func (t *Target) compileClassify(testIDs []int) {
 		newRule(match(ctKey("direction"), "==", "original"), markSet(bitAnd(meta("mark"), int64(MarkKeepOnDirectionWrite)))),
 	)
 	c.Rules = append(c.Rules,
-		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devdestport"]), verdict("return")),
-		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr")), t.ClassifyMaps["devdest"]), verdict("return")),
-		newRule(vmap(concat(ctOriginalIP("saddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devport"]), verdict("return")),
-		newRule(vmap(ctOriginalIP("saddr"), t.ClassifyMaps["dev"]), verdict("return")),
+		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devdestport"])),
+		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr")), t.ClassifyMaps["devdest"])),
+		newRule(vmap(concat(ctOriginalIP("saddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devport"])),
+		newRule(vmap(ctOriginalIP("saddr"), t.ClassifyMaps["dev"])),
 	)
 	t.Nft.Chains = append(t.Nft.Chains, c)
 }
 
-// markChain is the per-id chain a classification map element jumps to: it writes the id into bits
-// 4-15, keeping everything else (MarkKeepOnIDWrite), and returns to the classify chain's "return".
-func markChain(id int) Chain {
-	return Chain{Name: MarkChainName(id), Rules: []Rule{
-		newRule(markSet(bitOr(bitAnd(meta("mark"), int64(MarkKeepOnIDWrite)), lshift(id, MarkIDShift))), verdict("return")),
-	}}
-}
-
-func uniqueSortedIDs(in []int) []int {
-	seen := map[int]bool{}
-	var out []int
-	for _, id := range in {
-		if id < 0 || id > MarkIDMax || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
+// markChain is the per-id chain a classification map element goes to: it writes the id into bits
+// 4-15, keeping everything else (MarkKeepOnIDWrite), counts the packet in the counter of its
+// direction and ends (the classification of the packet is done). Id 0 clears the id: it is the entry of a
+// fault that impairs nothing, which still shadows the less specific faults below it.
+func markChain(id int, counterUp, counterDown string) Chain {
+	rules := []Rule{newRule(markSet(bitOr(bitAnd(meta("mark"), int64(MarkKeepOnIDWrite)), lshift(id, MarkIDShift))))}
+	if counterUp != "" {
+		rules = append(rules,
+			newRule(match(ctKey("direction"), "==", "original"), counter(counterUp)),
+			newRule(match(ctKey("direction"), "==", "reply"), counter(counterDown)))
 	}
-	sort.Ints(out)
-	return out
+	rules = append(rules, newRule(verdict("return")))
+	return Chain{Name: MarkChainName(id), Rules: rules}
 }
 
 // classifyNets lists the prefixes classification touches: test networks, WireGuard networks and

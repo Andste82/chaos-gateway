@@ -27,6 +27,8 @@ type gw struct {
 	ex  *executor.Executor
 	cfg *model.Configuration
 	seq uint64
+	// ids is the fault id allocation of the last compile, fed back so ids stay stable (plan §3.3)
+	ids map[string]int
 }
 
 func newGateway(t *testing.T) *gw {
@@ -59,10 +61,13 @@ func (g *gw) compile(mods ...func(*compiler.Input)) *compiler.Target {
 	}
 	g.seq++
 	in := compiler.Input{Config: g.cfg, Host: h, Generation: compiler.Generation{Revision: 1, Seq: g.seq}}
+	in.FaultIDs = g.ids
 	for _, m := range mods {
 		m(&in)
 	}
-	return compiler.Compile(in)
+	tg := compiler.Compile(in)
+	g.ids = tg.FaultIDs
+	return tg
 }
 
 func (g *gw) apply(tg *compiler.Target) *apply.Result {

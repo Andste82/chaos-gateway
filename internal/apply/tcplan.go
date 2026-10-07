@@ -73,6 +73,10 @@ type tcPlan struct {
 	// dists is the distribution table each leaf of the target holds after the plan ("dev handle" ->
 	// "normal", "" for none); a leaf whose table is not known is not in it.
 	dists map[string]string
+	// created are the classes ("dev class") whose netem leaf the plan makes new: a leaf that did not
+	// exist, or one that is deleted and made again. Its counters start at zero; a leaf that is changed
+	// in place keeps them (what the engine's counter epochs follow).
+	created []string
 	// immediate are the stale objects that go at once because the interface leaves Chaos Gateway's
 	// control, or because the apply has no retirer: they are in stale as well.
 	immediate map[string]bool
@@ -267,6 +271,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 		case !haveLeaf:
 			change = append(change, leafEntry)
 			created++
+			p.created = append(p.created, dev+" "+id)
 			p.dists[dkey] = dist
 		case ll.Line() != wl.Line() || tableDiffers:
 			// A change that names no table keeps the old one, so a leaf that is to be uniform (and has a
@@ -277,6 +282,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			case dist == "" && c.Netem.Jitter > 0 && (!known || last != ""):
 				repair = append(repair, executor.TCEntry{Object: "qdisc", Action: "delete", Dev: dev, Parent: id, Handle: c.LeafHandle()})
 				p.words = append(p.words, dev+": leaf "+c.LeafHandle()+" is made again (it may hold a distribution table, the target has none)")
+				p.created = append(p.created, dev+" "+id)
 				p.dists[dkey] = ""
 			case dist != "":
 				p.dists[dkey] = dist

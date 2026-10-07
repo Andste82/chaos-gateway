@@ -78,10 +78,33 @@ func (r *Retirer) commit(p *Plan) {
 			items[st.Key()] = old
 			continue
 		}
+		// a class of a tree that was waiting as a whole (the last fault went, then another came):
+		// the time of the tree is the time of its classes, the new fault's tree is not theirs to keep
+		if old := r.treeWith(st); old != nil {
+			items[st.Key()] = &retiree{TCStale: st, first: old.first, due: old.due}
+			continue
+		}
 		items[st.Key()] = &retiree{TCStale: st, first: now, due: now + p.Grace}
 	}
 	r.items = items
 	r.tables = p.Dists
+}
+
+// treeWith returns the pending whole tree of the interface of a stale class that has the class
+// (the tree was read with it): the classes of a tree that a new fault revives one by one keep the time
+// their tree was given. Nil for anything else. The caller holds the mutex.
+func (r *Retirer) treeWith(st TCStale) *retiree {
+	if st.Class == "" {
+		return nil
+	}
+	if t, ok := r.items[TCStale{Dev: st.Dev}.Key()]; ok {
+		for _, c := range t.Classes {
+			if c == st.Class {
+				return t
+			}
+		}
+	}
+	return nil
 }
 
 // dists returns a copy of what is known of the distribution tables of the leaves.

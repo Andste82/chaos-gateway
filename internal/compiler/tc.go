@@ -90,6 +90,12 @@ func (c TCClass) FilterHandle() string { return fmt.Sprintf("0x%05x/0x%05x", c.M
 // classMinor numbers the classes of a fault id: two minors per id, upload then download.
 func classMinor(id int, dir Direction) int { return tcFirstMinor + 2*id + int(dir) }
 
+// ClassIDOf is the class id in tc notation ("1:24") of a fault id and a direction: where the
+// fault's packets of that direction queue.
+func ClassIDOf(id int, dir Direction) string {
+	return TCClass{ID: id, Dir: dir, Minor: classMinor(id, dir)}.ClassID()
+}
+
 // ClassIDToFault is the inverse of the class numbering: the fault id and direction of a class id in tc
 // notation ("1:24"); false for the default class and for anything that is not a class of a fault.
 func ClassIDToFault(classID string) (id int, dir Direction, ok bool) {

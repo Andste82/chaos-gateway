@@ -81,6 +81,8 @@ func TestTCRejectsWhatLeavesTheOwnTree(t *testing.T) {
 		"delete a leaf of another":   `{"object":"qdisc","action":"delete","dev":"wan0","parent":"8001:1","handle":"8003:"}`,
 		"class of another major":     `{"object":"class","action":"replace","dev":"wan0","parent":"2:","classid":"2:24","args":["htb","rate","1mbit"]}`,
 		"class below another major":  `{"object":"class","action":"replace","dev":"wan0","parent":"2:","classid":"1:24","args":["htb","rate","1mbit"]}`,
+		"class with the minor zero":  `{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:0","args":["htb","rate","1mbit"]}`,
+		"leaf of the minor zero":     `{"object":"qdisc","action":"replace","dev":"wan0","parent":"1:0","handle":"0:","args":["netem","delay","5ms"]}`,
 		"class without a minor":      `{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:","args":["htb","rate","1mbit"]}`,
 		"class without a parent":     `{"object":"class","action":"replace","dev":"wan0","classid":"1:24","args":["htb","rate","1mbit"]}`,
 		"delete class of another":    `{"object":"class","action":"delete","dev":"wan0","classid":"8001:1"}`,

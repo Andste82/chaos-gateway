@@ -1439,3 +1439,86 @@ func TestWinnersAreTheFaultsThatWinSomewhere(t *testing.T) {
 		}
 	}
 }
+
+// ---- the cost of resolving many overlays -----------------------------------------------------------
+
+// scaleOverlays adds n overlays on the network IoT; kind says what each selects: "dp" its own /24 and
+// its own tcp port, "mixed" alternately its own /24 only and its own port only (those two conflict
+// pairwise, so the level-1 map needs their product).
+func scaleOverlays(w *faultWorld, n int, kind string) {
+	for i := 0; i < n; i++ {
+		dest := fmt.Sprintf("11.%d.%d.0/24", (i/256)%256, i%256)
+		switch {
+		case kind == "dp":
+			w.overlay(fmt.Sprintf(`{target: {network: IoT}, fault: {destination: {cidr: "%s"}, protocol: tcp, ports: [%d], latency: 50ms}}`, dest, 1000+i), time.Duration(i)*time.Millisecond)
+		case i%2 == 0:
+			w.overlay(fmt.Sprintf(`{target: {network: IoT}, fault: {destination: {cidr: "%s"}, latency: 50ms}}`, dest), time.Duration(i)*time.Millisecond)
+		default:
+			w.overlay(fmt.Sprintf(`{target: {network: IoT}, fault: {protocol: tcp, ports: [%d], loss: 1%%}}`, 1000+i), time.Duration(i)*time.Millisecond)
+		}
+	}
+}
+
+// A token that may write overlays must not be able to stall the state owner: the compile that
+// checks every write was cubic in the number of overlays that each name a destination and a port
+// (4.5 ms for 10, 11.7 s for 160, 42 s for 240).
+func TestManyOverlaysWithTheirOwnDestinationAndPortCompileQuickly(t *testing.T) {
+	w := newFaultWorld(t)
+	scaleOverlays(w, 400, "dp")
+	start := time.Now()
+	tg := w.compile(nil)
+	took := time.Since(start)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if len(tg.Faults) != 400 {
+		t.Fatalf("%d faults", len(tg.Faults))
+	}
+	if took > 3*time.Second {
+		t.Fatalf("compiling 400 overlays took %v", took)
+	}
+}
+
+func TestAnOverlaySetThatNeedsTooManyClassificationCellsIsRefusedQuickly(t *testing.T) {
+	w := newFaultWorld(t)
+	scaleOverlays(w, 600, "mixed")
+	start := time.Now()
+	tg := w.compile(func(in *Input) { in.ClassLimit = 100000 })
+	took := time.Since(start)
+	var p *Problem
+	for i := range tg.Problems {
+		if tg.Problems[i].Code == CodeCapacityExceeded {
+			p = &tg.Problems[i]
+		}
+	}
+	if p == nil || !tg.HasErrors() {
+		t.Fatalf("no capacity_exceeded: %+v", tg.Problems)
+	}
+	if !strings.Contains(p.Message, "destinations and ports") || len(p.Faults) == 0 {
+		t.Errorf("%+v", p)
+	}
+	if took > 3*time.Second {
+		t.Fatalf("the refusal took %v", took)
+	}
+}
+
+func TestTooManyClassificationElementsAreRefused(t *testing.T) {
+	// 100 overlays of 64 scattered ports on each of two networks: two tables of 6400 entries, which
+	// the address stretches of their sources multiply (one element per stretch and entry)
+	w := newFaultWorld(t)
+	for i := 0; i < 200; i++ {
+		var ports []string
+		for k := 0; k < 64; k++ {
+			ports = append(ports, fmt.Sprint(1+2*(i/2*64+k)))
+		}
+		network := []string{"IoT", "Lab"}[i%2]
+		w.overlay(fmt.Sprintf(`{target: {network: %s}, fault: {protocol: tcp, ports: [%s], latency: 50ms}}`, network, strings.Join(ports, ",")), time.Duration(i)*time.Millisecond)
+	}
+	tg := w.compile(func(in *Input) { in.ClassLimit = 100000 })
+	for _, p := range tg.Problems {
+		if p.Code == CodeCapacityExceeded && strings.Contains(p.Message, "elements") {
+			return
+		}
+	}
+	t.Fatalf("no capacity_exceeded about elements: %+v", tg.Problems)
+}

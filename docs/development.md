@@ -1006,6 +1006,21 @@ steps.
   random worlds. `uplink` is the complement of the known prefixes; hostnames are not in a table
   (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. See
   `docs/open-items.md` P2-M8a-01 for why group and network scopes are folded into the tables.
+  *Cost.* The first version looked at every cell of the (destination piece x port piece) grid and
+  scanned all candidates per cell: cubic in the number of overlays that name their own destination
+  and port (4.5 ms for 10, 11.7 s for 160, 42 s for 240), and the compile runs inside the state
+  owner. A candidate is now one of four classes (names a destination, a port selector, both or
+  neither); a cell can only differ from what the levels below give where a candidate names both for
+  that very cell, or where a destination-only and a port-only candidate meet, so only those cells
+  are looked at, with the candidates reduced to one champion per (layer, level, scope) first. 10000
+  overlays with their own destination and port build in 0.3 s. The work is bounded: a table that
+  needs more than `domain.MaxTableCells` (8192) cells is refused with `*TableTooLargeError`, the
+  tables of all sources that differ by `compiler.MaxCompileCells` (32768), the classification maps
+  by `compiler.MaxClassElements` (8192); each is `capacity_exceeded` naming the faults that select by
+  destination only or by port only (their product is what grows). Sources that the same candidates
+  apply to share one table (`Table.Cells` is 0 for the later ones). The worst accepted set compiles
+  in about 0.1 s; `TestABurstOfOverlaysThatOverflowsTheClassificationIsRefusedAtTheLimitAndQuickly`
+  throws 400 writes of the worst kind at the engine.
 
 ### Faults in the compiler (M8a)
 
@@ -1120,7 +1135,9 @@ install it with the executor.
   is verified, with the generation it made, the actor and the subject; a change that is taken back
   never announced itself. Renewing a lease moves a deadline only: no generation, no event, no apply.
 - **Expiry** is the `overlay.Expirer` on the engine's injected clock: it arms one timer for the next
-  deadline, re-armed after every change and renewal; when it fires, `cmdOverlayExpire` makes the
+  deadline, re-armed after every change and renewal; a renewal is also written into every
+  checkpoint the store can still be restored to (`Store.Renew(id, checkpoints...)`), so a failed
+  apply or a refused write of somebody else does not take it back; when it fires, `cmdOverlayExpire` makes the
   owner call `Store.Expire`. The tests move the fake clock (`TestTheTTLRemovesAnOverlayAndAnEventSaysSo`,
   `TestALeaseNeedsRenewingAndRunsOnTheMonotonicClock`, which also jumps the wall clock).
 - **Restart.** The store lives in the owner and nowhere else, so a new engine starts without

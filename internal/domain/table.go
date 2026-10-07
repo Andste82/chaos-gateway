@@ -144,6 +144,9 @@ type Table struct {
 	// Unresolved are the candidates that name a hostname: their addresses are known at run time
 	// only, so they are not in Entries.
 	Unresolved []Candidate
+	// Cells is the work the build took (see MaxTableCells); 0 for a table that was shared with an
+	// earlier source.
+	Cells int
 }
 
 // Signature is a string that is equal for tables with equal entries, whatever source they are
@@ -391,77 +394,303 @@ func sameWinner(a, b *Candidate) bool {
 	return a.Layer == b.Layer && a.ID == b.ID && a.Family == b.Family
 }
 
-// Table builds the classification table of a source for a family of TableFamilies.
+// MaxTableCells bounds the work of building one Table: the (destination piece, protocol/port piece)
+// cells whose winner must be looked at, plus the pieces every selector covers. A table of
+// overlays that each name their own destination and their own port needs one cell per overlay; a
+// table whose destination-only and port-only faults all conflict needs the product of the two
+// counts, and no sane test needs 8192 of those. The limit keeps one scope's token from making a
+// compile (which runs inside the state owner) last for minutes.
+const MaxTableCells = 1 << 13
+
+// TableTooLargeError is returned by Table when the faults that apply to a source cut the traffic
+// space into more cells than MaxTableCells.
+type TableTooLargeError struct {
+	Family string
+	// Cells is the work counted when the build stopped.
+	Cells int
+	// Faults are ids of faults that select by destination only or by port only, the kinds whose
+	// product makes the grid; at most ten.
+	Faults []string
+}
+
+func (e *TableTooLargeError) Error() string {
+	return fmt.Sprintf("domain: the %s faults of one source select so many different destinations and ports that the classification would need more than %d cells", e.Family, MaxTableCells)
+}
+
+// pickWinner returns the winner of the candidates of one family that match the same traffic
+// (resolveFamily without the explanation): overlays before configuration, then winnerOf.
+func pickWinner(cs []Candidate) *Candidate {
+	switch len(cs) {
+	case 0:
+		return nil
+	case 1:
+		return &cs[0]
+	}
+	var overlays, configs []Candidate
+	for _, c := range cs {
+		if c.Layer == LayerOverlay {
+			overlays = append(overlays, c)
+		} else {
+			configs = append(configs, c)
+		}
+	}
+	winning := configs
+	if len(overlays) > 0 {
+		winning = overlays
+	}
+	win := winning[winnerOf(winning)]
+	return &win
+}
+
+// reduceCandidates drops the candidates that can never win, whatever else matches: on one scope
+// and level of one layer only the champion can (winnerOf). A list of equal-selector candidates of
+// many owners thereby shrinks to one per scope.
+func reduceCandidates(cs []Candidate) []Candidate {
+	if len(cs) < 2 {
+		return cs
+	}
+	type slot struct {
+		layer Layer
+		level int
+		scope string
+	}
+	best := map[slot]int{}
+	for i, c := range cs {
+		k := slot{c.Layer, c.Level, scopeKey(&c.Scope)}
+		if cur, ok := best[k]; !ok || champion(c, cs[cur]) {
+			best[k] = i
+		}
+	}
+	if len(best) == len(cs) {
+		return cs
+	}
+	out := make([]Candidate, 0, len(best))
+	for i, c := range cs {
+		if best[slot{c.Layer, c.Level, scopeKey(&c.Scope)}] == i {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// pieceRange returns the indices of the pieces that lie inside the span; pieces are sorted and
+// disjoint, and each is inside the span or outside it (they are cut at its boundaries).
+func pieceRange(pieces []span, s span) (from, to int) {
+	from = sort.Search(len(pieces), func(i int) bool { return pieces[i].lo >= s.lo })
+	to = from
+	for to < len(pieces) && pieces[to].hi <= s.hi {
+		to++
+	}
+	return from, to
+}
+
+// portIndices returns the indices of the protocol/port pieces the selectors cover, sorted and
+// without repeats.
+func portIndices(pieces []PortSel, sels []PortSel) []int {
+	var out []int
+	for _, s := range sels {
+		lo := sort.Search(len(pieces), func(i int) bool {
+			p := pieces[i]
+			if p.Proto != s.Proto {
+				return protoOrder(p.Proto) >= protoOrder(s.Proto)
+			}
+			return p.From >= s.From
+		})
+		for k := lo; k < len(pieces) && pieces[k].Proto == s.Proto && (s.Proto == "icmp" || pieces[k].To <= s.To); k++ {
+			out = append(out, k)
+		}
+	}
+	sort.Ints(out)
+	uniq := out[:0]
+	for i, v := range out {
+		if i == 0 || v != out[i-1] {
+			uniq = append(uniq, v)
+		}
+	}
+	return uniq
+}
+
+// tableCand is a candidate that applies to a source, with the pieces of traffic it names.
+type tableCand struct {
+	c     Candidate
+	spans []span
+	hasD  bool // names a destination
+	sels  []PortSel
+	hasP  bool // names a protocol or ports
+}
+
+type tableResult struct {
+	t   Table
+	err error
+}
+
+// Table builds the classification table of a source for a family of TableFamilies. The result
+// (Entries, Unresolved) depends on the candidates that apply to the source, not on its address:
+// sources with the same candidates get the table of the first one (Cells is 0 for them).
+//
+// The work is proportional to the traffic the faults name, not to the full grid of destination
+// pieces times port pieces. A candidate belongs to one of four classes (it names a destination, a
+// protocol/port selector, both or neither), and a cell of the grid can only differ from what the
+// levels below give when a candidate names both for that very cell, or when a destination-only
+// and a port-only candidate meet in it. Every other cell is skipped without looking at it. The
+// build is refused with a *TableTooLargeError when the cells to look at exceed MaxTableCells.
 func (w *World) Table(src Source, family string) (Table, error) {
 	if family != FamilyImpairment && family != FamilyMTU {
 		return Table{}, fmt.Errorf("domain: the family %s has no classification table (it is not selected by destination and port)", family)
 	}
 	t := Table{Source: src, Family: family}
 
-	var relevant []Candidate
+	var relevant []tableCand
+	var unresolved []Candidate
 	var destCover []span
 	var sels []PortSel
-	for _, c := range w.candidates() {
+	var key strings.Builder
+	key.WriteString(family)
+	for ci, c := range w.candidates() {
 		if c.Family != family || !w.scopeMatches(c.Scope, src.Subject) {
 			continue
 		}
-		relevant = append(relevant, c)
+		fmt.Fprintf(&key, ",%d", ci)
+		x := tableCand{c: c}
 		if c.Match.Destination != nil {
 			spans, ok := w.destSpans(c.Match.Destination)
 			if !ok {
-				t.Unresolved = append(t.Unresolved, c)
+				unresolved = append(unresolved, c) // a hostname: it takes no part in the table
 				continue
 			}
+			x.spans, x.hasD = spans, true
 			destCover = append(destCover, spans...)
 		}
-		s, _ := portSels(c.Match)
+		s, wildcard := portSels(c.Match)
+		x.sels, x.hasP = s, !wildcard
 		sels = append(sels, s...)
-	}
-	// the candidates that name a hostname take no part in the table
-	if len(t.Unresolved) > 0 {
-		skip := map[string]bool{}
-		for _, c := range t.Unresolved {
-			skip[string(c.Layer)+c.ID+c.Family] = true
-		}
-		kept := relevant[:0:0]
-		for _, c := range relevant {
-			if !skip[string(c.Layer)+c.ID+c.Family] {
-				kept = append(kept, c)
-			}
-		}
-		relevant = kept
+		relevant = append(relevant, x)
 	}
 
-	winner := func(dest netip.Addr, proto string, port int) *Candidate {
-		q := Query{Source: src.Subject, DestIP: dest, Protocol: proto, Port: port}
-		var matching []Candidate
-		for _, c := range relevant {
-			if w.candidateMatches(c, q) {
-				matching = append(matching, c)
-			}
+	w.tabMu.Lock()
+	r, ok := w.tabCache[key.String()]
+	w.tabMu.Unlock()
+	if !ok {
+		r.t, r.err = buildTable(t, relevant, destCover, sels)
+		r.t.Unresolved = unresolved
+		w.tabMu.Lock()
+		if w.tabCache == nil {
+			w.tabCache = map[string]tableResult{}
 		}
-		if r, ok := resolveFamily(family, matching); ok {
-			return r.Winner
-		}
-		return nil
+		w.tabCache[key.String()] = r
+		w.tabMu.Unlock()
+	} else {
+		r.t.Cells = 0
 	}
-	repPort := func(p PortSel) (string, int) { return p.Proto, p.From }
+	r.t.Source = src
+	return r.t, r.err
+}
 
+// buildTable is the work of Table, for the candidates that apply to the source.
+func buildTable(t Table, relevant []tableCand, destCover []span, sels []PortSel) (Table, error) {
+	family := t.Family
 	dests := elementary(destCover, addrSpace)
 	ports := portPieces(sels)
 
-	v4 := winner(netip.Addr{}, "", 0)
+	var (
+		g  []Candidate // names neither a destination nor a port
+		dl = make([][]Candidate, len(dests))
+		pl = make([][]Candidate, len(ports))
+		dp = map[[2]int][]Candidate{}
+	)
+	work := 0
+	tooLarge := func() error {
+		e := &TableTooLargeError{Family: family, Cells: work}
+		for _, x := range relevant {
+			if x.hasD != x.hasP && len(e.Faults) < 10 {
+				e.Faults = append(e.Faults, x.c.ID)
+			}
+		}
+		return e
+	}
+	for _, x := range relevant {
+		var di, pi []int
+		if x.hasD {
+			for _, s := range x.spans {
+				from, to := pieceRange(dests, s)
+				for k := from; k < to; k++ {
+					di = append(di, k)
+				}
+			}
+		}
+		if x.hasP {
+			pi = portIndices(ports, x.sels)
+		}
+		work += len(di) + len(pi) + 1
+		if x.hasD && x.hasP {
+			work += len(di) * len(pi)
+		}
+		if work > MaxTableCells {
+			return Table{}, tooLarge()
+		}
+		switch {
+		case !x.hasD && !x.hasP:
+			g = append(g, x.c)
+		case x.hasD && !x.hasP:
+			for _, i := range di {
+				dl[i] = append(dl[i], x.c)
+			}
+		case !x.hasD && x.hasP:
+			for _, j := range pi {
+				pl[j] = append(pl[j], x.c)
+			}
+		default:
+			for _, i := range di {
+				for _, j := range pi {
+					dp[[2]int{i, j}] = append(dp[[2]int{i, j}], x.c)
+				}
+			}
+		}
+	}
+	g = reduceCandidates(g)
+	nd, np := 0, 0
+	for i := range dl {
+		if len(dl[i]) > 0 {
+			dl[i] = reduceCandidates(dl[i])
+			nd++
+		}
+	}
+	for j := range pl {
+		if len(pl[j]) > 0 {
+			pl[j] = reduceCandidates(pl[j])
+			np++
+		}
+	}
+	if work += nd * np; work > MaxTableCells {
+		return Table{}, tooLarge()
+	}
+
+	// the winner of classes of candidates that match the same traffic
+	winner := func(parts ...[]Candidate) *Candidate {
+		var all []Candidate
+		for _, p := range parts {
+			all = append(all, p...)
+		}
+		return pickWinner(all)
+	}
+
+	v4 := winner(g)
 	if v4 != nil {
 		t.Entries = append(t.Entries, Entry{Level: 4, Winner: v4})
 	}
 	byPort := make([]*Candidate, len(ports))
-	for j, p := range ports {
-		proto, port := repPort(p)
-		byPort[j] = winner(netip.Addr{}, proto, port)
+	for j := range ports {
+		byPort[j] = v4
+		if len(pl[j]) > 0 {
+			byPort[j] = winner(g, pl[j])
+		}
 	}
 	byDest := make([]*Candidate, len(dests))
-	for i, d := range dests {
-		byDest[i] = winner(numAddr(d.lo), "", 0)
+	for i := range dests {
+		byDest[i] = v4
+		if len(dl[i]) > 0 {
+			byDest[i] = winner(g, dl[i])
+		}
 	}
 
 	var l1, l2, l3 []Entry
@@ -477,23 +706,37 @@ func (w *World) Table(src Source, family string) (Table, error) {
 			l2 = append(l2, Entry{Level: 2, Dest: &r, Winner: byDest[i]})
 		}
 	}
-	for i, d := range dests {
-		for j, p := range ports {
-			below := v4 // what the levels below level 1 give here
-			switch {
-			case !sameWinner(byDest[i], v4):
-				below = byDest[i]
-			case !sameWinner(byPort[j], v4):
-				below = byPort[j]
-			}
-			proto, port := repPort(p)
-			if got := winner(numAddr(d.lo), proto, port); !sameWinner(got, below) {
-				r, p := d.ipRange(), p
-				l1 = append(l1, Entry{Level: 1, Dest: &r, Port: &p, Winner: got})
+	cell := func(i, j int) {
+		below := v4 // what the levels below level 1 give here
+		switch {
+		case !sameWinner(byDest[i], v4):
+			below = byDest[i]
+		case !sameWinner(byPort[j], v4):
+			below = byPort[j]
+		}
+		if got := winner(g, dl[i], pl[j], reduceCandidates(dp[[2]int{i, j}])); !sameWinner(got, below) {
+			r, p := dests[i].ipRange(), ports[j]
+			l1 = append(l1, Entry{Level: 1, Dest: &r, Port: &p, Winner: got})
+		}
+	}
+	for i := range dests {
+		if len(dl[i]) == 0 {
+			continue
+		}
+		for j := range ports {
+			if len(pl[j]) > 0 {
+				cell(i, j)
 			}
 		}
 	}
+	for ij := range dp {
+		if len(dl[ij[0]]) > 0 && len(pl[ij[1]]) > 0 {
+			continue // done with the product above
+		}
+		cell(ij[0], ij[1])
+	}
 	t.Entries = append(append(append(mergeLevel1(l1), mergeLevel2(l2)...), mergeLevel3(l3)...), t.Entries...)
+	t.Cells = work
 	return t, nil
 }
 

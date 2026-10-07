@@ -266,7 +266,7 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 // problemsToError turns the errors the compiler reports for a target into a validation failure.
 func problemsToError(ps []compiler.Problem) *problem {
 	var errs []model.ValidationError
-	unsupported := false
+	unsupported, capacity := false, false
 	for _, p := range ps {
 		if p.Severity != compiler.SevError {
 			continue
@@ -278,13 +278,20 @@ func problemsToError(ps []compiler.Problem) *problem {
 		if p.Network != "" {
 			path = "/networks/" + p.Network
 		}
+		if p.Code == compiler.CodeCapacityExceeded {
+			// the scope that caused it ("network IoT"): there is no object pointer for a scope
+			capacity, path = true, p.Scope
+		}
 		errs = append(errs, model.ValidationError{Path: path, Code: p.Code, Message: p.Message})
 	}
 	if len(errs) == 0 {
 		return nil
 	}
 	code := model.ErrorCodeValidationFailed
-	if unsupported {
+	switch {
+	case capacity:
+		code = model.ErrorCodeCapacityExceeded
+	case unsupported:
 		code = model.ErrorCodeUnsupportedFeature
 	}
 	return newProblem(code, "%s", errs[0].Message).with(func(b *model.Problem) { b.Errors = &errs })

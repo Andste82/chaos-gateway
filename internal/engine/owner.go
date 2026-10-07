@@ -259,6 +259,7 @@ func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 		o.prune(init.config)
 	}
 	o.publish()
+	close(e.ready)
 	for {
 		if o.batch != nil {
 			// overlay writes are being taken in: take what is already waiting, and check them together

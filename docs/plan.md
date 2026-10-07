@@ -1357,6 +1357,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 - Depends on: M6a, M6b, S2, S10, S11, S16.
 
 **M8a — Overlays** (M)
+- **Status:** done — merged (PR #31, `3d7a82f`).
 - Scope: overlay store with owner, key, TTL, lease and renew; overlay kinds whose milestone is not done yet (rule before M9, DNS before M20, TLS before M21, DHCP before M23) are rejected with `unsupported_feature`; `POST /api/v1/reset` (own vs. all); per-family precedence into winning faults (§2.4); stable ids; compiler output for tc (per id and direction, complete parameter sets, computed queue limits); named per-fault counters; `explain` endpoint, including the effective route for a destination (a
 table-100 lookup via an executor read, `ip route get <dst> from <src> iif <dev>`; decided 2026-10-04,
 M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (counters, state) no longer wait behind writes, and operation time stamps (enqueue, start); a revision that deletes a referenced object applies with `?force=true`, listing `references[]` in `validation_failed` otherwise, and emits `overlay_orphaned` for the removed overlays (§2.1.1); a merge revision moves overlays of the covered discovered device to the configured one.

@@ -107,7 +107,11 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 	}
 	if testbed.Accurate() {
 		measure := func() testbed.ProbeResult { return c.run(t, impairedRun()) }
+		// the stream is the first attempt only when it was long enough for the median (N >= 200, plan §4.3)
 		fresh := &res
+		if res.Sent < 200 {
+			fresh = nil
+		}
 		testbed.Statistically(t, "C's delay after the changes", func() error {
 			cur := fresh
 			if cur == nil {
@@ -167,8 +171,9 @@ func TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket(t *te
 	}
 	r.verifyKernel()
 	if testbed.Accurate() {
-		// the drops are the configured 5 % of what was sent; the second attempt is a fresh run
-		first := true
+		// the drops are the configured 5 % of what was sent; the stream is the first attempt only when it
+		// was long enough for the interval (N >= 2000, plan §4.3), otherwise every attempt is a fresh run
+		first := res.Sent >= 2000
 		testbed.Statistically(t, "loss of the 600 ms fault", func() error {
 			if first {
 				first = false

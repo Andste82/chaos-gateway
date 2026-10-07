@@ -34,6 +34,7 @@ type link struct {
 	index                   int
 	mtu                     int
 	wg                      *wgState
+	tc                      *simTC
 }
 
 type route struct {
@@ -137,6 +138,8 @@ type Kernel struct {
 	Fail func(argv []string, stdin string) *executor.Result
 	// Log records every command that was run.
 	Log []string
+	// tcSeed numbers the netem qdiscs created: the seed of each (a re-created qdisc has another)
+	tcSeed uint64
 }
 
 type dockerRule struct {
@@ -461,7 +464,7 @@ func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, 
 	case executor.ToolWg:
 		return k.wg(c)
 	case executor.ToolTC:
-		return executor.Result{}, nil
+		return k.tcCmd(c)
 	case executor.ToolBird, executor.ToolBirdc:
 		return k.birdCmd(c)
 	case executor.ToolConntrack:

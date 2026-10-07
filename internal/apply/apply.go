@@ -52,7 +52,7 @@ func want(t *compiler.Target) Want { return WantOf(t) }
 
 // WantOf is what to read for a target besides the basics.
 func WantOf(t *compiler.Target) Want {
-	w := Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance}
+	w := Want{Sysctls: t.Sysctls, Offloads: t.Offloads, BirdInstance: compiler.BirdInstance, TCDevs: t.TCCandidates()}
 	if t.Service != nil {
 		w.ServiceNS, w.ServicePeerIf, w.ServiceHolderPID = t.Service.Name, t.Service.PeerIf, t.Service.HolderPID
 	}
@@ -65,7 +65,7 @@ func Preview(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Plan
 	if err != nil {
 		return nil, &Error{Stage: "read", Err: err}
 	}
-	p, err := BuildPlan(t, s, ns)
+	p, err := BuildPlanRetiring(t, s, ns)
 	if err != nil {
 		return nil, &Error{Stage: "plan", Err: err}
 	}
@@ -75,12 +75,27 @@ func Preview(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Plan
 // Apply carries the target into the kernel: it reads the state, plans the difference, applies it
 // as one executor request and verifies the result by reading the state back (plan §2.14). A
 // failing apply returns an *Error; the result is returned in every case where the plan was built.
+//
+// Apply deletes a tc class the target no longer wants right after the nftables transaction. The
+// engine uses ApplyWith and a Retirer: the class stays until the packets queued in it have left.
 func Apply(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Result, error) {
+	return ApplyWith(ctx, ex, ns, t, nil)
+}
+
+// ApplyWith is Apply with the make-before-break of plan §3.2 for the tc tree: when r is not nil, a
+// class that no fault id uses any more is not deleted but handed to r, which deletes it after the
+// largest configured delay plus one second (Retirer.Reap); verify accepts it meanwhile.
+func ApplyWith(ctx context.Context, ex Exec, ns string, t *compiler.Target, r *Retirer) (*Result, error) {
 	s, err := ReadState(ctx, ex, ns, want(t))
 	if err != nil {
 		return nil, &Error{Stage: "read", Err: err}
 	}
-	p, err := BuildPlan(t, s, ns)
+	var p *Plan
+	if r != nil {
+		p, err = buildPlan(t, s, ns, true, r.dists())
+	} else {
+		p, err = BuildPlan(t, s, ns)
+	}
 	if err != nil {
 		return nil, &Error{Stage: "plan", Err: err}
 	}
@@ -91,9 +106,16 @@ func Apply(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Result
 	if err != nil && !errors.As(err, &birdDown) {
 		return res, &Error{Stage: "execute", Err: err}
 	}
+	if r != nil && (err == nil || errors.As(err, &birdDown)) {
+		r.commit(p)
+	}
 	after, err := ReadState(ctx, ex, ns, want(t))
 	if err != nil {
 		return res, &Error{Stage: "verify", Err: err}
+	}
+	after.TCRetiring = map[string]bool{}
+	for _, st := range p.Stale {
+		after.TCRetiring[st.Key()] = true
 	}
 	res.After = after
 	res.Mismatches = Verify(t, after)

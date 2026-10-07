@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +64,9 @@ type World struct {
 
 	prefixes map[string][]netip.Prefix // per network: the prefixes that belong to it
 	mgmt     []netip.Prefix            // management sources: not reached via the uplink
+
+	candOnce sync.Once
+	cands    []Candidate // candidates(), computed once: a World never changes
 }
 
 // NewWorld prepares a resolution. The configuration must be normalized (see Normalize): it
@@ -267,8 +271,13 @@ func (w *World) profile(id string) (model.Profile, bool) {
 }
 
 // candidates returns every candidate of the families resolved by scope, from both layers,
-// before any query is applied.
+// before any query is applied. The slice is shared and must not be modified.
 func (w *World) candidates() []Candidate {
+	w.candOnce.Do(func() { w.cands = w.buildCandidates() })
+	return w.cands
+}
+
+func (w *World) buildCandidates() []Candidate {
 	var out []Candidate
 	for _, id := range sortedKeys(deref(w.Config.Faults)) {
 		f := deref(w.Config.Faults)[id]

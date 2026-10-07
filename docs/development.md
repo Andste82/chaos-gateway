@@ -1358,7 +1358,10 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   state, so a class that a fault wants again drops out (nothing is deleted, its queue stays), an
   apply that failed half-way or a restore of the previous revision leaves nothing behind that the next
   apply does not find, and after a restart of the gateway the classes it finds stale get their time
-  from the first apply: they go later than needed, never earlier.
+  from the first apply: they go later than needed, never earlier. An apply that comes while classes
+  wait does not move their time (`TestAnApplyBeforeTheDeletionFiresLeavesItsTimeAlone`); when the last
+  fault went (the whole tree waits) and another comes, the old classes become stale one by one and keep
+  the time of the tree they were in (`Retirer.treeWith`).
 - **Fault ids.** `compiler.Input.RetiringIDs` (the engine passes `Retirer.IDs()`) keeps a new fault
   from taking an id whose class is still waiting, so old and new ids differ for as long as both are in
   the kernel, not only across one transition.
@@ -1399,6 +1402,54 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   goes with the last fault, a normal distribution going back to uniform). The load is a sender that
   runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
   kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution" -tags testbed -test-timeout 30m ./internal/apply'`.
+
+### Queue statistics and counter epochs (M8b)
+
+Plan §2.12: "per netem queue: packets dropped and delayed ... a queue that is re-created starts a new
+counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
+
+- **A queue** is the netem leaf below the class of one (fault id, direction) on one interface. The
+  statistics are the kernel's counters of that leaf, read when the API asks (`Engine.ReadQueues`: one
+  `ReadTC` per interface of the tree, so three tool runs each; nothing is polled, P2-M8b-04 is the
+  cost): packets and bytes that left it, drops (the loss the fault configures and the packets that did
+  not fit into the limit, both are `drops` on a netem leaf; `overlimits` stays 0), the backlog in
+  packets and bytes. They are what `QueueStats` in the spec carries (`sent_bytes` and `backlog_bytes`
+  were added in M8b) on `Overlay.queues` and on `FaultView.queues`, one entry per interface and
+  direction the fault impairs, with `device` set for the queue of one device (D18).
+- **The epoch** of a queue is the generation of the apply that made its leaf. What the kernel does
+  decides (measured on 6.8.0-142): `tc qdisc replace` of a leaf of the same kind and `tc class
+  replace/change` keep every counter, a deletion and a new leaf start them at zero. The plan therefore
+  names the leaves it makes new (`apply.Plan.QueuesCreated`: a leaf that did not exist, a class made
+  again after damage, a leaf deleted and made again because a distribution table has to go,
+  P2-M8a-05) and the engine gives those the generation of the apply (`trackQueues`); a leaf that
+  stays keeps its epoch through any change of the fault's parameters. A queue the engine has not seen
+  before (the first apply after a restart finds leaves it did not make) gets the epoch of that apply, which
+  is more than strictly needed and never less. After an apply that failed nothing is known about what it
+  did to the leaves, so every queue that was there starts a new epoch. Two readings with the same epoch
+  may be subtracted, readings with different ones must not be. A fault that is removed and written
+  again has new queues (its old classes retire, a new id is taken) and so a new epoch.
+- **The nft counters** (`Counter.epoch` of overlays and faults) are the generation in which the fault
+  first appeared in an applied target (`trackFaults`), as before. The state's `counter_epoch` is the
+  epoch of all of them together (`trackCounters`): the generation of the engine's first apply, and of
+  every apply that finds the table of Chaos Gateway missing (`Plan.NftNew`: a reboot, `chaosgw teardown`),
+  and then every fault counter starts a new epoch as well. A gateway that merely restarts cannot tell
+  whether the counters it finds are the ones it left, so it counts as a new epoch (P2-M8b-05); the
+  generation is persisted (`GenerationFile`), so the numbers never repeat.
+- **Tests.** `internal/engine/queues_test.go` (simulated kernel: the readings, the epoch through a
+  change in place, a leaf made again, an update that leaves another fault's queue and epoch alone, a
+  fault that comes back, a failed apply, the counter epoch and a restart), `internal/api`
+  `TestAnOverlayAndAFaultShowTheirNetemQueuesWithEpochs` (the fields and their contract),
+  `internal/apply` `TestThePlanNamesTheLeavesItMakesNewAndATableThatIsNew`, and on the real kernel
+  `internal/engine/integration_queues_test.go` (`TestTheQueuesCountTheKernelsPacketsAndKeepOrRestartTheirEpoch`).
+- **The queue limit** (P2-M8a-02): `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops`
+  sends a burst of 4000 echo requests back to back (`ping -l`) through a 600 ms fault. With the
+  compiler's computed limit (44739 packets here: the 1 Gbit/s cap would need 50000, the budget share of
+  four classes allows 44739) the upload and the download queue each carry all 4000 and drop none; with
+  an explicit limit of 1000 the upload queue passes 2000 and drops 2000 (tail drop while the first 1000
+  wait), and every packet is accounted for by the queues: upload sent + dropped = 4000, download sent +
+  dropped = what left the upload queue. What `ping` itself receives is not a measure (a burst of replies
+  overruns its socket buffer: 2000 to 2500 of 4000 on the emulated kernel with no drop in the queues). The
+  outcome and the cost are in P2-M8a-02.
 
 ### Coalescing and the reader pool (M8a)
 

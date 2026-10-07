@@ -41,7 +41,7 @@ func TestEveryTransactionIsAcceptedByNftsParser(t *testing.T) {
 // scenario added here is checked against the real kernel too.
 func transactionScenarios(t *testing.T) map[string]*Target {
 	t.Helper()
-	return map[string]*Target{
+	out := map[string]*Target{
 		"routed":    compileBasic(t, nil),
 		"twoport":   compileBasic(t, twoPortMod),
 		"wireguard": compileWG(t, nil),
@@ -49,4 +49,10 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 		"service":   withService(t),
 		"dhcp":      compileBasic(t, func(c *model.Configuration, _ *Host) { withDHCP(c, iotNet, &model.DhcpScope{}) }),
 	}
+	// the fault scenarios (M8a): interval maps with ranges and prefixes, the per-id chains with
+	// their counters, mark_0
+	for name, tg := range faultScenarios(t) {
+		out[name] = tg
+	}
+	return out
 }

@@ -49,12 +49,21 @@ type Input struct {
 	// Identity is which addresses belong to which device right now (observed state); nil before
 	// anything was observed.
 	Identity *domain.Identity
-	// TestClassifyIDs pre-creates the per-id mark-writing chain of the classification mechanism
-	// (plan §3.3, M7) for each id named here. M7 has no fault resolution yet (that is M8a onward),
-	// so nothing makes the compiler choose a classification id on its own; a test applies a target
-	// with one of these and then adds classification-map elements for it with
-	// executor.NftAddMapElements, to prove the lookup chain and the mark layout end-to-end.
-	TestClassifyIDs []int
+	// Overlays are the active overlays (plan §2.1.1): they are never part of a revision. Their
+	// references are UUIDs. Faults and profile activations among them take part in the precedence
+	// resolution; kinds that no compiled mechanism implements yet (rules, DNS, TLS, DHCP) are
+	// ignored here.
+	Overlays []model.Overlay
+	// FaultIDs is the allocation of fault ids of the previous compile (Target.FaultIDs): a fault
+	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
+	// stable while the winning fault stays the same"). Nil allocates from scratch.
+	FaultIDs map[string]int
+	// ClassLimit is the number of tc classes one interface may carry (plan §3.3, D18); 0 uses
+	// DefaultClassLimit.
+	ClassLimit int
+	// QueueBudget is the memory in bytes one interface may spend on the queues of faults that
+	// have no explicit queue limit (plan §2.5); 0 uses DefaultQueueBudget.
+	QueueBudget int64
 	// ServiceNS is the name of the service namespace the gateway services run in; empty compiles
 	// no service namespace (and no DNS redirect).
 	ServiceNS string
@@ -85,6 +94,10 @@ type Problem struct {
 	Message  string   `json:"message"`
 	// Network names the test network concerned, empty for the gateway as a whole.
 	Network string `json:"network,omitempty"`
+	// Scope says which scope of a fault caused the problem ("network IoT"), for capacity_exceeded.
+	Scope string `json:"scope,omitempty"`
+	// Faults are the overlays or configured faults that caused it, the biggest first.
+	Faults []string `json:"faults,omitempty"`
 }
 
 // Problem codes.
@@ -156,6 +169,15 @@ type Target struct {
 	// removed renumbers them, which is why a changed device set still needs a full apply.
 	DeviceNums  map[string]int `json:"device_nums,omitempty"`
 	identityMap MapDef
+	// FaultIDs is the allocation of fault ids by Fault.Key: feed it back as Input.FaultIDs.
+	FaultIDs map[string]int `json:"fault_ids,omitempty"`
+	// Faults are the fault ids in use, sorted by id: the winners of the impairment family with the
+	// netem configuration of each direction.
+	Faults []Fault `json:"faults,omitempty"`
+	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault
+	// impairs anything.
+	TC         *TCTarget `json:"tc,omitempty"`
+	faultBuild *faultBuild
 	// ClassifyNets is the nftables set of test, WireGuard and remote-network prefixes that guards
 	// the classification chain (plan §3.3): classification never reads or writes the mark of
 	// anything outside it.
@@ -283,7 +305,8 @@ func Compile(in Input) *Target {
 	t.compileBird(cfg, idx)
 	t.compileKea(cfg, idx)
 	t.compileIdentity(idx, in.Identity)
-	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets, in.TestClassifyIDs)
+	t.compileFaults(in, idx)
+	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.finish()
 	return t
 }

@@ -73,11 +73,11 @@ func markSet(value any) any {
 	return map[string]any{"mangle": map[string]any{"key": meta("mark"), "value": value}}
 }
 
-// vmap is a verdict-map lookup statement: it jumps to the chain the matching key names, or, when
+// vmap is a verdict-map lookup statement: it goes to the chain the matching key names, or, when
 // no key matches, lets the rule fall through to the next one (plan §3.3's first-match lookup
 // chain) — confirmed against nft's own parser (`nft -c`), since a map lookup cannot be combined
 // with other expressions such as the bitwise ops that write the fault id (`-- Expression type map
-// not allowed in context`): every classification level is its own small jump target chain instead.
+// not allowed in context`): every classification level is its own small goto target chain instead.
 func vmap(key any, mapName string) any {
 	return map[string]any{"vmap": map[string]any{"key": key, "data": setRef(mapName)}}
 }
@@ -91,7 +91,7 @@ type endpoint struct {
 // compileNft builds the table `inet chaosgw`: gateway protection (input), the access matrix and
 // the IPv6 block (forward), masquerade (postrouting), the MSS clamp on WireGuard interfaces and
 // the generation chain.
-func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef, testClassifyIDs []int) {
+func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef) {
 	mkSet := func(base string, elems []string) SetDef {
 		s := SetDef{Type: "ifname", Elements: elems}
 		s.Name = hashName(base, s.Type, s.Flags)
@@ -248,7 +248,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 
 	// ---- classification (plan §3.3, M7): the fault-id/direction mark on prerouting, for test,
 	// WireGuard and remote-network traffic only ---------------------------------------------
-	t.compileClassify(testClassifyIDs)
+	t.compileClassify()
 	sort.Slice(t.Nft.Maps, func(i, j int) bool { return t.Nft.Maps[i].Name < t.Nft.Maps[j].Name })
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
 

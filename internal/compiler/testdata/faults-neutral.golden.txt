@@ -1,0 +1,26 @@
+# faults
+id 1  overlay 00000000-0000-4000-8000-000000000001  scope "network IoT"  device -  counters fault_74ef99ff3e_up fault_74ef99ff3e_down
+    upload: 100ms
+    download: 100ms
+# tc on br-iot br-lab wan0
+qdisc add dev br-iot root handle 1: htb default 1
+class replace dev br-iot parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev br-iot parent 1: classid 1:12 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:12 handle 12: netem limit 8334 delay 100ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00010/0x1fff0 protocol ip prio 1 fw flowid 1:12
+class replace dev br-iot parent 1: classid 1:13 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:13 handle 13: netem limit 8334 delay 100ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10010/0x1fff0 protocol ip prio 1 fw flowid 1:13
+# classification maps
+devdestport (ipv4_addr . ipv4_addr . inet_proto . inet_service, flags [interval])
+devdest (ipv4_addr . ipv4_addr, flags [interval])
+    10.10.0.42 . 203.0.113.0/24 : mark_0
+devport (ipv4_addr . inet_proto . inet_service, flags [interval])
+dev (ipv4_addr, flags [interval])
+    10.10.0.0/24 : mark_1
+# mark chains
+mark_0: 2 rules
+mark_1: 4 rules
+# fault counters
+fault_74ef99ff3e_down
+fault_74ef99ff3e_up

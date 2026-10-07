@@ -37,12 +37,12 @@ func TestMarkMasksKeepTheDirectionBit(t *testing.T) {
 	}
 }
 
-// compileClassifyTarget compiles a minimal target with two test networks and WireGuard, so
-// classifyNets has something to report, and the given test classification ids.
-func compileClassifyTarget(t *testing.T, ids []int) *Target {
+// compileClassifyTarget compiles a minimal target with two test networks, so classifyNets has
+// something to report.
+func compileClassifyTarget(t *testing.T) *Target {
 	t.Helper()
 	cfg := loadConfig(t, "gateway.yaml")
-	tg := Compile(Input{Config: cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}, TestClassifyIDs: ids})
+	tg := Compile(Input{Config: cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}})
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}
@@ -52,7 +52,7 @@ func compileClassifyTarget(t *testing.T, ids []int) *Target {
 // TestClassifyChainGuardsNonTestTraffic proves that only test, WireGuard and remote-network
 // traffic is classified: the chain's first rule returns (mark untouched) for anything else.
 func TestClassifyChainGuardsNonTestTraffic(t *testing.T) {
-	tg := compileClassifyTarget(t, nil)
+	tg := compileClassifyTarget(t)
 	c := findChain(tg, ClassifyChain)
 	if c == nil {
 		t.Fatal("no classify chain")
@@ -77,7 +77,7 @@ func TestClassifyChainGuardsNonTestTraffic(t *testing.T) {
 // the kernel (EOPNOTSUPP on 6.8.0-142, found by the level 1b testbed job), so no shift of ct
 // direction may appear anywhere in the chain.
 func TestClassifyChainWritesTheDirectionBitOnce(t *testing.T) {
-	tg := compileClassifyTarget(t, nil)
+	tg := compileClassifyTarget(t)
 	c := findChain(tg, ClassifyChain)
 	if len(c.Rules) < 3 {
 		t.Fatalf("%+v", c.Rules)
@@ -103,9 +103,9 @@ func TestClassifyChainWritesTheDirectionBitOnce(t *testing.T) {
 }
 
 // TestClassifyLookupChainOrder proves the four device-granularity levels of plan §3.3 are present,
-// most specific first, each a vmap lookup followed by return (first match wins, plan §3.3).
+// most specific first, each a vmap lookup that goes to its chain (first match wins, plan §3.3).
 func TestClassifyLookupChainOrder(t *testing.T) {
-	tg := compileClassifyTarget(t, nil)
+	tg := compileClassifyTarget(t)
 	c := findChain(tg, ClassifyChain)
 	// rules[0] is the guard, [1] and [2] the direction write, [3..6] the four lookup levels.
 	if len(c.Rules) != 7 {
@@ -118,8 +118,14 @@ func TestClassifyLookupChainOrder(t *testing.T) {
 		}
 		b, _ := json.Marshal(c.Rules[3+i].Expr)
 		s := string(b)
-		if !strings.Contains(s, `"vmap"`) || !strings.Contains(s, "@"+name) || !strings.Contains(s, `"return"`) {
+		if !strings.Contains(s, `"vmap"`) || !strings.Contains(s, "@"+name) {
 			t.Errorf("level %d (%s): %s", i, name, s)
+		}
+		// nothing follows the lookup in its rule: after a jump the kernel would not run it anyway, and
+		// with a goto it cannot be reached, so a `return` there would be dead code that suggests
+		// the wrong thing
+		if strings.Contains(s, `"return"`) {
+			t.Errorf("level %d has a statement after its lookup: %s", i, s)
 		}
 	}
 	// the four maps have distinct key arities (4, 2, 3, 1 fields) and all jump to a chain (verdict).
@@ -132,39 +138,6 @@ func TestClassifyLookupChainOrder(t *testing.T) {
 		if len(m.KeyType) != wantArity[i] || m.ValueType != "verdict" {
 			t.Errorf("%s: %+v", field, m)
 		}
-	}
-}
-
-// TestClassifyTestIDsGetAMarkChain proves TestClassifyIDs each get their own mark-writing chain,
-// with the golden id mask, deduplicated and bounded to the 4095-id capacity (plan §3.3).
-func TestClassifyTestIDsGetAMarkChain(t *testing.T) {
-	tg := compileClassifyTarget(t, []int{7, 7, 42, -1, MarkIDMax + 1})
-	for _, id := range []int{7, 42} {
-		c := findChain(tg, MarkChainName(id))
-		if c == nil {
-			t.Fatalf("no chain for id %d", id)
-		}
-		if len(c.Rules) != 1 {
-			t.Fatalf("%+v", c.Rules)
-		}
-		b, _ := json.Marshal(c.Rules[0].Expr)
-		s := string(b)
-		if !strings.Contains(s, "4294901775") { // 0xffff000f, MarkKeepOnIDWrite
-			t.Errorf("id %d: %s", id, s)
-		}
-	}
-	if findChain(tg, MarkChainName(-1)) != nil || findChain(tg, MarkChainName(MarkIDMax+1)) != nil {
-		t.Error("an out-of-range id got a chain")
-	}
-	// deduplicated: exactly one chain for id 7, not two.
-	n := 0
-	for _, c := range tg.Nft.Chains {
-		if c.Name == MarkChainName(7) {
-			n++
-		}
-	}
-	if n != 1 {
-		t.Errorf("%d chains for id 7", n)
 	}
 }
 
@@ -216,10 +189,9 @@ func TestClassifyNetsCoversTestAndWireGuardAndRemoteNetworks(t *testing.T) {
 // - MarkKeepOnIDWrite and MarkKeepOnDirectionWrite only ever clear bits 4-16. See
 // docs/open-items.md P2-M7-01: M7 itself never sets bit 20 for real traffic either.
 func TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark(t *testing.T) {
-	tg := compileWG(t, func(_ *model.Configuration, in *Input) {
-		in.ServiceNS = "cgsvc"
-		in.TestClassifyIDs = []int{7}
-	})
+	w := newFaultWorld(t)
+	w.overlay(`{target: {device: esp32-42}, fault: {latency: 50ms}}`, 0)
+	tg := w.compile(func(in *Input) { in.ServiceNS = "cgsvc" })
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}
@@ -239,13 +211,13 @@ func TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark(t *testing.T) {
 		t.Error("MarkKeepOnDirectionWrite clears the service-selection bit (bit 20)")
 	}
 	// the per-id mark chain itself only ORs in the id bits; it cannot clear bit 20 either.
-	mc := findChain(tg, MarkChainName(7))
-	if mc == nil || len(mc.Rules) != 1 {
+	mc := findChain(tg, MarkChainName(tg.Faults[0].ID))
+	if mc == nil || len(mc.Rules) == 0 {
 		t.Fatalf("%+v", mc)
 	}
 	b, _ := json.Marshal(mc.Rules[0].Expr)
 	if s := string(b); !strings.Contains(s, "4294901775") { // 0xffff000f: keeps bit 20
-		t.Errorf("mark_7 chain: %s", s)
+		t.Errorf("mark chain: %s", s)
 	}
 }
 
@@ -274,4 +246,58 @@ func findSet(tg *Target, name string) *SetDef {
 		}
 	}
 	return nil
+}
+
+// lookupOrder returns the map each lookup rule of the classify chain consults, in rule order.
+func lookupOrder(tg *Target) []string {
+	c := findChain(tg, ClassifyChain)
+	var out []string
+	for _, r := range c.Rules {
+		b, _ := json.Marshal(r.Expr)
+		s := string(b)
+		if !strings.Contains(s, `"vmap"`) {
+			continue
+		}
+		for field, name := range tg.ClassifyMaps {
+			if strings.Contains(s, `"@`+name+`"`) {
+				out = append(out, field)
+			}
+		}
+	}
+	return out
+}
+
+// The order of the lookup chain is what makes the more specific entry win (first match), so a
+// reordered chain must not pass for the right one. The kernel side of this is
+// internal/apply's TestAReorderedLookupChainIsCaught.
+func TestAReorderedLookupChainIsNotTheLookupChain(t *testing.T) {
+	want := "devdestport,devdest,devport,dev"
+	tg := compileClassifyTarget(t)
+	if got := strings.Join(lookupOrder(tg), ","); got != want {
+		t.Fatalf("lookup order %s, want %s", got, want)
+	}
+	c := findChain(tg, ClassifyChain)
+	c.Rules[3], c.Rules[6] = c.Rules[6], c.Rules[3]
+	if got := strings.Join(lookupOrder(tg), ","); got == want {
+		t.Error("the check does not see a reordered chain")
+	}
+}
+
+// Every classification element goes to its chain with a goto: a jump comes back to the NEXT RULE of
+// the calling chain, so the next level's entry would overwrite the id (proven on the kernel: both
+// ids counted the same packets). The transaction must contain no jump at all.
+func TestClassificationElementsGotoTheirChainAndNeverJump(t *testing.T) {
+	for name, tg := range faultScenarios(t) {
+		tx, err := tg.Nft.Transaction(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(tx)
+		if strings.Contains(s, `"jump"`) {
+			t.Errorf("%s: the transaction has a jump", name)
+		}
+		if tg.Faults != nil && !strings.Contains(s, `"goto"`) {
+			t.Errorf("%s: no goto in the transaction", name)
+		}
+	}
 }

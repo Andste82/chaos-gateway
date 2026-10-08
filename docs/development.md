@@ -175,6 +175,13 @@ Things to know:
   canceled") and `TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel` (the test
   runs 260 s, WireGuard rekeys every 120 s and the test takes that for a changed session). The rest
   of the engine package, `internal/apply`, the executor and the compiler pass.
+  Checked on 2026-10-08 during M9 (same VM, `main` and the M9 branch): `internal/api`'s
+  `TestAHolderRestartIsHealedWithoutHelp` also fails on `main` under emulation (its 30 s wait for a
+  proxy in the new holder's namespace is shorter than an emulated holder restart plus the first DNS
+  answer). Two timing checks of M8b passed on a second run and failed once on the first
+  (`TestDeletingALeafDropsItsQueueAndAKindCannotBeChangedInPlace`: its 4 s queue is over before the emulated
+  steps are; `TestSwitchingADeviceToANewFaultIdThroughTheEngine...`: one packet in flight between the read
+  of the old class and its deletion), neither touched by M9.
   One more since M8b, `TestAHundredWritesWithoutAHeldExecutorAreQuick`: its 5 s bound is far from
   what a native or KVM run needs (about 0.3 s) but an emulated apply of 100 faults takes 6.9 s since
   every apply reads the tc state of all assigned interfaces before and after (P2-M8b-04), where

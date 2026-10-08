@@ -1351,7 +1351,12 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   that creates and changes (on ALL interfaces, before anything classifies into a new class), then
   the nftables transaction, then (only without a retirer) the deletion of what the target no longer
   wants, then DOCKER-USER and the rest. The plan text (`Plan.Summary`, the preview) says
-  `tc: br-iot: 6 objects created, 2 changed in place; ...`.
+  `tc: br-iot: 6 objects created, 2 changed in place; ...`. The creations and changes are one
+  executor operation per interface (and the deletions too), in the same order: an interface at the
+  class limit has about three entries per class (3000 on x86-64), and the executor takes at most
+  `executor.MaxTCEntries` (4096) in one operation, so all interfaces together would not fit
+  (`TestATreeAtTheClassLimitIsAppliedOnEveryInterface`, which names the limit it assumes: 1000 on
+  x86-64, 200 on arm64). `tcOps` also splits an interface's entries above the cap, keeping the order.
 - **Make before break, the second half.** A class that no fault id uses any more (`TCStale`) is not
   deleted by the apply that stops classifying into it. `ApplyWith(..., retirer)` hands it to the
   `Retirer`, which deletes it (its filters first, then the class; the leaf goes with it) when
@@ -1382,7 +1387,11 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   (delete, create: a new seed, the queue is dropped); a leaf that is to get a table gets it
   in place; one that the retirer did not create (the first apply after a restart) counts as one that
   may hold a table, but is left alone when it is already what the target says
-  (`TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`).
+  (`TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`). An apply that fails while it
+  is carried out may have written a table that the memory would not know: the leaves its tc operations
+  wrote are then remembered as holding an unknown table (`Retirer.failed`), so the restore of the
+  previous revision makes a leaf that is to be uniform again even though the listing shows no
+  difference (`TestAFailedApplyLeavesTheTablesUnknownSoTheRestoreMakesTheLeavesAgain`).
 - **Verify.** `apply.Verify` compares every interface of the target and every interface with a
   tree: the wanted tree equals the observed own subtree (`linux.CompareTC`), an interface that is not
   to hold a tree holds none. What the apply left standing for the retirer (`State.TCRetiring`, set by
@@ -1390,7 +1399,9 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   unexpected, nothing else.
 - **The engine** (`runApplyLoop`) owns the retirer, calls `ApplyWith` and arms a timer on the engine's
   clock for the next deletion (`Retirer.Next`); the timer's case in the loop's `select` runs
-  `Reap` and arms the next. An overlay write is answered after the apply that contains it verified,
+  `Reap` and arms the next. The preview (`Engine.Preview`) plans with the same retirer
+  (`Retirer.BuildPlan`): stale classes stay for the grace period, and the leaves it announces to be
+  made again are the ones the apply would make again. An overlay write is answered after the apply that contains it verified,
   and that verify includes the tc tree; a failing tc operation (`apply: execute`) takes the batch back
   like every other failure, and nothing of the failed plan is handed to the retirer.
 - **kernelsim** (`internal/apply/kernelsim/tc.go`) simulates the tc tool for the cases above: it keeps
@@ -1398,9 +1409,12 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   recorded format (so the real normalizer reads it), refuses what the kernel refuses (a second root,
   a class a filter selects, a class below a root that is not there), makes the answers of a
   `-force` batch the executor knows as benign, keeps the seed through a `replace` of a leaf and draws a
-  new one for a new leaf. It does not queue packets (`SetTCStats` sets backlog and counters for the
-  tests of the retirer), does not keep the attributes of a `change` that is not given (the compiler's
-  sets are complete) and does not know a distribution table.
+  new one for a new leaf. It keeps the distribution table a leaf was given (`TCTable`, which the
+  listing does not show) through a change that names none, as the kernel does. It does not queue
+  packets (`SetTCStats` sets backlog and counters for the tests of the retirer) and does not keep the
+  other attributes of a `change` that is not given (the compiler's sets are complete). `Kernel.After`
+  runs a function after each command, outside the lock, to change the kernel behind the caller's back
+  (a drift that verify has to find).
 - **Tests.** `tcapply_test.go` (simulated kernel: apply and verify on all interfaces, re-apply,
   in-place change, moved id with the order tc-before-nft, grace period and backlog guard, a whole tree
   that goes, restart, injected failure, repair, preview) and `internal/engine/tc_test.go` (the engine:
@@ -1487,7 +1501,7 @@ overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are
   direction it was configured, a flow the fault does not name loses nothing and did not get more than
   25 ms slower than before the fault. The accuracy assertions (median within ±2 ms + 5 %, spread, loss in the
   interval, unaffected flows within ±2 ms + 5 % of before) run when `testbed.Accurate()`, with N = 2000 probes
-  (6 ms apart; at least 200 for the delay) instead of 120 under emulation.
+  (6 ms apart; at least 200 for the delay) instead of 300 under emulation (20 ms apart: the smallest loss the tests configure, 3 %, is missed by 300 probes with a chance of 1e-4 per flow, by 120 with 2.6 %).
 - **The acceptance list of the plan, by test** (`make vm-test ARGS='-run "..." -tags testbed -test-timeout 120m ./internal/engine'`;
   an overlay write takes tens of seconds on the emulated kernel, so a test takes minutes):
 

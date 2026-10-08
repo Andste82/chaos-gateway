@@ -160,3 +160,17 @@ func TestAStatisticalAssertionThatFailsIsRepeatedOnceAndOnlyASecondFailureFails(
 		t.Errorf("a broken assertion: ok=%v, %d attempts, errors %v", ok, n, r.errs)
 	}
 }
+
+func TestCheckEveryDelayFindsOneDelayedPacket(t *testing.T) {
+	ms := time.Millisecond
+	ds := []time.Duration{40 * ms, 38 * ms, 43 * ms, 41 * ms}
+	if err := CheckEveryDelay("up", ds, 36*ms, 44*ms); err != nil {
+		t.Errorf("all inside: %v", err)
+	}
+	if err := CheckEveryDelay("up", append(ds, 52*ms), 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "1 of 5") || !strings.Contains(err.Error(), "largest 52ms") {
+		t.Errorf("one outside: %v", err)
+	}
+	if err := CheckEveryDelay("up", nil, 36*ms, 44*ms); err != nil {
+		t.Errorf("no delays: %v", err)
+	}
+}

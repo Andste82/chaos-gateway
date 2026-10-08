@@ -5,7 +5,9 @@ package engine_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,6 +150,31 @@ func preload(t *testing.T, ns *testbed.Namespace, dst string, n int, wait time.D
 	return res
 }
 
+// softnetDrops is the number of packets the per-CPU receive queues of the host have dropped since boot:
+// the second column of /proc/net/softnet_stat, a hexadecimal counter per CPU. It counts the packets that
+// found netdev_max_backlog full (veth and the bridges hand a packet to the next hop through that queue),
+// which is where a burst released by a delay queue is lost on a slow environment (P2-M8b-07).
+func softnetDrops(t *testing.T) uint64 {
+	t.Helper()
+	b, err := os.ReadFile("/proc/net/softnet_stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum uint64
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			t.Fatalf("softnet_stat: %q", line)
+		}
+		n, err := strconv.ParseUint(f[1], 16, 64)
+		if err != nil {
+			t.Fatalf("softnet_stat: %q: %v", line, err)
+		}
+		sum += n
+	}
+	return sum
+}
+
 // P2-M8a-02: what a queue limit does with real traffic. A 600 ms fault holds every packet for 600 ms,
 // so at a few thousand packets per second more than netem's default of 1000 are in the queue at once.
 // The compiler's computed limit (delay x rate, here the 1 Gbit/s cap) must hold the whole burst; the
@@ -180,6 +207,7 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	// kernel's queues), so what ping received says nothing about the fault.
 
 	// IoT: the whole burst fits
+	softnet := softnetDrops(t)
 	res := preload(t, r.top.A, testbed.ServerAddr, burst, 20*time.Second)
 	time.Sleep(2 * time.Second)
 	sent, drops, backlog, _ := r.queueSum(fi, compiler.Upload)
@@ -190,19 +218,27 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	// (netdev_max_backlog, 1000 per CPU) faster than the CPU empties it when the environment is slow
 	// (nested virtualisation, seen on the hosted runners): such packets are lost between the queues, not
 	// in them. So the download queue holds what reaches it (no drop, nothing left) and cannot have more
-	// than the upload queue sent; ping cannot have more than the download queue sent (P2-M8b-07).
+	// than the upload queue sent, and every packet missing between the two is accounted for by a drop of
+	// a receive queue of the host (softnet_stat), or the test fails; ping cannot have more than the
+	// download queue sent (P2-M8b-07).
+	lost := softnetDrops(t) - softnet
+	t.Logf("the receive queues of the host dropped %d packets during the burst", lost)
 	if sent != int64(res.Sent) || drops != 0 || dDrops != 0 || backlog != 0 || dBacklog != 0 {
 		t.Errorf("a burst of %d packets through a limit of %d: upload sent %d dropped %d (backlog %d), download dropped %d (backlog %d)", burst, computed, sent, drops, backlog, dDrops, dBacklog)
 	}
 	if dSent > sent || res.Received > int(dSent) {
 		t.Errorf("a burst of %d packets: the upload queue sent %d, the download queue %d, ping got %d", burst, sent, dSent, res.Received)
 	}
+	if gap := sent - dSent; gap > int64(lost) {
+		t.Errorf("a burst of %d packets: the upload queue sent %d, the download queue only %d, and the receive queues of the host dropped %d: %d packets are lost where nothing counts them", burst, sent, dSent, lost, gap-int64(lost))
+	}
 
 	// Lab: netem's limit of 1000 drops what does not fit while the first 1000 wait
+	softnet = softnetDrops(t)
 	res = preload(t, r.top.C, testbed.ServerAddr, burst, 20*time.Second)
 	time.Sleep(2 * time.Second)
 	sent, drops, _, _ = r.queueSum(fl, compiler.Upload)
-	dSent, dDrops, _, _ = r.queueSum(fl, compiler.Download)
+	dSent, dDrops, dBacklog, _ = r.queueSum(fl, compiler.Download)
 	t.Logf("limit 1000: ping sent %d, received %d; upload queue sent %d drops %d, download queue sent %d drops %d", res.Sent, res.Received, sent, drops, dSent, dDrops)
 	if drops == 0 {
 		t.Errorf("a burst of %d packets through a limit of 1000 lost nothing: the packets were sent more slowly than 1667 per second", burst)
@@ -213,11 +249,17 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	if sent+drops != int64(res.Sent) {
 		t.Errorf("upload: sent %d + dropped %d != the %d packets of the burst", sent, drops, res.Sent)
 	}
-	if dSent+dDrops > sent {
-		t.Errorf("download: sent %d + dropped %d are more than the %d packets that left the upload queue", dSent, dDrops, sent)
+	if dSent+dDrops+dBacklog > sent {
+		t.Errorf("download: sent %d + dropped %d + held %d are more than the %d packets that left the upload queue", dSent, dDrops, dBacklog, sent)
 	}
 	if res.Received > int(dSent) {
 		t.Errorf("ping got %d replies, the download queue sent %d", res.Received, dSent)
+	}
+	lost = softnetDrops(t) - softnet
+	t.Logf("the receive queues of the host dropped %d packets during the burst", lost)
+	// (a reply may still wait in the download queue: its delay of 600 ms starts when the echo answers)
+	if gap := sent - (dSent + dDrops + dBacklog); gap > int64(lost) {
+		t.Errorf("upload sent %d, the download queue sent %d, dropped %d and holds %d, the receive queues of the host dropped %d: %d packets are lost where nothing counts them", sent, dSent, dDrops, dBacklog, lost, gap-int64(lost))
 	}
 	r.verifyKernel()
 }

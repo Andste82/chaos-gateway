@@ -90,6 +90,17 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 	if got := res.DownMedian(); got < cShape.down-time.Millisecond || got > cShape.down+25*time.Millisecond {
 		t.Errorf("C's download delay is %v while the fault says %v", got, cShape.down)
 	}
+	if testbed.Accurate() {
+		// A median cannot see one delayed packet, and the stream is too short for the tolerance of the
+		// median (N >= 200 is asked for it): every packet of the stream is held to the fault's own
+		// bounds, so a change somewhere else that delayed one of C's packets fails here.
+		const slack = 2 * time.Millisecond
+		if err := joinErrs(
+			testbed.CheckEveryDelay("C upload during the changes", res.Up, cShape.up-cShape.upJitter-slack, cShape.up+cShape.upJitter+slack),
+			testbed.CheckEveryDelay("C download during the changes", res.Down, cShape.down-slack, cShape.down+slack)); err != nil {
+			t.Errorf("C's flow was disturbed while other faults changed: %v", err)
+		}
+	}
 	up, upDrops, backlog, upNow := r.queueSum(fy, compiler.Upload)
 	down, downDrops, _, downNow := r.queueSum(fy, compiler.Download)
 	if !sameSet(upNow, upEpochs) || !sameSet(downNow, downEpochs) {

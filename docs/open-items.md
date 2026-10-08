@@ -818,7 +818,10 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   anything, and may have at most what the upload queue sent; ping may have at most what the download
   queue sent. The suspected cause is that a delay queue releases what it holds in a burst and the next hop's receive
   queue (`netdev_max_backlog`, 1000 per CPU) overflows when the CPU is slower than the release; it
-  is not proven (the counters of that queue, `/proc/net/softnet_stat`, were not read in CI).
+  is not proven by that run (the counters of that queue, `/proc/net/softnet_stat`, were not read in CI);
+  the test now reads the dropped column before and after each burst and fails when more packets are
+  missing between the queues than the receive queues of the host dropped, so the next CI run turns the
+  suspicion into a measurement (a gap that softnet does not explain is a product or tc defect).
 - Acceptance: a maintainer confirms the weaker law, or the cause is read from `softnet_stat` on a KVM
   run and the test sets the sysctl (or paces the burst) so that the exact law holds again.
 - Needs maintainer: yes

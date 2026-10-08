@@ -193,6 +193,52 @@ func TestEveryCompiledTCTreeIsAcceptedByTheKernel(t *testing.T) {
 	}
 }
 
+// The values at the edge of what the API accepts (many decimals, very high rates) are written as tokens
+// the executor takes and the kernel reads back as the compiler predicts: rounded to nine decimals and
+// to whole Gbit/s from a terabit on (found by review: the tokens were refused by the executor).
+func TestTheKernelTakesTheLongestValuesTheAPIAccepts(t *testing.T) {
+	bed := testbed.New(t)
+	for name, fault := range map[string]string{
+		"decimals":      `{loss: 5.0000000001%, duplicate: 0.0000000001%, corrupt: 33.3333333333%}`,
+		"burst":         `{burst_loss: {p: 1.00000000001%, r: 30.33333333333%, h: 10.1234567891011%, k: 99.99999999999%}}`,
+		"a huge rate":   `{rate: 1000000000001bit}`,
+		"a larger rate": `{rate: 99999999999999999999Gbit}`,
+		"an odd rate":   `{rate: 123456789.123456789Mbit}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newFaultWorld(t)
+			w.overlay(`{target: {device: esp32-42}, fault: `+fault+`}`, 0)
+			tg := w.compile(nil)
+			if tg.HasErrors() || tg.TC == nil {
+				t.Fatalf("%+v", tg.Problems)
+			}
+			ns := bed.Add("tcedge-" + strings.ReplaceAll(name, " ", "-"))
+			dev := tg.TC.Devs[0]
+			ns.Must("ip", "link", "add", dev, "type", "dummy")
+			ns.Must("ip", "link", "set", dev, "up")
+			steps, err := executor.Plan(&executor.TC{Target: executor.Target{}, Entries: tg.TC.Entries(dev, true)})
+			if err != nil {
+				t.Fatalf("the executor refuses the tree: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := ns.Command(ctx, "tc", steps[0].Cmd.Args...)
+			cmd.Stdin = strings.NewReader(steps[0].Cmd.Stdin)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("the kernel refuses the tc tree: %v\n%s\n%s", err, out, steps[0].Cmd.Stdin)
+			}
+			have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
+				[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := linux.DiffTC(tg.TC.Norm(dev), have.Subtree(TCRootHandle)); len(d) != 0 {
+				t.Errorf("the kernel holds another tree than the compiler predicts:\n%s", strings.Join(d, "\n"))
+			}
+		})
+	}
+}
+
 // An element transaction (a device gets a new address, so its elements and the borders of the
 // stretches around it move) is accepted by the real kernel and leaves the maps exactly as a full
 // apply of the new target would: delete and add in one commit, even where the new element

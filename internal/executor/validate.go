@@ -33,8 +33,12 @@ const (
 	DockerUserComment = "chaosgw"
 )
 
+// MaxTCEntries is the most entries one tc operation takes; a caller with more splits them into
+// several operations, which run in order.
+const MaxTCEntries = 4096
+
 const (
-	maxEntries  = 4096
+	maxEntries  = MaxTCEntries
 	maxDevs     = 256
 	maxTCArgs   = 64
 	maxNftItems = 100000

@@ -111,6 +111,29 @@ func CheckLatency(what string, got, want time.Duration) error {
 	return fmt.Errorf("%s: median %v, configured %v (tolerance ±2 ms + 5 %%)", what, got, want)
 }
 
+// CheckEveryDelay returns an error when any delay of ds lies outside [lo, hi]. It is the check for a
+// stream that must not be disturbed by a change somewhere else: a median hides one delayed packet, this
+// does not. The message names how many lie outside and the extremes.
+func CheckEveryDelay(what string, ds []time.Duration, lo, hi time.Duration) error {
+	var out int
+	var min, max time.Duration
+	for i, d := range ds {
+		if i == 0 || d < min {
+			min = d
+		}
+		if i == 0 || d > max {
+			max = d
+		}
+		if d < lo || d > hi {
+			out++
+		}
+	}
+	if out == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: %d of %d delays outside [%v, %v] (smallest %v, largest %v)", what, out, len(ds), lo, hi, min, max)
+}
+
 // CheckLoss returns an error when lost of sent is outside the 99.9 % interval of rate.
 func CheckLoss(what string, lost, sent int, rate float64) error {
 	ok, lo, hi := LossWithinInterval(lost, sent, rate)

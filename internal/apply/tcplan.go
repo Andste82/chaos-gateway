@@ -60,16 +60,36 @@ func (s TCStale) String() string {
 	return "class " + s.Class + " of " + s.Dev
 }
 
+// tcBatch is the tc work on one interface.
+type tcBatch struct {
+	dev     string
+	words   []string
+	entries []executor.TCEntry
+}
+
+// tcOps turns entries into executor operations of at most executor.MaxTCEntries entries each, in
+// order: the operations run one after the other, so the order of the entries is kept.
+func tcOps(tg executor.Target, entries []executor.TCEntry) []executor.Operation {
+	var ops []executor.Operation
+	for len(entries) > 0 {
+		n := min(len(entries), executor.MaxTCEntries)
+		ops = append(ops, &executor.TC{Target: tg, Entries: entries[:n:n]})
+		entries = entries[n:]
+	}
+	return ops
+}
+
 // tcPlan is the tc part of a plan.
 type tcPlan struct {
-	// before are the entries that run before the nftables transaction: repairs, then changes.
-	before []executor.TCEntry
+	// before are the entries that run before the nftables transaction, one batch per interface:
+	// repairs, then changes. The batches are separate operations (an interface at the class limit
+	// has about three thousand entries, the executor takes at most executor.MaxTCEntries in one).
+	before []tcBatch
 	// stale is what the target no longer wants.
 	stale []TCStale
 	// grace is the time the stale objects live after the switch: the largest delay (with jitter) of
 	// any netem leaf, in the kernel or in the target, plus one second.
 	grace time.Duration
-	words []string
 	// dists is the distribution table each leaf of the target holds after the plan ("dev handle" ->
 	// "normal", "" for none); a leaf whose table is not known is not in it.
 	dists map[string]string
@@ -164,6 +184,7 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree, mem map[string]string) {
 	want := tc.Norm(dev)
 	var repair, change []executor.TCEntry
+	var words []string
 	var created, changed int
 
 	liveClass := map[string]linux.NormClass{}
@@ -207,7 +228,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 	// taken away and made again
 	if root != nil && (root.Kind != "htb" || root.HTB == nil || root.HTB.Default != compiler.TCDefaultMinor) {
 		repair = append(repair, executor.TCEntry{Object: "qdisc", Action: "delete", Dev: dev, Parent: "root", Handle: compiler.TCRootHandle})
-		p.words = append(p.words, dev+": the root qdisc is not Chaos Gateway's (it is replaced)")
+		words = append(words, dev+": the root qdisc is not Chaos Gateway's (it is replaced)")
 		root, live = nil, emptyTree
 		liveClass, liveLeaf, liveFilter = map[string]linux.NormClass{}, map[string]linux.NormQdisc{}, map[string]linux.NormFilter{}
 	}
@@ -247,7 +268,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 				}
 			}
 			repair = append(repair, executor.TCEntry{Object: "class", Action: "delete", Dev: dev, ClassID: id})
-			p.words = append(p.words, dev+": class "+id+" is not the compiler's (it is made again)")
+			words = append(words, dev+": class "+id+" is not the compiler's (it is made again)")
 			have, haveLeaf = false, false
 		}
 		switch {
@@ -281,7 +302,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			switch {
 			case dist == "" && c.Netem.Jitter > 0 && (!known || last != ""):
 				repair = append(repair, executor.TCEntry{Object: "qdisc", Action: "delete", Dev: dev, Parent: id, Handle: c.LeafHandle()})
-				p.words = append(p.words, dev+": leaf "+c.LeafHandle()+" is made again (it may hold a distribution table, the target has none)")
+				words = append(words, dev+": leaf "+c.LeafHandle()+" is made again (it may hold a distribution table, the target has none)")
 				p.created = append(p.created, dev+" "+id)
 				p.dists[dkey] = ""
 			case dist != "":
@@ -324,13 +345,14 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			continue // deleted above with its class
 		}
 		repair = append(repair, deleteFilter(f))
-		p.words = append(p.words, dev+": filter "+f.Key()+" is not the target's (it goes)")
+		words = append(words, dev+": filter "+f.Key()+" is not the target's (it goes)")
 	}
 
-	p.before = append(p.before, repair...)
-	p.before = append(p.before, change...)
 	if created+changed > 0 {
-		p.words = append(p.words, fmt.Sprintf("%s: %d objects created, %d changed in place", dev, created, changed))
+		words = append(words, fmt.Sprintf("%s: %d objects created, %d changed in place", dev, created, changed))
+	}
+	if entries := append(repair, change...); len(entries) > 0 {
+		p.before = append(p.before, tcBatch{dev: dev, words: words, entries: entries})
 	}
 }
 

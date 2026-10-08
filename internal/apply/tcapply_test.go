@@ -49,13 +49,18 @@ func newTCEnv(t *testing.T) *tcEnv {
 	e.cfg = norm
 	c := clock.NewFake(time.Unix(1_700_000_000, 0))
 	x := &tcEnv{env: e, ids: map[string]int{}, clock: c, ret: apply.NewRetirer(c)}
-	e.k.Fail = func(argv []string, stdin string) *executor.Result {
+	x.logTC()
+	return x
+}
+
+// logTC makes the simulated kernel record the tc batches it gets, and fail nothing.
+func (x *tcEnv) logTC() {
+	x.k.Fail = func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && len(argv) > 1 && strings.Contains(strings.Join(argv, " "), "-batch") {
 			x.log = append(x.log, strings.TrimSpace(stdin))
 		}
 		return nil
 	}
-	return x
 }
 
 func (x *tcEnv) overlay(body string) model.Overlay {
@@ -760,5 +765,151 @@ func TestThePlanNamesTheLeavesItMakesNewAndATableThatIsNew(t *testing.T) {
 	}
 	if res = change(slower); len(res.Plan.QueuesCreated) != 0 {
 		t.Errorf("a change of a uniform leaf makes %v new", res.Plan.QueuesCreated)
+	}
+}
+
+// A failure after the tc step leaves the leaves with what the plan wrote, but the apply did not
+// complete: the memory of the distribution tables must not say what the plan meant to write. The
+// restore of the previous revision then makes a uniform leaf again, although the listing shows no
+// table in either state.
+func TestAFailedApplyLeavesTheTablesUnknownSoTheRestoreMakesTheLeavesAgain(t *testing.T) {
+	const uniform = `{target: {device: dev-a}, fault: {latency: 100ms, jitter: 20ms}}`
+	const normal = `{target: {device: dev-a}, fault: {latency: 100ms, jitter: 20ms, distribution: normal}}`
+	x := newTCEnv(t)
+	o := x.overlay(uniform)
+	tgUniform := x.compileWith(o)
+	x.applyRetiring(tgUniform)
+	leaf := tgUniform.TC.Classes[0].LeafHandle()
+	seedUniform := x.k.TCSeed("br-iot", leaf)
+
+	// the same fault with a table, the transaction fails after the tc step: the leaves hold the table
+	n := x.overlay(normal)
+	o.Target, o.Fault = n.Target, n.Fault
+	tgNormal := x.compileWith(o)
+	x.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	_, err := apply.ApplyWith(context.Background(), x.exec(), "", tgNormal, x.ret)
+	var ae *apply.Error
+	if !asError(err, &ae) || ae.Stage != "execute" {
+		t.Fatalf("%v", err)
+	}
+	x.logTC()
+	if x.k.TCTable("br-iot", leaf) != "normal" {
+		t.Fatal("the failed apply did not reach the leaf: the test proves nothing")
+	}
+
+	// the preview of the restore asks the retirer too: it announces the leaves it makes again, which a
+	// preview without the memory cannot know
+	pv, err := apply.PreviewWith(context.Background(), x.exec(), "", tgUniform, x.ret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := strings.Join(pv.Summary, "\n"); !strings.Contains(text, "is made again") {
+		t.Errorf("the preview with the retirer does not announce the leaves:\n%s", text)
+	}
+	if pv, err = apply.Preview(context.Background(), x.exec(), "", tgUniform); err != nil || strings.Contains(strings.Join(pv.Summary, "\n"), "is made again") {
+		t.Errorf("a preview without the memory announces leaves it cannot know about (%v)", err)
+	}
+
+	// the restore: the listing shows no difference, the leaf has to be made again
+	x.log = nil
+	x.applyRetiring(tgUniform)
+	if x.k.TCTable("br-iot", leaf) != "" || x.k.TCSeed("br-iot", leaf) == seedUniform {
+		t.Errorf("the restore left the table in the leaf (or did not make it again):\n%s", x.tcLog())
+	}
+	if !strings.Contains(x.tcLog(), "qdisc delete dev br-iot parent "+tgUniform.TC.Classes[0].ClassID()) {
+		t.Errorf("the leaf was not made again:\n%s", x.tcLog())
+	}
+	// and from there it is known again: the next change is in place
+	x.log = nil
+	x.applyRetiring(tgUniform)
+	if len(x.log) != 0 {
+		t.Errorf("a re-apply touched tc:\n%s", x.tcLog())
+	}
+}
+
+// fillToTheClassLimit gives the tree of the target as many classes as one interface may carry: the
+// default class plus limit-1 classes of fault ids 1.., upload and download, each a copy of the first.
+func fillToTheClassLimit(tg *compiler.Target, limit int) {
+	base := tg.TC.Classes[0]
+	tg.TC.Classes = nil
+	for i := 0; i < limit-1; i++ {
+		id, dir := 1+i/2, compiler.Direction(i%2)
+		c := base
+		c.ID, c.Dir, c.Mark = id, dir, compiler.MarkOf(id, dir)
+		c.Minor = 0x10 + 2*id + int(dir)
+		tg.TC.Classes = append(tg.TC.Classes, c)
+	}
+}
+
+// A tree at the class limit is applied on every interface. The limit this test assumes is the
+// compiler's default for the architecture the test runs on: compiler.DefaultClassLimit(), which is
+// 1000 on x86-64 and 200 on arm64 (plan §3.3). One interface then has about three entries per class
+// (3000 on x86-64), and several interfaces together are far above what one executor operation takes
+// (executor.MaxTCEntries); the apply sends one operation per interface.
+func TestATreeAtTheClassLimitIsAppliedOnEveryInterface(t *testing.T) {
+	limit := compiler.DefaultClassLimit()
+	if limit != 1000 && limit != 200 {
+		t.Fatalf("the test assumes the class limit of 1000 (x86-64) or 200 (arm64), the compiler has %d", limit)
+	}
+	x := newTCEnv(t)
+	tg := x.compileWith(x.overlay(dev150))
+	fillToTheClassLimit(tg, limit)
+	if got := tg.TC.ClassesPerDevice(); got != limit {
+		t.Fatalf("the tree has %d classes per interface, want the limit %d", got, limit)
+	}
+	if len(tg.TC.Devs) < 2 {
+		t.Fatalf("the test needs at least two interfaces with a tree, the target has %v", tg.TC.Devs)
+	}
+
+	res := x.applyRetiring(tg)
+	if len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
+	perDev := map[string]int{}
+	total := 0
+	for _, op := range res.Plan.Ops {
+		if o, ok := op.(*executor.TC); ok {
+			if len(o.Entries) > executor.MaxTCEntries {
+				t.Errorf("a tc operation has %d entries, the executor takes %d", len(o.Entries), executor.MaxTCEntries)
+			}
+			total += len(o.Entries)
+			perDev[o.Entries[0].Dev] += len(o.Entries)
+		}
+	}
+	if len(perDev) != len(tg.TC.Devs) {
+		t.Errorf("tc work on %v, want one share per interface of %v", perDev, tg.TC.Devs)
+	}
+	if limit == 1000 && total <= executor.MaxTCEntries {
+		t.Errorf("%d entries in all do not exceed one operation's cap: the test does not test the split", total)
+	}
+	for _, d := range tg.TC.Devs {
+		if n := len(x.readTC(d).Subtree("1:").Classes); n != limit {
+			t.Errorf("%s holds %d classes, want %d", d, n, limit)
+		}
+	}
+	if mm := x.strictVerify(tg); len(mm) != 0 {
+		t.Errorf("%v", mm[:min(3, len(mm))])
+	}
+
+	// the same tree again changes nothing; a tree that goes is deleted in operations of the same size
+	x.log = nil
+	if res := x.applyRetiring(tg); !res.Plan.Empty() || len(x.log) != 0 {
+		t.Errorf("a re-apply of the full tree plans work: %v", res.Plan.Summary)
+	}
+	tgNone := x.compileWith()
+	x.applyRetiring(tgNone)
+	x.clock.Advance(time.Hour)
+	if n, err := x.ret.Reap(context.Background(), x.exec(), ""); err != nil || n == 0 {
+		t.Fatalf("the reap deleted %d trees: %v", n, err)
+	}
+	for _, d := range tg.TC.Devs {
+		if q := x.readTC(d).Subtree("1:").Qdiscs; len(q) != 0 {
+			t.Errorf("%s still holds %d qdiscs", d, len(q))
+		}
 	}
 }

@@ -300,3 +300,74 @@ func TestAfterARestartTheLeftoverClassesAreDeletedByTheNextFullApply(t *testing.
 	}
 	h.verifyKernelWithOverlays()
 }
+
+// The preview names the tc work the apply loop would do: the classes of a fault that went stay for
+// the grace period (they are not deleted right after the transaction), as the plan of ApplyWith with
+// the engine's retirer says.
+func TestThePreviewPlansTheTCTreeAsTheApplyLoopDoes(t *testing.T) {
+	h := startedWithRevision(t)
+	rev := h.e.Snapshot().Applied.Revision
+	r := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 600ms}")
+	if _, err := h.e.DeleteOverlay(context.Background(), r.Overlay.Id, nil, admin); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.e.RetiringTC()) == 0 {
+		t.Fatal("nothing is retiring: the test proves nothing")
+	}
+	p, err := h.e.Preview(context.Background(), rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(p.Plan, "\n")
+	if strings.Contains(text, "tc: delete") || !strings.Contains(text, "stay for 1.6s") {
+		t.Errorf("the preview plans the tc deletion as the one-shot plan does:\n%s", text)
+	}
+}
+
+// A write returns only after the tc part of the verify, too: when the kernel's tree differs from the
+// target after the apply's operations all went through (here a leaf is changed behind the engine's back
+// right after the nftables transaction), the write fails as apply_failed at the verify stage and the
+// batch is reverted like every other failure.
+func TestADriftedTreeFoundByTheVerifyFailsTheWriteAndRevertsIt(t *testing.T) {
+	h := startedWithRevision(t)
+	keep := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 30ms}")
+	var armed, drifted atomic.Int32
+	armed.Store(1)
+	h.k.After = func(argv []string, stdin string) {
+		if argv[0] != "nft" || !strings.Contains(strings.Join(argv, " "), "-f") || !armed.CompareAndSwap(1, 0) {
+			return
+		}
+		// every operation of the apply went through; now one leaf of the new fault is changed by hand
+		for _, q := range h.tcTree("br-iot").Qdiscs {
+			if q.Netem != nil && q.Netem.Delay == 0.777 {
+				line := "qdisc replace dev br-iot parent " + q.Parent + " handle " + q.Handle + " netem limit 1000 delay 1ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"
+				if r, _ := h.k.Run(context.Background(), executor.Command{Tool: executor.ToolTC, Args: []string{"-force", "-batch", "-"}, Stdin: line + "\n"}); r.Exit != 0 {
+					t.Errorf("%s: %s", line, r.Stderr)
+				}
+				drifted.Add(1)
+				return
+			}
+		}
+	}
+	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 777ms}")
+	h.k.After = nil
+	var af *engine.ErrApplyFailed
+	if !errors.As(err, &af) {
+		t.Fatalf("got %v, want apply_failed", err)
+	}
+	if drifted.Load() == 0 {
+		t.Fatal("the kernel was never changed behind the engine's back: the test proves nothing")
+	}
+	var ae *apply.Error
+	if !errors.As(err, &ae) || ae.Stage != "verify" || !strings.Contains(ae.Error(), "tc") {
+		t.Errorf("the failure is %v, want one of the verify stage about the tc tree", err)
+	}
+	s := h.barrier()
+	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
+		t.Fatalf("overlays after the failure: %+v", s.Overlays)
+	}
+	if s.LastError != "" {
+		t.Errorf("the restore did not apply: %s", s.LastError)
+	}
+	h.verifyKernelWithOverlays()
+}

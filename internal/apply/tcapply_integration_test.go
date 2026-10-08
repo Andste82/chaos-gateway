@@ -5,6 +5,7 @@ package apply_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -449,5 +450,108 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 		}
 	} else if !testbed.Accurate() {
 		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", share*100)
+	}
+}
+
+// failAtNft carries out the operations before the nftables transaction and then fails: an apply that
+// fails after its tc step, as one does when the transaction, the routes or DOCKER-USER fail.
+type failAtNft struct{ apply.Exec }
+
+func (f failAtNft) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	for i, op := range ops {
+		if _, ok := op.(*executor.NftApply); ok {
+			if i > 0 {
+				if out, err := f.Exec.Do(ctx, ops[:i]...); err != nil {
+					return out, err
+				}
+			}
+			return executor.Outcome{}, errors.New("injected failure after the tc step")
+		}
+	}
+	return f.Exec.Do(ctx, ops...)
+}
+
+// An apply that failed after its tc step may have given the leaves a distribution table that the
+// listing does not show. The restore of the previous (uniform) revision must make the leaves again, or
+// they keep a normal table while the engine believes they are uniform. A qdisc that is made again
+// starts its counters at zero; one that is changed in place goes on counting.
+func TestARestoreAfterAFailedApplyRemovesTheTableThatApplyWrote(t *testing.T) {
+	g := newGateway(t)
+	g.withDevices()
+	const delay, jitter = 100 * time.Millisecond, 20 * time.Millisecond
+	const slack = 2*time.Millisecond + delay/20
+	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms}}}`)
+	uniform := g.compileFaults(o)
+	g.applyRetiring(uniform)
+	f := faultOf(t, uniform, o, "")
+	leaf := classOf(t, uniform, f.ID, compiler.Upload).LeafHandle()
+
+	// the same fault with a table; the apply fails after its tc step, so the leaves hold the table
+	normal := g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms, distribution: normal}}}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, err := apply.ApplyWith(ctx, failAtNft{g.exec()}, g.ns(), normal, g.ret)
+	var ae *apply.Error
+	if !errors.As(err, &ae) || ae.Stage != "execute" {
+		t.Fatalf("%v", err)
+	}
+	// traffic through the leaf, so that its counters say whether it is the same one afterwards
+	r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 20, 30*time.Millisecond)
+	if r.Received < 15 {
+		t.Fatalf("received %d of %d", r.Received, r.Sent)
+	}
+	before := g.leafPackets("wan0", leaf)
+	if before == 0 {
+		t.Fatal("no packet went through the leaf: the test proves nothing")
+	}
+
+	// the restore: the listing is the same in both states, the leaf has to be made again all the same
+	if res := g.applyRetiring(uniform); len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
+	if after := g.leafPackets("wan0", leaf); after >= before {
+		t.Fatalf("the restore did not make the leaf again (%d packets before, %d after): a normal table stays in it", before, after)
+	}
+	if testbed.Accurate() {
+		share := func() float64 {
+			r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 150, 30*time.Millisecond)
+			if r.Received < 140 {
+				t.Fatalf("received %d of %d", r.Received, r.Sent)
+			}
+			return outsideShare(r, delay, jitter+slack)
+		}
+		testbed.Statistically(t, "a uniform jitter after the restore", func() error {
+			if s := share(); s > 0 {
+				return fmt.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", s*100)
+			}
+			return nil
+		})
+	}
+}
+
+// A tree at the class limit is applied by the real kernel on every interface of the gateway, in the
+// operations the planner makes (one per interface): the limit is the compiler's default for the
+// architecture, 1000 on x86-64 and 200 on arm64 (plan §3.3).
+func TestATreeAtTheClassLimitIsAppliedAndVerifiedByTheRealKernel(t *testing.T) {
+	limit := compiler.DefaultClassLimit()
+	g := newGateway(t)
+	g.withDevices()
+	tg := g.compileFaults(g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 20ms}}}`))
+	fillToTheClassLimit(tg, limit)
+	res := g.applyRetiring(tg)
+	if len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches[:min(3, len(res.Mismatches))])
+	}
+	for _, d := range tg.TC.Devs {
+		if n := len(g.kernelTree(d).Classes); n != limit {
+			t.Errorf("%s holds %d classes, want %d", d, n, limit)
+		}
+	}
+	if mm := g.strictVerify(tg); len(mm) != 0 {
+		t.Errorf("%v", mm[:min(3, len(mm))])
+	}
+	// and the same tree again changes nothing
+	if res := g.applyRetiring(tg); !res.Plan.Empty() {
+		t.Errorf("a re-apply of the full tree plans work: %v", res.Plan.Summary)
 	}
 }

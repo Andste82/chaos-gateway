@@ -1522,3 +1522,40 @@ func TestTooManyClassificationElementsAreRefused(t *testing.T) {
 	}
 	t.Fatalf("no capacity_exceeded about elements: %+v", tg.Problems)
 }
+
+// Whatever the API accepts as a percentage or a rate must be a tc command the executor's grammar
+// takes: an operation it refuses fails the whole apply (found by review: the API pattern allows any
+// number of decimals and any number of digits).
+func TestWhatTheAPIAcceptsIsWhatTheExecutorsTCGrammarTakes(t *testing.T) {
+	for name, fault := range map[string]string{
+		"many decimals of a loss":      `{loss: 5.0000000001%}`,
+		"a tiny loss":                  `{loss: 0.0000000001%}`,
+		"a repeating fraction":         `{loss: 33.3333333333%, duplicate: 0.1234567890123%}`,
+		"burst loss with decimals":     `{burst_loss: {p: 1.00000000001%, r: 30.33333333333%, h: 10.1234567891011%, k: 99.99999999999%}}`,
+		"a rate of many digits":        `{rate: 1000000000001bit}`,
+		"a rate of very many digits":   `{rate: 99999999999999Gbit}`,
+		"a fractional rate":            `{rate: 123456789.123456789Mbit}`,
+		"a rate a trillion above that": `{rate: 99999999999999999999Gbit}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newFaultWorld(t)
+			w.overlay(`{target: {device: esp32-42}, fault: `+fault+`}`, 0)
+			tg := w.compile(nil)
+			if tg.HasErrors() {
+				t.Fatalf("%+v", tg.Problems)
+			}
+			if tg.TC == nil || len(tg.TC.Classes) == 0 {
+				t.Fatal("no tc tree")
+			}
+			for _, dev := range tg.TC.Devs {
+				data, err := executor.Encode(&executor.TC{Entries: tg.TC.Entries(dev, true)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := executor.Decode(data); err != nil {
+					t.Errorf("%s: the executor refuses the tree of the fault %s: %v", dev, fault, err)
+				}
+			}
+		})
+	}
+}

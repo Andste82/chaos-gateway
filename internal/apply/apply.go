@@ -59,13 +59,25 @@ func WantOf(t *compiler.Target) Want {
 	return w
 }
 
-// Preview reads the current state and plans what an apply would do, without changing anything.
+// Preview reads the current state and plans what an apply would do, without changing anything. It
+// plans as ApplyWith does with a retirer that remembers nothing; PreviewWith asks the engine's.
 func Preview(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Plan, error) {
+	return PreviewWith(ctx, ex, ns, t, nil)
+}
+
+// PreviewWith is Preview for the plan that ApplyWith would make with r: the classes it keeps for the
+// grace period and the leaves it makes again follow what r remembers. A nil r remembers nothing.
+func PreviewWith(ctx context.Context, ex Exec, ns string, t *compiler.Target, r *Retirer) (*Plan, error) {
 	s, err := ReadState(ctx, ex, ns, want(t))
 	if err != nil {
 		return nil, &Error{Stage: "read", Err: err}
 	}
-	p, err := BuildPlanRetiring(t, s, ns)
+	var p *Plan
+	if r != nil {
+		p, err = r.BuildPlan(t, s, ns)
+	} else {
+		p, err = BuildPlanRetiring(t, s, ns)
+	}
 	if err != nil {
 		return nil, &Error{Stage: "plan", Err: err}
 	}
@@ -104,6 +116,9 @@ func ApplyWith(ctx context.Context, ex Exec, ns string, t *compiler.Target, r *R
 	res.Outcome = out
 	var birdDown *executor.BirdDownError
 	if err != nil && !errors.As(err, &birdDown) {
+		if r != nil {
+			r.failed(p)
+		}
 		return res, &Error{Stage: "execute", Err: err}
 	}
 	if r != nil && (err == nil || errors.As(err, &birdDown)) {

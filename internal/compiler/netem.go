@@ -167,7 +167,15 @@ func fmtDuration(d time.Duration) string {
 }
 
 // fmtPercent renders a percentage the way the API wrote it, without trailing zeros.
-func fmtPercent(p float64) string { return strconv.FormatFloat(p, 'f', -1, 64) + "%" }
+// At most nine decimals are written: more than the kernel resolves (a probability is 32 bits) and
+// more than the executor's tc grammar takes, which refuses the whole operation.
+func fmtPercent(p float64) string {
+	s := strconv.FormatFloat(p, 'f', 9, 64)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	}
+	return s + "%"
+}
 
 // fmtRate renders a rate in the largest unit that keeps it exact; 0 is "0bit" (netem: no rate).
 func fmtRate(bits int64) string {
@@ -193,6 +201,21 @@ func parsePercent(s string) (float64, error) {
 	return v, nil
 }
 
+// maxRate is the highest rate the compiler writes: a petabit per second, no link carries more. A rate
+// from one terabit per second on is rounded to whole Gbit/s, so that its tc token stays within the
+// twelve digits the executor's grammar takes; below that every rate is written exactly.
+const maxRate = 1_000_000_000_000_000
+
+func clampRate(bits float64) int64 {
+	switch {
+	case bits >= maxRate:
+		return maxRate
+	case bits >= 1e12:
+		return int64(math.Round(bits/1e9)) * 1_000_000_000
+	}
+	return int64(bits)
+}
+
 // parseRate parses "2Mbit" of the API into bit/s (decimal units, like tc).
 func parseRate(s string) (int64, error) {
 	units := []struct {
@@ -205,7 +228,7 @@ func parseRate(s string) (int64, error) {
 			if err != nil || v < 0 {
 				break
 			}
-			return int64(math.Round(v * u.mult)), nil
+			return clampRate(math.Round(v * u.mult)), nil
 		}
 	}
 	return 0, fmt.Errorf("%q is not a bit rate", s)

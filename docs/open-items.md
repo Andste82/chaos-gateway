@@ -638,7 +638,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ### P2-M8a-07 `explain` judges access by the matrix and the gateway's protection, not by access rules
 
-- Status: new
+- Status: resolved in M9 (`World.AccessDecision` puts the rules in front of the matrix and names the deciding rule)
 - Severity: low
 - Reason: deferred (to M9). The spec's `access.layer` can name `overlay_rule` and `config_rule`, but
   access rules do not take effect before M9 (the compiler does not compile them, overlays of kind

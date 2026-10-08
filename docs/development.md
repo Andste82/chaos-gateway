@@ -952,7 +952,8 @@ also changes two things said here: the maps are interval maps, and an element `g
   change within a second, and `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` (over the
   simulated kernel, a `blockingNftExec` wrapper above the kernel's own lock) proves a full apply
   racing an incremental identity update does not win with the stale address.
-- **Not in M7:** real fault ids (M8a onward), group- and network-level selectors (M8a/M9), the output
+- **Not in M7:** real fault ids (M8a onward), group- and network-level selectors (M8a/M9; the access
+  rules of M9 expand their scopes into address sets, not into this lookup chain), the output
   hook and IFB for tunnel faults (M10), writing the service-selection mark bit from real traffic
   (M20/M21, P2-M7-01) and the connections-redirected-to-a-gateway-service classification test that
   goes with it.
@@ -1039,7 +1040,7 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
 - **What is resolved** (`compiler/faults.go`). For every source of traffic (`World.Sources`: each
   device with its addresses, each range that identifies a device, the stretches of the networks'
   addresses that no device owns) the impairment family's `Table` gives the winner per piece of the
-  destination and port space. MTU, DNS, TLS, DHCP, tunnel faults and rules are not compiled here; a
+  destination and port space. MTU, DNS, TLS, DHCP and tunnel faults are not compiled here, and the access rules have a compile step of their own (`access.go`, "Access rules (M9)"); a
   fault that names a hostname is left out with a `hostname_unresolved` warning (M20).
 - **Fault ids.** One id (12 bits, 1 to 4095; 0 is "no fault") per winning fault, per matched device
   when the fault has a rate, an explicit queue limit or keep order in either direction (D18); the
@@ -1126,9 +1127,10 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: rule M9, WireGuard
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: WireGuard
   action and the mtu and tunnel families M10, profile M11, DNS M20, TLS M21, DHCP M23) are refused
-  with `unsupported_feature` before they reach the owner.
+  with `unsupported_feature` before they reach the owner. The kind `rule` has been supported since M9
+  (see "Access rules (M9)").
 - **Verify and take back.** The writer is answered when the apply loop has verified a generation
   that is at least the one of its change, with that generation (`OverlayResult.Generation`: it can be
   newer than the one the change made, when later changes were applied together with it). The owner
@@ -1168,11 +1170,11 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `GET /faults` and `/faults/{id}` show the configured faults with their state, counters and, for an
   overridden one, the faults that beat it (the winners over the devices of its scope at a destination
   and port it selects); a revision other than the active one shows the configuration alone.
-  `GET /capabilities` lists the `fault` overlay kind and the `impairment` family.
+  `GET /capabilities` lists the `fault` and `rule` overlay kinds and the `impairment` family.
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
-  identity maps to a device), the access verdict (`domain.World.AccessVerdict`: the gateway's
-  protection for traffic to the gateway, then the matrix; access rules join with M9, P2-M8a-07), the
+  identity maps to a device), the access verdict (`domain.World.AccessDecision` since M9: the
+  control plane, the access rules, then the gateway's protection or the matrix; P2-M8a-07), the
   winner and the overridden candidates of every family that has candidates (`domain.World.Resolve`),
   the fault id and the two marks the compiler gave the impairment winner, `dns_proxy` for a query to
   the gateway's own address on port 53, and the route. The route is the kernel's answer to
@@ -1576,8 +1578,9 @@ Plan §3.11 in the code, with the tests that pin it (`internal/engine/coalesce_t
 
 Plan §2.2 and §2.4: the ordered allow, drop, reject and TCP-reset rules, in the configuration
 (`access_rules` with `access_rule_order`) and as overlays (kind `rule`), compiled into two chains
-(`internal/compiler/access.go`). This section describes the compiler's output; the engine, the API and
-the testbed tests of the behavior matrix build on it.
+(`internal/compiler/access.go`). The first half of this section describes the compiler's output, the
+second ("Rules in the engine and over the API") what the engine does with it: overlays, the cut, the
+counters, `explain`, the endpoints and the preview.
 
 ### Where the rules stand
 
@@ -1692,6 +1695,84 @@ rules that reset the packets of established connections, then the window is clos
   the cut window with a connection that an earlier rule owns. These tests run in the persistent VM
   (`make vm-test ARGS='-run "TestAccessRule|TestACutWindowResets" -tags testbed -test-timeout 15m ./internal/compiler'`);
   python3 starts slowly under emulation, so a run takes about six minutes.
+
+### Rules in the engine and over the API
+
+- **Rule overlays** take the road of the fault overlays: the same store (owner, key, TTL, lease, renew,
+  replace, reset), the same write path (validate against the live configuration, a dry compile, one
+  generation, the writer is answered when the apply loop has verified it, taken back when the apply
+  fails). A rule overlay's key is owner, kind, target and selector, so writing the same selector again
+  replaces it and keeps the id, and with it the rule's key (`overlay:<id>`), counter and counter epoch
+  (`TestReplacingARuleOverlayKeepsItsIdItsPlaceInTheKeyAndItsCounter`). The capacity limit is a compile
+  error the engine turns into `*CompileError` (HTTP 422 `capacity_exceeded`), the write is refused and
+  nothing changes (`TestTooManyRulesAreRefusedWithCapacityExceededAndNothingChanges`; the test names its
+  limit, `engine.Config.RuleLimit`, the production one is `compiler.DefaultRuleLimit` on every
+  architecture). When a TTL or a lease runs out the rule leaves the next compile, and with it its chain
+  entry, its counter and its sets (`TestTheTTLAndTheLeaseOfARuleOverlayRemoveItsRuleAndItsCounter`).
+- **Faults and rules.** A rule overlay and a fault overlay are independent: faults are resolved per
+  family, rules are one ordered list, and the kernel evaluates the rules first (plan §2.4), so a packet a
+  rule refuses never reaches a fault's queue. `explain` shows both, and the verdict says which one counts
+  (`TestARuleOverlayAndAFaultCombineWithTheRuleFirst`). The fault counters of the classification still
+  count what a rule drops afterwards, P2-M9-05.
+- **The cut** (`internal/engine/cut.go`). It runs in the apply loop right after a full apply (not after
+  an incremental identity update) that verified, so the writer of the overlay waits for it, and it
+  never fails the apply. The engine keeps the target of the last verified apply (`verified`, kept
+  across a failed one) and compares: `cutFlows` takes the tracked connections (`conntrack -L` through the
+  executor), asks `AccessPlan.Winner` of the new and of the old plan for each one on its original
+  tuple, and takes it when the new winner cuts and the old one was not the same rule with the same
+  effect. That makes the cut idempotent by construction (an apply that does not change the rule finds
+  nothing; `TestACutIsNotRepeatedByAnApplyThatDoesNotChangeTheRule`), and it follows reorders, the
+  removal of an earlier allow rule and a change from drop to reject
+  (`TestACutFollowsWhatChangedBetweenTheOldAndTheNewRules`). The first apply of a process cuts nothing
+  (the engine does not know what the kernel ran before). A connection that an earlier rule owns, and
+  one an allow rule owns, is left alone; connections that are over (TIME_WAIT, CLOSE, LAST_ACK) and the
+  control plane (a management source towards SSH or the UI port, the anti-lockout rule's match) are
+  never taken, whatever a rule says.
+  Then, for established TCP connections only, `cutWindowRun` opens the window (`CutTransaction(keys)`
+  through `NftApply`), waits `Config.CutWindow` on the engine's clock (500 ms; a negative value is
+  no wait, for tests), and closes it (`CutTransaction(nil)`, also when the wait or the opening failed, with
+  a context that is not cancelled). The entries are deleted last, in batches of at most
+  `executor.MaxConntrackFlows`, with the new operation below. A failure is logged and reported in the
+  `applied` event (`cut_error`); the rules are in force either way. The event carries `cut_rules` (the
+  keys that cut) and `cut_connections` when a cut happened.
+  `TestACuttingRuleOverlayResetsAndDeletesTheConnectionsItOwnsAndNothingElse` checks the order
+  (open, close, delete) and exactly which entries go.
+- **`conntrack_delete`** is a closed executor operation (`internal/executor`): a list of flows by original
+  tuple (tcp or udp with ports, icmp with type, code and id; IPv4), one `conntrack -D -f ipv4 -p ...
+  --orig-src ... --orig-dst ...` per flow. It takes tuples, never a filter, so it cannot delete more than it
+  names. The tool exits 1 with "0 flow entries have been deleted." for a flow that is gone; that is
+  benign (the operation is idempotent). The kernel simulator deletes the lines of its scripted
+  `conntrack -L` text.
+- **Snapshot and counters.** `Snapshot.Access` is the `AccessPlan` of the last applied target and
+  `Snapshot.RuleEpochs` the generation in which each rule key first appeared (like the fault epochs; a
+  new table resets them all). A rule's counter is read with `Engine.ReadCounters` by `AccessRule.Counter`.
+- **`explain`** (`domain.World.AccessDecision`). Towards the gateway: the control plane first (a
+  management source is allowed; the UI port is dropped for everybody else, whatever a rule says), then the
+  rules, then the gateway's protection (DHCP, DNS, ICMP echo). Towards anything else: the rules, then the
+  matrix. The first matching rule decides, overlay rules first (`ResolveAccess`); `access.layer` is
+  `overlay_rule` or `config_rule` and `access.rule` its id. An allow rule in front of the gateway's own
+  address leaves the verdict to the protection (the reason says so, P2-M9-01). A drop rule on `udp/53`
+  is what `explain` names for the gateway's DNS address and for 169.254.100.2 alike
+  (`TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`). A hostname destination has no address
+  to judge and is not explained by rules (the rules that name hostnames are not compiled before M20).
+  This resolves P2-M8a-07.
+- **Endpoints.** `GET /rules` lists the configured rules in the order of `access_rule_order` with `state`
+  (`effective` when the rule is in the packet path, `disabled` for `enabled: false` and for a rule the
+  kernel does not run: the hostname rule before M20) and `counters` (the active revision only), behind
+  `system_rules` (the anti-lockout rule with its counter). `GET /rules/{id}` takes an id or a name.
+  `GET /overlays` and `/overlays/{id}` show a rule overlay with `state` and `counters` too;
+  `/overlays?kind=rule` lists them. `GET /capabilities` has the overlay kind `rule` and the feature
+  `rules`.
+- **Preview.** `POST /revisions/{id}/preview` has `rules`: the effective list after the change, overlay
+  rules first, each with its key, layer, place, action, selector in words and `new` when the kernel does
+  not run it in this form yet. A hostname rule is not in the list and the warning
+  `hostname_unresolved` says why; more rules than the limit is `capacity_exceeded` at preview and apply
+  (`TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply`).
+- **Tests.** Simulator and fake clock: `internal/engine/access_test.go`, `cut_internal_test.go`,
+  `internal/api/rules_test.go`, `internal/executor/conntrack_delete_test.go`. Real kernel (testbed, run in
+  the persistent VM): `internal/engine/integration_access_test.go` writes rule overlays through the engine
+  into a lab of three devices and checks new connections, the reset of a TCP connection, the deletion of a
+  UDP flow, isolation of the other devices and the TTL.
 
 ## Generated code
 

@@ -60,7 +60,7 @@ type overlayContext struct {
 // still the truth.
 func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) overlayContext {
 	oc := overlayContext{snap: s.cfg.Engine.Snapshot()}
-	if withCounters && len(oc.snap.Faults) > 0 {
+	if withCounters && (len(oc.snap.Faults) > 0 || oc.snap.Access != nil) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
 			s.log.Warn("cannot read the fault counters", "error", err)
@@ -185,6 +185,23 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
 		}
+	}
+	if ov.Kind == model.OverlayKindRule {
+		return oc.overlayRule(ov)
+	}
+	return ov
+}
+
+func (oc overlayContext) overlayRule(ov model.Overlay) model.Overlay {
+	if r, ok := oc.snap.Access.Rule("overlay:" + ov.Id.String()); ok {
+		st := model.EffectStateEffective
+		ov.State = &st
+		ov.Counters = oc.ruleCounter(*r)
+	} else {
+		// the overlay is in the store but not in the packet path (a rule that names a hostname before M20,
+		// or a change the apply loop has not verified yet)
+		st := model.EffectStateDisabled
+		ov.State = &st
 	}
 	return ov
 }

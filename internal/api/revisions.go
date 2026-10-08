@@ -266,6 +266,9 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	if len(p.References) > 0 {
 		body["references"] = blockingReferences(p.References)
 	}
+	if len(p.Rules) > 0 {
+		body["rules"] = previewRules(p.Rules)
+	}
 	c.JSON(200, body)
 }
 

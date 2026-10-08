@@ -1569,6 +1569,24 @@ func (e PreflightReportStatus) Valid() bool {
 	}
 }
 
+// Defines values for PreviewRuleLayer.
+const (
+	PreviewRuleLayerConfig  PreviewRuleLayer = "config"
+	PreviewRuleLayerOverlay PreviewRuleLayer = "overlay"
+)
+
+// Valid indicates whether the value is a known member of the PreviewRuleLayer enum.
+func (e PreviewRuleLayer) Valid() bool {
+	switch e {
+	case PreviewRuleLayerConfig:
+		return true
+	case PreviewRuleLayerOverlay:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Protocol.
 const (
 	ProtocolAny  Protocol = "any"
@@ -2459,7 +2477,7 @@ type AccessRuleView struct {
 	// Position 0-based position in `access_rule_order`.
 	Position int `json:"position"`
 
-	// State `effective` for a rule that is in the packet path, `disabled` for one with `enabled: false`.
+	// State `effective` for a rule that is in the packet path, `disabled` for one with `enabled: false` and for one the kernel does not run (a rule that names a hostname before M20 is not compiled, see the preview warning `hostname_unresolved`).
 	State *EffectState `json:"state,omitempty"`
 }
 
@@ -3528,7 +3546,7 @@ type Explanation struct {
 		// Reason Which entry or default decided, in words.
 		Reason *string `json:"reason,omitempty"`
 
-		// Rule Overlay or configured rule id.
+		// Rule The overlay or configured rule that decided; absent for `gateway_protection` and `access_matrix`.
 		Rule *Uuid `json:"rule,omitempty"`
 
 		// Verdict `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
@@ -3543,7 +3561,9 @@ type Explanation struct {
 		Resolved *[]Ipv4 `json:"resolved,omitempty"`
 	} `json:"destination,omitempty"`
 
-	// Faults One entry per family (families without candidates are omitted).
+	// Faults One entry per family (families without candidates are omitted). The faults are resolved for the
+	// traffic whatever the access verdict is: they take effect only when the verdict is `allow`, because
+	// access rules are evaluated first and a refused packet reaches no fault (plan §2.4).
 	Faults []struct {
 		Family     FaultFamily `json:"family"`
 		Overridden *[]FaultRef `json:"overridden,omitempty"`
@@ -4577,12 +4597,48 @@ type Preview struct {
 	// RequiresConfirm Lockout-relevant change; applying it starts commit-confirm.
 	RequiresConfirm bool  `json:"requires_confirm"`
 	Revision        int64 `json:"revision"`
-	Warnings        *[]struct {
+
+	// Rules The access rules in the order they are evaluated after the change, overlay rules first (plan §2.4):
+	// the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
+	// `warnings` say so. Absent when there is no rule.
+	Rules    *[]PreviewRule `json:"rules,omitempty"`
+	Warnings *[]struct {
 		Code    string  `json:"code"`
 		Message string  `json:"message"`
 		Path    *string `json:"path,omitempty"`
 	} `json:"warnings,omitempty"`
 }
+
+// PreviewRule defines model for PreviewRule.
+type PreviewRule struct {
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
+	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+	Action      AccessAction `json:"action"`
+	CutExisting *bool        `json:"cut_existing,omitempty"`
+
+	// Destination Where to, in words; absent for any destination.
+	Destination *string `json:"destination,omitempty"`
+	Id          *Uuid   `json:"id,omitempty"`
+
+	// Key `config:<uuid>` or `overlay:<uuid>`; the named counter of the rule is derived from it, so it keeps its counter while the key stays.
+	Key   string           `json:"key"`
+	Layer PreviewRuleLayer `json:"layer"`
+	Name  *string          `json:"name,omitempty"`
+
+	// New The rule is not in the kernel yet (a new rule, or one that comes with this revision).
+	New   *bool     `json:"new,omitempty"`
+	Ports *[]string `json:"ports,omitempty"`
+
+	// Position 0-based place in the effective order.
+	Position int      `json:"position"`
+	Protocol Protocol `json:"protocol"`
+
+	// Scope Who the rule applies to, in words (`network IoT`, `device esp32-42`).
+	Scope *string `json:"scope,omitempty"`
+}
+
+// PreviewRuleLayer defines model for PreviewRule.Layer.
+type PreviewRuleLayer string
 
 // Probe A virtual client inside the gateway, a port of the network's bridge (plan §2.12). It is also a device with the same UUID and name (device namespace); there is no separate `Device` entry for it.
 type Probe struct {

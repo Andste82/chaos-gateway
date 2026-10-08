@@ -120,7 +120,7 @@ func specOps(t *testing.T) (m5, later []struct {
 				Method, Path, Milestone string
 				Internal                bool
 			}{m, path, o.Milestone, o.Internal}
-			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" { // implemented in this build
+			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" || o.Milestone == "M9" { // implemented in this build
 				m5 = append(m5, e)
 			} else {
 				later = append(later, e)
@@ -165,7 +165,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 58 {
+	if len(m5) != 60 {
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body
@@ -230,8 +230,8 @@ func TestSystemEndpoints(t *testing.T) {
 			t.Errorf("capability %s is missing: %v", f, feats)
 		}
 	}
-	// M8a: faults of the impairment family; the other kinds follow with their milestones
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault]" || fmt.Sprint(caps["fault_families"]) != "[impairment]" || caps["version"] != "test" {
+	// M8a: faults of the impairment family, M9: access rules; the other kinds follow with their milestones
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
 	}
 	info := g.do("GET", "/system/info", nil, nil, nil).json(t)

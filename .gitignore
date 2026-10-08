@@ -5,6 +5,7 @@ __pycache__/
 
 # build output and generated, uncommitted code (make generate)
 /bin/
+/testvm
 /.venv/
 /web/dist/
 /web/src/api/generated/

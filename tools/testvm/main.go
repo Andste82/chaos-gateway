@@ -165,6 +165,10 @@ func runDirect(ctx context.Context, cfg vmrun.Config, stdout, stderr io.Writer) 
 		return 2
 	}
 	goArgs := []string{"test", "-count=1", "-tags", tags, "-v"}
+	if cfg.TestTimeout > 0 {
+		// go test stops a package after 10 minutes unless told otherwise: -test-timeout is for this mode too
+		goArgs = append(goArgs, "-timeout", cfg.TestTimeout.String())
+	}
 	if cfg.Run != "" {
 		goArgs = append(goArgs, "-run", cfg.Run)
 	}

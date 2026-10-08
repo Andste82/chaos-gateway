@@ -800,3 +800,26 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   that the spread bounds are never near their limits, they can be tightened.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M8b-07 A burst through a delay fault loses replies outside the queues on a slow environment
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
+  required exact conservation through both queues (the download queue sends what the upload queue sent,
+  because "the echo server answers every request"). On the hosted level 1b runner (kernel 6.8 in a VM on
+  a VM) a burst of 4000 pings lost half of its packets between the two queues, with no drop in either of
+  them: download sent 1951 of 4000 that the upload queue sent (and 797 of 1000 with the limit of 1000), and
+  ping received exactly what the download queue sent. Natively, with KVM on a developer machine and
+  emulated, the same test counted every packet.
+- Evidence: the CI run of PR #33 (level 1b), `internal/engine/integration_queues_test.go`.
+- Task: chosen interpretation — the upload queue (the one under test) keeps the exact law: sent + drops =
+  the burst, and no drop and no backlog with the computed limit. The download queue must not drop or hold
+  anything, and may have at most what the upload queue sent; ping may have at most what the download
+  queue sent. The suspected cause is that a delay queue releases what it holds in a burst and the next hop's receive
+  queue (`netdev_max_backlog`, 1000 per CPU) overflows when the CPU is slower than the release; it
+  is not proven (the counters of that queue, `/proc/net/softnet_stat`, were not read in CI).
+- Acceptance: a maintainer confirms the weaker law, or the cause is read from `softnet_stat` on a KVM
+  run and the test sets the sysctl (or paces the burst) so that the exact law holds again.
+- Needs maintainer: yes
+- Effort: S

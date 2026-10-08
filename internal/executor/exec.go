@@ -576,9 +576,9 @@ func benign(tool Tool, stderr string) bool {
 }
 
 // onlyBenignTC is onlyBenign for a `tc -force -batch` of deletions. The answers below were read
-// from the kernel (6.8, iproute2 6.19, docs/development.md "tc operations on the kernel"): they all
-// mean "this object is not there (any more)". Anything else, "HTB class in use" first of all, is
-// a failure.
+// from the kernel (6.8 and 7.0, iproute2 6.19, docs/development.md "tc operations on the kernel"):
+// they all mean "this object is not there (any more)". Anything else, "HTB class in use" first of
+// all, is a failure.
 func onlyBenignTC(stderr string) bool {
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
@@ -586,7 +586,7 @@ func onlyBenignTC(stderr string) bool {
 		case line == "", strings.HasPrefix(line, "Command failed"), line == "We have an error talking to the kernel":
 		case strings.HasSuffix(line, "No such file or directory"):
 		case line == "Error: Specified class not found.", line == "Error: Failed to find qdisc with specified handle.",
-			line == "Error: Specified filter handle not found.", line == "Error: Cannot find specified filter chain.",
+			line == "Error: Failed to find qdisc with specified classid.", line == "Error: Specified filter handle not found.", line == "Error: Cannot find specified filter chain.",
 			line == "Error: Parent Qdisc doesn't exists.", line == "Error: Invalid handle.":
 		default:
 			return false

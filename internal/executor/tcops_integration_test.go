@@ -196,8 +196,10 @@ func TestAChangeKeepsWhatItIsNotGivenForTheOptionalAttributes(t *testing.T) {
 // ---- what replace keeps ---------------------------------------------------------------------------------
 
 // `replace` of a netem leaf of the same kind is a change in place: the queue (packets that wait for
-// their delay), the counters and the seed stay, packets already queued keep the release time they
-// got, and a lower limit does not shorten the queue. `replace` of an HTB class keeps its leaf and its
+// their delay) and the counters stay, packets already queued keep the release time they got, and a
+// lower limit does not shorten the queue. (The seed is not part of this: kernel 6.17 draws a new one
+// at every change, 6.8 and 7.0 keep it; a qdisc that was created again shows in its queue and its
+// counters, which start at zero.) `replace` of an HTB class keeps its leaf and its
 // counters. This is the in-place update of plan §3.2.
 func TestReplacingALeafOrAClassKeepsTheQueueAndTheCounters(t *testing.T) {
 	g := startGateway(t)
@@ -205,10 +207,6 @@ func TestReplacingALeafOrAClassKeepsTheQueueAndTheCounters(t *testing.T) {
 	// a delay far longer than the steps below take, even in an emulated VM
 	const old = "25s"
 	g.must(&executor.TC{Target: tgt(g.ns), Entries: withClass("dtc0", 0x24, 0xa0, fullNetem("1000", old, "0ms", "0%")...)})
-	before, _ := g.netem("dtc0", 0x24)
-	if before.Seed == 0 {
-		t.Fatal("no seed printed: the tool is too old for this test")
-	}
 	g.send(0xa0, 30, 200)
 	sent := time.Now()
 	// a change of the delay, and a lower limit than the queue holds; then the same for the class
@@ -233,9 +231,6 @@ func TestReplacingALeafOrAClassKeepsTheQueueAndTheCounters(t *testing.T) {
 	if elapsed := time.Since(sent); elapsed > 20*time.Second {
 		t.Fatalf("the steps took %s, nearly as long as the %s the packets are held for: the measurement below would mean nothing", elapsed, old)
 	}
-	if q.Seed != before.Seed {
-		t.Errorf("the qdisc was created again: seed %d, was %d", q.Seed, before.Seed)
-	}
 	if q.Netem.Delay != 0.1 || q.Netem.Limit != 10 {
 		t.Errorf("the change did not take: %+v", q.Netem)
 	}
@@ -254,8 +249,8 @@ func TestReplacingALeafOrAClassKeepsTheQueueAndTheCounters(t *testing.T) {
 	g.must(&executor.TC{Target: tgt(g.ns), Entries: []executor.TCEntry{leaf("dtc0", 0x24, "replace", fullNetem("10", "3s", "0ms", "0%")...)}})
 	g.send(0xa0, 25, 2000)
 	eventually(t, 60*time.Second, "the burst to be over", func() bool { q, _ = g.netem("dtc0", 0x24); return q.Stats.Qlen == 0 })
-	if q.Stats.Drops != 15 || q.Stats.Packets != 40 || q.Seed != before.Seed {
-		t.Errorf("25 packets into a limit of 10: %+v seed %d", q.Stats, q.Seed)
+	if q.Stats.Drops != 15 || q.Stats.Packets != 40 {
+		t.Errorf("25 packets into a limit of 10: %+v", q.Stats)
 	}
 }
 

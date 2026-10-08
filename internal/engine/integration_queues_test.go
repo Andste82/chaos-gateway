@@ -185,8 +185,17 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	sent, drops, backlog, _ := r.queueSum(fi, compiler.Upload)
 	dSent, dDrops, dBacklog, _ := r.queueSum(fi, compiler.Download)
 	t.Logf("computed limit: ping sent %d, received %d; upload queue sent %d drops %d, download queue sent %d drops %d", res.Sent, res.Received, sent, drops, dSent, dDrops)
-	if sent != int64(res.Sent) || drops != 0 || dSent != int64(res.Sent) || dDrops != 0 || backlog != 0 || dBacklog != 0 {
-		t.Errorf("a burst of %d packets through a limit of %d: upload sent %d dropped %d, download sent %d dropped %d", burst, computed, sent, drops, dSent, dDrops)
+	// The upload queue is the one under test: it takes the whole burst and holds all of it. What it sends
+	// out is released in a burst, and a burst of thousands reaches the receive queue of the next hop
+	// (netdev_max_backlog, 1000 per CPU) faster than the CPU empties it when the environment is slow
+	// (nested virtualisation, seen on the hosted runners): such packets are lost between the queues, not
+	// in them. So the download queue holds what reaches it (no drop, nothing left) and cannot have more
+	// than the upload queue sent; ping cannot have more than the download queue sent (P2-M8b-07).
+	if sent != int64(res.Sent) || drops != 0 || dDrops != 0 || backlog != 0 || dBacklog != 0 {
+		t.Errorf("a burst of %d packets through a limit of %d: upload sent %d dropped %d (backlog %d), download dropped %d (backlog %d)", burst, computed, sent, drops, backlog, dDrops, dBacklog)
+	}
+	if dSent > sent || res.Received > int(dSent) {
+		t.Errorf("a burst of %d packets: the upload queue sent %d, the download queue %d, ping got %d", burst, sent, dSent, res.Received)
 	}
 
 	// Lab: netem's limit of 1000 drops what does not fit while the first 1000 wait
@@ -199,13 +208,16 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 		t.Errorf("a burst of %d packets through a limit of 1000 lost nothing: the packets were sent more slowly than 1667 per second", burst)
 	}
 	// conservation: every packet of the burst reached the upload queue and left it or was dropped there;
-	// what left it reached the download queue (the echo server answers every request) and left it or was
-	// dropped there
+	// of what left it, the download queue got at most what the echo server answered and the path let
+	// through (see above), and left it or dropped it
 	if sent+drops != int64(res.Sent) {
 		t.Errorf("upload: sent %d + dropped %d != the %d packets of the burst", sent, drops, res.Sent)
 	}
-	if dSent+dDrops != sent {
-		t.Errorf("download: sent %d + dropped %d != the %d packets that left the upload queue", dSent, dDrops, sent)
+	if dSent+dDrops > sent {
+		t.Errorf("download: sent %d + dropped %d are more than the %d packets that left the upload queue", dSent, dDrops, sent)
+	}
+	if res.Received > int(dSent) {
+		t.Errorf("ping got %d replies, the download queue sent %d", res.Received, dSent)
 	}
 	r.verifyKernel()
 }

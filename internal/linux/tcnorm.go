@@ -49,10 +49,10 @@ type NormQdisc struct {
 	Netem   *NetemSpec `json:"netem,omitempty"`
 	Options string     `json:"options,omitempty"`
 
-	// Seed identifies a netem instance: the kernel draws one when the qdisc is created and keeps it
-	// through every change, so a different seed means the qdisc was re-created (its counters
-	// started again). It is not configuration and not part of Spec(). Zero when the tool does not
-	// print one.
+	// Seed is the PRNG seed of a netem instance: the kernel draws one when the qdisc is created. Kernels
+	// 6.8 and 7.0 keep it through every change, 6.17 draws a new one at each, so it does not say that a
+	// qdisc was re-created (its counters starting again do). It is not configuration and not part of
+	// Spec(). Zero when the tool does not print one.
 	Seed uint64 `json:"seed,omitempty"`
 	// Stats is set when the listing was made with `-s`.
 	Stats *NormStats `json:"stats,omitempty"`

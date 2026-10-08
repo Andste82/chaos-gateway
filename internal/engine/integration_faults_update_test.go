@@ -148,6 +148,10 @@ func TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket(t *te
 		}
 		r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {latency: "+lat+", loss: 5%}}")
 	}
+	// The changes can be quick (a native kernel needs a fraction of a second for each), and the loss
+	// below needs a stream that is long enough to have lost something: 200 datagrams are a loss of at
+	// least one with a probability of 1 - 0.95^200.
+	waitDelivered(t, run, 200)
 	res, err := run.Stop()
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +223,10 @@ func TestSwitchingADeviceToANewFaultIdThroughTheEngineLosesNoPacketAndTheOldClas
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// An HTB class counts a packet when it leaves, so what was queued in the old class (400 ms of the
+	// stream) is still being counted for that long after the switch. Once that is over the class is quiet
+	// and says whether anything still reaches it.
+	time.Sleep(400*time.Millisecond + time.Second)
 	oldNow := r.classTotal(tg, oldUp)
 	oldCounted := r.counters()[fOld.CounterUp].Packets
 	time.Sleep(time.Second)
@@ -255,8 +263,8 @@ func TestSwitchingADeviceToANewFaultIdThroughTheEngineLosesNoPacketAndTheOldClas
 	if res.UpLoss() != 0 || res.DownLoss() != 0 {
 		t.Errorf("the switch lost packets: %s", res)
 	}
-	// every packet of the stream was counted by the old or by the new class (they count at enqueue):
-	// none went unclassified in between. The old class's total was read before the stream ended, and
+	// every packet of the stream was counted by the old or by the new class (a class counts a packet
+	// when it leaves, and the old one was quiet when it was read): none went unclassified in between. The old class's total was read before the stream ended, and
 	// the old class is gone now, so the totals are those read while both existed: the old one up to
 	// the switch, the new one at the end.
 	inNew := r.classTotal(tg, newUp)
@@ -307,7 +315,7 @@ func TestAnOverlayWriteWaitsForTheKernelsTreeAndAFailedTCOperationTakesItBack(t 
 		t.Fatalf("the write returned (%v) while the kernel has not got the tree yet", o.err)
 	case <-time.After(3 * time.Second):
 	}
-	if strings.Contains(r.top.GW.Must("tc", "qdisc", "show", "dev", "wan0"), "777") {
+	if strings.Contains(r.top.GW.Must("tc", "qdisc", "show", "dev", "wan0"), "delay 777ms") {
 		t.Fatal("the held operation has reached the kernel")
 	}
 	gate.releaseTC()
@@ -341,7 +349,7 @@ func TestAnOverlayWriteWaitsForTheKernelsTreeAndAFailedTCOperationTakesItBack(t 
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id || s.LastError != "" {
 		t.Fatalf("after the failed write: %d overlays, last error %q", len(s.Overlays), s.LastError)
 	}
-	if strings.Contains(r.top.GW.Must("tc", "qdisc", "show", "dev", "wan0"), "888") {
+	if strings.Contains(r.top.GW.Must("tc", "qdisc", "show", "dev", "wan0"), "delay 888ms") {
 		t.Error("the failed write left its netem in the kernel")
 	}
 	r.verifyKernel()

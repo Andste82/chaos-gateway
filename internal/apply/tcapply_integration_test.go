@@ -25,7 +25,7 @@ import (
 // The tc tree in the apply, on the real kernel (M8b). The simulator's tests (tcapply_test.go) say what
 // the apply decides; these say what the kernel does with it: that the tree it builds verifies, that a
 // re-apply changes nothing the kernel can tell, that a change of parameters keeps the qdisc and its
-// queue (same seed, no loss), and that traffic whose fault id moves loses no packet.
+// queue (its counters go on, no loss), and that traffic whose fault id moves loses no packet.
 
 // kernelTree reads the own tree of an interface of the gateway, with counters.
 func (g *gw) kernelTree(dev string) *linux.NormTree {
@@ -51,6 +51,23 @@ func (g *gw) seeds(dev string) map[string]uint64 {
 		}
 	}
 	return m
+}
+
+// leafPackets returns the packets the netem qdisc with the handle has sent: a counter that starts at zero
+// when the qdisc is created and goes on through every change in place, so it says whether the qdisc
+// is the same one. (The seed does not: kernel 6.17 draws a new one at every change.)
+func (g *gw) leafPackets(dev, handle string) int64 {
+	g.t.Helper()
+	for _, q := range g.kernelTree(dev).Qdiscs {
+		if q.Netem != nil && q.Handle == handle {
+			if q.Stats == nil {
+				g.t.Fatalf("qdisc %s has no counters", handle)
+			}
+			return int64(q.Stats.Packets)
+		}
+	}
+	g.t.Fatalf("no netem leaf %s on %s", handle, dev)
+	return -1
 }
 
 func (g *gw) strictVerify(tg *compiler.Target) []apply.Mismatch {
@@ -215,10 +232,7 @@ func TestChangingAFaultOf600msUnderLoadLosesNoPacket(t *testing.T) {
 	g.apply(tg)
 	f := faultOf(t, tg, o, "")
 	up := classOf(t, tg, f.ID, compiler.Upload)
-	seed := g.seeds("wan0")[up.LeafHandle()]
-	if seed == 0 {
-		t.Fatalf("no netem leaf %s on wan0", up.LeafHandle())
-	}
+	g.leafPackets("wan0", up.LeafHandle()) // fails if there is no such leaf
 
 	st := startStream(t, g.top.A, g.top.Server, testbed.ServerAddr, 9300)
 	st.waitFlowing(5)
@@ -237,8 +251,10 @@ func TestChangingAFaultOf600msUnderLoadLosesNoPacket(t *testing.T) {
 	if sent == 0 || sent != got {
 		t.Errorf("sent %d, received %d: the change lost packets\n%s", sent, got, g.top.GW.Must("tc", "-s", "qdisc", "show", "dev", "wan0"))
 	}
-	if now := g.seeds("wan0")[up.LeafHandle()]; now != seed {
-		t.Errorf("the leaf was created again (seed %d, was %d)", now, seed)
+	// the stream is the only traffic through the class and started after the leaf was made: a leaf
+	// that was made again by a change would have counted only what came after it
+	if now := g.leafPackets("wan0", up.LeafHandle()); now != int64(sent) {
+		t.Errorf("the leaf has sent %d packets of the %d the stream sent: it was created again", now, sent)
 	}
 	for _, q := range g.kernelTree("wan0").Qdiscs {
 		if q.Netem != nil && q.Stats != nil && q.Stats.Drops != 0 {
@@ -282,6 +298,10 @@ func TestMovingADeviceToANewFaultIdLosesNoPacketAndTheOldClassesGoLater(t *testi
 	}
 	// the stream goes on, now through the new class; nothing reaches the old one any more
 	waitClassPackets(t, g.top.GW, "wan0", newUp, time.Minute, "the stream was never classified into the new class")
+	// An HTB class counts a packet when it leaves, so the packets that were queued in the old class (400 ms
+	// of the stream) are still being counted for that long after the switch: the class is quiet after
+	// that, and only then does it say whether anything still reaches it.
+	time.Sleep(400*time.Millisecond + time.Second)
 	oldNow := classPackets(t, g.top.GW, "wan0", oldUp)
 	time.Sleep(time.Second)
 	if later := classPackets(t, g.top.GW, "wan0", oldUp); later != oldNow {
@@ -292,8 +312,8 @@ func TestMovingADeviceToANewFaultIdLosesNoPacketAndTheOldClassesGoLater(t *testi
 		t.Errorf("sent %d, received %d: the move lost packets\n%s", sent, got, g.top.GW.Must("tc", "-s", "class", "show", "dev", "wan0"))
 	}
 	// no packet lost its classification on the way: every datagram of the stream was counted by the old
-	// or the new class (the classes count at enqueue, and nothing but the stream is A's traffic
-	// through them). The default class sees other traffic of the gateway now and then, so it says
+	// or the new class (the classes count when a packet leaves, which finish has waited for, and nothing
+	// but the stream is A's traffic through them). The default class sees other traffic of the gateway now and then, so it says
 	// nothing.
 	if inOld, inNew := classPackets(t, g.top.GW, "wan0", oldUp), classPackets(t, g.top.GW, "wan0", newUp); inOld+inNew != int64(sent) {
 		t.Errorf("the stream sent %d datagrams, the old class counted %d and the new one %d", sent, inOld, inNew)

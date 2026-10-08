@@ -226,11 +226,12 @@ func TestDeletingWhatIsGoneIsNotAnError(t *testing.T) {
 		`{"object":"filter","action":"delete","dev":"wan0","parent":"1:","handle":"0xa0/0x1fff0","args":["protocol","ip","prio","1","fw"]}`,
 		`{"object":"class","action":"delete","dev":"wan0","classid":"1:24"}`)
 	for name, stderr := range map[string]string{
-		"nothing printed": "",
-		"gone":            "Error: Specified filter handle not found.\nWe have an error talking to the kernel\nCommand failed -:1\nRTNETLINK answers: No such file or directory\nCommand failed -:2\n",
-		"class":           "Error: Specified class not found.\nCommand failed -:2\n",
-		"chain":           "Error: Cannot find specified filter chain.\nWe have an error talking to the kernel\nCommand failed -:1\n",
-		"qdisc":           "Error: Failed to find qdisc with specified handle.\nCommand failed -:1\nError: Parent Qdisc doesn't exists.\nCommand failed -:2\nError: Invalid handle.\nCommand failed -:3\n",
+		"nothing printed":              "",
+		"gone":                         "Error: Specified filter handle not found.\nWe have an error talking to the kernel\nCommand failed -:1\nRTNETLINK answers: No such file or directory\nCommand failed -:2\n",
+		"class":                        "Error: Specified class not found.\nCommand failed -:2\n",
+		"chain":                        "Error: Cannot find specified filter chain.\nWe have an error talking to the kernel\nCommand failed -:1\n",
+		"qdisc":                        "Error: Failed to find qdisc with specified handle.\nCommand failed -:1\nError: Parent Qdisc doesn't exists.\nCommand failed -:2\nError: Invalid handle.\nCommand failed -:3\n",
+		"leaf of a class that is gone": "Error: Failed to find qdisc with specified classid.\nCommand failed -:1\n",
 	} {
 		exit := 1
 		if stderr == "" {

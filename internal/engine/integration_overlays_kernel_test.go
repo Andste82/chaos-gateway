@@ -185,16 +185,21 @@ func (r *real) verifyKernel() *compiler.Target {
 	tg := r.target()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// the classes of fault ids that went, or of an apply that failed after its tc operation, stay
+	// for the retirer (make-before-break). The list is read before the kernel: the retirer deletes a
+	// class and then takes it off its list, so a class that is in the kernel and was not on the list
+	// can only be one that is not meant to be there, while a class on the list that has gone from the
+	// kernel in the meantime is no mismatch. The other order sees a class in the kernel that the
+	// retirer has deleted and dropped from its list since.
+	retiring := map[string]bool{}
+	for _, c := range r.e.RetiringTC() {
+		retiring[c.Key()] = true
+	}
 	st, err := apply.ReadState(ctx, apply.Local{E: r.ex}, r.top.GW.Name, apply.WantOf(tg))
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	// the classes of fault ids that went, or of an apply that failed after its tc operation, stay
-	// for the retirer (make-before-break)
-	st.TCRetiring = map[string]bool{}
-	for _, c := range r.e.RetiringTC() {
-		st.TCRetiring[c.Key()] = true
-	}
+	st.TCRetiring = retiring
 	if mm := apply.Verify(tg, st); len(mm) != 0 {
 		r.t.Fatalf("the kernel does not match the compile of the snapshot: %v", mm)
 	}

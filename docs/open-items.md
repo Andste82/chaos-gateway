@@ -839,7 +839,10 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Evidence: the logs of the CI runs 37701957026 and 37711403220 (the `C to the server, before:` lines).
 - Task: chosen interpretation — the cause is not found, and no fault is involved (no tc tree exists in the
   flows that show it), so the measurement tests bring the lab to its steady state first (`warmUp` in
-  `startFaultLab`: three pings from each device, logged with the slowest round trip). To find the
+  `startFaultLab`: three pings from each device, logged with the slowest round trip; on level 1 the first
+  ping of C took 1.00 to 1.06 s in every test, A's and B's 0.1 ms, which is the evidence that it is C's
+  first packet and one second; then `settleIdentity` waits for the engine to absorb the neighbors the pings
+  made it meet). To find the
   cause: `ip neigh` and a capture on the gateway's `lan1` and `wan0` for the first second after `startFaultLab`.
   If it is the product (a port or an address that is not ready when the apply returns), the apply
   has to wait for it.

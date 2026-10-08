@@ -136,10 +136,10 @@ type Kernel struct {
 	// Fail is consulted before every command; a non-nil result is returned as the command's
 	// outcome (an injected failure). It receives the command with the tool name first.
 	Fail func(argv []string, stdin string) *executor.Result
-	// After is called after every command that was run (not after an injected failure), outside the
+	// after is called after every command that was run (not after an injected failure), outside the
 	// simulator's lock: it may run commands of its own, to change the kernel behind the caller's back
-	// (a drift that verify has to find).
-	After func(argv []string, stdin string)
+	// (a drift that verify has to find). SetAfter sets it.
+	after func(argv []string, stdin string)
 	// Log records every command that was run.
 	Log []string
 	// tcSeed numbers the netem qdiscs created: the seed of each (a re-created qdisc has another)
@@ -435,12 +435,21 @@ func (k *Kernel) ClearLog() {
 
 // ---- executor.Runner -------------------------------------------------------------------------
 
+// SetAfter sets the function that is called after every command that was run (nil removes it). It is
+// called outside the simulator's lock and may run commands of its own, to change the kernel behind the
+// caller's back (a drift that verify has to find).
+func (k *Kernel) SetAfter(f func(argv []string, stdin string)) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.after = f
+}
+
 // Run implements executor.Runner.
 func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, error) {
 	res, ran, err := k.run(ctx, c)
 	if ran {
 		k.mu.Lock()
-		after := k.After
+		after := k.after
 		k.mu.Unlock()
 		if after != nil {
 			after(append([]string{string(c.Tool)}, c.Args...), c.Stdin)

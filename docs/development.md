@@ -1412,8 +1412,8 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   new one for a new leaf. It keeps the distribution table a leaf was given (`TCTable`, which the
   listing does not show) through a change that names none, as the kernel does. It does not queue
   packets (`SetTCStats` sets backlog and counters for the tests of the retirer) and does not keep the
-  other attributes of a `change` that is not given (the compiler's sets are complete). `Kernel.After`
-  runs a function after each command, outside the lock, to change the kernel behind the caller's back
+  other attributes of a `change` that is not given (the compiler's sets are complete). `Kernel.SetAfter`
+  sets a function that runs after each command, outside the lock, to change the kernel behind the caller's back
   (a drift that verify has to find).
 - **Tests.** `tcapply_test.go` (simulated kernel: apply and verify on all interfaces, re-apply,
   in-place change, moved id with the order tc-before-nft, grace period and backlog guard, a whole tree

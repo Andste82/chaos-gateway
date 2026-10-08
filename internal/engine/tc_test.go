@@ -333,7 +333,7 @@ func TestADriftedTreeFoundByTheVerifyFailsTheWriteAndRevertsIt(t *testing.T) {
 	keep := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 30ms}")
 	var armed, drifted atomic.Int32
 	armed.Store(1)
-	h.k.After = func(argv []string, stdin string) {
+	h.k.SetAfter(func(argv []string, stdin string) {
 		if argv[0] != "nft" || !strings.Contains(strings.Join(argv, " "), "-f") || !armed.CompareAndSwap(1, 0) {
 			return
 		}
@@ -348,9 +348,9 @@ func TestADriftedTreeFoundByTheVerifyFailsTheWriteAndRevertsIt(t *testing.T) {
 				return
 			}
 		}
-	}
+	})
 	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 777ms}")
-	h.k.After = nil
+	h.k.SetAfter(nil)
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) {
 		t.Fatalf("got %v, want apply_failed", err)

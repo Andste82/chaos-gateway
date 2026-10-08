@@ -1365,6 +1365,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M7.
 
 **M8b — Fault engine: latency, jitter, loss** (M)
+- **Status:** done — merged (PR #33, `e3212c6`).
 - Scope: apply the tc tree per interface with in-place parameter changes and make-before-break for id changes (§3.2); overlay writes return after verify with the new generation; netem queue statistics with counter epochs.
 - Tests: measurement tests (§4.3) for device, group and network scope, for traffic between two test networks, between a test network and a WireGuard client network, and over a route learned via BGP; isolation test; updating one fault does not disturb others; changing the parameters of a 600 ms fault under load loses no queued packet; golden tests for the `tc -j` normalizer.
 - Depends on: M8a.

@@ -180,6 +180,14 @@ func TestCheckDelaysToleratesNoiseAndFindsADisturbance(t *testing.T) {
 	if err := CheckDelays("up", many, 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "4 of 204") {
 		t.Errorf("four of 204 outside: %v", err)
 	}
+	// a short stream tolerates one packet slightly outside, not two
+	short := append(append([]time.Duration(nil), ds[:67]...), 48*ms)
+	if err := CheckDelays("up", short, 36*ms, 44*ms); err != nil {
+		t.Errorf("one of 68 slightly outside: %v", err)
+	}
+	if err := CheckDelays("up", append(short, 47*ms), 36*ms, 44*ms); err == nil {
+		t.Errorf("two of 69 outside")
+	}
 	// one packet far outside (a flushed or doubled queue)
 	far := append(append([]time.Duration(nil), ds...), 90*ms)
 	if err := CheckDelays("up", far, 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "largest 90ms") {

@@ -500,7 +500,7 @@ func (k *Kernel) dispatch(ctx context.Context, c executor.Command) (executor.Res
 	case executor.ToolBird, executor.ToolBirdc:
 		return k.birdCmd(c)
 	case executor.ToolConntrack:
-		return okr(k.conntrack)
+		return k.conntrackCmd(c.Args)
 	}
 	return executor.Result{Exit: 127, Stderr: "unknown tool"}, nil
 }

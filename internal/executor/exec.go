@@ -572,6 +572,9 @@ func benign(tool Tool, stderr string) bool {
 	if tool == ToolTC {
 		return onlyBenignTC(stderr)
 	}
+	if tool == ToolConntrack {
+		return onlyBenignConntrack(stderr)
+	}
 	return onlyBenign(stderr)
 }
 
@@ -588,6 +591,23 @@ func onlyBenignTC(stderr string) bool {
 		case line == "Error: Specified class not found.", line == "Error: Failed to find qdisc with specified handle.",
 			line == "Error: Failed to find qdisc with specified classid.", line == "Error: Specified filter handle not found.", line == "Error: Cannot find specified filter chain.",
 			line == "Error: Parent Qdisc doesn't exists.", line == "Error: Invalid handle.":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// onlyBenignConntrack is onlyBenign for `conntrack -D`: the entry was gone when the tool looked for it
+// (the answer was read from the tool, docs/development.md "Access rules"). Anything else, a refused
+// option first of all, is a failure.
+func onlyBenignConntrack(stderr string) bool {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+		case strings.HasSuffix(line, "0 flow entries have been deleted."):
+		case strings.HasSuffix(line, "No such file or directory"):
 		default:
 			return false
 		}

@@ -68,6 +68,8 @@ type ExplainDestination struct {
 type ExplainAccess struct {
 	Verdict string `json:"verdict"`
 	Layer   string `json:"layer"`
+	// Rule is the id of the access rule that decided, empty when none did.
+	Rule string `json:"rule,omitempty"`
 	// Reason says which entry or default decided.
 	Reason string `json:"reason,omitempty"`
 }
@@ -197,10 +199,10 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		out.Destination = &ExplainDestination{Hostname: q.Dst}
 	}
 
-	// access: the gateway's protection and the matrix (access rules join with M9)
+	// access: the control plane, the access rules, then the gateway's protection or the matrix
 	if sub.IP.IsValid() && dstIP.IsValid() {
-		a := world.AccessVerdict(sub.IP, dstIP, query.Protocol, q.Port, e.accessFacts(snap))
-		out.Access = ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Reason: a.Reason}
+		a := world.AccessDecision(query, e.accessFacts(snap))
+		out.Access = ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Rule: a.Rule, Reason: a.Reason}
 	} else {
 		// without a source address or an address to go to there is nothing to judge: say what holds
 		// for traffic that is not addressed to the gateway
@@ -315,7 +317,7 @@ func interfaceOfNetwork(snap *Snapshot, network string) string {
 }
 
 func (e *Engine) accessFacts(snap *Snapshot) domain.AccessFacts {
-	f := domain.AccessFacts{Gateway: gatewayAddrs(snap), Management: append([]netip.Prefix(nil), snap.Management.Sources...)}
+	f := domain.AccessFacts{Gateway: gatewayAddrs(snap), Management: append([]netip.Prefix(nil), snap.Management.Sources...), UIPort: snap.Management.UIPort}
 	if snap.Management.Subnet.IsValid() {
 		f.Management = append(f.Management, snap.Management.Subnet)
 	}

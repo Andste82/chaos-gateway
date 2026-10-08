@@ -22,7 +22,16 @@ import (
 // silences the DNS proxy for the device both for queries to the gateway's address (redirected into the
 // service namespace) and for queries sent directly to the service namespace's address 169.254.100.2.
 
-func TestARuleOverlayCreatedOverTheAPIRefusesTheDNSQueriesOfItsNetworkAndCountsThem(t *testing.T) {
+// dnsBed is the gateway with its service namespace and the DNS proxy, and an upstream resolver that
+// knows example.test. direct asks the service namespace's address by itself, the way a device that
+// bypasses the gateway's DNS address would.
+type dnsBed struct {
+	g      *gw
+	top    *testbed.Topology
+	direct func() (string, error)
+}
+
+func newDNSBed(t *testing.T) *dnsBed {
 	ns := fmt.Sprintf("svc%06x", rand.Intn(1<<24))
 	t.Cleanup(func() { _ = exec.Command("ip", "netns", "delete", ns).Run() })
 	g, top := newBedGW(t, func(o *options) {
@@ -65,7 +74,12 @@ func TestARuleOverlayCreatedOverTheAPIRefusesTheDNSQueriesOfItsNetworkAndCountsT
 		out, err := direct()
 		return err == nil && out == "203.0.113.77"
 	})
+	return &dnsBed{g: g, top: top, direct: direct}
+}
 
+func TestARuleOverlayCreatedOverTheAPIRefusesTheDNSQueriesOfItsNetworkAndCountsThem(t *testing.T) {
+	bed := newDNSBed(t)
+	g, top, direct := bed.g, bed.top, bed.direct
 	// the rule: devices of IoT may not send UDP to port 53, wherever it goes
 	r := g.createOverlay(`{"target":{"network":"IoT"},"rule":{"protocol":"udp","ports":[53],"action":"drop"}}`)
 	if r.Status != 201 {
@@ -104,6 +118,55 @@ func TestARuleOverlayCreatedOverTheAPIRefusesTheDNSQueriesOfItsNetworkAndCountsT
 	// the overlay goes: the proxy answers again
 	if d := g.do("DELETE", "/overlays/"+id, nil, nil, nil); d.Status != 204 {
 		t.Fatalf("%d %s", d.Status, d.Body)
+	}
+	if out, err := direct(); err != nil || out != "203.0.113.77" {
+		t.Errorf("after the rule: %q %v", out, err)
+	}
+	if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
+		t.Errorf("after the rule: %q %v", out, err)
+	}
+}
+
+// The same rule as a configured rule: a revision with a drop rule on UDP 53 for the network silences the DNS
+// proxy for queries to the gateway's address and to the service namespace's address, the rule is listed
+// as effective with its counter, explain names it as a configured rule, and a revision without it brings
+// the proxy back.
+func TestAConfiguredDropRuleOnUDP53SilencesTheDNSProxyForBothAddresses(t *testing.T) {
+	bed := newDNSBed(t)
+	g, top, direct := bed.g, bed.top, bed.direct
+	const ruleID = "a1000000-0000-4000-8000-0000000000d5"
+
+	id := g.mustPatch(map[string]any{
+		"access_rules":      map[string]any{ruleID: map[string]any{"name": "no-dns", "source": map[string]any{"network": "IoT"}, "protocol": "udp", "ports": []int{53}, "action": "drop"}},
+		"access_rule_order": []string{ruleID},
+	})
+	if r := g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	if out, err := digA(top, top.A, testbed.LAN0Gateway); err == nil && out != "" {
+		t.Errorf("the proxy answered A although a configured rule drops UDP 53: %q", out)
+	}
+	if out, err := direct(); err == nil && out != "" {
+		t.Errorf("the service namespace answered A directly although a configured rule drops UDP 53: %q", out)
+	}
+	if out, err := digA(top, top.A, testbed.LAN0Gateway, "+tcp"); err != nil || out != "203.0.113.77" {
+		t.Errorf("DNS over TCP: %q %v", out, err)
+	}
+	rule := g.do("GET", "/rules/"+ruleID, nil, nil, nil).json(t)
+	c, ok := rule["counters"].(map[string]any)
+	if rule["state"] != "effective" || !ok || c["packets"].(float64) < 2 {
+		t.Errorf("the rule after two refused queries: %v", rule)
+	}
+	for _, dst := range []string{testbed.LAN0Gateway, "169.254.100.2"} {
+		a := g.do("GET", "/explain?src="+testbed.ClientAAddr+"&dst="+dst+"&protocol=udp&port=53", nil, nil, nil).json(t)["access"].(map[string]any)
+		if a["verdict"] != "drop" || a["layer"] != "config_rule" || a["rule"] != ruleID {
+			t.Errorf("explain %s: %v", dst, a)
+		}
+	}
+
+	id = g.mustPatch(map[string]any{"access_rules": map[string]any{ruleID: nil}, "access_rule_order": []string{}})
+	if r := g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	if out, err := direct(); err != nil || out != "203.0.113.77" {
 		t.Errorf("after the rule: %q %v", out, err)

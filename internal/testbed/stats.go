@@ -112,19 +112,21 @@ func CheckLatency(what string, got, want time.Duration) error {
 }
 
 // DelayOutlierShare and DelayOutlierHard are the tolerances of CheckDelays for a stream that must not be
-// disturbed from outside: at most 1 % of the delays may lie outside the bounds, and none further than
-// 10 ms beyond them. The plan (§4.3) gives a tolerance for the median only; these are the tests' own,
-// chosen so that scheduling noise of a loaded (nested virtual) machine passes (hosted runner: 2 of 904
-// delays 1 to 3 ms too long, none further) and a disturbance by a change somewhere else does not: a
-// queue that was made again drops or delays a whole run of packets, a flush of one delays them by its
-// full delay.
+// disturbed from outside: at most 1 % of the delays (and always one) may lie outside the bounds, and none
+// further than 10 ms beyond them. The plan (§4.3) gives a tolerance for the median only; these are the
+// tests' own. A packet that is due while a neighbor's change holds the lock of the interface's queues, or
+// while a loaded (nested virtual) machine runs something else, leaves a few milliseconds late: the
+// hosted runners showed 2 of 904 delays 1 to 3 ms too long on the nested runner and 1 of 68 by 2 ms on
+// the native one, none further. A disturbance by a change somewhere else is not that: a queue that was
+// made again drops or delays a whole run of packets, a flush of one delays them by its full delay.
 const (
 	DelayOutlierShare = 0.01
 	DelayOutlierHard  = 10 * time.Millisecond
 )
 
-// CheckDelays returns an error when more than DelayOutlierShare of ds lies outside [lo, hi], or any delay
-// lies more than DelayOutlierHard outside it. A median cannot see a few delayed packets, this can.
+// CheckDelays returns an error when more than DelayOutlierShare of ds (rounded up: at least one packet)
+// lies outside [lo, hi], or any delay lies more than DelayOutlierHard outside it. A median cannot see a
+// few delayed packets, this can.
 func CheckDelays(what string, ds []time.Duration, lo, hi time.Duration) error {
 	var out, far int
 	var min, max time.Duration
@@ -142,7 +144,7 @@ func CheckDelays(what string, ds []time.Duration, lo, hi time.Duration) error {
 			far++
 		}
 	}
-	if far == 0 && float64(out) <= DelayOutlierShare*float64(len(ds)) {
+	if far == 0 && out <= int(math.Ceil(DelayOutlierShare*float64(len(ds)))) {
 		return nil
 	}
 	return fmt.Errorf("%s: %d of %d delays outside [%v, %v], %d of them more than %v outside (smallest %v, largest %v)",

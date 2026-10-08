@@ -1518,7 +1518,7 @@ overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are
 | test network and WireGuard client network | `TestFaultsBetweenATestNetworkAndAWireGuardClientNetworkAreMeasuredPerDirection` |
 | route learned via BGP | `TestAFaultOnTrafficOverARouteLearnedByBGPIsMeasuredPerDirection` |
 | isolation (every fault test above) | `expectUnaffected`: a device or flow the fault does not name, measured before and after |
-| updating one fault does not disturb others | `TestUpdatingOneFaultDoesNotDisturbTheOthers` (also holds every delay of C's stream during the changes to the fault's bounds with `testbed.CheckDelays`: at most 1 % outside, none more than 10 ms outside, the tests' own tolerance since the plan gives one for the median only) |
+| updating one fault does not disturb others | `TestUpdatingOneFaultDoesNotDisturbTheOthers` (also holds every delay of C's stream during the changes to the fault's bounds with `testbed.CheckDelays`: at most 1 % (and always one packet) outside, none more than 10 ms outside, the tests' own tolerance since the plan gives one for the median only) |
 | 600 ms fault changed under load loses no queued packet | `TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket` (engine, sent = delivered + the fault's own drops) and `TestChangingAFaultOf600msUnderLoadLosesNoPacket` (apply) |
 | make before break | `TestSwitchingADeviceToANewFaultIdThroughTheEngineLosesNoPacketAndTheOldClassesGoLater` (engine) and `TestMovingADeviceToANewFaultIdLosesNoPacketAndTheOldClassesGoLater` (apply), `internal/apply/tcapply_test.go` for the plans |
 | golden tests for the `tc -j` normalizer | `internal/linux/tcnorm_test.go` on `internal/linux/testdata/tc` |

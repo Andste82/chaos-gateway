@@ -342,7 +342,9 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 	})
 
 	t.Run("C6_a_cut_resets_the_stream_and_leaves_the_server_half_open", func(t *testing.T) {
-		p := hold(9106, "1")
+		// the window stays open for 500 ms (engine.DefaultCutWindow): a message every 300 ms is sure to
+		// meet it, while an echo in flight at the moment it opens is three times rarer than at 100 ms
+		p := hold(9106, "0.3")
 		defer p.Stop()
 		afterAnAnswer(t, p)
 		mark := len(p.Output())

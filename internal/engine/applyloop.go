@@ -34,6 +34,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// ids is the allocation of fault ids of the last target that was applied and verified: the next
 	// compile hands it back, so a fault that is still there keeps its id (plan §3.3)
 	var ids map[string]int
+	// verified is the last target the kernel was brought to, kept across a failed apply (last is not):
+	// the access rules of the next apply are compared with it to find the connections a rule cuts
+	// (cut.go). Nil until the first apply of this process, which cuts nothing.
+	var verified *compiler.Target
 	// the retirer deletes the tc classes of fault ids that no longer exist once the packets queued in
 	// them have left (make-before-break, plan §3.2); it runs on the injected clock
 	retirer := e.retirer
@@ -111,10 +115,18 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				ids = target.FaultIDs
 			}
 			dhcpErr := ""
+			var cut *cutOutcome
 			if err == nil && !incremental {
 				dhcpErr = e.syncDHCP(ctx, target)
+				cut = e.cutExisting(ctx, verified, target)
+				if cut != nil && cut.Err != nil {
+					e.cfg.Log.Warn("cutting the existing connections of an access rule failed: the rules are in force, the connections may live on", "generation", d.Generation, "error", cut.Err)
+				}
 			}
-			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan}
+			if err == nil {
+				verified = target
+			}
+			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut}
 			if err == nil && incremental && last != nil {
 				res.dhcpErr = e.dhcp.errorNow()
 			}
@@ -134,7 +146,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 // allocation of fault ids of the previous apply.
 func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
-		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit}
+		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is

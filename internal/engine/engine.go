@@ -55,6 +55,12 @@ type Config struct {
 	// ClassLimit is the number of tc classes one interface may carry; 0 uses the compiler's default
 	// for the architecture (plan §3.3).
 	ClassLimit int
+	// RuleLimit is the number of access rules, overlay rules included, one compile accepts; 0 uses the
+	// compiler's default (plan §2.4, compiler.DefaultRuleLimit).
+	RuleLimit int
+	// CutWindow is how long the window of "also cut existing connections" stays open; 0 uses
+	// DefaultCutWindow, a negative value closes it again at once (tests).
+	CutWindow time.Duration
 	// GenerationFile persists the generation counter's high-water mark across restarts (plan
 	// openapi.yaml convention: "monotonic integer, never reused"). Empty keeps it per-process.
 	GenerationFile string
@@ -120,6 +126,11 @@ type Snapshot struct {
 	Faults []compiler.Fault
 	// Winners are the keys of the faults that win for some traffic (compiler.Target.Winners).
 	Winners map[string]bool
+	// Access is the effective list of access rules of the last applied target, overlay rules first;
+	// nil when there was none. RuleEpochs is the generation in which each rule, by key, first
+	// appeared: the epoch of its counter (it restarts when a rule is new or the table was made anew).
+	Access     *compiler.AccessPlan
+	RuleEpochs map[string]int64
 	// Management is the management interface and the sources that reach the control plane in the
 	// last applied target (`explain` judges traffic to the gateway with it).
 	Management  compiler.Management

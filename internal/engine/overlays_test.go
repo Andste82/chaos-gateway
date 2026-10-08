@@ -452,7 +452,6 @@ func TestAnInvalidOverlayIsRefusedWithoutChangingAnything(t *testing.T) {
 func TestOverlaysOfLaterMilestonesAreUnsupported(t *testing.T) {
 	h := startedWithRevision(t)
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\nrule: {action: drop}":                               "M9",
 		"target: {network: IoT}\nprofile: bad-lte":                                   "M11",
 		"target: {network: IoT}\ndns: {names: [example.com], action: nxdomain}":      "M20",
 		"target: {network: IoT}\ntls: {case: expired}":                               "M21",

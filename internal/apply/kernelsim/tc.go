@@ -35,6 +35,7 @@ type simQdisc struct {
 	htbDefault           uint64
 	netem                linux.NetemSpec
 	seed                 uint64
+	table                string // the distribution table: what the listing does not show
 	stats                linux.NormStats
 }
 
@@ -77,6 +78,33 @@ func (k *Kernel) SetTCStats(dev, handle string, s linux.NormStats) {
 			q.stats = s
 		}
 	}
+}
+
+// TCTable returns the distribution table the netem qdisc with the handle holds ("" for none): the
+// listing does not show it, the kernel keeps it across a change that names none.
+func (k *Kernel) TCTable(dev, handle string) string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	l := k.links[dev]
+	if l == nil || l.tc == nil {
+		return ""
+	}
+	for _, q := range l.tc.leaves {
+		if q.handle == handle {
+			return q.table
+		}
+	}
+	return ""
+}
+
+// netemTable is the distribution table the netem arguments name.
+func netemTable(a []string) string {
+	for i := 0; i+1 < len(a); i++ {
+		if a[i] == "distribution" {
+			return a[i+1]
+		}
+	}
+	return ""
 }
 
 // TCSeed returns the seed of the qdisc with the handle: it changes when the qdisc is created again.
@@ -258,13 +286,18 @@ func (k *Kernel) tcQdisc(tc *simTC, action, parent, handle string, args []string
 	if err != nil {
 		return "Error: " + err.Error()
 	}
+	table := netemTable(args)
 	if old != nil {
-		// a change in place: the queue, the counters and the seed stay
+		// a change in place: the queue, the counters and the seed stay; so does the distribution
+		// table when the change names none
 		old.netem = spec
+		if table != "" {
+			old.table = table
+		}
 		return ""
 	}
 	k.tcSeed++
-	tc.leaves[parent] = &simQdisc{kind: "netem", handle: handle, parent: parent, netem: spec, seed: k.tcSeed*7919 + 1}
+	tc.leaves[parent] = &simQdisc{kind: "netem", handle: handle, parent: parent, netem: spec, seed: k.tcSeed*7919 + 1, table: table}
 	tc.classes[parent].leaf = handle
 	return ""
 }

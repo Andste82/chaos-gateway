@@ -330,8 +330,10 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	tp := planTC(t, s, removed, mem)
 	p.Grace, p.Dists, p.QueuesCreated = tp.grace, tp.dists, tp.created
 	p.NftNew = s.Nft == nil || len(s.Nft.Tables()) == 0
-	if len(tp.before) > 0 {
-		add("tc: "+strings.Join(tp.words, "; "), &executor.TC{Target: tg, Entries: tp.before})
+	for _, b := range tp.before {
+		for _, op := range tcOps(tg, b.entries) {
+			add("tc: "+strings.Join(b.words, "; "), op)
+		}
 	}
 
 	// ---- nftables: one atomic transaction -------------------------------------------------
@@ -343,9 +345,19 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		len(t.Nft.AllChains()), len(t.Nft.Sets), len(t.Nft.Counters), t.Nft.Generation), &executor.NftApply{Target: tg, Ruleset: json.RawMessage(tx)})
 
 	// ---- tc: what the target no longer wants -----------------------------------------------
+	// one batch per interface, like the creations above (tp.stale is ordered by interface)
 	var gone []executor.TCEntry
 	var goneWords, retiring []string
-	for _, st := range tp.stale {
+	flushGone := func() {
+		for _, op := range tcOps(tg, gone) {
+			add("tc: delete "+strings.Join(goneWords, ", "), op)
+		}
+		gone, goneWords = nil, nil
+	}
+	for i, st := range tp.stale {
+		if i > 0 && st.Dev != tp.stale[i-1].Dev {
+			flushGone()
+		}
 		if retire && !tp.immediate[st.Key()] {
 			p.Stale = append(p.Stale, st)
 			retiring = append(retiring, st.String())
@@ -354,9 +366,7 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		gone = append(gone, staleEntries(st, ownTree(s, st.Dev))...)
 		goneWords = append(goneWords, st.String())
 	}
-	if len(gone) > 0 {
-		add("tc: delete "+strings.Join(goneWords, ", "), &executor.TC{Target: tg, Entries: gone})
-	}
+	flushGone()
 	if len(retiring) > 0 {
 		note("tc: %s stay for %s (the packets queued in them are delivered), then go", strings.Join(retiring, ", "), p.Grace.Round(time.Millisecond))
 	}

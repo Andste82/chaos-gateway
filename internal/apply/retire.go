@@ -107,6 +107,32 @@ func (r *Retirer) treeWith(st TCStale) *retiree {
 	return nil
 }
 
+// tableUnknown is what the table memory holds for a leaf that a failed apply may have written to: it
+// may hold any table, so a leaf that is to be uniform is made again (and one that is to have a table
+// gets it) even where the listing shows nothing different.
+const tableUnknown = "?"
+
+// failed is called with the plan of an apply that failed while it was carried out. The kernel may
+// already hold what the plan wrote to a leaf (a new distribution table, which the listing does not
+// show), but the apply did not complete, so the memory must not say what the plan intended: the leaves
+// the plan wrote are marked as holding an unknown table. The restore of the previous revision then
+// makes a leaf that is to be uniform again.
+func (r *Retirer) failed(p *Plan) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, op := range p.Ops {
+		tc, ok := op.(*executor.TC)
+		if !ok {
+			continue
+		}
+		for _, e := range tc.Entries {
+			if e.Object == "qdisc" && e.Parent != "root" && e.Dev != "" && e.Handle != "" {
+				r.tables[e.Dev+" "+e.Handle] = tableUnknown
+			}
+		}
+	}
+}
+
 // dists returns a copy of what is known of the distribution tables of the leaves.
 func (r *Retirer) dists() map[string]string {
 	r.mu.Lock()
@@ -116,6 +142,13 @@ func (r *Retirer) dists() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// BuildPlan plans an apply of t in state s the way ApplyWith does with this retirer: the classes the
+// target no longer wants stay for the grace period, and a leaf is made again only where the memory
+// says a distribution table may be. It changes neither the kernel nor the retirer (a preview).
+func (r *Retirer) BuildPlan(t *compiler.Target, s *State, ns string) (*Plan, error) {
+	return buildPlan(t, s, ns, true, r.dists())
 }
 
 // Pending lists what waits, soonest first.
@@ -253,12 +286,18 @@ func (r *Retirer) Reap(ctx context.Context, ex Exec, ns string) (int, error) {
 		if len(entries) == 0 {
 			continue
 		}
-		if _, err := ex.Do(ctx, &executor.TC{Target: executor.Target{NS: ns}, Entries: entries}); err != nil {
-			if gone(err) {
+		var delErr error
+		for _, op := range tcOps(executor.Target{NS: ns}, entries) {
+			if _, delErr = ex.Do(ctx, op); delErr != nil {
+				break
+			}
+		}
+		if delErr != nil {
+			if gone(delErr) {
 				r.forget(going)
 				continue
 			}
-			fail(going, fmt.Errorf("delete the retired tc classes of %s: %w", dev, err))
+			fail(going, fmt.Errorf("delete the retired tc classes of %s: %w", dev, delErr))
 			continue
 		}
 		r.forget(going)

@@ -227,12 +227,15 @@ func settle() time.Duration {
 }
 
 // impairedRun is a run long enough for the assertions of the place it runs: N >= 2000 for the loss
-// with native execution or KVM, a short one under emulation, where only the effect is looked at.
+// with native execution or KVM; under emulation only the effect is looked at, but "no packet lost" must
+// not be a coincidence there either: the smallest loss the tests configure is 3 %, and 300 probes miss
+// it with a chance of 0.97^300 = 1e-4 per flow (120 probes did with 2.6 %, which made a full emulated
+// run fail for no defect about once in fifteen).
 func impairedRun() testbed.ProbeOptions {
 	if testbed.Accurate() {
 		return testbed.ProbeOptions{Count: 2000, Interval: 6 * time.Millisecond, Settle: settle()}
 	}
-	return testbed.ProbeOptions{Count: 120, Interval: 25 * time.Millisecond, Settle: settle()}
+	return testbed.ProbeOptions{Count: 300, Interval: 20 * time.Millisecond, Settle: settle()}
 }
 
 // quietRun is the run of a device the fault does not name: N >= 200 for the median.

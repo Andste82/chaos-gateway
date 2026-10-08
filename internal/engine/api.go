@@ -166,7 +166,9 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan, err := apply.BuildPlan(tg, state, e.cfg.Namespace)
+	// the plan the apply loop would make: stale classes stay for the grace period, the retirer's memory
+	// of the distribution tables decides which leaves are made again
+	plan, err := e.retirer.BuildPlan(tg, state, e.cfg.Namespace)
 	if err != nil {
 		return nil, err
 	}

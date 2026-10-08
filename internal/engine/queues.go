@@ -113,7 +113,12 @@ func (o *owner) trackCounters(plan *apply.Plan, gen uint64) {
 	}
 	o.counterEpoch = int64(gen)
 	o.snap.CounterEpoch = o.counterEpoch
+	// a new map: the old one is the Snapshot.FaultEpochs that readers of earlier snapshots hold, and a
+	// published map is never written to
+	born := make(map[string]int64, len(o.ov.born))
 	for k := range o.ov.born {
-		o.ov.born[k] = int64(gen)
+		born[k] = int64(gen)
 	}
+	o.ov.born = born
+	o.snap.FaultEpochs = born
 }

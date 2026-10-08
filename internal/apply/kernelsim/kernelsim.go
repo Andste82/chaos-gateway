@@ -136,6 +136,10 @@ type Kernel struct {
 	// Fail is consulted before every command; a non-nil result is returned as the command's
 	// outcome (an injected failure). It receives the command with the tool name first.
 	Fail func(argv []string, stdin string) *executor.Result
+	// After is called after every command that was run (not after an injected failure), outside the
+	// simulator's lock: it may run commands of its own, to change the kernel behind the caller's back
+	// (a drift that verify has to find).
+	After func(argv []string, stdin string)
 	// Log records every command that was run.
 	Log []string
 	// tcSeed numbers the netem qdiscs created: the seed of each (a re-created qdisc has another)
@@ -433,15 +437,34 @@ func (k *Kernel) ClearLog() {
 
 // Run implements executor.Runner.
 func (k *Kernel) Run(ctx context.Context, c executor.Command) (executor.Result, error) {
+	res, ran, err := k.run(ctx, c)
+	if ran {
+		k.mu.Lock()
+		after := k.After
+		k.mu.Unlock()
+		if after != nil {
+			after(append([]string{string(c.Tool)}, c.Args...), c.Stdin)
+		}
+	}
+	return res, err
+}
+
+// run runs the command under the lock; ran is false for an injected failure.
+func (k *Kernel) run(ctx context.Context, c executor.Command) (res executor.Result, ran bool, err error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	argv := append([]string{string(c.Tool)}, c.Args...)
 	k.Log = append(k.Log, strings.Join(argv, " "))
 	if k.Fail != nil {
 		if r := k.Fail(argv, c.Stdin); r != nil {
-			return *r, nil
+			return *r, false, nil
 		}
 	}
+	res, err = k.dispatch(ctx, c)
+	return res, true, err
+}
+
+func (k *Kernel) dispatch(ctx context.Context, c executor.Command) (executor.Result, error) {
 	if c.NS != "" && k.svcNames[c.NS] {
 		sub := k.svc[c.NS]
 		if sub == nil {

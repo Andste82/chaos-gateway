@@ -131,6 +131,22 @@ func streamOutcome(t *testing.T, p *testbed.Process, mark int) string {
 	return "undecided: " + p.Output()[mark:]
 }
 
+// afterAnAnswer returns right after the connection of p has been answered once more. A connection
+// that sends every second is idle for the rest of the second: nothing of it is in flight on the
+// gateway, so a conntrack deletion in that second cannot catch an echo on its way back (such an echo
+// reaches the gateway without an entry, is answered with a reset and ends the server's side by chance).
+func afterAnAnswer(t *testing.T, p *testbed.Process) {
+	t.Helper()
+	have := strings.Count(p.Output(), "ok")
+	deadline := time.Now().Add(30 * time.Second)
+	for strings.Count(p.Output(), "ok") <= have {
+		if time.Now().After(deadline) {
+			t.Fatalf("the connection is not answered any more: %s", p.Output())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func lanRuleOverlay(t *testing.T, r *real, body string) engine.OverlayResult {
 	t.Helper()
 	return r.mustPut(model.Owner{Type: "user", Id: "test"}, body)
@@ -183,9 +199,9 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 	}
 
 	// hold starts a connection of A towards the port and waits until it runs.
-	hold := func(port int) *testbed.Process {
+	hold := func(port int, pause ...string) *testbed.Process {
 		t.Helper()
-		p := top.A.Start("python3", "-c", accessHold, testbed.ServerAddr, strconv.Itoa(port))
+		p := top.A.Start("python3", append([]string{"-c", accessHold, testbed.ServerAddr, strconv.Itoa(port)}, pause...)...)
 		waitText(t, p, "connected", 60*time.Second)
 		deadline := time.Now().Add(60 * time.Second)
 		for strings.Count(p.Output(), "ok") < 3 {
@@ -277,13 +293,14 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 	})
 
 	t.Run("C4_a_drop_rule_and_a_conntrack_deletion_hang_the_stream", func(t *testing.T) {
-		p := hold(9104)
+		p := hold(9104, "1")
 		defer p.Stop()
 		sport := clientPort(t, top.A, 9104)
 		if !trackedTCP(top.GW, testbed.ClientAAddr, 9104) {
 			t.Fatal("the gateway does not track the connection")
 		}
 		res := lanRuleOverlay(t, r, selector(9104, "drop", false))
+		afterAnAnswer(t, p)
 		mark := len(p.Output())
 		r.deleteFlow(testbed.ClientAAddr, sport, testbed.ServerAddr, 9104)
 		if got := streamOutcome(t, p, mark); got != "timeout" {
@@ -303,9 +320,10 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 	})
 
 	t.Run("C5_a_conntrack_deletion_alone_does_not_cut_behind_NAT", func(t *testing.T) {
-		p := hold(9105)
+		p := hold(9105, "1")
 		defer p.Stop()
 		sport := clientPort(t, top.A, 9105)
+		afterAnAnswer(t, p)
 		mark := len(p.Output())
 		r.deleteFlow(testbed.ClientAAddr, sport, testbed.ServerAddr, 9105)
 		if got := streamOutcome(t, p, mark); got != "continues" {
@@ -324,8 +342,9 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 	})
 
 	t.Run("C6_a_cut_resets_the_stream_and_leaves_the_server_half_open", func(t *testing.T) {
-		p := hold(9106)
+		p := hold(9106, "1")
 		defer p.Stop()
+		afterAnAnswer(t, p)
 		mark := len(p.Output())
 		res := lanRuleOverlay(t, r, selector(9106, "drop", true))
 		// PutOverlay answers when the cut is done: the window has been open and is closed again

@@ -1814,6 +1814,13 @@ compiler tests 1 to 2 minutes each. Select them with `-run`, and pass `-test-tim
 | `capacity_exceeded` | `TestTooManyRulesAreRefusedAndTheOverlaysThatCausedItAreNamed`, `TestTooManyRulesAreRefusedWithCapacityExceededAndNothingChanges`, `TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply` (each names its limit) |
 | Explain and preview of the effective result | `TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`, `TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes`; against the kernel: `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` (for every probe, explain's verdict is the one the packets get, and every rule that decided counted) |
 
+The cases C4, C5 and C6 hold their connection with one message per second and act right after an answer.
+With a message every 100 ms an echo is on its way back to the device in a few percent of the cases when the
+entry is deleted or the cut window opens; it reaches the gateway without an entry (or inside the window),
+the gateway answers the server with a reset, and the server's side is gone by chance instead of staying
+half-open (seen once on level 1b, then reproduced in the persistent VM: 3 of 40 deletions). That is what a
+real outage does as well; the test only has to stay out of that moment.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

@@ -803,33 +803,36 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ### P2-M8b-07 A burst through a delay fault loses replies outside the queues on a slow environment
 
-- Status: new
+- Status: cause found in M8b (the echo server of the lab, not the gateway); the test accounts for it
 - Severity: low
-- Reason: cause-unknown. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
+- Reason: needs-decision. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
   required exact conservation through both queues (the download queue sends what the upload queue sent,
   because "the echo server answers every request"). On the hosted level 1b runner (kernel 6.8 in a VM on
   a VM) a burst of 4000 pings loses half of its packets between the two queues, with no drop in either of
-  them: the download queue sent 1951 and 2011 of the 4000 that the upload queue sent (762 of 1000 with the
-  limit of 1000), and ping received exactly what the download queue sent. On the hosted level 1 runner
-  (kernel 6.17, native) every packet is counted by both queues; with KVM on a developer machine and
+  them: the download queue sent 1851 to 2011 of the 4000 that the upload queue sent (740 to 797 of 1000
+  with the limit of 1000), and ping received exactly what the download queue sent. On the hosted level 1
+  runner (kernel 6.17, native) every packet is counted by both queues; with KVM on a developer machine and
   emulated (kernel 6.8, TCG) the queues count every packet too, and only ping's own receive buffer loses
   replies.
 - Evidence: the CI runs of PR #33 (level 1b), `internal/engine/integration_queues_test.go`. The first
-  suspect, the receive queue of the next hop (`netdev_max_backlog`, 1000 per CPU), is ruled out by
-  measurement: `/proc/net/softnet_stat` (dropped column) was read before and after each burst on level 1b
-  and did not move (0 drops) while 1989 and 238 packets were missing.
-- Task: chosen interpretation — the upload queue (the one under test) keeps the exact law: sent + drops =
-  the burst, and no drop and no backlog with the computed limit. The download queue must not drop or hold
-  anything with the computed limit and may have at most what the upload queue sent; ping may have at
-  most what the download queue sent. Where packets are missing between the queues, the test logs the gap
-  and every counter that moved during the burst in every namespace of the lab (interface drops and
-  errors, IP, ICMP, UDP) instead of failing, so that the next run on level 1b names the place where they
-  go. Not understood: whether the loss is the environment (a slow nested virtualisation) or something the
-  gateway does to a burst that its delay queue releases at once (HTB, the bridges, the conntrack entry of
-  one ICMP id shared by 4000 requests).
-- Acceptance: the counters of a level 1b run name where the packets go, and the test then asserts the
-  exact law (or the cause is fixed); a maintainer confirms the weaker law until then.
-- Needs maintainer: yes
+  suspect, the receive queue of the next hop (`netdev_max_backlog`), is ruled out: `/proc/net/softnet_stat`
+  did not move. The counters of every namespace, logged for the gap, name the place (run 37735996258): the
+  gateway forwarded every packet it got (`ForwDatagrams` +5851 = 4000 requests and 1851 replies), the echo
+  server received all 4000 requests (`Icmp.InEchos` +4000) and sent 1851 replies; for the other 2149 its
+  `Icmp.OutErrors` and `Ip.OutDiscards` moved by exactly that number (260 of 1000 in the second burst).
+  The replies are discarded in the echo server's own output path (`Icmp.OutErrors` is what the kernel
+  counts when it fails to build or queue an ICMP reply, `Ip.OutDiscards` the same packets at the IP layer),
+  not by the gateway. Why the server's output fails under a burst on a slow, nested CPU (a full send
+  buffer of the kernel's ICMP socket is the likely reason) was not examined further.
+- Task: done for the test — the upload queue keeps the exact law (sent + drops = the burst, no drop and
+  no backlog with the computed limit); the download queue must not drop or hold anything with the
+  computed limit; every packet missing between the two queues must be accounted for by a drop of the
+  host's receive queues or by a reply the echo server could not send (its `Icmp.OutErrors`), else the test
+  fails and prints the counters that moved. What stays open is only whether the lab should avoid the
+  server's discards (for example a slower burst) so that the exact law holds on every runner.
+- Acceptance: a maintainer confirms that accounting for the echo server's output errors is the right
+  test, or the burst is paced so that the exact law holds without it.
+- Needs maintainer: no (confirmation only)
 - Effort: S
 
 ### P2-M8b-08 The first packets of the first flow of a lab wait about a second on a fast kernel

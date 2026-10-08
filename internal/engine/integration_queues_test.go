@@ -264,15 +264,13 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	sent, drops, backlog, _ := r.queueSum(fi, compiler.Upload)
 	dSent, dDrops, dBacklog, _ := r.queueSum(fi, compiler.Download)
 	t.Logf("computed limit: ping sent %d, received %d; upload queue sent %d drops %d, download queue sent %d drops %d", res.Sent, res.Received, sent, drops, dSent, dDrops)
-	// The upload queue is the one under test: it takes the whole burst and holds all of it. What it sends
-	// out is released in a burst, and a burst of thousands reaches the receive queue of the next hop
-	// (netdev_max_backlog, 1000 per CPU) faster than the CPU empties it when the environment is slow
-	// (nested virtualisation, seen on the hosted runners): such packets are lost between the queues, not
-	// in them. So the download queue holds what reaches it (no drop, nothing left) and cannot have more
-	// than the upload queue sent; ping cannot have more than the download queue sent. Where packets are
-	// missing between the two queues, the receive queues of the host (softnet_stat) are the suspect that
-	// the first guess named; on the hosted runner they dropped nothing while half of the burst was
-	// missing, so the cause is not known (P2-M8b-07), and the counters that moved are logged for it.
+	// The upload queue is the one under test: it takes the whole burst and holds all of it. The download
+	// queue holds what reaches it (no drop, nothing left) and cannot have more than the upload queue
+	// sent; ping cannot have more than the download queue sent. A packet that is missing between the
+	// two queues is accounted for by a drop of the host's receive queues (softnet_stat, the first guess)
+	// or by a reply that the echo server could not send (its ICMP output errors): on the hosted
+	// nested-virtualisation runner the server discards the replies of a burst that it cannot hand to its
+	// interface fast enough, while the gateway forwards every packet it gets (P2-M8b-07).
 	lost := softnetDrops(t) - softnet
 	t.Logf("the receive queues of the host dropped %d packets during the burst", lost)
 	if sent != int64(res.Sent) || drops != 0 || dDrops != 0 || backlog != 0 || dBacklog != 0 {
@@ -281,9 +279,14 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	if dSent > sent || res.Received > int(dSent) {
 		t.Errorf("a burst of %d packets: the upload queue sent %d, the download queue %d, ping got %d", burst, sent, dSent, res.Received)
 	}
-	if gap := sent - dSent; gap > int64(lost) {
-		t.Logf("P2-M8b-07: the upload queue sent %d, the download queue %d, the receive queues of the host dropped %d: %d packets are missing between the queues; the counters that moved during the burst:\n    %s",
-			sent, dSent, lost, gap-int64(lost), counterChanges(counters, kernelCounters(t, r.top)))
+	after := kernelCounters(t, r.top)
+	unsent := after["server Icmp.OutErrors"] - counters["server Icmp.OutErrors"]
+	if unsent != 0 || lost != 0 {
+		t.Logf("P2-M8b-07: the echo server could not send %d replies, the receive queues dropped %d", unsent, lost)
+	}
+	if gap := sent - dSent; gap > int64(lost)+unsent {
+		t.Errorf("a burst of %d packets: the upload queue sent %d, the download queue %d, the receive queues of the host dropped %d and the echo server could not send %d replies: %d packets are lost where nothing counts them; the counters that moved:\n    %s",
+			burst, sent, dSent, lost, unsent, gap-int64(lost)-unsent, counterChanges(counters, after))
 	}
 
 	// Lab: netem's limit of 1000 drops what does not fit while the first 1000 wait
@@ -311,9 +314,11 @@ func TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops(t *test
 	lost = softnetDrops(t) - softnet
 	t.Logf("the receive queues of the host dropped %d packets during the burst", lost)
 	// (a reply may still wait in the download queue: its delay of 600 ms starts when the echo answers)
-	if gap := sent - (dSent + dDrops + dBacklog); gap > int64(lost) {
-		t.Logf("P2-M8b-07: the upload queue sent %d, the download queue sent %d, dropped %d and holds %d, the receive queues of the host dropped %d: %d packets are missing between the queues; the counters that moved during the burst:\n    %s",
-			sent, dSent, dDrops, dBacklog, lost, gap-int64(lost), counterChanges(counters, kernelCounters(t, r.top)))
+	after = kernelCounters(t, r.top)
+	unsent = after["server Icmp.OutErrors"] - counters["server Icmp.OutErrors"]
+	if gap := sent - (dSent + dDrops + dBacklog); gap > int64(lost)+unsent {
+		t.Errorf("upload sent %d, the download queue sent %d, dropped %d and holds %d, the receive queues of the host dropped %d and the echo server could not send %d replies: %d packets are lost where nothing counts them; the counters that moved:\n    %s",
+			sent, dSent, dDrops, dBacklog, lost, unsent, gap-int64(lost)-unsent, counterChanges(counters, after))
 	}
 	r.verifyKernel()
 }

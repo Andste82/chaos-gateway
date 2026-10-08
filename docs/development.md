@@ -1772,7 +1772,10 @@ rules that reset the packets of established connections, then the window is clos
   `internal/api/rules_test.go`, `internal/executor/conntrack_delete_test.go`. Real kernel (testbed, run in
   the persistent VM): `internal/engine/integration_access_test.go` writes rule overlays through the engine
   into a lab of three devices and checks new connections, the reset of a TCP connection, the deletion of a
-  UDP flow, isolation of the other devices and the TTL.
+  UDP flow, isolation of the other devices and the TTL; `internal/api/e2e_access_test.go` creates a drop rule on
+  `udp/53` over HTTP and shows that the DNS proxy is silenced for queries to the gateway's address and to
+  169.254.100.2 alike (TCP stays), that the overlay's counter counts the dropped queries, and that `explain`
+  names the overlay. Both passed in the persistent VM (emulated, so no timing is asserted).
 
 ## Generated code
 

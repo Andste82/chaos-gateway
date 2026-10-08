@@ -103,10 +103,28 @@ func Plan(op Operation) ([]Step, error) {
 			steps = append(steps, Step{Cmd: Command{Tool: ToolSysctl, Args: []string{"-w", sysctlPath(e.Name, e.Dev) + "=" + strconv.Itoa(e.Value)}, NS: o.NS}})
 		}
 		return steps, nil
+	case *ConntrackDelete:
+		return planConntrackDelete(o), nil
 	case *AssignInterfaces:
 		return nil, nil // changes the executor's own scope, not the kernel
 	}
 	return nil, fmt.Errorf("no plan for %T", op)
+}
+
+// planConntrackDelete is one `conntrack -D` per flow, by the original tuple. A flow that is not there
+// (any more) makes the tool exit 1 with "0 flow entries have been deleted": benign (Idempotent).
+func planConntrackDelete(o *ConntrackDelete) []Step {
+	steps := make([]Step, 0, len(o.Flows))
+	for _, f := range o.Flows {
+		args := []string{"-D", "-f", "ipv4", "-p", f.Proto, "--orig-src", f.Src, "--orig-dst", f.Dst}
+		if f.Proto == "icmp" {
+			args = append(args, "--icmp-type", strconv.Itoa(*f.ICMPType), "--icmp-code", strconv.Itoa(*f.ICMPCode), "--icmp-id", strconv.Itoa(*f.ICMPID))
+		} else {
+			args = append(args, "--orig-port-src", strconv.Itoa(f.SPort), "--orig-port-dst", strconv.Itoa(f.DPort))
+		}
+		steps = append(steps, Step{Idempotent: true, Cmd: Command{Tool: ToolConntrack, Args: args, NS: o.NS}})
+	}
+	return steps
 }
 
 func planElements(verb string, tg Target, set string, elements []string, timeout int) ([]Step, error) {

@@ -24,6 +24,7 @@ const (
 	TypeSysctl            = "sysctl"
 	TypeWireGuard         = "wireguard"
 	TypeBird              = "bird"
+	TypeConntrackDelete   = "conntrack_delete"
 	TypeServiceNS         = "service_ns"
 	TypeRead              = "read"
 )
@@ -308,6 +309,35 @@ type Bird struct {
 	ImportTables []int `json:"import_tables,omitempty"`
 }
 
+// ConntrackFlow names one tracked connection by its original tuple: the direction in which the
+// first packet went (plan §2.2). Only IPv4 and the protocols with a tuple the closed operation
+// understands are accepted.
+type ConntrackFlow struct {
+	Proto string `json:"proto"` // tcp | udp | icmp
+	Src   string `json:"src"`
+	Dst   string `json:"dst"`
+	// SPort and DPort are the original ports of tcp and udp.
+	SPort int `json:"sport,omitempty"`
+	DPort int `json:"dport,omitempty"`
+	// ICMPType, ICMPCode and ICMPID identify an icmp flow (the echo id tells concurrent pings apart).
+	ICMPType *int `json:"icmp_type,omitempty"`
+	ICMPCode *int `json:"icmp_code,omitempty"`
+	ICMPID   *int `json:"icmp_id,omitempty"`
+}
+
+// ConntrackDelete deletes the named connections from the connection tracking table (`conntrack -D`),
+// one command per flow. A flow that is gone already (it timed out, or the cut closed it) is not an
+// error: the operation is idempotent. It is how "also cut existing connections" (plan §2.4) removes
+// what a window of TCP resets cannot reach (UDP, ICMP, idle TCP), and the operation takes tuples, never
+// a filter, so it cannot delete more than it names.
+type ConntrackDelete struct {
+	Target
+	Flows []ConntrackFlow `json:"flows"`
+}
+
+// MaxConntrackFlows is the most flows one conntrack_delete takes; a caller with more splits them.
+const MaxConntrackFlows = 4096
+
 // Read queries kernel state through the standard tools.
 type Read struct {
 	Target
@@ -380,6 +410,7 @@ func (Links) OpType() string             { return TypeLinks }
 func (Sysctl) OpType() string            { return TypeSysctl }
 func (WireGuard) OpType() string         { return TypeWireGuard }
 func (Bird) OpType() string              { return TypeBird }
+func (ConntrackDelete) OpType() string   { return TypeConntrackDelete }
 func (ServiceNS) OpType() string         { return TypeServiceNS }
 func (Read) OpType() string              { return TypeRead }
 
@@ -397,6 +428,7 @@ func (Links) Mutates() bool             { return true }
 func (Sysctl) Mutates() bool            { return true }
 func (WireGuard) Mutates() bool         { return true }
 func (ServiceNS) Mutates() bool         { return true }
+func (ConntrackDelete) Mutates() bool   { return true }
 func (o Bird) Mutates() bool            { return o.Action == "apply" }
 func (Read) Mutates() bool              { return false }
 
@@ -453,6 +485,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &WireGuard{}
 	case TypeBird:
 		op = &Bird{}
+	case TypeConntrackDelete:
+		op = &ConntrackDelete{}
 	case TypeServiceNS:
 		op = &ServiceNS{}
 	case TypeRead:

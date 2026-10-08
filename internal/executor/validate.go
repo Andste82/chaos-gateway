@@ -985,3 +985,57 @@ func (o Read) checkRouteGet() error {
 	}
 	return nil
 }
+
+// ConntrackProtos are the protocols a conntrack_delete names.
+var ConntrackProtos = []string{"tcp", "udp", "icmp"}
+
+func (o ConntrackDelete) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if len(o.Flows) == 0 || len(o.Flows) > MaxConntrackFlows {
+		return fmt.Errorf("%d flows, want 1..%d", len(o.Flows), MaxConntrackFlows)
+	}
+	for i, f := range o.Flows {
+		if err := f.validate(); err != nil {
+			return fmt.Errorf("flows[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (f ConntrackFlow) validate() error {
+	if err := oneOf("proto", f.Proto, ConntrackProtos...); err != nil {
+		return err
+	}
+	for _, a := range []string{f.Src, f.Dst} {
+		ip, err := netip.ParseAddr(a)
+		if err != nil || !ip.Is4() || ip.Zone() != "" {
+			return fmt.Errorf("invalid IPv4 address %q", a)
+		}
+	}
+	port := func(name string, p int) error {
+		if p < 1 || p > 65535 {
+			return fmt.Errorf("%s %d out of range", name, p)
+		}
+		return nil
+	}
+	if f.Proto == "icmp" {
+		if f.SPort != 0 || f.DPort != 0 {
+			return errors.New("an icmp flow has no ports")
+		}
+		for name, v := range map[string]*int{"icmp_type": f.ICMPType, "icmp_code": f.ICMPCode, "icmp_id": f.ICMPID} {
+			if v == nil || *v < 0 || *v > 65535 {
+				return fmt.Errorf("an icmp flow needs %s in 0..65535", name)
+			}
+		}
+		return nil
+	}
+	if f.ICMPType != nil || f.ICMPCode != nil || f.ICMPID != nil {
+		return fmt.Errorf("a %s flow has no icmp fields", f.Proto)
+	}
+	if err := port("sport", f.SPort); err != nil {
+		return err
+	}
+	return port("dport", f.DPort)
+}

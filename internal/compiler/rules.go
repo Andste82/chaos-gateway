@@ -118,14 +118,24 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		t.Nft.Sets = append(t.Nft.Sets, ifsWG)
 	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
+	t.Nft.Sets = append(t.Nft.Sets, t.accessSets...)
 	if t.identityMap.Name != "" {
 		t.Nft.Maps = append(t.Nft.Maps, t.identityMap)
 	}
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
-	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop"}
+	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop", AntiLockoutCounter}
+	if t.Access != nil {
+		for _, r := range t.Access.Rules {
+			t.Nft.Counters = append(t.Nft.Counters, r.Counter)
+		}
+	}
 
 	// ---- input: gateway protection (plan §2.2 layer 1) -------------------------------------
 	input := Chain{Name: "input", Base: &BaseChain{Type: "filter", Hook: "input", Prio: 0, Policy: "accept"}}
+	if t.Access.HasCuts() {
+		// the window of "also cut existing connections" runs in front of everything (access.go)
+		input.Rules = append(input.Rules, newRule(map[string]any{"jump": map[string]any{"target": CutInputChain}}))
+	}
 	input.Rules = append(input.Rules,
 		newRule(ctState("established", "related"), verdict("accept")),
 		newRule(iifname("lo"), verdict("accept")),
@@ -133,15 +143,25 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	// the gateway services answer through svc0 and reach only the internal API (these rules stand
 	// before the UI port rule below)
 	input.Rules = append(input.Rules, t.serviceInput()...)
+	antiLockoutMatch := []any{match(meta("iifname"), "!=", setRef(ifsTest.Name)), eq(payload("ip", "saddr"), setRef(mgmtSrc.Name)), eq(payload("tcp", "dport"), controlPorts(t.Management.UIPort))}
+	antiLockout := newRule(append(append([]any(nil), antiLockoutMatch...), counter(AntiLockoutCounter), verdict("accept"))...)
+	if t.Access != nil {
+		t.Access.guard = antiLockoutMatch
+	}
 	input.Rules = append(input.Rules,
 		// anti-lockout: the management sources always reach the control plane; nothing below
 		// and no access rule can take this away. A device on a test network that claims a
 		// management address does not count: the rule is for what does not come from there.
-		newRule(match(meta("iifname"), "!=", setRef(ifsTest.Name)), eq(payload("ip", "saddr"), setRef(mgmtSrc.Name)), eq(payload("tcp", "dport"), controlPorts(t.Management.UIPort)), verdict("accept")),
+		antiLockout,
 		// the UI and API are reachable from the management network only (plan §2.2); SSH is left to
 		// the operating system
 		newRule(eq(payload("tcp", "dport"), t.Management.UIPort), counter("input_drop"), verdict("drop")),
 	)
+	// the access rules (access.go): after the anti-lockout rule and the UI port, before the routing
+	// protocols and the gateway's protection of the test networks, so a rule can block DNS or BGP
+	if t.Access != nil {
+		input.Rules = append(input.Rules, newRule(map[string]any{"jump": map[string]any{"target": AccessInputChain}}))
+	}
 	// the routing protocols the gateway runs answer on their link's interface (plan §2.2.2): BGP,
 	// OSPF and Babel are the only traffic besides DHCP, DNS and ping that a test-role link may send to
 	// the gateway
@@ -168,6 +188,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 
 	// ---- forward: IPv6 block and the access matrix (layers 2) ------------------------------
 	forward := Chain{Name: "forward", Base: &BaseChain{Type: "filter", Hook: "forward", Prio: 0, Policy: "accept"}}
+	if t.Access.HasCuts() {
+		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": CutForwardChain}}))
+	}
 	forward.Rules = append(forward.Rules,
 		newRule(ctState("established", "related"), verdict("accept")),
 	)
@@ -186,6 +209,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		newRule(iifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 		newRule(oifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 	)
+	// the access rules stand in front of the access matrix: an allow rule is an exception to it, a
+	// drop, reject or reset rule decides before the matrix is asked (plan §2.2, §2.4)
+	if t.Access != nil {
+		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": AccessForwardChain}}))
+	}
 	explicit, implicit := t.matrixRules(cfg, tp, mgmtSrc.Name)
 	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
@@ -225,6 +253,13 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
+	if t.Access != nil {
+		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain, "forward"), t.Access.chain(AccessInputChain, "input"))
+		if t.Access.HasCuts() {
+			// empty until the engine opens a window (CutRules)
+			t.Nft.Chains = append(t.Nft.Chains, Chain{Name: CutForwardChain}, Chain{Name: CutInputChain})
+		}
+	}
 	if c := t.serviceRedirect(tp); c != nil {
 		t.Nft.Chains = append(t.Nft.Chains, *c)
 	}

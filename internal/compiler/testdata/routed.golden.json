@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "68b73539efd01404",
+  "hash": "2f0426be1891dc3c",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -267,6 +267,7 @@
       }
     ],
     "counters": [
+      "anti_lockout",
       "forward_drop",
       "input_drop",
       "ipv6_drop",
@@ -886,10 +887,13 @@
                 }
               },
               {
+                "counter": "anti_lockout"
+              },
+              {
                 "accept": null
               }
             ],
-            "comment": "d41f816bae07"
+            "comment": "c5eebee2c8c7"
           },
           {
             "expr": [

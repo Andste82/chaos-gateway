@@ -54,5 +54,10 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	for name, tg := range faultScenarios(t) {
 		out[name] = tg
 	}
+	// the access rules (M9): the access chains, the source sets, the counters, reject with icmpx and
+	// with tcp reset, the cut chains
+	for name, tg := range accessScenarios(t) {
+		out[name] = tg
+	}
 	return out
 }

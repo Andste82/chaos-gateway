@@ -173,6 +173,8 @@ type applyResult struct {
 	// plan is what a full apply did (or tried): nil for an identity update, which changes only
 	// elements of maps. It is set when the apply failed after the plan was built.
 	plan *apply.Plan
+	// cut is what "also cut existing connections" did after the apply (cut.go); nil when no rule cut.
+	cut *cutOutcome
 }
 
 // inflight is a revision apply the state owner waits for.
@@ -609,13 +611,22 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		}
 		o.trackCounters(r.plan, r.d.Generation)
 		o.trackFaults(r.target, r.d.Generation)
+		o.trackRules(r.target, r.d.Generation)
 		o.trackQueues(r.target, r.plan, r.d.Generation, false)
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {
 			o.event(EventUplinkChanged, map[string]any{"old": o.lastApp.Uplink, "new": r.target.Uplink})
 		}
 		o.lastApp = r.target
-		o.event(EventApplied, map[string]any{"generation": r.d.Generation, "revision": r.d.Revision, "hash": r.target.Hash})
+		applied := map[string]any{"generation": r.d.Generation, "revision": r.d.Revision, "hash": r.target.Hash}
+		if !r.cut.empty() {
+			// the rules that cut and the connections they deleted, so a test or the UI can say what the cut did
+			applied["cut_rules"], applied["cut_connections"] = r.cut.Rules, r.cut.Connections
+			if r.cut.Err != nil {
+				applied["cut_error"] = r.cut.Err.Error()
+			}
+		}
+		o.event(EventApplied, applied)
 	} else {
 		o.snap.LastError = r.err.Error()
 		// what a failed apply did to the counters and the leaves is not known: they start new epochs

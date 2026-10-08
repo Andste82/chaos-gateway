@@ -121,4 +121,13 @@ func (o *owner) trackCounters(plan *apply.Plan, gen uint64) {
 	}
 	o.ov.born = born
 	o.snap.FaultEpochs = born
+	// the same for the counters of the access rules
+	rborn := make(map[string]int64, len(o.ov.ruleBorn))
+	for k := range o.ov.ruleBorn {
+		rborn[k] = int64(gen)
+	}
+	o.ov.ruleBorn = rborn
+	if o.snap.RuleEpochs != nil {
+		o.snap.RuleEpochs = rborn
+	}
 }

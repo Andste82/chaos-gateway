@@ -48,7 +48,7 @@ var (
 // UnsupportedOverlayError is returned for an overlay whose kind or fault family is not
 // implemented in this build.
 type UnsupportedOverlayError struct {
-	// What names the kind or family ("rule", "dns", "fault family mtu").
+	// What names the kind or family ("dns", "fault family mtu").
 	What string
 	// Milestone is the milestone that brings it.
 	Milestone string
@@ -71,10 +71,10 @@ func (e *CompileError) Error() string {
 }
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
-// /capabilities): faults of the impairment family; the kinds rule (M9), profile (M11), dns (M20),
-// tls (M21), dhcp (M23) and wireguard (M10) follow with their milestones.
+// /capabilities): faults of the impairment family and access rules; the kinds profile (M11), dns
+// (M20), tls (M21), dhcp (M23) and wireguard (M10) follow with their milestones.
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindRule}
 	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment}
 )
 
@@ -99,7 +99,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 	case "profile":
 		return &UnsupportedOverlayError{What: "a profile", Milestone: "M11"}
 	case "rule":
-		return &UnsupportedOverlayError{What: "an access rule", Milestone: "M9"}
+		return nil // M9
 	case "wireguard":
 		return &UnsupportedOverlayError{What: "a WireGuard action", Milestone: "M10"}
 	case "dns":
@@ -263,12 +263,14 @@ type overlayState struct {
 	born map[string]int64
 	// queueBorn is the same for the netem leaves, by QueueKey (queues.go).
 	queueBorn map[string]int64
+	// ruleBorn is the same for the access rules, by key (access.go).
+	ruleBorn map[string]int64
 }
 
 func (o *owner) initOverlays() {
 	e := o.e
 	st := overlay.New(overlay.Options{Clock: e.cfg.Clock})
-	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}, queueBorn: map[string]int64{}}
+	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}, queueBorn: map[string]int64{}, ruleBorn: map[string]int64{}}
 	o.ov.expirer = overlay.NewExpirer(st, e.cfg.Clock, func() {
 		go func() {
 			select {
@@ -675,6 +677,28 @@ func (o *owner) trackFaults(t *compiler.Target, gen uint64) {
 	o.snap.Winners = win
 	o.snap.FaultIDs = t.FaultIDs
 	o.snap.FaultEpochs = born
+}
+
+// trackRules updates the epochs of the access rules' counters after an apply, like trackFaults does for
+// the faults': a rule that is new in the applied target starts its counter at zero in this generation,
+// one that went is forgotten (its counter went with it).
+func (o *owner) trackRules(t *compiler.Target, gen uint64) {
+	o.snap.Access = t.Access
+	if t.Access == nil {
+		o.ov.ruleBorn = map[string]int64{}
+		o.snap.RuleEpochs = nil
+		return
+	}
+	born := make(map[string]int64, len(t.Access.Rules))
+	for _, r := range t.Access.Rules {
+		if g, ok := o.ov.ruleBorn[r.Key]; ok {
+			born[r.Key] = g
+		} else {
+			born[r.Key] = int64(gen)
+		}
+	}
+	o.ov.ruleBorn = born
+	o.snap.RuleEpochs = born
 }
 
 // CounterValue is the reading of one named nft counter.

@@ -51,8 +51,8 @@ type Input struct {
 	Identity *domain.Identity
 	// Overlays are the active overlays (plan §2.1.1): they are never part of a revision. Their
 	// references are UUIDs. Faults and profile activations among them take part in the precedence
-	// resolution; kinds that no compiled mechanism implements yet (rules, DNS, TLS, DHCP) are
-	// ignored here.
+	// resolution, rules are compiled into the access chains (access.go); kinds that no compiled
+	// mechanism implements yet (DNS, TLS, DHCP) are ignored here.
 	Overlays []model.Overlay
 	// FaultIDs is the allocation of fault ids of the previous compile (Target.FaultIDs): a fault
 	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
@@ -64,6 +64,12 @@ type Input struct {
 	// ClassLimit is the number of tc classes one interface may carry (plan §3.3, D18); 0 uses
 	// DefaultClassLimit.
 	ClassLimit int
+	// RuleLimit is the number of access rules, overlay rules included, one compile accepts
+	// (capacity_exceeded above it); 0 uses DefaultRuleLimit.
+	RuleLimit int
+	// RuleElementLimit is the number of address elements all source sets of the access rules
+	// together may hold; 0 uses MaxRuleElements.
+	RuleElementLimit int
 	// QueueBudget is the memory in bytes one interface may spend on the queues of faults that
 	// have no explicit queue limit (plan §2.5); 0 uses DefaultQueueBudget.
 	QueueBudget int64
@@ -185,6 +191,10 @@ type Target struct {
 	// impairs anything.
 	TC         *TCTarget `json:"tc,omitempty"`
 	faultBuild *faultBuild
+	// Access is the effective list of access rules, overlay rules first (plan §2.4); nil when there
+	// is no rule.
+	Access     *AccessPlan `json:"access,omitempty"`
+	accessSets []SetDef
 	// ClassifyNets is the nftables set of test, WireGuard and remote-network prefixes that guards
 	// the classification chain (plan §3.3): classification never reads or writes the mark of
 	// anything outside it.
@@ -313,6 +323,7 @@ func Compile(in Input) *Target {
 	t.compileKea(cfg, idx)
 	t.compileIdentity(idx, in.Identity)
 	t.compileFaults(in, idx)
+	t.compileAccess(in, idx)
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.finish()
 	return t

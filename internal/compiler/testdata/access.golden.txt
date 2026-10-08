@@ -1,0 +1,47 @@
+# rules
+0  overlay:00000000-0000-4000-8000-000000000001    drop  scope "device esp32-42"  dest "203.0.113.10"  proto tcp  counter rule_8e9ca98e27
+1  config:a1000000-0000-4000-8000-000000000001  no-dot  reject  scope "network IoT"  dest ""  proto tcp  counter rule_add048cda1
+2  config:a1000000-0000-4000-8000-000000000002  lab-to-iot  allow  scope "network Lab"  dest "network IoT"  proto any  counter rule_a41eb09061
+3  config:a1000000-0000-4000-8000-000000000003  iot-up-udp  drop  scope "group sensors"  dest "uplink"  proto udp  counter rule_6bfa3b0050
+4  config:a1000000-0000-4000-8000-000000000004  no-bgp  reset  scope "global"  dest ""  proto tcp  counter rule_5670a37936
+# sets
+set anon_uplink_8743d6 { 10.10.0.0/24, 10.20.0.0/24, 192.168.56.0/24 }
+set asrc_00074ad1_8743d6 { 10.10.0.0/24 }
+set asrc_32ea59bc_8743d6 { 10.10.0.42, 10.10.0.43 }
+set asrc_bd595b57_8743d6 { 10.10.0.42 }
+set asrc_be61152c_8743d6 { 10.20.0.0/24 }
+# chain forward
+  ct state { established, related } accept
+  meta iifname br-iot meta oifname br-iot accept
+  meta iifname br-lab meta oifname br-lab accept
+  meta iifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta oifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  jump access_forward
+  meta iifname @ifs_lan_bf4feb meta oifname wan0 accept
+  meta iifname @ifs_cg_bf4feb counter "forward_drop" drop
+  meta oifname @ifs_cg_bf4feb counter "forward_drop" drop
+# chain input
+  ct state { established, related } accept
+  meta iifname lo accept
+  meta iifname != @ifs_test_bf4feb ip saddr @mgmt_src_8743d6 tcp dport { 22, 443 } counter "anti_lockout" accept
+  tcp dport 443 counter "input_drop" drop
+  jump access_input
+  meta iifname @ifs_test_bf4feb ip protocol icmp icmp type echo-request accept
+  meta iifname @ifs_test_bf4feb udp dport 67 accept
+  meta iifname @ifs_test_bf4feb udp dport 53 accept
+  meta iifname @ifs_test_bf4feb tcp dport 53 accept
+  meta iifname @ifs_test_bf4feb counter "input_drop" drop
+# chain access_forward
+  ct original ip saddr @asrc_bd595b57_8743d6 ct original ip daddr 203.0.113.10/32 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" drop
+  ct original ip saddr @asrc_00074ad1_8743d6 meta l4proto tcp ct original proto-dst 853 counter "rule_add048cda1" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_be61152c_8743d6 ct original ip daddr 10.10.0.0/24 counter "rule_a41eb09061" accept
+  ct original ip saddr @asrc_32ea59bc_8743d6 ct original ip daddr != @anon_uplink_8743d6 meta l4proto udp ct original proto-dst { 53, 1000-2000 } counter "rule_6bfa3b0050" drop
+  ct original ip saddr @classify_nets_8743d6 meta l4proto tcp ct original proto-dst 179 counter "rule_5670a37936" reject with tcp reset
+# chain access_input
+  ct original ip saddr @asrc_bd595b57_8743d6 ct original ip daddr 203.0.113.10/32 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" drop
+  ct original ip saddr @asrc_00074ad1_8743d6 meta l4proto tcp ct original proto-dst 853 counter "rule_add048cda1" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_be61152c_8743d6 ct original ip daddr 10.10.0.0/24 counter "rule_a41eb09061" return
+  ct original ip saddr @asrc_32ea59bc_8743d6 ct original ip daddr != @anon_uplink_8743d6 meta l4proto udp ct original proto-dst { 53, 1000-2000 } counter "rule_6bfa3b0050" drop
+  ct original ip saddr @classify_nets_8743d6 meta l4proto tcp ct original proto-dst 179 counter "rule_5670a37936" reject with tcp reset

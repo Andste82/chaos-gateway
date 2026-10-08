@@ -21,114 +21,6 @@
       "add": {
         "counter": {
           "family": "inet",
-          "name": "fault_0a138872c8_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_0a138872c8_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_22f152633a_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_22f152633a_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_38a1d1d638_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_38a1d1d638_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_5410b3e4b7_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_5410b3e4b7_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_c1e6a9cca1_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_c1e6a9cca1_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_f4ebd684d3_down",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
-          "name": "fault_f4ebd684d3_up",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "counter": {
-          "family": "inet",
           "name": "forward_drop",
           "table": "chaosgw"
         }
@@ -158,6 +50,116 @@
           "family": "inet",
           "name": "nat_0b7c6a3e",
           "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "rule_5670a37936",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "rule_6bfa3b0050",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "rule_8e9ca98e27",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "rule_a41eb09061",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
+          "name": "rule_add048cda1",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "anon_uplink_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "asrc_00074ad1_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "asrc_32ea59bc_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "asrc_bd595b57_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "asrc_be61152c_8743d6",
+          "table": "chaosgw",
+          "type": "ipv4_addr"
         }
       }
     },
@@ -300,6 +302,24 @@
       "add": {
         "chain": {
           "family": "inet",
+          "name": "access_forward",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "name": "access_input",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
           "hook": "prerouting",
           "name": "classify",
           "policy": "accept",
@@ -339,60 +359,6 @@
       "add": {
         "chain": {
           "family": "inet",
-          "name": "mark_1",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_2",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_3",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_4",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_5",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_6",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "chain": {
-          "family": "inet",
           "hook": "postrouting",
           "name": "postrouting",
           "policy": "accept",
@@ -407,6 +373,24 @@
         "chain": {
           "family": "inet",
           "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "access_forward",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "access_input",
           "table": "chaosgw"
         }
       }
@@ -442,60 +426,6 @@
       "flush": {
         "chain": {
           "family": "inet",
-          "name": "mark_1",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_2",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_3",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_4",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_5",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
-          "name": "mark_6",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "flush": {
-        "chain": {
-          "family": "inet",
           "name": "postrouting",
           "table": "chaosgw"
         }
@@ -506,6 +436,139 @@
         "chain": {
           "family": "inet",
           "name": "generation",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "anon_uplink_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "10.10.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "10.20.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "192.168.56.0",
+                "len": 24
+              }
+            }
+          ],
+          "family": "inet",
+          "name": "anon_uplink_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "asrc_00074ad1_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "10.10.0.0",
+                "len": 24
+              }
+            }
+          ],
+          "family": "inet",
+          "name": "asrc_00074ad1_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "asrc_32ea59bc_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            "10.10.0.42",
+            "10.10.0.43"
+          ],
+          "family": "inet",
+          "name": "asrc_32ea59bc_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "asrc_bd595b57_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            "10.10.0.42"
+          ],
+          "family": "inet",
+          "name": "asrc_bd595b57_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "set": {
+          "family": "inet",
+          "name": "asrc_be61152c_8743d6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "element": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "10.20.0.0",
+                "len": 24
+              }
+            }
+          ],
+          "family": "inet",
+          "name": "asrc_be61152c_8743d6",
           "table": "chaosgw"
         }
       }
@@ -650,126 +713,8 @@
       }
     },
     {
-      "add": {
-        "element": {
-          "elem": [
-            [
-              {
-                "range": [
-                  "10.10.0.0",
-                  "10.10.0.41"
-                ]
-              },
-              {
-                "goto": {
-                  "target": "mark_3"
-                }
-              }
-            ],
-            [
-              "10.10.0.42",
-              {
-                "goto": {
-                  "target": "mark_1"
-                }
-              }
-            ],
-            [
-              "10.10.0.43",
-              {
-                "goto": {
-                  "target": "mark_2"
-                }
-              }
-            ],
-            [
-              {
-                "range": [
-                  "10.10.0.44",
-                  "10.10.0.255"
-                ]
-              },
-              {
-                "goto": {
-                  "target": "mark_3"
-                }
-              }
-            ],
-            [
-              "10.20.0.50",
-              {
-                "goto": {
-                  "target": "mark_6"
-                }
-              }
-            ]
-          ],
-          "family": "inet",
-          "name": "cls_dev_14ef7f",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
       "flush": {
         "map": {
-          "family": "inet",
-          "name": "cls_devdest_e28fbe",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "element": {
-          "elem": [
-            [
-              {
-                "concat": [
-                  {
-                    "range": [
-                      "10.20.0.0",
-                      "10.20.0.49"
-                    ]
-                  },
-                  {
-                    "prefix": {
-                      "addr": "203.0.113.0",
-                      "len": 24
-                    }
-                  }
-                ]
-              },
-              {
-                "goto": {
-                  "target": "mark_5"
-                }
-              }
-            ],
-            [
-              {
-                "concat": [
-                  {
-                    "range": [
-                      "10.20.0.51",
-                      "10.20.0.255"
-                    ]
-                  },
-                  {
-                    "prefix": {
-                      "addr": "203.0.113.0",
-                      "len": 24
-                    }
-                  }
-                ]
-              },
-              {
-                "goto": {
-                  "target": "mark_5"
-                }
-              }
-            ]
-          ],
           "family": "inet",
           "name": "cls_devdest_e28fbe",
           "table": "chaosgw"
@@ -788,31 +733,6 @@
     {
       "flush": {
         "map": {
-          "family": "inet",
-          "name": "cls_devport_1e10ac",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "element": {
-          "elem": [
-            [
-              {
-                "concat": [
-                  "10.10.0.42",
-                  "tcp",
-                  8883
-                ]
-              },
-              {
-                "goto": {
-                  "target": "mark_4"
-                }
-              }
-            ]
-          ],
           "family": "inet",
           "name": "cls_devport_1e10ac",
           "table": "chaosgw"
@@ -847,6 +767,612 @@
           ],
           "family": "inet",
           "name": "ident4_b89cfe",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_forward",
+          "comment": "1b1b9c24c9a9",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_bd595b57_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "203.0.113.10",
+                    "len": 32
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 8883
+              }
+            },
+            {
+              "counter": "rule_8e9ca98e27"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_forward",
+          "comment": "8fa8ca76eed9",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_00074ad1_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 853
+              }
+            },
+            {
+              "counter": "rule_add048cda1"
+            },
+            {
+              "reject": {
+                "expr": "port-unreachable",
+                "type": "icmpx"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_forward",
+          "comment": "935fd1ae1c6f",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_be61152c_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "10.10.0.0",
+                    "len": 24
+                  }
+                }
+              }
+            },
+            {
+              "counter": "rule_a41eb09061"
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_forward",
+          "comment": "382ee3634109",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_32ea59bc_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "!=",
+                "right": "@anon_uplink_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "udp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    53,
+                    {
+                      "range": [
+                        1000,
+                        2000
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "counter": "rule_6bfa3b0050"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_forward",
+          "comment": "6cab4953d1bf",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@classify_nets_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 179
+              }
+            },
+            {
+              "counter": "rule_5670a37936"
+            },
+            {
+              "reject": {
+                "type": "tcp reset"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_input",
+          "comment": "1b1b9c24c9a9",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_bd595b57_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "203.0.113.10",
+                    "len": 32
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 8883
+              }
+            },
+            {
+              "counter": "rule_8e9ca98e27"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_input",
+          "comment": "8fa8ca76eed9",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_00074ad1_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 853
+              }
+            },
+            {
+              "counter": "rule_add048cda1"
+            },
+            {
+              "reject": {
+                "expr": "port-unreachable",
+                "type": "icmpx"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_input",
+          "comment": "0c086fc28fe6",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_be61152c_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "10.10.0.0",
+                    "len": 24
+                  }
+                }
+              }
+            },
+            {
+              "counter": "rule_a41eb09061"
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_input",
+          "comment": "382ee3634109",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@asrc_32ea59bc_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip daddr"
+                  }
+                },
+                "op": "!=",
+                "right": "@anon_uplink_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "udp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    53,
+                    {
+                      "range": [
+                        1000,
+                        2000
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "counter": "rule_6bfa3b0050"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "access_input",
+          "comment": "6cab4953d1bf",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "ip saddr"
+                  }
+                },
+                "op": "==",
+                "right": "@classify_nets_8743d6"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "dir": "original",
+                    "key": "proto-dst"
+                  }
+                },
+                "op": "==",
+                "right": 179
+              }
+            },
+            {
+              "counter": "rule_5670a37936"
+            },
+            {
+              "reject": {
+                "type": "tcp reset"
+              }
+            }
+          ],
+          "family": "inet",
           "table": "chaosgw"
         }
       }
@@ -1377,6 +1903,23 @@
       "add": {
         "rule": {
           "chain": "forward",
+          "comment": "86483ace806f",
+          "expr": [
+            {
+              "jump": {
+                "target": "access_forward"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
           "comment": "b2f96a069b8e",
           "expr": [
             {
@@ -1615,6 +2158,23 @@
       "add": {
         "rule": {
           "chain": "input",
+          "comment": "3259909eb11b",
+          "expr": [
+            {
+              "jump": {
+                "target": "access_input"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "input",
           "comment": "c1d2f59d7aa1",
           "expr": [
             {
@@ -1797,654 +2357,6 @@
             },
             {
               "drop": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_1",
-          "comment": "252c568b504e",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        1,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_1",
-          "comment": "dc91fd30328a",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_22f152633a_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_1",
-          "comment": "af3a1b7ed033",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_22f152633a_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_1",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_2",
-          "comment": "2f30da578a62",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        2,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_2",
-          "comment": "651467772367",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_0a138872c8_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_2",
-          "comment": "f4e11c06cd32",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_0a138872c8_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_2",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_3",
-          "comment": "c1d2d35ab1a4",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        3,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_3",
-          "comment": "1b33a3cd1815",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_f4ebd684d3_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_3",
-          "comment": "9daa31d8bc77",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_f4ebd684d3_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_3",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_4",
-          "comment": "6d3782447391",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        4,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_4",
-          "comment": "1132819efc4e",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_5410b3e4b7_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_4",
-          "comment": "e37540a70048",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_5410b3e4b7_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_4",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_5",
-          "comment": "1878dcd23135",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        5,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_5",
-          "comment": "8dc591e54356",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_c1e6a9cca1_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_5",
-          "comment": "60794dcfa47c",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_c1e6a9cca1_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_5",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_6",
-          "comment": "9c99014c4abb",
-          "expr": [
-            {
-              "mangle": {
-                "key": {
-                  "meta": {
-                    "key": "mark"
-                  }
-                },
-                "value": {
-                  "|": [
-                    {
-                      "\u0026": [
-                        {
-                          "meta": {
-                            "key": "mark"
-                          }
-                        },
-                        4294901775
-                      ]
-                    },
-                    {
-                      "\u003c\u003c": [
-                        6,
-                        4
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_6",
-          "comment": "23763fe93315",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "original"
-              }
-            },
-            {
-              "counter": "fault_38a1d1d638_up"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_6",
-          "comment": "23826eb240bc",
-          "expr": [
-            {
-              "match": {
-                "left": {
-                  "ct": {
-                    "key": "direction"
-                  }
-                },
-                "op": "==",
-                "right": "reply"
-              }
-            },
-            {
-              "counter": "fault_38a1d1d638_down"
-            }
-          ],
-          "family": "inet",
-          "table": "chaosgw"
-        }
-      }
-    },
-    {
-      "add": {
-        "rule": {
-          "chain": "mark_6",
-          "comment": "204347acdd5e",
-          "expr": [
-            {
-              "return": null
             }
           ],
           "family": "inet",

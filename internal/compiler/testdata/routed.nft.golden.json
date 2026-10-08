@@ -12,6 +12,15 @@
       "add": {
         "counter": {
           "family": "inet",
+          "name": "anti_lockout",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "counter": {
+          "family": "inet",
           "name": "forward_drop",
           "table": "chaosgw"
         }
@@ -1116,7 +1125,7 @@
       "add": {
         "rule": {
           "chain": "input",
-          "comment": "d41f816bae07",
+          "comment": "c5eebee2c8c7",
           "expr": [
             {
               "match": {
@@ -1157,6 +1166,9 @@
                   ]
                 }
               }
+            },
+            {
+              "counter": "anti_lockout"
             },
             {
               "accept": null

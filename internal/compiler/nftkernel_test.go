@@ -75,6 +75,48 @@ func TestEveryCompiledRulesetIsAcceptedByTheKernel(t *testing.T) {
 	}
 }
 
+// The cut windows of the access rules (M9) are transactions of their own that run on top of an
+// applied ruleset: the kernel must accept every window the plan can open, and the one that closes
+// it. The ruleset is applied for real in a fresh namespace (the chains the windows fill must exist),
+// the windows are checked with `nft -c`.
+func TestEveryCutWindowIsAcceptedByTheKernel(t *testing.T) {
+	bed := testbed.New(t)
+	for name, tg := range accessScenarios(t) {
+		if !tg.Access.HasCuts() {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			ns := bed.Add("cutchk-" + strings.TrimPrefix(name, "access-"))
+			tx, err := tg.Nft.Transaction(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ns.MustStdin(string(tx), "nft", "-j", "-f", "-")
+			var keys []string
+			for _, r := range tg.Access.Rules {
+				keys = append(keys, r.Key)
+			}
+			windows := [][]string{nil, keys}
+			for _, r := range tg.Access.Rules {
+				windows = append(windows, []string{r.Key})
+			}
+			for _, w := range windows {
+				tx, err := tg.Access.CutTransaction(w)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmds, err := nftCommands(tx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := kernelCheck(ns, cmds); err != nil {
+					t.Errorf("the kernel rejects the cut window for %v: %v\n%s", w, err, report(ns, cmds))
+				}
+			}
+		})
+	}
+}
+
 // The gate must be able to fail: a batch with a command that every kernel refuses (a jump to a
 // chain that does not exist) is rejected, and the bisection names exactly that command.
 func TestTheKernelGateNamesTheRejectedCommand(t *testing.T) {

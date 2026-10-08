@@ -82,12 +82,16 @@ var classifyLevels = []struct {
 	{4, "dev", []string{"ipv4_addr"}},
 }
 
+// classifyNetsName is the name of the set of test, WireGuard and remote-network prefixes: the
+// classification chain and the global scope of the access rules are guarded by it.
+func classifyNetsName() string { return hashName("classify_nets", "ipv4_addr", []string{"interval"}) }
+
 // compileClassify builds the classification mechanism: the guard set of test/WireGuard/remote
 // prefixes, the lookup chain's maps with the elements compileFaults resolved, the per-id chains
 // and counters, and the "classify" chain itself.
 func (t *Target) compileClassify() {
 	netsSet := SetDef{Type: "ipv4_addr", Flags: []string{"interval"}, Elements: t.classifyNets()}
-	netsSet.Name = hashName("classify_nets", netsSet.Type, netsSet.Flags)
+	netsSet.Name = classifyNetsName()
 	t.Nft.Sets = append(t.Nft.Sets, netsSet)
 	t.ClassifyNets = netsSet.Name
 

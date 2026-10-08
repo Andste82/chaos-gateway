@@ -11,8 +11,8 @@ import (
 // chain decides it (plan §2.2): the gateway's own protection for traffic to the gateway, then the
 // access matrix between networks, clients, the management network and the uplink. It mirrors
 // compiler.matrixRules (the more specific endpoint first, explicit entries before what a client's
-// `reachable` list implies, then the default) and is used by `explain`. Access rules are not part of
-// it: they take effect, and join the explanation, with milestone M9.
+// `reachable` list implies, then the default) and is used by `explain`. AccessVerdict is that level;
+// AccessDecision puts the access rules (M9) in front of it, in the order of the packet path.
 
 // AccessFacts are what the verdict needs to know about the gateway besides the configuration.
 type AccessFacts struct {
@@ -25,22 +25,31 @@ type AccessFacts struct {
 	// TwoPort reports that the management network lies behind the uplink interface: devices under
 	// test do not reach it unless an explicit entry says so (plan §2.16).
 	TwoPort bool
+	// UIPort is the port of the UI and API: the gateway answers it for the management sources only,
+	// and no access rule changes that (0: unknown).
+	UIPort int
 }
 
 // AccessLayers of an explanation, as the spec names them.
 const (
 	AccessGatewayProtection = "gateway_protection"
 	AccessMatrix            = "access_matrix"
+	AccessOverlayRule       = "overlay_rule"
+	AccessConfigRule        = "config_rule"
 )
 
 // AccessExplanation is the verdict and what decided it.
 type AccessExplanation struct {
-	// Verdict is allow or drop.
+	// Verdict is allow or drop; with access rules it is also reject or reset.
 	Verdict string
-	// Layer is AccessGatewayProtection or AccessMatrix.
+	// Layer is AccessGatewayProtection, AccessMatrix, AccessOverlayRule or AccessConfigRule.
 	Layer string
 	// Reason says in words which entry or default decided.
 	Reason string
+	// Rule is the id of the access rule that decided and RuleName its name (a configured rule's);
+	// empty when no rule did.
+	Rule     string
+	RuleName string
 }
 
 // endpoint ranks of the compiler: the more specific one is evaluated first.
@@ -141,6 +150,71 @@ func containsEndpoint(set []matrixEndpoint, e matrixEndpoint) bool {
 	return false
 }
 
+// AccessDecision decides what the gateway does with the first packet of a connection described by q
+// (the source, the destination address and the original port), in the order of the packet path
+// (plan §2.2): towards the gateway itself the control plane (management sources, the UI port for
+// everybody else) comes first, then the access rules, then the gateway's protection of the test
+// networks; towards anything else the access rules, then the access matrix. The first access rule that
+// selects the traffic decides, overlay rules before configured ones. A drop, reject or reset rule
+// refuses; an allow rule is an exception to the matrix in the forward path, and in the input path it
+// leaves the decision to the gateway's protection (a rule cannot open the gateway; open item P2-M9-01).
+// q.Source.IP and q.DestIP must be set.
+func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
+	src, dst := q.Source.IP, q.DestIP
+	toGateway := false
+	for _, g := range f.Gateway {
+		if g == dst {
+			toGateway = true
+		}
+	}
+	inMgmt := false
+	for _, p := range f.Management {
+		if p.Contains(src) {
+			inMgmt = true
+		}
+	}
+	if toGateway {
+		switch {
+		case inMgmt:
+			return w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
+		case f.UIPort > 0 && q.Port == f.UIPort && (q.Protocol == "tcp" || q.Protocol == ""):
+			return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "the UI and API are reachable from the management network only; no access rule changes that"}
+		}
+	}
+	r := w.ResolveAccess(q)
+	if r.Matched {
+		layer := AccessConfigRule
+		if r.Layer == LayerOverlay {
+			layer = AccessOverlayRule
+		}
+		label := "the " + string(r.Layer) + " rule " + r.RuleID
+		if r.Name != "" {
+			label = "the rule " + r.Name + " (" + string(r.Layer) + ", " + r.RuleID + ")"
+		}
+		switch {
+		case r.Action != "allow":
+			return AccessExplanation{Verdict: r.Action, Layer: layer, Reason: label + " " + ruleVerb(r.Action) + " this traffic", Rule: r.RuleID, RuleName: r.Name}
+		case !toGateway:
+			return AccessExplanation{Verdict: "allow", Layer: layer, Reason: label + " allows this traffic before the access matrix is asked", Rule: r.RuleID, RuleName: r.Name}
+		}
+		// an allow rule towards the gateway: the gateway's protection decides
+		a := w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
+		a.Reason = label + " allows it, which leaves the decision to the gateway's protection: " + a.Reason
+		return a
+	}
+	return w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
+}
+
+func ruleVerb(action string) string {
+	switch action {
+	case "reject":
+		return "rejects (ICMP port unreachable)"
+	case "reset":
+		return "resets (TCP reset)"
+	}
+	return "drops"
+}
+
 // AccessVerdict decides what the gateway does with a packet from src to dst. The protocol ("tcp",
 // "udp", "icmp" or "") and the port matter only for traffic to the gateway itself.
 func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f AccessFacts) AccessExplanation {
@@ -160,11 +234,11 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		// only for DHCP, DNS and ICMP echo
 		switch {
 		case inMgmt(src):
-			return AccessExplanation{"allow", AccessGatewayProtection, "management sources reach the gateway's control plane"}
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "management sources reach the gateway's control plane"}
 		case protocol == "icmp", port == 53 && (protocol == "udp" || protocol == "tcp" || protocol == ""), port == 67 && (protocol == "udp" || protocol == ""):
-			return AccessExplanation{"allow", AccessGatewayProtection, "the gateway answers ICMP echo, DNS and DHCP on a test network"}
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway answers ICMP echo, DNS and DHCP on a test network"}
 		}
-		return AccessExplanation{"drop", AccessGatewayProtection, "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
+		return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
 	}
 	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
 
@@ -213,7 +287,7 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		for _, e := range from {
 			if e.kind == "network" && w.Index.Networks[e.id].IsLan() {
-				return AccessExplanation{"drop", AccessMatrix, "devices under test do not reach the management network behind the uplink"}, true
+				return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink"}, true
 			}
 		}
 		return AccessExplanation{}, false
@@ -230,7 +304,7 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		if it.allow {
 			verdict = "allow"
 		}
-		return AccessExplanation{verdict, AccessMatrix, it.why}
+		return AccessExplanation{Verdict: verdict, Layer: AccessMatrix, Reason: it.why}
 	}
 	if g, ok := guard(); ok {
 		return g
@@ -239,11 +313,11 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 	if containsEndpoint(to, matrixEndpoint{"uplink", ""}) {
 		for _, e := range from {
 			if e.kind == "network" && w.Index.Networks[e.id].IsLan() {
-				return AccessExplanation{"allow", AccessMatrix, "the default: a local test network reaches the uplink"}
+				return AccessExplanation{Verdict: "allow", Layer: AccessMatrix, Reason: "the default: a local test network reaches the uplink"}
 			}
 		}
 	}
-	return AccessExplanation{"drop", AccessMatrix, "the default: no entry allows this traffic"}
+	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "the default: no entry allows this traffic"}
 }
 
 // NetworkOf returns the network an address belongs to: the one whose prefix contains it most

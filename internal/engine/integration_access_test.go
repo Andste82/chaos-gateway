@@ -60,9 +60,11 @@ except ConnectionResetError: print("reset")
 except socket.timeout: print("timeout")
 `
 
-// accessHold keeps a TCP connection busy: one byte every 100 ms, one line per answer, until it breaks.
+// accessHold keeps a TCP connection busy: one byte every 100 ms (or every argv[3] seconds), one line per
+// answer, until it breaks.
 const accessHold = `
 import socket, sys, time
+pause = float(sys.argv[3]) if len(sys.argv) > 3 else 0.1
 s = socket.socket(); s.settimeout(3); s.connect((sys.argv[1], int(sys.argv[2])))
 print("connected", flush=True)
 while True:
@@ -71,7 +73,7 @@ while True:
         print("ok" if r == b"x" else "bad", flush=True)
     except Exception as e:
         print(type(e).__name__, flush=True); break
-    time.sleep(0.1)
+    time.sleep(pause)
 `
 
 // accessUDPStream sends a datagram every 100 ms from one socket (one tracked flow) and prints ok when

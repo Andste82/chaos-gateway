@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\":\"tc\",\"entries\":[{\"object\":\"filter\",\"action\":\"add\",\"dev\":\"wan0\",\"parent\":\"1:\",\"args\":[\"flowid\",\"0\"]}]}")

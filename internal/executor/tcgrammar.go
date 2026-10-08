@@ -122,6 +122,24 @@ func (e TCEntry) checkTCArgs() error {
 		if hasToken(e.Args, "fw") {
 			return e.checkFwFilter()
 		}
+		return checkFlowids(e.Args)
+	}
+	return nil
+}
+
+// checkFlowids requires that every `flowid` of a filter of another kind names a class of the own
+// tree (the fw grammar checks its own). The nightly fuzzer found `flowid 0` passing on a u32 filter.
+func checkFlowids(args []string) error {
+	for i, a := range args {
+		if a != "flowid" && a != "classid" {
+			continue
+		}
+		if i+1 == len(args) {
+			return fmt.Errorf("%s needs a class", a)
+		}
+		if _, ok := ownMinor(args[i+1]); !ok {
+			return fmt.Errorf("%s %q is not a class of the tree", a, args[i+1])
+		}
 	}
 	return nil
 }

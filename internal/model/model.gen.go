@@ -2355,7 +2355,8 @@ func (e ExportRevisionParamsFormat) Valid() bool {
 	}
 }
 
-// AccessAction `reject` - ICMP unreachable; `reset` - TCP reset (TCP only).
+// AccessAction `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
+// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
 type AccessAction string
 
 // AccessMatrix Default policy between networks (firewall layer 2, plan §2.2). Without an entry:
@@ -2366,12 +2367,20 @@ type AccessMatrix struct {
 	Entries *[]MatrixEntry `json:"entries,omitempty"`
 }
 
-// AccessRule A configured access rule. Evaluated in forward and input on the conntrack original tuple; overlay rules come first.
+// AccessRule A configured access rule. Evaluated in forward and input on the conntrack original tuple;
+// overlay rules come first. A configuration (with its overlays) of more than 1000 rules, or whose
+// rules select more than 65536 source addresses together, is refused with `capacity_exceeded`
+// naming the overlays or rules that caused it.
 type AccessRule struct {
-	// Action `reject` - ICMP unreachable; `reset` - TCP reset (TCP only).
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
+	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
 	Action AccessAction `json:"action"`
 
-	// CutExisting Also cut established connections (time-limited TCP reset on established packets, plan §2.4).
+	// CutExisting Also cut established connections (plan §2.4): for a short time, TCP packets of established
+	// connections that the rule decides get a TCP reset towards the sender, who can reconnect
+	// (the server side stays half-open, as in a real outage), and the rule's conntrack entries
+	// are deleted so that other protocols are judged again as new traffic. Not allowed with
+	// `allow`; the protocol must be `tcp` or `any`.
 	CutExisting *bool        `json:"cut_existing,omitempty"`
 	Description *Description `json:"description,omitempty"`
 
@@ -2392,12 +2401,31 @@ type AccessRule struct {
 	Source Scope `json:"source"`
 }
 
-// AccessRuleBody defines model for AccessRuleBody.
+// AccessRuleBody The selector and the action of an access rule (plan §2.4). A rule is evaluated on the conntrack
+// original tuple in the forward and the input path, so a connection that the gateway redirects
+// (the DNS proxy, a TLS case) is judged by the destination the device meant, and a rule on
+// `udp/53` also covers queries sent directly to the service namespace's address. The first
+// matching rule decides, overlay rules (newest first) before configured rules; traffic no rule
+// selects is judged by the access matrix.
+//
+// Rules take effect for **new connections**: established traffic is accepted before the rules
+// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
+//
+// An `allow` rule is an exception to the access matrix in the forward path. It does not open
+// the gateway itself: traffic to the gateway's own addresses that its protection of the test
+// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
+// The management sources always reach SSH and the UI/API: this system rule stands in front of
+// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
 type AccessRuleBody struct {
-	// Action `reject` - ICMP unreachable; `reset` - TCP reset (TCP only).
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
+	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
 	Action AccessAction `json:"action"`
 
-	// CutExisting Also cut established connections (time-limited TCP reset on established packets, plan §2.4).
+	// CutExisting Also cut established connections (plan §2.4): for a short time, TCP packets of established
+	// connections that the rule decides get a TCP reset towards the sender, who can reconnect
+	// (the server side stays half-open, as in a real outage), and the rule's conntrack entries
+	// are deleted so that other protocols are judged again as new traffic. Not allowed with
+	// `allow`; the protocol must be `tcp` or `any`.
 	CutExisting *bool `json:"cut_existing,omitempty"`
 
 	// Destination Exactly one property. Omit the whole destination for "any".
@@ -2411,17 +2439,28 @@ type AccessRuleBody struct {
 type AccessRulePage struct {
 	Items      []AccessRuleView `json:"items"`
 	NextCursor *string          `json:"next_cursor,omitempty"`
+
+	// SystemRules Rules that stand in front of `items` and cannot be overridden.
+	SystemRules *[]SystemAccessRule `json:"system_rules,omitempty"`
 }
 
 // AccessRuleView defines model for AccessRuleView.
 type AccessRuleView struct {
-	// Config A configured access rule. Evaluated in forward and input on the conntrack original tuple; overlay rules come first.
-	Config   AccessRule `json:"config"`
-	Counters *Counter   `json:"counters,omitempty"`
-	Id       Uuid       `json:"id"`
+	// Config A configured access rule. Evaluated in forward and input on the conntrack original tuple;
+	// overlay rules come first. A configuration (with its overlays) of more than 1000 rules, or whose
+	// rules select more than 65536 source addresses together, is refused with `capacity_exceeded`
+	// naming the overlays or rules that caused it.
+	Config AccessRule `json:"config"`
+
+	// Counters Packets and bytes of the **new connections** the rule decided (established traffic is accepted before the rules). Monotonic across applies; `epoch` changes on a restart.
+	Counters *Counter `json:"counters,omitempty"`
+	Id       Uuid     `json:"id"`
 
 	// Position 0-based position in `access_rule_order`.
 	Position int `json:"position"`
+
+	// State `effective` for a rule that is in the packet path, `disabled` for one with `enabled: false`.
+	State *EffectState `json:"state,omitempty"`
 }
 
 // Actor defines model for Actor.
@@ -3492,7 +3531,8 @@ type Explanation struct {
 		// Rule Overlay or configured rule id.
 		Rule *Uuid `json:"rule,omitempty"`
 
-		// Verdict `reject` - ICMP unreachable; `reset` - TCP reset (TCP only).
+		// Verdict `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
+		// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
 		Verdict AccessAction `json:"verdict"`
 	} `json:"access"`
 	Destination *struct {
@@ -4290,8 +4330,24 @@ type Overlay struct {
 	Profile *Ref `json:"profile,omitempty"`
 
 	// Queues netem queues currently fed by this overlay (impairment and tunnel faults, profile impairment parts).
-	Queues *[]QueueStats   `json:"queues,omitempty"`
-	Rule   *AccessRuleBody `json:"rule,omitempty"`
+	Queues *[]QueueStats `json:"queues,omitempty"`
+
+	// Rule The selector and the action of an access rule (plan §2.4). A rule is evaluated on the conntrack
+	// original tuple in the forward and the input path, so a connection that the gateway redirects
+	// (the DNS proxy, a TLS case) is judged by the destination the device meant, and a rule on
+	// `udp/53` also covers queries sent directly to the service namespace's address. The first
+	// matching rule decides, overlay rules (newest first) before configured rules; traffic no rule
+	// selects is judged by the access matrix.
+	//
+	// Rules take effect for **new connections**: established traffic is accepted before the rules
+	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
+	//
+	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
+	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
+	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
+	// The management sources always reach SSH and the UI/API: this system rule stands in front of
+	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Run Set when a run owns the overlay.
 	Run *OverlayRunRef `json:"run,omitempty"`
@@ -4380,8 +4436,24 @@ type OverlayRequest struct {
 	Lease *Duration `json:"lease,omitempty"`
 
 	// Profile UUID or name of an object. Stored configurations contain UUIDs only.
-	Profile *Ref            `json:"profile,omitempty"`
-	Rule    *AccessRuleBody `json:"rule,omitempty"`
+	Profile *Ref `json:"profile,omitempty"`
+
+	// Rule The selector and the action of an access rule (plan §2.4). A rule is evaluated on the conntrack
+	// original tuple in the forward and the input path, so a connection that the gateway redirects
+	// (the DNS proxy, a TLS case) is judged by the destination the device meant, and a rule on
+	// `udp/53` also covers queries sent directly to the service namespace's address. The first
+	// matching rule decides, overlay rules (newest first) before configured rules; traffic no rule
+	// selects is judged by the access matrix.
+	//
+	// Rules take effect for **new connections**: established traffic is accepted before the rules
+	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
+	//
+	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
+	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
+	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
+	// The management sources always reach SSH and the UI/API: this system rule stands in front of
+	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
 	// and scenarios). Exactly one property. Specificity levels (plan §2.4): device → 1–4,
@@ -5148,8 +5220,24 @@ type Step struct {
 	Remove *StepId `json:"remove,omitempty"`
 
 	// Restore Remove all overlays of the run.
-	Restore *StepRestore    `json:"restore,omitempty"`
-	Rule    *AccessRuleBody `json:"rule,omitempty"`
+	Restore *StepRestore `json:"restore,omitempty"`
+
+	// Rule The selector and the action of an access rule (plan §2.4). A rule is evaluated on the conntrack
+	// original tuple in the forward and the input path, so a connection that the gateway redirects
+	// (the DNS proxy, a TLS case) is judged by the destination the device meant, and a rule on
+	// `udp/53` also covers queries sent directly to the service namespace's address. The first
+	// matching rule decides, overlay rules (newest first) before configured rules; traffic no rule
+	// selects is judged by the access matrix.
+	//
+	// Rules take effect for **new connections**: established traffic is accepted before the rules
+	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
+	//
+	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
+	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
+	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
+	// The management sources always reach SSH and the UI/API: this system rule stands in front of
+	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target Narrows the scenario target (e.g. one device of the target group).
 	Target *Scope `json:"target,omitempty"`
@@ -5181,6 +5269,18 @@ type StepRestore bool
 
 // StepId Unique within a scenario. `start` is reserved (check windows).
 type StepId = string
+
+// SystemAccessRule A rule the gateway adds that no configuration and no overlay can override (plan §2.17), shown locked at the top of the list.
+type SystemAccessRule struct {
+	Counters    *Counter `json:"counters,omitempty"`
+	Description string   `json:"description"`
+
+	// Key Example: system:anti_lockout
+	Key string `json:"key"`
+
+	// Name Example: Control plane access
+	Name string `json:"name"`
+}
 
 // SystemInfo defines model for SystemInfo.
 type SystemInfo struct {

@@ -20,6 +20,9 @@ func newBedGW(t *testing.T, extra ...func(*options)) (*gw, *testbed.Topology) {
 	t.Helper()
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false), testbed.WithRemotes(true))
 	g := newGW(t, append([]func(*options){func(o *options) { o.runner = executor.NewExecRunner(); o.namespace = top.GW.Name }}, extra...)...)
+	// the setup applies the whole configuration; a software-emulated kernel takes more than the
+	// harness's minute for it (a bound on a hung request, not an assertion)
+	g.client.Timeout = 6 * time.Minute
 	raw, err := os.ReadFile("../engine/testdata/testbed_wg.yaml")
 	if err != nil {
 		t.Fatal(err)

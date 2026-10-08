@@ -823,3 +823,26 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   run and the test sets the sysctl (or paces the burst) so that the exact law holds again.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M8b-08 The first packets of the first flow of a lab wait about a second on a fast kernel
+
+- Status: new
+- Severity: low
+- Reason: cause-unknown. In the CI runs of PR #33 the probes of the first flow measured from the Lab
+  device C right after the lab came up (a 5 ms interval, no fault anywhere) had a median in microseconds and a
+  95th percentile of 860 to 970 ms in the upload direction only, in 4 of 4 runs on the hosted level 1
+  (kernel 6.17) and 1b (6.8 under KVM) runners, and in no run of the second flow of the same test or on the
+  emulated kernel. All the probes sent in that first second reach the echo at about the same moment, which
+  is what a packet queue waiting for a neighbor resolution (ARP retry after 1 s) looks like. The stream of
+  `TestUpdatingOneFaultDoesNotDisturbTheOthers` (91 probes, 1.8 s) took it for a median of 142 ms and the
+  test failed once on level 1.
+- Evidence: the logs of the CI runs 37701957026 and 37711403220 (the `C to the server, before:` lines).
+- Task: chosen interpretation — the cause is not found, and no fault is involved (no tc tree exists in the
+  flows that show it), so the measurement tests bring the lab to its steady state first (`warmUp` in
+  `startFaultLab`: three pings from each device, logged with the slowest round trip). To find the
+  cause: `ip neigh` and a capture on the gateway's `lan1` and `wan0` for the first second after `startFaultLab`.
+  If it is the product (a port or an address that is not ready when the apply returns), the apply
+  has to wait for it.
+- Acceptance: the cause is named; the warm-up either goes or stays as a documented part of the lab.
+- Needs maintainer: no
+- Effort: M

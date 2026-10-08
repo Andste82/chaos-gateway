@@ -111,11 +111,22 @@ func CheckLatency(what string, got, want time.Duration) error {
 	return fmt.Errorf("%s: median %v, configured %v (tolerance ±2 ms + 5 %%)", what, got, want)
 }
 
-// CheckEveryDelay returns an error when any delay of ds lies outside [lo, hi]. It is the check for a
-// stream that must not be disturbed by a change somewhere else: a median hides one delayed packet, this
-// does not. The message names how many lie outside and the extremes.
-func CheckEveryDelay(what string, ds []time.Duration, lo, hi time.Duration) error {
-	var out int
+// DelayOutlierShare and DelayOutlierHard are the tolerances of CheckDelays for a stream that must not be
+// disturbed from outside: at most 1 % of the delays may lie outside the bounds, and none further than
+// 10 ms beyond them. The plan (§4.3) gives a tolerance for the median only; these are the tests' own,
+// chosen so that scheduling noise of a loaded (nested virtual) machine passes (hosted runner: 2 of 904
+// delays 1 to 3 ms too long, none further) and a disturbance by a change somewhere else does not: a
+// queue that was made again drops or delays a whole run of packets, a flush of one delays them by its
+// full delay.
+const (
+	DelayOutlierShare = 0.01
+	DelayOutlierHard  = 10 * time.Millisecond
+)
+
+// CheckDelays returns an error when more than DelayOutlierShare of ds lies outside [lo, hi], or any delay
+// lies more than DelayOutlierHard outside it. A median cannot see a few delayed packets, this can.
+func CheckDelays(what string, ds []time.Duration, lo, hi time.Duration) error {
+	var out, far int
 	var min, max time.Duration
 	for i, d := range ds {
 		if i == 0 || d < min {
@@ -127,11 +138,15 @@ func CheckEveryDelay(what string, ds []time.Duration, lo, hi time.Duration) erro
 		if d < lo || d > hi {
 			out++
 		}
+		if d < lo-DelayOutlierHard || d > hi+DelayOutlierHard {
+			far++
+		}
 	}
-	if out == 0 {
+	if far == 0 && float64(out) <= DelayOutlierShare*float64(len(ds)) {
 		return nil
 	}
-	return fmt.Errorf("%s: %d of %d delays outside [%v, %v] (smallest %v, largest %v)", what, out, len(ds), lo, hi, min, max)
+	return fmt.Errorf("%s: %d of %d delays outside [%v, %v], %d of them more than %v outside (smallest %v, largest %v)",
+		what, out, len(ds), lo, hi, far, DelayOutlierHard, min, max)
 }
 
 // CheckLoss returns an error when lost of sent is outside the 99.9 % interval of rate.

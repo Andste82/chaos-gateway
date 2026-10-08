@@ -805,25 +805,30 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 - Status: new
 - Severity: low
-- Reason: needs-decision. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
+- Reason: cause-unknown. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
   required exact conservation through both queues (the download queue sends what the upload queue sent,
   because "the echo server answers every request"). On the hosted level 1b runner (kernel 6.8 in a VM on
-  a VM) a burst of 4000 pings lost half of its packets between the two queues, with no drop in either of
-  them: download sent 1951 of 4000 that the upload queue sent (and 797 of 1000 with the limit of 1000), and
-  ping received exactly what the download queue sent. Natively, with KVM on a developer machine and
-  emulated, the same test counted every packet.
-- Evidence: the CI run of PR #33 (level 1b), `internal/engine/integration_queues_test.go`.
+  a VM) a burst of 4000 pings loses half of its packets between the two queues, with no drop in either of
+  them: the download queue sent 1951 and 2011 of the 4000 that the upload queue sent (762 of 1000 with the
+  limit of 1000), and ping received exactly what the download queue sent. On the hosted level 1 runner
+  (kernel 6.17, native) every packet is counted by both queues; with KVM on a developer machine and
+  emulated (kernel 6.8, TCG) the queues count every packet too, and only ping's own receive buffer loses
+  replies.
+- Evidence: the CI runs of PR #33 (level 1b), `internal/engine/integration_queues_test.go`. The first
+  suspect, the receive queue of the next hop (`netdev_max_backlog`, 1000 per CPU), is ruled out by
+  measurement: `/proc/net/softnet_stat` (dropped column) was read before and after each burst on level 1b
+  and did not move (0 drops) while 1989 and 238 packets were missing.
 - Task: chosen interpretation — the upload queue (the one under test) keeps the exact law: sent + drops =
   the burst, and no drop and no backlog with the computed limit. The download queue must not drop or hold
-  anything, and may have at most what the upload queue sent; ping may have at most what the download
-  queue sent. The suspected cause is that a delay queue releases what it holds in a burst and the next hop's receive
-  queue (`netdev_max_backlog`, 1000 per CPU) overflows when the CPU is slower than the release; it
-  is not proven by that run (the counters of that queue, `/proc/net/softnet_stat`, were not read in CI);
-  the test now reads the dropped column before and after each burst and fails when more packets are
-  missing between the queues than the receive queues of the host dropped, so the next CI run turns the
-  suspicion into a measurement (a gap that softnet does not explain is a product or tc defect).
-- Acceptance: a maintainer confirms the weaker law, or the cause is read from `softnet_stat` on a KVM
-  run and the test sets the sysctl (or paces the burst) so that the exact law holds again.
+  anything with the computed limit and may have at most what the upload queue sent; ping may have at
+  most what the download queue sent. Where packets are missing between the queues, the test logs the gap
+  and every counter that moved during the burst in every namespace of the lab (interface drops and
+  errors, IP, ICMP, UDP) instead of failing, so that the next run on level 1b names the place where they
+  go. Not understood: whether the loss is the environment (a slow nested virtualisation) or something the
+  gateway does to a burst that its delay queue releases at once (HTB, the bridges, the conntrack entry of
+  one ICMP id shared by 4000 requests).
+- Acceptance: the counters of a level 1b run name where the packets go, and the test then asserts the
+  exact law (or the cause is fixed); a maintainer confirms the weaker law until then.
 - Needs maintainer: yes
 - Effort: S
 

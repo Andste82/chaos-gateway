@@ -161,16 +161,31 @@ func TestAStatisticalAssertionThatFailsIsRepeatedOnceAndOnlyASecondFailureFails(
 	}
 }
 
-func TestCheckEveryDelayFindsOneDelayedPacket(t *testing.T) {
+func TestCheckDelaysToleratesNoiseAndFindsADisturbance(t *testing.T) {
 	ms := time.Millisecond
-	ds := []time.Duration{40 * ms, 38 * ms, 43 * ms, 41 * ms}
-	if err := CheckEveryDelay("up", ds, 36*ms, 44*ms); err != nil {
+	var ds []time.Duration
+	for i := 0; i < 200; i++ {
+		ds = append(ds, 40*ms+time.Duration(i%5)*ms)
+	}
+	if err := CheckDelays("up", ds, 36*ms, 44*ms); err != nil {
 		t.Errorf("all inside: %v", err)
 	}
-	if err := CheckEveryDelay("up", append(ds, 52*ms), 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "1 of 5") || !strings.Contains(err.Error(), "largest 52ms") {
-		t.Errorf("one outside: %v", err)
+	// two of two hundred a few ms too long: 1 % is the share that passes
+	noisy := append(append([]time.Duration(nil), ds...), 47*ms, 48*ms)
+	if err := CheckDelays("up", noisy, 36*ms, 44*ms); err != nil {
+		t.Errorf("two of 202 slightly outside: %v", err)
 	}
-	if err := CheckEveryDelay("up", nil, 36*ms, 44*ms); err != nil {
+	// more than 1 % outside the bounds
+	many := append(append([]time.Duration(nil), ds...), 47*ms, 48*ms, 47*ms, 46*ms)
+	if err := CheckDelays("up", many, 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "4 of 204") {
+		t.Errorf("four of 204 outside: %v", err)
+	}
+	// one packet far outside (a flushed or doubled queue)
+	far := append(append([]time.Duration(nil), ds...), 90*ms)
+	if err := CheckDelays("up", far, 36*ms, 44*ms); err == nil || !strings.Contains(err.Error(), "largest 90ms") {
+		t.Errorf("one delay of 90 ms: %v", err)
+	}
+	if err := CheckDelays("up", nil, 36*ms, 44*ms); err != nil {
 		t.Errorf("no delays: %v", err)
 	}
 }

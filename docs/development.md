@@ -1572,6 +1572,127 @@ Plan §3.11 in the code, with the tests that pin it (`internal/engine/coalesce_t
   made a burst of hundreds of fault elements quadratic in the test, not in the product; it indexes the
   keys once per operation now.
 
+## Access rules (M9)
+
+Plan §2.2 and §2.4: the ordered allow, drop, reject and TCP-reset rules, in the configuration
+(`access_rules` with `access_rule_order`) and as overlays (kind `rule`), compiled into two chains
+(`internal/compiler/access.go`). This section describes the compiler's output; the engine, the API and
+the testbed tests of the behavior matrix build on it.
+
+### Where the rules stand
+
+```
+input     jump cut_input*                    only when a rule can cut (below)
+          ct state established,related accept
+          iifname lo accept
+          (the service namespace's answers)
+          ANTI-LOCKOUT: management sources -> SSH and the UI port: counter "anti_lockout", accept
+          the UI port, for everybody else: drop
+          jump access_input                  <- the rules
+          (BGP, OSPF, Babel of the links)
+          the gateway's protection of the test networks: DHCP, DNS, ICMP echo, drop
+forward   jump cut_forward*
+          ct state established,related accept
+          (service guard, switched traffic, invalid, IPv6)
+          jump access_forward                <- the rules
+          the access matrix, the service rules, the default
+```
+
+- **The rules decide before the matrix.** `allow` in forward is `accept`: an exception to the matrix
+  ("IoT may not reach management, but this device may reach that host on port 22"). Traffic that no
+  rule selects goes on to the matrix, which stays the default policy per network.
+- **`allow` does not open the gateway.** In input an allow rule is `return`: the rules end for this
+  packet, and the gateway's protection of the test networks (DHCP, DNS and ICMP echo, nothing else,
+  never the UI) applies as without rules. The UI port is dropped for everybody but the management
+  sources in front of the rules, so no rule, not even a reject, changes what a device sees there. A drop, reject or reset rule in input acts before the
+  gateway answers, so "drop UDP 53" silences the DNS proxy for a device, and a rule can block BGP on a
+  link (the routing protocols' accepts stand behind the rules). `docs/open-items.md` P2-M9-01.
+- **The anti-lockout rule is not part of the rules.** It stands in front of the jump, nothing is
+  inserted before it, and `TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay` compares every rule in
+  front of the jump with the chain compiled without rules. It has a counter (`anti_lockout`) and is
+  listed, locked, as `AntiLockoutRule` (`system_rules` of `GET /rules`). The cut chain of input starts
+  with the same match, so a cut window never resets the control plane.
+- **New connections only.** Established traffic is accepted before the rules (spike S3, C2; D11), so
+  a rule changes the fate of new connections. The rule's counter counts the packets the rule decided,
+  which are those of new connections: a hit means "this rule just refused something", and it does not
+  grow while an established connection runs through.
+- **The original tuple.** Every rule matches `ct original ip saddr` (a set), `ct original ip daddr`,
+  `meta l4proto` and `ct original proto-dst`, never the packet's own addresses or interfaces, so a
+  connection the gateway redirected is judged by what the device meant (plan §2.2, E11), and a reply
+  is judged like the packet that opened the connection. A rule on `udp/53` therefore covers queries to
+  the gateway's DNS address (redirected into the service namespace in forward) and queries sent
+  directly to `169.254.100.2`.
+
+### The compiled list
+
+`Target.Access` (`AccessPlan`) is the effective order: the overlay rules, newest `updated_at` first
+(the order `domain.World.ResolveAccess` uses), then the configured rules in `access_rule_order`, disabled
+rules left out. A rule has a key (`overlay:<id>` or `config:<id>`), its position, its action, the
+resolved source addresses and a named counter `rule_<10 hex>` derived from the key: the counter
+keeps its name while the rule stays, however the order changes, survives every apply and goes with a
+removed rule (plan §3.2). An overlay that is written again keeps its id and so its counter.
+
+- **Sources** are sets `asrc_<hash of the scope>_<hash of the type>`, interval sets of IPv4 prefixes,
+  refilled at every apply from the identity of the devices (`domain.World.ScopePrefixes`): a device
+  or group is the addresses of its devices (and the ranges that identify them), a network its
+  prefixes (subnet, the networks behind a hub's clients, a link's routes) and the addresses of the
+  devices that belong to it, a remote network its prefixes. The global scope is the classification's
+  set of test, WireGuard and remote networks, never the management network or the uplink. A scope
+  without an address yet keeps its rule with an empty set (the rule takes effect with the first
+  address, the counter exists).
+- **Destinations**: an address or prefix, the prefixes of a network, or `uplink`, which is everything
+  outside the networks and the management network (`anon_uplink_*` is the set that is excluded;
+  `domain.World.viaUplink`). A hostname needs the DNS-derived sets of M20: such a rule stays out of the
+  chain with a `hostname_unresolved` warning (P2-M9-02).
+- **Ports** are merged into disjoint ranges (an anonymous interval set refuses overlapping elements).
+- **Verdicts**: `drop`; `reject` is `reject with icmpx type port-unreachable`, one statement for
+  IPv4 and IPv6; `reset` is `reject with tcp reset` (validation requires protocol `tcp`). V1's
+  selectors are IPv4, and forwarded IPv6 is dropped before the rules.
+- **Limits** (`capacity_exceeded`, a compile error that names the overlays that contributed): 1000 rules,
+  overlays included (`Input.RuleLimit`, `DefaultRuleLimit`, the same on every architecture) and 65536
+  source addresses in all sets (`Input.RuleElementLimit`). `TestTooManyRulesAreRefused...` names the limit it assumes.
+- `AccessPlan.Winner(Tuple)` evaluates the plan in Go like the kernel does. It is the oracle of the
+  engine's conntrack deletion, and `TestTheCompiledRulesDecideLikeTheDomainLayer` checks it against
+  `domain.World.ResolveAccess` (the specification) over a grid of sources, destinations and ports.
+
+### Also cut existing connections
+
+The kernel keeps accepting an established connection after a drop rule arrived; deleting its conntrack
+entry alone does not cut it either behind NAT (spike S3, C4/C5). The cut is C6: a window of a
+second or less in which `jump cut_forward` / `jump cut_input`, in front of the established accept, run
+rules that reset the packets of established connections, then the window is closed. The chains exist
+(empty) only when some rule can cut (`HasCuts`: `cut_existing` with a drop, reject or reset action).
+
+- `AccessPlan.CutRules(keys)` builds the window for the rules of the keys (the ones that are new or
+  changed since the last apply, the engine's business): the effective list again, in order. A rule
+  that cuts becomes "its selector, `ct state established`, `ct direction original`, TCP, `reject with
+  tcp reset`"; every other rule becomes "its selector, `return`". A connection belongs to the first
+  rule that selects it, so a cutting rule behind an allow rule (or a rule that does not cut) leaves
+  that rule's connections alone. Only the original direction is reset: the device gets the reset,
+  the server side stays half-open as in a real outage. Rules behind the last cutting rule are not in the
+  window; the input chain's window starts with the anti-lockout match and a `return`.
+- `AccessPlan.CutTransaction(keys)` is the nftables JSON that replaces the two chains' content;
+  without keys it closes the window. The conntrack entries of the rule are deleted afterwards for what
+  the reset cannot reach (UDP, ICMP): the engine reads them and deletes those for which
+  `Winner(tuple)` is a cutting rule of the window.
+
+### Tests
+
+- Unit and golden: `access_test.go` (order, verdicts, selectors, scopes, counters, capacity, cut
+  windows, the Go oracle against the domain layer), goldens `access.golden.txt`,
+  `access-cut.golden.txt` (readable) and `access.nft.golden.json` (the transaction).
+- Kernel gate: `access` and `access-cut` are `transactionScenarios`, so
+  `TestEveryCompiledRulesetIsAcceptedByTheKernel` runs them through the kernel with `nft -c`, and
+  `TestEveryCutWindowIsAcceptedByTheKernel` checks every window the plan can open and the one that
+  closes it on an applied ruleset.
+- Kernel behavior (`accesskernel_test.go`, testbed): the compiled transaction on a gateway namespace with
+  a device, a server and a management host. Established connections continue under a drop rule and new
+  ones hang (C1/C2), reject and reset refuse at once, order and overlays, an allow rule as an exception
+  to the matrix, the DNS rule in input, the anti-lockout rule under a global drop-everything rule, and
+  the cut window with a connection that an earlier rule owns. These tests run in the persistent VM
+  (`make vm-test ARGS='-run "TestAccessRule|TestACutWindowResets" -tags testbed -test-timeout 15m ./internal/compiler'`);
+  python3 starts slowly under emulation, so a run takes about six minutes.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

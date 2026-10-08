@@ -860,3 +860,124 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Acceptance: the cause is named; the warm-up either goes or stays as a documented part of the lab.
 - Needs maintainer: no
 - Effort: M
+
+### P2-M9-01 An allow rule in the input path returns to the gateway's protection instead of accepting
+
+- Status: new
+- Severity: medium
+- Reason: needs-decision. Plan §2.4 lists `allow` among the actions and §2.2 says rules are evaluated
+  "in the forward and the input path". It does not say whether an allow rule can open something the
+  gateway's protection of the test networks closes (everything but DHCP, DNS and ICMP echo; the UI/API
+  never, SSH left to the OS). The UI prototype lists only the "Control plane access" system rule above
+  the others.
+- Evidence: `internal/compiler/access.go` (`verdictFor`), `internal/compiler/rules.go` (where the jumps
+  stand), `TestEveryActionHasItsVerdictInForwardAndInput`, `TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel`.
+- Task: chosen interpretation — in forward `allow` is `accept` (an exception to the access matrix); in
+  input it is `return` from the rule chain, after which the gateway's protection applies as without
+  rules. So a rule `allow any -> any` cannot make the UI/API, BIRD or Kea reachable from a test
+  network, and a drop, reject or reset rule in input still acts before the gateway answers. The UI/API
+  port rule for non-management sources and the anti-lockout rule stand in front of the rules.
+- Acceptance: a maintainer confirms, or asks for `accept` in input (an allow rule then also opens the
+  gateway's closed ports for its selector, except the UI port).
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M9-02 A rule that names a hostname is not compiled before M20
+
+- Status: new
+- Severity: medium
+- Reason: deferred (to M20, the DNS-derived address sets). Plan §2.4 allows a hostname as the
+  destination of a rule. Its addresses are known at run time only, so a drop rule that names one
+  would compile to a rule that matches nothing, and the traffic the operator wants blocked goes through.
+- Evidence: `internal/compiler/access.go` (`compileAccess`), `TestAHostnameRuleIsLeftOutWithAWarning`.
+- Task: chosen interpretation — the rule stays out of the chain and the compile reports the warning
+  `hostname_unresolved` (the code faults use), which the preview and the events show. M20 adds the
+  DNS-derived set as the rule's destination.
+- Acceptance: M20's test that a drop rule with a hostname destination blocks the addresses the device
+  resolved.
+- Needs maintainer: no
+- Effort: S
+
+### P2-M9-03 `reject` answers with ICMP port unreachable for every protocol
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.4 says "reject (ICMP)" without the type.
+- Evidence: `internal/compiler/access.go` (`rejectICMP`), spike S3 (C3 used a TCP reset).
+- Task: chosen interpretation — `reject with icmpx type port-unreachable`: the same statement for IPv4
+  and IPv6, and the one that makes clients fail at once ("connection refused") for TCP and UDP alike.
+  `admin-prohibited` would say "a firewall did it", which some stacks treat as a different error.
+- Acceptance: a maintainer confirms the type or names another (or asks for a choice per rule).
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M9-04 The network scope of a rule does not include the networks behind a test network's static routes
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.3 gives a test network "downstream routes" for devices behind another
+  router. `domain.prefixesOf` (which scope matching, `ResolveAccess` and the fault tables all use)
+  counts a LAN's subnet only; the routes of a hub's clients and of a link are part of their networks,
+  a LAN's are not. A rule or fault for "network IoT" therefore does not select a host at 10.30.0.5
+  behind IoT's router unless a device is configured for it. The classification guard
+  (`classify_nets`) does include the routes, so the global scope reaches such a host.
+- Evidence: `internal/domain/resolve.go` (`prefixesOf`), `internal/compiler/classify.go`
+  (`classifyNets`).
+- Task: chosen interpretation — keep one definition for faults and rules (the subnet).
+- Acceptance: a maintainer confirms, or asks for the downstream routes in `prefixesOf` (a one-line
+  change that also moves the fault tables).
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M9-05 The fault counters of the classification count packets that a rule drops afterwards
+
+- Status: new
+- Severity: low
+- Reason: deferred. Plan §2.4: "access rules are evaluated first. A dropped packet does not reach any
+  fault." The tc side holds (the dropped packet never reaches an egress queue), but classification
+  runs in prerouting, before forward and input, so a packet that a rule drops has already been counted
+  in the named counters of its fault id (`counter_up`/`counter_down` of the `mark_<id>` chain).
+- Evidence: `internal/compiler/classify.go` (priority -150), the forward chain.
+- Task: chosen interpretation — leave it; the counters say how many packets were classified, the
+  queue statistics (`QueueStats`) say how many a fault actually handled. A rule's own counter shows
+  what it dropped.
+- Acceptance: a maintainer confirms, or asks for the fault counters to count after the rules (the
+  counting rules would move to the egress side of the decision, e.g. a postrouting chain).
+- Needs maintainer: yes
+- Effort: M
+
+### P2-M9-06 The limits of the access rules are not measured on small hardware
+
+- Status: new
+- Severity: low
+- Reason: env-limit (H1). The compiler refuses more than 1000 rules (overlays included) and more than
+  65536 source addresses in all rule sets with `capacity_exceeded`, on every architecture. Rules are
+  evaluated for the first packet of each connection only (established traffic is accepted first), so
+  the chain is a linear scan per new connection; nothing in the repository measures what 1000 rules
+  cost a Raspberry Pi at the connection rates of a test lab.
+- Evidence: `internal/compiler/access.go` (`DefaultRuleLimit`, `MaxRuleElements`).
+- Task: chosen interpretation — one limit for all architectures (the class limit has two because tc
+  classes cost memory and CPU per packet; rules cost per connection). H1 measures new connections per
+  second with 1000 rules on the target hardware and sets an ARM64 default if needed.
+- Acceptance: the H1 measurement exists and the limit is confirmed or lowered for ARM64.
+- Needs maintainer: no
+- Effort: S
+
+### P2-M9-07 A rule's counter counts the packets of new connections, not of every connection it decides
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.14/§3: "per access rule: matched packets and bytes" and "the counters
+  show whether a rule actually matches". Established traffic is accepted before the rules (D11, spike
+  S3), so an allow rule's counter does not grow while a connection that it allowed runs; it counts the
+  packets that were judged by it, which are the first packets of connections and the retransmitted
+  SYNs of dropped ones. A drop or reject rule's counter is exact: nothing it decided is established.
+- Evidence: `internal/compiler/rules.go` (the jump stands behind the established accept),
+  `TestAccessRulesOnTheRealKernelChangeNewConnectionsOnly`.
+- Task: chosen interpretation — document it in the spec (`AccessRuleView.counters`) and the UI text;
+  counting every packet of a decided connection would need a conntrack mark per rule or a counting
+  rule per allow rule behind the established accept.
+- Acceptance: a maintainer confirms, or asks for byte and packet counts of the connections an allow
+  rule let through (a ct label or mark written by the rule, one counter chain per rule).
+- Needs maintainer: yes
+- Effort: M

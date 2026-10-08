@@ -118,4 +118,4 @@ jobs:
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
-            make test-vm ARGS="-kernel ${{ matrix.kernel }}"
+            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 60m -vm-timeout 2h"

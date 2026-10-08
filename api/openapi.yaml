@@ -3673,6 +3673,35 @@ components:
           type: array
           description: Active overlays and runs that applying would orphan (needs `force=true`).
           items: {$ref: '#/components/schemas/BlockingReference'}
+        rules:
+          type: array
+          description: |
+            The access rules in the order they are evaluated after the change, overlay rules first (plan §2.4):
+            the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
+            `warnings` say so. Absent when there is no rule.
+          items: {$ref: '#/components/schemas/PreviewRule'}
+    PreviewRule:
+      type: object
+      required: [key, layer, position, action, protocol]
+      properties:
+        key:
+          type: string
+          description: '`config:<uuid>` or `overlay:<uuid>`; the named counter of the rule is derived from it, so it keeps its counter while the key stays.'
+        layer: {type: string, enum: [overlay, config]}
+        id: {$ref: '#/components/schemas/Uuid'}
+        name: {type: string}
+        position: {type: integer, description: '0-based place in the effective order.'}
+        action: {$ref: '#/components/schemas/AccessAction'}
+        cut_existing: {type: boolean}
+        scope: {type: string, description: 'Who the rule applies to, in words (`network IoT`, `device esp32-42`).'}
+        destination: {type: string, description: 'Where to, in words; absent for any destination.'}
+        protocol: {$ref: '#/components/schemas/Protocol'}
+        ports:
+          type: array
+          items: {type: string, example: '8883', description: 'A port or a range `from-to`.'}
+        new:
+          type: boolean
+          description: The rule is not in the kernel yet (a new rule, or one that comes with this revision).
     ApplyResult:
       type: object
       required: [revision, status, generation]
@@ -4211,7 +4240,7 @@ components:
         config: {$ref: '#/components/schemas/AccessRule'}
         state:
           allOf: [{$ref: '#/components/schemas/EffectState'}]
-          description: '`effective` for a rule that is in the packet path, `disabled` for one with `enabled: false`.'
+          description: '`effective` for a rule that is in the packet path, `disabled` for one with `enabled: false` and for one the kernel does not run (a rule that names a hostname before M20 is not compiled, see the preview warning `hostname_unresolved`).'
         counters:
           allOf: [{$ref: '#/components/schemas/Counter'}]
           description: Packets and bytes of the **new connections** the rule decided (established traffic is accepted before the rules). Monotonic across applies; `epoch` changes on a restart.
@@ -4331,13 +4360,16 @@ components:
               enum: [gateway_protection, overlay_rule, config_rule, access_matrix]
             rule:
               allOf: [{$ref: '#/components/schemas/Uuid'}]
-              description: Overlay or configured rule id.
+              description: The overlay or configured rule that decided; absent for `gateway_protection` and `access_matrix`.
             reason:
               type: string
               description: Which entry or default decided, in words.
         faults:
           type: array
-          description: One entry per family (families without candidates are omitted).
+          description: |
+            One entry per family (families without candidates are omitted). The faults are resolved for the
+            traffic whatever the access verdict is: they take effect only when the verdict is `allow`, because
+            access rules are evaluated first and a refused packet reaches no fault (plan §2.4).
           items:
             type: object
             required: [family]

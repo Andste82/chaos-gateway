@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/observer"
@@ -104,9 +105,38 @@ type Preview struct {
 	NeedsConfirmation bool
 	// Target is the compiled target.
 	Target *compiler.Target
+	// Rules are the access rules in the order they are evaluated after the change, overlay rules first;
+	// New marks the ones that are not in the kernel in this form yet.
+	Rules []PreviewRule
 	// References are the active overlays the revision would orphan: applying it needs force, which
 	// removes them. The target is compiled without them.
 	References []OverlayReference
+}
+
+// PreviewRule is a rule of the effective list a preview shows.
+type PreviewRule struct {
+	compiler.AccessRule
+	New bool
+}
+
+// previewRules lists the rules of a compiled target and marks those that differ from the applied ones
+// (a new rule, a changed selector or action; a new place in the order, or other addresses of the
+// same scope, are not a change).
+func previewRules(next, applied *compiler.AccessPlan) []PreviewRule {
+	if next == nil {
+		return nil
+	}
+	var out []PreviewRule
+	for _, r := range next.Rules {
+		pr := PreviewRule{AccessRule: r, New: true}
+		if old, ok := applied.Rule(r.Key); ok {
+			a, b := *old, r
+			a.Position, b.Position, a.Sources, b.Sources = 0, 0, nil, nil
+			pr.New = !reflect.DeepEqual(a, b)
+		}
+		out = append(out, pr)
+	}
+	return out
 }
 
 // Preview compiles a candidate against the current snapshot and compares it with the kernel,
@@ -136,6 +166,7 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	}
 	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs, e.retirer.IDs()))
 	p.Target, p.Problems = tg, tg.Problems
+	p.Rules = previewRules(tg.Access, snap.Access)
 	if tg.HasErrors() {
 		return p, nil
 	}

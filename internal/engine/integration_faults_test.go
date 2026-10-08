@@ -5,6 +5,7 @@ package engine_test
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -100,7 +101,39 @@ func startFaultLab(t *testing.T, mod func(*model.Configuration)) *real {
 	}
 	resolveDevices(t, r.e)
 	warmUp(t, r.top)
+	settleIdentity(t, r.e)
 	return r
+}
+
+// settleIdentity waits until what the engine knows of the hosts has not changed for a second and a half
+// (three observations) and its work on it is done. The pings of warmUp make the gateway meet hosts it did
+// not know (the neighbors of the server's side), the engine learns them at its next observation, and a
+// discovered device takes a numeral in the identity map: a test that compiles the snapshot at that moment
+// and reads the kernel a moment later would see the two differ.
+func settleIdentity(t *testing.T, e *engine.Engine) {
+	t.Helper()
+	signature := func() string {
+		id := e.Snapshot().Identity
+		var disc []string
+		for _, d := range id.Discovered {
+			disc = append(disc, d.ID)
+		}
+		sort.Strings(disc)
+		return fmt.Sprint(id.Addresses, disc)
+	}
+	last, quiet := signature(), 0
+	deadline := time.Now().Add(30 * time.Second)
+	for quiet < 3 && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		if now := signature(); now != last {
+			last, quiet = now, 0
+		} else {
+			quiet++
+		}
+	}
+	if _, err := e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // warmUp sends a few pings from every test device to the server, once the lab stands. On a fast kernel

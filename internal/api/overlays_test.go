@@ -171,7 +171,6 @@ func TestOverlaysOfLaterMilestonesAreRefusedAndInvalidOnesAreExplained(t *testin
 		`{"target":{"network":"IoT"},"dns":{"names":["example.com"],"action":"nxdomain"}}`: "M20",
 		`{"target":{"network":"IoT"},"tls":{"case":"expired"}}`:                            "M21",
 		`{"target":{"network":"IoT"},"dhcp":{"action":"silence"}}`:                         "M23",
-		`{"target":{"network":"IoT"},"fault":{"family":"mtu","mtu":{"size":1200}}}`:        "M10",
 	} {
 		r := g.createOverlay(body)
 		if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(r.json(t)["detail"].(string), milestone) {
@@ -272,7 +271,7 @@ func TestAnOverlayThatDoesNotFitTheClassLimitIsRefusedWithCapacityExceeded(t *te
 func TestCapabilitiesNameWhatOverlaysThisBuildTakes(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment]" {
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu]" {
 		t.Errorf("%v", caps)
 	}
 	if !strings.Contains(fmt.Sprint(caps["features"]), "overlays") {

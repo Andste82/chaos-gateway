@@ -81,11 +81,14 @@ type ExplainFamily struct {
 	Overridden []model.FaultRef `json:"overridden,omitempty"`
 }
 
-// ExplainKernel is the classification as compiled: the fault id and the marks of its directions.
+// ExplainKernel is the classification as compiled: the fault id and the marks of its directions of the
+// impairment winner, and the PMTU mirror table the MTU winner in icmp mode sends the traffic through
+// (bits 17-19 of the mark, plan §3.3). Either part is absent when the traffic has no such winner.
 type ExplainKernel struct {
-	FaultID      int    `json:"fault_id"`
-	MarkUpload   string `json:"mark_upload"`
-	MarkDownload string `json:"mark_download"`
+	FaultID      int    `json:"fault_id,omitempty"`
+	MarkUpload   string `json:"mark_upload,omitempty"`
+	MarkDownload string `json:"mark_download,omitempty"`
+	PMTUTable    int    `json:"pmtu_table,omitempty"`
 }
 
 // ExplainRoute is the route the kernel gives the packet.
@@ -227,6 +230,18 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 			out.Kernel = &ExplainKernel{FaultID: f.ID,
 				MarkUpload:   fmt.Sprintf("0x%08x", compiler.MarkOf(f.ID, compiler.Upload)),
 				MarkDownload: fmt.Sprintf("0x%08x", compiler.MarkOf(f.ID, compiler.Download))}
+		}
+	}
+
+	if w := domain.Winner(results, domain.FamilyMTU); w != nil {
+		key := string(w.Layer) + ":" + w.ID + ":" + w.Family
+		for _, f := range snap.PMTU {
+			if f.Key == key && f.Index > 0 {
+				if out.Kernel == nil {
+					out.Kernel = &ExplainKernel{}
+				}
+				out.Kernel.PMTUTable = f.Index
+			}
 		}
 	}
 

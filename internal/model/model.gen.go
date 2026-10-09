@@ -3600,7 +3600,9 @@ type Explanation struct {
 
 		// MarkUpload Example: 0x000000a0
 		MarkUpload *string `json:"mark_upload,omitempty"`
-		PmtuTable  *int    `json:"pmtu_table,omitempty"`
+
+		// PmtuTable The index of the PMTU mirror table (bits 17-19 of the mark, plan §3.3) the traffic is routed through, when the winner of the `mtu` family is in `icmp` mode. Absent for `blackhole` and `mss_clamp` and when no `mtu` fault applies. `fault_id` and the marks are absent when only an `mtu` fault applies.
+		PmtuTable *int `json:"pmtu_table,omitempty"`
 	} `json:"kernel,omitempty"`
 
 	// Route The route the kernel takes for the packet (`ip route get`, through the policy rules); absent for a hostname destination or a source without an address.

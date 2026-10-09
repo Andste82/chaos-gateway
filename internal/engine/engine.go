@@ -128,6 +128,11 @@ type Snapshot struct {
 	// allocation by key (the next compile keeps it) and FaultEpochs the generation in which each
 	// fault, by key, first appeared: the epoch of its counters (they restart when a fault is new).
 	Faults []compiler.Fault
+	// PMTU are the winning MTU faults of the last applied target (plan §2.5), PMTUTables the allocation
+	// of their mirror tables by size (the next compile keeps it). The epochs of their counters are in
+	// FaultEpochs, by key, like the faults'.
+	PMTU       []compiler.PMTUFault
+	PMTUTables map[int]int
 	// Winners are the keys of the faults that win for some traffic (compiler.Target.Winners).
 	Winners map[string]bool
 	// Access is the effective list of access rules of the last applied target, overlay rules first;

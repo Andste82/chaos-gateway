@@ -36,7 +36,9 @@ type State struct {
 	Rules      []linux.Rule
 	Routes     []linux.Route
 	Nft        *linux.Ruleset
-	Offloads   map[string]linux.Features
+	// NftDup is the table of the duplication hook (executor.NftDup); empty when there is none.
+	NftDup   *linux.Ruleset
+	Offloads map[string]linux.Features
 	// Sysctl holds "ip_forward" and "accept_ra:<dev>" for the interfaces that exist.
 	Sysctl     map[string]int
 	DockerUser linux.DockerUserState
@@ -140,6 +142,7 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		read(ns, executor.ReadRoutes, ""),
 		read(ns, executor.ReadNft, ""),
 		&executor.Read{Target: executor.Target{NS: ns}, What: executor.ReadDockerUser},
+		read(ns, executor.ReadNftDup, ""),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("read the kernel state: %w", err)
@@ -180,6 +183,12 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 		return nil, err
 	}
 	s.DockerUser = du
+	if s.NftDup, err = decode[*linux.Ruleset](out, 7, "nft_dup"); err != nil {
+		return nil, err
+	}
+	if s.NftDup == nil {
+		s.NftDup = &linux.Ruleset{}
+	}
 
 	// WireGuard interfaces and their peers
 	s.WireGuard = map[string]*linux.WGInfo{}

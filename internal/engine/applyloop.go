@@ -47,10 +47,13 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	retirer := e.retirer
 	var retire clock.Timer
 	var retireC <-chan time.Time
+	// the flapping faults toggle between applies, on the engine's clock (flap.go)
+	flapT := &flapTimer{clk: e.cfg.Clock}
 	defer func() {
 		if retire != nil {
 			retire.Stop()
 		}
+		flapT.stop()
 	}()
 	arm := func() {
 		if retire != nil {
@@ -75,6 +78,17 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				e.cfg.Log.Debug("retired tc classes deleted", "count", n)
 			}
 			arm()
+			continue
+		case <-flapT.c:
+			flapT.c = nil
+			if last == nil {
+				continue // nothing is known about the kernel: the next apply that succeeds takes over
+			}
+			var err error
+			if last, err = e.toggleFlaps(ctx, last); err != nil {
+				e.cfg.Log.Warn("toggling flapping faults failed: it is tried again", "error", err)
+			}
+			flapT.arm(e.flap)
 			continue
 		case <-e.wake:
 		}
@@ -114,9 +128,15 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if err != nil {
 				e.cfg.Log.Warn("apply failed", "generation", d.Generation, "revision", d.Revision, "error", err)
 				last = nil
+				flapT.stop()
 			} else {
 				last = &appliedState{d: d, target: target}
 				ids = target.FaultIDs
+				if !incremental {
+					// the flapping faults of the target start (or go on) from here
+					e.flap.sync(target, e.cfg.Clock.Monotonic())
+					flapT.arm(e.flap)
+				}
 			}
 			dhcpErr := ""
 			var cut *cutOutcome
@@ -161,7 +181,8 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 // allocation of fault ids of the previous apply.
 func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
-		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit}
+		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit,
+		FlapPhase: e.flap.phase}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is

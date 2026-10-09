@@ -11,6 +11,7 @@ import (
 // Operation types: the closed set the executor accepts.
 const (
 	TypeNftApply          = "nft_apply"
+	TypeNftDup            = "nft_dup"
 	TypeNftAddElements    = "nft_add_elements"
 	TypeNftDelElements    = "nft_del_elements"
 	TypeNftAddMapElements = "nft_add_map_elements"
@@ -369,9 +370,12 @@ const (
 	ReadRouteGet = "route_get"
 	ReadRules    = "rules"
 	ReadNft      = "nft"
-	ReadQdiscs   = "qdiscs"
-	ReadClasses  = "classes"
-	ReadFilters  = "filters"
+	// ReadNftDup returns the table of the duplication hook (nftdup.go) as `nft -j list` prints it; a
+	// missing table is an empty ruleset.
+	ReadNftDup  = "nft_dup"
+	ReadQdiscs  = "qdiscs"
+	ReadClasses = "classes"
+	ReadFilters = "filters"
 	// ReadTC returns the whole tc state of one interface, with counters, in the normalized form of
 	// linux.NormTree (`tc -s -j` qdisc, class and filter listings, normalized). Dev is required.
 	ReadTC       = "tc"
@@ -459,6 +463,8 @@ func Decode(data []byte) (Operation, error) {
 	switch env.Type {
 	case TypeNftApply:
 		op = &NftApply{}
+	case TypeNftDup:
+		op = &NftDup{}
 	case TypeNftAddElements:
 		op = &NftAddElements{}
 	case TypeNftDelElements:

@@ -40,7 +40,11 @@ type Netem struct {
 	LossCorr float64  `json:"loss_corr"`
 	Gemodel  *Gemodel `json:"gemodel,omitempty"`
 
-	Reorder   float64 `json:"reorder"`
+	Reorder float64 `json:"reorder"`
+	// Duplicate is the fault's probability, in percent. The netem qdisc itself never duplicates
+	// (Args writes `duplicate 0%`): the kernel refuses a duplicating netem on an interface that holds
+	// any other netem, so the copies are made by a tc hook on the egress interface, flagged by the
+	// classification (MarkDupBit, DupFilter; P2-M10-01).
 	Duplicate float64 `json:"duplicate"`
 	Corrupt   float64 `json:"corrupt"`
 
@@ -48,7 +52,7 @@ type Netem struct {
 	Rate int64 `json:"rate"`
 
 	// Flapping is the timed blackout that follows the up phase this configuration describes; the
-	// fault engine (M8b) toggles to Down().
+	// fault engine (flap.go in the engine) toggles to Down() and back.
 	Flapping *FlapSpec `json:"flapping,omitempty"`
 }
 
@@ -93,6 +97,7 @@ func (n Netem) Down() Netem {
 }
 
 // Args returns the arguments of the netem qdisc after its kind: every attribute, neutral or not.
+// The duplicate attribute is always 0%: duplication is not done by the qdisc (see Duplicate).
 func (n Netem) Args() []string {
 	a := []string{"netem", "limit", strconv.Itoa(n.Limit),
 		"delay", fmtDuration(n.Delay), fmtDuration(n.Jitter), "0%"}
@@ -106,7 +111,7 @@ func (n Netem) Args() []string {
 	}
 	return append(a,
 		"reorder", fmtPercent(n.Reorder), "0%",
-		"duplicate", fmtPercent(n.Duplicate), "0%",
+		"duplicate", "0%", "0%",
 		"corrupt", fmtPercent(n.Corrupt), "0%",
 		"rate", fmtRate(n.Rate))
 }

@@ -43,6 +43,8 @@ type NftChain struct {
 	Table  string `json:"table"`
 	Name   string `json:"name"`
 	Handle int    `json:"handle"`
+	// Dev is the interface of a base chain of the netdev family (egress and ingress hooks).
+	Dev    string `json:"dev"`
 	Type   string `json:"type"`
 	Hook   string `json:"hook"`
 	Prio   *int   `json:"prio"`

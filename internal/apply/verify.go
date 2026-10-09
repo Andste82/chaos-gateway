@@ -55,6 +55,11 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 	var mm []Mismatch
 	bad := func(sub, format string, a ...any) { mm = append(mm, Mismatch{sub, fmt.Sprintf(format, a...)}) }
 
+	// the duplication hook
+	for _, why := range dupProblems(t.DupDevs, s.NftDup) {
+		bad("nft", "duplication hook: %s", why)
+	}
+
 	// interfaces assigned to the executor
 	if got, want := strings.Join(s.Assigned, ","), strings.Join(sorted(t.Interfaces), ","); got != want {
 		bad("interfaces", "assigned %q, want %q", got, want)

@@ -336,6 +336,12 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		}
 	}
 
+	// ---- the duplication hook: before the transaction that makes packets ask for a copy ----------
+	dupWrong := dupProblems(t.DupDevs, s.NftDup)
+	if len(dupWrong) > 0 && len(t.DupDevs) > 0 {
+		add(dupSummary(t.DupDevs), &executor.NftDup{Target: tg, Devs: t.DupDevs})
+	}
+
 	// ---- nftables: one atomic transaction -------------------------------------------------
 	tx, err := t.Nft.Transaction(s.Nft)
 	if err != nil {
@@ -343,6 +349,11 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	}
 	add(fmt.Sprintf("nftables: table inet chaosgw, %d chains, %d sets, %d counters, generation %q",
 		len(t.Nft.AllChains()), len(t.Nft.Sets), len(t.Nft.Counters), t.Nft.Generation), &executor.NftApply{Target: tg, Ruleset: json.RawMessage(tx)})
+
+	// ... and the hook goes after the transaction that stopped them
+	if len(dupWrong) > 0 && len(t.DupDevs) == 0 {
+		add(dupSummary(nil), &executor.NftDup{Target: tg})
+	}
 
 	// ---- tc: what the target no longer wants -----------------------------------------------
 	// one batch per interface, like the creations above (tp.stale is ordered by interface)

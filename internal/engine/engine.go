@@ -195,8 +195,10 @@ type Engine struct {
 	// retirer holds the tc classes that no fault id uses any more until the packets queued in them
 	// have left (plan §3.2); the apply loop is its only writer.
 	retirer *apply.Retirer
-	events  *bus
-	sup     *supervisor.Supervisor
+	// flap is the schedule of the flapping faults (flap.go); the apply loop is its only writer.
+	flap   *flapper
+	events *bus
+	sup    *supervisor.Supervisor
 
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -285,6 +287,7 @@ func New(cfg Config) (*Engine, error) {
 		})
 	}
 	e.retirer = apply.NewRetirer(cfg.Clock)
+	e.flap = newFlapper()
 	e.snap.Store(&Snapshot{})
 	return e, nil
 }

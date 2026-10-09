@@ -61,6 +61,12 @@ type Input struct {
 	// RetiringIDs are the fault ids whose tc classes are still in the kernel waiting for their
 	// deletion (make-before-break, plan §3.2): a fault that is new does not take one of them.
 	RetiringIDs []int
+	// FlapPhase says whether the flapping class with the key (TCClass.FlapKey) is in its down phase
+	// right now; nil, or false, is the up phase. The fault engine owns the phase (internal/engine/
+	// flap.go): it is the clock's, not the configuration's, and a compile only writes it into the tree.
+	// A phase belongs to one flapping: it is asked with the FlapSpec the compile is about to write, so
+	// a fault whose up and down times were just changed starts up.
+	FlapPhase func(key string, f FlapSpec) bool
 	// ClassLimit is the number of tc classes one interface may carry (plan §3.3, D18); 0 uses
 	// DefaultClassLimit.
 	ClassLimit int
@@ -189,7 +195,10 @@ type Target struct {
 	Winners []string `json:"winners,omitempty"`
 	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault
 	// impairs anything.
-	TC         *TCTarget `json:"tc,omitempty"`
+	TC *TCTarget `json:"tc,omitempty"`
+	// DupDevs are the interfaces that carry the duplication hook while some fault duplicates packets: the
+	// interfaces of the tc tree (executor.NftDup, P2-M10-01). Empty when nothing duplicates.
+	DupDevs    []string `json:"dup_devs,omitempty"`
 	faultBuild *faultBuild
 	// Access is the effective list of access rules, overlay rules first (plan §2.4); nil when there
 	// is no rule.

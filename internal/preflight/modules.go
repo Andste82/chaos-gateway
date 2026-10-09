@@ -38,7 +38,7 @@ var modules = []Module{
 	{Name: "nft_redir", Feature: "nftables: redirect to gateway services (DNS, TLS)", Milestone: "M6b"},
 	{Name: "nft_reject", Feature: "nftables: reject", Milestone: "M9"},
 	{Name: "nft_reject_inet", Feature: "nftables: reject (inet family)", Milestone: "M9"},
-	{Name: "nft_dup_netdev", Feature: "nftables: duplicate packets (capture)", Milestone: "M17"},
+	{Name: "nft_dup_netdev", Feature: "nftables: duplicate packets (fault duplication hook, capture)", Milestone: "M10"},
 	{Name: "veth", Feature: "virtual cables: probes, service namespace, testbed", Milestone: "M1"},
 	{Name: "bridge", Feature: "one bridge per test network", Milestone: "M4"},
 	{Name: "wireguard", Feature: "WireGuard networks", Milestone: "M4b"},

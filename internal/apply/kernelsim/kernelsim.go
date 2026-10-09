@@ -105,12 +105,14 @@ func (t *nftTable) clone() *nftTable {
 
 // Kernel is the simulated kernel of one network namespace.
 type Kernel struct {
-	mu       sync.Mutex
-	links    map[string]*link
-	nextIdx  int
-	routes   []route
-	rules    []rule
-	nft      *nftTable
+	mu      sync.Mutex
+	links   map[string]*link
+	nextIdx int
+	routes  []route
+	rules   []rule
+	nft     *nftTable
+	// dup is the netdev table of the duplication hook (executor.NftDup): nil when it does not exist
+	dup      *dupTable
 	sysctl   map[string]int
 	features map[string]map[string]bool // dev → feature → on
 	// docker
@@ -417,6 +419,7 @@ func (k *Kernel) Reset() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nft = nil
+	k.dup = nil
 }
 
 // Commands returns the log of commands.

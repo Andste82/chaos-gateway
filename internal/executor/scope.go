@@ -107,6 +107,12 @@ func (s *Scope) needNotOSOwned(dev string) error {
 // operation earlier in the same batch, pass the interfaces it assigns as `pending`.
 func (s *Scope) Check(op Operation) error {
 	switch o := op.(type) {
+	case *NftDup:
+		for _, d := range o.Devs {
+			if err := s.need(d); err != nil {
+				return err
+			}
+		}
 	case *TC:
 		for i, e := range o.Entries {
 			if err := s.need(e.Dev); err != nil {

@@ -280,7 +280,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			changed++
 		}
 		wl := wantLeaf[id]
-		leafEntry := executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: id, Handle: c.LeafHandle(), Args: c.Netem.Args()}
+		leafEntry := executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: id, Handle: c.LeafHandle(), Args: c.Config().Args()}
 		dkey := dev + " " + c.LeafHandle()
 		last, known := mem[dkey]
 		dist := c.Netem.Distribution

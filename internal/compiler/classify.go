@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 
@@ -47,6 +48,24 @@ const (
 	// cleared first.
 	MarkKeepOnDirectionWrite = ^markDirMaskBits // 0xfffeffff
 )
+
+// MarkDupBit is the mark bit that says "duplicate this packet": written by the mark chain of a
+// fault that duplicates, with the fault's probability, and consumed (cleared) by the egress hook of
+// the interface the packet leaves through. Bits 21 to 23 were reserved for further routing marks;
+// this is the first of them in use (plan §3.3).
+const MarkDupBit = uint32(1) << 21
+
+// DupResolution is the modulus of the random number a duplicating fault compares with: a
+// probability resolves to one part in 10^9, which is 10^-7 percent.
+const DupResolution = 1_000_000_000
+
+// dupThreshold is the number below which the random number of a packet makes it a duplicate.
+func dupThreshold(percent float64) int64 {
+	if percent <= 0 {
+		return 0
+	}
+	return min(int64(math.Round(percent*DupResolution/100)), DupResolution)
+}
 
 // ClassifyChain is the prerouting chain that writes the classification mark.
 const ClassifyChain = "classify"
@@ -145,8 +164,31 @@ func (t *Target) compileClassify() {
 // 4-15, keeping everything else (MarkKeepOnIDWrite), counts the packet in the counter of its
 // direction and ends (the classification of the packet is done). Id 0 clears the id: it is the entry of a
 // fault that impairs nothing, which still shadows the less specific faults below it.
-func markChain(id int, counterUp, counterDown string) Chain {
+//
+// A fault that duplicates packets also decides here, per packet and direction, whether this packet is
+// duplicated: with the probability of the fault it sets MarkDupBit, which the tc hook of the egress
+// interface turns into a copy of the packet (DupFilter). The duplication is not netem's: the kernel
+// refuses a duplicating netem on an interface that has any other netem (docs/open-items.md
+// P2-M8b-01, P2-M10-01).
+func markChain(id int, counterUp, counterDown string, dupUp, dupDown float64) Chain {
 	rules := []Rule{newRule(markSet(bitOr(bitAnd(meta("mark"), int64(MarkKeepOnIDWrite)), lshift(id, MarkIDShift))))}
+	for _, d := range []struct {
+		dir string
+		p   float64
+	}{{"original", dupUp}, {"reply", dupDown}} {
+		n := dupThreshold(d.p)
+		switch {
+		case n >= DupResolution:
+			// always: the comparison would be against the modulus, which nft refuses (the value of
+			// `numgen random mod N` is below N)
+			rules = append(rules, newRule(match(ctKey("direction"), "==", d.dir),
+				markSet(bitOr(meta("mark"), int64(MarkDupBit)))))
+		case n > 0:
+			rules = append(rules, newRule(match(ctKey("direction"), "==", d.dir),
+				match(numgenRandom(DupResolution), "<", n),
+				markSet(bitOr(meta("mark"), int64(MarkDupBit)))))
+		}
+	}
 	if counterUp != "" {
 		rules = append(rules,
 			newRule(match(ctKey("direction"), "==", "original"), counter(counterUp)),

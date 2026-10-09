@@ -63,6 +63,11 @@ func bitAnd(a, b any) any { return map[string]any{"&": []any{a, b}} }
 func bitOr(a, b any) any  { return map[string]any{"|": []any{a, b}} }
 func lshift(a, b any) any { return map[string]any{"<<": []any{a, b}} }
 
+// numgenRandom is `numgen random mod N`: a uniformly random number below N for every packet.
+func numgenRandom(mod int64) any {
+	return map[string]any{"numgen": map[string]any{"mode": "random", "mod": mod}}
+}
+
 // concat is a concatenated key expression (plan §3.3's lookup chain): several fields matched or
 // looked up together, e.g. device, destination, protocol and port.
 func concat(parts ...any) any { return map[string]any{"concat": parts} }

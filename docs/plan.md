@@ -337,7 +337,7 @@ A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a c
 | Loss | % random, burst models (Gilbert-Elliott) | netem | S2: accuracy within the 99 % confidence interval |
 | Rate limit | bit/s | netem rate or HTB | |
 | Reordering | % | netem | requires a delay |
-| Duplication | % | netem | |
+| Duplication | % | a draw in the fault's mark chain and a copy made by nftables on the egress interface (`dup to` the same interface in a netdev egress chain); not netem's `duplicate`, which the kernel refuses next to any other netem of the interface | the copy meets the same class (delay, loss, rate) as the original; the hook is on every interface of the tc tree while some fault duplicates (M10, P2-M10-01) |
 | Corruption | % | netem | corrupted packets are usually dropped by checksums at the receiver |
 | Queue limit | packets | netem limit | per device (D18). By default the compiler computes the limit from delay × rate, where rate is the fault's rate or, without one, the egress interface's link speed capped at 1 Gbit/s, and caps the result by a memory budget per interface (netem's default of 1000 packets causes tail drop at high delay × rate, e.g. satellite); an explicit value models small buffers |
 | Blackout | on/off | netem loss 100 % | "offline"; part of the effective fault configuration, so it follows the same precedence and hits running connections too; fault counters show the dropped packets |
@@ -815,7 +815,8 @@ Server reply ──► prerouting on uplink:
     | 16 | direction: 0 = packet in the connection's original direction (upload of the initiator), 1 = reply (download), from `ct direction` |
     | 17–19 | PMTU table index: 0 = none, 1–7 select one of up to seven PMTU mirror tables (§2.5; S13 used a single bit, `0x00200000`) |
     | 20 | service selection: route into the service namespace (§3.3, S16) |
-    | 21–23 | reserved for further routing marks |
+    | 21 | duplicate this packet: set by the fault's mark chain with the fault's probability, cleared by the egress hook that makes the copy (§2.5; M10) |
+    | 22–23 | reserved for further routing marks |
     | 0–3, 24–31 | untouched, free for other software |
 
   - Every chain that writes the fault id must keep the direction bit (mask `0xffff000f`, not `0xfffe000f`); a golden test checks the compiled masks. In S15 a wrong mask gave both directions the upload parameters.

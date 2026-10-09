@@ -234,11 +234,11 @@ never collide, and removes everything at the end of the test, killing processes 
 ## The executor
 
 `chaosgw exec` is the only process that writes the kernel's network configuration (plan §3.1). It
-accepts a closed set of operations (`nft_apply`, `nft_add_elements`, `nft_del_elements`, `routing`,
+accepts a closed set of operations (`nft_apply`, `nft_dup`, `nft_add_elements`, `nft_del_elements`, `routing`,
 `tc`, `offloads`, `docker_user`, `assign_interfaces`, `links`, `sysctl`, `wireguard`, `bird`,
 `service_ns`, `read`), each a JSON object with a `type` and an optional `namespace`. The decoder
 (`executor.Decode`) is strict and is where most of the scope is enforced:
-nftables only `inet chaosgw`, routes and rules only in tables 100-110 and always with protocol tag
+nftables only `inet chaosgw` (and, written by the executor itself from a list of interfaces, the table `netdev chaosgw_dup` of the duplication hook, M10), routes and rules only in tables 100-110 and always with protocol tag
 201, tc arguments only from a token allowlist without the keywords that override the validated
 fields, in Chaos Gateway's own handles (root `1:`, classes `1:<minor>`, leaves `<minor>:`, filters
 on `1:`, M8b; see "tc state and tc operations (M8b)"). What depends on run-time state, the interfaces assigned to Chaos Gateway, is checked by the
@@ -388,6 +388,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `invalid_dhcp_action` | A DHCP action's fields do not match (`lease_time` only for `short_lease`, `options` only for `set_options`). |
 | `invalid_overlay` | An overlay request names zero, or both, of `client` and `link`. |
 | `invalid_flapping` | A flapping fault's `up` or `down` is zero. |
+| `invalid_rate` | A fault's `rate` is below 8 bit/s (netem limits in bytes per second: such a rate would not limit at all). |
 | `invalid_name` | Reserved; not produced yet. |
 | `duplicate_protocol` | A link already runs a routing protocol of the same type. |
 | `missing_routing_settings` | Reserved; not produced yet. |
@@ -1006,7 +1007,7 @@ steps.
   input order; `TestTheWinnerOfALevelDoesNotDependOnTheInputOrder` pins the fix. The tests E1–E8
   and E12 exist twice: as pure domain tests (`resolve_test.go`, with the example configuration) and
   through the store (`internal/overlay/precedence_test.go`: write, replace, expire, reset, then
-  resolve); E9 and E10 follow in M10, E11 in M21. E5 resolves the DNS family, which only takes
+  resolve); E9 is the compiler's golden of M10 (`TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate`, measured on the real kernel by `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit`), E10 follows with the tunnel faults, E11 in M21. E5 resolves the DNS family, which only takes
   effect in the kernel from M20; its resolution is already tested.
 - **Classification tables** (`domain/table.go`, `domain/sources.go`). `World.Sources(identity)` lists
   the sources of traffic (every device with its addresses, every address range that identifies a
@@ -1080,9 +1081,9 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `0x100a0/0x1fff0` download; `protocol ip prio 1`, `flowid` the class). A direction the fault does
   not impair has no class and meets the default one. The netem configuration is always complete:
   `limit`, `delay D J 0%`, `distribution` (only with a jitter), `loss random P C` or
-  `loss gemodel p r 1-h 1-k`, `reorder P 0%`, `duplicate P 0%`, `corrupt P 0%`, `rate R` with `0bit`
-  for none. Blackout is `loss 100%`, flapping compiles its up phase and `Netem.Down()` is the blackout
-  (M8b toggles), `keep_order` is a rate (the fault's, else 1 Gbit/s). The queue limit is the explicit one,
+  `loss gemodel p r 1-h 1-k`, `reorder P 0%`, `duplicate 0%` (since M10 always 0: the copy is not netem's), `corrupt P 0%`, `rate R` with `0bit`
+  for none. Blackout is `loss 100%`, flapping compiles the phase the engine holds (`Input.FlapPhase`) and `Netem.Down()` is the blackout
+  (the engine toggles it, "Extended faults (M10)"), `keep_order` is a rate (the fault's, else 1 Gbit/s). The queue limit is the explicit one,
   or delay+jitter × rate / 1500 bytes (rate: the fault's, else 1 Gbit/s), at least 1000 and at most the
   class's share of the interface's memory budget (P2-M8a-02).
 - **What the VM proved first** (kernel 6.8.0-142, iproute2 6.19, nftables 1.1.6), before any compiler code
@@ -1304,7 +1305,7 @@ before the code was written and pinned by tests (`internal/executor/tcops_integr
 | HTB root: `change`, `replace` (identical or not) or `add` when it exists | `Change operation not supported by specified qdisc` / `Exclusivity flag on`: the root is created once and left alone. |
 | root `add` over a root the host put there (mq, fq_codel) | refused: `NLM_F_REPLACE needed to override`. `replace` takes the root over (with the host's queues below it). `qdisc delete ... root handle 1:` gives the default qdisc back. **The apply uses `replace`, not `add`, when the interface's root is not ours** (`add` is only right on a `noqueue`, which the compiler's `Entries(dev, withRoot)` assumes; proven on a bridge, a dummy and an interface with Chaos Gateway's own root). |
 | `delete` of what is not there | exit 2 and one of: `RTNETLINK answers: No such file or directory`, `Error: Specified class not found.`, `Error: Failed to find qdisc with specified handle.`, `Error: Failed to find qdisc with specified classid.` (a leaf below a class that is gone; kernels 6.17 and 7.0, not seen on 6.8), `Error: Specified filter handle not found.`, `Error: Cannot find specified filter chain.`, `Error: Parent Qdisc doesn't exists.`, `Error: Invalid handle.` (also the answer for a root with a handle that is not there) and, for the default qdisc, `Cannot delete qdisc with handle of zero`, which the executor never sends. All but the last are "benign" in a deletion step (below). |
-| a duplicating netem with any other netem on the interface | refused in either order: `netem: cannot mix duplicating netems with other netems in tree` (P2-M8b-01). |
+| a duplicating netem with any other netem on the interface | refused in either order: `netem: cannot mix duplicating netems with other netems in tree` (P2-M8b-01). The compiler never writes one since M10: every leaf says `duplicate 0%` and the copy is made by an egress hook (P2-M10-01, "Extended faults (M10)"). |
 
 **Executor operations.** The operation is still `tc` with `TCEntry` entries (`object` qdisc | class |
 filter, `action` add | replace | change | delete), now closed in two more ways (`tcgrammar.go`):
@@ -1873,6 +1874,243 @@ entry is deleted or the cut window opens; it reaches the gateway without an entr
 the gateway answers the server with a reset, and the server's side is gone by chance instead of staying
 half-open (seen once on level 1b, then reproduced in the persistent VM: 3 of 40 deletions). That is what a
 real outage does as well; the test only has to stay out of that moment.
+
+## Extended faults (M10)
+
+Plan §2.5 and M10. This section describes the non-tunnel half of M10, built on the fault engine of M8a
+and M8b: rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott),
+blackout and flapping. Tunnel faults, the WireGuard-action overlays, MTU and PMTUD (and E10) follow in the
+next steps of the milestone and are not described here. What was already there and is only tested now:
+the model and the validation (`NetemParams` has had every one of these since Phase 1), the netem leaf with
+its complete parameter set (`compiler/netem.go`), the per-device fault ids of D18 (`compiler/faults.go`) and
+the class limit with `capacity_exceeded`.
+
+### What the VM proved first
+
+Before any code was written around them, in the persistent VM (kernel 6.8.0-142, iproute2 6.19, nftables
+1.1.6; `make vm-exec`), and again on the 7.0.0-38 kernel of Ubuntu 26.04 for the constructs the compiler
+emits (below, "Kernel matrix"):
+
+- **Every netem shape is accepted** and reads back as the compiler predicts: `loss gemodel` at its
+  edges (p or r 0 %, 100 %, `0.000000001 %`), `corrupt 100 %`, `reorder 100 %` with a delay, `rate 8bit`
+  and `rate 100Gbit`, `limit 1` and `limit 1000000`, `loss random 100 %`. The edges are in
+  `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports`.
+- **A flapping toggle is a `replace` of the leaf.** `replace` (or `change`) from `loss gemodel ...` to
+  `loss random 100% 0%` and back keeps the seed and the counters, and the gemodel's state is simply used
+  again; `loss random 100% 0%` clears a gemodel, as `loss random 0% 0%` did.
+- **A duplicating netem cannot share an interface** with any other netem (P2-M8b-01). The tree has every
+  class on every interface, so a duplicating fault in both directions would not even fit by itself. The
+  copy is therefore made outside netem, below.
+- **First try, and why it is gone: a tc hook.** `tc qdisc replace dev D clsact` and `tc filter replace dev D
+  egress handle 0x200000/0x200000 protocol ip prio 1 fw action skbedit mark 0x0/0x200000 pipe action
+  mirred egress mirror dev D`, with a packet mark with bit 21 set from nftables (`meta mark set mark |
+  0x200000`), duplicated 103 of 1000 pings flagged with 10 % on **6.8.0-142**, and the copy went through the
+  same HTB class and netem. On **7.0.0-38** the same filter does nothing: the mirred action counts an
+  overlimit for every packet and sends no copy (no message in `dmesg`; with or without the `skbedit`; the
+  action seems to refuse a mirror back to the device the packet is leaving through, which 6.8 allows). The matrix has both
+  kernels, so the first version of the hook (clsact, `skbedit`, `mirred`, the executor's grammar for the
+  egress block, the read of it, an action normalizer) was built, passed the 6.8 measurement and failed the
+  7.0 one, and was replaced.
+- **The hook that works on both: nftables.** A table of the netdev family with a base chain on the `egress`
+  hook of the interface (kernel 5.16 and later), the rule `meta mark & 0x200000 == 0x200000  meta mark set
+  meta mark & 0xffdfffff  dup to "D"`. The hook runs before the qdisc, so the clone passes the whole egress
+  path again, tc included; duplicated 56 of 200 pings flagged with 30 % on 7.0 and the copies were delayed
+  by the 20 ms of the netem leaf. nft's JSON for it is `{"dup": {"addr": "D"}}` (the device name goes into
+  `addr`), a netdev base chain prints its interface as `"dev"`. A table is replaced in one transaction by
+  `add table`, `delete table`, `add table` and the chains (nothing meets half of it); a chain on an interface
+  that does not exist is refused by the kernel (`Could not process rule: No such file or directory`).
+
+### Duplication (P2-M10-01)
+
+The decision of P2-M8b-01. Netem's `duplicate` is never used: `Netem.Args()` writes `duplicate 0% 0%` in
+every leaf and `Netem.Duplicate` only keeps the fault's probability.
+
+```
+classify (prerouting)   mark_<id>: ... meta mark set mark | 0x200000     with probability p, per direction
+                                    (ct direction original|reply, numgen random mod 10^9 < p × 10^7)
+table netdev chaosgw_dup, one chain per interface of the tc tree, hook egress:
+   egress_<dev>: meta mark & 0x200000 == 0x200000 -> meta mark set mark & 0xffdfffff -> dup to "<dev>"
+   -> (the packet and its copy) -> HTB root -> fw filter by the id bits -> the class of the fault -> its netem leaf
+```
+
+- **The draw** is a rule of the fault's mark chain (`markChain`, `classify.go`): one rule per direction that
+  duplicates, `ct direction original|reply`, `numgen random mod 1000000000 < N`, `meta mark set mark |
+  MarkDupBit`; 100 % is the rule without the draw (nft refuses a comparison against the modulus), and a
+  probability that rounds to zero parts in 10^9 has no rule. The resolution is 10^-7 percent.
+- **The copy** is a clone of the packet, sent through the interface's whole egress path again: the same
+  HTB class, so it has the delay, loss and rate of the original (a duplicate in netem is delayed as well),
+  and is dropped or limited like it. The flag is cleared on the original before the clone is made, so
+  neither is copied again. The original and the copy are two packets of the class; the fault's named
+  counters count the packet once (they count the classification), the queue statistics count both.
+- **Mark bit 21** was one of the reserved routing bits; the layout in plan §3.3 now names it. The fw
+  filters of the classes mask it out (`MarkMask` is `0x1fff0`), and `TestTheDuplicationBitIsAReservedRoutingMarkBitThatNothingElseUses`
+  pins that nothing else overlaps.
+- **The executor's operation** is `nft_dup` (`executor.NftDup`, `internal/executor/nftdup.go`): a list of
+  interfaces, no free-form rule. The executor writes the table itself (`DupTransaction`: chain
+  `egress_<dev>` of type filter, hook egress, priority 0, policy accept, bound to the interface, and the
+  one rule `DupRuleExpr`, with a comment that is a hash of the rule so that a read-back can tell it from
+  another one), the interfaces must be assigned to Chaos Gateway (the scope check), and `read` `nft_dup`
+  returns the table (`nft -j list table netdev chaosgw_dup`; a missing table is an empty ruleset). The
+  table is not the table `inet chaosgw` of `nft_apply`, which stays closed to every other table.
+- **The apply** (`internal/apply/dup.go`). `Target.DupDevs` is the interfaces of the tc tree while some class
+  duplicates. `dupProblems` compares them with the table the kernel holds: a chain missing, on an interface
+  that is not wanted, of another shape, or without the one rule is a difference; a table with nothing
+  to do is one too. The verify reports them (`nft: duplication hook: ...`); the plan writes the table before
+  the transaction that makes packets ask for a copy and deletes it after the transaction that stopped them
+  (a flagged packet that meets no hook is merely not copied; the flag is harmless). A re-apply of the
+  same target writes nothing for the hook. The simulated kernel has the table too (`kernelsim/nftdup.go`).
+- **What it does not do.** A packet that leaves through an interface without the hook (the management
+  interface, a port) is not duplicated: only test traffic is classified and it leaves through the tree's
+  interfaces. A packet that is forwarded from one test network to another is duplicated once, on the
+  interface it leaves through.
+- **An interface that goes takes its chain along** (found in the VM): the kernel removes the base chain
+  bound to a deleted interface and does not bring it back when an interface of that name returns. The
+  apply that deletes an interface (a network that is no longer wanted) sees the chain in the state it read
+  and writes the table again; an interface that is deleted and created again behind the gateway's back
+  loses its hook until the next apply, whose verify reports it (`nft: duplication hook: X has no hook`)
+  and whose plan writes the table again. Nothing checks in between (drift detection is M38).
+- **Modules:** `nft_dup_netdev` was in the shared list for the capture of M17; M10 uses it as well.
+
+### Flapping (`internal/engine/flap.go`)
+
+A flapping fault is up for `up`, then a blackout (netem `loss random 100%`, everything else of the leaf
+unchanged) for `down`, and so on, starting up. The phase is not configuration; it is the clock's.
+
+- **The schedule.** The flapper holds one entry per flap key (`compiler.FlapKey`: the fault's key without the
+  device, and the direction: all classes of a fault flap in step on all devices), with the spec and the
+  start. The start is the moment an apply containing the flapping was verified (`flapper.sync` after
+  every successful full apply): a write that is answered starts its fault's first up phase. A
+  flapping whose other parameters change keeps its schedule; changed times are a new flapping and start
+  up. A restart starts every flapping up (overlays do not survive one either).
+- **The boundaries** are `start + k × (up + down)` and `+ up`, from the start, on the injected clock
+  (`Monotonic`), never by adding up timer delays: a timer that fires late does not move the next one.
+  The apply loop arms one timer for the nearest boundary; when it fires, `toggleFlaps` computes the phase
+  the schedule says now, and replaces the leaf of every class of every flapping that is not in that phase
+  (one `tc -batch` per interface; a clock that jumped over several boundaries lands in the right phase
+  with one toggle). Toggles run in the apply loop's goroutine, so they never overlap an apply: a boundary
+  that falls into an apply is made right after it.
+- **The compiler writes the phase** (`Input.FlapPhase`, `TCClass.Down`, `TCClass.Config()`): a full apply
+  of the down phase writes the blackout where the leaf holds the up configuration, an apply in the up
+  phase ends nothing early, and `Verify` compares the phase it was compiled with. The phase is asked with
+  the spec the compile is about to write, so a changed flapping is up. `sameFaultStructure` compares the
+  trees with the phase, and the toggle updates the target the loop holds, so an identity-only update
+  stays incremental through a flapping.
+- **Only the running gateway flaps.** The one-shot `chaosgw apply` leaves a flapping fault in its up phase
+  and exits: nothing toggles it afterwards.
+- **A failed toggle** is tried again a second later (`flapRetry`); the schedule does not get stuck, and the
+  next full apply writes the phase anyway.
+- **Timing tolerance.** Plan §2.10 gives scenario steps ±100 ms on a native or KVM machine, counted at the
+  executor's commit; a boundary is a step of the same kind, and `engine.FlapTolerance` (100 ms) is the
+  same figure: from the scheduled moment to the moment the executor answered (`FlapChange.Late`). The
+  figure is asserted on the real kernel where `testbed.Accurate()`; under emulation the schedule itself
+  (the exact distances of the toggles) is asserted and the lateness is only logged. A probe stream sees an
+  outage to the precision of its spacing, so `testbed.CheckFlaps` adds two intervals of the stream to
+  the engine's tolerance.
+- **What the API shows.** `QueueStats.flapping` (`phase`, `since`, `next_change_at`) on the queues of a
+  flapping fault (`Engine.Flaps`); `Engine.FlapLog` keeps the last 1024 toggles with the scheduled and the
+  commit time, for the tests and later for the run timeline.
+- **A defect this found.** `&clock.Real{}`, which `engine.New` and the API server use by default, had a
+  zero origin, so `Monotonic()` stood still at 292 years: no deadline computed from it came (overlay TTLs
+  and leases, the retirer's grace period). The zero value is a working clock now (the origin is the first
+  reading; `TestTheZeroValueOfRealIsAClockWhoseMonotonicTimeMoves`).
+
+### Rate, queue limit and the class limit (D18)
+
+Compiler and capacity were M8a's; M10 measures them.
+
+- A fault with a `rate`, an explicit `queue_limit` or `keep_order` gets one fault id per matched device (plus
+  one for the addresses of the network that no device owns), so a 2 Mbit/s "Bad LTE" on a network is 2 Mbit/s
+  per device, not 2 Mbit/s for the network (E9: `TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate`).
+  `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit` transfers with iperf3 from two devices
+  at the same time, in each direction, and from a device of another network that the fault does not name.
+  The throughput iperf3 reports is the TCP payload and netem's rate counts the IP packet (1448 of 1500
+  bytes), so 2 Mbit/s shows as 1.93 Mbit/s, inside the plan's ±10 %.
+- **Rates below 8 bit/s are refused** (`invalid_rate`): netem counts bytes per second, so `rate: 7bit` would
+  not limit at all.
+- **`capacity_exceeded` in the preview** names the scope and the limit and is refused at the apply too:
+  `TestThePreviewOfAPerDeviceRateThatDoesNotFitTheClassLimitIsCapacityExceeded` (engine; 30 known devices
+  need 63 classes at a limit of 50; the limit it names is the one it sets),
+  `TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWithItsScope` (API, limit 6),
+  and the compiler's `TestARateLimitedNetworkOf250DevicesNeeds500Classes` (1000 on x86-64, 200 on arm64:
+  the tests that depend on it set the limit they mean).
+- **An explicit queue limit** is a small buffer: `TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest`
+  sends a burst of 300 datagrams of 1000 bytes (back to back, from a script: a paced flood is only as steady
+  as the sender's timer, which under emulation is not) into a 1 Mbit/s fault while probes run through it.
+  With `queue_limit: 20` the queue holds 20 packets, drops the rest at its tail (261 to 264 of 300 in the
+  runs below) and the slowest probe waits 141 to 161 ms (20 packets of about 1000 bytes at 1 Mbit/s
+  are 165 ms); with the computed limit (1000 packets) nothing is dropped and the slowest probe waits 2.0
+  to 2.3 s behind the burst (300 packets are 2.4 s). A sample of the queue's length does not work as the
+  evidence: reading it takes longer than the queue lives under emulation.
+
+### Tests
+
+The compiler: `internal/compiler/extended_test.go` (E9, the draw and the leaf that never duplicates, the
+hook's interfaces, the bit, the phase of a flapping, every shape side by side, the mark chains as golden)
+and the scenario `faults-shapes` (a golden file; also in the kernel gates). The gates run the new shapes
+and the hook's table on the real kernel: `TestEveryCompiledRulesetIsAcceptedByTheKernel` (nft),
+`TestEveryCompiledTCTreeIsAcceptedByTheKernel`, `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports`
+(tc; the duplicating shapes are in the main list now, not on an interface of their own) and
+`TestTheKernelAcceptsTheDuplicationHookAndReadsItBackAsTheVerifyExpects` (the executor's transaction, its
+replacement by another set of interfaces, its deletion, an interface that does not exist).
+
+The apply on the simulated kernel: `internal/apply/dup_test.go` (the table before the classification, a
+re-apply that writes nothing, its removal after the transaction while the tree stays, damage found and
+repaired, a table nobody wants, the preview), `tcapply_test.go` for the phase of a flapping. The executor:
+`internal/executor/nftdup_test.go` (the operation, the transaction, the rule, the scope, the read). The engine:
+`flap_test.go` and `flap_internal_test.go` (the schedule on the fake clock to the exact boundary, a jump over
+cycles, a failed toggle, a replaced fault, a configured fault), `extended_test.go` (the hook with a write, the
+preview). The API: `TestTheQueuesOfAFlappingFaultShowTheirPhase`. The domain: `invalid_rate` and the validation
+rules the extended faults have (`validate_fault_test.go`, `overlay_test.go`), E9 through the store
+(`internal/overlay/precedence_test.go`).
+
+The measurements on the real kernel, `internal/engine/integration_faults_extended_test.go`, one test per
+fault type, each with the isolation of a flow the fault does not name (plan §4.3); run in the persistent VM with
+`make vm-test ARGS='-run "TestADuplicating|TestAReordering|TestACorrupting|TestABurstLoss|TestABlackout|TestAFlapping|TestAnIotRate|TestAnExplicitQueue" -tags testbed -test-timeout 170m -vm-timeout 4h ./internal/engine'`
+(about 4 minutes each, emulated; the test binary is built on the host, so a kernel other than the default is
+`vm up -kernel 7.0.0-38-generic` first). What is asserted where: the functional assertions always (the effect is
+there, in its direction, the flow that is not named is untouched), the accuracy ones with native execution or
+KVM (`testbed.Accurate()`), with the flakiness policy (a failed attempt is measured again).
+
+| Fault type | Functional (always) | Accuracy (§4.3, `Accurate()`) |
+|---|---|---|
+| duplicate | copies of the datagrams (upload) or of the answers (download) only, none in the other direction, another device's delay fault intact next to it, the hook there and gone | share of duplicates in the 99.9 % binomial interval of the configured one (N = 2000) |
+| reorder | datagrams arrive after later ones, none lost or duplicated | share sent at once in the interval of the configured one |
+| corrupt | datagrams lost, the receiver counts checksum and header errors, never more than the loss | share lost in the interval of the configured one times (1 - 6/72) (a flipped bit of the frame's source address is not caught) |
+| burst loss | loss, in runs of more than 1.5 packets, none in the other direction | losses in the Gilbert-Elliott interval (`GilbertLossBounds`, with the autocorrelation of the model) and runs of about 1/r (`CheckBurstLoss`) |
+| blackout | nothing gets through, also a stream that was running; the queues count the drops; the next write ends it | |
+| flapping | the engine's toggles are the exact distance of the cycle apart and never early; at least two complete outages of about the down time | each toggle within `FlapTolerance` of its time; the outages of the stream (down time, cycle) within that plus two intervals |
+| rate (D18) | each of two devices at 1.4 to 2.4 Mbit/s in each direction (a shared queue would give each 1), the device of another network above three times the limit | each within ±10 % of 2 Mbit/s; the other network's device above ten times the limit |
+| queue limit | tail drops (at least 200 of a burst of 300), a probe waits below 600 ms; without the limit nothing is dropped and a probe waits more than a second | |
+
+### What the persistent VM showed, on both kernels of the matrix
+
+The functional assertions passed on **6.8.0-142** and on **7.0.0-38** (software emulation, 2 CPUs; the
+accuracy assertions of plan §4.3 do not run there and are the first thing CI verifies). The measured
+distributions the tests log, for the record (one run each, 600 probes 20 ms apart unless said otherwise;
+emulation adds tens of milliseconds of noise to delays, which is why the timing figures are not asserted):
+
+| | 6.8.0-142 | 7.0.0-38 |
+|---|---|---|
+| upload duplicate 10 % | 59 of 600 (9.8 %), the echo answers each copy | 58 of 600 (9.7 %) |
+| download duplicate 20 % | 127 copies of answers, none of datagrams | 117 |
+| reorder 25 % + 50 ms (300 probes) | 81 sent at once (27 %), 109 arrived late | 70 (23 %), 102 |
+| corrupt 10 % | 54 lost (9.0 %), the server counted 46 header and checksum errors | 59 lost (9.8 %), 45 |
+| burst loss p 5 %, r 25 % | 97 lost (16.2 %; the model says 16.7 %) in runs of 3.9 (model: 4) | 140 (23.3 %) in runs of 4.2 |
+| flapping 6 s up, 4 s down | outages of 3.6, 3.2 and 3.85 s | 4.1, 3.3 and 3.65 s |
+| 2 Mbit/s per device, two devices at once | download 1.78 and 1.87, upload 1.86 and 1.90 Mbit/s | 1.89 and 1.90, 1.90 and 1.92 |
+| queue limit 20 at 1 Mbit/s, a burst of 300 | 233 dropped, slowest probe 165 ms (the model: 165) | 266 dropped, 158 ms |
+| the same without a limit | nothing dropped, slowest probe 2.08 s (model: 2.4) | 2.29 s |
+
+Both burst-loss runs lie inside the 99.9 % interval of the model (`GilbertLossBounds`: 4.7 % to 28.7 % of 600
+packets, 10.1 % to 23.2 % of 2000 for these parameters), which is wide because the losses come in bursts: a run
+of 600 probes has about 25 of them.
+
+**Kernel matrix.** The kernel gates (`TestEveryCompiledRulesetIsAcceptedByTheKernel`,
+`TestEveryCompiledTCTreeIsAcceptedByTheKernel`, `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports`,
+`TestTheKernelTakesTheLongestValuesTheAPIAccepts`, `TestTheKernelAcceptsTheDuplicationHookAndReadsItBackAsTheVerifyExpects`)
+and the eight measurement tests ran on both. A kernel other than the default is `make vm-down`, then
+`go run ./tools/testvm vm up -kernel 7.0.0-38-generic` (the guest uses the container's iproute2 6.19 and nftables
+1.1.6 on both).
 
 ## Generated code
 

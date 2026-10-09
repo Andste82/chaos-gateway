@@ -2371,6 +2371,38 @@ Real kernel (`engine/integration_tunnel_test.go`), run in the persistent VM with
 | `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` | disable (peer off the interface, offline event), key mismatch (another key on the interface), block endpoint (the counter counts); each ends with its overlay and the tunnel returns; flows outside unaffected |
 | `TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported` | the routes are withdrawn within the hold time (9 s) and the margin; the times are logged and taken from the events of the routing poll; the routes return after the blackout |
 
+**What the persistent VM showed** (software emulation, 2 CPUs, so the accuracy assertions of §4.3 did not run and CI verifies them;
+the functional ones passed, one run each unless said):
+
+- Impairment through the tunnel, 5 % loss and 150 ms towards the peer and 30 ms from it: 14 to 19 of 300 probes lost per flow
+  (4.67 %, 3.67 % and 5.0 % in one run, 5.0 %, 6.0 % and 6.33 % in another), only in the direction the loss was configured for, medians
+  of the delays above the configured ones by the noise of the machine (tens of milliseconds).
+- Blackouts: with the upload alone 60 of 60 requests reached the echo of the client machine and no answer returned, with the download
+  alone none reached it; with both nothing passed in the flows of two devices, the flow the client's network starts, or the tunnel's
+  own ping, while a flow to the server through the same uplink and a flow from the client machine to the gateway's uplink address
+  were unchanged.
+- Flapping, 6 s up and 4 s down: outages of 3.8, 3.3, 3.9 and 2.85 s (probes every 50 ms); the toggles of both sides were one `tc`
+  batch each. Before the toggles were one batch per interface, a toggle was 16 s late (six runs of the tool at about 2.5 s each).
+- The BGP link: the session went down and the routes were withdrawn, and came back after the blackout. The write of the overlay
+  took 84 s on this machine (an emulated apply of the whole lab is that slow: a write of a device fault took 1 min 44 s next to
+  2 min 20 s for the tunnel fault, the larger plan), so the blackout had held for most of the hold time when the write was answered;
+  the test therefore takes the times from the call and from the answer and from the events, and bounds the withdrawal by the
+  protocol timers (6 to 9 s after the blackout began) plus the length of the write. On a native or KVM machine S15's figures are
+  the expectation: withdrawn after about 6 s, back after 2.5 s.
+- The roaming test found the client at its new port after one apply; an apply took minutes here, and the engine made one desired
+  state for it, not one per poll (`TestAPeerThatRoamsMakesOneDesiredStateWhileTheApplyForItIsOnItsWay`: before the rule, the polls made
+  six).
+- A flow the fault does not name was measured at 13 ms before a fault and at 41 ms and 397 ms in the same run, while the fault was on
+  another flow: the emulated machine's own load. The functional isolation assertion of these tests (`isolated`) therefore has the
+  flakiness rule of §4.3 (a failed attempt is measured once more), as the accurate branch always had.
+
+**Kernel matrix.** The gates (`TestEveryCompiledRulesetIsAcceptedByTheKernel` with the scenario `tunnel`,
+`TestEveryCompiledTunnelTreeIsAcceptedByTheKernel`, `TestEveryCompiledTCTreeIsAcceptedByTheKernel`), the executor's
+`TestTheIFBAndTheFlowerFiltersOnARealKernel` and the nine real-kernel tests above ran on **6.8.0-142** and on **7.0.0-38** and passed
+on both (7.0.0-38: the tunnel fault 150 ms / 5 % loss in the same three flows, flapping outages of 3.5, 4.4, 3.7 and 2.4 s for a down
+time of 4 s, the BGP session down 40.7 s and up again 36.4 s after the calls of the writes, on a machine that took 69 s over the write).
+A kernel other than the default is `make vm-down`, then `go run ./tools/testvm vm up -kernel 7.0.0-38-generic`.
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

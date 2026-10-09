@@ -166,15 +166,19 @@ func TestARuleOverlayRefusesNewConnectionsAndCutsExistingOnesOfItsDeviceOnly(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := r.e.Snapshot()
-	var seen int
-	for _, rule := range s.Access.Rules {
-		if v := counters[rule.Counter]; v.Packets > 0 {
-			seen++
+	// the overlay's rule is the only rule: it decided at least the three attempts above (a SYN or
+	// a datagram each; a SYN is sent again, the UDP stream sends on)
+	var ruleCounter string
+	for _, rule := range r.e.Snapshot().Access.Rules {
+		if rule.Key == "overlay:"+res.Overlay.Id.String() {
+			ruleCounter = rule.Counter
 		}
 	}
-	if seen == 0 {
-		t.Errorf("no rule counted a packet: %+v", counters)
+	if ruleCounter == "" {
+		t.Fatalf("the overlay's rule is not in the snapshot: %+v", r.e.Snapshot().Access.Rules)
+	}
+	if got := counters[ruleCounter].Packets; got < 3 {
+		t.Errorf("the rule's counter is %d, want at least 3 (the dropped attempts of A): %+v", got, counters)
 	}
 	// the window is closed and the cut chains are empty
 	if out := top.GW.Must("nft", "list", "chain", "inet", "chaosgw", compiler.CutForwardChain); strings.Contains(out, "reject") {

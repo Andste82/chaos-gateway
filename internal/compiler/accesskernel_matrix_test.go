@@ -313,3 +313,58 @@ func TestForwardedIPv6StaysBlockedWhateverTheRulesAllow(t *testing.T) {
 		t.Errorf("IPv6 after an IPv4 connection: %s", got)
 	}
 }
+
+// The cut window runs in front of the established accept, so it has to skip by itself what the hooks
+// let no rule judge (plan §2.2: switched traffic is "never ours to impair or drop"; the gateway's own
+// connections). On a bridged bed with br_netfilter, an established TCP connection between two devices of
+// one network and a connection the gateway holds to its own bridge address (loopback, original source in
+// the network the rule selects) both survive a window of a rule that cuts that whole network; a
+// connection of the device through the gateway is reset by the same window, so the window did open.
+func TestACutWindowLeavesSwitchedAndGatewayOriginatedTrafficAlone(t *testing.T) {
+	b := newBridgedAccessBed(t)
+	b.apply()
+	switched := b.dev.Start("python3", "-c", holdScript, "10.10.0.43", "8883")
+	local := b.gw.Start("python3", "-c", holdScript, "10.10.0.1", "443")
+	routed := b.dev.Start("python3", "-c", holdScript, "203.0.113.10", "8883")
+	for _, p := range []*testbed.Process{switched, local, routed} {
+		waitOutput(t, p, "ok")
+	}
+
+	b.w.addConfigRule(ruleA, `{name: cut-iot, source: {network: IoT}, protocol: tcp, action: drop, cut_existing: true}`)
+	tg := b.apply()
+	if !tg.Access.HasCuts() {
+		t.Fatal("the rule must be able to cut")
+	}
+	// the bridge must really show the switched traffic to the forward hook for this test to mean
+	// anything: a counter in front of everything proves that the connection passes the hook
+	b.gw.MustStdin(`add counter inet chaosgw probe_sw
+add chain inet chaosgw probe_switched { type filter hook forward priority -10; }
+add rule inet chaosgw probe_switched iifname "br-iot" oifname "br-iot" counter name "probe_sw"
+`, "nft", "-f", "-")
+	tx, err := tg.Access.CutTransaction([]string{"config:" + ruleA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.gw.MustStdin(string(tx), "nft", "-j", "-f", "-")
+	for i := 0; i < 50 && b.counter("probe_sw") == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if n := b.counter("probe_sw"); n == 0 {
+		t.Fatal("the switched connection does not pass the forward hook: br_netfilter is not on, the test proves nothing")
+	}
+	waitOutput(t, routed, "ConnectionResetError") // the window is open and resets what it is meant to
+	time.Sleep(time.Second)
+	closing, err := tg.Access.CutTransaction(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.gw.MustStdin(string(closing), "nft", "-j", "-f", "-")
+	for name, p := range map[string]*testbed.Process{"the switched connection of two devices": switched, "the gateway's own connection over loopback": local} {
+		if out := p.Output(); strings.Contains(out, "Error") || strings.Contains(out, "bad") || strings.Contains(out, "timeout") {
+			t.Errorf("%s was reset by the cut window: %s", name, out)
+		}
+	}
+	switched.Stop()
+	local.Stop()
+	routed.Stop()
+}

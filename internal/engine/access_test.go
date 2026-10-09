@@ -489,6 +489,107 @@ func TestAFailureOfTheCutDoesNotFailTheApplyAndTheWindowIsClosed(t *testing.T) {
 	}
 }
 
+// closingTransaction is the nft command that empties the cut chains: flushes only.
+func closingTransaction(argv []string, stdin string) bool {
+	return len(argv) > 0 && argv[0] == "nft" && strings.Contains(stdin, compiler.CutForwardChain) &&
+		strings.Contains(stdin, `"flush"`) && !strings.Contains(stdin, `"add"`)
+}
+
+// putAdvancing runs a write while the test moves the fake clock on, for the pauses between the retries.
+func (h *harness) putAdvancing(who model.Owner, body string) error {
+	h.t.Helper()
+	done := make(chan error, 1)
+	go func() { _, err := h.put(who, body); done <- err }()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Millisecond):
+			h.clk.Advance(engine.CloseRetryDelay)
+		}
+	}
+}
+
+func TestAFailedCloseOfTheCutWindowIsRetriedBeforeItIsReported(t *testing.T) {
+	h := newHarness(t)
+	h.startWith(engine.Config{CutWindow: -1})
+	h.mustApply(h.revision(nil))
+	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
+	var failed int
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if closingTransaction(argv, stdin) && failed < engine.CloseAttempts-1 {
+			failed++
+			return &executor.Result{Exit: 1, Stderr: "netlink: Error: Could not process rule: Device or resource busy\n"}
+		}
+		return nil
+	}
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	if err := h.putAdvancing(alice, ruleIoTCut); err != nil {
+		t.Fatal(err)
+	}
+	if failed != engine.CloseAttempts-1 {
+		t.Fatalf("the close failed %d times", failed)
+	}
+	if got := h.chainRules(compiler.CutForwardChain); len(got) != 0 {
+		t.Errorf("the window is still open after the retries: %v", got)
+	}
+	for _, ev := range collect(ch, engine.EventApplied) {
+		if msg, _ := ev.Data["cut_error"].(string); msg != "" {
+			t.Errorf("a close that succeeded on a retry is reported: %s", msg)
+		}
+	}
+	if s := h.e.Snapshot(); s.CutWindowError != "" {
+		t.Errorf("the apply status says the window is open: %s", s.CutWindowError)
+	}
+}
+
+// A window that cannot be closed is reported in the applied event and in the apply status, and the next
+// apply closes it: the incremental identity update retries the close, a full apply flushes the chains.
+func TestAWindowThatStaysOpenIsReportedAndClosedByTheNextApply(t *testing.T) {
+	h := newHarness(t)
+	h.startWith(engine.Config{CutWindow: -1})
+	h.mustApply(h.revision(nil))
+	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
+	broken := true
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if broken && closingTransaction(argv, stdin) {
+			return &executor.Result{Exit: 1, Stderr: "netlink: Error: Could not process rule: Device or resource busy\n"}
+		}
+		return nil
+	}
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	if err := h.putAdvancing(alice, ruleIoTCut); err != nil {
+		t.Fatalf("a window that stays open fails the write: %v", err)
+	}
+	if got := h.chainRules(compiler.CutForwardChain); len(got) == 0 {
+		t.Fatal("the failure injection did not keep the window open")
+	}
+	var seen bool
+	for _, ev := range collect(ch, engine.EventApplied) {
+		if msg, _ := ev.Data["cut_error"].(string); strings.Contains(msg, "close the cut window") {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("the applied event does not say that the window stays open")
+	}
+	if s := h.e.Snapshot(); !strings.Contains(s.CutWindowError, "close the cut window") {
+		t.Errorf("the apply status does not say that the window is open: %q", s.CutWindowError)
+	}
+
+	// the cause is gone; the next full apply flushes the chains and the status clears
+	broken = false
+	h.mustApply(h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") }))
+	if got := h.chainRules(compiler.CutForwardChain); len(got) != 0 {
+		t.Errorf("the next apply left the window open: %v", got)
+	}
+	if s := h.e.Snapshot(); s.CutWindowError != "" {
+		t.Errorf("the apply status still says the window is open: %q", s.CutWindowError)
+	}
+}
+
 func TestTheCutWindowStaysOpenForItsLengthOnTheClock(t *testing.T) {
 	h := newHarness(t)
 	h.startWith(engine.Config{}) // the default window of half a second

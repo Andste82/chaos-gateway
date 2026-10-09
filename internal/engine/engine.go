@@ -116,6 +116,10 @@ type Snapshot struct {
 	// ServiceError is why the service namespace does not have the holder the configuration wants,
 	// empty when it does (M6b-02): a dead holder degrades instead of failing every apply.
 	ServiceError string
+	// CutWindowError is why the window of resets of "also cut existing connections" is still open
+	// (cut.go), empty when it is closed: until a later apply closes it, the cutting rules reset
+	// every established TCP connection of their selectors.
+	CutWindowError string
 	// Overlays are the active overlays (plan §2.1.1), oldest first: what the desired state holds, which
 	// can be a change that the apply loop has not verified yet. Nothing in it is modified.
 	Overlays []model.Overlay

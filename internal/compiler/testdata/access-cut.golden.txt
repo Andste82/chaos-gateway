@@ -3,8 +3,8 @@
 1  config:a1000000-0000-4000-8000-000000000001  keep-ntp  allow  scope "global"  dest ""  proto udp  counter rule_add048cda1
 2  config:a1000000-0000-4000-8000-000000000002  cut-iot  reject  cut  scope "network IoT"  dest ""  proto any  counter rule_a41eb09061
 # sets
-set asrc_00074ad1_8743d6 { 10.10.0.0/24 }
-set asrc_bd595b57_8743d6 { 10.10.0.42 }
+set asrc_00074ad1ca56d1cfa1658f32_8743d6 { 10.10.0.0/24 }
+set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
 # chain forward
   jump cut_forward
   ct state { established, related } accept
@@ -31,12 +31,12 @@ set asrc_bd595b57_8743d6 { 10.10.0.42 }
   meta iifname @ifs_test_bf4feb tcp dport 53 accept
   meta iifname @ifs_test_bf4feb counter "input_drop" drop
 # chain access_forward
-  ct original ip saddr @asrc_bd595b57_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
   ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" accept
-  ct original ip saddr @asrc_00074ad1_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
 # chain access_input
-  ct original ip saddr @asrc_bd595b57_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
   ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" return
-  ct original ip saddr @asrc_00074ad1_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
 # chain cut_forward
 # chain cut_input

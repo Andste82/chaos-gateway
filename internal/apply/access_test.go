@@ -92,8 +92,9 @@ func TestAccessRulesApplyVerifyAndKeepTheirCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(s.Nft.Rules(compiler.CutForwardChain)); n != 1 {
-		t.Errorf("%d rules in the cut chain during the window", n)
+	// the cutting rule, behind one skip per bridge for the traffic that is switched inside it
+	if n := len(s.Nft.Rules(compiler.CutForwardChain)); n != 1+len(tg.Access.Switched) || len(tg.Access.Switched) == 0 {
+		t.Errorf("%d rules in the cut chain during the window, want the cut and a skip for each of the %d bridges", n, len(tg.Access.Switched))
 	}
 	closed, _ := tg.Access.CutTransaction(nil)
 	if _, err := e.ex.Do(context.Background(), &executor.NftApply{Ruleset: closed}); err != nil {

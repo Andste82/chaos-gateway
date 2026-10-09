@@ -345,7 +345,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M4: Docker started after the last apply is not noticed (`DOCKER-USER`) | M38 drift detection (partial) |
 | M4c: received-prefix list in routing view | M14 |
 | M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
-| M5: `lockout_protected` never produced | M9 |
+| M5: `lockout_protected` never produced — M9 does not produce it either; the kernel rule cannot be overridden and lockout-relevant configuration changes take commit-confirm. Whether to also refuse them: P2-M9-08 | decision |
 | M5: `capacity_exceeded` never produced | M8a, M10 |
 | M5: `target_busy` never produced | M15 |
 | M5: IPv6 management addresses never bound | M32 |
@@ -981,3 +981,71 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   rule let through (a ct label or mark written by the rule, one counter chain per rule).
 - Needs maintainer: yes
 - Effort: M
+
+### P2-M9-08 `lockout_protected` is still never produced
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. The spec lists `lockout_protected` (422, "the change would remove control-plane
+  access from the management network") since M5, and the Covered-later table gave it to M9. M9 cannot
+  produce it for rules: the anti-lockout rule is a system rule in front of the jump to the access rules,
+  so no rule and no overlay can take the control plane away (`TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay`),
+  and there is nothing to refuse. What can still lock the administrator out is a configuration change
+  that moves the UI port or the management interface or its sources; `engine.LockoutRelevant` flags
+  those and the apply waits for confirmation (commit-confirm, rolled back when it runs out), which is
+  the protection plan §2.16 names for risk 20.
+- Evidence: `internal/engine/lockout.go`, `internal/compiler/access.go` (the guard of the cut chain),
+  `api/openapi.yaml` (`lockout_protected`).
+- Task: chosen interpretation — commit-confirm stays the only protection; no change is refused
+  outright. If an outright refusal is wanted (for example a change that removes every management source
+  while the request has no confirm window), the code would be returned by the revision validation.
+- Acceptance: a maintainer confirms that commit-confirm is enough and the code may stay reserved, or
+  names the changes that must be refused with `lockout_protected`.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M9-09 Access rules select IPv4 only; IPv6 comes with M32
+
+- Status: new
+- Severity: low
+- Reason: deferred (to M32, IPv6 in the networks). The task text for M9 says "IPv4 + IPv6" for the
+  compiler output. The V1 networks are IPv4 only and forwarded IPv6 is dropped before the rules (plan
+  §2.2.2, D7), so there is no IPv6 packet that a rule could decide in forward; the selectors (sources,
+  destinations, `ct original ip saddr`) are IPv4 sets. The verdicts are written so they need no change:
+  `reject with icmpx type port-unreachable` is one statement for both families, and the `inet` table
+  carries both. What is missing for IPv6 is the address families of the scopes and destinations
+  (`ip6` sets, `ct original ip6 saddr`) and a rule that selects an IPv6 destination.
+- Evidence: `internal/compiler/access.go` (`matchExpr`, `verdictFor`), `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow`,
+  `TestEveryActionHasItsVerdictInForwardAndInput`.
+- Task: chosen interpretation — IPv6 rule selectors are M32's; M9 keeps IPv6 blocked and says so.
+- Acceptance: a maintainer confirms, or asks for IPv6 selectors before M32. M32 adds the `ip6` sets and
+  the IPv6 variants of the rule tests.
+- Needs maintainer: yes
+- Effort: M
+
+### P2-M9-10 What "also cut existing connections" does at its edges
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.4 promises that existing connections get an immediate reset. The
+  cut compares the plan the kernel ran with the new plan, and three consequences of that are not in
+  the plan's text:
+  1. The plan holds the resolved source addresses. A device whose addresses first appear after the
+     first apply (an empty set at start, filled by the identity on a later apply) enters the scope of
+     a long-standing cutting rule at that moment, and its existing connections are cut then.
+  2. Every address change of a device in a rule's scope changes the plan, so the identity update is a
+     full apply instead of an incremental one, and with a cutting rule it reads the whole conntrack table.
+  3. Only conntrack state ESTABLISHED counts as a TCP connection a window of resets reaches. A
+     half-closed connection (FIN_WAIT, CLOSE_WAIT, SYN_RECV) still matches `ct state established`
+     and keeps passing data; it is deleted without a reset, so the device sees a stall, not an
+     immediate reset, and when no tracked connection is ESTABLISHED no window opens.
+- Evidence: `internal/engine/cut.go` (`sameRules`, `cutFlows`, `cutExisting`), the cut section of
+  docs/development.md "Access rules (M9)".
+- Task: chosen interpretation — keep it: (1) is the rule doing what it says for a device it now
+  selects, (2) costs one table read per address change of a device in a cutting rule's scope, (3) is
+  the best the kernel offers for a connection a TCP reset cannot be matched to.
+- Acceptance: a maintainer confirms, or asks for (1) a cut only on an edit of the rule (the comparison
+  would ignore the sources of the old plan), (3) a window whenever a cutting rule selects a TCP
+  connection in any state but TIME_WAIT, CLOSE and LAST_ACK.
+- Needs maintainer: yes
+- Effort: S

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -143,5 +144,31 @@ func TestACutLeavesTheControlPlaneFinishedConnectionsAndOtherProtocolsAlone(t *t
 	}
 	if resets != 2 { // 40003 and 40008
 		t.Errorf("%d connections for the window: %s", resets, keysOf(got))
+	}
+}
+
+// A connection the gateway opened (its source is one of the gateway's own addresses, e.g. a BGP session
+// to a device) and traffic that stays inside one network (switched, seen with br_netfilter) are never
+// judged by a rule, so a cut must not delete their entries or open a window for them.
+func TestACutLeavesGatewayOriginatedAndSwitchedConnectionsAlone(t *testing.T) {
+	p := plan(rule("config:cut", "drop", true, "10.10.0.0/24", "tcp"))
+	p.GatewayAddrs = []netip.Addr{netip.MustParseAddr("10.10.0.1"), netip.MustParseAddr("169.254.100.1")}
+	p.Segments = [][]netip.Prefix{{pfx("10.10.0.0/24"), pfx("10.99.0.0/16")}, {pfx("10.20.0.0/24")}}
+	flows := []linux.Conntrack{
+		tcpFlow("ESTABLISHED", "10.10.0.1", 40001, "10.10.0.5", 179),     // the gateway's BGP session to a device
+		tcpFlow("ESTABLISHED", "10.10.0.5", 40002, "10.10.0.6", 8883),    // two devices of one network
+		tcpFlow("ESTABLISHED", "10.10.0.5", 40003, "10.99.0.7", 8883),    // a device and a host behind its router
+		tcpFlow("ESTABLISHED", "10.10.0.5", 40004, "10.20.0.6", 8883),    // another network: routed, judged
+		tcpFlow("ESTABLISHED", "10.10.0.5", 40005, "203.0.113.10", 8883), // the uplink: judged
+		tcpFlow("ESTABLISHED", "10.10.0.5", 40006, "10.10.0.1", 8883),    // a device to the gateway: judged
+	}
+	got := cutFlows(target(plan()), target(p), flows)
+	var ports []int
+	for _, f := range got {
+		ports = append(ports, f.flow.SPort)
+	}
+	sort.Ints(ports)
+	if len(ports) != 3 || ports[0] != 40004 || ports[1] != 40005 || ports[2] != 40006 {
+		t.Errorf("cut source ports %v, want 40004 40005 40006", ports)
 	}
 }

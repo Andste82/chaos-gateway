@@ -38,6 +38,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// the access rules of the next apply are compared with it to find the connections a rule cuts
 	// (cut.go). Nil until the first apply of this process, which cuts nothing.
 	var verified *compiler.Target
+	// cutStuck reports that the window of a cut could not be closed: until the chains are flushed,
+	// the cutting rules reset established connections. A full apply flushes them, an incremental one
+	// tries to close the window again.
+	var cutStuck error
 	// the retirer deletes the tc classes of fault ids that no longer exist once the packets queued in
 	// them have left (make-before-break, plan §3.2); it runs on the injected clock
 	retirer := e.retirer
@@ -116,9 +120,20 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			}
 			dhcpErr := ""
 			var cut *cutOutcome
+			if err == nil && incremental && cutStuck != nil && target.Access.HasCuts() {
+				if cerr := e.closeStuckWindow(ctx, target); cerr != nil {
+					e.cfg.Log.Error("the cut window is still open", "error", cerr)
+				} else {
+					cutStuck = nil
+				}
+			}
 			if err == nil && !incremental {
+				cutStuck = nil // the full apply flushed the cut chains
 				dhcpErr = e.syncDHCP(ctx, target)
 				cut = e.cutExisting(ctx, verified, target)
+				if cut != nil && cut.WindowOpen {
+					cutStuck = cut.Err
+				}
 				if cut != nil && cut.Err != nil {
 					e.cfg.Log.Warn("cutting the existing connections of an access rule failed: the rules are in force, the connections may live on", "generation", d.Generation, "error", cut.Err)
 				}
@@ -126,7 +141,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if err == nil {
 				verified = target
 			}
-			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut}
+			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut, cutStuck: cutStuck}
 			if err == nil && incremental && last != nil {
 				res.dhcpErr = e.dhcp.errorNow()
 			}

@@ -147,6 +147,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	antiLockout := newRule(append(append([]any(nil), antiLockoutMatch...), counter(AntiLockoutCounter), verdict("accept"))...)
 	if t.Access != nil {
 		t.Access.guard = antiLockoutMatch
+		t.Access.describePath(t)
 	}
 	input.Rules = append(input.Rules,
 		// anti-lockout: the management sources always reach the control plane; nothing below

@@ -1371,6 +1371,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M8a.
 
 **M9 — Access rules** (M)
+- **Status:** done — merged (PR #35, `36726d9`).
 - Scope: ordered allow/drop/reject/TCP reset rules in configuration and as overlays, evaluated in forward and input on the conntrack original tuple (§2.2); "also cut existing connections"; precedence rules vs. faults; named per-rule counters; preview and `explain` of the effective result.
 - Tests: behavior matrix from S3 as automated tests; rule order; overlay rules before configuration rules; anti-lockout rule cannot be overridden; a drop rule on UDP 53 blocks the device's queries to the DNS proxy, and also covers queries sent directly to 169.254.100.2.
 - Depends on: M8a, S3.

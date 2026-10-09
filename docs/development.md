@@ -2244,7 +2244,7 @@ the same assertions run under emulation and on a native or KVM kernel.
 | `TestAPMTUFaultAppliesToTrafficThroughATunnel` | a fault on a network limits traffic into a WireGuard client network: a packet that fits the tunnel (1420) but not the fault is answered with `mtu = 1280`, and what fits goes through; the mirror table holds the route into the tunnel |
 | `TestLearnedRoutesAreExportedIntoThePMTUMirrorTablesToo` | BGP over a link: the learned route is in table 103 with `proto bird` and the size locked, traffic to the learned network is limited, a second size feeds table 104 without losing the session, a size that goes empties its table, the main table never has the route |
 
-What the persistent VM showed (6.8.0-142, emulation, one run each): the transfers of 300 KB took 0.4 to 1.0 s; the black hole
+Kernel matrix: the gate (`TestEveryCompiledRulesetIsAcceptedByTheKernel`, scenario `pmtu`), the route test of the executor and all six real-kernel tests passed on **6.8.0-142** and on **7.0.0-38** (`go run ./tools/testvm vm up -kernel 7.0.0-38-generic`). What the persistent VM showed (6.8.0-142, emulation, one run each): the transfers of 300 KB took 0.4 to 1.0 s; the black hole
 received 0 bytes in 8 s. One defect was found: the removal of the last MTU fault was refused by the kernel (busy chain), see
 above. Two assertions of the tests were wrong and fixed: the client's Python thread printed a traceback into the JSON when the
 black hole stalled it, and a device that was told a path MTU keeps it in its own route cache (the tests flush it).

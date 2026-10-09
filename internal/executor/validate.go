@@ -853,11 +853,14 @@ func (o Links) validate() error {
 }
 
 func (e LinkEntry) validate() error {
-	if err := oneOf("action", e.Action, "add_bridge", "delete_bridge", "enslave", "release", "up", "down", "addr_replace", "addr_delete"); err != nil {
+	if err := oneOf("action", e.Action, "add_bridge", "delete_bridge", "add_ifb", "delete_ifb", "enslave", "release", "up", "down", "addr_replace", "addr_delete"); err != nil {
 		return err
 	}
 	if err := checkDev(e.Name); err != nil {
 		return err
+	}
+	if (e.Action == "add_ifb" || e.Action == "delete_ifb") && e.Name != IFBName {
+		return fmt.Errorf("%s takes the device %s only, not %q", e.Action, IFBName, e.Name)
 	}
 	if (e.Action == "enslave") != (e.Master != "") {
 		return errors.New("master is given for enslave and only for it")

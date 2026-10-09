@@ -1,0 +1,58 @@
+{
+  "dev": "wan0",
+  "qdiscs": [
+    {
+      "handle": "0:",
+      "parent": "root",
+      "kind": "noqueue",
+      "stats": {
+        "bytes": 0,
+        "packets": 0,
+        "drops": 0,
+        "overlimits": 0,
+        "requeues": 0,
+        "backlog": 0,
+        "qlen": 0
+      }
+    },
+    {
+      "handle": "ffff:",
+      "parent": "ingress",
+      "kind": "ingress",
+      "stats": {
+        "bytes": 0,
+        "packets": 0,
+        "drops": 0,
+        "overlimits": 0,
+        "requeues": 0,
+        "backlog": 0,
+        "qlen": 0
+      }
+    }
+  ],
+  "classes": [],
+  "filters": [
+    {
+      "parent": "ingress",
+      "protocol": "ip",
+      "pref": 10,
+      "kind": "flower",
+      "flower": {
+        "handle": 7,
+        "ip_proto": "udp",
+        "src_ip": "198.51.100.2",
+        "src_port": 51820,
+        "redirect": "ifb-cgw"
+      },
+      "stats": {
+        "bytes": 0,
+        "packets": 0,
+        "drops": 0,
+        "overlimits": 0,
+        "requeues": 0,
+        "backlog": 0,
+        "qlen": 0
+      }
+    }
+  ]
+}

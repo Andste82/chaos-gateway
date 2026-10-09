@@ -51,6 +51,12 @@ var fuzzSeeds = []string{
 	`{"type":"nft_dup","devs":["wan0","wan0"]}`,
 	`{"type":"nft_dup","devs":["wan0; drop"],"ruleset":{"nftables":[]}}`,
 	`{"type":"read","what":"nft_dup"}`,
+	// M10: the IFB of the tunnel faults and the flower filters that feed and select it
+	`{"type":"links","namespace":"gw","entries":[{"action":"add_ifb","name":"ifb-cgw"},{"action":"up","name":"ifb-cgw"},{"action":"delete_ifb","name":"ifb-cgw"}]}`,
+	`{"type":"links","entries":[{"action":"add_ifb","name":"ifb0"},{"action":"delete_ifb","name":"wan0"}]}`,
+	`{"type":"tc","namespace":"gw","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"ingress"},{"object":"filter","action":"replace","dev":"wan0","parent":"ffff:","handle":"7","args":["protocol","ip","prio","10","flower","ip_proto","udp","src_ip","198.51.100.2","src_port","51820","action","mirred","egress","redirect","dev","ifb-cgw"]},{"object":"filter","action":"replace","dev":"ifb-cgw","parent":"1:","handle":"7","args":["protocol","ip","prio","1","flower","ip_proto","udp","src_ip","198.51.100.2","src_port","51820","flowid","1:1e"]},{"object":"filter","action":"delete","dev":"wan0","parent":"ffff:","handle":"7","args":["protocol","ip","prio","10","flower"]},{"object":"qdisc","action":"delete","dev":"wan0","parent":"ingress"}]}`,
+	`{"type":"tc","entries":[{"object":"filter","action":"add","dev":"wan0","parent":"ffff:","handle":"7","args":["protocol","ip","prio","10","flower","ip_proto","udp","src_ip","198.51.100.2","src_port","51820","action","mirred","egress","redirect","dev","lan0"]}]}`,
+	`{"type":"tc","entries":[{"object":"filter","action":"add","dev":"wan0","parent":"ffff:","handle":"7","args":["protocol","ip","prio","10","flower","src_ip","1.2.3.4/8","action","drop"]}]}`,
 	``, `{}`, `[]`, `null`, `{"type":null}`, `{"type":"read"`, "\x00",
 }
 

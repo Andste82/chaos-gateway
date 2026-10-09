@@ -247,13 +247,22 @@ type AssignInterfaces struct {
 
 // LinkEntry is one change of the links Chaos Gateway owns: its bridges, their ports and addresses.
 type LinkEntry struct {
-	// Action: add_bridge (if missing) | delete_bridge | enslave (Name becomes a port of Master) |
-	// release (Name leaves its bridge) | up | down | addr_replace | addr_delete (CIDR on Name).
+	// Action: add_bridge (if missing) | delete_bridge | add_ifb (if missing) | delete_ifb | enslave (Name
+	// becomes a port of Master) | release (Name leaves its bridge) | up | down | addr_replace |
+	// addr_delete (CIDR on Name). The IFB actions take the name IFBName only.
 	Action string `json:"action"`
 	Name   string `json:"name"`
 	Master string `json:"master,omitempty"`
 	CIDR   string `json:"cidr,omitempty"`
 }
+
+// IFBName is the one IFB device Chaos Gateway creates: the tunnel faults of M10 redirect the encrypted
+// UDP that comes from a WireGuard peer into it and impair it there (plan §2.2.1, spike S15). The
+// executor creates and deletes no other IFB, and a tc filter may redirect to no other device.
+const IFBName = "ifb-cgw"
+
+// deleteKinds names the kind of device each deleting link action is allowed to delete.
+var deleteKinds = map[string]string{"delete_bridge": "bridge", "delete_ifb": "ifb"}
 
 // Links creates and deletes bridges, attaches ports, sets link state and addresses. Every
 // interface it names must be assigned.

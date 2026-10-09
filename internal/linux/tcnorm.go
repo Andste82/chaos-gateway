@@ -154,6 +154,27 @@ type NormFilter struct {
 	Mask     uint32 `json:"mask,omitempty"`
 	Flowid   string `json:"flowid,omitempty"`
 	Options  string `json:"options,omitempty"`
+	// Flower is set for a flower filter (the tunnel faults of M10): the selector on the outer UDP,
+	// the handle that names the filter and, on an ingress qdisc, the device it redirects to.
+	Flower *FlowerSpec `json:"flower,omitempty"`
+	// Stats are the counters of the redirect action of an ingress flower filter, set when the
+	// listing was made with `-s`: the packets the filter matched.
+	Stats *NormStats `json:"stats,omitempty"`
+}
+
+// FlowerSpec is a flower filter the way Chaos Gateway writes it: the protocol, source address and
+// source port of the outer UDP of a WireGuard peer, and, on the ingress qdisc, the one action `mirred
+// egress redirect dev <IFB>`. Anything else the listing shows is kept in NormFilter.Options and
+// FlowerSpec.Extra, so that it is visible as a difference.
+type FlowerSpec struct {
+	Handle  int    `json:"handle"`
+	IPProto string `json:"ip_proto,omitempty"`
+	SrcIP   string `json:"src_ip,omitempty"`
+	SrcPort int    `json:"src_port,omitempty"`
+	// Redirect is the device of the mirred redirect action; empty for a filter that selects a class.
+	Redirect string `json:"redirect,omitempty"`
+	// Extra is the canonical form of the keys and the actions this code does not know.
+	Extra string `json:"extra,omitempty"`
 }
 
 // NormStats are the counters of a qdisc or class, as `tc -s -j` prints them. They only grow
@@ -252,6 +273,13 @@ type rawObj = map[string]json.RawMessage
 // An empty output is an empty list (some versions print nothing for it). An entry that names
 // another interface is ignored, so the output of a listing of all interfaces can be passed too.
 func NormalizeTC(dev string, qdiscs, classes, filters []byte) (*NormTree, error) {
+	return NormalizeTCIngress(dev, qdiscs, classes, filters, nil)
+}
+
+// NormalizeTCIngress is NormalizeTC with the listing of the filters of the ingress qdisc
+// (`tc -j filter show dev <dev> ingress`), which `filter show` does not include: its filters get
+// the parent "ingress". The tunnel faults of M10 put flower filters there.
+func NormalizeTCIngress(dev string, qdiscs, classes, filters, ingress []byte) (*NormTree, error) {
 	t := &NormTree{Dev: dev, Qdiscs: []NormQdisc{}, Classes: []NormClass{}, Filters: []NormFilter{}}
 	qs, err := rawList("tc qdisc", qdiscs)
 	if err != nil {
@@ -285,7 +313,11 @@ func NormalizeTC(dev string, qdiscs, classes, filters []byte) (*NormTree, error)
 	if err != nil {
 		return nil, err
 	}
-	for _, o := range fs {
+	is, err := rawList("tc filter ingress", ingress)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range append(fs, is...) {
 		if !forDev(o, dev) {
 			continue
 		}
@@ -807,7 +839,7 @@ func normFilter(o rawObj) (NormFilter, error) {
 	switch parent {
 	case "":
 		return f, fmt.Errorf("filter without a parent")
-	case "ffff:fff1":
+	case "ffff:fff1", "ffff:":
 		f.Parent = "ingress"
 	case "ffff:fff3":
 		f.Parent = "clsact"
@@ -819,6 +851,9 @@ func normFilter(o rawObj) (NormFilter, error) {
 	opts, err := getObj(o, "options")
 	if err != nil {
 		return f, err
+	}
+	if f.Kind == "flower" {
+		return normFlower(f, opts)
 	}
 	if f.Kind != "fw" {
 		f.Options, err = canonical(opts)
@@ -877,6 +912,90 @@ func normFilter(o rawObj) (NormFilter, error) {
 	return f, err
 }
 
+// normFlower reads the options of a flower filter: handle, the keys, the class it selects or the
+// redirect action. A key or an action that is not the one Chaos Gateway writes lands in Extra.
+func normFlower(f NormFilter, opts rawObj) (NormFilter, error) {
+	spec := &FlowerSpec{}
+	h, err := getInt(opts, "handle")
+	if err != nil {
+		return f, err
+	}
+	spec.Handle = int(h)
+	flow, err := getStr(opts, "classid")
+	if err != nil {
+		return f, err
+	}
+	if flow != "" {
+		var ok bool
+		if f.Flowid, ok = ParseTCHandle(flow); !ok {
+			return f, fmt.Errorf("filter flowid %q", flow)
+		}
+	}
+	extra := rawObj{}
+	if keys, err := getObj(opts, "keys"); err != nil {
+		return f, err
+	} else {
+		for k, v := range keys {
+			switch k {
+			case "eth_type":
+				var s string
+				if json.Unmarshal(v, &s) != nil || s != "ipv4" {
+					extra["key:"+k] = v
+				}
+			case "ip_proto":
+				if err := json.Unmarshal(v, &spec.IPProto); err != nil {
+					return f, fmt.Errorf("flower ip_proto: %w", err)
+				}
+			case "src_ip":
+				if err := json.Unmarshal(v, &spec.SrcIP); err != nil {
+					return f, fmt.Errorf("flower src_ip: %w", err)
+				}
+			case "src_port":
+				if err := json.Unmarshal(v, &spec.SrcPort); err != nil {
+					return f, fmt.Errorf("flower src_port: %w", err)
+				}
+			default:
+				extra["key:"+k] = v
+			}
+		}
+	}
+	if raw, ok := opts["actions"]; ok {
+		var acts []rawObj
+		if err := json.Unmarshal(raw, &acts); err != nil {
+			return f, fmt.Errorf("flower actions: %w", err)
+		}
+		for i, a := range acts {
+			kind, _ := getStr(a, "kind")
+			act, _ := getStr(a, "mirred_action")
+			dir, _ := getStr(a, "direction")
+			to, _ := getStr(a, "to_dev")
+			if i == 0 && kind == "mirred" && act == "redirect" && dir == "egress" && to != "" {
+				spec.Redirect = to
+				if st, err := getObj(a, "stats"); err == nil && st != nil {
+					s, err := normStats(st)
+					if err != nil {
+						return f, fmt.Errorf("flower action stats: %w", err)
+					}
+					f.Stats = &s
+				}
+				continue
+			}
+			b, _ := canonicalValue(a)
+			q, _ := json.Marshal(b)
+			extra[fmt.Sprintf("action:%d", i)] = q
+		}
+	}
+	if len(extra) > 0 {
+		spec.Extra, err = canonical(extra)
+		if err != nil {
+			return f, err
+		}
+	}
+	f.Flower = spec
+	f.Options, err = canonical(opts, "handle", "classid", "keys", "actions", "not_in_hw", "in_hw", "in_hw_count")
+	return f, err
+}
+
 func hex32(s string) (uint32, error) {
 	n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 32)
 	if err != nil {
@@ -908,6 +1027,9 @@ func (t *NormTree) Spec() *NormTree {
 		cl.Burst, cl.Cburst, cl.Stats = 0, 0, nil
 		c.Classes[i] = cl
 	}
+	for i := range c.Filters {
+		c.Filters[i].Stats = nil
+	}
 	return c
 }
 
@@ -935,6 +1057,9 @@ func (c NormClass) Key() string { return "class " + c.ID }
 
 // Key identifies the filter: its parent, priority and selector.
 func (f NormFilter) Key() string {
+	if f.Flower != nil {
+		return fmt.Sprintf("filter parent %s pref %d flower handle %d", f.Parent, f.Pref, f.Flower.Handle)
+	}
 	return fmt.Sprintf("filter parent %s pref %d %s %#x/%#x%s", f.Parent, f.Pref, f.Kind, f.Mark, f.Mask, optSuffix(f.Options))
 }
 
@@ -979,6 +1104,16 @@ func (f NormFilter) Line() string {
 	s := f.Key()
 	if f.Flowid != "" {
 		s += " flowid=" + f.Flowid
+	}
+	if fl := f.Flower; fl != nil {
+		s += fmt.Sprintf(" %s src=%s:%d", fl.IPProto, fl.SrcIP, fl.SrcPort)
+		if fl.Redirect != "" {
+			s += " redirect=" + fl.Redirect
+		}
+		if fl.Extra != "" {
+			s += " " + fl.Extra
+		}
+		s += optSuffix(f.Options)
 	}
 	return s
 }
@@ -1026,6 +1161,23 @@ func (t *NormTree) Subtree(rootHandle string) *NormTree {
 	}
 	for _, f := range t.Filters {
 		if own(f.Parent) {
+			out.Filters = append(out.Filters, f)
+		}
+	}
+	return out
+}
+
+// Ingress returns the part of the tree that hangs off the ingress qdisc: the qdisc and its filters.
+// Empty when the interface has none. The result shares nothing with t.
+func (t *NormTree) Ingress() *NormTree {
+	out := &NormTree{Dev: t.Dev, Qdiscs: []NormQdisc{}, Classes: []NormClass{}, Filters: []NormFilter{}}
+	for _, q := range t.Qdiscs {
+		if q.Parent == "ingress" {
+			out.Qdiscs = append(out.Qdiscs, q)
+		}
+	}
+	for _, f := range t.Filters {
+		if f.Parent == "ingress" {
 			out.Filters = append(out.Filters, f)
 		}
 	}

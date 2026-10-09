@@ -486,6 +486,12 @@ func planLinks(o *Links) []Step {
 			exists := ip("link", "show", "dev", e.Name)
 			// `type bridge` makes ip refuse any other kind of device
 			steps = append(steps, Step{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", e.Name, "type", "bridge")})
+		case "add_ifb":
+			exists := ip("link", "show", "dev", e.Name)
+			steps = append(steps, Step{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", "name", e.Name, "type", "ifb")})
+		case "delete_ifb":
+			exists := ip("link", "show", "dev", e.Name)
+			steps = append(steps, Step{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", e.Name, "type", "ifb")})
 		case "enslave":
 			steps = append(steps, Step{Cmd: ip("link", "set", "dev", e.Name, "master", e.Master)})
 		case "release":

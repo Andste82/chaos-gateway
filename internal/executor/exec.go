@@ -698,12 +698,14 @@ func (e *Executor) wgConfig(w *WireGuard) (string, error) {
 	return b.String(), nil
 }
 
-// checkBridges makes sure that delete_bridge only ever deletes a bridge: `ip link delete ... type
-// bridge` does not refuse a device of another kind (a veth was deleted by it in the testbed), so
-// the kind is read first. A device that does not exist is fine, deleting it is a no-op.
+// checkBridges makes sure that delete_bridge only ever deletes a bridge and delete_ifb only the IFB:
+// `ip link delete ... type bridge` does not refuse a device of another kind (a veth was deleted by it
+// in the testbed, and `type ifb` deleted a WireGuard interface in the proof of M10), so the kind is
+// read first. A device that does not exist is fine, deleting it is a no-op.
 func (e *Executor) checkBridges(ctx context.Context, l *Links) error {
 	for _, en := range l.Entries {
-		if en.Action != "delete_bridge" {
+		kind := deleteKinds[en.Action]
+		if kind == "" {
 			continue
 		}
 		cmd := ReadCommand(&Read{Target: l.Target, What: ReadLinks, Dev: en.Name})
@@ -719,8 +721,8 @@ func (e *Executor) checkBridges(ctx context.Context, l *Links) error {
 			return err
 		}
 		for _, x := range links {
-			if x.Name == en.Name && x.Kind() != "bridge" {
-				return fmt.Errorf("%s is not a bridge: refusing to delete it", en.Name)
+			if x.Name == en.Name && x.Kind() != kind {
+				return fmt.Errorf("%s is not a %s: refusing to delete it", en.Name, kind)
 			}
 		}
 	}
@@ -844,6 +846,22 @@ func (e *Executor) readTC(ctx context.Context, o *Read) (json.RawMessage, error)
 	tree, err := linux.NormalizeTC(o.Dev, out[0], out[1], out[2])
 	if err != nil {
 		return nil, err
+	}
+	if len(tree.Ingress().Qdiscs) > 0 {
+		// `filter show` lists the filters of the egress side only: the flower filters of the tunnel
+		// faults (M10) hang off the ingress qdisc and have a listing of their own
+		cmd := tcListing(o, "filter")
+		cmd.Args = append(cmd.Args, "ingress")
+		r, err := e.run.Run(ctx, cmd)
+		if err != nil {
+			return nil, err
+		}
+		if r.Exit != 0 {
+			return nil, &CommandError{Cmd: cmd, Exit: r.Exit, Stderr: r.Stderr}
+		}
+		if tree, err = linux.NormalizeTCIngress(o.Dev, out[0], out[1], out[2], []byte(r.Stdout)); err != nil {
+			return nil, err
+		}
 	}
 	return json.Marshal(tree)
 }

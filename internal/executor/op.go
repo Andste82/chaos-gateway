@@ -118,6 +118,10 @@ type Route struct {
 	Dev    string `json:"dev,omitempty"`  // assigned interface
 	Type   string `json:"type,omitempty"` // unicast (default) | blackhole | unreachable | prohibit
 	Metric *int   `json:"metric,omitempty"`
+	// MTU, when set, is the path MTU the route carries and locks (`mtu lock N`): the kernel
+	// answers a packet that does not fit with "fragmentation needed" and never learns another value
+	// (the PMTU mirror tables, plan §2.5).
+	MTU int `json:"mtu,omitempty"`
 }
 
 // Rule is a policy-routing rule that sends matching traffic to one of Chaos Gateway's tables.

@@ -272,6 +272,9 @@ func routeLine(r Route) string {
 	if r.Metric != nil {
 		f = append(f, "metric", strconv.Itoa(*r.Metric))
 	}
+	if r.MTU != 0 && r.Action == "replace" {
+		f = append(f, "mtu", "lock", strconv.Itoa(r.MTU))
+	}
 	return strings.Join(f, " ")
 }
 

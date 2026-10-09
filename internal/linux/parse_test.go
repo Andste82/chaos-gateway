@@ -78,6 +78,17 @@ func TestParseRoutes(t *testing.T) {
 	}
 }
 
+// `ip -j` prints the path MTU of a route among its metrics, without telling whether it is locked.
+func TestParseRoutesReadsThePathMTUOfARoute(t *testing.T) {
+	r, err := ParseRoutes([]byte(`[{"dst":"10.10.0.0/24","dev":"br-iot","protocol":"77","scope":"link","flags":[],"metrics":[{"mtu":1280}],"table":"103"},{"dst":"default","gateway":"203.0.113.10","dev":"wan0","flags":[]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r[0].MTU() != 1280 || r[1].MTU() != 0 || r[0].Table != "103" {
+		t.Errorf("%+v", r)
+	}
+}
+
 func TestParseRules(t *testing.T) {
 	r, err := ParseRules(fixture(t, "ip_rule.json"))
 	if err != nil {

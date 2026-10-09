@@ -39,6 +39,8 @@ type link struct {
 
 type route struct {
 	table, dst, via, dev, typ, proto string
+	// mtu is the path MTU of `mtu lock N`; `ip -j` prints it as a metric without the lock
+	mtu int
 }
 
 type rule struct {
@@ -336,6 +338,31 @@ func (k *Kernel) ForeignRoute(table, dst, via, dev string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.routes = append(k.routes, route{table: table, dst: dst, via: via, dev: dev, proto: "static"})
+}
+
+// SetRouteMTU changes the path MTU of the routes of a table (0 removes it): what another tool can do to
+// a mirror table.
+func (k *Kernel) SetRouteMTU(table string, mtu int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for i := range k.routes {
+		if k.routes[i].table == table {
+			k.routes[i].mtu = mtu
+		}
+	}
+}
+
+// RouteMTUs lists the path MTUs of the routes of a table, one per route, in the order they were added.
+func (k *Kernel) RouteMTUs(table string) []int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var out []int
+	for _, r := range k.routes {
+		if r.table == table {
+			out = append(out, r.mtu)
+		}
+	}
+	return out
 }
 
 // DockerOursLast moves the accept rules of Chaos Gateway behind Docker's RETURN rule, which makes
@@ -656,6 +683,9 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			if r.proto != "" {
 				m["protocol"] = r.proto
 			}
+			if r.mtu != 0 {
+				m["metrics"] = []map[string]any{{"mtu": r.mtu}}
+			}
 			out = append(out, m)
 		}
 		return jsonOut(out)
@@ -899,6 +929,13 @@ func (k *Kernel) batchRoute(f []string) string {
 			r.via = f[i+1]
 		case "dev":
 			r.dev = f[i+1]
+		case "mtu":
+			// mtu lock N: the keyword takes one more word than the others
+			if f[i+1] != "lock" || i+2 >= len(f) {
+				return "mtu needs `lock` and a size"
+			}
+			r.mtu, _ = strconv.Atoi(f[i+2])
+			i++
 		}
 	}
 	if r.dev != "" {

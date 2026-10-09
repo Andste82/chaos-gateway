@@ -155,6 +155,23 @@ route del 10.8.0.0/16 table 101 proto 201 dev lan0
 	}
 }
 
+// A route with a path MTU (a PMTU mirror table, M10) is written with `mtu lock N`; the line that deletes it names no size.
+func TestPlanRoutingWritesTheLockedPathMTUOfAReplaceAndNotOfADelete(t *testing.T) {
+	steps := mustPlan(t, `{"type":"routing","routes":[
+	  {"action":"replace","family":4,"table":103,"dst":"10.10.0.0/24","dev":"br-iot","mtu":1280},
+	  {"action":"replace","family":4,"table":103,"dst":"default","via":"203.0.113.10","dev":"wan0","metric":5,"mtu":1280},
+	  {"action":"delete","family":4,"table":104,"dst":"10.10.0.0/24","dev":"br-iot","mtu":1400}],
+	 "rules":[{"action":"add","family":4,"priority":950,"fwmark":"0x20000/0xe0000","table":103}]}`)
+	want := `route replace 10.10.0.0/24 table 103 proto 201 dev br-iot mtu lock 1280
+route replace default table 103 proto 201 via 203.0.113.10 dev wan0 metric 5 mtu lock 1280
+rule add priority 950 fwmark 0x20000/0xe0000 table 103 protocol 201
+route del 10.10.0.0/24 table 104 proto 201 dev br-iot
+`
+	if len(steps) != 1 || steps[0].Cmd.Stdin != want {
+		t.Errorf("%v", steps)
+	}
+}
+
 func TestEveryRoutingLineCarriesTheProtocolTag(t *testing.T) {
 	for _, step := range mustPlan(t, `{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"10.0.0.0/8","dev":"wan0"},{"action":"delete","family":4,"table":100,"dst":"10.0.0.0/8"}],"rules":[{"action":"delete","family":4,"priority":5,"table":100}]}`) {
 		for _, line := range strings.Split(strings.TrimSpace(step.Cmd.Stdin), "\n") {

@@ -215,6 +215,12 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		sort.Strings(oldSets)
 		sort.Strings(oldMaps)
 		sort.Strings(oldCounters)
+		// a removed map is emptied before any chain goes: its elements can be verdicts that name chains (the
+		// MTU maps go with their last fault, together with the chains their elements lead to), and a chain
+		// that a map element still names is busy
+		for _, m := range oldMaps {
+			cmds = append(cmds, cmd("flush", "map", map[string]any{"name": m}))
+		}
 		// a removed chain is emptied first: its rules may refer to sets, maps and counters that go too
 		for _, c := range oldChains {
 			cmds = append(cmds, cmd("flush", "chain", map[string]any{"name": c}))

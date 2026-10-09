@@ -347,6 +347,17 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 			if len(c.rules) > 0 {
 				return t, nftErr("Device or resource busy")
 			}
+			// a chain that a rule jumps to or an element of a map names (a verdict map) is busy
+			if usedBy(t, func(e any) bool { m, ok := e.(map[string]any); return ok && m["target"] == name }) {
+				return t, nftErr("Device or resource busy")
+			}
+			for _, m := range t.maps {
+				for _, e := range m.elems {
+					if strings.Contains(string(e), `"target":"`+name+`"`) {
+						return t, nftErr("Device or resource busy")
+					}
+				}
+			}
 			delete(t.chains, name)
 		default:
 			return t, nftErr(command + " chain is not simulated")

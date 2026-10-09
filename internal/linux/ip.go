@@ -89,6 +89,24 @@ type Route struct {
 	PrefSrc  string   `json:"prefsrc"`
 	Metric   *int     `json:"metric"`
 	Flags    []string `json:"flags"`
+	// Metrics holds the route's metrics; `ip -j` prints the path MTU there (without telling whether it is
+	// locked).
+	Metrics []RouteMetrics `json:"metrics"`
+}
+
+// RouteMetrics is an entry of a route's metrics; only the MTU is read.
+type RouteMetrics struct {
+	MTU int `json:"mtu"`
+}
+
+// MTU is the path MTU the route carries, 0 when it has none.
+func (r Route) MTU() int {
+	for _, m := range r.Metrics {
+		if m.MTU != 0 {
+			return m.MTU
+		}
+	}
+	return 0
 }
 
 // Rule is one entry of `ip -j rule show`.

@@ -245,7 +245,7 @@ Verdict: done. The high bug (external mode) is fixed; every scope and test item 
 | Babel | done | the link-local address Babel needs is assigned to the WireGuard interface (M4c-05); testbed `TestBabelOverAWireGuardLink` |
 | Static, router id/ASN/neighbors/areas/timers, announcements | done | `compiler/routing.go`; `TestTheBirdConfigurationFollowsTheModel` |
 | Import filters | done | `bird/render.go`; the management subnet is protected with explicit `allowed_sources` too, and `allow_default` is honored with an allowed list |
-| Export only into own tables | done for table 100 | PMTU tables come with M10 (plan.md updated) |
+| Export only into own tables | done for table 100 and, since M10, the PMTU mirror tables | `TestLearnedRoutesAreExportedIntoThePMTUMirrorTablesToo` |
 | `bird -p` + `birdc configure` part of the revision | done | `executor/exec.go:705-758`, `apply/bird.go` |
 | …and of preview/diff | done | `Preview.linux.bird` and `.wireguard` are filled |
 | Custom snippets | done | `bird/lexical.go` |
@@ -1127,5 +1127,28 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   since, next_change_at}`, which is optional and additive.
 - Acceptance: a maintainer confirms, or asks for a rate of zero to mean "no limit" (a parameter that
   does nothing) or for the phase in another place (the overlay itself, `explain`).
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M10-04 The black hole drops before the access rules, the verify cannot see the route lock, and the clamp counts the headers without options
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Three small things plan §2.5 and §2.4 leave open for the MTU family. (1) §2.4 says access
+  rules are evaluated first and a dropped packet does not reach any fault; the black hole is a rule of the fault's chain
+  in the classify chain (prerouting), the one place that knows the winner without a mark bit, and mark bits 17-19
+  are the index of the seven mirror tables, so they cannot also carry black-hole sizes. (2) `ip -j route` does not print
+  whether `mtu` is locked, so the verify checks the size of a mirror route and not the lock. (3) The MSS of a clamp
+  is `size - 40`, the headers of IPv4 and TCP without options.
+- Evidence: `internal/compiler/pmtu.go` (`chain`), `internal/apply/plan.go` (`routeSig`), docs/development.md "MTU and PMTUD",
+  `TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls`, `TestAnMSSClampLimitsTheSegmentsOfTheSelectedDeviceOnly`.
+- Task: chosen interpretation — (1) a packet that an access rule would reject (tcp reset, icmp unreachable) and that
+  is longer than a black hole's size is dropped silently by the black hole and counted in its drop counter; drop rules are not
+  affected (both drop). (2) The verify reports a mirror route whose size is wrong or missing; a route whose lock was cleared
+  behind the gateway's back (same size, no lock) is not noticed until the next apply, which rewrites it. (3) A connection
+  with options (timestamps: 12 bytes) sends packets of at most `size` bytes, one without options `size`; so a clamp never
+  produces a packet longer than the size, but it does not make every packet that long.
+- Acceptance: a maintainer confirms, or asks for (1) a second lookup in the forward chain after the access rules (a second
+  set of maps and a mark bit or a second table of sizes), or (2) the executor to read mirror routes with the plain `ip -d route`.
 - Needs maintainer: yes
 - Effort: S

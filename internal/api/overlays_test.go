@@ -688,3 +688,52 @@ func TestTheQueuesOfAFlappingFaultShowTheirPhase(t *testing.T) {
 		}
 	}
 }
+
+// An MTU overlay (M10) is effective, shows the counters of the packets classified into it, is explained with
+// its PMTU table, and an eighth size in icmp mode is refused with capacity_exceeded and leaves no trace.
+func TestAnMTUOverlayIsEffectiveCountedAndExplainedAndTheEighthSizeIsRefused(t *testing.T) {
+	g := ready(t)
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"family":"mtu","mtu":{"size":1280,"mode":"icmp"}}}`)
+	if ov["state"] != "effective" {
+		t.Fatalf("%v", ov)
+	}
+	got := g.do("GET", "/overlays/"+ov["id"].(string), nil, nil, nil).json(t)
+	if c, ok := got["counters"].(map[string]any); !ok || c["epoch"] == nil || got["state"] != "effective" {
+		t.Errorf("an MTU overlay of the kernel shows its counters: %v", got)
+	}
+	if got["queues"] != nil {
+		t.Errorf("an MTU fault has no netem queue: %v", got["queues"])
+	}
+	g.observe()
+	ex := g.do("GET", "/explain?src=10.10.0.31&dst=198.51.100.7&protocol=tcp&port=443", nil, nil, nil).json(t)
+	var mtu map[string]any
+	for _, f := range ex["faults"].([]any) {
+		if f.(map[string]any)["family"] == "mtu" {
+			mtu = f.(map[string]any)
+		}
+	}
+	if mtu == nil || mtu["winner"].(map[string]any)["id"] != ov["id"] {
+		t.Fatalf("%v", ex["faults"])
+	}
+	if k, ok := ex["kernel"].(map[string]any); !ok || k["pmtu_table"] != float64(1) || k["fault_id"] != nil {
+		t.Errorf("kernel %v", ex["kernel"])
+	}
+	// six more sizes fit, the eighth does not; the same size as one of the seven does
+	for i := 1; i < 7; i++ {
+		g.mustCreateOverlay(fmt.Sprintf(`{"target":{"network":"IoT"},"fault":{"family":"mtu","mtu":{"size":%d},"protocol":"tcp","ports":[%d]}}`, 1280+10*i, 8000+i))
+	}
+	r := g.createOverlay(`{"target":{"network":"IoT"},"fault":{"family":"mtu","mtu":{"size":1500},"protocol":"tcp","ports":[9000]}}`)
+	if r.Status != 422 || r.code(t) != "capacity_exceeded" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	if errs := r.json(t)["errors"].([]any); len(errs) == 0 || !strings.Contains(errs[0].(map[string]any)["message"].(string), "8 different sizes") {
+		t.Errorf("%s", r.Body)
+	}
+	if list := g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any); len(list) != 7 {
+		t.Errorf("%d overlays", len(list))
+	}
+	g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"family":"mtu","mtu":{"size":1290},"protocol":"udp","ports":[9]}}`)
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["last_apply"].(map[string]any)["result"] != "ok" {
+		t.Errorf("%v", st)
+	}
+}

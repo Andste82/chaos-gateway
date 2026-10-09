@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -157,4 +158,55 @@ func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 	}
 	o.snap.WireGuard = next
 	o.publish()
+	// a peer that is seen at another address than the one a tunnel fault or a blocked endpoint was compiled
+	// with (it roamed, or it connected for the first time) needs the packet filters to move with it
+	if o.current != nil && roamed(o.snap.PeerEndpoints, next) {
+		o.converge(o.nextDesired(o.current.Config, o.current.Revision))
+	}
+}
+
+// roamed reports whether some peer that the applied target selects by its address is seen at another
+// one now.
+func roamed(used map[string]string, seen map[string]PeerStatus) bool {
+	for id, ep := range used {
+		if st, ok := seen[id]; ok && st.Endpoint != "" && st.Endpoint != ep {
+			return true
+		}
+	}
+	return false
+}
+
+// readPeerEndpoints reads the addresses the peers of the applied WireGuard interfaces are reached at
+// from the interfaces themselves, by peer id: what the compiler selects the encrypted UDP of a tunnel
+// fault by (compiler.Input.PeerEndpoints). A peer that has not connected has none.
+func (e *Engine) readPeerEndpoints(ctx context.Context) (map[string]netip.AddrPort, error) {
+	snap := e.Snapshot()
+	out := map[string]netip.AddrPort{}
+	if len(snap.WireGuardInterfaces) == 0 {
+		return out, nil
+	}
+	var ops []executor.Operation
+	for _, w := range snap.WireGuardInterfaces {
+		ops = append(ops, &executor.Read{Target: executor.Target{NS: e.cfg.Namespace}, What: executor.ReadWireGuard, Dev: w.Name})
+	}
+	res, err := e.cfg.Exec.Do(ctx, ops...)
+	if err != nil {
+		return nil, fmt.Errorf("read the WireGuard peers: %w", err)
+	}
+	for i, w := range snap.WireGuardInterfaces {
+		var info linux.WGInfo
+		if i >= len(res.Data) || json.Unmarshal(res.Data[i], &info) != nil {
+			continue // an interface that cannot be read has no endpoints; the peers keep the configured ones
+		}
+		byKey := map[string]string{}
+		for _, p := range info.Peers {
+			byKey[p.PublicKey] = p.Endpoint
+		}
+		for _, p := range w.Peers {
+			if ep, err := netip.ParseAddrPort(byKey[p.PublicKey]); err == nil {
+				out[p.ID] = ep
+			}
+		}
+	}
+	return out, nil
 }

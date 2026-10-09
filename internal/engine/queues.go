@@ -84,10 +84,10 @@ func (o *owner) trackQueues(t *compiler.Target, plan *apply.Plan, gen uint64, fa
 		return
 	}
 	var devs []string
-	if t.TC != nil {
-		devs = append(devs, t.TC.Devs...)
-		for _, c := range t.TC.Classes {
-			for _, d := range t.TC.Devs {
+	for _, tr := range t.TCTrees() {
+		devs = append(devs, tr.Devs...)
+		for _, c := range tr.Classes {
+			for _, d := range tr.Devs {
 				k := QueueKey(d, c.ClassID())
 				if g, ok := old[k]; ok && !made[k] {
 					next[k] = g

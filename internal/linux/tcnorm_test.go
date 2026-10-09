@@ -565,7 +565,7 @@ func TestAForeignFilterOnTheIngressQdiscIsKeptApart(t *testing.T) {
 	for _, f := range tree.Ingress().Filters {
 		kinds = append(kinds, f.Kind)
 	}
-	if len(kinds) != 2 || !(kinds[0] == "u32" && kinds[1] == "flower" || kinds[1] == "u32" && kinds[0] == "flower") {
+	if len(kinds) != 2 || (kinds[0] != "u32" || kinds[1] != "flower") && (kinds[1] != "u32" || kinds[0] != "flower") {
 		t.Errorf("%v", kinds)
 	}
 }

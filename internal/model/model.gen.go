@@ -2714,7 +2714,7 @@ type Capabilities struct {
 	DiagnosticTypes *[]string     `json:"diagnostic_types,omitempty"`
 	FaultFamilies   []FaultFamily `json:"fault_families"`
 
-	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
+	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
 	Features []string `json:"features"`
 	Limits   *struct {
 		ClassLimitPerInterface *int `json:"class_limit_per_interface,omitempty"`
@@ -3586,6 +3586,9 @@ type Explanation struct {
 		Family     FaultFamily `json:"family"`
 		Overridden *[]FaultRef `json:"overridden,omitempty"`
 
+		// Tunnel For the family `tunnel`: the tunnel the traffic crosses, `client:<id>` or `link:<id>`. Traffic that crosses two tunnels (from a client network into a link) has one entry per tunnel.
+		Tunnel *string `json:"tunnel,omitempty"`
+
 		// Winner A fault or profile part as a candidate in precedence resolution.
 		Winner *FaultRef `json:"winner,omitempty"`
 	} `json:"faults"`
@@ -3603,6 +3606,23 @@ type Explanation struct {
 
 		// PmtuTable The index of the PMTU mirror table (bits 17-19 of the mark, plan §3.3) the traffic is routed through, when the winner of the `mtu` family is in `icmp` mode. Absent for `blackhole` and `mss_clamp` and when no `mtu` fault applies. `fault_id` and the marks are absent when only an `mtu` fault applies.
 		PmtuTable *int `json:"pmtu_table,omitempty"`
+
+		// Tunnels The tunnel faults in the packet path of the traffic, as compiled (plan §2.2.1); a tunnel fault of a peer with no known address is not among them.
+		Tunnels *[]struct {
+			// Endpoint The address and port the peer's encrypted UDP comes from and goes to; the packets are selected by it.
+			//
+			// Example: 198.51.100.2:51820
+			Endpoint string `json:"endpoint"`
+			FaultId  int    `json:"fault_id"`
+
+			// MarkDownload The mark of the packets towards the peer (the output hook).
+			//
+			// Example: 0x000100a0
+			MarkDownload *string `json:"mark_download,omitempty"`
+
+			// Tunnel `client:<id>` or `link:<id>`.
+			Tunnel string `json:"tunnel"`
+		} `json:"tunnels,omitempty"`
 	} `json:"kernel,omitempty"`
 
 	// Route The route the kernel takes for the packet (`ip route get`, through the policy rules); absent for a hostname destination or a source without an address.
@@ -3653,7 +3673,11 @@ type ExternalRouting struct {
 //   - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 //   - `mtu` - `mtu` plus an optional `TrafficMatch`.
 //   - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
-//     burst_loss, blackout and flapping; no `TrafficMatch`, no source/target.
+//     burst_loss, blackout and flapping; no `TrafficMatch`, no source/target. The directions
+//     are the remote side's: `upload` is what the client or the remote site sends (the encrypted
+//     UDP from the peer to the gateway), `download` what it receives (from the gateway to the
+//     peer). The peer is found by the address it is reached at: a client that has not connected
+//     yet has none, and its fault takes effect when it does.
 type FaultBody struct {
 	// Blackout Drop everything (netem loss 100 %).
 	Blackout *bool `json:"blackout,omitempty"`
@@ -4369,7 +4393,11 @@ type Overlay struct {
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
-	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target.
+	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target. The directions
+	//   are the remote side's: `upload` is what the client or the remote site sends (the encrypted
+	//   UDP from the peer to the gateway), `download` what it receives (from the gateway to the
+	//   peer). The peer is found by the address it is reached at: a client that has not connected
+	//   yet has none, and its fault takes effect when it does.
 	Fault *FaultBody `json:"fault,omitempty"`
 
 	// Generation Generation in which the current version became active.
@@ -4436,8 +4464,14 @@ type Overlay struct {
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
 	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
-	// Requires M10.
+	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
+	// both directions (output and input hook, before connection tracking).
+	//
+	// The overlay is `effective` while it changes something: the peer is on its interface, and
+	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
+	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
+	// dropped. A peer that is disabled in the configuration is not on its interface, so the
+	// overlay has nothing to change and shows `disabled`.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -4487,7 +4521,11 @@ type OverlayRequest struct {
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
-	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target.
+	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target. The directions
+	//   are the remote side's: `upload` is what the client or the remote site sends (the encrypted
+	//   UDP from the peer to the gateway), `download` what it receives (from the gateway to the
+	//   peer). The peer is found by the address it is reached at: a client that has not connected
+	//   yet has none, and its fault takes effect when it does.
 	Fault *FaultBody `json:"fault,omitempty"`
 
 	// Lease The owner must renew the overlay within this interval (`POST /overlays/{id}/renew`).
@@ -4533,8 +4571,14 @@ type OverlayRequest struct {
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
 	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
-	// Requires M10.
+	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
+	// both directions (output and input hook, before connection tracking).
+	//
+	// The overlay is `effective` while it changes something: the peer is on its interface, and
+	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
+	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
+	// dropped. A peer that is disabled in the configuration is not on its interface, so the
+	// overlay has nothing to change and shows `disabled`.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -5304,7 +5348,11 @@ type Step struct {
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
-	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target.
+	//   burst_loss, blackout and flapping; no `TrafficMatch`, no source/target. The directions
+	//   are the remote side's: `upload` is what the client or the remote site sends (the encrypted
+	//   UDP from the peer to the gateway), `download` what it receives (from the gateway to the
+	//   peer). The peer is found by the address it is reached at: a client that has not connected
+	//   yet has none, and its fault takes effect when it does.
 	Fault *FaultBody `json:"fault,omitempty"`
 
 	// Id Unique within a scenario. `start` is reserved (check windows).
@@ -5353,8 +5401,14 @@ type Step struct {
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
 	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
-	// Requires M10.
+	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
+	// both directions (output and input hook, before connection tracking).
+	//
+	// The overlay is `effective` while it changes something: the peer is on its interface, and
+	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
+	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
+	// dropped. A peer that is disabled in the configuration is not on its interface, so the
+	// overlay has nothing to change and shows `disabled`.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -5579,8 +5633,14 @@ type WaitConditionFor string
 // WireGuardAction WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 // `disable` removes the peer from the interface ("peer offline", for a link "link
 // down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP.
-// Requires M10.
+// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
+// both directions (output and input hook, before connection tracking).
+//
+// The overlay is `effective` while it changes something: the peer is on its interface, and
+// for `block_endpoint` the address the peer is reached at is known (the peer has connected
+// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
+// dropped. A peer that is disabled in the configuration is not on its interface, so the
+// overlay has nothing to change and shows `disabled`.
 type WireGuardAction struct {
 	Action WireGuardActionAction `json:"action"`
 

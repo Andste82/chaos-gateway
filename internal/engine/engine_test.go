@@ -24,6 +24,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
@@ -40,6 +41,8 @@ type harness struct {
 	dir  string
 	// classLimit is the class limit the engine was started with (0: the architecture default)
 	classLimit int
+	// sec is the secrets store of a WireGuard harness (newWGHarness)
+	sec *secrets.Store
 }
 
 func ptr[T any](v T) *T { return &v }

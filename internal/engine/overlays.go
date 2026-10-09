@@ -2,14 +2,19 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/overlay"
 )
@@ -71,11 +76,11 @@ func (e *CompileError) Error() string {
 }
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
-// /capabilities): faults of the impairment and mtu families and access rules; the kinds profile (M11), dns
-// (M20), tls (M21), dhcp (M23) and wireguard (M10) follow with their milestones.
+// /capabilities): faults of the impairment, mtu and tunnel families, access rules and WireGuard actions;
+// the kinds profile (M11), dns (M20), tls (M21) and dhcp (M23) follow with their milestones.
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindRule}
-	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindRule, model.OverlayKindWireguard}
+	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyTunnel}
 )
 
 // CheckOverlaySupported returns an *UnsupportedOverlayError for an overlay request that needs a
@@ -94,14 +99,14 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 		case *fam == model.FaultBodyFamilyMtu:
 			return nil
 		case *fam == model.FaultBodyFamilyTunnel:
-			return &UnsupportedOverlayError{What: "a fault of family tunnel", Milestone: "M10"}
+			return nil
 		}
 	case "profile":
 		return &UnsupportedOverlayError{What: "a profile", Milestone: "M11"}
 	case "rule":
 		return nil // M9
 	case "wireguard":
-		return &UnsupportedOverlayError{What: "a WireGuard action", Milestone: "M10"}
+		return nil
 	case "dns":
 		return &UnsupportedOverlayError{What: "a DNS fault", Milestone: "M20"}
 	case "tls":
@@ -145,6 +150,10 @@ type overlayReply struct {
 type cmdOverlayPut struct {
 	w     OverlayWrite
 	reply chan overlayReply
+	// endpoints are the addresses the WireGuard peers were reached at when the write was accepted, read from the
+	// interfaces for a request that selects a peer's packets by its address; nil for every other request. The check of
+	// the write compiles with them, so a tunnel fault that does not fit is refused with the answer of the compiler.
+	endpoints map[string]netip.AddrPort
 }
 
 type cmdOverlayDelete struct {
@@ -183,7 +192,26 @@ func (e *Engine) PutOverlay(ctx context.Context, w OverlayWrite) (OverlayResult,
 	if err := CheckOverlaySupported(&w.Request); err != nil {
 		return OverlayResult{}, err
 	}
-	return e.overlayCmd(ctx, func(reply chan overlayReply) command { return cmdOverlayPut{w: w, reply: reply} })
+	var eps map[string]netip.AddrPort
+	if requestNeedsEndpoints(&w.Request) {
+		// a failed read leaves the check with what the last poll saw; the apply reads again
+		if got, err := e.readPeerEndpoints(ctx); err == nil {
+			eps = got
+		}
+	}
+	return e.overlayCmd(ctx, func(reply chan overlayReply) command { return cmdOverlayPut{w: w, reply: reply, endpoints: eps} })
+}
+
+// requestNeedsEndpoints reports whether the overlay selects a peer's encrypted UDP by its address: a tunnel fault or a
+// blocked endpoint.
+func requestNeedsEndpoints(req *model.OverlayRequest) bool {
+	switch {
+	case req.Fault != nil && req.Fault.Family != nil && *req.Fault.Family == model.FaultBodyFamilyTunnel:
+		return true
+	case req.Wireguard != nil && req.Wireguard.Action == model.BlockEndpoint:
+		return true
+	}
+	return false
 }
 
 // DeleteOverlay removes an overlay. A non-nil by limits the caller to its own overlays
@@ -342,7 +370,19 @@ func (o *owner) compileProblems() []compiler.Problem {
 		cp := *o.identity
 		id = &cp
 	}
-	tg := compiler.Compile(o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.snap.PMTUTables, o.e.retirer.IDs()))
+	in := o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.snap.PMTUTables, o.e.retirer.IDs())
+	// the peers are reached where the last poll saw them: the check needs the classes of the tunnel faults
+	// that would exist, and they exist for the peers that have an address
+	in.PeerEndpoints = map[string]netip.AddrPort{}
+	for id, st := range o.snap.WireGuard {
+		if ep, err := netip.ParseAddrPort(st.Endpoint); err == nil {
+			in.PeerEndpoints[id] = ep
+		}
+	}
+	for id, ep := range o.fresh {
+		in.PeerEndpoints[id] = ep
+	}
+	tg := compiler.Compile(in)
 	var out []compiler.Problem
 	for _, p := range tg.Problems {
 		if p.Severity == compiler.SevError && (p.Code == compiler.CodeCapacityExceeded || p.Code == compiler.CodeFaultInvalid) {
@@ -378,6 +418,9 @@ type pendingPut struct {
 // overlayPut validates a write and takes it into the open batch (starting one when there is none).
 // It does not answer: the batch does, when it is checked (finishBatch).
 func (o *owner) overlayPut(c cmdOverlayPut) {
+	if c.endpoints != nil {
+		o.fresh = c.endpoints
+	}
 	req, ok := o.validPut(c)
 	if !ok {
 		return
@@ -456,6 +499,9 @@ func writeActor(w OverlayWrite) model.Actor {
 // putOne makes one write complete in itself: validated, stored, compiled with the store as it is and,
 // when it is valid, a desired state of its own.
 func (o *owner) putOne(c cmdOverlayPut) {
+	if c.endpoints != nil {
+		o.fresh = c.endpoints
+	}
 	req, ok := o.validPut(c)
 	if !ok {
 		return
@@ -659,8 +705,14 @@ func (o *owner) settleOverlays(r applyResult) (reverted bool) {
 
 // trackFaults updates the epochs of the faults' counters after an apply: a fault that is new in the
 // applied target starts its counters at zero in this generation, one that went is forgotten.
-func (o *owner) trackFaults(t *compiler.Target, gen uint64) {
+func (o *owner) trackFaults(t *compiler.Target, gen uint64, plan *apply.Plan) {
 	born := make(map[string]int64, len(t.Faults)+len(t.PMTU))
+	restarted := map[int]bool{}
+	if plan != nil {
+		for _, id := range plan.IngressRestarted {
+			restarted[id] = true
+		}
+	}
 	keep := func(key string) {
 		if g, ok := o.ov.born[key]; ok {
 			born[key] = g
@@ -670,12 +722,24 @@ func (o *owner) trackFaults(t *compiler.Target, gen uint64) {
 	}
 	for _, f := range t.Faults {
 		keep(f.Key)
+		if f.Tunnel != nil && restarted[f.ID] {
+			born[f.Key] = int64(gen) // the counters of the packets from the peer started again
+		}
 	}
 	for _, f := range t.PMTU {
 		keep(f.Key)
 	}
+	for _, a := range t.WGActions {
+		if a.Counter != "" {
+			keep(WGActionKey(a.Overlay))
+		}
+	}
 	o.ov.born = born
 	o.snap.Faults = t.Faults
+	o.snap.TunnelIFB, o.snap.TunnelUplink = "", ""
+	if t.IFB != nil {
+		o.snap.TunnelIFB, o.snap.TunnelUplink = t.IFB.Dev, t.IFB.Uplink
+	}
 	o.snap.PMTU, o.snap.PMTUTables = t.PMTU, t.PMTUTables
 	win := make(map[string]bool, len(t.Winners))
 	for _, k := range t.Winners {
@@ -708,6 +772,10 @@ func (o *owner) trackRules(t *compiler.Target, gen uint64) {
 	o.snap.RuleEpochs = born
 }
 
+// WGActionKey is the key under which the epoch of the counter of a blocked endpoint (a WireGuard action) is kept
+// in Snapshot.FaultEpochs, next to the keys of the faults.
+func WGActionKey(overlay string) string { return "wireguard:" + strings.ToLower(overlay) }
+
 // CounterValue is the reading of one named nft counter.
 type CounterValue struct {
 	Packets, Bytes int64
@@ -724,6 +792,42 @@ func (e *Engine) ReadCounters(ctx context.Context) (map[string]CounterValue, err
 	for _, obj := range rs.Objects {
 		if c := obj.Counter; c != nil {
 			out[c.Name] = CounterValue{Packets: c.Packets, Bytes: c.Bytes}
+		}
+	}
+	// the packets from a peer are counted by tc, not by nft: the redirect action of the ingress filter of
+	// each tunnel fault has matched them before any netem has dropped or delayed one (plan §2.5: "fault
+	// counters show the dropped packets"); the fault's CounterUp is the name they are reported under
+	if snap := e.Snapshot(); snap.TunnelUplink != "" {
+		var tunnels []compiler.Fault
+		for _, f := range snap.Faults {
+			if f.Tunnel != nil && f.Upload != nil {
+				tunnels = append(tunnels, f)
+			}
+		}
+		if len(tunnels) > 0 {
+			res, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: executor.Target{NS: e.cfg.Namespace}, What: executor.ReadTC, Dev: snap.TunnelUplink})
+			if err != nil {
+				return nil, fmt.Errorf("read the ingress filters of %s: %w", snap.TunnelUplink, err)
+			}
+			var tree *linux.NormTree
+			if len(res.Data) > 0 {
+				if err := json.Unmarshal(res.Data[0], &tree); err != nil {
+					return nil, fmt.Errorf("read the ingress filters of %s: %w", snap.TunnelUplink, err)
+				}
+			}
+			if tree != nil {
+				byHandle := map[int]linux.NormFilter{}
+				for _, f := range tree.Ingress().Filters {
+					if f.Flower != nil && f.Flower.Redirect == compiler.IFBDev {
+						byHandle[f.Flower.Handle] = f
+					}
+				}
+				for _, f := range tunnels {
+					if nf, ok := byHandle[f.ID]; ok && nf.Stats != nil {
+						out[f.CounterUp] = CounterValue{Packets: int64(nf.Stats.Packets), Bytes: int64(nf.Stats.Bytes)}
+					}
+				}
+			}
 		}
 	}
 	return out, nil

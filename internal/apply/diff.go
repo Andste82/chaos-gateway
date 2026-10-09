@@ -188,7 +188,7 @@ func targetHostLines(t *compiler.Target) []line {
 	}
 	var rl, rt []string
 	for _, r := range t.Rules {
-		rl = append(rl, fmt.Sprintf("rule %d iif %s lookup %d", r.Priority, r.Iif, r.Table))
+		rl = append(rl, fmt.Sprintf("rule %d%s iif %s lookup %d", r.Priority, fwmarkNote(r), r.Iif, r.Table))
 	}
 	for _, r := range t.Routes {
 		rt = append(rt, fmt.Sprintf("route table %d %s%s", r.Table, r.Dst, viaDev(r)))
@@ -278,7 +278,7 @@ func hostLines(s *State, t *compiler.Target) []line {
 	var rl, rt []string
 	for _, r := range s.Rules {
 		if er, ok := stateRule(r); ok && r.Protocol == ownProto {
-			rl = append(rl, fmt.Sprintf("rule %d iif %s lookup %d", er.Priority, er.Iif, er.Table))
+			rl = append(rl, fmt.Sprintf("rule %d%s iif %s lookup %d", er.Priority, fwmarkNote(er), er.Iif, er.Table))
 		}
 	}
 	for _, r := range s.Routes {

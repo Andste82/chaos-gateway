@@ -447,6 +447,9 @@ func (r Route) validate() error {
 	if r.Metric != nil && (*r.Metric < 0 || *r.Metric > 1<<30) {
 		return fmt.Errorf("metric %d out of range", *r.Metric)
 	}
+	if r.MTU != 0 && (r.MTU < 68 || r.MTU > 65535 || typ != "unicast") {
+		return fmt.Errorf("mtu %d out of range 68-65535, or on a route that is not a unicast route", r.MTU)
+	}
 	return nil
 }
 

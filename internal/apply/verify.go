@@ -166,12 +166,12 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 	haveRoutes := map[string]bool{}
 	for _, r := range s.Routes {
 		if r.Protocol == ownProto && ownTable(r.Table) {
-			haveRoutes[routeKey(stateRoute(r))] = true
+			haveRoutes[routeSig(stateRoute(r))] = true
 		}
 	}
 	wantRoutes := map[string]bool{}
 	for _, r := range t.Routes {
-		k := routeKey(r)
+		k := routeSig(r)
 		wantRoutes[k] = true
 		if !haveRoutes[k] {
 			bad("routes", "missing %s%s table %d", r.Dst, viaDev(r), r.Table)

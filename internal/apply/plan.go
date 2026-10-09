@@ -115,8 +115,9 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		}
 		er := stateRoute(r)
 		k := routeKey(er)
-		haveRoutes[k] = true
-		if _, ok := wantRoutes[k]; !ok {
+		w, wanted := wantRoutes[k]
+		haveRoutes[k] = wanted && w.MTU == er.MTU // a route with another MTU is replaced, below
+		if !wanted {
 			er.Action = "delete"
 			// a route of a device that is about to go is deleted first (deleting it afterwards
 			// fails); every other stale route goes after the new ones exist
@@ -162,7 +163,7 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	for _, r := range t.Rules {
 		if !haveRules[ruleKey(r)] {
 			fresh.Rules = append(fresh.Rules, r)
-			note("rule add priority %d iif %s table %d", r.Priority, r.Iif, r.Table)
+			note("rule add priority %d%s iif %s table %d", r.Priority, fwmarkNote(r), r.Iif, r.Table)
 		}
 	}
 	if len(stale.Routes)+len(stale.Rules) > 0 {
@@ -512,7 +513,17 @@ func viaDev(r executor.Route) string {
 	if r.Type != "" && r.Type != "unicast" {
 		s += " (" + r.Type + ")"
 	}
+	if r.MTU != 0 {
+		s += fmt.Sprintf(" mtu lock %d", r.MTU)
+	}
 	return s
+}
+
+// routeSig is a route with everything that makes it the route the target wants: its key and the path
+// MTU it carries. A route that differs from the target in the MTU only is replaced in place (`ip route
+// replace`), never deleted and added.
+func routeSig(r executor.Route) string {
+	return fmt.Sprintf("%s|mtu=%d", routeKey(r), r.MTU)
 }
 
 func ownTable(t string) bool {
@@ -548,11 +559,18 @@ func stateRoute(r linux.Route) executor.Route {
 	if typ == "unicast" {
 		typ = ""
 	}
-	er := executor.Route{Family: fam, Table: n, Dst: r.Dst, Via: r.Gateway, Dev: r.Dev, Type: typ}
+	er := executor.Route{Family: fam, Table: n, Dst: r.Dst, Via: r.Gateway, Dev: r.Dev, Type: typ, MTU: r.MTU()}
 	if typ != "" {
 		er.Dev = "" // blackhole routes carry no device in the executor's model
 	}
 	return er
+}
+
+func fwmarkNote(r executor.Rule) string {
+	if r.Fwmark == "" {
+		return ""
+	}
+	return " fwmark " + r.Fwmark
 }
 
 func ruleKey(r executor.Rule) string {

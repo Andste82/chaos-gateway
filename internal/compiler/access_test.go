@@ -142,8 +142,8 @@ func TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay(t *testing.T) {
 	}
 	// the cut window of the input hook starts with the anti-lockout match: the control plane is never reset
 	_, cutIn := tg.Access.CutRules([]string{tg.Access.Rules[0].Key, tg.Access.Rules[1].Key, tg.Access.Rules[2].Key, tg.Access.Rules[3].Key})
-	if len(cutIn) == 0 || !strings.Contains(renderRule(cutIn[0]), "@mgmt_src") || !strings.HasSuffix(renderRule(cutIn[0]), "return") {
-		t.Fatalf("the cut chain of input must start with the anti-lockout match: %v", cutIn)
+	if len(cutIn) < 2 || renderRule(cutIn[0]) != "meta iifname lo return" || !strings.Contains(renderRule(cutIn[1]), "@mgmt_src") || !strings.HasSuffix(renderRule(cutIn[1]), "return") {
+		t.Fatalf("the cut chain of input must start with loopback and the anti-lockout match: %v", cutIn)
 	}
 }
 
@@ -494,11 +494,14 @@ func TestACutWindowResetsOnlyEstablishedTCPOfTheOriginalDirection(t *testing.T) 
 	fwd, in := tg.Access.CutRules([]string{key})
 	set := scopeSetName(model.Scope{Device: ptr(devESP42)})
 	want := fmt.Sprintf(`ct original ip saddr @%s meta l4proto tcp ct original proto-dst 8883 ct state { established } ct direction original reject with tcp reset`, set)
-	if len(fwd) != 1 || renderRule(fwd[0]) != want {
-		t.Fatalf("forward window = %v\nwant %s", fwd, want)
+	// switched traffic of a bridge and loopback are skipped first, as the hooks do before the rules
+	if got := renderRules(Chain{Rules: fwd}); len(got) != 3 || got[0] != "meta iifname br-iot meta oifname br-iot return" ||
+		got[1] != "meta iifname br-lab meta oifname br-lab return" || got[2] != want {
+		t.Fatalf("forward window = %v\nwant %s", got, want)
 	}
-	if len(in) != 2 || !strings.HasSuffix(renderRule(in[0]), " return") || renderRule(in[1]) != want {
-		t.Fatalf("input window = %v", in)
+	if got := renderRules(Chain{Rules: in}); len(got) != 3 || got[0] != "meta iifname lo return" ||
+		!strings.Contains(got[1], "@mgmt_src") || !strings.HasSuffix(got[1], " return") || got[2] != want {
+		t.Fatalf("input window = %v", got)
 	}
 	// no window without keys, none for a key that does not cut
 	if f, i := tg.Access.CutRules(nil); f != nil || i != nil {
@@ -520,9 +523,16 @@ func TestACutWindowLeavesTheConnectionsOfEarlierRulesAlone(t *testing.T) {
 	tg := w.compile(nil)
 	fwd, _ := tg.Access.CutRules([]string{"config:" + ruleC})
 	got := renderRules(Chain{Rules: fwd})
-	if len(got) != 3 {
+	if len(got) != 5 {
 		t.Fatalf("window = %v", got)
 	}
+	// the switched traffic of the bridges comes first, then the rules
+	for i, b := range []string{"br-iot", "br-lab"} {
+		if want := "meta iifname " + b + " meta oifname " + b + " return"; got[i] != want {
+			t.Errorf("window[%d] = %s, want %s", i, got[i], want)
+		}
+	}
+	got = got[2:]
 	for i, r := range tg.Access.Rules[:2] {
 		if !strings.HasSuffix(got[i], " return") || !strings.Contains(got[i], "ct original proto-dst") {
 			t.Errorf("rule %d (%s) must return first: %s", i, r.Name, got[i])
@@ -583,8 +593,8 @@ func TestACutTransactionReplacesTheChainsAndClosesTheWindowWithoutKeys(t *testin
 			}
 		}
 	}
-	// flush forward, one rule, flush input, the guard and one rule
-	if strings.Join(verbs, "|") != "flush chain <nil>|add rule cut_forward|flush chain <nil>|add rule cut_input|add rule cut_input" {
+	// flush forward, the two bridges and the rule, flush input, loopback, the guard and the rule
+	if strings.Join(verbs, "|") != "flush chain <nil>|add rule cut_forward|add rule cut_forward|add rule cut_forward|flush chain <nil>|add rule cut_input|add rule cut_input|add rule cut_input" {
 		t.Errorf("open = %v", verbs)
 	}
 	if len(c.Nftables) != 2 {
@@ -758,4 +768,56 @@ func TestGoldenAccessNftTransaction(t *testing.T) {
 	var pretty any
 	_ = json.Unmarshal(tx, &pretty)
 	golden(t, "access.nft", pretty)
+}
+
+// The plan knows what the packet path never lets a rule judge: the bridges' switched traffic and what
+// the gateway opened itself. A device talking to the gateway is input traffic and is judged.
+func TestThePlanKnowsWhatNoRuleJudges(t *testing.T) {
+	w := accessWorld(t)
+	w.addConfigRule(ruleA, `{name: cut-iot, source: {network: IoT}, action: drop, cut_existing: true}`)
+	tg := w.compile(nil)
+	p := tg.Access
+	if got := strings.Join(p.Switched, ","); got != "br-iot,br-lab" {
+		t.Errorf("switched bridges = %s", got)
+	}
+	addr := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+	for _, c := range []struct {
+		src, dst string
+		not      bool
+	}{
+		{"10.10.0.1", "10.10.0.42", true},     // the gateway opened it (BGP to a device)
+		{"10.10.0.42", "10.10.0.43", true},    // two devices of IoT: switched
+		{"10.20.0.50", "10.20.0.51", true},    // two devices of Lab
+		{"10.10.0.42", "10.20.0.50", false},   // routed between the networks
+		{"10.10.0.42", "203.0.113.10", false}, // towards the uplink
+		{"10.10.0.42", "10.10.0.1", false},    // to the gateway: input, judged
+		{"203.0.113.10", "10.10.0.42", false}, // from outside
+	} {
+		if got := p.NotJudged(Tuple{Src: addr(c.src), Dst: addr(c.dst), Proto: "tcp", Port: 80}); got != c.not {
+			t.Errorf("%s -> %s: not judged = %v, want %v", c.src, c.dst, got, c.not)
+		}
+	}
+	if (*AccessPlan)(nil).NotJudged(Tuple{Src: addr("10.10.0.1"), Dst: addr("10.10.0.42")}) {
+		t.Error("no plan, no exclusions")
+	}
+}
+
+// The name of a source set is a hash of the scope; the sets of two scopes that collide must never be
+// shared, and the same scope twice shares its set.
+func TestASourceSetNameIsLongAndACollisionIsRefused(t *testing.T) {
+	name := scopeSetName(model.Scope{Device: ptr(devESP42)})
+	if len(name) < len("asrc_")+24 {
+		t.Errorf("the set name %q has fewer than 96 bits of the scope's hash", name)
+	}
+	sets := map[string]SetDef{}
+	a := SetDef{Name: "asrc_x", Elements: []string{"10.10.0.42"}}
+	if added, err := addSourceSet(sets, a); !added || err != nil {
+		t.Fatalf("%v %v", added, err)
+	}
+	if added, err := addSourceSet(sets, a); added || err != nil {
+		t.Errorf("the same scope twice: %v %v", added, err)
+	}
+	if _, err := addSourceSet(sets, SetDef{Name: "asrc_x", Elements: []string{"10.10.0.43"}}); err == nil {
+		t.Error("a set name used by two scopes with different addresses must be refused")
+	}
 }

@@ -238,6 +238,12 @@ func (s *Server) GetHealth(c *gin.Context) {
 			comps[0].Status, comps[0].Detail = "degraded", "the last apply failed: "+firstLine(snap.LastError)
 		}
 	}
+	if snap.CutWindowError != "" {
+		worse("degraded")
+		if comps[0].Status == "healthy" {
+			comps[0].Status, comps[0].Detail = "degraded", "the window of resets of an access rule's cut is still open: "+firstLine(snap.CutWindowError)
+		}
+	}
 	if snap.KeaNetworks == nil {
 		comps = append(comps, healthComponent{Name: "kea", Status: "disabled"})
 	} else {

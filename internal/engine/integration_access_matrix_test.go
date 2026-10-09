@@ -91,6 +91,20 @@ func trackedTCP(gw *testbed.Namespace, src string, port int) bool {
 	return strings.Contains(out, "dport="+strconv.Itoa(port))
 }
 
+// serverSideEnds waits until the server has no established connection on the port any more: the
+// connection was closed normally, both ends saw the FIN. The "server side afterwards" column of the S3
+// matrix says "closed normally" for the cases in which nothing cut the connection.
+func serverSideEnds(t *testing.T, ns *testbed.Namespace, port int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for establishedCount(ns, "sport", port) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the server's side of the connection on %d is still established 30 s after the client closed it", port)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // clientPort is the local port of the one established connection of ns towards port.
 func clientPort(t *testing.T, ns *testbed.Namespace, port int) int {
 	t.Helper()
@@ -236,6 +250,8 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 		if got := tryTo(top.A, "tcp", testbed.ServerAddr, 9101); got != "ok" {
 			t.Errorf("new connection: %s", got)
 		}
+		p.Stop() // the client closes the connection: the server's side ends normally
+		serverSideEnds(t, top.Server, 9101)
 	})
 
 	// C1 and C2: a drop rule arrives while a connection runs. The ruleset the product compiles accepts
@@ -258,6 +274,10 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 		if counterOf(res) == 0 {
 			t.Error("the rule's counter counts nothing")
 		}
+		// the client closes the connection while the rule stands: the FIN is established traffic, which
+		// the rule never sees, and the server's side ends normally
+		p.Stop()
+		serverSideEnds(t, top.Server, 9102)
 		fwd := top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "forward")
 		est := strings.Index(fwd, "ct state established,related accept")
 		jump := strings.Index(fwd, "jump access_forward")
@@ -285,6 +305,10 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 		res = lanRuleOverlay(t, r, selector(9103, "reset", true))
 		if got := streamOutcome(t, p, mark); got != "reset" {
 			t.Errorf("stream with cut_existing: %s (C3: reset)", got)
+		}
+		// the reset went to the device only: the server's side is still established
+		if n := establishedCount(top.Server, "sport", 9103); n != 1 {
+			t.Errorf("the server's side of the connection cut with cut_existing: %d established, want 1", n)
 		}
 		if got := tryTo(top.A, "tcp", testbed.ServerAddr, 9103); got != "refused" {
 			t.Errorf("new connection: %s", got)
@@ -339,6 +363,8 @@ func TestTheBehaviorMatrixOfS3OnTheRealKernel(t *testing.T) {
 		if got := tryTo(top.A, "tcp", testbed.ServerAddr, 9105); got != "ok" {
 			t.Errorf("new connection: %s", got)
 		}
+		p.Stop() // the deletion did not touch the server's side: it ends normally with the client's close
+		serverSideEnds(t, top.Server, 9105)
 	})
 
 	t.Run("C6_a_cut_resets_the_stream_and_leaves_the_server_half_open", func(t *testing.T) {
@@ -648,4 +674,85 @@ time.sleep(10**6)
 		t.Errorf("the anti-lockout rule counted nothing: %+v", counters[compiler.AntiLockoutCounter])
 	}
 	ssh.Stop()
+}
+
+// accessTimedTry is accessTry with the time the attempt took: "<status> <seconds>".
+const accessTimedTry = `
+import socket, sys, time
+ip, port, t = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+t0 = time.time()
+try:
+    s = socket.socket(); s.settimeout(t); s.connect((ip, port)); s.sendall(b"hi"); r = s.recv(10)
+    st = "ok" if r == b"hi" else "bad"
+except ConnectionRefusedError: st = "refused"
+except ConnectionResetError: st = "reset"
+except socket.timeout: st = "timeout"
+print(st, "%.3f" % (time.time() - t0))
+`
+
+// timedTry connects to the server's port and returns what happened and how long it took.
+func timedTry(t *testing.T, from *testbed.Namespace, port int, timeout time.Duration) (string, time.Duration) {
+	t.Helper()
+	out, err := from.Run(context.Background(), "python3", "-c", accessTimedTry, testbed.ServerAddr, strconv.Itoa(port), fmt.Sprint(timeout.Seconds()))
+	f := strings.Fields(out)
+	if err != nil || len(f) != 2 {
+		t.Fatalf("timed attempt to %d: %v %q", port, err, out)
+	}
+	secs, _ := strconv.ParseFloat(f[1], 64)
+	return f[0], time.Duration(secs * float64(time.Second))
+}
+
+// Access rules are evaluated before faults (plan §2.4: "a dropped packet does not reach any fault"). A
+// device with a latency fault in both directions meets a reject rule on one port, a drop rule on a
+// second and no rule on a third: the rejected connection is refused at once, without the fault's delay in
+// either direction, the dropped one never connects (it is not merely late), and the allowed port is delayed
+// by the fault as before, on the same device. Another device of the network, without the fault, is not
+// delayed anywhere. Functional assertions only: the delays are 300 ms against a 150 ms margin, which an
+// emulated kernel's noise does not reach.
+func TestARuleActsBeforeAFaultOnTheSameDeviceOnTheRealKernel(t *testing.T) {
+	r := startFaultLab(t, nil)
+	top := r.top
+	startMatrixServer(t, top.Server)
+	for try := 0; tryTo(top.A, "udp", testbed.ServerAddr, 5353) != "ok"; try++ {
+		if try > 300 {
+			t.Fatal("the server does not answer")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	const delay = 300 * time.Millisecond
+	// before anything: both ports connect in a few round trips of an undelayed network
+	for _, port := range []int{9101, 9102, 9103} {
+		if st, took := timedTry(t, top.A, port, 5*time.Second); st != "ok" || took > delay/2 {
+			t.Fatalf("port %d before the fault: %s in %v", port, st, took)
+		}
+	}
+
+	lanRuleOverlay(t, r, "target: {device: dev-a}\nfault: "+shape{up: delay, down: delay}.yaml(""))
+	// a connection needs one round trip (SYN up, SYN-ACK down) and the echo another: four delays
+	if st, took := timedTry(t, top.A, 9101, 10*time.Second); st != "ok" || took < 3*delay {
+		t.Fatalf("the allowed port with the fault alone: %s in %v, the fault of %v each way is not in force", st, took, delay)
+	}
+
+	lanRuleOverlay(t, r, "target: {device: dev-a}\nrule: {protocol: tcp, ports: [9102], action: reject}")
+	lanRuleOverlay(t, r, "target: {device: dev-a}\nrule: {protocol: tcp, ports: [9103], action: drop}")
+
+	// reject: the answer is the gateway's own and does not wait for the fault; the SYN never queued
+	if st, took := timedTry(t, top.A, 9102, 10*time.Second); st != "refused" || took > delay/2 {
+		t.Errorf("the rejected port: %s in %v, want refused in far less than the fault's %v", st, took, delay)
+	}
+	// drop: the connection does not come up at all, however long it waits (a delay would let it through)
+	if st, took := timedTry(t, top.A, 9103, 3*time.Second); st != "timeout" {
+		t.Errorf("the dropped port: %s in %v, want timeout (dropped, not delayed)", st, took)
+	}
+	// the port no rule names is still delayed by the fault, and not refused
+	if st, took := timedTry(t, top.A, 9101, 10*time.Second); st != "ok" || took < 3*delay {
+		t.Errorf("the allowed port with the rules present: %s in %v, want ok after the fault's delay", st, took)
+	}
+	// B has neither fault nor rule
+	for _, port := range []int{9101, 9102, 9103} {
+		if st, took := timedTry(t, top.B, port, 5*time.Second); st != "ok" || took > delay/2 {
+			t.Errorf("device B on port %d: %s in %v, want ok without delay", port, st, took)
+		}
+	}
+	r.verifyKernel()
 }

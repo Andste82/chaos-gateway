@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 
@@ -131,6 +132,79 @@ type AccessPlan struct {
 	NonUplink []netip.Prefix `json:"non_uplink,omitempty"`
 	// guard is the match of the anti-lockout rule: the cut chain of the input hook starts with it.
 	guard []any
+	// Switched are the bridges whose traffic that enters and leaves through the same bridge is
+	// never ours to impair or drop (plan §2.2): forward accepts it before the rules, so the cut
+	// chain skips it, too.
+	Switched []string `json:"switched,omitempty"`
+	// Segments are the prefixes reached through one bridge (its network and downstream routes), one
+	// list per bridge: a tuple with both ends in one segment is switched (or routed back out of the
+	// same bridge), and no rule judges it.
+	Segments [][]netip.Prefix `json:"segments,omitempty"`
+	// GatewayAddrs are the addresses of the gateway itself: a connection it opened is not a
+	// device's, and no rule cuts it.
+	GatewayAddrs []netip.Addr `json:"gateway_addrs,omitempty"`
+}
+
+// describePath records which traffic the packet path never lets a rule judge: what is switched
+// inside one bridge and what the gateway itself originated. The cut chains and the cut of the
+// engine read it.
+func (p *AccessPlan) describePath(t *Target) {
+	seenAddr := map[netip.Addr]bool{}
+	addAddr := func(a netip.Addr) {
+		if a.IsValid() && !seenAddr[a] {
+			seenAddr[a] = true
+			p.GatewayAddrs = append(p.GatewayAddrs, a)
+		}
+	}
+	for _, b := range t.Bridges {
+		p.Switched = append(p.Switched, b.Name)
+		seg := parsePrefixes([]string{b.Address.Masked().String()})
+		for _, r := range b.Routes {
+			if q, err := netip.ParsePrefix(r); err == nil {
+				seg = append(seg, q.Masked())
+			} else if a, err := netip.ParseAddr(r); err == nil {
+				seg = append(seg, netip.PrefixFrom(a, a.BitLen()))
+			}
+		}
+		p.Segments = append(p.Segments, seg)
+		addAddr(b.Address.Addr())
+	}
+	for _, w := range t.WireGuard {
+		addAddr(w.Address.Addr())
+	}
+	if t.Service != nil {
+		addAddr(t.Service.HostCIDR.Addr())
+		addAddr(t.Service.PeerCIDR.Addr())
+	}
+	addAddr(t.Uplink.Addr.Addr())
+	sort.Slice(p.GatewayAddrs, func(i, j int) bool { return p.GatewayAddrs[i].Less(p.GatewayAddrs[j]) })
+}
+
+// NotJudged reports whether the packet path never lets a rule judge a connection: the gateway
+// opened it, or it stays inside one bridge's segment (plan §2.2: switched traffic is never ours to
+// impair or drop). Rules do not decide such a connection, so a cut must not touch it either.
+func (p *AccessPlan) NotJudged(t Tuple) bool {
+	if p == nil {
+		return false
+	}
+	toGateway := false
+	for _, a := range p.GatewayAddrs {
+		if a == t.Src {
+			return true
+		}
+		if a == t.Dst {
+			toGateway = true
+		}
+	}
+	if toGateway {
+		return false // a device talking to the gateway is input traffic, which the rules judge
+	}
+	for _, seg := range p.Segments {
+		if inPrefixes(seg, t.Src) && inPrefixes(seg, t.Dst) {
+			return true
+		}
+	}
+	return false
 }
 
 // Tuple is the conntrack original tuple of a packet, the unit the rules judge.
@@ -243,7 +317,7 @@ func ruleCounterName(key string) string {
 func scopeSetName(sc model.Scope) string {
 	b, _ := json.Marshal(sc)
 	h := sha256.Sum256(b)
-	return hashName("asrc_"+hex.EncodeToString(h[:4]), "ipv4_addr", []string{"interval"})
+	return hashName("asrc_"+hex.EncodeToString(h[:12]), "ipv4_addr", []string{"interval"})
 }
 
 // nonUplinkSetName is the set of destinations a rule with the destination "uplink" excludes.
@@ -415,12 +489,16 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 		} else {
 			r.Sources = prefixes
 			r.SourceSet = scopeSetName(c.scope)
-			if _, ok := sets[r.SourceSet]; !ok {
-				s := SetDef{Name: r.SourceSet, Type: "ipv4_addr", Flags: []string{"interval"}}
-				for _, p := range prefixes {
-					s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
-				}
-				sets[r.SourceSet] = s
+			s := SetDef{Name: r.SourceSet, Type: "ipv4_addr", Flags: []string{"interval"}}
+			for _, p := range prefixes {
+				s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
+			}
+			added, err := addSourceSet(sets, s)
+			if err != nil {
+				t.errorf(CodeFaultInvalid, "", "the access rule %s: %v", c.id, err)
+				return
+			}
+			if added {
 				elements += len(s.Elements)
 			}
 		}
@@ -476,6 +554,22 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 			break
 		}
 	}
+}
+
+// addSourceSet registers the source set of a scope. Rules with the same scope share one set; the name
+// is a hash of the scope, so a set that is there already with other addresses is a collision (or a
+// scope that resolved twice to different addresses), and sharing it would silently apply a rule to
+// the wrong devices.
+func addSourceSet(sets map[string]SetDef, s SetDef) (added bool, err error) {
+	have, ok := sets[s.Name]
+	if !ok {
+		sets[s.Name] = s
+		return true, nil
+	}
+	if !slices.Equal(have.Elements, s.Elements) {
+		return false, fmt.Errorf("the source set %s is used by two scopes with different addresses; change a scope of the rules", s.Name)
+	}
+	return false, nil
 }
 
 func parsePrefixes(in []string) []netip.Prefix {
@@ -602,8 +696,11 @@ func (p *AccessPlan) chain(name, hook string) Chain {
 //   - every other rule: its selector, then `return`. The connection belongs to the first rule that
 //     selects it; if that rule does not cut, a later cutting rule must not touch it.
 //
-// The input chain starts with the anti-lockout rule's match and a return, so the control plane is
-// never reset.
+// Both chains skip what the packet path never lets a rule judge, as the hooks do before the rules:
+// the forward chain returns for traffic that enters and leaves through one bridge (switched, seen
+// with br_netfilter), and the input chain returns for loopback, whatever the original source.
+// The input chain also starts with the anti-lockout rule's match and a return, so the control plane
+// is never reset.
 func (p *AccessPlan) CutRules(keys []string) (forward, input []Rule) {
 	if p == nil {
 		return nil, nil
@@ -639,7 +736,11 @@ func (p *AccessPlan) CutRules(keys []string) (forward, input []Rule) {
 			body = append(body, newRule(append(append([]any(nil), expr...), verdict("return"))...))
 		}
 	}
-	forward = body
+	for _, b := range p.Switched {
+		forward = append(forward, newRule(iifname(b), oifname(b), verdict("return")))
+	}
+	forward = append(forward, body...)
+	input = append(input, newRule(iifname("lo"), verdict("return")))
 	if p.guard != nil {
 		input = append(input, newRule(append(append([]any(nil), p.guard...), verdict("return"))...))
 	}

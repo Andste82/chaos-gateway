@@ -175,6 +175,8 @@ type applyResult struct {
 	plan *apply.Plan
 	// cut is what "also cut existing connections" did after the apply (cut.go); nil when no rule cut.
 	cut *cutOutcome
+	// cutStuck is why the window of a cut could not be closed, nil while it is closed (cut.go).
+	cutStuck error
 }
 
 // inflight is a revision apply the state owner waits for.
@@ -597,6 +599,10 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Management = r.target.Management
 		o.snap.Service = r.target.Service
 		o.snap.ServiceError = ""
+		o.snap.CutWindowError = ""
+		if r.cutStuck != nil {
+			o.snap.CutWindowError = r.cutStuck.Error()
+		}
 		if h := o.snap.ServiceHealth; r.target.Service != nil && h != nil && !h.HolderExists {
 			// M6b-02: input() already compiled this with HolderPID 0 instead of failing the apply;
 			// this is only the report of that degradation. A holder that is merely not attached yet

@@ -1642,7 +1642,8 @@ resolved source addresses and a named counter `rule_<10 hex>` derived from the k
 keeps its name while the rule stays, however the order changes, survives every apply and goes with a
 removed rule (plan §3.2). An overlay that is written again keeps its id and so its counter.
 
-- **Sources** are sets `asrc_<hash of the scope>_<hash of the type>`, interval sets of IPv4 prefixes,
+- **Sources** are sets `asrc_<96 bits of the scope's hash>_<hash of the type>`, interval sets of IPv4 prefixes
+  (two scopes whose names collide with different addresses are a compile error, never a shared set),
   refilled at every apply from the identity of the devices (`domain.World.ScopePrefixes`): a device
   or group is the addresses of its devices (and the ranges that identify them), a network its
   prefixes (subnet, the networks behind a hub's clients, a link's routes) and the addresses of the
@@ -1680,11 +1681,40 @@ rules that reset the packets of established connections, then the window is clos
   rule that selects it, so a cutting rule behind an allow rule (or a rule that does not cut) leaves
   that rule's connections alone. Only the original direction is reset: the device gets the reset,
   the server side stays half-open as in a real outage. Rules behind the last cutting rule are not in the
-  window; the input chain's window starts with the anti-lockout match and a `return`.
+  window; the window skips what the hooks let no rule judge, as the hooks do in front of the rules: the
+  forward chain starts with `iifname B oifname B return` for every bridge (traffic switched inside one
+  test network, visible in forward when `br_netfilter` is loaded, plan §2.2 "never ours to impair or
+  drop"), the input chain with `iifname lo return` (a connection of the gateway to its own bridge
+  address has a test network's address as original source) and then the anti-lockout match and a
+  `return`. These skips stand in the cut chains because the chains run in front of the established accept
+  and so in front of the bridge accept and the loopback accept of the hooks
+  (`TestACutWindowLeavesSwitchedAndGatewayOriginatedTrafficAlone`, which fails without them).
+- `AccessPlan.NotJudged(tuple)` is the Go side of those skips (`Switched`, `Segments` and `GatewayAddrs` of the
+  plan): a connection the gateway opened (original source one of its bridge, WireGuard, service
+  namespace or uplink addresses, e.g. a BGP session it opened to a device) or one with both ends in one
+  bridge's segment (its network and downstream routes) is never taken by the cut, whatever the rules
+  select. A device towards the gateway's own address is input traffic, which the rules judge.
 - `AccessPlan.CutTransaction(keys)` is the nftables JSON that replaces the two chains' content;
   without keys it closes the window. The conntrack entries of the rule are deleted afterwards for what
   the reset cannot reach (UDP, ICMP): the engine reads them and deletes those for which
   `Winner(tuple)` is a cutting rule of the window.
+
+What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
+
+- The comparison is between the plans, and a plan holds the resolved source addresses. A device whose
+  addresses first appear after the daemon's first apply (the set was empty at start and the identity
+  fills it on a later apply) enters the scope of a long-standing `cut_existing` rule at that moment, and
+  the rule cuts that device's existing connections then. That is the rule doing what it says for a device
+  it now selects, but it is not caused by an edit of the rule.
+- An address change of a device in a rule's scope changes the plan, so the identity update is a full
+  apply instead of an incremental one; with a cutting rule that apply also reads the whole conntrack
+  table. Nothing is wrong at the nft level; it costs a read of the table per such change.
+- Only conntrack state ESTABLISHED counts as a TCP connection a window of resets reaches. A half-closed
+  connection (FIN_WAIT, CLOSE_WAIT, SYN_RECV) still matches `ct state established` in the kernel's
+  chains, keeps passing data, and is deleted from the table without a reset: the device sees a stall
+  until its next packet meets the rule as a new connection, not an immediate reset. When no tracked
+  connection of the cut is ESTABLISHED no window opens at all. Plan §2.4's "immediate reset" holds for
+  established connections.
 
 ### Tests
 
@@ -1699,7 +1729,9 @@ rules that reset the packets of established connections, then the window is clos
   a device, a server and a management host. Established connections continue under a drop rule and new
   ones hang (C1/C2), reject and reset refuse at once, order and overlays, an allow rule as an exception
   to the matrix, the DNS rule in input, the anti-lockout rule under a global drop-everything rule, and
-  the cut window with a connection that an earlier rule owns. These tests run in the persistent VM
+  the cut window with a connection that an earlier rule owns, and (on a bridged bed with `br_netfilter`
+  loaded by the test) a window that leaves switched traffic between two devices and the gateway's own
+  loopback connection alone. These tests run in the persistent VM
   (`make vm-test ARGS='-run "TestAccessRule|TestACutWindowResets" -tags testbed -test-timeout 15m ./internal/compiler'`);
   python3 starts slowly under emulation, so a run takes about six minutes.
 
@@ -1719,8 +1751,12 @@ rules that reset the packets of established connections, then the window is clos
 - **Faults and rules.** A rule overlay and a fault overlay are independent: faults are resolved per
   family, rules are one ordered list, and the kernel evaluates the rules first (plan §2.4), so a packet a
   rule refuses never reaches a fault's queue. `explain` shows both, and the verdict says which one counts
-  (`TestARuleOverlayAndAFaultCombineWithTheRuleFirst`). The fault counters of the classification still
-  count what a rule drops afterwards, P2-M9-05.
+  (`TestARuleOverlayAndAFaultCombineWithTheRuleFirst`, simulated). On the kernel,
+  `TestARuleActsBeforeAFaultOnTheSameDeviceOnTheRealKernel` gives one device a latency fault of 300 ms in
+  both directions and rules on three ports: the rejected connection is refused in far less than the delay,
+  the dropped one never comes up (it is not merely late), the port no rule names is delayed by the fault as
+  before, and a device without fault or rule is not delayed. The fault counters of the classification
+  still count what a rule drops afterwards, P2-M9-05.
 - **The cut** (`internal/engine/cut.go`). It runs in the apply loop right after a full apply (not after
   an incremental identity update) that verified, so the writer of the overlay waits for it, and it
   never fails the apply. The engine keeps the target of the last verified apply (`verified`, kept
@@ -1740,7 +1776,15 @@ rules that reset the packets of established connections, then the window is clos
   no wait, for tests), and closes it (`CutTransaction(nil)`, also when the wait or the opening failed, with
   a context that is not cancelled). The entries are deleted last, in batches of at most
   `executor.MaxConntrackFlows`, with the new operation below. A failure is logged and reported in the
-  `applied` event (`cut_error`); the rules are in force either way. The event carries `cut_rules` (the
+  `applied` event (`cut_error`); the rules are in force either way. Closing the window is tried three
+  times (`CloseAttempts`, `CloseRetryDelay` apart, on the engine's clock) because a window that stays open
+  resets every established connection of the cutting rules' selectors and no overlay or configuration owns
+  that: when all three fail the cut error says `close the cut window`, `Snapshot.CutWindowError` holds it
+  (and `GET /system/health` reports the API component degraded), and the next apply closes the window: a
+  full apply flushes the chains, an incremental identity update tries the close again
+  (`TestAFailedCloseOfTheCutWindowIsRetriedBeforeItIsReported`,
+  `TestAWindowThatStaysOpenIsReportedAndClosedByTheNextApply`,
+  `TestAnIncrementalIdentityUpdateClosesACutWindowThatStayedOpen`). The event carries `cut_rules` (the
   keys that cut) and `cut_connections` when a cut happened.
   `TestACuttingRuleOverlayResetsAndDeletesTheConnectionsItOwnsAndNothingElse` checks the order
   (open, close, delete) and exactly which entries go.
@@ -1786,8 +1830,12 @@ rules that reset the packets of established connections, then the window is clos
 
 ### Acceptance map (plan M9 "Tests")
 
-Every bullet of the plan's test list and every cell of spike S3's behavior matrix has a test. The
-real-kernel ones are testbed tests; run them in the persistent VM (`make vm-test`). Accuracy is not
+Every bullet of the plan's test list and every cell of spike S3's behavior matrix has a test, with one
+exception that is a substitute and says so: C1 (a rule that sees every packet, which would stall an
+established stream) is not a ruleset the product can build (D11), so no test reproduces the cell; the
+test asserts the order that rules it out. The "server side afterwards" column is asserted where the
+matrix gives it: half-open after C4 and C6 and after C3 with `cut_existing`, closed normally after C0, C2
+and C5 (`serverSideEnds`). The real-kernel ones are testbed tests; run them in the persistent VM (`make vm-test`). Accuracy is not
 the subject of M9: all assertions are functional and hold under emulation. In the persistent VM (emulated)
 the S3 matrix takes about 10 minutes, `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` about 10 minutes (every
 probe that is dropped waits out a 2 s client timeout), the two DNS tests of `internal/api` about 5 minutes each
@@ -1797,12 +1845,15 @@ compiler tests 1 to 2 minutes each. Select them with `-run`, and pass `-test-tim
 | Plan bullet | Test (real kernel unless noted) |
 |---|---|
 | S3 C0, no change | `TestTheBehaviorMatrixOfS3OnTheRealKernel/C0_no_change` (engine, with NAT) |
-| S3 C1, a rule that sees every packet | not a product ruleset (the established accept comes first, D11): `.../C1_C2_a_drop_rule_changes_new_connections_only` asserts the order in the kernel's forward chain; the compiler-level run is `TestAccessRulesOnTheRealKernelChangeNewConnectionsOnly` |
+| S3 C1, a rule that sees every packet | not reproduced: the product cannot build that ruleset (the established accept comes first, D11). Substitute: `.../C1_C2_a_drop_rule_changes_new_connections_only` asserts the order in the kernel's forward chain (the established accept stands before `jump access_forward`); the compiler-level run is `TestAccessRulesOnTheRealKernelChangeNewConnectionsOnly` |
 | S3 C2, established accept then drop | `.../C1_C2_...` (stream continues, new connections hang, the rule's counter counts, another device is not touched) |
 | S3 C3, reject with tcp reset | `.../C3_a_reset_rule_refuses_new_connections_and_cuts_when_asked` (refused at once; the stream continues, and is reset with `cut_existing`) |
 | S3 C4, C2 plus a conntrack deletion | `.../C4_a_drop_rule_and_a_conntrack_deletion_hang_the_stream` (stream hangs, server side half-open, no entry comes back) |
 | S3 C5, a conntrack deletion alone | `.../C5_a_conntrack_deletion_alone_does_not_cut_behind_NAT` (stream continues, the flow is re-created) |
 | S3 C6, a one-shot cut | `.../C6_a_cut_resets_the_stream_and_leaves_the_server_half_open` (reset, server half-open, window closed when the write is answered, the device reconnects once the rule is gone); the compiler-level run is `TestACutWindowResetsEstablishedConnectionsOnTheRealKernel` |
+| Rules before faults (plan §2.4, task scope) | `TestARuleActsBeforeAFaultOnTheSameDeviceOnTheRealKernel` (a rejected port is refused without the fault's delay, a dropped one does not come up, an allowed port of the same device is still delayed; functional), simulated: `TestARuleOverlayAndAFaultCombineWithTheRuleFirst` |
+| The cut leaves what no rule judges | `TestACutWindowLeavesSwitchedAndGatewayOriginatedTrafficAlone` (kernel: switched traffic between two devices and the gateway's loopback connection survive, a routed one is reset), `TestThePlanKnowsWhatNoRuleJudges`, `TestACutLeavesGatewayOriginatedAndSwitchedConnectionsAlone` (units) |
+| A cut window that cannot be closed | `TestAFailedCloseOfTheCutWindowIsRetriedBeforeItIsReported`, `TestAWindowThatStaysOpenIsReportedAndClosedByTheNextApply`, `TestAnIncrementalIdentityUpdateClosesACutWindowThatStayedOpen` (simulated) |
 | Rule order, first match wins | `TestAccessRuleOrderAndOverlaysOnTheRealKernel` (compiled ruleset), `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` (engine: configured order, an allow rule as an exception to the matrix) |
 | Overlay rules before configuration rules | the same two tests (an overlay in front of configured rules; the newest of two overlays wins); simulated: `TestOverlayRulesComeBeforeConfigurationRulesNewestFirst` |
 | The anti-lockout rule cannot be overridden | `TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay` (ruleset, unit), `TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel`, `TestTheAntiLockoutRuleHoldsAgainstRulesThatSelectTheManagementHost` (rules that really select the host: UDP is refused, SSH and the UI are not, a window with every rule does not reset the host's SSH), `TestNoRuleOrOverlayLocksTheManagementNetworkOut` (the same through the engine) |
@@ -1810,7 +1861,7 @@ compiler tests 1 to 2 minutes each. Select them with `-run`, and pass `-test-tim
 | "Also cut existing connections" | `TestARuleOverlayRefusesNewConnectionsAndCutsExistingOnesOfItsDeviceOnly` (TCP reset, UDP flow deleted), `TestACutTakesOnlyWhatTheSelectorOwnsOnTheRealKernel` (the named port only, another device's connection and the entries of the others stay; a tracked ping flow is deleted), simulated: `TestACuttingRuleOverlayResetsAndDeletesTheConnectionsItOwnsAndNothingElse`, `TestACutLeavesTheControlPlaneFinishedConnectionsAndOtherProtocolsAlone` |
 | reject and reset variants | `TestRejectResetAndDropAnswerWithTheirOwnPacketsOnTheWire` (ICMP port unreachable, TCP RST from the server's address, nothing for drop) |
 | Named per-rule counters | `TestEachRuleHasACounterOfItsOwnThatCountsWhatItDecided` (exact counts per rule, an allow rule counts the first packet only, P2-M9-07), `TestTheCounterOfARuleFollowsTheRuleNotItsPlace` (unit) |
-| IPv6 | `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow` (an allow rule does not open forwarded IPv6, no rule counts an IPv6 packet; V1 selectors are IPv4, D7), `TestEveryActionHasItsVerdictInForwardAndInput` (one reject statement for both families) |
+| IPv6 | `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow` (an allow rule does not open forwarded IPv6, no rule counts an IPv6 packet; V1 selectors are IPv4, D7), `TestEveryActionHasItsVerdictInForwardAndInput` (one reject statement for both families). Rules select IPv4 only until M32: docs/open-items.md P2-M9-09 |
 | `capacity_exceeded` | `TestTooManyRulesAreRefusedAndTheOverlaysThatCausedItAreNamed`, `TestTooManyRulesAreRefusedWithCapacityExceededAndNothingChanges`, `TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply` (each names its limit) |
 | Explain and preview of the effective result | `TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`, `TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes`; against the kernel: `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` (for every probe, explain's verdict is the one the packets get, and every rule that decided counted) |
 

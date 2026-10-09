@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -44,9 +45,22 @@ type cutOutcome struct {
 	Reset bool
 	// Err is why the cut did not complete; the rules are in force anyway.
 	Err error
+	// WindowOpen reports that the window of resets could not be closed even after the retries: the
+	// cut chains still hold rules until the next full apply flushes them (the apply status says so).
+	WindowOpen bool
 }
 
 func (c *cutOutcome) empty() bool { return c == nil || (len(c.Rules) == 0 && c.Err == nil) }
+
+const (
+	// CloseAttempts is how often closing the window is tried before the failure is reported.
+	CloseAttempts = 3
+	// CloseRetryDelay separates two attempts to close the window.
+	CloseRetryDelay = 100 * time.Millisecond
+)
+
+// errWindowStaysOpen marks the failure to close the window after all attempts.
+var errWindowStaysOpen = errors.New("the window of resets stays open")
 
 // cutWindow is the configured length of the window.
 func (e *Engine) cutWindow() time.Duration {
@@ -126,6 +140,7 @@ func (e *Engine) cutExisting(ctx context.Context, old, next *compiler.Target) *c
 		sort.Strings(ks)
 		if err := e.cutWindowRun(ctx, next, ns, ks); err != nil {
 			res.Err = err
+			res.WindowOpen = errors.Is(err, errWindowStaysOpen)
 		} else {
 			res.Reset = true
 		}
@@ -159,14 +174,11 @@ func (e *Engine) cutWindowRun(ctx context.Context, t *compiler.Target, ns execut
 	if err != nil {
 		return err
 	}
-	closeWindow := func() error {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		_, err := e.cfg.Exec.Do(cctx, &executor.NftApply{Target: ns, Ruleset: shut})
-		return err
-	}
+	closeWindow := func() error { return e.closeCutWindow(ctx, shut, ns) }
 	if _, err := e.cfg.Exec.Do(ctx, &executor.NftApply{Target: ns, Ruleset: open}); err != nil {
-		_ = closeWindow()
+		if cerr := closeWindow(); cerr != nil {
+			return fmt.Errorf("open the cut window: %w; %w", err, cerr)
+		}
 		return fmt.Errorf("open the cut window: %w", err)
 	}
 	if w := e.cutWindow(); w > 0 {
@@ -185,9 +197,40 @@ func (e *Engine) cutWindowRun(ctx context.Context, t *compiler.Target, ns execut
 	return nil
 }
 
+// closeCutWindow empties the cut chains. It is retried: a window that stays open resets every
+// established connection of the cutting rules' selectors until the next full apply, and no overlay or
+// configuration owns that effect. A failure that lasts is reported as errWindowStaysOpen.
+func (e *Engine) closeCutWindow(ctx context.Context, shut []byte, ns executor.Target) error {
+	var err error
+	for attempt := 1; attempt <= CloseAttempts; attempt++ {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		_, err = e.cfg.Exec.Do(cctx, &executor.NftApply{Target: ns, Ruleset: shut})
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if attempt < CloseAttempts {
+			e.cfg.Log.Warn("the cut window could not be closed, trying again", "attempt", attempt, "error", err)
+			<-e.cfg.Clock.NewTimer(CloseRetryDelay).C()
+		}
+	}
+	return fmt.Errorf("%w: %w", errWindowStaysOpen, err)
+}
+
+// closeStuckWindow is the retry of a window that stayed open, run after an apply that did not flush
+// the chains (an incremental identity update).
+func (e *Engine) closeStuckWindow(ctx context.Context, t *compiler.Target) error {
+	shut, err := t.Access.CutTransaction(nil)
+	if err != nil {
+		return err
+	}
+	return e.closeCutWindow(ctx, shut, executor.Target{NS: e.cfg.Namespace})
+}
+
 // cutFlows lists the tracked connections that a cutting rule of next decides and the rules of old did
 // not decide in the same way, in a stable order. Connections of the control plane (the anti-lockout
-// rule's sources and ports) are never among them, whatever a rule says.
+// rule's sources and ports), connections the gateway opened and traffic switched inside one bridge
+// are never among them, whatever a rule says.
 func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 	var out []cutFlow
 	for _, c := range raw {
@@ -216,6 +259,9 @@ func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 		}
 		if c.Proto == "tcp" && (c.State == "TIME_WAIT" || c.State == "CLOSE" || c.State == "LAST_ACK") {
 			continue // the connection is over
+		}
+		if next.Access.NotJudged(t) {
+			continue // a connection the gateway opened, or one switched inside a bridge: no rule judges it
 		}
 		w := next.Access.Winner(t)
 		if w == nil || !w.Cuts() {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/testbed"
 )
 
@@ -28,19 +29,43 @@ import (
 type accessBed struct {
 	t               *testing.T
 	gw, dev, srv, m *testbed.Namespace
-	w               *faultWorld
-	current         *linux.Ruleset
+	// dev2 is a second device on the same network; only the bridged bed has it
+	dev2    *testbed.Namespace
+	w       *faultWorld
+	current *linux.Ruleset
 }
 
 // newAccessBed builds the topology of the compiler's fixture: IoT (10.10.0.0/24) on br-iot with the
 // device esp32-42 at 10.10.0.42, the uplink wan0 (203.0.113.1/24) with the server at
 // 203.0.113.10, the management interface mgmt0 (192.168.56.1/24) with a host at 192.168.56.2. The
 // gateway's ports carry the names the compiler uses, so the compiled ruleset sees what it expects.
-func newAccessBed(t *testing.T) *accessBed {
+func newAccessBed(t *testing.T) *accessBed { return newAccessBedWith(t, false) }
+
+// newBridgedAccessBed is the bed with a real bridge br-iot on the gateway and a second device on it
+// (10.10.0.43), with br_netfilter on: traffic between the two devices is switched, and still passes
+// the forward hook with the bridge as input and output interface, as it does on a Docker host.
+func newBridgedAccessBed(t *testing.T) *accessBed { return newAccessBedWith(t, true) }
+
+func newAccessBedWith(t *testing.T, bridged bool) *accessBed {
 	t.Helper()
 	bed := testbed.New(t)
 	b := &accessBed{t: t, gw: bed.Add("gw"), dev: bed.Add("dev"), srv: bed.Add("srv"), m: bed.Add("mgmt"), w: accessWorld(t)}
-	bed.Link(testbed.End{NS: b.gw, If: "br-iot", Addr: "10.10.0.1/24"}, testbed.End{NS: b.dev, If: "eth0", Addr: "10.10.0.42/24"})
+	if bridged {
+		// the switched traffic shows in the forward hook only with br_netfilter, which the
+		// product does not need and the testbed does not load by itself
+		if err := preflight.Load(context.Background(), []preflight.Module{{Name: "br_netfilter"}}); err != nil {
+			t.Fatalf("the bridged bed needs br_netfilter: %v", err)
+		}
+		b.dev2 = bed.Add("dev2")
+		b.gw.Bridge("br-iot", "10.10.0.1/24")
+		bed.Link(testbed.End{NS: b.gw, If: "p-dev", Master: "br-iot"}, testbed.End{NS: b.dev, If: "eth0", Addr: "10.10.0.42/24"})
+		bed.Link(testbed.End{NS: b.gw, If: "p-dev2", Master: "br-iot"}, testbed.End{NS: b.dev2, If: "eth0", Addr: "10.10.0.43/24"})
+		b.gw.Sysctl("net.bridge.bridge-nf-call-iptables", "1")
+		b.dev2.Route("default", "via", "10.10.0.1")
+		b.dev2.Start("python3", "-c", serverScript)
+	} else {
+		bed.Link(testbed.End{NS: b.gw, If: "br-iot", Addr: "10.10.0.1/24"}, testbed.End{NS: b.dev, If: "eth0", Addr: "10.10.0.42/24"})
+	}
 	bed.Link(testbed.End{NS: b.gw, If: "wan0", Addr: "203.0.113.1/24"}, testbed.End{NS: b.srv, If: "eth0", Addr: "203.0.113.10/24"})
 	bed.Link(testbed.End{NS: b.gw, If: "mgmt0", Addr: "192.168.56.1/24"}, testbed.End{NS: b.m, If: "eth0", Addr: "192.168.56.2/24"})
 	b.dev.Route("default", "via", "10.10.0.1")
@@ -53,6 +78,9 @@ func newAccessBed(t *testing.T) *accessBed {
 	b.waitListening(b.srv, "8883", "22", "7050")
 	b.waitListening(b.m, "22")
 	b.waitListening(b.gw, "443", "22")
+	if bridged {
+		b.waitListening(b.dev2, "8883")
+	}
 	return b
 }
 

@@ -768,3 +768,57 @@ func TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress(t *testing.T) {
 		t.Errorf("the full apply's stale write was not corrected: the identity map holds %q", got)
 	}
 }
+
+// A window of a cut that stayed open is closed again by the next apply even when that one is an
+// incremental identity update, which does not flush the cut chains by itself.
+func TestAnIncrementalIdentityUpdateClosesACutWindowThatStayedOpen(t *testing.T) {
+	h := newHarness(t)
+	e, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: h.ex}, Clock: h.clk, DHCP: &fakeDHCP{}, CutWindow: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	h.e = e
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.barrier()
+
+	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
+	broken := true
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if broken && closingTransaction(argv, stdin) {
+			return &executor.Result{Exit: 1, Stderr: "netlink: Error: Could not process rule: Device or resource busy\n"}
+		}
+		return nil
+	}
+	if err := h.putAdvancing(alice, ruleIoTCut); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.chainRules(compiler.CutForwardChain); len(got) == 0 {
+		t.Fatal("the failure injection did not keep the window open")
+	}
+	if h.e.Snapshot().CutWindowError == "" {
+		t.Fatal("the apply status does not say that the window is open")
+	}
+
+	broken = false
+	before := len(h.k.Commands())
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.77", macCfg)})
+	h.observe()
+	h.barrier()
+	for _, c := range h.k.Commands()[before:] {
+		if strings.HasPrefix(c, "ip -j") {
+			t.Fatalf("the update was a full apply, not an incremental one: %s", c)
+		}
+	}
+	if got := h.chainRules(compiler.CutForwardChain); len(got) != 0 {
+		t.Errorf("the incremental update left the window open: %v", got)
+	}
+	if s := h.e.Snapshot(); s.CutWindowError != "" {
+		t.Errorf("the apply status still says the window is open: %q", s.CutWindowError)
+	}
+}

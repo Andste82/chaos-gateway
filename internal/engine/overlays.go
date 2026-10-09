@@ -71,11 +71,11 @@ func (e *CompileError) Error() string {
 }
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
-// /capabilities): faults of the impairment family and access rules; the kinds profile (M11), dns
+// /capabilities): faults of the impairment and mtu families and access rules; the kinds profile (M11), dns
 // (M20), tls (M21), dhcp (M23) and wireguard (M10) follow with their milestones.
 var (
 	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindRule}
-	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment}
+	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu}
 )
 
 // CheckOverlaySupported returns an *UnsupportedOverlayError for an overlay request that needs a
@@ -92,7 +92,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 		case fam == nil || *fam == model.FaultBodyFamilyImpairment:
 			return nil
 		case *fam == model.FaultBodyFamilyMtu:
-			return &UnsupportedOverlayError{What: "a fault of family mtu", Milestone: "M10"}
+			return nil
 		case *fam == model.FaultBodyFamilyTunnel:
 			return &UnsupportedOverlayError{What: "a fault of family tunnel", Milestone: "M10"}
 		}
@@ -342,7 +342,7 @@ func (o *owner) compileProblems() []compiler.Problem {
 		cp := *o.identity
 		id = &cp
 	}
-	tg := compiler.Compile(o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.e.retirer.IDs()))
+	tg := compiler.Compile(o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.snap.PMTUTables, o.e.retirer.IDs()))
 	var out []compiler.Problem
 	for _, p := range tg.Problems {
 		if p.Severity == compiler.SevError && (p.Code == compiler.CodeCapacityExceeded || p.Code == compiler.CodeFaultInvalid) {
@@ -660,16 +660,23 @@ func (o *owner) settleOverlays(r applyResult) (reverted bool) {
 // trackFaults updates the epochs of the faults' counters after an apply: a fault that is new in the
 // applied target starts its counters at zero in this generation, one that went is forgotten.
 func (o *owner) trackFaults(t *compiler.Target, gen uint64) {
-	born := make(map[string]int64, len(t.Faults))
-	for _, f := range t.Faults {
-		if g, ok := o.ov.born[f.Key]; ok {
-			born[f.Key] = g
+	born := make(map[string]int64, len(t.Faults)+len(t.PMTU))
+	keep := func(key string) {
+		if g, ok := o.ov.born[key]; ok {
+			born[key] = g
 		} else {
-			born[f.Key] = int64(gen)
+			born[key] = int64(gen)
 		}
+	}
+	for _, f := range t.Faults {
+		keep(f.Key)
+	}
+	for _, f := range t.PMTU {
+		keep(f.Key)
 	}
 	o.ov.born = born
 	o.snap.Faults = t.Faults
+	o.snap.PMTU, o.snap.PMTUTables = t.PMTU, t.PMTUTables
 	win := make(map[string]bool, len(t.Winners))
 	for _, k := range t.Winners {
 		win[k] = true

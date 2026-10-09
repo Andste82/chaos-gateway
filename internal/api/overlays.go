@@ -65,7 +65,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	for _, f := range s.cfg.Engine.Flaps() {
 		oc.flaps[f.Key] = f
 	}
-	if withCounters && (len(oc.snap.Faults) > 0 || oc.snap.Access != nil) {
+	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
 			s.log.Warn("cannot read the fault counters", "error", err)
@@ -104,10 +104,27 @@ func (oc overlayContext) counterOf(layer, source string) *model.Counter {
 		return nil
 	}
 	idx := oc.faultsOf(layer, source)
-	if len(idx) == 0 {
+	var mtu []compiler.PMTUFault
+	for _, f := range oc.snap.PMTU {
+		if f.Layer == layer && strings.EqualFold(f.Source, source) {
+			mtu = append(mtu, f)
+		}
+	}
+	if len(idx) == 0 && len(mtu) == 0 {
 		return nil
 	}
 	c := model.Counter{}
+	// the packets classified into an MTU fault, in both directions (a black hole's drops are a counter of their own)
+	for _, f := range mtu {
+		for _, name := range []string{f.CounterUp, f.CounterDown} {
+			v := oc.counters[name]
+			c.Packets += v.Packets
+			c.Bytes += v.Bytes
+		}
+		if e := oc.snap.FaultEpochs[f.Key]; e > c.Epoch {
+			c.Epoch = e
+		}
+	}
 	for _, i := range idx {
 		f := oc.snap.Faults[i]
 		for _, name := range []string{f.CounterUp, f.CounterDown} {

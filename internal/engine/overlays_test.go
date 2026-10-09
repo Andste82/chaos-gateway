@@ -131,7 +131,7 @@ func (h *harness) verifyKernelWithOverlays() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs,
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables,
 		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation}, ClassLimit: h.classLimit,
 		FlapPhase: h.e.FlapPhase})
 	st, err = apply.ReadState(ctx, apply.Local{E: h.ex}, "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
@@ -457,7 +457,6 @@ func TestOverlaysOfLaterMilestonesAreUnsupported(t *testing.T) {
 		"target: {network: IoT}\ndns: {names: [example.com], action: nxdomain}":      "M20",
 		"target: {network: IoT}\ntls: {case: expired}":                               "M21",
 		"target: {network: IoT}\ndhcp: {action: silence}":                            "M23",
-		"target: {network: IoT}\nfault: {family: mtu, mtu: {size: 1200}}":            "M10",
 		"fault: {family: tunnel, tunnel: {client: x}, latency: 10ms}":                "M10",
 		"wireguard: {action: disable, client: 8a2c9d3e-1111-4222-8333-444455556666}": "M10",
 	} {

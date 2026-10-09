@@ -230,8 +230,8 @@ func TestSystemEndpoints(t *testing.T) {
 			t.Errorf("capability %s is missing: %v", f, feats)
 		}
 	}
-	// M8a: faults of the impairment family, M9: access rules; the other kinds follow with their milestones
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment]" || caps["version"] != "test" {
+	// M8a: faults of the impairment family, M10: the mtu family, M9: access rules; the other kinds follow with their milestones
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
 	}
 	info := g.do("GET", "/system/info", nil, nil, nil).json(t)

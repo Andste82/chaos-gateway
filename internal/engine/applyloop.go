@@ -34,6 +34,8 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// ids is the allocation of fault ids of the last target that was applied and verified: the next
 	// compile hands it back, so a fault that is still there keeps its id (plan §3.3)
 	var ids map[string]int
+	// pmtu is the allocation of PMTU mirror tables of the same target (a size keeps its table).
+	var pmtu map[int]int
 	// verified is the last target the kernel was brought to, kept across a failed apply (last is not):
 	// the access rules of the next apply are compared with it to find the connections a rule cuts
 	// (cut.go). Nil until the first apply of this process, which cuts nothing.
@@ -98,7 +100,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				break
 			}
 			done = d.Generation
-			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, retirer.IDs()))
+			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, pmtu, retirer.IDs()))
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			var plan *apply.Plan
@@ -131,7 +133,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				flapT.stop()
 			} else {
 				last = &appliedState{d: d, target: target}
-				ids = target.FaultIDs
+				ids, pmtu = target.FaultIDs, target.PMTUTables
 				if !incremental {
 					// the flapping faults of the target start (or go on) from here
 					e.flap.sync(target, e.cfg.Clock.Monotonic())
@@ -178,10 +180,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 // secrets store; a network without one is reported by the compiler.
 //
 // The overlays are the active ones of the desired state (never part of a revision) and ids the
-// allocation of fault ids of the previous apply.
-func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int, retiring []int) compiler.Input {
+// allocation of fault ids and pmtu that of PMTU mirror tables of the previous apply.
+func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, ids map[string]int, pmtu map[int]int, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
-		Overlays: overlays, FaultIDs: ids, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit,
+		Overlays: overlays, FaultIDs: ids, PMTUTables: pmtu, RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit,
 		FlapPhase: e.flap.phase}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
@@ -338,9 +340,10 @@ func sameFaultStructure(old, next *compiler.Target) bool {
 			Nft      compiler.Nft
 			Faults   []compiler.Fault
 			FaultIDs map[string]int
+			PMTU     []compiler.PMTUFault
 			TC       *compiler.TCTarget
 			Classify map[string]string
-		}{n, t.Faults, t.FaultIDs, t.TC, t.ClassifyMaps})
+		}{n, t.Faults, t.FaultIDs, t.PMTU, t.TC, t.ClassifyMaps})
 		return string(b)
 	}
 	return strip(old) == strip(next)

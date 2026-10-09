@@ -4414,7 +4414,11 @@ components:
             fault_id: {type: integer, minimum: 1, maximum: 4095}
             mark_upload: {type: string, example: '0x000000a0'}
             mark_download: {type: string, example: '0x000100a0'}
-            pmtu_table: {type: integer, minimum: 0, maximum: 7}
+            pmtu_table:
+              type: integer
+              minimum: 1
+              maximum: 7
+              description: The index of the PMTU mirror table (bits 17-19 of the mark, plan §3.3) the traffic is routed through, when the winner of the `mtu` family is in `icmp` mode. Absent for `blackhole` and `mss_clamp` and when no `mtu` fault applies. `fault_id` and the marks are absent when only an `mtu` fault applies.
         route:
           type: object
           description: The route the kernel takes for the packet (`ip route get`, through the policy rules); absent for a hostname destination or a source without an address.

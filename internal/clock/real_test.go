@@ -17,6 +17,22 @@ func TestRealMonotonicNeverGoesBackwards(t *testing.T) {
 	}
 }
 
+// `&clock.Real{}` is the clock most of the code makes; its monotonic time must move (it stood still at the
+// largest duration while its origin was the zero time, which froze every deadline computed from it:
+// found by the flapping of M10, which toggles on it).
+func TestTheZeroValueOfRealIsAClockWhoseMonotonicTimeMoves(t *testing.T) {
+	c := &Real{}
+	a := c.Monotonic()
+	time.Sleep(20 * time.Millisecond)
+	b := c.Monotonic()
+	if a < 0 || a > time.Second {
+		t.Errorf("the first reading is %v: the origin is the first reading, not the zero time", a)
+	}
+	if b-a < 15*time.Millisecond || b-a > time.Second {
+		t.Errorf("20 ms passed and the clock moved by %v", b-a)
+	}
+}
+
 func TestRealTimerAndTickerFire(t *testing.T) {
 	c := NewReal()
 	select {

@@ -346,7 +346,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M4c: received-prefix list in routing view | M14 |
 | M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
 | M5: `lockout_protected` never produced — M9 does not produce it either; the kernel rule cannot be overridden and lockout-relevant configuration changes take commit-confirm. Whether to also refuse them: P2-M9-08 | decision |
-| M5: `capacity_exceeded` never produced | M8a, M10 |
+| ~~M5: `capacity_exceeded` never produced~~ — produced for classes, fault ids, map cells and rules since M8a; the preview refuses with it (M10 test) | M8a, M10 |
 | M5: `target_busy` never produced | M15 |
 | M5: IPv6 management addresses never bound | M32 |
 | ~~M5: `counter_epoch` always 0~~ — done in M8b (P2-M8b-05 for what it means) | M8b |
@@ -656,7 +656,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ### P2-M8b-01 A duplicating netem cannot share an interface's tree with any other netem
 
-- Status: new
+- Status: resolved in M10 by the decision in P2-M10-01 (the copy is made by an egress hook, not by netem)
 - Severity: medium (for M10; none for M8b, whose faults have no duplicate)
 - Reason: needs-decision. Plan §3.3 builds one HTB tree per interface with a netem leaf per active
   (fault id, direction), and §2.2 lists `duplicate` among the faults. The kernel (6.8.0-142, the
@@ -682,7 +682,9 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   its operations so that a transition never has two netems with one duplicating (delete before add).
 - Acceptance: M10's duplicate test passes with a second fault active on the same interface, or the
   restriction is documented in the API (a `capacity_exceeded` problem that names it) and tested.
-- Needs maintainer: yes
+  Met by `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults` (a delay fault of another device
+  next to the duplicating one, both measured on the real kernel).
+- Needs maintainer: yes (P2-M10-01)
 - Effort: M
 
 ### P2-M8b-02 Verification cannot see the HTB quantum or the netem distribution table
@@ -1047,5 +1049,83 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Acceptance: a maintainer confirms, or asks for (1) a cut only on an edit of the rule (the comparison
   would ignore the sources of the old plan), (3) a window whenever a cutting rule selects a TCP
   connection in any state but TIME_WAIT, CLOSE and LAST_ACK.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M10-01 Duplication is a draw in the mark chain and a copy made by nftables on the egress hook, not netem's duplicate
+
+- Status: new
+- Severity: medium
+- Reason: needs-decision. Resolves P2-M8b-01. The kernel refuses a netem with a duplicate probability
+  next to any other netem of the interface, and the tree has every class on every interface, so with
+  netem a duplicating fault in both directions would not even fit by itself, and a duplicating fault
+  could only exist when nothing else is impaired anywhere (candidate (a) of P2-M8b-01). Candidate (b),
+  a second mechanism the kernel does not count as netem, works and is what M10 does. The first version
+  of (b), a clsact egress filter that mirrors the packet back to the interface (`mirred egress mirror`),
+  duplicated on kernel 6.8.0-142 and not at all on 7.0.0-38, whose mirred action counts an overlimit and
+  sends nothing; it was replaced by a netdev table with an egress base chain and `dup to` the same
+  interface, which duplicates on both.
+- Evidence: the proofs on both kernels and the design in docs/development.md "Extended faults (M10)";
+  `internal/compiler/classify.go` (`markChain`, `dupThreshold`), `internal/executor/nftdup.go`
+  (`NftDup`, `DupTransaction`), `internal/apply/dup.go`; measured by
+  `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults` (a delay fault of another device next to it,
+  both directions) on both kernels.
+- Task: chosen interpretation — the probability is drawn per packet in the fault's mark chain (`numgen
+  random`, resolution 10^-7 percent) and sets mark bit 21; one netdev table `chaosgw_dup` holds an egress
+  chain per interface of the tree that clears the bit and sends a clone of the packet to the same
+  interface, so the copy goes through the same class as the original. Consequences a maintainer may want
+  to weigh: the copy is made after the fault's classification, so the fault's nft counters do not count
+  it (the queue statistics do); the table is a second one next to `inet chaosgw` (`nft_dup`, a closed
+  executor operation that takes interfaces, not rules; `nft_apply` stays closed to every other table);
+  it needs the netdev egress hook (kernel 5.16 or later, `nft_dup_netdev`, both in the plan's minimum
+  kernel and in the preflight list); the bit is one of the reserved routing mark bits (21; plan §3.3 and
+  §2.5 are updated); the kernel removes the chain of an interface that is deleted and does not restore it
+  when the interface returns, so an interface that is re-created behind the gateway's back loses its hook
+  until the next apply (the verify reports it). Not measured on the target hardware (H1): the cost of the
+  clone on a Raspberry Pi.
+- Acceptance: a maintainer confirms, or asks for the restriction instead (netem's duplicate, allowed only
+  when the tree holds no other netem, `capacity_exceeded` naming it, and a delete-before-add order in
+  the apply).
+- Needs maintainer: yes
+- Effort: M
+
+### P2-M10-02 A flapping starts when the write is answered, and a boundary during an apply is made after it
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.5 says "Flapping: up/down durations, timed blackout, starting with
+  `up`" and §2.10 gives scenario steps ±100 ms. It does not say when the first up phase starts, what
+  a restart or a replacement does to the schedule, or how late a boundary may be when an apply is running.
+- Evidence: `internal/engine/flap.go`, `TestAFlappingFaultStartsUpAndTogglesOnTheClock`,
+  `TestAReplacedFlappingKeepsItsScheduleUnlessItsTimesChange`, `TestAClockThatJumpsOverFlappingBoundariesLandsInThePhaseItSays`,
+  `TestAFlappingFaultBlacksOutOnSchedule` (real kernel).
+- Task: chosen interpretation — the first up phase starts when the apply that contains the flapping has
+  been verified (the moment the overlay write is answered); the schedule is the start plus multiples of
+  up and down on the injected clock; a change of the other parameters keeps the schedule, a change of up
+  or down starts a new one (up); a restart starts every flapping up (overlays are gone anyway);
+  all classes of one fault and direction, on all devices, flap in step, and upload and download of a
+  flat flapping have separate schedules that happen to coincide; a toggle runs in the apply loop's
+  goroutine, so one that falls into an apply is made right after it (a full apply of a large target
+  takes seconds on small hardware, the figure is for H1); ±100 ms (`engine.FlapTolerance`) is the
+  tolerance of §2.10 applied to a boundary, measured from the schedule to the answer of the executor.
+- Acceptance: a maintainer confirms, or asks for a toggle that cannot be late (a toggle between the
+  operations of an apply) or for the phase to survive a restart.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M10-03 A rate below 8 bit/s is refused, and the API shows the phase of a flapping
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Two small decisions the spec does not make. (1) netem takes its rate in bytes
+  per second, so `rate: 7bit` (or `0kbit`) is no rate at all: the fault would pass everything. (2) The
+  UI will need to say that a device is in the down phase of a flapping fault; the spec has nothing for it.
+- Evidence: `internal/domain/validate_fault.go` (`invalid_rate`), `TestFaultRules`'s rate cases and the overlay cases of `internal/domain/overlay_test.go`,
+  `api/openapi.yaml` (`QueueStats.flapping`, `FlapState`), `TestTheQueuesOfAFlappingFaultShowTheirPhase`.
+- Task: chosen interpretation — validation refuses a rate below 8 bit/s with `invalid_rate` (the code
+  is documented in docs/development.md); the queues of a flapping fault carry `flapping: {phase,
+  since, next_change_at}`, which is optional and additive.
+- Acceptance: a maintainer confirms, or asks for a rate of zero to mean "no limit" (a parameter that
+  does nothing) or for the phase in another place (the overlay itself, `explain`).
 - Needs maintainer: yes
 - Effort: S

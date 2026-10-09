@@ -922,6 +922,12 @@ func summarizeNetem(p model.NetemParams) string {
 	if p.Rate != nil {
 		parts = append(parts, "rate "+*p.Rate)
 	}
+	if p.QueueLimit != nil {
+		parts = append(parts, fmt.Sprintf("queue %d packets", *p.QueueLimit))
+	}
+	if p.KeepOrder != nil && *p.KeepOrder {
+		parts = append(parts, "keep order")
+	}
 	if p.Reorder != nil {
 		parts = append(parts, "reorder "+*p.Reorder)
 	}

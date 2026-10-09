@@ -72,6 +72,7 @@ const (
 	CodeInvalidDHCPAction      = "invalid_dhcp_action"
 	CodeInvalidOverlay         = "invalid_overlay"
 	CodeInvalidFlapping        = "invalid_flapping"
+	CodeInvalidRate            = "invalid_rate"
 	CodeInvalidName            = "invalid_name"
 	CodeDuplicateRoutingKind   = "duplicate_protocol"
 	CodeUnknownRoutingSettings = "missing_routing_settings"

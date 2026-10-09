@@ -27,6 +27,15 @@ func TestFaultRules(t *testing.T) {
 		{"flapping without a down time", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"up":"1s","down":"0s"}`), "faults", idFaultNet, "flapping")
 		}, f + "/flapping", CodeInvalidFlapping},
+		{"a rate below one byte per second", func(t *testing.T, d doc) {
+			d.set(t, "7bit", "faults", idFaultNet, "rate")
+		}, f + "/rate", CodeInvalidRate},
+		{"a rate of zero", func(t *testing.T, d doc) {
+			d.set(t, "0kbit", "faults", idFaultNet, "rate")
+		}, f + "/rate", CodeInvalidRate},
+		{"a rate below one byte per second in a direction", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"rate":"1bit"}`), "faults", idFaultDev, "download")
+		}, faultPath(idFaultDev) + "/download/rate", CodeInvalidRate},
 		{"flat parameters mixed with directions", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"latency":"5ms"}`), "faults", idFaultNet, "upload")
 		}, f, CodeMixedDirections},

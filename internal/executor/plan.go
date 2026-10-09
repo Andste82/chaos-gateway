@@ -65,6 +65,8 @@ func Plan(op Operation) ([]Step, error) {
 	switch o := op.(type) {
 	case *NftApply:
 		return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(o.Ruleset), NS: o.NS}}}, nil
+	case *NftDup:
+		return planNftDup(o)
 	case *NftAddElements:
 		return planElements("add", o.Target, o.Set, o.Elements, o.TimeoutSeconds)
 	case *NftDelElements:
@@ -409,6 +411,8 @@ func ReadCommand(o *Read) Command {
 		c.Tool, c.Args = ToolIP, []string{"-j", "rule", "show"}
 	case ReadNft:
 		c.Tool, c.Args = ToolNft, []string{"-j", "list", "table", NftFamily, NftTable}
+	case ReadNftDup:
+		c.Tool, c.Args = ToolNft, []string{"-j", "list", "table", NftDupFamily, NftDupTable}
 	case ReadQdiscs, ReadClasses, ReadFilters:
 		kind := map[string]string{ReadQdiscs: "qdisc", ReadClasses: "class", ReadFilters: "filter"}[o.What]
 		c.Tool, c.Args = ToolTC, []string{"-j", kind, "show"}

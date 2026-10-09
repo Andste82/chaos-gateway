@@ -24,7 +24,7 @@ func (n Netem) Norm() linux.NetemSpec {
 		Delay:         linux.NetemTime(n.Delay),
 		Jitter:        linux.NetemTime(n.Jitter),
 		Reorder:       linux.NetemProb(n.Reorder),
-		Duplicate:     linux.NetemProb(n.Duplicate),
+		Duplicate:     0, // duplication is the egress hook's, never the qdisc's (Netem.Duplicate)
 		Corrupt:       linux.NetemProb(n.Corrupt),
 		Rate:          linux.NetemRate(n.Rate),
 		ReorderCorr:   0,
@@ -59,7 +59,7 @@ func (tc *TCTarget) Norm(dev string) *linux.NormTree {
 	t.Classes = append(t.Classes, linux.NormClass{ID: fmt.Sprintf("1:%x", TCDefaultMinor), Parent: TCRootHandle, Kind: "htb",
 		Rate: tcClassRateBytes, Ceil: tcClassRateBytes})
 	for _, c := range tc.Classes {
-		spec := c.Netem.Norm()
+		spec := c.Config().Norm()
 		t.Classes = append(t.Classes, linux.NormClass{ID: c.ClassID(), Parent: TCRootHandle, Kind: "htb", Leaf: c.LeafHandle(),
 			Rate: tcClassRateBytes, Ceil: tcClassRateBytes})
 		t.Qdiscs = append(t.Qdiscs, linux.NormQdisc{Handle: c.LeafHandle(), Parent: c.ClassID(), Kind: "netem", Netem: &spec})

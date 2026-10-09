@@ -424,12 +424,29 @@ func (t *Target) compileTC(in Input) {
 			} else {
 				f.Download = &cfg
 			}
-			tc.Classes = append(tc.Classes, TCClass{ID: f.ID, Dir: d, Minor: classMinor(f.ID, d), Mark: MarkOf(f.ID, d), Netem: cfg})
+			class := TCClass{ID: f.ID, Dir: d, Minor: classMinor(f.ID, d), Mark: MarkOf(f.ID, d), Netem: cfg}
+			if cfg.Flapping != nil {
+				class.FlapKey = FlapKey(f.Key, d)
+				class.Down = in.FlapPhase != nil && in.FlapPhase(class.FlapKey, *cfg.Flapping)
+			}
+			tc.Classes = append(tc.Classes, class)
 		}
 	}
 	if len(tc.Devs) > 0 {
 		t.TC = tc
+		if tc.HasDup() {
+			t.DupDevs = append([]string(nil), tc.Devs...)
+		}
 	}
+}
+
+// FlapKey names the flapping of a fault in one direction: the key of the fault without the device
+// (a per-device fault flaps in step on all of its devices) and the direction.
+func FlapKey(faultKey string, d Direction) string {
+	if i := strings.LastIndex(faultKey, "@"); i >= 0 {
+		faultKey = faultKey[:i]
+	}
+	return faultKey + "|" + d.String()
 }
 
 // capacityProblem reports capacity_exceeded with the scope that caused it: the fault that needs
@@ -757,10 +774,17 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 
 	// the per-id chains and their counters
 	if needZero {
-		t.faultBuild.chains = append(t.faultBuild.chains, markChain(0, "", ""))
+		t.faultBuild.chains = append(t.faultBuild.chains, markChain(0, "", "", 0, 0))
 	}
 	for _, f := range t.Faults {
-		t.faultBuild.chains = append(t.faultBuild.chains, markChain(f.ID, f.CounterUp, f.CounterDown))
+		var dupUp, dupDown float64
+		if f.Upload != nil {
+			dupUp = f.Upload.Duplicate
+		}
+		if f.Download != nil {
+			dupDown = f.Download.Duplicate
+		}
+		t.faultBuild.chains = append(t.faultBuild.chains, markChain(f.ID, f.CounterUp, f.CounterDown, dupUp, dupDown))
 		t.faultBuild.counters = append(t.faultBuild.counters, f.CounterUp, f.CounterDown)
 	}
 	sort.Strings(t.faultBuild.counters)

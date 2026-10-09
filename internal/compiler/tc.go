@@ -74,6 +74,21 @@ type TCClass struct {
 	// Mark is the value the fw filter matches under MarkMask.
 	Mark  uint32 `json:"mark"`
 	Netem Netem  `json:"netem"`
+	// FlapKey names the flapping this class belongs to (set when Netem.Flapping is): all classes of
+	// one fault and direction share it, so a fault that gets one class per device flaps in step.
+	FlapKey string `json:"flap_key,omitempty"`
+	// Down says the class is in the down phase of its flapping now (Input.FlapPhase): the leaf holds
+	// Netem.Down(), not Netem. Phase is the fault engine's, the compiler only writes it down.
+	Down bool `json:"down,omitempty"`
+}
+
+// Config is the netem configuration the leaf holds now: the fault's, or its blackout in the down
+// phase of a flapping.
+func (c TCClass) Config() Netem {
+	if c.Down && c.Netem.Flapping != nil {
+		return c.Netem.Down()
+	}
+	return c.Netem
 }
 
 // ClassID is the class's id in tc notation.
@@ -127,6 +142,20 @@ type TCTarget struct {
 	Classes []TCClass `json:"classes"`
 }
 
+// HasDup reports whether some class duplicates packets: the interfaces then carry the duplication
+// hook (Target.DupDevs, an nftables table of its own: dup.go).
+func (tc *TCTarget) HasDup() bool {
+	if tc == nil {
+		return false
+	}
+	for _, c := range tc.Classes {
+		if c.Netem.Duplicate > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Entries returns the tc commands of the tree of one interface in the order they must run: the root,
 // then each class with its leaf and filter. Everything but the root is `replace`, which creates
 // what is missing and changes what exists in place (classes, netem leaves and fw filters all accept
@@ -152,7 +181,7 @@ func (tc *TCTarget) Entries(dev string, withRoot bool) []executor.TCEntry {
 			executor.TCEntry{Object: "class", Action: "replace", Dev: dev, Parent: TCRootHandle, ClassID: c.ClassID(),
 				Args: []string{"htb", "rate", TCClassRate, "quantum", TCClassQuantum}},
 			executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: c.ClassID(), Handle: c.LeafHandle(),
-				Args: c.Netem.Args()},
+				Args: c.Config().Args()},
 			executor.TCEntry{Object: "filter", Action: "replace", Dev: dev, Parent: TCRootHandle, Handle: c.FilterHandle(),
 				Args: []string{"protocol", "ip", "prio", "1", "fw", "flowid", c.ClassID()}},
 		)

@@ -18,7 +18,15 @@ func (k *Kernel) nftCmd(c executor.Command) (executor.Result, error) {
 			return executor.Result{Exit: 1, Stderr: "Error: No such file or directory\nlist table inet chaosgw\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}, nil
 		}
 		return jsonOut(k.nftList())
+	case "-j list table netdev chaosgw_dup":
+		if k.dup == nil {
+			return executor.Result{Exit: 1, Stderr: "Error: No such file or directory\nlist table netdev chaosgw_dup\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}, nil
+		}
+		return jsonOut(k.dup.list())
 	case "-j -f -":
+		if strings.Contains(c.Stdin, `"family":"netdev"`) {
+			return k.dupApply(c.Stdin)
+		}
 		return k.nftApply(c.Stdin)
 	}
 	return fail("unsupported nft %v", c.Args)

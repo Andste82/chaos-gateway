@@ -776,7 +776,7 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		if o.What == ReadDockerUser && strings.Contains(r.Stderr, "No chain/target/match by that name") {
 			return json.Marshal(&linux.DockerUserState{})
 		}
-		if o.What == ReadNft && r.Exit == 1 && strings.Contains(r.Stderr, "No such file or directory") && !strings.Contains(r.Stderr, "network namespace") {
+		if (o.What == ReadNft || o.What == ReadNftDup) && r.Exit == 1 && strings.Contains(r.Stderr, "No such file or directory") && !strings.Contains(r.Stderr, "network namespace") {
 			return json.Marshal(&linux.Ruleset{})
 		}
 		return nil, &CommandError{Cmd: cmd, Exit: r.Exit, Stderr: r.Stderr}
@@ -793,7 +793,7 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 		v, err = linux.ParseRouteGet([]byte(r.Stdout))
 	case ReadRules:
 		v, err = linux.ParseRules([]byte(r.Stdout))
-	case ReadNft:
+	case ReadNft, ReadNftDup:
 		v, err = linux.ParseNft([]byte(r.Stdout))
 	case ReadQdiscs:
 		v, err = linux.ParseQdiscs([]byte(r.Stdout))

@@ -159,10 +159,22 @@ func (o *owner) wireguardStatus(next map[string]PeerStatus) {
 	o.snap.WireGuard = next
 	o.publish()
 	// a peer that is seen at another address than the one a tunnel fault or a blocked endpoint was compiled
-	// with (it roamed, or it connected for the first time) needs the packet filters to move with it
-	if o.current != nil && roamed(o.snap.PeerEndpoints, next) {
+	// with (it roamed, or it connected for the first time) needs the packet filters to move with it. Not while
+	// an apply is on its way: it reads the addresses when it starts, a slow machine takes minutes over one, and
+	// every poll in between would make another desired state; the poll after it ends looks again.
+	if o.current != nil && o.settled >= o.gen && roamed(o.snap.PeerEndpoints, next) {
+		o.e.cfg.Log.Debug("a peer is seen at another address than the one a tunnel fault was compiled for: applying again", "applied", o.snap.PeerEndpoints, "seen", peerEndpoints(next))
 		o.converge(o.nextDesired(o.current.Config, o.current.Revision))
 	}
+}
+
+// peerEndpoints are the addresses the peers were seen at, by peer id.
+func peerEndpoints(seen map[string]PeerStatus) map[string]string {
+	out := map[string]string{}
+	for id, st := range seen {
+		out[id] = st.Endpoint
+	}
+	return out
 }
 
 // roamed reports whether some peer that the applied target selects by its address is seen at another

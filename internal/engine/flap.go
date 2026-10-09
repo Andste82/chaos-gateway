@@ -26,8 +26,10 @@ import (
 //   - The boundaries are start + k × (up + down) and start + k × (up + down) + up on the injected
 //     clock, computed from the start, never by adding up timer delays, so a late timer does not move
 //     the next one. A boundary toggles the leaves of every class of the flapping on every interface of
-//     the tree in one tc batch per interface (`replace` of the netem leaf: its queue, counters and seed
-//     stay, the loss model is the only difference).
+//     the tree (and of the IFB's, for a tunnel fault) in one tc batch for all of them (`replace` of the netem
+//     leaf: its queue, counters and seed stay, the loss model is the only difference). One run of the
+//     tool, because a run costs seconds on a small or emulated machine, and the interfaces then change
+//     phase together.
 //   - The toggle runs in the apply loop's goroutine, between applies, so it never overlaps one. A
 //     boundary that falls into an apply is made right after it (the phase is then the one the clock
 //     says, not the one that was missed). Plan §2.10 gives scenario steps ±100 ms on a native or KVM
@@ -274,10 +276,12 @@ func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedS
 	}
 	nt := *last.target
 	tg := executor.Target{NS: e.cfg.Namespace}
-	var ops []executor.Operation
+	var entries []executor.TCEntry
 	devices := 0
 	// the interfaces' tree and the tree of the IFB flap alike: every tree is copied with the new phase of the
-	// classes that are due, and each of its interfaces gets one batch of leaf replacements
+	// classes that are due, and the leaf replacements of all of their interfaces are one `tc -batch`: one run of
+	// the tool, so that the interfaces change phase together (a tool run costs seconds on a small or emulated
+	// machine, and a toggle that is made interface by interface is late by the sum of them)
 	toggle := func(src *compiler.TCTarget) *compiler.TCTarget {
 		if src == nil {
 			return nil
@@ -295,14 +299,8 @@ func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedS
 			return &tc
 		}
 		for _, dev := range tc.Devs {
-			var entries []executor.TCEntry
 			for _, c := range changed {
 				entries = append(entries, executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: c.ClassID(), Handle: c.LeafHandle(), Args: c.Config().Args()})
-			}
-			for len(entries) > 0 {
-				n := min(len(entries), executor.MaxTCEntries)
-				ops = append(ops, &executor.TC{Target: tg, Entries: entries[:n:n]})
-				entries = entries[n:]
 			}
 			devices++
 		}
@@ -313,6 +311,12 @@ func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedS
 		ifb := *last.target.IFB
 		ifb.TC = toggle(ifb.TC)
 		nt.IFB = &ifb
+	}
+	var ops []executor.Operation
+	for len(entries) > 0 {
+		n := min(len(entries), executor.MaxTCEntries)
+		ops = append(ops, &executor.TC{Target: tg, Entries: entries[:n:n]})
+		entries = entries[n:]
 	}
 	if len(ops) > 0 {
 		if _, err := e.cfg.Exec.Do(ctx, ops...); err != nil {

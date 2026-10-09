@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/apply/kernelsim"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -35,13 +36,23 @@ func newWGHarnessFile(t *testing.T, file string) (*harness, *secrets.Store) {
 // newWGHarnessCfg is newWGHarness for a configuration file of the compiler's test data, with the engine's configuration (the
 // limits a test sets).
 func newWGHarnessCfg(t *testing.T, file string, cfg engine.Config) (*harness, *secrets.Store) {
+	return newWGHarnessWrap(t, file, cfg, nil)
+}
+
+// newWGHarnessWrap is newWGHarnessCfg with the executor running its commands through wrap(kernel), for tests that hold what
+// reaches the kernel.
+func newWGHarnessWrap(t *testing.T, file string, cfg engine.Config, wrap func(*kernelsim.Kernel) executor.Runner) (*harness, *secrets.Store) {
 	t.Helper()
-	h := newHarness(t)
+	h := newHarnessRunner(t, wrap)
 	sec, err := secrets.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := executor.New(h.k, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
+	var run executor.Runner = h.k
+	if wrap != nil {
+		run = wrap(h.k)
+	}
+	ex, err := executor.New(run, executor.WithBirdDir(t.TempDir()), executor.WithKeys(func(id string) (string, string, error) {
 		k, err := sec.WireGuard(id)
 		return k.PrivateKey, k.PresharedKey, err
 	}))

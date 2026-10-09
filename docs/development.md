@@ -1879,8 +1879,8 @@ real outage does as well; the test only has to stay out of that moment.
 
 Plan §2.5 and M10. This section describes the non-tunnel half of M10, built on the fault engine of M8a
 and M8b: rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott),
-blackout and flapping, and, in its own subsection below, the MTU family (MTU and PMTUD). Tunnel faults, the
-WireGuard-action overlays (and E10) follow in the next steps of the milestone and are not described here. What was already there and is only tested now:
+blackout and flapping, and, in its own subsection below, the MTU family (MTU and PMTUD). The tunnel faults, the
+WireGuard-action overlays and E10 are in "Tunnel faults and WireGuard actions" after the MTU tests. What was already there and is only tested now:
 the model and the validation (`NetemParams` has had every one of these since Phase 1), the netem leaf with
 its complete parameter set (`compiler/netem.go`), the per-device fault ids of D18 (`compiler/faults.go`) and
 the class limit with `capacity_exceeded`.
@@ -1986,7 +1986,7 @@ unchanged) for `down`, and so on, starting up. The phase is not configuration; i
   (`Monotonic`), never by adding up timer delays: a timer that fires late does not move the next one.
   The apply loop arms one timer for the nearest boundary; when it fires, `toggleFlaps` computes the phase
   the schedule says now, and replaces the leaf of every class of every flapping that is not in that phase
-  (one `tc -batch` per interface; a clock that jumped over several boundaries lands in the right phase
+  (one `tc -batch` for all interfaces since the tunnel faults, because a run of the tool costs seconds on a small or emulated machine and a toggle made interface by interface was late by the sum of them; a clock that jumped over several boundaries lands in the right phase
   with one toggle). Toggles run in the apply loop's goroutine, so they never overlap an apply: a boundary
   that falls into an apply is made right after it.
 - **The compiler writes the phase** (`Input.FlapPhase`, `TCClass.Down`, `TCClass.Config()`): a full apply
@@ -2248,6 +2248,128 @@ Kernel matrix: the gate (`TestEveryCompiledRulesetIsAcceptedByTheKernel`, scenar
 received 0 bytes in 8 s. One defect was found: the removal of the last MTU fault was refused by the kernel (busy chain), see
 above. Two assertions of the tests were wrong and fixed: the client's Python thread printed a traceback into the JSON when the
 black hole stalled it, and a device that was told a path MTU keeps it in its own route cache (the tests flush it).
+
+### Tunnel faults and WireGuard actions (plan §2.2.1, spike S15)
+
+A tunnel fault impairs the encrypted UDP of one WireGuard peer, a hub client or the remote side of a link, so everything inside
+the tunnel is impaired, routing sessions included, and the fault stacks with the faults of the traffic inside it (E10). It is a
+fault of its own family (`family: tunnel`, `tunnel: {client|link}`, latency, jitter, loss, burst loss, blackout, flapping; no
+selector, no source) resolved per tunnel (`domain.World.ResolveTunnels`: overlays before the configuration, the newest wins, the
+parameters are not merged). The WireGuard actions are overlays of the kind `wireguard`. Both were `unsupported_feature` until M10.
+
+**What the VM proved first** (kernel 6.8.0-142, iproute2 6.19, nftables 1.1.6; the constructs of the gates run on 7.0.0-38 as well):
+
+- `tc qdisc replace dev X ingress` creates the ingress qdisc and takes over one that exists (`add` twice: `Exclusivity flag on`);
+  `tc filter replace dev X parent ffff: protocol ip prio 10 handle N flower ip_proto udp src_ip A src_port P action mirred egress
+  redirect dev ifb-cgw` is accepted twice and changes the filter in place (a new selector with the same handle: the action's
+  counters start again, an unchanged one keeps them); the same filter with `flowid 1:M` below an HTB root selects a class
+  (`classid` and `flowid` are both read; the executor writes `flowid`, because `classid` is among the words it refuses).
+- `tc filter show dev X` lists the egress filters only; the ingress ones are `tc -s -j filter show dev X ingress`, which prints
+  `[]` for a device without an ingress qdisc too. An ingress filter is listed with `"parent":"ffff:"`, `options.handle`,
+  `options.keys.{ip_proto,src_ip,src_port}` and `options.actions[0]` (`mirred`, `redirect`, `egress`, `to_dev`) with
+  its own `stats`. Deleting by `handle N protocol ip prio P flower` works; deleting an HTB class that a flower filter
+  selects is `HTB class in use`.
+- A packet marked in a base chain on the **output** hook of the `inet` table (`ip daddr . udp dport vmap @map`, element
+  `goto chain`) takes the class the mark selects on the interface it leaves through; the plain underlay traffic of the same hosts
+  is not touched. The encrypted packets of a tunnel have a conntrack entry of their own, in whichever direction the peer spoke first,
+  so the direction bit of the tunnel's mark is written by the chain (a tunnel is always "downstream" towards the peer) and not from
+  `ct direction`.
+- `ip link add name ifb-cgw type ifb` is `File exists` the second time; `ip link del dev wg-a type ifb` **deleted a WireGuard
+  interface**: the kind has to be read first (as for the bridges).
+- The ifb module must be loaded: the persistent VM's first minutes have no `ifb`, a job that starts right after the boot may see
+  `Operation not permitted`.
+
+**The design.**
+
+```
+packets towards the peer (download)         packets from the peer (upload)
+ output hook, prio -150, table inet chaosgw   ingress qdisc of the uplink (ffff:)
+   tunnel_out: ip daddr . udp dport vmap      flower: udp, src_ip, src_port -> mirred redirect to ifb-cgw
+   tun_<id>: mark = mark & 0xfffe000f           ifb-cgw: HTB root 1:, class 1:<minor>, netem leaf
+             | id << 4 | 0x10000; counter                 flower (same selector) -> flowid 1:<minor>
+ -> the fw filters of the interface's tree -> the class of the fault -> its netem leaf
+```
+
+- **The directions are the remote side's** (P2-M10-05): `upload` is what the client sends, `download` what it receives, as for a
+  device. `Fault.Upload` is the IFB class, `Fault.Download` a class of the interfaces' tree (one per interface, like every
+  other fault). Ids come from the same 12-bit pool and the same allocation as the other faults (`overlay:<id>:tunnel` keys,
+  stable across compiles), the class minors are `ClassIDOf(id, dir)`, so queue statistics, epochs, the retirer and the flapper
+  treat them like any class.
+- **The peer's address** (`compiler.Input.PeerEndpoints`, `Target.Endpoints`): the engine reads `wg show dump` of the applied
+  interfaces right before it compiles when `compiler.NeedsPeerEndpoints` says something selects by address (a tunnel fault or a
+  blocked endpoint, in the configuration or in an overlay), in the apply loop, in the preview and when an overlay is written
+  (so the check of the write, `capacity_exceeded` included, compiles what the apply will). A link's configured endpoint is the
+  fallback when it is an address. `PollWireGuard` finds a peer that moved (`roamed`: the endpoint in `Snapshot.PeerEndpoints`
+  differs from the one seen) and makes a new desired state, a full apply; a peer with no address is in `Target.Endpoints` with
+  `""`, so the poll applies as soon as it is seen. The overlay of a fault that is not compiled shows `disabled`.
+- **The target** (`compiler/tunnel.go`): `Target.IFB` (`Dev`, `Uplink`, `TC`: an ordinary `TCTarget` whose classes carry the
+  peer's `Endpoint`, so that `TCClass.FilterEntry` writes a flower filter with the fault id as handle where the other trees
+  have an fw filter) with `IngressEntries` (the ingress qdisc and a redirect filter per fault, pref 10, handle = id) and
+  `IngressNorm`. `Target.TCTrees()` and `TreeOf(dev)` are the two trees; everything that walked `Target.TC` (apply, verify,
+  queues, flapper) walks both. The IFB has its own class limit (default class plus one per fault; `capacity_exceeded` names
+  the scope), and takes `ifb-cgw` into `Target.Interfaces`.
+- **Flapping** is the existing flapper: both sides carry flap keys of the fault (`|upload`, `|download`), the toggle replaces the
+  leaves on the interfaces of the tree and on the IFB in one pass, and the phase the engine holds is written into both trees by
+  every compile.
+- **The apply** (`apply/ingress.go`, `plan.go`, `retire.go`): the IFB is created (`add_ifb` if it is missing, a probe makes it
+  idempotent) and brought up before its tree; the ingress qdisc and the filters are the switch of the direction from the peer
+  and stand between the classes that are created or changed and the nftables transaction; a filter is `replace`d only when its
+  selector or redirect differs (its counters would start again; `Plan.IngressRestarted` tells the engine, which starts a new epoch
+  for the fault's counter). A filter of the uplink's ingress qdisc is Chaos Gateway's when it is a flower filter that redirects
+  to the IFB (`ownIngressFilters`); the host's own are left alone and the ingress qdisc goes only with the last filter of ours
+  (P2-M10-07). When the last fault that impairs the packets from a peer ends, its filter goes at once, the class and the IFB wait for the
+  retirer (the IFB stays in the executor's scope: `keepIFB`), the retirer deletes the tree and then the device (`Retirer.Reap`), and the
+  next apply takes it out of the assigned interfaces. Without a retirer (the one-shot apply) the device goes at the end of
+  the plan, after everything that refers to it. An IFB that nobody wants and nobody assigned (a gateway that died) is
+  assigned for the duration of the plan, and deleted with its tree. A device named `ifb-cgw` that is not an IFB is refused.
+  The verify compares the IFB link (exists, kind, up), its tree and the ingress side.
+- **The executor** (`executor/op.go`, `tcgrammar.go`, `exec.go`): `links` takes `add_ifb`, `delete_ifb` (the name `ifb-cgw` only,
+  the kind read before a deletion) and `up`; a flower filter is a closed grammar, either `protocol ip prio N flower ip_proto udp
+  src_ip A src_port P action mirred egress redirect dev ifb-cgw` below `ffff:` or `... flowid 1:M` below `1:`, with a decimal
+  handle, an IPv4 address and a port; the scope check sees the redirect target as an interface that has to be assigned. The
+  tc read adds the ingress filters of a device that has an ingress qdisc (`linux.NormalizeTCIngress`, `NormFilter.Flower`,
+  `NormTree.Ingress`).
+- **The counters**: the packets towards the peer are an nft counter of the chain `tun_<id>` (`Fault.CounterDown`); the packets
+  from the peer are the packets the redirect action of the ingress filter has matched, read with the tc state of the uplink
+  (`Engine.ReadCounters` reports them under `Fault.CounterUp`), before any netem has dropped or delayed one, so that a blackout
+  counts what it swallows. The queues show the drops per class (the IFB's for the upload, the interfaces' for the download).
+- **Explain** has a `tunnel` entry per tunnel the traffic crosses (`domain.World.TunnelsCrossed`: the client or link the
+  source or the destination lies behind by the configuration, and, for a route BIRD learned, the link the kernel's route leads
+  into), with the winner and what it overrode, and `kernel.tunnels` (fault id, endpoint, mark).
+
+**The WireGuard actions** (P2-M10-06) are decided where the interface is compiled (`compileWireGuardNetwork`): `disable` leaves
+the peer out (the same as `enabled: false`: its routes go with it), `key_mismatch` gives the peer a key derived from the
+overlay, `block_endpoint` is nftables: a base chain on the output hook and one on the input hook at priority -300 (raw), each a
+verdict map keyed on peer address, peer port and the interface's port, one chain with one named counter per overlay (`wgblock_<id>`).
+`Target.WGActions` lists the overlays that change something; the API shows `effective` for them and `disabled` for the others (a
+peer that is off its interface already, a block with no address), and the counter of a block.
+
+**Tests.** Compiler (`tunnel_test.go`): both sides of the tunnel, the endpoint map, the chain and its mask, a peer without an address,
+the resolution per tunnel, E10 (golden `e10`), flapping on both sides, the class limit of the IFB, disable, key mismatch, block endpoint
+(golden `wgblock`), a target without any of it, the scenario `tunnel` (golden `tunnel`, also in the kernel gates), E9 as a golden
+file (`e9`). Executor (`ifb_test.go`, `integration_ifb_test.go`): the grammar, the scope, the plan, the kind check, the ingress
+read, the whole life of an IFB and of the filters on a real kernel. Linux (`tcnorm_test.go`): listings recorded on a real kernel.
+Apply (`apply/tunnel_test.go`, simulated kernel): the order of the plan, a peer that moves, the end of a fault with the IFB
+waiting for the retirer, the one-shot apply, leftovers (with a retirer and without), a filter of the host, damage found and repaired,
+a device that has the IFB's name, the preview. Engine (`tunnel_test.go`): the write that reads the address, a peer that has not connected
+and one that moves, the end of a fault, flapping, the class limit, explain, the actions, the counters. API (`tunnel_test.go`): state,
+counters and queues, explain, the actions' states. Overlay (`precedence_test.go`): E10 through the store. The gates
+`TestEveryCompiledRulesetIsAcceptedByTheKernel` (scenario `tunnel`) and `TestEveryCompiledTunnelTreeIsAcceptedByTheKernel` (the
+trees and the ingress side, twice, the normalized state compared with the prediction, the deletions).
+
+Real kernel (`engine/integration_tunnel_test.go`), run in the persistent VM with
+`make vm-test ARGS='-run "TestATunnelFault|TestE10TheDeviceFault|TestATunnelBlackout|TestAFlappingTunnel|TestAClientThatMoves|TestTheIFBAndItsFilters|TestWireGuardActionsCut" -tags testbed -test-timeout 170m -vm-timeout 4h ./internal/engine'`:
+
+| Test | What it shows |
+|---|---|
+| `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse` | the flows of two devices into the client's network and the flow the client's network starts are impaired in the directions of the fault (latency, loss); a flow to the server through the same interface and a flow from the client machine to the gateway's uplink address are not; the counters of both directions, the queues of both sides, the handshake goes on. Accuracy (§4.3) with `Accurate()`, the flakiness policy |
+| `TestE10TheDeviceFaultAndTheTunnelFaultOfTheClientAddUp` | E10: 40 ms of the device and 50 ms of the tunnel are 90 ms for the device's flow into the tunnel, 50 ms for another device through it, 40 ms for the device's flow to the server |
+| `TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse` | upload alone: the requests arrive, no answer; download alone: nothing arrives; both: nothing in any flow, the tunnel's ping included; flows outside unaffected; drops and counters; the tunnel returns by itself |
+| `TestAFlappingTunnelBlacksOutOnSchedule` | the toggles of both sides within `FlapTolerance`, the outages of the flow within the tolerance (accurate), whole outages of about the down time (emulated) |
+| `TestAClientThatMovesTakesItsTunnelFaultWithIt` | the client listens on another port: the poll finds it, the filters move, the flow is impaired again |
+| `TestTheIFBAndItsFiltersAreCreatedAndRemovedWithTheTunnelFaultsAndLeftoversAreCleanedUp` | a leftover IFB, tree and filter go with the first apply and the host's filter stays; the IFB comes with the first fault and goes with the last |
+| `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` | disable (peer off the interface, offline event), key mismatch (another key on the interface), block endpoint (the counter counts); each ends with its overlay and the tunnel returns; flows outside unaffected |
+| `TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported` | the routes are withdrawn within the hold time (9 s) and the margin; the times are logged and taken from the events of the routing poll; the routes return after the blackout |
 
 ## Generated code
 

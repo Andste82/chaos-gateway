@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/apply/kernelsim"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -196,6 +197,41 @@ func TestAPeerThatRoamsTakesItsTunnelFaultWithIt(t *testing.T) {
 	}
 	if f := h.e.Snapshot().Faults; len(f) != 1 || f[0].Tunnel.Endpoint != "198.51.100.9:40000" {
 		t.Errorf("%+v", f)
+	}
+	h.verifyTunnelKernel()
+}
+
+// An apply that is slow (minutes on a small machine) does not pile up desired states: the polls that see the peer at its new
+// address while the apply for that very address is on its way make no new generation, and the one after it finds nothing to do.
+func TestAPeerThatRoamsMakesOneDesiredStateWhileTheApplyForItIsOnItsWay(t *testing.T) {
+	var gate *writeGate
+	h, _ := newWGHarnessWrap(t, "tunnels.yaml", engine.Config{}, func(k *kernelsim.Kernel) executor.Runner { gate = newGate(k); return gate })
+	h.mustApply(h.revision(nil))
+	h.connect(wgHub, "198.51.100.2:51820")
+	if err := h.e.PollWireGuard(context.Background(), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	h.mustPut(alice, tunBody)
+	gen := h.e.Snapshot().Generation
+
+	gate.arm()
+	h.connect(wgHub, "198.51.100.9:40000")
+	h.clk.BlockUntil(1)
+	h.clk.Advance(5 * time.Second)
+	gate.waitEntered(t)
+	for i := 0; i < 4; i++ {
+		h.clk.Advance(5 * time.Second)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if g := h.e.Snapshot().Generation; g != gen+1 {
+		t.Errorf("the generation is %d, %d polls saw the peer at its new address while one apply was on its way: want %d", g, 5, gen+1)
+	}
+	gate.release()
+	h.wait(func() bool { return h.e.Snapshot().PeerEndpoints[tunClient] == "198.51.100.9:40000" }, "the apply to take the new address")
+	h.clk.Advance(5 * time.Second)
+	time.Sleep(100 * time.Millisecond)
+	if g := h.barrier().Generation; g != gen+1 {
+		t.Errorf("generation %d, want %d: the poll after the apply found the peer where it was applied", g, gen+1)
 	}
 	h.verifyTunnelKernel()
 }

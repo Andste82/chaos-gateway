@@ -175,6 +175,27 @@ func TestE8AFaultBeatsAProfilePartOnTheSameScope(t *testing.T) {
 	}
 }
 
+// E9 (plan §2.4, M10): "Bad LTE" on the network reaches every device of the network, A and a device that
+// is only known by its address, with the profile's full rate each; and it goes with its overlay.
+func TestE9ABadLTEOverlayOnTheNetworkReachesEveryDeviceOfIt(t *testing.T) {
+	f := newFixture(t)
+	f.keepFaults()
+	o := f.put(admin, `{target: {network: IoT}, profile: bad-lte}`).Overlay
+	b := domain.Subject{IP: netip.MustParseAddr("10.10.0.77")}
+	for name, s := range map[string]domain.Subject{"A": subjectA, "B": b} {
+		win := domain.Winner(f.world().Resolve(domain.Query{Source: s, DestIP: netip.MustParseAddr("203.0.113.10"), Protocol: "tcp", Port: 443}), domain.FamilyImpairment)
+		if win == nil || win.ID != o.Id.String() || *win.Impairment.Rate != "2Mbit" || win.ProfileName != "bad-lte" {
+			t.Errorf("%s: winner = %+v", name, win)
+		}
+	}
+	if _, err := f.store.Delete(o.Id); err != nil {
+		t.Fatal(err)
+	}
+	if win := f.impairment(toServer("tcp", 443)); win != nil {
+		t.Errorf("the profile outlived its overlay: %+v", win)
+	}
+}
+
 func TestE12TheInitiatorsScopeDecides(t *testing.T) {
 	f := newFixture(t)
 	f.keepFaults()

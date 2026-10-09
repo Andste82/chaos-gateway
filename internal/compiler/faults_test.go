@@ -55,11 +55,33 @@ func scenarioNeutral(t *testing.T) *Target {
 	return w.compile(nil)
 }
 
+// scenarioShapes has every kind of netem leaf the fault family of M10 can produce, side by side on
+// one interface tree: a per-device rate with a queue limit, reordering, a duplicating fault next to
+// other netems (the kernel refuses a duplicating netem there, P2-M10-01), burst loss, corruption,
+// a blackout and a flapping one that is in its down phase.
+func scenarioShapes(t *testing.T) *Target {
+	t.Helper()
+	w := newFaultWorld(t)
+	w.overlay(`{target: {network: IoT}, fault: {rate: 2Mbit, queue_limit: 300}}`, 0)
+	w.overlay(`{target: {device: esp32-43}, fault: {upload: {latency: 50ms, jitter: 10ms, reorder: 25%, duplicate: 5%}, download: {burst_loss: {p: 2%, r: 20%, h: 10%, k: 99%}, corrupt: 1.5%}}}`, time.Second)
+	w.overlay(`{target: {device: lab-host}, fault: {destination: {cidr: 203.0.113.0/24}, blackout: true}}`, 2*time.Second)
+	w.overlay(`{target: {device: lab-host}, fault: {destination: {cidr: 198.51.100.0/24}, flapping: {up: 20s, down: 10s}, latency: 30ms, duplicate: 100%}}`, 3*time.Second)
+	up := w.compile(nil)
+	down := map[string]bool{}
+	for _, c := range up.TC.Classes {
+		if c.FlapKey != "" {
+			down[c.FlapKey] = true
+		}
+	}
+	return w.compile(func(in *Input) { in.FlapPhase = func(key string, _ FlapSpec) bool { return down[key] } })
+}
+
 func faultScenarios(t *testing.T) map[string]*Target {
 	return map[string]*Target{
 		"faults-mixed":   scenarioMixed(t),
 		"faults-nested":  scenarioNested(t),
 		"faults-neutral": scenarioNeutral(t),
+		"faults-shapes":  scenarioShapes(t),
 	}
 }
 
@@ -325,7 +347,8 @@ func TestNetemRendering(t *testing.T) {
 		"microseconds":                  {`{latency: 1500us}`, "netem limit 1000 delay 1500us 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
 		"seconds":                       {`{latency: 1.5s}`, "netem limit 89478 delay 1500ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
 		"loss with correlation":         {`{loss: 5%, loss_correlation: 25%}`, "netem limit 1000 delay 0ms 0ms 0% loss random 5% 25% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
-		"fractions":                     {`{loss: 0.5%, duplicate: 1.25%, corrupt: 0.01%}`, "netem limit 1000 delay 0ms 0ms 0% loss random 0.5% 0% reorder 0% 0% duplicate 1.25% 0% corrupt 0.01% 0% rate 0bit"},
+		"fractions":                     {`{loss: 0.5%, corrupt: 0.01%}`, "netem limit 1000 delay 0ms 0ms 0% loss random 0.5% 0% reorder 0% 0% duplicate 0% 0% corrupt 0.01% 0% rate 0bit"},
+		"a duplicate is not netem's":    {`{latency: 10ms, duplicate: 1.25%}`, "netem limit 1000 delay 10ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
 		"burst loss defaults":           {`{burst_loss: {p: 1%, r: 30%}}`, "netem limit 1000 delay 0ms 0ms 0% loss gemodel 1% 30% 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
 		"burst loss with h and k":       {`{burst_loss: {p: 1%, r: 30%, h: 10%, k: 99%}}`, "netem limit 1000 delay 0ms 0ms 0% loss gemodel 1% 30% 90% 1% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},
 		"blackout":                      {`{blackout: true}`, "netem limit 1000 delay 0ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit"},

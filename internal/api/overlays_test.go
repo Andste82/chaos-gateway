@@ -602,3 +602,90 @@ func TestAnOverlayAndAFaultShowTheirNetemQueuesWithEpochs(t *testing.T) {
 		t.Errorf("state %v", st)
 	}
 }
+
+// Plan M10: exceeding the class limit returns capacity_exceeded in the preview of a revision, naming the
+// scope that needs the classes, and the same revision is refused at the apply. The limit this test
+// assumes is the one it sets (6: five classes and the default one).
+func TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWithItsScope(t *testing.T) {
+	g := newGW(t, func(o *options) { o.classLimit = 6 })
+	g.finishSetup()
+	faults := map[string]any{
+		"a1000000-0000-4000-8000-000000000001": map[string]any{"source": map[string]any{"network": "IoT"}, "latency": "10ms"},
+		"a1000000-0000-4000-8000-000000000002": map[string]any{"source": map[string]any{"network": "lab-hub"}, "latency": "10ms"},
+	}
+	id := g.mustPatch(map[string]any{"faults": faults})
+	if r := g.do("POST", "/revisions/"+itoa(id)+"/preview", nil, nil, nil); r.Status != 200 {
+		t.Fatalf("two faults fit the limit of 6 (5 classes): %d %s", r.Status, r.Body)
+	}
+	// a third needs two more classes: 7 on every interface
+	faults["a1000000-0000-4000-8000-000000000003"] = map[string]any{"source": map[string]any{"network": "IoT"}, "latency": "20ms", "destination": map[string]any{"cidr": "198.51.100.1/32"}, "rate": "1Mbit"}
+	id = g.mustPatch(map[string]any{"faults": faults})
+	for _, path := range []string{"/revisions/" + itoa(id) + "/preview", "/revisions/" + itoa(id) + "/apply"} {
+		r := g.do("POST", path, nil, nil, nil)
+		if r.Status != 422 || r.code(t) != "capacity_exceeded" {
+			t.Fatalf("%s: %d %s", path, r.Status, r.Body)
+		}
+		errs := r.json(t)["errors"].([]any)
+		first := errs[0].(map[string]any)
+		if first["code"] != "capacity_exceeded" || !strings.Contains(first["message"].(string), "limit of 6") || first["path"] == "" {
+			t.Errorf("%s: %v", path, errs)
+		}
+	}
+}
+
+// A flapping fault's queues say where it is in its cycle: up, then a blackout, with the time the phase began
+// and the time the schedule ends it. The engine runs on the real clock here; the phase changes after a second.
+func TestTheQueuesOfAFlappingFaultShowTheirPhase(t *testing.T) {
+	g := ready(t)
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"20ms","flapping":{"up":"1s","down":"1500ms"}}}`)
+	id := ov["id"].(string)
+	phases := func() (up, down map[string]any) {
+		got := g.do("GET", "/overlays/"+id, nil, nil, nil).json(t)
+		qs, _ := got["queues"].([]any)
+		for _, q := range qs {
+			m := q.(map[string]any)
+			f, ok := m["flapping"].(map[string]any)
+			if !ok {
+				t.Fatalf("a queue of a flapping fault without its phase: %v", m)
+			}
+			if m["direction"] == "upload" {
+				up = f
+			} else {
+				down = f
+			}
+		}
+		return up, down
+	}
+	up, down := phases()
+	if up["phase"] != "up" || down["phase"] != "up" {
+		t.Fatalf("a flapping starts up: %v %v", up, down)
+	}
+	since, _ := time.Parse(time.RFC3339Nano, up["since"].(string))
+	next, _ := time.Parse(time.RFC3339Nano, up["next_change_at"].(string))
+	if d := next.Sub(since); d < 900*time.Millisecond || d > 1100*time.Millisecond {
+		t.Errorf("the up phase of 1 s runs from %v to %v", since, next)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if up, _ = phases(); up["phase"] == "down" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the fault never entered its down phase: %v", up)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	since, _ = time.Parse(time.RFC3339Nano, up["since"].(string))
+	next, _ = time.Parse(time.RFC3339Nano, up["next_change_at"].(string))
+	if d := next.Sub(since); d < 1400*time.Millisecond || d > 1600*time.Millisecond {
+		t.Errorf("the down phase of 1.5 s runs from %v to %v", since, next)
+	}
+	// a fault that does not flap has no phase
+	plain := g.mustCreateOverlay(`{"target":{"network":"lab-hub"},"fault":{"latency":"20ms"}}`)
+	got := g.do("GET", "/overlays/"+plain["id"].(string), nil, nil, nil).json(t)
+	for _, q := range got["queues"].([]any) {
+		if _, ok := q.(map[string]any)["flapping"]; ok {
+			t.Errorf("a queue without flapping has a phase: %v", q)
+		}
+	}
+}

@@ -45,6 +45,12 @@ var fuzzSeeds = []string{
 	`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"1:24","handle":"24:","args":["netem","limit","1000","delay","1ms","distribution","../../etc/passwd"]}]}`,
 	`{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"8001:"}]}`,
 	`{"type":"read","what":"tc","dev":"wan0"}`,
+	// M10: the duplication hook and its read
+	`{"type":"nft_dup","namespace":"gw","devs":["br-iot","br-lab","wan0"]}`,
+	`{"type":"nft_dup","devs":[]}`,
+	`{"type":"nft_dup","devs":["wan0","wan0"]}`,
+	`{"type":"nft_dup","devs":["wan0; drop"],"ruleset":{"nftables":[]}}`,
+	`{"type":"read","what":"nft_dup"}`,
 	``, `{}`, `[]`, `null`, `{"type":null}`, `{"type":"read"`, "\x00",
 }
 
@@ -105,6 +111,10 @@ func checkStdin(t *testing.T, op Operation, c Command) {
 	t.Helper()
 	switch c.Tool {
 	case ToolNft:
+		if _, ok := op.(*NftDup); ok {
+			checkDupTransaction(t, c.Stdin)
+			return
+		}
 		if err := CheckNftRuleset(json.RawMessage(c.Stdin)); err != nil {
 			t.Fatalf("the nft input of an accepted operation leaves the scope: %v\n%s", err, c.Stdin)
 		}
@@ -129,6 +139,56 @@ func checkStdin(t *testing.T, op Operation, c Command) {
 			if c.Tool == ToolIP {
 				if i := indexOf(f, "table"); i < 0 || len(f) <= i+1 || !ownTable(f[i+1]) {
 					t.Fatalf("routing line outside Chaos Gateway's tables: %q", l)
+				}
+			}
+		}
+	}
+}
+
+// checkDupTransaction: whatever nft_dup is given, the transaction it makes touches the table of the hook and
+// nothing else: every object is in the family netdev and the table chaosgw_dup, a chain is an egress filter
+// chain on an interface, a rule is the one rule of the hook.
+func checkDupTransaction(t *testing.T, stdin string) {
+	t.Helper()
+	var doc struct {
+		Nftables []map[string]map[string]map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal([]byte(stdin), &doc); err != nil {
+		t.Fatalf("the hook's transaction is no JSON: %v", err)
+	}
+	str := func(f map[string]json.RawMessage, k string) string {
+		var v string
+		_ = json.Unmarshal(f[k], &v)
+		return v
+	}
+	for _, item := range doc.Nftables {
+		if len(item) != 1 {
+			t.Fatalf("an item with %d commands: %s", len(item), stdin)
+		}
+		for cmd, objs := range item {
+			if cmd != "add" && cmd != "delete" {
+				t.Fatalf("the hook's transaction has the command %q", cmd)
+			}
+			for kind, f := range objs {
+				if str(f, "family") != NftDupFamily {
+					t.Fatalf("%s %s in the family %q", cmd, kind, str(f, "family"))
+				}
+				switch kind {
+				case "table":
+					if str(f, "name") != NftDupTable {
+						t.Fatalf("table %q", str(f, "name"))
+					}
+				case "chain":
+					dev := str(f, "dev")
+					if str(f, "table") != NftDupTable || str(f, "hook") != "egress" || str(f, "type") != "filter" || str(f, "name") != DupChainName(dev) || checkDev(dev) != nil {
+						t.Fatalf("chain %s", stdin)
+					}
+				case "rule":
+					if str(f, "table") != NftDupTable || !strings.HasPrefix(str(f, "chain"), "egress_") {
+						t.Fatalf("rule %s", stdin)
+					}
+				default:
+					t.Fatalf("the hook's transaction has the object %q", kind)
 				}
 			}
 		}

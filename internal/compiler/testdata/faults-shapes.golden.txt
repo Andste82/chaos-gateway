@@ -1,0 +1,77 @@
+# faults
+id 1  overlay 00000000-0000-4000-8000-000000000001  scope "network IoT"  device 1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a  counters fault_22f152633a_up fault_22f152633a_down
+    upload: rate 2Mbit, queue 300
+    download: rate 2Mbit, queue 300
+id 2  overlay 00000000-0000-4000-8000-000000000001  scope "network IoT"  device -  counters fault_f4ebd684d3_up fault_f4ebd684d3_down
+    upload: rate 2Mbit, queue 300
+    download: rate 2Mbit, queue 300
+id 3  overlay 00000000-0000-4000-8000-000000000002  scope "device esp32-43"  device -  counters fault_5410b3e4b7_up fault_5410b3e4b7_down
+    upload: 50ms ±10ms, reorder 25%, duplicate 5%
+    download: burst loss, corrupt 1.5%
+id 4  overlay 00000000-0000-4000-8000-000000000003  scope "device lab-host"  device -  counters fault_c1e6a9cca1_up fault_c1e6a9cca1_down
+    upload: blackout
+    download: blackout
+id 5  overlay 00000000-0000-4000-8000-000000000004  scope "device lab-host"  device -  counters fault_38a1d1d638_up fault_38a1d1d638_down
+    upload: 30ms, duplicate 100%, flapping 20s up, 10s down
+    download: 30ms, duplicate 100%, flapping 20s up, 10s down
+# tc on br-iot br-lab wan0
+qdisc add dev br-iot root handle 1: htb default 1
+class replace dev br-iot parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev br-iot parent 1: classid 1:12 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:12 handle 12: netem limit 300 delay 0ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 2Mbit
+filter replace dev br-iot parent 1: handle 0x00010/0x1fff0 protocol ip prio 1 fw flowid 1:12
+class replace dev br-iot parent 1: classid 1:13 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:13 handle 13: netem limit 300 delay 0ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 2Mbit
+filter replace dev br-iot parent 1: handle 0x10010/0x1fff0 protocol ip prio 1 fw flowid 1:13
+class replace dev br-iot parent 1: classid 1:14 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:14 handle 14: netem limit 300 delay 0ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 2Mbit
+filter replace dev br-iot parent 1: handle 0x00020/0x1fff0 protocol ip prio 1 fw flowid 1:14
+class replace dev br-iot parent 1: classid 1:15 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:15 handle 15: netem limit 300 delay 0ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 2Mbit
+filter replace dev br-iot parent 1: handle 0x10020/0x1fff0 protocol ip prio 1 fw flowid 1:15
+class replace dev br-iot parent 1: classid 1:16 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:16 handle 16: netem limit 5000 delay 50ms 10ms 0% loss random 0% 0% reorder 25% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00030/0x1fff0 protocol ip prio 1 fw flowid 1:16
+class replace dev br-iot parent 1: classid 1:17 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:17 handle 17: netem limit 1000 delay 0ms 0ms 0% loss gemodel 2% 20% 90% 1% reorder 0% 0% duplicate 0% 0% corrupt 1.5% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10030/0x1fff0 protocol ip prio 1 fw flowid 1:17
+class replace dev br-iot parent 1: classid 1:18 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:18 handle 18: netem limit 1000 delay 0ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00040/0x1fff0 protocol ip prio 1 fw flowid 1:18
+class replace dev br-iot parent 1: classid 1:19 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:19 handle 19: netem limit 1000 delay 0ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10040/0x1fff0 protocol ip prio 1 fw flowid 1:19
+class replace dev br-iot parent 1: classid 1:1a htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:1a handle 1a: netem limit 2500 delay 30ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00050/0x1fff0 protocol ip prio 1 fw flowid 1:1a
+class replace dev br-iot parent 1: classid 1:1b htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:1b handle 1b: netem limit 2500 delay 30ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10050/0x1fff0 protocol ip prio 1 fw flowid 1:1b
+# classification maps
+devdestport (ipv4_addr . ipv4_addr . inet_proto . inet_service, flags [interval])
+devdest (ipv4_addr . ipv4_addr, flags [interval])
+    10.20.0.50 . 198.51.100.0/24 : mark_5
+    10.20.0.50 . 203.0.113.0/24 : mark_4
+devport (ipv4_addr . inet_proto . inet_service, flags [interval])
+dev (ipv4_addr, flags [interval])
+    10.10.0.0-10.10.0.41 : mark_2
+    10.10.0.42 : mark_1
+    10.10.0.43 : mark_3
+    10.10.0.44-10.10.0.255 : mark_2
+# mark chains
+mark_1: 4 rules
+mark_2: 4 rules
+mark_3: 5 rules
+mark_4: 4 rules
+mark_5: 6 rules
+# fault counters
+fault_22f152633a_down
+fault_22f152633a_up
+fault_38a1d1d638_down
+fault_38a1d1d638_up
+fault_5410b3e4b7_down
+fault_5410b3e4b7_up
+fault_c1e6a9cca1_down
+fault_c1e6a9cca1_up
+fault_f4ebd684d3_down
+fault_f4ebd684d3_up

@@ -172,7 +172,8 @@ func (r *real) target() *compiler.Target {
 		r.t.Fatal(err)
 	}
 	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: host, Overlays: s.Overlays, FaultIDs: s.FaultIDs,
-		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation}})
+		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation},
+		FlapPhase: r.e.FlapPhase})
 	if tg.HasErrors() {
 		r.t.Fatalf("the snapshot does not compile: %+v", tg.Problems)
 	}

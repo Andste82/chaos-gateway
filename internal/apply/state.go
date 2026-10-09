@@ -273,8 +273,8 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 
 // readTC reads the tc state of the interfaces that may hold a tree of Chaos Gateway's own: the ones
 // the target names and every assigned one (a tree on an interface the target no longer uses has to be
-// found). The qdisc listing of each is one tool run; only an interface with a root qdisc 1: gets the
-// whole read (qdiscs, classes, filters, with counters).
+// found). The qdisc listing of each is one tool run; only an interface with a root qdisc 1: or an
+// ingress qdisc gets the whole read (qdiscs, classes, filters, with counters).
 func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) (map[string]*linux.NormTree, error) {
 	var devs []string
 	for _, d := range union(wanted, s.Assigned) {
@@ -303,7 +303,7 @@ func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) 
 		for _, q := range qs {
 			// the entries of a listing that names a device belong to it; `dev` is empty when a
 			// version does not print it
-			if q.Handle == compiler.TCRootHandle && q.Root && (q.Dev == "" || q.Dev == d) {
+			if (q.Handle == compiler.TCRootHandle && q.Root || q.Kind == "ingress") && (q.Dev == "" || q.Dev == d) {
 				withTree = append(withTree, d)
 				break
 			}

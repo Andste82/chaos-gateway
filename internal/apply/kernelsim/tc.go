@@ -28,6 +28,9 @@ type simTC struct {
 	leaves  map[string]*simQdisc
 	classes map[string]*simClass
 	filters []*simFilter
+	// ingress is true while the interface has an ingress qdisc; ingressFilters hang off it
+	ingress        bool
+	ingressFilters []*simFilter
 }
 
 type simQdisc struct {
@@ -51,6 +54,11 @@ type simFilter struct {
 	pref                int
 	mark, mask          uint32
 	flowid              string
+	// flower filters: the handle names the filter, the rest is the selector and the redirect action
+	handle                   int
+	ipProto, srcIP, redirect string
+	srcPort                  int
+	stats                    linux.NormStats
 }
 
 func (k *Kernel) tcOf(l *link) *simTC {
@@ -140,7 +148,10 @@ func (k *Kernel) tcCmd(c executor.Command) (executor.Result, error) {
 	}
 	// <kind> show dev X
 	if len(a) == 4 && a[1] == "show" && a[2] == "dev" {
-		return k.tcShow(a[0], a[3])
+		return k.tcShow(a[0], a[3], false)
+	}
+	if len(a) == 5 && a[0] == "filter" && a[1] == "show" && a[2] == "dev" && a[4] == "ingress" {
+		return k.tcShow(a[0], a[3], true)
 	}
 	if len(a) == 2 && a[1] == "show" {
 		return executor.Result{Exit: 1, Stderr: "the simulated tc lists one interface at a time\n"}, nil
@@ -187,6 +198,9 @@ func (k *Kernel) tcLine(f []string) string {
 		case "root":
 			parent, rest = "root", rest[1:]
 			continue
+		case "ingress":
+			parent, rest = "ingress", rest[1:]
+			continue
 		case "parent":
 			if len(rest) < 2 {
 				return "Error: malformed line"
@@ -220,6 +234,23 @@ func (k *Kernel) tcLine(f []string) string {
 }
 
 func (k *Kernel) tcQdisc(tc *simTC, action, parent, handle string, args []string) string {
+	if parent == "ingress" {
+		switch action {
+		case "delete":
+			if !tc.ingress {
+				return "Error: Invalid handle."
+			}
+			tc.ingress, tc.ingressFilters = false, nil
+		case "add":
+			if tc.ingress {
+				return "Error: Exclusivity flag on, cannot modify."
+			}
+			tc.ingress = true
+		default:
+			tc.ingress = true
+		}
+		return ""
+	}
 	if action == "delete" {
 		if parent == "root" {
 			if tc.root == nil || tc.root.handle != handle {
@@ -359,6 +390,9 @@ func (k *Kernel) tcClass(tc *simTC, action, parent, classid string, args []strin
 }
 
 func (k *Kernel) tcFilter(tc *simTC, action, parent, handle string, args []string) string {
+	if parent == "ffff:" || containsWord(args, "flower") {
+		return k.tcFlower(tc, action, parent, handle, args)
+	}
 	if tc.root == nil || parent != tc.root.handle {
 		if action == "delete" {
 			return "Error: Cannot find specified filter chain."
@@ -425,9 +459,134 @@ func (k *Kernel) tcFilter(tc *simTC, action, parent, handle string, args []strin
 	return ""
 }
 
+func containsWord(a []string, w string) bool {
+	for _, x := range a {
+		if x == w {
+			return true
+		}
+	}
+	return false
+}
+
+// tcFlower runs a flower filter: below the ingress qdisc (parent ffff:) it redirects the outer UDP of one
+// peer to another interface, below the root (parent 1:) it chooses a class. The handle is a number that
+// names the filter among those of its priority; `replace` of a filter that exists changes it in place.
+func (k *Kernel) tcFlower(tc *simTC, action, parent, handle string, args []string) string {
+	ingress := parent == "ffff:"
+	if ingress && !tc.ingress {
+		if action == "delete" {
+			return "Error: Cannot find specified filter chain."
+		}
+		return "Error: Parent Qdisc doesn't exists."
+	}
+	if !ingress && (tc.root == nil || parent != tc.root.handle) {
+		if action == "delete" {
+			return "Error: Cannot find specified filter chain."
+		}
+		return "Error: Parent Qdisc doesn't exists."
+	}
+	h, err := strconv.Atoi(handle)
+	if err != nil || h < 1 {
+		return "Error: invalid filter handle"
+	}
+	f := &simFilter{parent: parent, kind: "flower", handle: h}
+	if ingress {
+		f.parent = "ffff:"
+	}
+	for len(args) > 0 {
+		switch {
+		case args[0] == "protocol" && len(args) > 1:
+			f.proto, args = args[1], args[2:]
+		case args[0] == "prio" && len(args) > 1:
+			n, err := strconv.Atoi(args[1])
+			if err != nil {
+				return "Error: invalid prio"
+			}
+			f.pref, args = n, args[2:]
+		case args[0] == "flower":
+			args = args[1:]
+		case args[0] == "ip_proto" && len(args) > 1:
+			f.ipProto, args = args[1], args[2:]
+		case args[0] == "src_ip" && len(args) > 1:
+			f.srcIP, args = args[1], args[2:]
+		case args[0] == "src_port" && len(args) > 1:
+			n, err := strconv.Atoi(args[1])
+			if err != nil {
+				return "Error: invalid src_port"
+			}
+			f.srcPort, args = n, args[2:]
+		case args[0] == "flowid" && len(args) > 1:
+			f.flowid, args = args[1], args[2:]
+		case len(args) >= 6 && args[0] == "action" && args[1] == "mirred" && args[2] == "egress" && args[3] == "redirect" && args[4] == "dev":
+			if _, ok := k.links[args[5]]; !ok {
+				return fmt.Sprintf("Cannot find device %q", args[5])
+			}
+			f.redirect, args = args[5], args[6:]
+		default:
+			return "Error: the simulated tc does not know " + args[0]
+		}
+	}
+	list := &tc.filters
+	if ingress {
+		list = &tc.ingressFilters
+	}
+	idx := -1
+	for i, x := range *list {
+		if x.pref == f.pref && x.proto == f.proto && x.handle == f.handle {
+			idx = i
+		}
+	}
+	switch action {
+	case "delete":
+		if idx < 0 {
+			return "Error: Specified filter handle not found."
+		}
+		*list = append((*list)[:idx], (*list)[idx+1:]...)
+		return ""
+	case "add":
+		if idx >= 0 {
+			return "Error: Filter with specified priority/protocol not found."
+		}
+	}
+	if ingress {
+		if f.redirect == "" {
+			return "Error: the simulated tc takes an ingress flower filter with a redirect only"
+		}
+	} else if tc.classes[f.flowid] == nil {
+		return "Error: Specified class not found."
+	}
+	if idx >= 0 {
+		// a change of the selector or the action is made in place and starts the action's counters again
+		old := (*list)[idx]
+		if old.srcIP == f.srcIP && old.srcPort == f.srcPort && old.redirect == f.redirect {
+			f.stats = old.stats
+		}
+		(*list)[idx] = f
+		return ""
+	}
+	*list = append(*list, f)
+	return ""
+}
+
+// SetIngressStats sets the counters of the redirect action of the ingress flower filter with the
+// handle, for tests that need a filter that has matched packets.
+func (k *Kernel) SetIngressStats(dev string, handle int, s linux.NormStats) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	l := k.links[dev]
+	if l == nil || l.tc == nil {
+		return
+	}
+	for _, f := range l.tc.ingressFilters {
+		if f.handle == handle {
+			f.stats = s
+		}
+	}
+}
+
 // ---- reading ----------------------------------------------------------------------------------
 
-func (k *Kernel) tcShow(kind, dev string) (executor.Result, error) {
+func (k *Kernel) tcShow(kind, dev string, ingress bool) (executor.Result, error) {
 	l := k.links[dev]
 	if l == nil {
 		return executor.Result{Exit: 1, Stderr: fmt.Sprintf("Cannot find device %q\n", dev)}, nil
@@ -438,6 +597,9 @@ func (k *Kernel) tcShow(kind, dev string) (executor.Result, error) {
 	case "qdisc":
 		if tc.root == nil {
 			out = append(out, map[string]any{"kind": "noqueue", "handle": "0:", "root": true, "refcnt": 2, "options": map[string]any{}})
+			if tc.ingress {
+				out = append(out, ingressQdisc())
+			}
 			break
 		}
 		root := map[string]any{"kind": "htb", "handle": tc.root.handle, "root": true, "refcnt": 2,
@@ -449,6 +611,9 @@ func (k *Kernel) tcShow(kind, dev string) (executor.Result, error) {
 			m := map[string]any{"kind": "netem", "handle": q.handle, "parent": parent, "options": netemJSON(q)}
 			addStats(m, q.stats)
 			out = append(out, m)
+		}
+		if tc.ingress {
+			out = append(out, ingressQdisc())
 		}
 	case "class":
 		for _, id := range sortedKeys(tc.classes) {
@@ -464,11 +629,29 @@ func (k *Kernel) tcShow(kind, dev string) (executor.Result, error) {
 			out = append(out, m)
 		}
 	case "filter":
-		for _, f := range tc.filters {
+		list := tc.filters
+		if ingress {
+			list = tc.ingressFilters
+		}
+		for _, f := range list {
 			h := map[string]any{"parent": f.parent, "protocol": f.proto, "pref": f.pref, "kind": f.kind, "chain": 0}
 			out = append(out, h)
-			e := map[string]any{"parent": f.parent, "protocol": f.proto, "pref": f.pref, "kind": f.kind, "chain": 0,
-				"options": map[string]any{"fw": map[string]any{"mark": fmt.Sprintf("%#x", f.mark), "mask": fmt.Sprintf("%#x", f.mask)}, "classid": f.flowid}}
+			e := map[string]any{"parent": f.parent, "protocol": f.proto, "pref": f.pref, "kind": f.kind, "chain": 0}
+			if f.kind == "flower" {
+				opts := map[string]any{"handle": f.handle, "keys": map[string]any{"eth_type": "ipv4", "ip_proto": f.ipProto, "src_ip": f.srcIP, "src_port": f.srcPort}, "not_in_hw": true}
+				if f.flowid != "" {
+					opts["classid"] = f.flowid
+				}
+				if f.redirect != "" {
+					st := map[string]any{}
+					addStats(st, f.stats)
+					opts["actions"] = []any{map[string]any{"order": 1, "kind": "mirred", "mirred_action": "redirect", "direction": "egress", "to_dev": f.redirect,
+						"control_action": map[string]any{"type": "stolen"}, "index": f.handle, "ref": 1, "bind": 1, "installed": 1, "last_used": 0, "stats": st}}
+				}
+				e["options"] = opts
+			} else {
+				e["options"] = map[string]any{"fw": map[string]any{"mark": fmt.Sprintf("%#x", f.mark), "mask": fmt.Sprintf("%#x", f.mask)}, "classid": f.flowid}
+			}
 			out = append(out, e)
 		}
 	default:
@@ -478,6 +661,13 @@ func (k *Kernel) tcShow(kind, dev string) (executor.Result, error) {
 		out = []any{}
 	}
 	return jsonOut(out)
+}
+
+// ingressQdisc is the entry the listing has for an ingress qdisc.
+func ingressQdisc() map[string]any {
+	m := map[string]any{"kind": "ingress", "handle": "ffff:", "parent": "ffff:fff1", "options": map[string]any{}}
+	addStats(m, linux.NormStats{})
+	return m
 }
 
 func addStats(m map[string]any, s linux.NormStats) {

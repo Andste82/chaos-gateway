@@ -300,10 +300,28 @@ func (r *Retirer) Reap(ctx context.Context, ex Exec, ns string) (int, error) {
 			fail(going, fmt.Errorf("delete the retired tc classes of %s: %w", dev, delErr))
 			continue
 		}
+		// the IFB of the tunnel faults goes with the last of its tree: it is not wanted any more, or its
+		// tree would not be stale as a whole (plan.go, keepIFB)
+		if dev == compiler.IFBDev && wholeTree(going) {
+			if _, err := ex.Do(ctx, &executor.Links{Target: executor.Target{NS: ns}, Entries: []executor.LinkEntry{{Action: "delete_ifb", Name: compiler.IFBDev}}}); err != nil && !gone(err) {
+				fail(going, fmt.Errorf("delete the IFB device %s: %w", dev, err))
+				continue
+			}
+		}
 		r.forget(going)
 		deleted += len(going)
 	}
 	return deleted, firstErr
+}
+
+// wholeTree reports whether the deletions include the whole tree of the interface.
+func wholeTree(its []*retiree) bool {
+	for _, it := range its {
+		if it.Class == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Retirer) forget(its []*retiree) {

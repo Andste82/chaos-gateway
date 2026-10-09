@@ -132,13 +132,13 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 	}
 	sort.Strings(names)
 
-	wantsTree := map[string]bool{}
+	wantsTree := map[string]*compiler.TCTarget{}
 	var maxDelay float64
-	if t.TC != nil && len(t.TC.Classes) > 0 {
-		for _, d := range t.TC.Devs {
-			wantsTree[d] = true
+	for _, tr := range t.TCTrees() {
+		for _, d := range tr.Devs {
+			wantsTree[d] = tr
 		}
-		for _, c := range t.TC.Classes {
+		for _, c := range tr.Classes {
 			maxDelay = max(maxDelay, linux.NetemTime(c.Netem.Delay+c.Netem.Jitter))
 		}
 	}
@@ -154,8 +154,8 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 	for _, dev := range names {
 		live := ownTree(s, dev)
 		l, ok := s.Links[dev]
-		if wantsTree[dev] {
-			p.planDev(t.TC, dev, live, mem)
+		if tr := wantsTree[dev]; tr != nil {
+			p.planDev(tr, dev, live, mem)
 			continue
 		}
 		if len(live.Qdiscs) == 0 {
@@ -170,7 +170,7 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 			// the interface leaves Chaos Gateway's control in this apply: nobody can delete it later
 			// (the executor's scope no longer covers it). A bridge or WireGuard interface that is
 			// deleted takes its tree along.
-			if ok && l.Kind() != "bridge" && l.Kind() != "wireguard" && l.Kind() != "veth" {
+			if ok && l.Kind() != "bridge" && l.Kind() != "wireguard" && l.Kind() != "veth" && l.Kind() != "ifb" {
 				p.immediate[st.Key()] = true
 			} else {
 				p.stale = p.stale[:len(p.stale)-1]
@@ -219,10 +219,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 		wantFilter[f.Key()] = f
 		wantFilterOf[f.Flowid] = f
 	}
-	deleteFilter := func(f linux.NormFilter) executor.TCEntry {
-		return executor.TCEntry{Object: "filter", Action: "delete", Dev: dev, Parent: f.Parent,
-			Handle: fmt.Sprintf("0x%05x/0x%05x", f.Mark, f.Mask), Args: []string{"protocol", f.Protocol, "prio", strconv.Itoa(f.Pref), f.Kind}}
-	}
+	deleteFilter := func(f linux.NormFilter) executor.TCEntry { return deleteFilterEntry(dev, f) }
 
 	// the root: HTB cannot be changed in place, so a root of another kind or default class is
 	// taken away and made again
@@ -316,8 +313,7 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			p.dists[dkey] = last
 		}
 		wf := wantFilterOf[id]
-		filterEntry := executor.TCEntry{Object: "filter", Action: "replace", Dev: dev, Parent: compiler.TCRootHandle, Handle: c.FilterHandle(),
-			Args: []string{"protocol", "ip", "prio", "1", "fw", "flowid", id}}
+		filterEntry := c.FilterEntry(dev)
 		if lf, ok := liveFilter[wf.Key()]; !ok {
 			change = append(change, filterEntry)
 			created++
@@ -356,6 +352,22 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 	}
 }
 
+// deleteFilterEntry is the command that deletes a filter of the own tree as the listing shows it: an fw
+// filter is named by its mark, a flower filter by its handle.
+func deleteFilterEntry(dev string, f linux.NormFilter) executor.TCEntry {
+	e := executor.TCEntry{Object: "filter", Action: "delete", Dev: dev, Parent: f.Parent,
+		Args: []string{"protocol", f.Protocol, "prio", strconv.Itoa(f.Pref), f.Kind}}
+	if f.Flower != nil {
+		e.Handle = strconv.Itoa(f.Flower.Handle)
+		if f.Parent == "ingress" {
+			e.Parent = compiler.IngressHandle
+		}
+	} else {
+		e.Handle = fmt.Sprintf("0x%05x/0x%05x", f.Mark, f.Mask)
+	}
+	return e
+}
+
 // staleEntries are the entries that delete stale objects, from the tree of the interface as it is
 // now: the filters that select a class, then the class (its leaf goes with it); for a whole tree the
 // root qdisc.
@@ -366,8 +378,7 @@ func staleEntries(st TCStale, live *linux.NormTree) []executor.TCEntry {
 	var es []executor.TCEntry
 	for _, f := range live.Filters {
 		if f.Flowid == st.Class {
-			es = append(es, executor.TCEntry{Object: "filter", Action: "delete", Dev: st.Dev, Parent: f.Parent,
-				Handle: fmt.Sprintf("0x%05x/0x%05x", f.Mark, f.Mask), Args: []string{"protocol", f.Protocol, "prio", strconv.Itoa(f.Pref), f.Kind}})
+			es = append(es, deleteFilterEntry(st.Dev, f))
 		}
 	}
 	return append(es, executor.TCEntry{Object: "class", Action: "delete", Dev: st.Dev, ClassID: st.Class})
@@ -384,10 +395,10 @@ func verifyTC(t *compiler.Target, s *State, bad func(sub, format string, a ...an
 	for d := range s.TC {
 		devs[d] = true
 	}
-	wantsTree := map[string]bool{}
-	if t.TC != nil && len(t.TC.Classes) > 0 {
-		for _, d := range t.TC.Devs {
-			wantsTree[d] = true
+	wantsTree := map[string]*compiler.TCTarget{}
+	for _, tr := range t.TCTrees() {
+		for _, d := range tr.Devs {
+			wantsTree[d] = tr
 		}
 	}
 	names := make([]string, 0, len(devs))
@@ -397,8 +408,8 @@ func verifyTC(t *compiler.Target, s *State, bad func(sub, format string, a ...an
 	sort.Strings(names)
 	for _, dev := range names {
 		want := emptyTree
-		if wantsTree[dev] {
-			want = t.TC.Norm(dev)
+		if tr := wantsTree[dev]; tr != nil {
+			want = tr.Norm(dev)
 		}
 		for _, d := range linux.CompareTC(want, ownTree(s, dev)) {
 			if d.Kind == "unexpected" && (s.TCRetiring[dev+" "+compiler.TCRootHandle] || d.Class != "" && s.TCRetiring[dev+" "+d.Class]) {
@@ -407,4 +418,5 @@ func verifyTC(t *compiler.Target, s *State, bad func(sub, format string, a ...an
 			bad("tc", "%s: %s", dev, d)
 		}
 	}
+	ingressProblems(t, s, bad)
 }

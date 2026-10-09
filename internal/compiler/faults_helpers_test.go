@@ -30,6 +30,7 @@ type faultWorld struct {
 	overlays []model.Overlay
 	next     int
 	ids      map[string]int
+	pmtu     map[int]int
 }
 
 func newFaultWorld(t *testing.T) *faultWorld { return newFaultWorldFile(t, "faults.yaml") }
@@ -122,7 +123,7 @@ func (w *faultWorld) compile(mod func(*Input)) *Target {
 	w.t.Helper()
 	id := w.id
 	in := Input{Config: w.cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}, Identity: &id,
-		Overlays: w.overlays, FaultIDs: w.ids,
+		Overlays: w.overlays, FaultIDs: w.ids, PMTUTables: w.pmtu,
 		// the tests of capacity name the limit they mean; the others must not depend on the
 		// architecture default (200 on ARM64, where a 250-device network does not fit)
 		ClassLimit: DefaultClassLimitX86}
@@ -131,6 +132,7 @@ func (w *faultWorld) compile(mod func(*Input)) *Target {
 	}
 	tg := Compile(in)
 	w.ids = tg.FaultIDs
+	w.pmtu = tg.PMTUTables
 	return tg
 }
 

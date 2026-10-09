@@ -58,6 +58,9 @@ type Input struct {
 	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
 	// stable while the winning fault stays the same"). Nil allocates from scratch.
 	FaultIDs map[string]int
+	// PMTUTables is the allocation of mirror table indices of the previous compile (Target.PMTUTables):
+	// a size that is still in force keeps its table and the mark of its traffic.
+	PMTUTables map[int]int
 	// RetiringIDs are the fault ids whose tc classes are still in the kernel waiting for their
 	// deletion (make-before-break, plan §3.2): a fault that is new does not take one of them.
 	RetiringIDs []int
@@ -200,6 +203,14 @@ type Target struct {
 	// interfaces of the tc tree (executor.NftDup, P2-M10-01). Empty when nothing duplicates.
 	DupDevs    []string `json:"dup_devs,omitempty"`
 	faultBuild *faultBuild
+	// PMTU are the winning MTU faults (plan §2.5, M10), sorted by key; PMTUTables is the allocation of
+	// the mirror tables by size (the index is the mark value in bits 17-19, the table is
+	// PMTUTableOf(index)): feed it back as Input.PMTUTables. PMTUMaps maps a lookup level to the name of
+	// the MTU classification map of that level.
+	PMTU       []PMTUFault       `json:"pmtu,omitempty"`
+	PMTUTables map[int]int       `json:"pmtu_tables,omitempty"`
+	PMTUMaps   map[string]string `json:"pmtu_maps,omitempty"`
+	pmtuBuild  *pmtuBuild
 	// Access is the effective list of access rules, overlay rules first (plan §2.4); nil when there
 	// is no rule.
 	Access     *AccessPlan `json:"access,omitempty"`

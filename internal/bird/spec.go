@@ -71,6 +71,16 @@ type External struct {
 	Import Import `json:"import"`
 }
 
+// Mirror is a PMTU mirror table (plan §2.5, M10): a kernel table that holds the same routes as the
+// policy table, each with the path MTU locked to MTU, so that traffic marked for it meets that
+// MTU. Learned routes are exported into it as well.
+type Mirror struct {
+	// Table is the kernel table; it differs from every other table of the configuration.
+	Table int `json:"table"`
+	// MTU is the locked path MTU of the routes written into it.
+	MTU int `json:"mtu"`
+}
+
 // Config is everything the configuration is generated from.
 type Config struct {
 	RouterID string `json:"router_id"`
@@ -83,6 +93,10 @@ type Config struct {
 	Protected []string   `json:"protected"`
 	Protocols []Protocol `json:"protocols"`
 	External  *External  `json:"external,omitempty"`
+	// Mirrors are the PMTU mirror tables learned routes are exported into besides KernelTable, one
+	// kernel protocol each (BIRD attaches a kernel protocol to a routing table of its own, so every
+	// mirror has a table fed by a pipe from the master table).
+	Mirrors []Mirror `json:"mirrors,omitempty"`
 }
 
 // Empty reports whether the configuration runs nothing but the device and kernel protocols.

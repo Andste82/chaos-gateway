@@ -57,6 +57,19 @@ func (c Config) Check() error {
 			return fmt.Errorf("protected prefix %q: %w", p, err)
 		}
 	}
+	tables := map[int]bool{c.KernelTable: true}
+	if c.External != nil {
+		tables[c.External.Table] = true
+	}
+	for _, m := range c.Mirrors {
+		if m.Table < 1 || m.Table > 252 || tables[m.Table] {
+			return fmt.Errorf("mirror table %d is not usable", m.Table)
+		}
+		tables[m.Table] = true
+		if m.MTU < 68 || m.MTU > 65535 {
+			return fmt.Errorf("mirror table %d: mtu %d out of range", m.Table, m.MTU)
+		}
+	}
 	seen := map[string]bool{}
 	for _, p := range c.Protocols {
 		if !identRE.MatchString(p.Name) || seen[p.Name] {
@@ -188,6 +201,19 @@ func (c Config) Render() (string, error) {
 	// the only place learned routes go: Chaos Gateway's table, never the main table
 	w("# learned routes are exported into table %d only\n", c.KernelTable)
 	w("protocol kernel gw_table {\n  kernel table %d;\n  learn off;\n  persist off;\n  ipv4 { import none; %s };\n}\n\n", c.KernelTable, export)
+
+	// the PMTU mirror tables (M10): the same learned routes, each with the path MTU locked. A BIRD
+	// kernel protocol syncs one routing table of BIRD, so every mirror has a table of its own, fed from
+	// the master table by a pipe that lets the same routes through as the export above.
+	for _, m := range c.Mirrors {
+		if len(src) == 0 {
+			break
+		}
+		w("# the same routes into PMTU mirror table %d, with the path MTU locked to %d\n", m.Table, m.MTU)
+		w("ipv4 table pmtu%d;\n", m.Table)
+		w("protocol pipe pmtu%d_pipe {\n  table master4;\n  peer table pmtu%d;\n  import none;\n  %s\n}\n", m.Table, m.Table, export)
+		w("protocol kernel gw_pmtu%d {\n  kernel table %d;\n  learn off;\n  persist off;\n  ipv4 { table pmtu%d; import none; export filter { krt_mtu = %d; krt_lock_mtu = true; accept; }; };\n}\n\n", m.Table, m.Table, m.Table, m.MTU)
+	}
 
 	for _, p := range c.Protocols {
 		c.renderProtocol(&b, p)

@@ -30,6 +30,7 @@ var tcDevs = []string{"br-iot", "br-lab", "wan0"}
 type tcEnv struct {
 	*env
 	ids   map[string]int
+	pmtu  map[int]int
 	log   []string // tc batches, one string per `tc -batch` and its lines
 	clock *clock.Fake
 	ret   *apply.Retirer
@@ -84,12 +85,12 @@ func (x *tcEnv) compileWith(overlays ...model.Overlay) *compiler.Target {
 	x.t.Helper()
 	id := domain.ResolveIdentity(x.cfg, domain.Observed{}, nil)
 	tg := x.compile(func(_ *model.Configuration, in *compiler.Input) {
-		in.Overlays, in.Identity, in.FaultIDs, in.ClassLimit = overlays, &id, x.ids, 1000
+		in.Overlays, in.Identity, in.FaultIDs, in.PMTUTables, in.ClassLimit = overlays, &id, x.ids, x.pmtu, 1000
 	})
 	if tg.HasErrors() {
 		x.t.Fatalf("%+v", tg.Problems)
 	}
-	x.ids = tg.FaultIDs
+	x.ids, x.pmtu = tg.FaultIDs, tg.PMTUTables
 	return tg
 }
 

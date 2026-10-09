@@ -151,6 +151,11 @@ func (t *Target) compileClassify() {
 		newRule(match(ctKey("direction"), "==", "reply"), markSet(bitOr(meta("mark"), int64(markDirMaskBits)))),
 		newRule(match(ctKey("direction"), "==", "original"), markSet(bitAnd(meta("mark"), int64(MarkKeepOnDirectionWrite)))),
 	)
+	// the MTU family resolves on its own (plan §2.4) and comes first: its lookup chain is jumped to and
+	// comes back, the impairment lookup below ends the chain with its goto
+	if r, ok := t.pmtuClassify(); ok {
+		c.Rules = append(c.Rules, r)
+	}
 	c.Rules = append(c.Rules,
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devdestport"])),
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr")), t.ClassifyMaps["devdest"])),

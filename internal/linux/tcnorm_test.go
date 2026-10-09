@@ -463,3 +463,109 @@ func FuzzNormalizeTC(f *testing.F) {
 		_ = tree.Subtree("1:")
 	})
 }
+
+// The flower filters of the tunnel faults (M10): listings recorded from kernel 6.8.0-142 with iproute2 6.19. The ingress
+// qdisc has its filters in a listing of its own (`filter show dev X ingress`); a flower filter is named by its handle, its
+// selector is the outer UDP of a peer, and the one action of an ingress filter redirects to the IFB.
+func TestTheNormalizerReadsTheFlowerFiltersOfTheTunnelFaults(t *testing.T) {
+	tree, err := NormalizeTCIngress("wan0", tcFixture(t, "flower_wan_qdisc.json"), nil, nil, tcFixture(t, "flower_wan_ingress.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "flower_ingress", tree)
+	ing := tree.Ingress()
+	if len(ing.Qdiscs) != 1 || ing.Qdiscs[0].Kind != "ingress" || ing.Qdiscs[0].Handle != "ffff:" || ing.Qdiscs[0].Parent != "ingress" || len(ing.Filters) != 1 {
+		t.Fatalf("ingress: %+v", ing)
+	}
+	f := ing.Filters[0]
+	want := &FlowerSpec{Handle: 7, IPProto: "udp", SrcIP: "198.51.100.2", SrcPort: 51820, Redirect: "ifb-cgw"}
+	if f.Parent != "ingress" || f.Kind != "flower" || f.Pref != 10 || f.Protocol != "ip" || *f.Flower != *want || f.Flowid != "" || f.Options != "" || f.Stats == nil {
+		t.Errorf("%+v %+v", f, f.Flower)
+	}
+	if got := f.Line(); got != "filter parent ingress pref 10 flower handle 7 udp src=198.51.100.2:51820 redirect=ifb-cgw" {
+		t.Errorf("line %q", got)
+	}
+	// the own tree does not include the ingress side, the root qdisc of the host stays out as well
+	if own := tree.Subtree("1:"); len(own.Qdiscs) != 0 || len(own.Filters) != 0 {
+		t.Errorf("own: %+v", own)
+	}
+
+	ifb, err := NormalizeTC("ifb-cgw", tcFixture(t, "flower_ifb_qdisc.json"), tcFixture(t, "flower_ifb_class.json"), tcFixture(t, "flower_ifb_filter.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "flower_ifb", ifb)
+	own := ifb.Subtree("1:")
+	if len(own.Filters) != 1 || own.Filters[0].Parent != "1:" || own.Filters[0].Flowid != "1:12" || own.Filters[0].Flower.Handle != 7 ||
+		own.Filters[0].Flower.SrcIP != "198.51.100.2" || own.Filters[0].Flower.Redirect != "" || own.Filters[0].Pref != 1 {
+		t.Errorf("%+v", own.Filters)
+	}
+	if got := own.Filters[0].Line(); got != "filter parent 1: pref 1 flower handle 7 flowid=1:12 udp src=198.51.100.2:51820" {
+		t.Errorf("line %q", got)
+	}
+}
+
+// What a re-apply can change is what the comparison sees: the selector, the class and the redirect; the counters of the action
+// are not configuration.
+func TestAFlowerFilterIsComparedByItsSelectorClassAndRedirectNotByItsCounters(t *testing.T) {
+	read := func(mod func(string) string) *NormTree {
+		raw := mod(string(tcFixture(t, "flower_wan_ingress.json")))
+		tree, err := NormalizeTCIngress("wan0", tcFixture(t, "flower_wan_qdisc.json"), nil, nil, []byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	base := read(func(s string) string { return s })
+	counted := read(func(s string) string {
+		return strings.Replace(s, `"stats":{"bytes":0,"packets":0`, `"stats":{"bytes":9000,"packets":60`, 1)
+	})
+	if d := DiffTC(base.Ingress(), counted.Ingress()); len(d) != 0 {
+		t.Errorf("counters differ: %v", d)
+	}
+	if counted.Ingress().Filters[0].Stats == nil || counted.Ingress().Filters[0].Stats.Packets != 60 || counted.Ingress().Filters[0].Stats.Bytes != 9000 {
+		t.Errorf("the counters are not read: %+v", counted.Ingress().Filters[0].Stats)
+	}
+	if counted.Spec().Filters[0].Stats != nil {
+		t.Error("the spec keeps the counters of a filter")
+	}
+	for name, mod := range map[string]func(string) string{
+		"port":     func(s string) string { return strings.Replace(s, `"src_port":51820`, `"src_port":51821`, 1) },
+		"address":  func(s string) string { return strings.Replace(s, `198.51.100.2`, `198.51.100.3`, 1) },
+		"redirect": func(s string) string { return strings.Replace(s, `"to_dev":"ifb-cgw"`, `"to_dev":"ifb0"`, 1) },
+		"protocol": func(s string) string { return strings.Replace(s, `"ip_proto":"udp"`, `"ip_proto":"tcp"`, 1) },
+		"another key": func(s string) string {
+			return strings.Replace(s, `"src_port":51820`, `"src_port":51820,"dst_ip":"10.0.0.1"`, 1)
+		},
+		"another action": func(s string) string {
+			return strings.Replace(s, `"mirred_action":"redirect"`, `"mirred_action":"mirror"`, 1)
+		},
+	} {
+		d := DiffTC(base.Ingress(), read(mod).Ingress())
+		if len(d) != 1 || !strings.HasPrefix(d[0], "different:") {
+			t.Errorf("%s: %v", name, d)
+		}
+	}
+	// a handle is another filter
+	d := DiffTC(base.Ingress(), read(func(s string) string { return strings.Replace(s, `"handle":7`, `"handle":8`, 1) }).Ingress())
+	if len(d) != 2 {
+		t.Errorf("handle: %v", d)
+	}
+}
+
+// A filter of the host on the ingress qdisc is kept and is not a flower filter of ours.
+func TestAForeignFilterOnTheIngressQdiscIsKeptApart(t *testing.T) {
+	raw := `[{"parent":"ffff:","protocol":"all","pref":49152,"kind":"u32","chain":0},{"parent":"ffff:","protocol":"all","pref":49152,"kind":"u32","chain":0,"options":{"fh":"800:","ht_divisor":1}},` +
+		strings.TrimPrefix(string(tcFixture(t, "flower_wan_ingress.json")), "[")
+	tree, err := NormalizeTCIngress("wan0", tcFixture(t, "flower_wan_qdisc.json"), nil, nil, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, f := range tree.Ingress().Filters {
+		kinds = append(kinds, f.Kind)
+	}
+	if len(kinds) != 2 || !(kinds[0] == "u32" && kinds[1] == "flower" || kinds[1] == "u32" && kinds[0] == "flower") {
+		t.Errorf("%v", kinds)
+	}
+}

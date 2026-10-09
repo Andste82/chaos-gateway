@@ -3,6 +3,7 @@ package executor
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -122,6 +123,9 @@ func (e TCEntry) checkTCArgs() error {
 		if hasToken(e.Args, "fw") {
 			return e.checkFwFilter()
 		}
+		if hasToken(e.Args, "flower") {
+			return e.checkFlowerFilter()
+		}
 		return checkFlowids(e.Args)
 	}
 	return nil
@@ -166,8 +170,64 @@ func (e TCEntry) checkDeleteArgs() error {
 		return errors.New("a filter deletion names the filter by its handle")
 	}
 	a := e.Args
-	if len(a) != 5 || a[0] != "protocol" || !protoTok[a[1]] || a[2] != "prio" || !uintNum.MatchString(a[3]) || (a[4] != "fw" && a[4] != "u32") {
-		return errors.New("a filter deletion has the arguments protocol P prio N fw|u32")
+	if len(a) != 5 || a[0] != "protocol" || !protoTok[a[1]] || a[2] != "prio" || !uintNum.MatchString(a[3]) || (a[4] != "fw" && a[4] != "u32" && a[4] != "flower") {
+		return errors.New("a filter deletion has the arguments protocol P prio N fw|u32|flower")
+	}
+	if a[4] == "flower" && !flowerHandle.MatchString(e.Handle) {
+		return errors.New("a flower filter is named by a decimal handle")
+	}
+	return nil
+}
+
+// flowerHandle is the handle of a flower filter: the number that names it among the filters of its
+// priority. The tunnel faults use the fault id.
+var flowerHandle = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+
+// checkFlowerFilter is the grammar of the two flower filters of the tunnel faults (M10, plan §2.2.1):
+//
+//	on the ingress qdisc of an interface (parent ffff:), the packets of the outer UDP of one peer are
+//	sent to the IFB:      protocol ip prio N flower ip_proto udp src_ip A src_port P action mirred egress redirect dev ifb-cgw
+//	on the root of the IFB (parent 1:), the same selector chooses the class of the fault:
+//	                      protocol ip prio N flower ip_proto udp src_ip A src_port P flowid 1:M
+//
+// and nothing else: a flower filter is not a way to redirect traffic to another interface or to name a
+// class outside the own tree.
+func (e TCEntry) checkFlowerFilter() error {
+	if !flowerHandle.MatchString(e.Handle) {
+		return errors.New("a flower filter is named by a decimal handle")
+	}
+	a := e.Args
+	if len(a) < 13 || a[0] != "protocol" || a[1] != "ip" || a[2] != "prio" || !uintNum.MatchString(a[3]) || a[4] != "flower" ||
+		a[5] != "ip_proto" || a[6] != "udp" || a[7] != "src_ip" || a[9] != "src_port" {
+		return errors.New("a flower filter has the arguments protocol ip prio N flower ip_proto udp src_ip A src_port P and an action or a flowid")
+	}
+	if ip, err := netip.ParseAddr(a[8]); err != nil || !ip.Is4() || ip.Zone() != "" {
+		return fmt.Errorf("flower src_ip %q is not an IPv4 address", a[8])
+	}
+	if p, err := strconv.Atoi(a[10]); err != nil || p < 1 || p > 65535 || !uintNum.MatchString(a[10]) {
+		return fmt.Errorf("flower src_port %q is not a port", a[10])
+	}
+	rest := a[11:]
+	switch e.Parent {
+	case ownRootHandle:
+		if len(rest) != 2 || rest[0] != "flowid" {
+			return errors.New("a flower filter below the root takes flowid C after the selector")
+		}
+		if _, ok := ownMinor(rest[1]); !ok {
+			return fmt.Errorf("flowid %q is not a class of the tree", rest[1])
+		}
+	case ingressHandle:
+		want := []string{"action", "mirred", "egress", "redirect", "dev", IFBName}
+		if len(rest) != len(want) {
+			return fmt.Errorf("a flower filter on the ingress qdisc redirects to %s: action mirred egress redirect dev %s", IFBName, IFBName)
+		}
+		for i := range want {
+			if rest[i] != want[i] {
+				return fmt.Errorf("a flower filter on the ingress qdisc redirects to %s only, not %q", IFBName, rest[i])
+			}
+		}
+	default:
+		return fmt.Errorf("a flower filter hangs below %s or the ingress %s", ownRootHandle, ingressHandle)
 	}
 	return nil
 }

@@ -1,0 +1,28 @@
+mark_1
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294901775]},{"\u003c\u003c":[1,4]}]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"fault_22f152633a_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"fault_22f152633a_down"}]
+    [{"return":null}]
+mark_2
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294901775]},{"\u003c\u003c":[2,4]}]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"fault_f4ebd684d3_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"fault_f4ebd684d3_down"}]
+    [{"return":null}]
+mark_3
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294901775]},{"\u003c\u003c":[3,4]}]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"match":{"left":{"numgen":{"mod":1000000000,"mode":"random"}},"op":"\u003c","right":50000000}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},2097152]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"fault_5410b3e4b7_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"fault_5410b3e4b7_down"}]
+    [{"return":null}]
+mark_4
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294901775]},{"\u003c\u003c":[4,4]}]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"fault_c1e6a9cca1_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"fault_c1e6a9cca1_down"}]
+    [{"return":null}]
+mark_5
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294901775]},{"\u003c\u003c":[5,4]}]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},2097152]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},2097152]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"fault_38a1d1d638_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"fault_38a1d1d638_down"}]
+    [{"return":null}]

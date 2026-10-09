@@ -182,8 +182,7 @@ func TestEveryCompiledTCTreeIsAcceptedByTheKernel(t *testing.T) {
 			// the normalized state of the interface is exactly the compiler's prediction of it (M8b):
 			// this is what verification will compare, so every attribute the compiler emits has to be
 			// one the listing shows the way Norm says
-			have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
-				[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+			have, err := normalizedTC(ns, dev)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -269,8 +268,7 @@ func TestTheKernelTakesTheLongestValuesTheAPIAccepts(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("the kernel refuses the tc tree: %v\n%s\n%s", err, out, steps[0].Cmd.Stdin)
 			}
-			have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
-				[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+			have, err := normalizedTC(ns, dev)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -279,6 +277,12 @@ func TestTheKernelTakesTheLongestValuesTheAPIAccepts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// normalizedTC reads the tc state of an interface the way the executor does.
+func normalizedTC(ns *testbed.Namespace, dev string) (*linux.NormTree, error) {
+	return linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
+		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
 }
 
 // An element transaction (a device gets a new address, so its elements and the borders of the
@@ -368,23 +372,30 @@ func TestAnElementTransactionMovesIntervalElementsOnTheRealKernel(t *testing.T) 
 // state back in the normalized form.
 func applyTC(t *testing.T, ns *testbed.Namespace, tc *TCTarget, dev string, withRoot bool) *linux.NormTree {
 	t.Helper()
-	steps, err := executor.Plan(&executor.TC{Target: executor.Target{}, Entries: tc.Entries(dev, withRoot)})
+	runTC(t, ns, tc.Entries(dev, withRoot))
+	have, err := normalizedTC(ns, dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return have.Subtree(TCRootHandle)
+}
+
+// runTC runs the executor's own plan for entries in a namespace.
+func runTC(t *testing.T, ns *testbed.Namespace, entries []executor.TCEntry) {
+	t.Helper()
+	steps, err := executor.Plan(&executor.TC{Target: executor.Target{}, Entries: entries})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := ns.Command(ctx, "tc", steps[0].Cmd.Args...)
-	cmd.Stdin = strings.NewReader(steps[0].Cmd.Stdin)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("the kernel refuses the tc tree: %v\n%s\n%s", err, out, steps[0].Cmd.Stdin)
+	for _, st := range steps {
+		cmd := ns.Command(ctx, "tc", st.Cmd.Args...)
+		cmd.Stdin = strings.NewReader(st.Cmd.Stdin)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the kernel refuses the tc tree: %v\n%s\n%s", err, out, st.Cmd.Stdin)
+		}
 	}
-	have, err := linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
-		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return have.Subtree(TCRootHandle)
 }
 
 // What the compiler predicts the kernel reports is right for every shape of netem configuration,
@@ -392,8 +403,9 @@ func applyTC(t *testing.T, ns *testbed.Namespace, tc *TCTarget, dev string, with
 // a percent and just below 100 %, a delay of one microsecond and of twelve seconds, rates the kernel
 // truncates to no rate at all. The same tree is then changed in place to each shape in turn (the
 // same handles, `replace`), so what the second round predicts has to hold for a qdisc that had other
-// values, too. A duplicating netem goes on an interface of its own: the kernel refuses to mix it with
-// other netems in one tree (P2-M8b-01).
+// values, too. A duplicating fault is among them: its netem leaf never duplicates (the kernel refuses
+// that next to any other netem, P2-M8b-01), the copy is made by the hook of the duplication table
+// (P2-M10-01).
 func TestTheNormOfEveryNetemShapeIsWhatTheKernelReports(t *testing.T) {
 	bed := testbed.New(t)
 	ms := time.Millisecond
@@ -415,6 +427,9 @@ func TestTheNormOfEveryNetemShapeIsWhatTheKernelReports(t *testing.T) {
 		{Limit: 1000, Delay: 10 * ms, Reorder: 25},
 		{Limit: 1000, Delay: 10 * ms, Reorder: 0.00000001},
 		{Limit: 1000, Corrupt: 0.1},
+		{Limit: 1000, Corrupt: 100},
+		{Limit: 1000, Delay: 20 * ms, Duplicate: 5},
+		{Limit: 1000, Duplicate: 0.0000001},
 		{Limit: 1000, Rate: 7},
 		{Limit: 1000, Rate: 2_500_000},
 		{Limit: 1000, Rate: 1_000_000_000},
@@ -451,12 +466,82 @@ func TestTheNormOfEveryNetemShapeIsWhatTheKernelReports(t *testing.T) {
 	if d := linux.DiffTC(tc3.Norm("d0"), applyTC(t, ns, tc3, "d0", false)); len(d) != 0 {
 		t.Errorf("reset to neutral:\n%s", strings.Join(d, "\n"))
 	}
-	// duplicating netems alone on an interface
-	ns.Must("ip", "link", "add", "d1", "type", "dummy")
-	ns.Must("ip", "link", "set", "d1", "up")
-	dup := mk([]Netem{{Limit: 1000, Delay: 20 * ms, Duplicate: 5}}, 0)
-	dup.Devs = []string{"d1"}
-	if d := linux.DiffTC(dup.Norm("d1"), applyTC(t, ns, dup, "d1", true)); len(d) != 0 {
-		t.Errorf("duplicate:\n%s", strings.Join(d, "\n"))
+}
+
+// The duplication hook's table is accepted by the real kernel as the executor writes it, replaced by a
+// transaction of other interfaces, and gone with an empty one; read back it is what the apply's verify
+// expects: one egress base chain per interface, bound to it, with the one rule the executor writes.
+func TestTheKernelAcceptsTheDuplicationHookAndReadsItBackAsTheVerifyExpects(t *testing.T) {
+	bed := testbed.New(t)
+	ns := bed.Add("dupnft")
+	for _, d := range []string{"d0", "d1", "d2"} {
+		ns.Must("ip", "link", "add", d, "type", "dummy")
+		ns.Must("ip", "link", "set", d, "up")
+	}
+	run := func(devs ...string) {
+		t.Helper()
+		tx, err := executor.DupTransaction(devs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := ns.Command(ctx, "nft", "-j", "-f", "-")
+		cmd.Stdin = bytes.NewReader(tx)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the kernel refuses the table for %v: %v\n%s\n%s", devs, err, out, tx)
+		}
+	}
+	read := func() *linux.Ruleset {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := ns.Run(ctx, "nft", "-j", "list", "table", executor.NftDupFamily, executor.NftDupTable)
+		if err != nil {
+			return &linux.Ruleset{} // no such table
+		}
+		rs, err := linux.ParseNft([]byte(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rs
+	}
+	chains := func(rs *linux.Ruleset) string {
+		var devs []string
+		for _, o := range rs.Objects {
+			if c := o.Chain; c != nil {
+				if c.Name != executor.DupChainName(c.Dev) || c.Type != "filter" || c.Hook != "egress" || c.Prio == nil || *c.Prio != 0 || c.Policy != "accept" {
+					t.Errorf("a chain that is not the executor's: %+v", c)
+				}
+				if rules := rs.Rules(c.Name); len(rules) != 1 || rules[0].Comment != executor.DupRuleComment(c.Dev) {
+					t.Errorf("the rules of %s: %+v", c.Name, rules)
+				}
+				devs = append(devs, c.Dev)
+			}
+		}
+		return strings.Join(devs, " ")
+	}
+	run("d0", "d1")
+	if got := chains(read()); got != "d0 d1" {
+		t.Fatalf("chains on %q", got)
+	}
+	run("d0", "d1") // the same again
+	run("d2", "d1") // another set replaces it, in one transaction
+	if got := chains(read()); got != "d1 d2" {
+		t.Fatalf("chains on %q after the replacement", got)
+	}
+	run()
+	if n := len(read().Tables()); n != 0 {
+		t.Errorf("the table is still there")
+	}
+	run() // deleting what is not there is no error
+	// an interface that does not exist is refused by the kernel
+	tx, _ := executor.DupTransaction([]string{"nothere"})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := ns.Command(ctx, "nft", "-j", "-f", "-")
+	cmd.Stdin = bytes.NewReader(tx)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Errorf("a chain on an interface that does not exist was accepted: %s", out)
 	}
 }

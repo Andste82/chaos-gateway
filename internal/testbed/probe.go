@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,6 +133,87 @@ type ProbeResult struct {
 	// reached the sender.
 	Delivered, Replied int
 	Up, Down           []time.Duration
+	// UpArrivals and DownArrivals are the sequence numbers in the order the datagrams arrived at
+	// the echo (a duplicate is listed again) and the answers at the sender (likewise): what reordering,
+	// duplication and the pattern of losses are measured from.
+	UpArrivals, DownArrivals []int
+}
+
+// duplicates counts the arrivals of a sequence that were already there.
+func duplicates(arrivals []int) int {
+	seen := map[int]bool{}
+	n := 0
+	for _, s := range arrivals {
+		if seen[s] {
+			n++
+		}
+		seen[s] = true
+	}
+	return n
+}
+
+// reordered counts the arrivals (of a sequence that was not seen before) that came after a datagram
+// with a higher number: the datagrams that were overtaken.
+func reordered(arrivals []int) int {
+	seen := map[int]bool{}
+	hi, n := -1, 0
+	for _, s := range arrivals {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		if s < hi {
+			n++
+		}
+		hi = max(hi, s)
+	}
+	return n
+}
+
+// UpDuplicates is the number of datagrams that reached the echo more than once (counting each extra
+// copy); DownDuplicates the same for the answers at the sender. Note that a duplicated upload makes
+// the echo answer twice, so the answers carry duplicates of an upload fault too.
+func (r ProbeResult) UpDuplicates() int   { return duplicates(r.UpArrivals) }
+func (r ProbeResult) DownDuplicates() int { return duplicates(r.DownArrivals) }
+
+// UpReordered is the number of datagrams that arrived at the echo after one that was sent later;
+// DownReordered the same for the answers.
+func (r ProbeResult) UpReordered() int   { return reordered(r.UpArrivals) }
+func (r ProbeResult) DownReordered() int { return reordered(r.DownArrivals) }
+
+// UpLost lists the sequence numbers (0 to Sent-1) that never reached the echo; DownLost those of the
+// delivered ones whose answer never came back.
+func (r ProbeResult) UpLost() []int { return missing(r.UpArrivals, r.Sent) }
+func (r ProbeResult) DownLost() []int {
+	var out []int
+	got := map[int]bool{}
+	for _, s := range r.DownArrivals {
+		got[s] = true
+	}
+	for _, s := range r.UpArrivals {
+		if !got[s] {
+			out = append(out, s)
+			got[s] = true
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+func missing(arrivals []int, sent int) []int {
+	got := make([]bool, sent)
+	for _, s := range arrivals {
+		if s >= 0 && s < sent {
+			got[s] = true
+		}
+	}
+	var out []int
+	for i, g := range got {
+		if !g {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // UpLoss is the fraction of the datagrams the upload lost.
@@ -257,6 +339,7 @@ func (e *Echo) delivered(run string) int {
 func parseProbe(sender, echo, run string) (ProbeResult, error) {
 	var r ProbeResult
 	sent := false
+	downSeen := map[int]bool{}
 	for _, l := range strings.Split(sender, "\n") {
 		f := strings.Fields(l)
 		switch {
@@ -265,6 +348,15 @@ func parseProbe(sender, echo, run string) (ProbeResult, error) {
 			if err != nil {
 				return r, fmt.Errorf("testbed: probe line %q: %w", l, err)
 			}
+			seq, err := strconv.Atoi(f[1])
+			if err != nil {
+				return r, fmt.Errorf("testbed: probe line %q: %w", l, err)
+			}
+			r.DownArrivals = append(r.DownArrivals, seq)
+			if downSeen[seq] {
+				continue // a copy of an answer: counted in DownDuplicates, not another reply
+			}
+			downSeen[seq] = true
 			r.Down = append(r.Down, time.Duration(ns))
 			r.Replied++
 		case len(f) == 2 && f[0] == "sent":
@@ -281,7 +373,13 @@ func parseProbe(sender, echo, run string) (ProbeResult, error) {
 	seen := map[string]bool{}
 	for _, l := range strings.Split(echo, "\n") {
 		f := strings.Fields(l)
-		if len(f) != 4 || f[0] != "u" || f[1] != run || seen[f[2]] {
+		if len(f) != 4 || f[0] != "u" || f[1] != run {
+			continue
+		}
+		if seq, err := strconv.Atoi(f[2]); err == nil {
+			r.UpArrivals = append(r.UpArrivals, seq)
+		}
+		if seen[f[2]] {
 			continue
 		}
 		ns, err := strconv.ParseInt(f[3], 10, 64)

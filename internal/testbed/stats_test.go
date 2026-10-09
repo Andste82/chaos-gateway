@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +196,111 @@ func TestCheckDelaysToleratesNoiseAndFindsADisturbance(t *testing.T) {
 	}
 	if err := CheckDelays("up", nil, 36*ms, 44*ms); err != nil {
 		t.Errorf("no delays: %v", err)
+	}
+}
+
+func TestAShareIsCheckedAgainstTheBinomialInterval(t *testing.T) {
+	// 2000 draws of 10 %: the 99.9 % interval is about 8 % to 12 %
+	if err := CheckShare("dup", "duplicates", 200, 2000, 0.10); err != nil {
+		t.Error(err)
+	}
+	if err := CheckShare("dup", "duplicates", 0, 2000, 0.10); err == nil || !strings.Contains(err.Error(), "duplicates") {
+		t.Errorf("no duplicates at all is not 10 %%: %v", err)
+	}
+	if err := CheckShare("dup", "duplicates", 330, 2000, 0.10); err == nil {
+		t.Error("16 % is not 10 %")
+	}
+}
+
+func TestGilbertBoundsAreWiderThanTheBinomialOnesBecauseLossesComeInBursts(t *testing.T) {
+	n, p, r := 2000, 0.02, 0.20
+	lo, hi := GilbertLossBounds(n, p, r, 1, 0, LossConfidence)
+	// stationary share of the bad state is p/(p+r) = 9.1 %: about 182 of 2000
+	if lo > 182 || hi < 182 {
+		t.Fatalf("[%d, %d] does not hold the mean of 182", lo, hi)
+	}
+	blo, bhi := BinomialBounds(n, p/(p+r), LossConfidence)
+	if hi-lo < 2*(bhi-blo) {
+		t.Errorf("the burst interval [%d, %d] is not much wider than the binomial one [%d, %d]", lo, hi, blo, bhi)
+	}
+	// independent losses (p + r = 1: the state has no memory) give the binomial interval
+	lo, hi = GilbertLossBounds(n, 0.1, 0.9, 1, 0, LossConfidence)
+	blo, bhi = BinomialBounds(n, 0.1, LossConfidence)
+	if abs(lo-blo) > 3 || abs(hi-bhi) > 3 {
+		t.Errorf("a memoryless channel: [%d, %d], the binomial interval is [%d, %d]", lo, hi, blo, bhi)
+	}
+}
+
+func abs(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+func TestAGilbertElliottRunIsCheckedForItsLossAndItsBurstLength(t *testing.T) {
+	// a synthetic run of the model with a fixed generator: p 2 %, r 20 %
+	rng := rand.New(rand.NewSource(7))
+	var lost []int
+	bad := false
+	n := 2000
+	for i := 0; i < n; i++ {
+		if bad {
+			lost = append(lost, i)
+			if rng.Float64() < 0.20 {
+				bad = false
+			}
+		} else if rng.Float64() < 0.02 {
+			bad = true
+		}
+	}
+	if err := CheckBurstLoss("model", lost, n, 0.02, 0.20, 1, 0); err != nil {
+		t.Errorf("a run of the model itself: %v (%d lost, mean run %.1f)", err, len(lost), MeanRun(lost))
+	}
+	// the same number of losses, all single: not bursts
+	var single []int
+	for i := 0; i < len(lost); i++ {
+		single = append(single, i*(n/len(lost)))
+	}
+	if err := CheckBurstLoss("random", single, n, 0.02, 0.20, 1, 0); err == nil || !strings.Contains(err.Error(), "runs") {
+		t.Errorf("losses that are all single are not bursts of 5: %v", err)
+	}
+	if err := CheckBurstLoss("none", nil, n, 0.02, 0.20, 1, 0); err == nil {
+		t.Error("no loss at all is not a 9 % loss")
+	}
+}
+
+func TestOutagesAreFoundAndComparedWithAFlappingFault(t *testing.T) {
+	// 10 ms probes, 3 s up and 2 s down, starting up: outages at 3 s, 8 s and 13 s of 2 s each
+	const iv = 10 * time.Millisecond
+	var lost []int
+	total := 1700
+	for _, start := range []int{300, 800, 1300} {
+		for i := start; i < start+200 && i < total; i++ {
+			lost = append(lost, i)
+		}
+	}
+	out := Outages(lost, iv, 5)
+	if len(out) != 3 || out[0].Start != 3*time.Second || out[0].Len != 2*time.Second {
+		t.Fatalf("%+v", out)
+	}
+	if err := CheckFlaps("flap", out, total, 3*time.Second, 2*time.Second, iv, 100*time.Millisecond, 3); err != nil {
+		t.Error(err)
+	}
+	// a single lost datagram in between is not an outage
+	if got := Outages(append([]int{50}, lost...), iv, 5); len(got) != 3 {
+		t.Errorf("%+v", got)
+	}
+	// the last outage is cut off by the end of the run: only two complete ones
+	if err := CheckFlaps("flap", out, 1400, 3*time.Second, 2*time.Second, iv, 100*time.Millisecond, 3); err == nil {
+		t.Error("an outage that the run cut off is not complete")
+	}
+	// the down time is wrong
+	if err := CheckFlaps("flap", out, total, 3*time.Second, 1*time.Second, iv, 100*time.Millisecond, 2); err == nil || !strings.Contains(err.Error(), "lasts") {
+		t.Errorf("2 s outages are not 1 s ones: %v", err)
+	}
+	// the cycle is wrong
+	if err := CheckFlaps("flap", out, total, 2*time.Second, 2*time.Second, iv, 100*time.Millisecond, 2); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("a 5 s cycle is not a 4 s one: %v", err)
 	}
 }

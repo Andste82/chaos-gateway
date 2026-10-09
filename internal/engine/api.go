@@ -164,7 +164,9 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 		p.References = referencesOf(orphans)
 		overlays = overlaysAfter(snap.Overlays, orphans, merges)
 	}
-	tg := compiler.Compile(e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs, snap.PMTUTables, e.retirer.IDs()))
+	in := e.input(cfg, snap.Host, compiler.Generation{Revision: rev, Seq: snap.Generation + 1}, &id, overlays, snap.FaultIDs, snap.PMTUTables, e.retirer.IDs())
+	e.withPeerEndpoints(ctx, &in)
+	tg := compiler.Compile(in)
 	p.Target, p.Problems = tg, tg.Problems
 	p.Rules = previewRules(tg.Access, snap.Access)
 	if tg.HasErrors() {

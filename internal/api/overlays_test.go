@@ -271,7 +271,7 @@ func TestAnOverlayThatDoesNotFitTheClassLimitIsRefusedWithCapacityExceeded(t *te
 func TestCapabilitiesNameWhatOverlaysThisBuildTakes(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu]" {
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu tunnel]" {
 		t.Errorf("%v", caps)
 	}
 	if !strings.Contains(fmt.Sprint(caps["features"]), "overlays") {

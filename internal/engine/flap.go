@@ -105,18 +105,20 @@ func (f *flapper) sync(t *compiler.Target, now time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	seen := map[string]bool{}
-	if t != nil && t.TC != nil {
-		for _, c := range t.TC.Classes {
-			if c.FlapKey == "" || c.Netem.Flapping == nil {
-				continue
+	if t != nil {
+		for _, tr := range t.TCTrees() {
+			for _, c := range tr.Classes {
+				if c.FlapKey == "" || c.Netem.Flapping == nil {
+					continue
+				}
+				seen[c.FlapKey] = true
+				spec := *c.Netem.Flapping
+				if e := f.entries[c.FlapKey]; e != nil && e.spec == spec {
+					e.down = c.Down
+					continue
+				}
+				f.entries[c.FlapKey] = &flapEntry{spec: spec, start: now, down: c.Down, since: now}
 			}
-			seen[c.FlapKey] = true
-			spec := *c.Netem.Flapping
-			if e := f.entries[c.FlapKey]; e != nil && e.spec == spec {
-				e.down = c.Down
-				continue
-			}
-			f.entries[c.FlapKey] = &flapEntry{spec: spec, start: now, down: c.Down, since: now}
 		}
 	}
 	for k := range f.entries {
@@ -258,7 +260,7 @@ func (e *Engine) FlapLog() []FlapChange {
 // kernel and in the target the apply loop holds. It returns the target to hold (the same one when
 // nothing changed) and the error of a failed toggle, after which the schedule tries again.
 func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedState, error) {
-	if last == nil || last.target == nil || last.target.TC == nil {
+	if last == nil || last.target == nil || len(last.target.TCTrees()) == 0 {
 		return last, nil
 	}
 	now := e.cfg.Clock.Monotonic()
@@ -270,27 +272,47 @@ func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedS
 	for _, x := range fl {
 		want[x.key] = x.down
 	}
-	tc := *last.target.TC
-	tc.Classes = append([]compiler.TCClass(nil), tc.Classes...)
-	var changed []compiler.TCClass
-	for i, c := range tc.Classes {
-		if down, ok := want[c.FlapKey]; ok && c.FlapKey != "" {
-			tc.Classes[i].Down = down
-			changed = append(changed, tc.Classes[i])
-		}
-	}
+	nt := *last.target
 	tg := executor.Target{NS: e.cfg.Namespace}
 	var ops []executor.Operation
-	for _, dev := range tc.Devs {
-		var entries []executor.TCEntry
-		for _, c := range changed {
-			entries = append(entries, executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: c.ClassID(), Handle: c.LeafHandle(), Args: c.Config().Args()})
+	devices := 0
+	// the interfaces' tree and the tree of the IFB flap alike: every tree is copied with the new phase of the
+	// classes that are due, and each of its interfaces gets one batch of leaf replacements
+	toggle := func(src *compiler.TCTarget) *compiler.TCTarget {
+		if src == nil {
+			return nil
 		}
-		for len(entries) > 0 {
-			n := min(len(entries), executor.MaxTCEntries)
-			ops = append(ops, &executor.TC{Target: tg, Entries: entries[:n:n]})
-			entries = entries[n:]
+		tc := *src
+		tc.Classes = append([]compiler.TCClass(nil), src.Classes...)
+		var changed []compiler.TCClass
+		for i, c := range tc.Classes {
+			if down, ok := want[c.FlapKey]; ok && c.FlapKey != "" {
+				tc.Classes[i].Down = down
+				changed = append(changed, tc.Classes[i])
+			}
 		}
+		if len(changed) == 0 {
+			return &tc
+		}
+		for _, dev := range tc.Devs {
+			var entries []executor.TCEntry
+			for _, c := range changed {
+				entries = append(entries, executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: c.ClassID(), Handle: c.LeafHandle(), Args: c.Config().Args()})
+			}
+			for len(entries) > 0 {
+				n := min(len(entries), executor.MaxTCEntries)
+				ops = append(ops, &executor.TC{Target: tg, Entries: entries[:n:n]})
+				entries = entries[n:]
+			}
+			devices++
+		}
+		return &tc
+	}
+	nt.TC = toggle(last.target.TC)
+	if last.target.IFB != nil {
+		ifb := *last.target.IFB
+		ifb.TC = toggle(ifb.TC)
+		nt.IFB = &ifb
 	}
 	if len(ops) > 0 {
 		if _, err := e.cfg.Exec.Do(ctx, ops...); err != nil {
@@ -298,9 +320,7 @@ func (e *Engine) toggleFlaps(ctx context.Context, last *appliedState) (*appliedS
 			return last, fmt.Errorf("toggle %d flapping faults: %w", len(fl), err)
 		}
 	}
-	e.flap.committed(fl, e.cfg.Clock.Monotonic(), len(tc.Devs))
-	nt := *last.target
-	nt.TC = &tc
+	e.flap.committed(fl, e.cfg.Clock.Monotonic(), devices)
 	return &appliedState{d: last.d, target: &nt}, nil
 }
 

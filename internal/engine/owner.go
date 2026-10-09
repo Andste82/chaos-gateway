@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"time"
@@ -196,6 +197,9 @@ type inflight struct {
 type owner struct {
 	e   *Engine
 	gen uint64
+	// fresh are the addresses of the WireGuard peers the last write of a tunnel fault or a blocked endpoint read from the
+	// interfaces: what the check of the next write compiles with, next to what the polls saw.
+	fresh map[string]netip.AddrPort
 	// genPath persists the generation high-water mark (M5-01); empty keeps it per-process.
 	// genReserved is the mark already written: ensureGenReserved writes a new one once gen passes it.
 	genPath     string
@@ -594,6 +598,8 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.LastError = ""
 		o.snap.Problems = r.target.Problems
 		o.snap.WireGuardInterfaces = r.target.WireGuard
+		o.snap.PeerEndpoints = r.target.Endpoints
+		o.snap.WGActions = r.target.WGActions
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
 		o.snap.Management = r.target.Management
@@ -616,7 +622,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 			o.snap.KeaNetworks = r.target.Kea.Networks
 		}
 		o.trackCounters(r.plan, r.d.Generation)
-		o.trackFaults(r.target, r.d.Generation)
+		o.trackFaults(r.target, r.d.Generation, r.plan)
 		o.trackRules(r.target, r.d.Generation)
 		o.trackQueues(r.target, r.plan, r.d.Generation, false)
 		o.problemEvents(r.target)

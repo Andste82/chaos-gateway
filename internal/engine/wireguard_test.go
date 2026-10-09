@@ -25,6 +25,16 @@ const (
 // newWGHarness is the harness with the WireGuard testbed configuration: keys in a secrets store the
 // executor reads, the configuration provisioned.
 func newWGHarness(t *testing.T) (*harness, *secrets.Store) {
+	return newWGHarnessFile(t, "wireguard.yaml")
+}
+
+func newWGHarnessFile(t *testing.T, file string) (*harness, *secrets.Store) {
+	return newWGHarnessCfg(t, file, engine.Config{})
+}
+
+// newWGHarnessCfg is newWGHarness for a configuration file of the compiler's test data, with the engine's configuration (the
+// limits a test sets).
+func newWGHarnessCfg(t *testing.T, file string, cfg engine.Config) (*harness, *secrets.Store) {
 	t.Helper()
 	h := newHarness(t)
 	sec, err := secrets.Open(t.TempDir())
@@ -40,23 +50,26 @@ func newWGHarness(t *testing.T) (*harness, *secrets.Store) {
 	}
 	t.Cleanup(ex.Close)
 	h.ex = ex
-	raw, err := os.ReadFile("../compiler/testdata/wireguard.yaml")
+	raw, err := os.ReadFile("../compiler/testdata/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := domain.DecodeConfiguration(raw, domain.FormatYAML)
+	conf, err := domain.DecodeConfiguration(raw, domain.FormatYAML)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, errs := domain.Normalize(cfg)
+	conf, errs := domain.Normalize(conf)
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	if cfg, err = wireguard.Provision(cfg, sec); err != nil {
+	if conf, err = wireguard.Provision(conf, sec); err != nil {
 		t.Fatal(err)
 	}
-	h.base = cfg
-	e, err := engine.New(engine.Config{Store: h.st, Exec: apply.Local{E: ex}, Clock: h.clk, Secrets: sec})
+	h.base = conf
+	h.sec = sec
+	cfg.Store, cfg.Exec, cfg.Clock, cfg.Secrets = h.st, apply.Local{E: ex}, h.clk, sec
+	h.classLimit = cfg.ClassLimit
+	e, err := engine.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

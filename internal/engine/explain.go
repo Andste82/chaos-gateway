@@ -76,7 +76,9 @@ type ExplainAccess struct {
 
 // ExplainFamily is the resolution of one family.
 type ExplainFamily struct {
-	Family     string           `json:"family"`
+	Family string `json:"family"`
+	// Tunnel names the tunnel of a tunnel-family entry: "client:<id>" or "link:<id>".
+	Tunnel     string           `json:"tunnel,omitempty"`
 	Winner     *model.FaultRef  `json:"winner,omitempty"`
 	Overridden []model.FaultRef `json:"overridden,omitempty"`
 }
@@ -89,6 +91,16 @@ type ExplainKernel struct {
 	MarkUpload   string `json:"mark_upload,omitempty"`
 	MarkDownload string `json:"mark_download,omitempty"`
 	PMTUTable    int    `json:"pmtu_table,omitempty"`
+	// Tunnels are the tunnel faults in the packet path of the traffic.
+	Tunnels []ExplainTunnel `json:"tunnels,omitempty"`
+}
+
+// ExplainTunnel is a tunnel fault as compiled: the tunnel, its fault id and the endpoint its packets are found by.
+type ExplainTunnel struct {
+	Tunnel       string `json:"tunnel"`
+	FaultID      int    `json:"fault_id"`
+	Endpoint     string `json:"endpoint"`
+	MarkDownload string `json:"mark_download,omitempty"`
 }
 
 // ExplainRoute is the route the kernel gives the packet.
@@ -233,6 +245,48 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		}
 	}
 
+	// the tunnel faults of the tunnels the traffic crosses (plan §2.2.1, §2.4: the tunnel family stacks with the
+	// others): the tunnels of the source and of the destination, and the link a learned route leads into
+	crossed := world.TunnelsCrossed(sub.IP, dstIP)
+	var route *ExplainRoute
+	if dstIP.IsValid() && sub.IP.IsValid() {
+		var rerr error
+		if route, rerr = e.explainRoute(ctx, snap, sub, dstIP); rerr != nil {
+			return nil, rerr
+		}
+		out.Route = route
+	}
+	if route != nil && len(crossed) == 0 {
+		for _, wg := range snap.WireGuardInterfaces {
+			if wg.Name == route.Interface && wg.Kind == "link" {
+				crossed = append(crossed, "link:"+strings.ToLower(wg.NetworkID))
+			}
+		}
+	}
+	for _, key := range crossed {
+		r, ok := world.TunnelFaultOf(key)
+		if !ok {
+			continue
+		}
+		fam := ExplainFamily{Family: domain.FamilyTunnel, Tunnel: key}
+		ref := r.Winner.Ref("")
+		fam.Winner = &ref
+		for _, o := range r.Overridden {
+			fam.Overridden = append(fam.Overridden, o.Ref(o.Reason))
+		}
+		out.Faults = append(out.Faults, fam)
+		base := string(r.Winner.Layer) + ":" + r.Winner.ID + ":" + r.Winner.Family
+		for _, f := range snap.Faults {
+			if f.Key == base && f.Tunnel != nil {
+				if out.Kernel == nil {
+					out.Kernel = &ExplainKernel{}
+				}
+				out.Kernel.Tunnels = append(out.Kernel.Tunnels, ExplainTunnel{Tunnel: key, FaultID: f.ID, Endpoint: f.Tunnel.Endpoint,
+					MarkDownload: fmt.Sprintf("0x%08x", compiler.MarkOf(f.ID, compiler.Download))})
+			}
+		}
+	}
+
 	if w := domain.Winner(results, domain.FamilyMTU); w != nil {
 		key := string(w.Layer) + ":" + w.ID + ":" + w.Family
 		for _, f := range snap.PMTU {
@@ -257,32 +311,34 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		out.Service = "none"
 	}
 
-	// the route: the kernel decides, through the policy rules and table 100 (plan §2.2)
-	if dstIP.IsValid() && sub.IP.IsValid() {
-		iif := ""
-		if sub.Network != "" {
-			iif = interfaceOfNetwork(snap, sub.Network)
+	return out, nil
+}
+
+// explainRoute asks the kernel for the route of the traffic (`ip route get`, through the policy rules and table
+// 100, plan §2.2); nil when it cannot be asked.
+func (e *Engine) explainRoute(ctx context.Context, snap *Snapshot, sub domain.Subject, dst netip.Addr) (*ExplainRoute, error) {
+	iif := ""
+	if sub.Network != "" {
+		iif = interfaceOfNetwork(snap, sub.Network)
+	}
+	ans, err := e.RouteFor(ctx, dst.String(), sub.IP.String(), iif)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		ans, err := e.RouteFor(ctx, dstIP.String(), sub.IP.String(), iif)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			e.cfg.Log.Warn("cannot read the route for explain", "dst", dstIP, "error", err)
-		} else {
-			r := &ExplainRoute{Gateway: ans.Gateway, Interface: ans.Interface, Unreachable: ans.Unreachable, Error: ans.Error}
-			switch ans.Table {
-			case "", "main":
-				r.Table = 254
-			default:
-				if n, err := strconv.Atoi(ans.Table); err == nil {
-					r.Table = n
-				}
-			}
-			out.Route = r
+		e.cfg.Log.Warn("cannot read the route for explain", "dst", dst, "error", err)
+		return nil, nil
+	}
+	r := &ExplainRoute{Gateway: ans.Gateway, Interface: ans.Interface, Unreachable: ans.Unreachable, Error: ans.Error}
+	switch ans.Table {
+	case "", "main":
+		r.Table = 254
+	default:
+		if n, err := strconv.Atoi(ans.Table); err == nil {
+			r.Table = n
 		}
 	}
-	return out, nil
+	return r, nil
 }
 
 func deref[T any](p *T) T {

@@ -151,6 +151,16 @@ type Snapshot struct {
 	TCDevs       []string
 	QueueEpochs  map[string]int64
 	CounterEpoch int64
+	// PeerEndpoints are the peers a tunnel fault or a blocked endpoint selects by address, with the endpoint
+	// the last applied target was compiled with ("" when it was not known): a peer that is seen elsewhere
+	// makes the engine apply again (wireguard.go). TunnelIFB is the IFB device of the tunnel faults, empty
+	// without one.
+	PeerEndpoints map[string]string
+	// WGActions are the WireGuard-action overlays that change something in the last applied target.
+	WGActions []compiler.WGActionInfo
+	TunnelIFB string
+	// TunnelUplink is the interface whose ingress filters feed the IFB, empty without one.
+	TunnelUplink string
 	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
 	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
 	ObserveError string

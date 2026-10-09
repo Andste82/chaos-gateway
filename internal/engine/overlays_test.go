@@ -453,12 +453,10 @@ func TestAnInvalidOverlayIsRefusedWithoutChangingAnything(t *testing.T) {
 func TestOverlaysOfLaterMilestonesAreUnsupported(t *testing.T) {
 	h := startedWithRevision(t)
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\nprofile: bad-lte":                                   "M11",
-		"target: {network: IoT}\ndns: {names: [example.com], action: nxdomain}":      "M20",
-		"target: {network: IoT}\ntls: {case: expired}":                               "M21",
-		"target: {network: IoT}\ndhcp: {action: silence}":                            "M23",
-		"fault: {family: tunnel, tunnel: {client: x}, latency: 10ms}":                "M10",
-		"wireguard: {action: disable, client: 8a2c9d3e-1111-4222-8333-444455556666}": "M10",
+		"target: {network: IoT}\nprofile: bad-lte":                              "M11",
+		"target: {network: IoT}\ndns: {names: [example.com], action: nxdomain}": "M20",
+		"target: {network: IoT}\ntls: {case: expired}":                          "M21",
+		"target: {network: IoT}\ndhcp: {action: silence}":                       "M23",
 	} {
 		_, err := h.put(alice, body)
 		var ue *engine.UnsupportedOverlayError

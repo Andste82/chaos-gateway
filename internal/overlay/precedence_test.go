@@ -13,10 +13,13 @@ import (
 // resolution sees is what was written, replaced, expired or reset, in the order it happened.
 
 const (
-	idLab      = "2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b" // device lab-host, 10.50.0.10
-	idSensors  = "3f4a5b6c-7d8e-4f9a-0b1c-2d3e4f5a6b7c"
-	idFaultNet = "7d8e9f0a-1b2c-4d3e-4f5a-6b7c8d9e0f1a" // iot-latency, 100 ms on the network IoT
-	idFaultDev = "8e9f0a1b-2c3d-4e4f-5a6b-7c8d9e0f1a2b" // esp-latency, 20 ms / 20 ms on esp32-42
+	idLab       = "2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b" // device lab-host, 10.50.0.10
+	idSensors   = "3f4a5b6c-7d8e-4f9a-0b1c-2d3e4f5a6b7c"
+	idFaultNet  = "7d8e9f0a-1b2c-4d3e-4f5a-6b7c8d9e0f1a" // iot-latency, 100 ms on the network IoT
+	idFaultDev  = "8e9f0a1b-2c3d-4e4f-5a6b-7c8d9e0f1a2b" // esp-latency, 20 ms / 20 ms on esp32-42
+	idFaultWANB = "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5f" // bad-wan-site-b, a tunnel fault of the link site-b, 70 ms
+	idClientRA  = "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" // the client lab-rA of the hub, with the network 10.50.0.0/24
+	idLinkB     = "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f" // the link site-b
 )
 
 var (
@@ -193,6 +196,53 @@ func TestE9ABadLTEOverlayOnTheNetworkReachesEveryDeviceOfIt(t *testing.T) {
 	}
 	if win := f.impairment(toServer("tcp", 443)); win != nil {
 		t.Errorf("the profile outlived its overlay: %+v", win)
+	}
+}
+
+// E10 (plan §2.4, M10): a device fault in the configuration and the tunnel fault of a client in an overlay are faults of two
+// families, so both apply to A's traffic to a host behind the client: the device fault resolves as ever, the tunnel fault
+// is the winner of the tunnel A's traffic crosses, and the two do not override each other. The compiler's golden file
+// (internal/compiler/testdata/e10.golden.txt) shows what the kernel gets: two ids and two classes, whose delays add up.
+func TestE10ADeviceFaultAndTheTunnelFaultOfAClientStack(t *testing.T) {
+	f := newFixture(t)
+	f.keepFaults(idFaultDev, idFaultWANB)
+	tun := f.put(admin, `{fault: {family: tunnel, tunnel: {client: lab-rA}, latency: 50ms}}`).Overlay
+	toHost := domain.Query{Source: subjectA, DestIP: netip.MustParseAddr("10.50.0.10"), Protocol: "tcp", Port: 22}
+	w := f.world()
+	res := w.Resolve(toHost)
+	if win := domain.Winner(res, domain.FamilyImpairment); win == nil || win.ID != idFaultDev || win.Layer != domain.LayerConfig {
+		t.Fatalf("impairment winner %+v", win)
+	}
+	crossed := w.TunnelsCrossed(subjectA.IP, toHost.DestIP)
+	if len(crossed) != 1 || crossed[0] != "client:"+idClientRA {
+		t.Fatalf("A's traffic crosses %v", crossed)
+	}
+	r, ok := w.TunnelFaultOf(crossed[0])
+	if !ok || r.Winner.ID != tun.Id.String() || r.Winner.Layer != domain.LayerOverlay || len(r.Overridden) != 0 {
+		t.Fatalf("tunnel result %+v", r)
+	}
+	// neither overrides the other: the device fault still wins its family, and traffic that leaves through no tunnel
+	// meets the device fault alone
+	if win := f.impairment(toServer("tcp", 443)); win == nil || win.ID != idFaultDev {
+		t.Errorf("the device fault changed: %+v", win)
+	}
+	if got := w.TunnelsCrossed(subjectA.IP, netip.MustParseAddr("203.0.113.10")); len(got) != 0 {
+		t.Errorf("the traffic to the server crosses %v", got)
+	}
+	// a tunnel fault of another client does not touch the tunnel of this one; a tunnel fault in the configuration loses to the overlay
+	f.put(token("bob"), `{fault: {family: tunnel, tunnel: {link: site-b}, latency: 5ms}}`)
+	if r, _ := f.world().TunnelFaultOf("client:" + idClientRA); r.Winner.ID != tun.Id.String() {
+		t.Errorf("%+v", r)
+	}
+	if r, ok := f.world().TunnelFaultOf("link:" + idLinkB); !ok || r.Winner.Layer != domain.LayerOverlay || len(r.Overridden) != 1 || r.Overridden[0].Layer != domain.LayerConfig {
+		t.Errorf("the overlay on the link must beat the configured fault of the link: %+v", r)
+	}
+	// the overlay goes with its TTL or its deletion, and the tunnel is unimpaired again
+	if _, err := f.store.Delete(tun.Id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.world().TunnelFaultOf("client:" + idClientRA); ok {
+		t.Error("the tunnel fault outlived its overlay")
 	}
 }
 

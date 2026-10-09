@@ -85,10 +85,7 @@ func TestATunnelFaultHasAClassOnEachSideOfTheTunnelAndIsFoundByTheEndpointOfItsP
 		t.Errorf("IFB class: %+v", c)
 	}
 	wantFilter := "filter replace dev ifb-cgw parent 1: handle " + fmt.Sprint(f.ID) + " protocol ip prio 1 flower ip_proto udp src_ip 198.51.100.2 src_port 51820 flowid " + c.ClassID()
-	var got []string
-	for _, l := range tg.IFB.TC.Lines(IFBDev) {
-		got = append(got, l)
-	}
+	got := tg.IFB.TC.Lines(IFBDev)
 	if !contains(got, wantFilter) {
 		t.Errorf("no flower filter on the IFB:\n%s\nwant %s", strings.Join(got, "\n"), wantFilter)
 	}
@@ -129,12 +126,12 @@ func TestATunnelFaultHasAClassOnEachSideOfTheTunnelAndIsFoundByTheEndpointOfItsP
 	}
 	rules := ruleJSON(chain)
 	// mark = (mark & 0xfffe000f | id << 4) | 0x10000: the id of the fault and the direction bit of a packet towards the peer
-	wantMark := fmt.Sprintf(`[{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"|":[{"\u0026":[{"meta":{"key":"mark"}},%d]},{"\u003c\u003c":[%d,4]}]},65536]}}}]`, uint32(markKeepOnTunnelWrite), f.ID)
+	wantMark := fmt.Sprintf(`[{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"|":[{"\u0026":[{"meta":{"key":"mark"}},%d]},{"\u003c\u003c":[%d,4]}]},65536]}}}]`, markKeepOnTunnelWrite, f.ID)
 	if len(rules) != 3 || rules[0] != wantMark || !strings.Contains(rules[1], f.CounterDown) || !strings.Contains(rules[2], `"return"`) {
 		t.Errorf("tunnel chain:\n%s\nwant %s", strings.Join(rules, "\n"), wantMark)
 	}
 	if markKeepOnTunnelWrite != 0xfffe000f || markKeepOnTunnelWrite&markDirMaskBits != 0 {
-		t.Errorf("the mask that clears id and direction is %#x", uint32(markKeepOnTunnelWrite))
+		t.Errorf("the mask that clears id and direction is %#x", markKeepOnTunnelWrite)
 	}
 	// no mark_<id> chain: the prerouting lookup does not classify the encrypted UDP
 	if findChain(tg, MarkChainName(f.ID)) != nil {

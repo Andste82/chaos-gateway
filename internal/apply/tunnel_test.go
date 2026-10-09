@@ -66,7 +66,7 @@ func (x *tunEnv) overlay(body string) model.Overlay {
 
 func (x *tunEnv) compileWith(overlays ...model.Overlay) *compiler.Target {
 	x.t.Helper()
-	tg := x.wgEnv.env.compile(func(_ *model.Configuration, in *compiler.Input) {
+	tg := x.env.compile(func(_ *model.Configuration, in *compiler.Input) {
 		keys, err := wireguard.InterfaceKeys(x.cfg, x.sec)
 		if err != nil {
 			x.t.Fatal(err)
@@ -215,7 +215,7 @@ func TestATunnelFaultMakesTheIFBItsTreeAndTheIngressFiltersInOrder(t *testing.T)
 	tree := opIndex(p, tcOn("ifb-cgw", "class"))
 	ing := opIndex(p, tcOn("wan0", "filter"))
 	nft := opIndex(p, func(op executor.Operation) bool { _, ok := op.(*executor.NftApply); return ok })
-	if !(assign >= 0 && assign < add && add < up && up < tree && tree < ing && ing < nft) {
+	if assign < 0 || assign >= add || add >= up || up >= tree || tree >= ing || ing >= nft {
 		t.Errorf("order: assign %d, add %d, up %d, IFB tree %d, ingress %d, nft %d\n%s", assign, add, up, tree, ing, nft, strings.Join(p.Summary, "\n"))
 	}
 	// what the kernel holds

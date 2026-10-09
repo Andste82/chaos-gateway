@@ -100,7 +100,9 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				break
 			}
 			done = d.Generation
-			target := compiler.Compile(e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, pmtu, retirer.IDs()))
+			in := e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, ids, pmtu, retirer.IDs())
+			e.withPeerEndpoints(ctx, &in)
+			target := compiler.Compile(in)
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			var plan *apply.Plan
@@ -207,6 +209,23 @@ func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compile
 		in.Keys = keys
 	}
 	return in
+}
+
+// withPeerEndpoints gives the compiler the addresses the WireGuard peers are reached at, when something
+// in the input selects a peer's encrypted UDP by its address (tunnel faults, blocked endpoints). They are
+// read from the interfaces right before the compile, so a fault that is written answers for the peer's
+// address of this moment, not of the last poll. A failed read leaves the input as it is: the peers are
+// then reached at their configured endpoints, and the next apply tries again.
+func (e *Engine) withPeerEndpoints(ctx context.Context, in *compiler.Input) {
+	if !compiler.NeedsPeerEndpoints(in.Config, in.Overlays) {
+		return
+	}
+	eps, err := e.readPeerEndpoints(ctx)
+	if err != nil {
+		e.cfg.Log.Warn("cannot read the addresses of the WireGuard peers: tunnel faults use the endpoints known", "error", err)
+		return
+	}
+	in.PeerEndpoints = eps
 }
 
 type appliedState struct {
@@ -342,8 +361,9 @@ func sameFaultStructure(old, next *compiler.Target) bool {
 			FaultIDs map[string]int
 			PMTU     []compiler.PMTUFault
 			TC       *compiler.TCTarget
+			IFB      *compiler.IFBTarget
 			Classify map[string]string
-		}{n, t.Faults, t.FaultIDs, t.PMTU, t.TC, t.ClassifyMaps})
+		}{n, t.Faults, t.FaultIDs, t.PMTU, t.TC, t.IFB, t.ClassifyMaps})
 		return string(b)
 	}
 	return strip(old) == strip(next)

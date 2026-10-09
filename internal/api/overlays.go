@@ -65,7 +65,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	for _, f := range s.cfg.Engine.Flaps() {
 		oc.flaps[f.Key] = f
 	}
-	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil) {
+	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
 			s.log.Warn("cannot read the fault counters", "error", err)
@@ -209,6 +209,11 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 			fam = string(*ov.Fault.Family)
 		}
 		st := oc.effectOf("overlay", ov.Id.String(), fam)
+		if fam == "tunnel" && st == model.EffectStateEffective && len(oc.faultsOf("overlay", ov.Id.String())) == 0 {
+			// the fault wins but nothing of it is in the packet path: its peer is not on an interface or has no
+			// address yet (the compiler says so), or it impairs nothing
+			st = model.EffectStateDisabled
+		}
 		ov.State = &st
 		ov.Counters = oc.counterOf("overlay", ov.Id.String())
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
@@ -218,6 +223,29 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 	if ov.Kind == model.OverlayKindRule {
 		return oc.overlayRule(ov)
 	}
+	if ov.Kind == model.OverlayKindWireguard {
+		return oc.overlayWireGuard(ov)
+	}
+	return ov
+}
+
+// overlayWireGuard completes a WireGuard action: effective while it changes something in the kernel (the peer is
+// off its interface, has the key nobody holds, or its endpoint is blocked), disabled while it does not (its peer
+// is not on an interface, or the address of the peer to block is not known yet). A blocked endpoint counts
+// the packets it dropped.
+func (oc overlayContext) overlayWireGuard(ov model.Overlay) model.Overlay {
+	st := model.EffectStateDisabled
+	for _, a := range oc.snap.WGActions {
+		if !strings.EqualFold(a.Overlay, ov.Id.String()) {
+			continue
+		}
+		st = model.EffectStateEffective
+		if a.Counter != "" && oc.counters != nil {
+			v := oc.counters[a.Counter]
+			ov.Counters = &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.FaultEpochs[engine.WGActionKey(a.Overlay)]}
+		}
+	}
+	ov.State = &st
 	return ov
 }
 

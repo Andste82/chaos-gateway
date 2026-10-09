@@ -22,6 +22,9 @@ func TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate(t 
 	if tg.HasErrors() {
 		t.Fatalf("%+v", tg.Problems)
 	}
+	// the golden file e9 is what the kernel gets: a fault id per device and one for the addresses no device owns, each with the
+	// profile's rate in both directions, a class of its own on every interface, and the device addresses classified into their ids
+	goldenText(t, "e9", describeFaults(tg))
 	a := faultOf(t, tg, o.Id.String(), devESP42)
 	b := faultOf(t, tg, o.Id.String(), devESP43)
 	shared := faultOf(t, tg, o.Id.String(), "")

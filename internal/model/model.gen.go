@@ -1077,6 +1077,24 @@ func (e FaultRefLayer) Valid() bool {
 	}
 }
 
+// Defines values for FlapStatePhase.
+const (
+	FlapStatePhaseDown FlapStatePhase = "down"
+	FlapStatePhaseUp   FlapStatePhase = "up"
+)
+
+// Valid indicates whether the value is a known member of the FlapStatePhase enum.
+func (e FlapStatePhase) Valid() bool {
+	switch e {
+	case FlapStatePhaseDown:
+		return true
+	case FlapStatePhaseUp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FlowProtocol.
 const (
 	FlowProtocolIcmp  FlowProtocol = "icmp"
@@ -3757,6 +3775,24 @@ type FaultView struct {
 	State EffectState `json:"state"`
 }
 
+// FlapState Where a flapping fault is in its cycle (up for `up`, then a blackout for `down`, starting up).
+// All queues of one fault and direction flap in step. The phase is the engine's clock's, not the
+// configuration's: a gateway that restarts starts every flapping up. A boundary is made within
+// 100 ms of its time on a native or KVM machine (plan §2.10), or right after the apply it fell into.
+type FlapState struct {
+	// NextChangeAt When the schedule ends the phase.
+	NextChangeAt time.Time `json:"next_change_at"`
+
+	// Phase The phase the kernel holds now.
+	Phase FlapStatePhase `json:"phase"`
+
+	// Since When the queue entered the phase.
+	Since time.Time `json:"since"`
+}
+
+// FlapStatePhase The phase the kernel holds now.
+type FlapStatePhase string
+
 // Flapping Timed blackout, starting with `up`.
 type Flapping struct {
 	// Down Example: 90s
@@ -4756,10 +4792,13 @@ type QueueStats struct {
 	Direction *QueueStatsDirection `json:"direction,omitempty"`
 
 	// DroppedPackets Packets the queue dropped, the loss the fault configures and the packets that did not fit into the queue limit.
-	DroppedPackets *int64  `json:"dropped_packets,omitempty"`
-	Epoch          *int64  `json:"epoch,omitempty"`
-	Interface      *string `json:"interface,omitempty"`
-	Overlimits     *int64  `json:"overlimits,omitempty"`
+	DroppedPackets *int64 `json:"dropped_packets,omitempty"`
+	Epoch          *int64 `json:"epoch,omitempty"`
+
+	// Flapping Set for the queues of a flapping fault (plan §2.5).
+	Flapping   *FlapState `json:"flapping,omitempty"`
+	Interface  *string    `json:"interface,omitempty"`
+	Overlimits *int64     `json:"overlimits,omitempty"`
 
 	// SentBytes Bytes of the packets that left the queue.
 	SentBytes *int64 `json:"sent_bytes,omitempty"`

@@ -435,7 +435,7 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
   isolation. Docker that starts after the last apply is not noticed until the next one.
 - **Gateway protection** closes the UI port for everything but the management sources and drops
   all but DHCP, DNS and ping from test networks. SSH stays with the operating system.
-- Not yet compiled: the PMTU mirror tables (M10).
+- The PMTU mirror tables are M10's ("Extended faults (M10)", "MTU and PMTUD").
 - A failed `chaosgw apply --file` without `--state-dir` leaves the kernel as the failed apply left
   it; with `--state-dir` the engine restores the previous revision.
 - `Rollback` and `Observe` return when the owner has taken the command; `Barrier` waits for the
@@ -1879,8 +1879,8 @@ real outage does as well; the test only has to stay out of that moment.
 
 Plan §2.5 and M10. This section describes the non-tunnel half of M10, built on the fault engine of M8a
 and M8b: rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott),
-blackout and flapping. Tunnel faults, the WireGuard-action overlays, MTU and PMTUD (and E10) follow in the
-next steps of the milestone and are not described here. What was already there and is only tested now:
+blackout and flapping, and, in its own subsection below, the MTU family (MTU and PMTUD). Tunnel faults, the
+WireGuard-action overlays (and E10) follow in the next steps of the milestone and are not described here. What was already there and is only tested now:
 the model and the validation (`NetemParams` has had every one of these since Phase 1), the netem leaf with
 its complete parameter set (`compiler/netem.go`), the per-device fault ids of D18 (`compiler/faults.go`) and
 the class limit with `capacity_exceeded`.
@@ -2042,6 +2042,109 @@ Compiler and capacity were M8a's; M10 measures them.
   to 2.3 s behind the burst (300 packets are 2.4 s). A sample of the queue's length does not work as the
   evidence: reading it takes longer than the queue lives under emulation.
 
+### MTU and PMTUD (plan §2.5, spike S13)
+
+The MTU family caps the packet size of the traffic it selects, in one of three modes. It resolves on its own
+(plan §2.4: the families are independent, so a device can have an impairment winner and an MTU winner at the
+same time), has the same selectors as the impairment family (device, group, network, any; destination;
+protocol and ports) and the same four-level lookup (`domain.World.Table(src, FamilyMTU)` was there since M8a).
+The compiler is `internal/compiler/pmtu.go`.
+
+| Mode | What the compiler writes | What happens to a packet that is longer than `size` |
+|---|---|---|
+| `icmp` | mark bits 17-19 = the index of a PMTU mirror table, an `ip rule` on that mark, the mirror table | the kernel itself answers "fragmentation needed, mtu `size`" to the sender, in both directions (a forwarded DF packet is checked against the route's MTU in `ip_forward`) |
+| `blackhole` | a rule in the fault's chain: `meta length > size`, counter, `drop` | dropped without a word: no ICMP, a transfer of full-size segments stalls |
+| `mss_clamp` | a rule in the fault's chain: `tcp flags & syn == syn`, `tcp option maxseg size > size - 40`, set it to `size - 40` | nothing: only the MSS option of a SYN or SYN-ACK is lowered, so neither side sends a segment that makes a packet longer than `size` (a connection with timestamps: 12 bytes of its own options come out of the segment). UDP, ICMP and existing connections are not touched |
+
+**What the VM proved first** (kernel 6.8.0-142, iproute2 6.19, nftables 1.1.6, `make vm-exec`):
+
+- `ip route replace D dev X table 103 proto 77 mtu lock 1280` is accepted, a second `replace` of the same key
+  with another size changes the route in place (and one without `mtu` removes the size); `ip -j route show`
+  prints `"metrics":[{"mtu":1280}]` and **does not show the lock**, even with `-d` (the plain `ip -d route`
+  does: `mtu lock 1280`). The verify therefore compares the size, not the lock (P2-M10-04).
+- `ip rule add priority 950 fwmark 0x20000/0xe0000 table 103 protocol 77` reads back as
+  `{"fwmark":"0x20000","fwmask":"0xe0000","table":"103"}`; the apply's `stateRule` joins the two the way the
+  compiler writes them (`0x20000/0xe0000`).
+- A `jump` from the base chain to a regular chain whose only rules are verdict-map lookups (`goto` elements)
+  comes back to the base chain's next rule when the goto target ends with `return`: the MTU lookup is the
+  first of two independent lookups in the `classify` chain. The impairment lookup after it still ends the
+  chain with its goto.
+- `nft` rewrites `meta mark & 0xfff1ffff | 0x20000` into the canonical `& 0xfff3ffff` with an xor on its listing;
+  verify compares rule hashes (the comment), not the printed expressions, so this does not matter.
+- The ICMP mode with a ping of 1400 bytes and DF: "Frag needed and DF set (mtu = 1280)" from the gateway; the black
+  hole: 100 % loss, nothing in return; the clamp: the server's accepted socket reports `TCP_MAXSEG` 1348 for a
+  clamp of 1360 (1400 minus 40 minus the 12 bytes of the timestamp option, the other devices 1448).
+- **BIRD attaches a kernel protocol to a routing table of its own**: a second `protocol kernel` on `master4`
+  is refused (`Kernel syncer (gw_table) already attached to table master4`). A mirror therefore has
+  `ipv4 table pmtu103;`, a `protocol pipe` from `master4` into it with the same export filter as the policy table's
+  protocol, and `protocol kernel gw_pmtu103` with `export filter { krt_mtu = 1280; krt_lock_mtu = true; accept; }`
+  (`internal/bird/render.go`, `bird.Config.Mirrors`).
+
+**Classification.** With at least one MTU winner the classify chain jumps to `classify_pmtu` after it wrote the
+direction bit; that chain has the four lookups (`pmtu_devdestport_*`, `pmtu_devdest_*`, `pmtu_devport_*`,
+`pmtu_dev_*`: interval maps on the conntrack original tuple, built by the same `classElements` as the impairment
+maps) whose elements go to the chain `pmtu_<hash of the winner's key>`. The chain counts the packet in
+`pmtu_<hash>_up` or `_down` (by `ct direction`) and does the mode's work. Without an MTU fault nothing of this exists
+(the classify chain has the rules it had before; the golden files of M7 to M9 did not change).
+
+**Mark bits 17-19** hold the mirror table's index (1 to 7), written by the chain with `mark & 0xfff1ffff | index << 17`
+(`pmtuKeep`: every other bit, the id, the direction, the service selection and the duplication bit, survives;
+`TestThePMTUMarkBitsAreTheOnesOfThePlanAndOverlapNothing`). The index belongs to a **size**: two faults of the same
+size share one table. `Input.PMTUTables` is the allocation of the previous compile (the engine feeds
+`Target.PMTUTables` back, like the fault ids): a size that stays keeps its index while others come and go, a new size
+takes the lowest free one, and the eighth distinct size is `capacity_exceeded` (the message names the scope that needs
+the most, like the class limit's). Blackhole and clamp faults need no table and do not count.
+
+**Mirror tables 103 to 109** (table 100 is the policy table, 102 the service table, 101 stays free; the executor's range
+is 100 to 110) hold a copy of **every route of table 100** (connected networks, the uplink, downstream routes,
+WireGuard networks and the networks behind clients, the default route) with `mtu lock <size>`
+(`executor.Route.MTU`), and `ip rule priority 950 fwmark <index<<17>/0xe0000 lookup <table>` selects them, after the
+service selection (900: `ServiceRulePriority`) and before the policy rules (1000). A packet of a download is
+classified by the conntrack original tuple, so it carries the mark of its device too and the rule sends it
+through the mirror (the route to the device's network then has the size). That is also why the server learns the
+size: the kernel's answer for a reply goes to the server, which caches it for the gateway's NAT address (plan §2.5
+and risk 23, the documented side effect; `TestAnIcmpMTUFault...` shows the server's cache, and measures the control device
+before the fault, because after it the server's cache would make the control look limited too).
+
+**Learned routes.** `Target.Bird` is rendered once without and once with the mirrors; `bird.Config.Mirrors` is
+the list of (table, size). Every mirror gets a table, a pipe and a kernel protocol of its own, with the export filter
+of the policy table's protocol (`export where source ~ [ RTS_BGP, ... ]`, so imported external routes are included, never
+the connected or static routes of BIRD itself), and the route attributes `krt_mtu`, `krt_lock_mtu`. A size that comes or
+goes changes the configuration, which is a `birdc configure` (the sessions are kept: `TestLearnedRoutesAreExportedIntoThePMTUMirrorTablesToo`).
+Without protocols there is nothing to export and no mirror in the file.
+
+**Apply and verify.** A route is `Table|Dst|Via|Dev|Type` (`routeKey`) plus the size (`routeSig`): the plan treats a
+wanted route whose size differs as a route to **replace** (`ip route replace` changes the size in place), never as one
+to delete and add, so a table whose size changes has no moment without its route. The verify compares the signature
+(`missing 10.10.0.0/24 dev br-iot mtu lock 1280 table 103`; the lock itself is not visible in `ip -j`), the rules with their
+fwmark (the preview line is `rule 950 fwmark 0x20000/0xe0000 iif  lookup 103`). Only routes with the executor's protocol tag
+are ever deleted, so BIRD's routes in the mirror tables are left to BIRD. The nft side is verified like every chain: by
+the hash of the rules.
+
+**Removal found a defect.** The transaction deleted a removed chain before the map that names it with a verdict, and the real
+kernel refuses that (`Could not process rule: Device or resource busy`): the last MTU fault's maps and chains go together.
+`Nft.Transaction` empties a removed map before it deletes any chain; the simulated kernel now refuses to delete a chain that a
+map element or a rule still names, and `TestTheLastMTUFaultTakesItsMapsAndChainsAlong` fails without the fix.
+
+**Engine, API.** `Snapshot.PMTU` and `PMTUTables`; the counters of an MTU overlay or configured fault are the packets classified
+into it in both directions (`counters` of the overlay: the same `Counter` as an impairment's; the black hole's drops are the counter
+`pmtu_<hash>_drop` of the fault, read with the others by `Engine.ReadCounters`). `explain` has the MTU family's winner as
+for every family and `kernel.pmtu_table` (the index; absent for a black hole, a clamp and when no MTU fault matches; `fault_id` and the
+marks are absent when only an MTU fault matches). `GET /capabilities` lists the family and the feature `faults.mtu`. A new
+overlay or revision whose MTU faults need an eighth table is refused with `capacity_exceeded`, in the preview as well.
+
+**Where it is weaker than it looks.**
+
+- The black hole drops in the classify chain (prerouting), before the access rules of M9 run in the forward chain: a packet that
+  is both too long and rejected by a rule is dropped silently instead of being rejected, and its drop is counted by the MTU fault
+  (P2-M10-04).
+- `meta length` is the length of the skb, so a black hole is only right where the kernel does not merge packets (GRO). The compiler
+  switches the offloads off on the ports, the bridges and the uplink (plan §3.4), and a WireGuard interface has none.
+- An icmp fault limits what the gateway forwards. A packet to the gateway itself (DNS proxy, UI) is not routed through a mirror
+  table; the answers of the DNS proxy come back through `svc0` and are classified, but the service rule (900) wins over the PMTU rule
+  (950) for traffic selected for a service.
+- IPv4 only, like the rest.
+
 ### Tests
 
 The compiler: `internal/compiler/extended_test.go` (E9, the draw and the leaf that never duplicates, the
@@ -2111,6 +2214,40 @@ of 600 probes has about 25 of them.
 and the eight measurement tests ran on both. A kernel other than the default is `make vm-down`, then
 `go run ./tools/testvm vm up -kernel 7.0.0-38-generic` (the guest uses the container's iproute2 6.19 and nftables
 1.1.6 on both).
+
+### Tests of the MTU family
+
+Compiler (`internal/compiler/pmtu_test.go`): the mark bits overlap nothing, an icmp winner with its chain, jump, map, mirror
+routes and rule, black hole and clamp without a table, no MTU fault leaves the target as it was, the families resolve
+independently (a device's winner beats the network's, a destination refines it, an impairment next to it), seven sizes fit and
+the eighth is `capacity_exceeded`, a size keeps its table, BIRD gets one kernel protocol per mirror, a hostname selector is
+reported; the golden `pmtu.golden.txt` (`TestGoldenPMTUTarget`: maps, chains, mirror routes and rules). The kernel gate
+`TestEveryCompiledRulesetIsAcceptedByTheKernel` has the scenario `pmtu`; `internal/bird` tests the mirror configuration
+(and `bird -p` parses it), `internal/executor` the line `mtu lock N`, its validation and, on the real kernel, the write, the
+read-back, the replace in place, the rule on the mark and `ip route get ... mark` (`TestARouteWithALockedPathMTUIsWrittenReplacedInPlaceAndDeleted`).
+The apply on the simulated kernel (`internal/apply/pmtu_test.go`): the mirror and its rule, a size that changes without a
+delete, removal, the last fault taking its maps and chains along, damage found and repaired, the preview. The engine
+(`internal/engine/pmtu_test.go`): the table in the kernel when the write returns and its removal, the eighth size refused with
+nothing changed, explain, the preview of eight configured faults.
+
+Real kernel (`integration_pmtu_test.go`, `integration_pmtu_wg_test.go`), run in the persistent VM with
+`make vm-test ARGS='-run "TestAnIcmpMTUFault|TestABlackholeDrops|TestAnMSSClamp|TestTwoMTUFaults|TestAPMTUFault|TestLearnedRoutesAreExported" -tags testbed -test-timeout 90m -vm-timeout 3h ./internal/engine'`.
+There is nothing statistical in them (a transfer completes or stalls, the kernel answers or it does not, a segment has a size), so
+the same assertions run under emulation and on a native or KVM kernel.
+
+| Test | What it shows |
+|---|---|
+| `TestAnIcmpMTUFaultMakesTheKernelAnswerLargePacketsAndTheTransferCompletes` | A (1280, icmp): the DF ping of 1400 bytes gets "Frag needed and DF set (mtu = 1280)" from the gateway, 1200 bytes go through, the control B is not limited (measured first, as in S13), A's 300 KB transfer completes, the server's route cache for the gateway holds `mtu 1280` (the download is cut: the documented side effect), the mirror table has only locked routes and the rule is on the mark, the counters count, and when the overlay goes the table is gone and A is no longer limited |
+| `TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls` | A (1280, blackhole): the large ping gets nothing back (no ICMP, no mtu in the output), the small one passes, B passes, A's transfer receives 0 bytes in 8 s while B's completes, the drop counter counts, the server has no cache entry, no mirror table; the transfer completes after the overlay is deleted |
+| `TestAnMSSClampLimitsTheSegmentsOfTheSelectedDeviceOnly` | A (1400, clamp): the connection negotiates 1348 on both sides (1360 minus the 12 bytes of timestamps), B 1448; a ping of 1472 bytes from A is not touched; the server's cache stays empty |
+| `TestTwoMTUFaultsAndAnImpairmentOfTheSameDeviceDoNotInterfere` | A (icmp 1280) with an impairment, B (blackhole 1000), C nothing: each is limited by its own fault only, the delay of A is still there |
+| `TestAPMTUFaultAppliesToTrafficThroughATunnel` | a fault on a network limits traffic into a WireGuard client network: a packet that fits the tunnel (1420) but not the fault is answered with `mtu = 1280`, and what fits goes through; the mirror table holds the route into the tunnel |
+| `TestLearnedRoutesAreExportedIntoThePMTUMirrorTablesToo` | BGP over a link: the learned route is in table 103 with `proto bird` and the size locked, traffic to the learned network is limited, a second size feeds table 104 without losing the session, a size that goes empties its table, the main table never has the route |
+
+What the persistent VM showed (6.8.0-142, emulation, one run each): the transfers of 300 KB took 0.4 to 1.0 s; the black hole
+received 0 bytes in 8 s. One defect was found: the removal of the last MTU fault was refused by the kernel (busy chain), see
+above. Two assertions of the tests were wrong and fixed: the client's Python thread printed a traceback into the JSON when the
+black hole stalled it, and a device that was told a path MTU keeps it in its own route cache (the tests flush it).
 
 ## Generated code
 

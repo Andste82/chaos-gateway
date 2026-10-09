@@ -342,7 +342,7 @@ A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a c
 | Queue limit | packets | netem limit | per device (D18). By default the compiler computes the limit from delay × rate, where rate is the fault's rate or, without one, the egress interface's link speed capped at 1 Gbit/s, and caps the result by a memory budget per interface (netem's default of 1000 packets causes tail drop at high delay × rate, e.g. satellite); an explicit value models small buffers |
 | Blackout | on/off | netem loss 100 % | "offline"; part of the effective fault configuration, so it follows the same precedence and hits running connections too; fault counters show the dropped packets |
 | Flapping | up/down durations | timed blackout | "intermittent connectivity" |
-| MTU / PMTUD | max. packet size; mode ICMP / black hole / MSS clamp | policy route with `mtu lock` (ICMP), nftables length drop (black hole), TCP MSS rewrite (clamp) | spike S13: with ICMP the kernel itself answers "fragmentation needed, mtu N" in both directions; black hole stalls TCP transfers. **Side effect:** the server caches the reduced path MTU for the shared NAT address, so other devices talking to the same server are affected until the cache expires (Linux: 10 min). MSS clamp affects only TCP of the selected device and has no such side effect. The device's own interface MTU cannot be changed |
+| MTU / PMTUD | max. packet size; mode ICMP / black hole / MSS clamp | policy route with `mtu lock` (ICMP), nftables length drop (black hole), TCP MSS rewrite (clamp) | spike S13: with ICMP the kernel itself answers "fragmentation needed, mtu N" in both directions (the mirror tables 103–109 hold a copy of every route of table 100, learned routes included, each with `mtu lock N`; at most seven distinct sizes); black hole stalls TCP transfers (the drop is in the classification chain, P2-M10-04); the clamp sets the MSS of a SYN to N − 40. **Side effect:** the server caches the reduced path MTU for the shared NAT address, so other devices talking to the same server are affected until the cache expires (Linux: 10 min). MSS clamp affects only TCP of the selected device and has no such side effect. The device's own interface MTU cannot be changed |
 
 TCP reset and silent drop of matching traffic are access actions (§2.4), not faults.
 
@@ -813,7 +813,7 @@ Server reply ──► prerouting on uplink:
     |---|---|
     | 4–15 | effective-fault id, 12 bits: up to 4095 ids at the same time (widened from 8 bits because of per-device queues, D18) |
     | 16 | direction: 0 = packet in the connection's original direction (upload of the initiator), 1 = reply (download), from `ct direction` |
-    | 17–19 | PMTU table index: 0 = none, 1–7 select one of up to seven PMTU mirror tables (§2.5; S13 used a single bit, `0x00200000`) |
+    | 17–19 | PMTU table index: 0 = none, 1–7 select one of up to seven PMTU mirror tables, the routing tables 103–109 (§2.5; S13 used a single bit, `0x00200000`); an index belongs to a size, and the `ip rule` on `index<<17/0xe0000` has priority 950, between the service selection and the policy rules |
     | 20 | service selection: route into the service namespace (§3.3, S16) |
     | 21 | duplicate this packet: set by the fault's mark chain with the fault's probability, cleared by the egress hook that makes the copy (§2.5; M10) |
     | 22–23 | reserved for further routing marks |

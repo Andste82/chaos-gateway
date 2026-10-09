@@ -151,6 +151,13 @@ func (v *validator) netem(path string, p model.NetemParams, tunnel bool) {
 			v.add(path+"/flapping", CodeInvalidFlapping, "up and down must both be longer than zero")
 		}
 	}
+	if p.Rate != nil {
+		if bits, ok := parseBitrate(*p.Rate); ok && bits < 8 {
+			// netem counts a rate in bytes per second: below 8 bit/s it is no rate at all, and the fault
+			// would pass everything where the user asked for (almost) nothing to pass
+			v.add(path+"/rate", CodeInvalidRate, "a rate of %s is below 8 bit/s: the kernel limits in bytes per second and would not limit at all; give a rate of at least 8bit", *p.Rate)
+		}
+	}
 	if tunnel {
 		for _, name := range netemSet(p) {
 			if !tunnelParams[name] {
@@ -158,6 +165,23 @@ func (v *validator) netem(path string, p model.NetemParams, tunnel bool) {
 			}
 		}
 	}
+}
+
+// parseBitrate reads "2Mbit" of the API (decimal units, like tc) in bit/s; false for a value that is not one.
+func parseBitrate(s string) (float64, bool) {
+	for _, u := range []struct {
+		suffix string
+		mult   float64
+	}{{"Gbit", 1e9}, {"Mbit", 1e6}, {"kbit", 1e3}, {"bit", 1}} {
+		if num, ok := strings.CutSuffix(s, u.suffix); ok {
+			f, err := strconv.ParseFloat(num, 64)
+			if err != nil || f < 0 {
+				return 0, false
+			}
+			return f * u.mult, true
+		}
+	}
+	return 0, false
 }
 
 // impairment validates ImpairmentParams: flat for both directions, or one set per direction.

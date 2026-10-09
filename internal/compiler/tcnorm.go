@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"net/netip"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
@@ -63,8 +64,18 @@ func (tc *TCTarget) Norm(dev string) *linux.NormTree {
 		t.Classes = append(t.Classes, linux.NormClass{ID: c.ClassID(), Parent: TCRootHandle, Kind: "htb", Leaf: c.LeafHandle(),
 			Rate: tcClassRateBytes, Ceil: tcClassRateBytes})
 		t.Qdiscs = append(t.Qdiscs, linux.NormQdisc{Handle: c.LeafHandle(), Parent: c.ClassID(), Kind: "netem", Netem: &spec})
-		t.Filters = append(t.Filters, linux.NormFilter{Parent: TCRootHandle, Protocol: "ip", Pref: 1, Kind: "fw",
-			Mark: c.Mark, Mask: MarkMask, Flowid: c.ClassID()})
+		t.Filters = append(t.Filters, c.NormFilter())
 	}
 	return t.Sorted()
+}
+
+// NormFilter is the filter that selects the class as the listing shows it: the fw filter on the mark
+// bits, or the flower filter on the outer UDP of the peer (IFB tree).
+func (c TCClass) NormFilter() linux.NormFilter {
+	if c.Endpoint != "" {
+		ep, _ := netip.ParseAddrPort(c.Endpoint)
+		return linux.NormFilter{Parent: TCRootHandle, Protocol: "ip", Pref: IFBFlowerPref, Kind: "flower", Flowid: c.ClassID(),
+			Flower: &linux.FlowerSpec{Handle: c.ID, IPProto: "udp", SrcIP: ep.Addr().String(), SrcPort: int(ep.Port())}}
+	}
+	return linux.NormFilter{Parent: TCRootHandle, Protocol: "ip", Pref: 1, Kind: "fw", Mark: c.Mark, Mask: MarkMask, Flowid: c.ClassID()}
 }

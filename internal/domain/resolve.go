@@ -785,6 +785,73 @@ func (w *World) ResolveTunnels() []TunnelResult {
 	return out
 }
 
+// TunnelsCrossed lists the tunnels the traffic from src to dst crosses, as the configuration describes
+// them: the tunnel of the client or link the source lies behind (its tunnel address, the networks behind
+// the client, the static routes of a link), then the tunnel of the one the destination lies behind. Routes
+// that a routing protocol learns are not in the configuration; the caller adds the link the kernel's route
+// leads into. A packet that stays inside one tunnel's networks crosses it once.
+func (w *World) TunnelsCrossed(src, dst netip.Addr) []string {
+	var out []string
+	add := func(key string) {
+		for _, k := range out {
+			if k == key {
+				return
+			}
+		}
+		out = append(out, key)
+	}
+	behind := func(a netip.Addr) string {
+		if !a.IsValid() {
+			return ""
+		}
+		for _, id := range sortedKeys(w.Index.Networks) {
+			n := w.Index.Networks[id]
+			if n.WG == nil {
+				continue
+			}
+			if n.IsHub() {
+				for _, cid := range sortedKeys(deref(n.WG.Clients)) {
+					c := deref(n.WG.Clients)[cid]
+					if t, ok := parseAddr(c.Address); ok && t == a {
+						return "client:" + strings.ToLower(cid)
+					}
+					for _, cn := range deref(c.ClientNetworks) {
+						if p, ok := parsePrefix(cn); ok && p.Contains(a) {
+							return "client:" + strings.ToLower(cid)
+						}
+					}
+				}
+			}
+			if n.IsLink() {
+				for _, r := range deref(n.WG.Routes) {
+					if p, ok := parsePrefix(r); ok && p.Contains(a) {
+						return "link:" + strings.ToLower(id)
+					}
+				}
+			}
+		}
+		return ""
+	}
+	if k := behind(src); k != "" {
+		add(k)
+	}
+	if k := behind(dst); k != "" {
+		add(k)
+	}
+	return out
+}
+
+// TunnelFaultOf returns the resolution of the tunnel faults of one tunnel ("client:<id>" or "link:<id>"):
+// the winner and the faults it overrode; false when no tunnel fault names the tunnel.
+func (w *World) TunnelFaultOf(tunnel string) (TunnelResult, bool) {
+	for _, r := range w.ResolveTunnels() {
+		if r.Tunnel == tunnel {
+			return r, true
+		}
+	}
+	return TunnelResult{}, false
+}
+
 // ---- access rules -----------------------------------------------------------------------
 
 // AccessResult is the outcome of the access rules for a query. Without a matching rule the

@@ -63,9 +63,16 @@ type Fault struct {
 	// impair that direction (no class exists for it).
 	Upload   *Netem `json:"upload,omitempty"`
 	Download *Netem `json:"download,omitempty"`
-	// CounterUp and CounterDown are the named nft counters of the packets classified into this id.
+	// CounterUp and CounterDown are the named nft counters of the packets classified into this id. For a
+	// tunnel fault, CounterDown is an nft counter (the packets towards the peer, classified in the output
+	// hook) and CounterUp the name under which the engine reports the packets the ingress filter of the peer
+	// matched: they are counted by tc, not by nft, and the name only keeps the two apart.
 	CounterUp   string `json:"counter_up"`
 	CounterDown string `json:"counter_down"`
+	// Tunnel is set for a fault of family tunnel (plan §2.2.1): it impairs the encrypted UDP of one WireGuard
+	// peer. Upload is then the packets from the peer (the IFB tree), Download the packets towards it (the
+	// tree of the interfaces).
+	Tunnel *TunnelInfo `json:"tunnel,omitempty"`
 }
 
 // netem returns the configuration of a direction.
@@ -339,7 +346,15 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		}
 	}
 
+	// ---- tunnel faults: their own family, resolved per tunnel ----
+	tunWinners := map[string]bool{}
+	if !t.resolveTunnelFaults(in, w, idx, faults, keySet, tunWinners) {
+		return
+	}
 	for k := range winners {
+		t.Winners = append(t.Winners, k)
+	}
+	for k := range tunWinners {
 		t.Winners = append(t.Winners, k)
 	}
 	sort.Strings(t.Winners)
@@ -372,15 +387,33 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 }
 
 // compileTC builds the classes of the active (id, direction)s and checks the class limit of an
-// interface.
+// interface. The classes of the tunnel faults towards the peer are classes of the interfaces' tree like
+// the others; the ones from the peer are the tree of the IFB device (tunnel.go).
 func (t *Target) compileTC(in Input) {
+	// mainClass reports whether the direction of the fault is a class of the interfaces' tree
+	mainClass := func(f Fault, d Direction) bool {
+		if f.netem(d) == nil {
+			return false
+		}
+		return f.Tunnel == nil || d == Download
+	}
 	classes := 0
 	for _, f := range t.Faults {
 		for _, d := range []Direction{Upload, Download} {
-			if f.netem(d) != nil {
+			if mainClass(f, d) {
 				classes++
 			}
 		}
+	}
+	// the IFB tree first: it needs the ids, and a fault of it that does not fit is reported before the rest
+	ifbTC, ok := t.compileTunnelTC(in, classes)
+	if !ok {
+		return
+	}
+	if ifbTC != nil {
+		t.IFB = &IFBTarget{Dev: IFBDev, Uplink: t.Uplink.Name, TC: ifbTC}
+		t.Interfaces = append(t.Interfaces, IFBDev)
+		sort.Strings(t.Interfaces)
 	}
 	if classes == 0 {
 		return
@@ -398,7 +431,7 @@ func (t *Target) compileTC(in Input) {
 		t.capacityProblem(byKey, fmt.Sprintf("%d classes (one per active fault id and direction, plus the default) exceed the limit of %d per interface", classes+1, limit), func(f *Fault) int {
 			n := 0
 			for _, d := range []Direction{Upload, Download} {
-				if f.netem(d) != nil {
+				if mainClass(*f, d) {
 					n++
 				}
 			}
@@ -414,10 +447,10 @@ func (t *Target) compileTC(in Input) {
 	for i := range t.Faults {
 		f := &t.Faults[i]
 		for _, d := range []Direction{Upload, Download} {
-			n := f.netem(d)
-			if n == nil {
+			if !mainClass(*f, d) {
 				continue
 			}
+			n := f.netem(d)
 			cfg := *n
 			if !cfg.LimitExplicit {
 				cfg.Limit = computedLimit(cfg, classes, budget)
@@ -706,6 +739,9 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 		t.faultBuild.chains = append(t.faultBuild.chains, markChain(0, "", "", 0, 0))
 	}
 	for _, f := range t.Faults {
+		if f.Tunnel != nil {
+			continue // a tunnel fault is classified by the output hook (tunnel.go), not by the lookup chain
+		}
 		var dupUp, dupDown float64
 		if f.Upload != nil {
 			dupUp = f.Upload.Duplicate

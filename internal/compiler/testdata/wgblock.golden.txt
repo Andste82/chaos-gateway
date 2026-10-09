@@ -1,0 +1,10 @@
+# tunnel faults
+chain wg_block_out (filter hook output priority -300)
+    [{"match":{"left":{"meta":{"key":"l4proto"}},"op":"==","right":"udp"}},{"vmap":{"data":"@wgblk_out_30c781","key":{"concat":[{"payload":{"field":"daddr","protocol":"ip"}},{"payload":{"field":"dport","protocol":"udp"}},{"payload":{"field":"sport","protocol":"udp"}}]}}}]
+chain wgblock_00000000
+    [{"counter":"wgblock_00000000"},{"drop":null}]
+map wgblk_in_30c781 (ipv4_addr . inet_service . inet_service)
+    198.51.100.2 . 51820 . 51820 : wgblock_00000000
+map wgblk_out_30c781 (ipv4_addr . inet_service . inet_service)
+    198.51.100.2 . 51820 . 51820 : wgblock_00000000
+action block_endpoint client:9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d rA counter "wgblock_00000000"

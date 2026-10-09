@@ -70,6 +70,13 @@ type Input struct {
 	// A phase belongs to one flapping: it is asked with the FlapSpec the compile is about to write, so
 	// a fault whose up and down times were just changed starts up.
 	FlapPhase func(key string, f FlapSpec) bool
+	// PeerEndpoints are the addresses the WireGuard peers are reached at right now, by peer id (a client's
+	// id, the id of a link network for its remote side): the endpoint the peer's packets come from and go to.
+	// The tunnel faults and the blocked endpoints select the encrypted UDP by it (tunnel.go). The engine
+	// fills it from the interfaces when something in the configuration or the overlays needs it
+	// (NeedsPeerEndpoints); a peer that is not in it is reached at the endpoint it is configured with, when
+	// that is an address.
+	PeerEndpoints map[string]netip.AddrPort
 	// ClassLimit is the number of tc classes one interface may carry (plan §3.3, D18); 0 uses
 	// DefaultClassLimit.
 	ClassLimit int
@@ -199,6 +206,17 @@ type Target struct {
 	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault
 	// impairs anything.
 	TC *TCTarget `json:"tc,omitempty"`
+	// IFB is the IFB device with its tree and the ingress filters of the uplink that feed it, while some
+	// tunnel fault impairs the packets from a peer (plan §2.2.1, tunnel.go); nil otherwise.
+	IFB *IFBTarget `json:"ifb,omitempty"`
+	// WGActions are the WireGuard-action overlays that change something in this target (plan §2.2.1, M10): a
+	// peer taken off its interface, given a key nobody holds, or a blocked endpoint. An overlay that is not in
+	// it is in the store but changes nothing (its peer is not on an interface, or its endpoint is not known).
+	WGActions []WGActionInfo `json:"wg_actions,omitempty"`
+	// Endpoints are the peers (by peer id) that a tunnel fault or a blocked endpoint selects by their address,
+	// with the endpoint the target was compiled with, "" for a peer whose address was not known. The engine
+	// compares it with what the interfaces report: a peer that moved needs a new apply.
+	Endpoints map[string]string `json:"endpoints,omitempty"`
 	// DupDevs are the interfaces that carry the duplication hook while some fault duplicates packets: the
 	// interfaces of the tc tree (executor.NftDup, P2-M10-01). Empty when nothing duplicates.
 	DupDevs    []string `json:"dup_devs,omitempty"`
@@ -345,6 +363,7 @@ func Compile(in Input) *Target {
 	t.compileFaults(in, idx)
 	t.compileAccess(in, idx)
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
+	t.compileTunnelNft(in)
 	t.finish()
 	return t
 }

@@ -279,10 +279,70 @@ func TestTheKernelTakesTheLongestValuesTheAPIAccepts(t *testing.T) {
 	}
 }
 
-// normalizedTC reads the tc state of an interface the way the executor does.
+// normalizedTC reads the tc state of an interface the way the executor does, the filters of the ingress
+// qdisc included.
 func normalizedTC(ns *testbed.Namespace, dev string) (*linux.NormTree, error) {
-	return linux.NormalizeTC(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
-		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)))
+	return linux.NormalizeTCIngress(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
+		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)),
+		[]byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev, "ingress")))
+}
+
+// The tunnel faults' tc side (M10, plan §2.2.1) is accepted by the real kernel: the tree of the IFB with its flower
+// filters, the ingress qdisc of the uplink with the flower filters that redirect to the IFB, and the download
+// classes in the tree of the interfaces; twice (a re-apply is a `replace`); and the normalized state is what the compiler
+// predicts, including the selector, the handle and the redirect of the flower filters. A deletion of a filter by handle
+// and of the ingress qdisc is accepted as well.
+func TestEveryCompiledTunnelTreeIsAcceptedByTheKernel(t *testing.T) {
+	bed := testbed.New(t)
+	tg := scenarioTunnel(t)
+	if tg.HasErrors() || tg.IFB == nil || tg.TC == nil {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	ns := bed.Add("tunchk")
+	up := tg.IFB.Uplink
+	ns.Must("ip", "link", "add", up, "type", "dummy")
+	ns.Must("ip", "link", "set", up, "up")
+	ns.Must("ip", "link", "add", "name", executor.IFBName, "type", "ifb")
+	ns.Must("ip", "link", "set", executor.IFBName, "up")
+	for round := 1; round <= 2; round++ {
+		runTC(t, ns, tg.TC.Entries(up, round == 1))
+		runTC(t, ns, tg.IFB.TC.Entries(IFBDev, round == 1))
+		runTC(t, ns, tg.IFB.IngressEntries())
+	}
+	have, err := normalizedTC(ns, IFBDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := linux.DiffTC(tg.IFB.TC.Norm(IFBDev), have.Subtree(TCRootHandle)); len(d) != 0 {
+		t.Errorf("the IFB holds another tree than the compiler predicts:\n%s", strings.Join(d, "\n"))
+	}
+	haveUp, err := normalizedTC(ns, up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := linux.DiffTC(tg.TC.Norm(up), haveUp.Subtree(TCRootHandle)); len(d) != 0 {
+		t.Errorf("the uplink holds another tree than the compiler predicts:\n%s", strings.Join(d, "\n"))
+	}
+	if d := linux.DiffTC(tg.IFB.IngressNorm(), haveUp.Ingress()); len(d) != 0 {
+		t.Errorf("the ingress side is not what the compiler predicts:\n%s", strings.Join(d, "\n"))
+	}
+	// deleting what the plan deletes: a filter of the ingress qdisc by its handle, a filter of the IFB, then the qdisc
+	for _, f := range haveUp.Ingress().Filters {
+		runTC(t, ns, []executor.TCEntry{{Object: "filter", Action: "delete", Dev: up, Parent: IngressHandle, Handle: fmt.Sprint(f.Flower.Handle),
+			Args: []string{"protocol", f.Protocol, "prio", fmt.Sprint(f.Pref), f.Kind}}})
+	}
+	for _, f := range have.Subtree(TCRootHandle).Filters {
+		runTC(t, ns, []executor.TCEntry{{Object: "filter", Action: "delete", Dev: IFBDev, Parent: TCRootHandle, Handle: fmt.Sprint(f.Flower.Handle),
+			Args: []string{"protocol", f.Protocol, "prio", fmt.Sprint(f.Pref), f.Kind}}})
+	}
+	runTC(t, ns, []executor.TCEntry{{Object: "qdisc", Action: "delete", Dev: up, Parent: "ingress"}})
+	after, err := normalizedTC(ns, up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing := after.Ingress(); len(ing.Qdiscs) != 0 || len(ing.Filters) != 0 {
+		t.Errorf("the ingress side is not gone: %+v", ing)
+	}
 }
 
 // An element transaction (a device gets a new address, so its elements and the borders of the

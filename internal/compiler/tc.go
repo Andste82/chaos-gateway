@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"net/netip"
 	"runtime"
 	"sort"
 	"strconv"
@@ -74,6 +75,10 @@ type TCClass struct {
 	// Mark is the value the fw filter matches under MarkMask.
 	Mark  uint32 `json:"mark"`
 	Netem Netem  `json:"netem"`
+	// Endpoint is "ip:port" of the WireGuard peer whose encrypted UDP this class holds, set for the classes
+	// of the IFB tree (tunnel faults, plan §2.2.1): a flower filter on the outer source address and port
+	// selects the class, where the classes of the other trees are selected by the packet mark.
+	Endpoint string `json:"endpoint,omitempty"`
 	// FlapKey names the flapping this class belongs to (set when Netem.Flapping is): all classes of
 	// one fault and direction share it, so a fault that gets one class per device flaps in step.
 	FlapKey string `json:"flap_key,omitempty"`
@@ -101,6 +106,20 @@ func (c TCClass) LeafHandle() string { return fmt.Sprintf("%x:", c.Minor) }
 // FilterHandle is the fw filter's handle: the mark with its mask, as in plan §3.3
 // (`0x000a0/0x1fff0` for upload of id 10, `0x100a0/0x1fff0` for its download).
 func (c TCClass) FilterHandle() string { return fmt.Sprintf("0x%05x/0x%05x", c.Mark, MarkMask) }
+
+// FilterEntry is the tc command that makes the filter selecting the class: the `fw` filter on the mark
+// bits for the classes of the interfaces' trees, the flower filter on the peer's outer UDP for the
+// classes of the IFB tree. The handle of a flower filter is the fault id.
+func (c TCClass) FilterEntry(dev string) executor.TCEntry {
+	if c.Endpoint != "" {
+		ep, _ := netip.ParseAddrPort(c.Endpoint)
+		return executor.TCEntry{Object: "filter", Action: "replace", Dev: dev, Parent: TCRootHandle, Handle: strconv.Itoa(c.ID),
+			Args: []string{"protocol", "ip", "prio", strconv.Itoa(IFBFlowerPref), "flower", "ip_proto", "udp",
+				"src_ip", ep.Addr().String(), "src_port", strconv.Itoa(int(ep.Port())), "flowid", c.ClassID()}}
+	}
+	return executor.TCEntry{Object: "filter", Action: "replace", Dev: dev, Parent: TCRootHandle, Handle: c.FilterHandle(),
+		Args: []string{"protocol", "ip", "prio", "1", "fw", "flowid", c.ClassID()}}
+}
 
 // classMinor numbers the classes of a fault id: two minors per id, upload then download.
 func classMinor(id int, dir Direction) int { return tcFirstMinor + 2*id + int(dir) }
@@ -182,8 +201,7 @@ func (tc *TCTarget) Entries(dev string, withRoot bool) []executor.TCEntry {
 				Args: []string{"htb", "rate", TCClassRate, "quantum", TCClassQuantum}},
 			executor.TCEntry{Object: "qdisc", Action: "replace", Dev: dev, Parent: c.ClassID(), Handle: c.LeafHandle(),
 				Args: c.Config().Args()},
-			executor.TCEntry{Object: "filter", Action: "replace", Dev: dev, Parent: TCRootHandle, Handle: c.FilterHandle(),
-				Args: []string{"protocol", "ip", "prio", "1", "fw", "flowid", c.ClassID()}},
+			c.FilterEntry(dev),
 		)
 	}
 	return es
@@ -223,8 +241,36 @@ func (tc *TCTarget) ClassesPerDevice() int {
 }
 
 // TCCandidates lists the interfaces the tc tree is (or, with no active fault, would be) installed on:
-// the apply reads them, to put the tree there or to take a tree that is no longer wanted away.
-func (t *Target) TCCandidates() []string { return t.tcDevs() }
+// the apply reads them, to put the tree there or to take a tree that is no longer wanted away. The IFB
+// device of the tunnel faults is always among them: its tree is its own (tunnel.go).
+func (t *Target) TCCandidates() []string {
+	return append(t.tcDevs(), IFBDev)
+}
+
+// TCTrees returns the trees the target wants: the one the interfaces carry and the one of the IFB
+// device, as far as they have classes.
+func (t *Target) TCTrees() []*TCTarget {
+	var out []*TCTarget
+	if t.TC != nil && len(t.TC.Classes) > 0 {
+		out = append(out, t.TC)
+	}
+	if t.IFB != nil && t.IFB.TC != nil && len(t.IFB.TC.Classes) > 0 {
+		out = append(out, t.IFB.TC)
+	}
+	return out
+}
+
+// TreeOf returns the tree the target wants on the interface, nil when it wants none there.
+func (t *Target) TreeOf(dev string) *TCTarget {
+	for _, tr := range t.TCTrees() {
+		for _, d := range tr.Devs {
+			if d == dev {
+				return tr
+			}
+		}
+	}
+	return nil
+}
 
 // tcDevs lists the interfaces a classified packet can leave through.
 func (t *Target) tcDevs() []string {

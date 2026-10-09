@@ -53,13 +53,18 @@ type overlayContext struct {
 	counters map[string]engine.CounterValue
 	// queues are the counters of the netem leaves by engine.QueueKey; nil when they could not be read
 	queues map[string]linux.NormStats
+	// flaps are the flapping faults by compiler.FlapKey
+	flaps map[string]engine.FlapState
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
 // the overlays of a response. A counter read that fails leaves the counters out: the overlays are
 // still the truth.
 func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) overlayContext {
-	oc := overlayContext{snap: s.cfg.Engine.Snapshot()}
+	oc := overlayContext{snap: s.cfg.Engine.Snapshot(), flaps: map[string]engine.FlapState{}}
+	for _, f := range s.cfg.Engine.Flaps() {
+		oc.flaps[f.Key] = f
+	}
 	if withCounters && (len(oc.snap.Faults) > 0 || oc.snap.Access != nil) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
@@ -154,6 +159,13 @@ func (oc overlayContext) queuesOf(layer, source string) []model.QueueStats {
 				}
 				if id, err := uuid.Parse(f.Device); err == nil && f.Device != "" {
 					q.Device = &id
+				}
+				if fl, ok := oc.flaps[compiler.FlapKey(f.Key, dir)]; ok {
+					phase := model.FlapStatePhaseUp
+					if fl.InDown {
+						phase = model.FlapStatePhaseDown
+					}
+					q.Flapping = &model.FlapState{Phase: phase, Since: fl.Since, NextChangeAt: fl.Next}
 				}
 				out = append(out, q)
 			}

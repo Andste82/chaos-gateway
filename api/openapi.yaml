@@ -3555,6 +3555,30 @@ components:
           description: Packets held in the queue now.
         backlog_bytes: {type: integer, format: int64}
         epoch: {type: integer, format: int64}
+        flapping:
+          allOf: [{$ref: '#/components/schemas/FlapState'}]
+          description: Set for the queues of a flapping fault (plan §2.5).
+    FlapState:
+      type: object
+      description: |
+        Where a flapping fault is in its cycle (up for `up`, then a blackout for `down`, starting up).
+        All queues of one fault and direction flap in step. The phase is the engine's clock's, not the
+        configuration's: a gateway that restarts starts every flapping up. A boundary is made within
+        100 ms of its time on a native or KVM machine (plan §2.10), or right after the apply it fell into.
+      required: [phase, since, next_change_at]
+      properties:
+        phase:
+          type: string
+          enum: [up, down]
+          description: The phase the kernel holds now.
+        since:
+          type: string
+          format: date-time
+          description: When the queue entered the phase.
+        next_change_at:
+          type: string
+          format: date-time
+          description: When the schedule ends the phase.
 
     # ============================================================ revisions and apply
     RevisionStatus:

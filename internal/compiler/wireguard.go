@@ -32,6 +32,9 @@ type WGPeer struct {
 	// Routes are the prefixes the table 100 reaches through this peer: the networks behind a
 	// client, the static routes of a link.
 	Routes []string `json:"routes,omitempty"`
+	// Action says that an overlay changes the peer on the interface: "key_mismatch" means PublicKey is
+	// not the key of the peer but one nobody holds the private key of (a WireGuard action, M10).
+	Action string `json:"action,omitempty"`
 
 	// reachable is what the client may reach: implicit access matrix entries
 	reachable []model.MatrixEndpoint
@@ -131,6 +134,7 @@ func (t *Target) compileWireGuardNetwork(id string, n *domain.NetInfo, in Input,
 	if wg.Mtu != nil {
 		w.MTU = *wg.Mtu
 	}
+	acts := wgActionsOf(in.Overlays)
 	switch wg.Kind {
 	case model.Hub:
 		if wg.Clients != nil {
@@ -153,8 +157,17 @@ func (t *Target) compileWireGuardNetwork(id string, n *domain.NetInfo, in Input,
 					t.errorf(CodeUnsupported, n.Name, "the client %q has no valid address", c.Name)
 					continue
 				}
+				if ov, off := acts.disable[tunnelKeyOfClient(cid)]; off {
+					// so is a client an overlay disables ("peer offline")
+					t.WGActions = append(t.WGActions, WGActionInfo{Overlay: ov, Action: "disable", Tunnel: tunnelKeyOfClient(cid), Peer: cid, PeerName: c.Name})
+					continue
+				}
 				nets := maskedStrings(c.ClientNetworks)
 				p := WGPeer{ID: cid, Name: c.Name, PublicKey: *c.Key.PublicKey, Routes: nets, address: a}
+				if ov, bad := acts.keyMismatch[tunnelKeyOfClient(cid)]; bad {
+					p.PublicKey, p.Action = mismatchedKey(ov, p.PublicKey), "key_mismatch"
+					t.WGActions = append(t.WGActions, WGActionInfo{Overlay: ov, Action: "key_mismatch", Tunnel: tunnelKeyOfClient(cid), Peer: cid, PeerName: c.Name})
+				}
 				p.AllowedIPs = append([]string{netip.PrefixFrom(a, 32).String()}, nets...)
 				for _, s := range nets {
 					pf, _ := netip.ParsePrefix(s)
@@ -173,8 +186,15 @@ func (t *Target) compileWireGuardNetwork(id string, n *domain.NetInfo, in Input,
 		if wg.Peer != nil && (wg.Peer.Enabled == nil || *wg.Peer.Enabled) {
 			if wg.Peer.Key == nil || wg.Peer.Key.PublicKey == nil || *wg.Peer.Key.PublicKey == "" {
 				t.errorf(CodeWireGuardKey, n.Name, "the link %q has no public key for its remote side", n.Name)
+			} else if ov, off := acts.disable[tunnelKeyOfLink(id)]; off {
+				// "link down": the peer is taken off the interface
+				t.WGActions = append(t.WGActions, WGActionInfo{Overlay: ov, Action: "disable", Tunnel: tunnelKeyOfLink(id), Peer: id, PeerName: n.Name})
 			} else {
 				p := WGPeer{ID: id, Name: n.Name, PublicKey: *wg.Peer.Key.PublicKey, AllowedIPs: []string{"0.0.0.0/0"}}
+				if ov, bad := acts.keyMismatch[tunnelKeyOfLink(id)]; bad {
+					p.PublicKey, p.Action = mismatchedKey(ov, p.PublicKey), "key_mismatch"
+					t.WGActions = append(t.WGActions, WGActionInfo{Overlay: ov, Action: "key_mismatch", Tunnel: tunnelKeyOfLink(id), Peer: id, PeerName: n.Name})
+				}
 				if wg.Peer.Endpoint != nil {
 					p.Endpoint = *wg.Peer.Endpoint
 				}

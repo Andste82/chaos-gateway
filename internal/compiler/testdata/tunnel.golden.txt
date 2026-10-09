@@ -1,0 +1,76 @@
+# faults
+id 1  config 5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b  scope "device esp32-42"  device -  counters fault_8c22a9ba3f_up fault_8c22a9ba3f_down
+    upload: 40ms
+    download: 40ms
+id 2  overlay 00000000-0000-4000-8000-000000000001  scope "tunnel of client rA"  device -  counters fault_8d4b4f7c99_up fault_8d4b4f7c99_down
+    upload: 20ms ±5ms
+    download: 50ms, loss 1%
+id 3  overlay 00000000-0000-4000-8000-000000000002  scope "tunnel of link site-b"  device -  counters fault_caaa969669_up fault_caaa969669_down
+    upload: burst loss, flapping 6s up, 4s down
+    download: burst loss, flapping 6s up, 4s down
+# tc on br-iot wan0 wg-admin wg-lab-hub wg-site-b
+qdisc add dev br-iot root handle 1: htb default 1
+class replace dev br-iot parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev br-iot parent 1: classid 1:12 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:12 handle 12: netem limit 3334 delay 40ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00010/0x1fff0 protocol ip prio 1 fw flowid 1:12
+class replace dev br-iot parent 1: classid 1:13 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:13 handle 13: netem limit 3334 delay 40ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10010/0x1fff0 protocol ip prio 1 fw flowid 1:13
+class replace dev br-iot parent 1: classid 1:15 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:15 handle 15: netem limit 4167 delay 50ms 0ms 0% loss random 1% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10020/0x1fff0 protocol ip prio 1 fw flowid 1:15
+class replace dev br-iot parent 1: classid 1:17 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:17 handle 17: netem limit 1000 delay 0ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10030/0x1fff0 protocol ip prio 1 fw flowid 1:17
+# classification maps
+devdestport (ipv4_addr . ipv4_addr . inet_proto . inet_service, flags [interval])
+devdest (ipv4_addr . ipv4_addr, flags [interval])
+devport (ipv4_addr . inet_proto . inet_service, flags [interval])
+dev (ipv4_addr, flags [interval])
+    10.10.0.42 : mark_1
+# mark chains
+mark_1: 4 rules
+# fault counters
+fault_8c22a9ba3f_down
+fault_8c22a9ba3f_up
+fault_8d4b4f7c99_down
+fault_caaa969669_down
+# tunnel faults
+id 2  client:9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d  tunnel of client rA  endpoint 198.51.100.2:51820 on wg-lab-hub
+id 3  link:c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f  tunnel of link site-b  endpoint 203.0.113.40:51821 on wg-site-b
+# ifb ifb-cgw, ingress of wan0
+qdisc add dev ifb-cgw root handle 1: htb default 1
+class replace dev ifb-cgw parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev ifb-cgw parent 1: classid 1:14 htb rate 10gbit quantum 60000
+qdisc replace dev ifb-cgw parent 1:14 handle 14: netem limit 2084 delay 20ms 5ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev ifb-cgw parent 1: handle 2 protocol ip prio 1 flower ip_proto udp src_ip 198.51.100.2 src_port 51820 flowid 1:14
+class replace dev ifb-cgw parent 1: classid 1:16 htb rate 10gbit quantum 60000
+qdisc replace dev ifb-cgw parent 1:16 handle 16: netem limit 1000 delay 0ms 0ms 0% loss random 100% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev ifb-cgw parent 1: handle 3 protocol ip prio 1 flower ip_proto udp src_ip 203.0.113.40 src_port 51821 flowid 1:16
+qdisc replace dev wan0 ingress  
+filter replace dev wan0 ffff: 2 protocol ip prio 10 flower ip_proto udp src_ip 198.51.100.2 src_port 51820 action mirred egress redirect dev ifb-cgw
+filter replace dev wan0 ffff: 3 protocol ip prio 10 flower ip_proto udp src_ip 203.0.113.40 src_port 51821 action mirred egress redirect dev ifb-cgw
+chain tun_2
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294836239]},{"\u003c\u003c":[2,4]}]},65536]}}}]
+    [{"counter":"fault_8d4b4f7c99_down"}]
+    [{"return":null}]
+chain tun_3
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294836239]},{"\u003c\u003c":[3,4]}]},65536]}}}]
+    [{"counter":"fault_caaa969669_down"}]
+    [{"return":null}]
+chain tunnel_out (filter hook output priority -150)
+    [{"match":{"left":{"meta":{"key":"l4proto"}},"op":"==","right":"udp"}},{"vmap":{"data":"@tun_out_281b07","key":{"concat":[{"payload":{"field":"daddr","protocol":"ip"}},{"payload":{"field":"dport","protocol":"udp"}}]}}}]
+chain wg_block_out (filter hook output priority -300)
+    [{"match":{"left":{"meta":{"key":"l4proto"}},"op":"==","right":"udp"}},{"vmap":{"data":"@wgblk_out_30c781","key":{"concat":[{"payload":{"field":"daddr","protocol":"ip"}},{"payload":{"field":"dport","protocol":"udp"}},{"payload":{"field":"sport","protocol":"udp"}}]}}}]
+chain wgblock_00000000
+    [{"counter":"wgblock_00000000"},{"drop":null}]
+map tun_out_281b07 (ipv4_addr . inet_service)
+    198.51.100.2 . 51820 : tun_2
+    203.0.113.40 . 51821 : tun_3
+map wgblk_in_30c781 (ipv4_addr . inet_service . inet_service)
+    198.51.100.2 . 51820 . 51820 : wgblock_00000000
+map wgblk_out_30c781 (ipv4_addr . inet_service . inet_service)
+    198.51.100.2 . 51820 . 51820 : wgblock_00000000
+action key_mismatch link:c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f site-b counter ""
+action block_endpoint client:9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d rA counter "wgblock_00000000"

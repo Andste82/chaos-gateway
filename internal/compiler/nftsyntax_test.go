@@ -56,6 +56,9 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	}
 	// the MTU family (M10): the second lookup, jumped to from the classify chain, and the three modes
 	out["pmtu"] = scenarioPMTU(t)
+	// the tunnel faults and the WireGuard actions (M10): the output hook with its endpoint map, the chains of the faults,
+	// the blocked endpoints at raw priority on output and input
+	out["tunnel"] = scenarioTunnel(t)
 	// the access rules (M9): the access chains, the source sets, the counters, reject with icmpx and
 	// with tcp reset, the cut chains
 	for name, tg := range accessScenarios(t) {

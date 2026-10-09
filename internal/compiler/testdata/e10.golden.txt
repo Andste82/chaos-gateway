@@ -1,0 +1,49 @@
+# faults
+id 1  config 5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b  scope "device esp32-42"  device -  counters fault_8c22a9ba3f_up fault_8c22a9ba3f_down
+    upload: 40ms
+    download: 40ms
+id 2  overlay 00000000-0000-4000-8000-000000000001  scope "tunnel of client rA"  device -  counters fault_8d4b4f7c99_up fault_8d4b4f7c99_down
+    upload: 50ms
+    download: 50ms
+# tc on br-iot wan0 wg-admin wg-lab-hub wg-site-b
+qdisc add dev br-iot root handle 1: htb default 1
+class replace dev br-iot parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev br-iot parent 1: classid 1:12 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:12 handle 12: netem limit 3334 delay 40ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x00010/0x1fff0 protocol ip prio 1 fw flowid 1:12
+class replace dev br-iot parent 1: classid 1:13 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:13 handle 13: netem limit 3334 delay 40ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10010/0x1fff0 protocol ip prio 1 fw flowid 1:13
+class replace dev br-iot parent 1: classid 1:15 htb rate 10gbit quantum 60000
+qdisc replace dev br-iot parent 1:15 handle 15: netem limit 4167 delay 50ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev br-iot parent 1: handle 0x10020/0x1fff0 protocol ip prio 1 fw flowid 1:15
+# classification maps
+devdestport (ipv4_addr . ipv4_addr . inet_proto . inet_service, flags [interval])
+devdest (ipv4_addr . ipv4_addr, flags [interval])
+devport (ipv4_addr . inet_proto . inet_service, flags [interval])
+dev (ipv4_addr, flags [interval])
+    10.10.0.42 : mark_1
+# mark chains
+mark_1: 4 rules
+# fault counters
+fault_8c22a9ba3f_down
+fault_8c22a9ba3f_up
+fault_8d4b4f7c99_down
+# tunnel faults
+id 2  client:9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d  tunnel of client rA  endpoint 198.51.100.2:51820 on wg-lab-hub
+# ifb ifb-cgw, ingress of wan0
+qdisc add dev ifb-cgw root handle 1: htb default 1
+class replace dev ifb-cgw parent 1: classid 1:1 htb rate 10gbit quantum 60000
+class replace dev ifb-cgw parent 1: classid 1:14 htb rate 10gbit quantum 60000
+qdisc replace dev ifb-cgw parent 1:14 handle 14: netem limit 4167 delay 50ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit
+filter replace dev ifb-cgw parent 1: handle 2 protocol ip prio 1 flower ip_proto udp src_ip 198.51.100.2 src_port 51820 flowid 1:14
+qdisc replace dev wan0 ingress  
+filter replace dev wan0 ffff: 2 protocol ip prio 10 flower ip_proto udp src_ip 198.51.100.2 src_port 51820 action mirred egress redirect dev ifb-cgw
+chain tun_2
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294836239]},{"\u003c\u003c":[2,4]}]},65536]}}}]
+    [{"counter":"fault_8d4b4f7c99_down"}]
+    [{"return":null}]
+chain tunnel_out (filter hook output priority -150)
+    [{"match":{"left":{"meta":{"key":"l4proto"}},"op":"==","right":"udp"}},{"vmap":{"data":"@tun_out_281b07","key":{"concat":[{"payload":{"field":"daddr","protocol":"ip"}},{"payload":{"field":"dport","protocol":"udp"}}]}}}]
+map tun_out_281b07 (ipv4_addr . inet_service)
+    198.51.100.2 . 51820 : tun_2

@@ -179,6 +179,11 @@ func TestCheckRejectsWhatCannotBeRendered(t *testing.T) {
 		"snippet close":      func(c *Config) { c.Protocols[1].Custom = "} protocol static x { ipv4;" },
 		"snippet protocol":   func(c *Config) { c.Protocols[1].Custom = "protocol static y { }" },
 		"snippet kernel":     func(c *Config) { c.Protocols[1].Custom = "kernel table 254;" },
+		"mirror == own":      func(c *Config) { c.Mirrors = []Mirror{{Table: 100, MTU: 1280}} },
+		"mirror == external": func(c *Config) { c.Mirrors = []Mirror{{Table: 200, MTU: 1280}} },
+		"mirror twice":       func(c *Config) { c.Mirrors = []Mirror{{Table: 103, MTU: 1280}, {Table: 103, MTU: 1400}} },
+		"mirror table":       func(c *Config) { c.Mirrors = []Mirror{{Table: 0, MTU: 1280}} },
+		"mirror mtu":         func(c *Config) { c.Mirrors = []Mirror{{Table: 103, MTU: 10}} },
 	}
 	for name, mod := range bad {
 		c := sample()
@@ -328,5 +333,52 @@ func TestIdent(t *testing.T) {
 	}
 	if ProtocolName("bgp", "Site B") != "bgp_Site_B" {
 		t.Error(ProtocolName("bgp", "Site B"))
+	}
+}
+
+// The PMTU mirror tables (M10): a table, a pipe and a kernel protocol each, all with the export filter of the
+// policy table's protocol, the size locked in, and a configuration that BIRD itself parses.
+func TestMirrorTablesAreFedByAPipeAndExportWhatTheKernelTableExports(t *testing.T) {
+	c := sample()
+	c.Mirrors = []Mirror{{Table: 103, MTU: 1280}, {Table: 104, MTU: 1400}}
+	text, err := c.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ipv4 table pmtu103;", "protocol pipe pmtu103_pipe {", "table master4;", "peer table pmtu103;",
+		"protocol kernel gw_pmtu103 {", "kernel table 103;", "ipv4 { table pmtu103; import none; export filter { krt_mtu = 1280; krt_lock_mtu = true; accept; }; };",
+		"protocol kernel gw_pmtu104 {", "krt_mtu = 1400;",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("no %q in\n%s", want, text)
+		}
+	}
+	// the learned routes are exported by the kernel protocol of table 100 and by every pipe alike
+	want := "export where source ~ [ RTS_BABEL, RTS_BGP, RTS_INHERIT, RTS_OSPF, RTS_OSPF_EXT1, RTS_OSPF_EXT2, RTS_OSPF_IA ];"
+	if n := strings.Count(text, want); n != 3 {
+		t.Errorf("%d exports of the learned routes, want the kernel table's and the two pipes':\n%s", n, text)
+	}
+	again, _ := c.Render()
+	if again != text {
+		t.Error("the text is not deterministic")
+	}
+	if bin, err := exec.LookPath("bird"); err == nil {
+		f := filepath.Join(t.TempDir(), "m.conf")
+		if err := os.WriteFile(f, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(bin, "-p", "-c", f).CombinedOutput(); err != nil {
+			t.Errorf("bird rejects it: %s", out)
+		}
+	}
+	// without a protocol there is nothing to export, and the idle configuration stays what it was
+	idle := Config{RouterID: "127.0.0.1", KernelTable: 100, Mirrors: []Mirror{{Table: 103, MTU: 1280}}}
+	if text, err := idle.Render(); err != nil || strings.Contains(text, "pmtu") {
+		t.Errorf("%v\n%s", err, text)
+	}
+	// a configuration without mirrors has none of it
+	if text, _ := sample().Render(); strings.Contains(text, "pmtu") {
+		t.Error("a mirror without a configured one")
 	}
 }

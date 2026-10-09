@@ -1,0 +1,64 @@
+# mtu faults
+overlay 00000000-0000-4000-8000-000000000001  scope "network IoT"  size 1400 icmp  index 2 table 104  chain pmtu_b943c6bd80  counters pmtu_b943c6bd80_up pmtu_b943c6bd80_down 
+overlay 00000000-0000-4000-8000-000000000002  scope "device esp32-42"  size 1280 icmp  index 1 table 103  chain pmtu_036be7c47b  counters pmtu_036be7c47b_up pmtu_036be7c47b_down 
+overlay 00000000-0000-4000-8000-000000000003  scope "device esp32-43"  size 1200 blackhole  index 0 table 0  chain pmtu_65bd3e295d  counters pmtu_65bd3e295d_up pmtu_65bd3e295d_down pmtu_65bd3e295d_drop
+overlay 00000000-0000-4000-8000-000000000004  scope "device lab-host"  size 1360 mss_clamp  index 0 table 0  chain pmtu_1fd8b4e765  counters pmtu_1fd8b4e765_up pmtu_1fd8b4e765_down 
+# tables by size: map[1280:1 1400:2]
+# classification maps
+devdestport (ipv4_addr . ipv4_addr . inet_proto . inet_service, flags [interval])
+devdest (ipv4_addr . ipv4_addr, flags [interval])
+devport (ipv4_addr . inet_proto . inet_service, flags [interval])
+    10.10.0.43 . tcp . 443 : pmtu_65bd3e295d
+dev (ipv4_addr, flags [interval])
+    10.10.0.0-10.10.0.41 : pmtu_b943c6bd80
+    10.10.0.42 : pmtu_036be7c47b
+    10.10.0.43-10.10.0.255 : pmtu_b943c6bd80
+    10.20.0.50 : pmtu_1fd8b4e765
+# chains
+classify
+    [{"match":{"left":{"ct":{"dir":"original","key":"ip saddr"}},"op":"!=","right":"@classify_nets_8743d6"}},{"match":{"left":{"ct":{"dir":"original","key":"ip daddr"}},"op":"!=","right":"@classify_nets_8743d6"}},{"return":null}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},65536]}}}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"\u0026":[{"meta":{"key":"mark"}},4294901759]}}}]
+    [{"jump":{"target":"classify_pmtu"}}]
+    [{"vmap":{"data":"@cls_devdestport_576968","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"ct":{"dir":"original","key":"ip daddr"}},{"meta":{"key":"l4proto"}},{"ct":{"dir":"original","key":"proto-dst"}}]}}}]
+    [{"vmap":{"data":"@cls_devdest_e28fbe","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"ct":{"dir":"original","key":"ip daddr"}}]}}}]
+    [{"vmap":{"data":"@cls_devport_1e10ac","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"meta":{"key":"l4proto"}},{"ct":{"dir":"original","key":"proto-dst"}}]}}}]
+    [{"vmap":{"data":"@cls_dev_14ef7f","key":{"ct":{"dir":"original","key":"ip saddr"}}}}]
+classify_pmtu
+    [{"vmap":{"data":"@pmtu_devdestport_576968","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"ct":{"dir":"original","key":"ip daddr"}},{"meta":{"key":"l4proto"}},{"ct":{"dir":"original","key":"proto-dst"}}]}}}]
+    [{"vmap":{"data":"@pmtu_devdest_e28fbe","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"ct":{"dir":"original","key":"ip daddr"}}]}}}]
+    [{"vmap":{"data":"@pmtu_devport_1e10ac","key":{"concat":[{"ct":{"dir":"original","key":"ip saddr"}},{"meta":{"key":"l4proto"}},{"ct":{"dir":"original","key":"proto-dst"}}]}}}]
+    [{"vmap":{"data":"@pmtu_dev_14ef7f","key":{"ct":{"dir":"original","key":"ip saddr"}}}}]
+pmtu_036be7c47b
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"pmtu_036be7c47b_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"pmtu_036be7c47b_down"}]
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294049791]},131072]}}}]
+    [{"return":null}]
+pmtu_1fd8b4e765
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"pmtu_1fd8b4e765_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"pmtu_1fd8b4e765_down"}]
+    [{"match":{"left":{"\u0026":[{"payload":{"field":"flags","protocol":"tcp"}},"syn"]},"op":"==","right":"syn"}},{"match":{"left":{"tcp option":{"field":"size","name":"maxseg"}},"op":"\u003e","right":1320}},{"mangle":{"key":{"tcp option":{"field":"size","name":"maxseg"}},"value":1320}}]
+    [{"return":null}]
+pmtu_65bd3e295d
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"pmtu_65bd3e295d_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"pmtu_65bd3e295d_down"}]
+    [{"match":{"left":{"meta":{"key":"length"}},"op":"\u003e","right":1200}},{"counter":"pmtu_65bd3e295d_drop"},{"drop":null}]
+    [{"return":null}]
+pmtu_b943c6bd80
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"original"}},{"counter":"pmtu_b943c6bd80_up"}]
+    [{"match":{"left":{"ct":{"key":"direction"}},"op":"==","right":"reply"}},{"counter":"pmtu_b943c6bd80_down"}]
+    [{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"\u0026":[{"meta":{"key":"mark"}},4294049791]},262144]}}}]
+    [{"return":null}]
+# routes and rules of the mirrors
+route table 103 10.10.0.0/24 via "" dev br-iot mtu 1280
+route table 103 10.20.0.0/24 via "" dev br-lab mtu 1280
+route table 103 203.0.113.0/24 via "" dev wan0 mtu 1280
+route table 103 10.30.0.0/24 via "10.10.0.2" dev br-iot mtu 1280
+route table 103 default via "203.0.113.10" dev wan0 mtu 1280
+route table 104 10.10.0.0/24 via "" dev br-iot mtu 1400
+route table 104 10.20.0.0/24 via "" dev br-lab mtu 1400
+route table 104 203.0.113.0/24 via "" dev wan0 mtu 1400
+route table 104 10.30.0.0/24 via "10.10.0.2" dev br-iot mtu 1400
+route table 104 default via "203.0.113.10" dev wan0 mtu 1400
+rule 950 fwmark 0x20000/0xe0000 lookup 103
+rule 950 fwmark 0x40000/0xe0000 lookup 104

@@ -264,6 +264,10 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		identity = *in.Identity
 	}
 	sources := w.Sources(identity)
+	t.compilePMTU(in, w, sources, idx)
+	if t.HasErrors() {
+		return
+	}
 
 	// ---- pass 1: the winner of every entry of every source's table, and the keys they need ----
 	tables := make([]domain.Table, len(sources))
@@ -682,16 +686,62 @@ func (r clsRow) rest() string {
 }
 
 func (t *Target) compileClassification(sources []domain.Source, tables []domain.Table, entryKey [][]string) {
+	byLevel, needZero, ok := t.classElements(sources, tables, func(i, j int) (int, bool) {
+		if tables[i].Entries[j].Winner == nil {
+			return 0, false
+		}
+		id := 0
+		if k := entryKey[i][j]; k != "" {
+			id = t.FaultIDs[k]
+		}
+		return id, true
+	}, MarkChainName)
+	if !ok {
+		return
+	}
+	t.faultBuild.maps = classMapDefs(byLevel)
+
+	// the per-id chains and their counters
+	if needZero {
+		t.faultBuild.chains = append(t.faultBuild.chains, markChain(0, "", "", 0, 0))
+	}
+	for _, f := range t.Faults {
+		var dupUp, dupDown float64
+		if f.Upload != nil {
+			dupUp = f.Upload.Duplicate
+		}
+		if f.Download != nil {
+			dupDown = f.Download.Duplicate
+		}
+		t.faultBuild.chains = append(t.faultBuild.chains, markChain(f.ID, f.CounterUp, f.CounterDown, dupUp, dupDown))
+		t.faultBuild.counters = append(t.faultBuild.counters, f.CounterUp, f.CounterDown)
+	}
+	sort.Strings(t.faultBuild.counters)
+}
+
+// classMapDefs turns the elements of the four lookup levels into map definitions, one per level, in
+// the order of classifyLevels. The caller names them.
+func classMapDefs(byLevel map[int][]MapElement) []MapDef {
+	var out []MapDef
+	for _, lv := range classifyLevels {
+		out = append(out, MapDef{KeyType: lv.key, ValueType: "verdict", Flags: []string{"interval"}, Elements: byLevel[lv.level]})
+	}
+	return out
+}
+
+// classElements turns the tables of the sources into the elements of the four lookup levels:
+// the rows of every entry for every address span of its source, merged where sources with the same
+// entries touch, checked against the limits of the maps. idOf gives the entry (source i, entry j) the
+// number whose chain it goes to, or false for an entry that has none; chainOf names that chain.
+// needZero reports that some entry has the number 0 (an impairing winner that impairs nothing). ok is
+// false when a limit was exceeded; the problem is reported.
+func (t *Target) classElements(sources []domain.Source, tables []domain.Table, idOf func(i, j int) (int, bool), chainOf func(id int) string) (byLevel map[int][]MapElement, needZero, ok bool) {
 	spans := partitionSources(sources)
 	var rows []clsRow
-	needZero := false
 	for i, tab := range tables {
 		for j, e := range tab.Entries {
-			id := 0
-			if k := entryKey[i][j]; k != "" {
-				id = t.FaultIDs[k]
-			}
-			if e.Winner == nil {
+			id, has := idOf(i, j)
+			if !has {
 				continue
 			}
 			if id == 0 {
@@ -711,7 +761,7 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 			}
 			if len(rows) > maxClassRows {
 				t.classificationProblem(fmt.Sprintf("the classification maps would need more than %d elements before they are merged; remove some of the faults that name a destination or ports", maxClassRows), nil)
-				return
+				return nil, false, false
 			}
 		}
 	}
@@ -745,7 +795,7 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 
 	if len(merged) > MaxClassElements {
 		t.classificationProblem(fmt.Sprintf("the classification maps would need %d elements, the limit is %d; remove some of the faults that name a destination or ports", len(merged), MaxClassElements), nil)
-		return
+		return nil, false, false
 	}
 	sort.Slice(merged, func(i, j int) bool {
 		a, b := merged[i], merged[j]
@@ -763,31 +813,11 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 		}
 		return a.id < b.id
 	})
-	byLevel := map[int][]MapElement{}
+	byLevel = map[int][]MapElement{}
 	for _, r := range merged {
-		byLevel[r.level] = append(byLevel[r.level], MapElement{Key: clsKey(r), Value: MarkChainName(r.id)})
+		byLevel[r.level] = append(byLevel[r.level], MapElement{Key: clsKey(r), Value: chainOf(r.id)})
 	}
-	t.faultBuild.maps = nil
-	for _, lv := range classifyLevels {
-		t.faultBuild.maps = append(t.faultBuild.maps, MapDef{KeyType: lv.key, ValueType: "verdict", Flags: []string{"interval"}, Elements: byLevel[lv.level]})
-	}
-
-	// the per-id chains and their counters
-	if needZero {
-		t.faultBuild.chains = append(t.faultBuild.chains, markChain(0, "", "", 0, 0))
-	}
-	for _, f := range t.Faults {
-		var dupUp, dupDown float64
-		if f.Upload != nil {
-			dupUp = f.Upload.Duplicate
-		}
-		if f.Download != nil {
-			dupDown = f.Download.Duplicate
-		}
-		t.faultBuild.chains = append(t.faultBuild.chains, markChain(f.ID, f.CounterUp, f.CounterDown, dupUp, dupDown))
-		t.faultBuild.counters = append(t.faultBuild.counters, f.CounterUp, f.CounterDown)
-	}
-	sort.Strings(t.faultBuild.counters)
+	return byLevel, needZero, true
 }
 
 func portSelLess(a, b domain.PortSel) bool {

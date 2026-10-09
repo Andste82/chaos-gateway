@@ -54,6 +54,8 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	for name, tg := range faultScenarios(t) {
 		out[name] = tg
 	}
+	// the MTU family (M10): the second lookup, jumped to from the classify chain, and the three modes
+	out["pmtu"] = scenarioPMTU(t)
 	// the access rules (M9): the access chains, the source sets, the counters, reject with icmpx and
 	// with tcp reset, the cut chains
 	for name, tg := range accessScenarios(t) {

@@ -29,7 +29,9 @@ type wgEnv struct {
 	sec *secrets.Store
 }
 
-func newWGEnv(t *testing.T) *wgEnv {
+func newWGEnv(t *testing.T) *wgEnv { return newWGEnvFile(t, "wireguard.yaml") }
+
+func newWGEnvFile(t *testing.T, file string) *wgEnv {
 	t.Helper()
 	k := newTestbedKernel()
 	sec, err := secrets.Open(t.TempDir())
@@ -44,7 +46,7 @@ func newWGEnv(t *testing.T) *wgEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(ex.Close)
-	raw, err := os.ReadFile("../compiler/testdata/wireguard.yaml")
+	raw, err := os.ReadFile("../compiler/testdata/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}

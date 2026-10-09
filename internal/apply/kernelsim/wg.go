@@ -153,6 +153,14 @@ func (k *Kernel) Handshake(dev, peerPub string, unix int64, rx, tx int64) {
 	p.handshake, p.rx, p.tx = unix, p.rx+rx, p.tx+tx
 }
 
+// SetPeerEndpoint sets the address a peer is reached at, as a handshake from there would (a roaming client): the
+// listing shows it, and an `ensure` that names no endpoint keeps it.
+func (k *Kernel) SetPeerEndpoint(dev, peerPub, endpoint string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.links[dev].wg.peers[peerPub].endpoint = endpoint
+}
+
 // WireGuardPeers returns the public keys of the peers of an interface.
 func (k *Kernel) WireGuardPeers(dev string) []string {
 	k.mu.Lock()

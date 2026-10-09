@@ -249,6 +249,14 @@ func (k *Kernel) addLink(name, mac, kind string, up bool) *link {
 	return l
 }
 
+// HasLink reports whether the interface exists.
+func (k *Kernel) HasLink(name string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	_, ok := k.links[name]
+	return ok
+}
+
 // SetAddr gives an interface an address ("203.0.113.1/24").
 func (k *Kernel) SetAddr(dev, cidr string) {
 	k.mu.Lock()
@@ -779,6 +787,14 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			sub.addLink(a[7], fmt.Sprintf("02:ee:00:01:00:%02x", sub.nextIdx+1), "veth", false)
 			return ok2()
 		}
+		// ip link add name X type ifb
+		if len(a) == 6 && a[2] == "name" && a[4] == "type" && a[5] == "ifb" {
+			if _, exists := k.links[a[3]]; exists {
+				return fail("RTNETLINK answers: File exists")
+			}
+			k.addLink(a[3], fmt.Sprintf("02:fe:00:00:00:%02x", k.nextIdx+1), "ifb", false)
+			return ok2()
+		}
 		// ip link add name X type bridge
 		if len(a) == 6 && a[2] == "name" && a[4] == "type" && a[5] == "bridge" {
 			if _, exists := k.links[a[3]]; exists {
@@ -788,7 +804,7 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			return ok2()
 		}
 	case "link delete":
-		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && (a[5] == "bridge" || a[5] == "wireguard" || a[5] == "veth") {
+		if len(a) == 6 && a[2] == "dev" && a[4] == "type" && (a[5] == "bridge" || a[5] == "wireguard" || a[5] == "veth" || a[5] == "ifb") {
 			_, exists := k.links[a[3]]
 			if !exists {
 				return fail("Cannot find device \"%s\"", a[3])

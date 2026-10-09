@@ -61,7 +61,11 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 	}
 
 	// interfaces assigned to the executor
-	if got, want := strings.Join(s.Assigned, ","), strings.Join(sorted(t.Interfaces), ","); got != want {
+	wantIfs := t.Interfaces
+	if s.TCRetiring[compiler.IFBDev+" "+compiler.TCRootHandle] {
+		wantIfs = union(wantIfs, []string{compiler.IFBDev}) // the IFB waits for the retirer with its last classes
+	}
+	if got, want := strings.Join(s.Assigned, ","), strings.Join(sorted(wantIfs), ","); got != want {
 		bad("interfaces", "assigned %q, want %q", got, want)
 	}
 
@@ -106,6 +110,19 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 			if pl, ok := s.Links[p]; ok && !pl.Up() {
 				bad("links", "port %s is down", p)
 			}
+		}
+	}
+
+	// the IFB device of the tunnel faults
+	if t.IFB != nil {
+		l, ok := s.Links[t.IFB.Dev]
+		switch {
+		case !ok:
+			bad("links", "IFB device %s is missing", t.IFB.Dev)
+		case l.Kind() != "ifb":
+			bad("links", "%s is not an IFB device", t.IFB.Dev)
+		case !l.Up():
+			bad("links", "IFB device %s is down", t.IFB.Dev)
 		}
 	}
 

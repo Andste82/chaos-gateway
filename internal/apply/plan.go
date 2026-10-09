@@ -30,6 +30,9 @@ type Plan struct {
 	// their counters start at zero when it has run. A leaf the plan changes in place is not in it,
 	// its counters go on (the kernel keeps them across a replace).
 	QueuesCreated []string
+	// IngressRestarted are the fault ids whose ingress filter (tunnel faults, the packets from the peer) the plan
+	// makes new or changes: the counters of its redirect action start again.
+	IngressRestarted []int
 	// NftNew is true when the kernel has no nftables table of Chaos Gateway's own yet: every named
 	// counter starts at zero with this plan.
 	NftNew bool
@@ -80,14 +83,33 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	}
 	note := func(format string, a ...any) { p.Summary = append(p.Summary, fmt.Sprintf(format, a...)) }
 
+	// The IFB of the tunnel faults (ingress.go, tunnel.go): one that is not wanted any more and still holds
+	// a tree waits for the retirer, which deletes it with the last of its classes, so it stays assigned
+	// until then; otherwise it goes at the end of this plan, also when it is a leftover of a gateway that
+	// did not clean up (it is Chaos Gateway's by its name, and has to be assigned for the executor to
+	// delete it).
+	ifbLink, ifbExists := s.Links[compiler.IFBDev]
+	if ifbExists && ifbLink.Kind() != "ifb" && (t.IFB != nil || contains(s.Assigned, compiler.IFBDev)) {
+		return nil, fmt.Errorf("%s exists but is not an IFB device: refusing to touch it", compiler.IFBDev)
+	}
+	ifbExists = ifbExists && ifbLink.Kind() == "ifb"
+	keepIFB := retire && t.IFB == nil && ifbExists && len(ownTree(s, compiler.IFBDev).Qdiscs) > 0
+	dropIFB := t.IFB == nil && !keepIFB && ifbExists
+	wantAssigned := t.Interfaces
+	if keepIFB {
+		wantAssigned = union(wantAssigned, []string{compiler.IFBDev})
+	}
 	oldAssigned := s.Assigned
-	both := union(oldAssigned, t.Interfaces)
-	if len(minus(both, oldAssigned)) > 0 || len(minus(oldAssigned, t.Interfaces)) > 0 {
+	both := union(oldAssigned, wantAssigned)
+	if dropIFB {
+		both = union(both, []string{compiler.IFBDev})
+	}
+	if len(minus(both, oldAssigned)) > 0 || len(minus(oldAssigned, wantAssigned)) > 0 {
 		add("assign interfaces: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both, OSOwned: t.OSOwned})
 	} else {
 		add("interfaces assigned: "+strings.Join(both, ", "), &executor.AssignInterfaces{Target: tg, Devs: both, OSOwned: t.OSOwned})
 	}
-	removed := minus(oldAssigned, t.Interfaces)
+	removed := minus(oldAssigned, wantAssigned)
 	wgWant := map[string]compiler.WGInterface{}
 	for _, w := range t.WireGuard {
 		wgWant[w.Name] = w
@@ -278,6 +300,14 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 			}
 		}
 	}
+	if t.IFB != nil {
+		if !ifbExists {
+			links = append(links, executor.LinkEntry{Action: "add_ifb", Name: compiler.IFBDev})
+		}
+		if !ifbExists || !ifbLink.Up() {
+			ups = append(ups, executor.LinkEntry{Action: "up", Name: compiler.IFBDev})
+		}
+	}
 	if len(links) > 0 {
 		var words []string
 		for _, e := range links {
@@ -328,13 +358,24 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	}
 
 	// ---- tc: create and change, before the classification switches -------------------------
-	tp := planTC(t, s, removed, mem)
+	leaving := removed
+	if dropIFB {
+		leaving = append(append([]string(nil), removed...), compiler.IFBDev) // it is deleted whole, with its tree
+	}
+	tp := planTC(t, s, leaving, mem)
 	p.Grace, p.Dists, p.QueuesCreated = tp.grace, tp.dists, tp.created
 	p.NftNew = s.Nft == nil || len(s.Nft.Tables()) == 0
 	for _, b := range tp.before {
 		for _, op := range tcOps(tg, b.entries) {
 			add("tc: "+strings.Join(b.words, "; "), op)
 		}
+	}
+
+	// ---- the ingress side of the tunnel faults: the switch of the direction from the peer -----------
+	ingress, ingressWords, restarted := planIngress(t, s)
+	p.IngressRestarted = restarted
+	for _, op := range tcOps(tg, ingress) {
+		add("tc: "+strings.Join(ingressWords, "; "), op)
 	}
 
 	// ---- the duplication hook: before the transaction that makes packets ask for a copy ----------
@@ -413,8 +454,12 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 	if err := planBird(t, s, p); err != nil {
 		return nil, err
 	}
-	if len(removed) > 0 {
-		add("interfaces assigned: "+strings.Join(t.Interfaces, ", "), &executor.AssignInterfaces{Target: tg, Devs: t.Interfaces, OSOwned: t.OSOwned})
+	// the IFB goes after everything that refers to it (the filters that redirect into it, the tree)
+	if dropIFB {
+		add("links: delete ifb "+compiler.IFBDev, &executor.Links{Target: tg, Entries: []executor.LinkEntry{{Action: "delete_ifb", Name: compiler.IFBDev}}})
+	}
+	if len(removed) > 0 || len(minus(both, wantAssigned)) > 0 {
+		add("interfaces assigned: "+strings.Join(wantAssigned, ", "), &executor.AssignInterfaces{Target: tg, Devs: wantAssigned, OSOwned: t.OSOwned})
 	}
 	return p, nil
 }
@@ -490,6 +535,8 @@ func linkWords(e executor.LinkEntry) string {
 		return "create bridge " + e.Name
 	case "delete_bridge":
 		return "delete bridge " + e.Name
+	case "add_ifb":
+		return "create ifb " + e.Name
 	case "enslave":
 		return "attach " + e.Name + " to " + e.Master
 	case "release":

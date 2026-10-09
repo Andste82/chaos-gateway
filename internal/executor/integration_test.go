@@ -407,6 +407,52 @@ func TestRoutingInOwnTablesWithOwnTag(t *testing.T) {
 	}
 }
 
+// A route with a path MTU (a PMTU mirror table, M10) is written with `mtu lock N`, reads back with its size, is replaced in
+// place by a route of another size, and the rule on a mark selects its table; a delete names no size.
+func TestARouteWithALockedPathMTUIsWrittenReplacedInPlaceAndDeleted(t *testing.T) {
+	g := startGateway(t)
+	g.top.GW.Sysctl("net.ipv4.ip_forward", "1")
+	route := func(mtu int) executor.Route {
+		return executor.Route{Action: "replace", Family: 4, Table: 103, Dst: "10.99.0.0/16", Via: testbed.ServerAddr, Dev: "wan0", MTU: mtu}
+	}
+	g.must(&executor.Routing{Target: tgt(g.ns), Routes: []executor.Route{route(1280)},
+		Rules: []executor.Rule{{Action: "add", Family: 4, Priority: 950, Fwmark: "0x20000/0xe0000", Table: 103}}})
+	if out := g.top.GW.Must("ip", "-d", "route", "show", "table", "103"); !strings.Contains(out, "mtu lock 1280") {
+		t.Errorf("the route has no locked size:\n%s", out)
+	}
+	routes := read[[]linux.Route](t, g, executor.Read{What: executor.ReadRoutes, Table: "103"})
+	if len(routes) != 1 || routes[0].MTU() != 1280 || routes[0].Protocol != "201" {
+		t.Errorf("%+v", routes)
+	}
+	// the rule reads back with the mark and its mask, and sends the marked packet through the table
+	var found bool
+	for _, r := range read[[]linux.Rule](t, g, executor.Read{What: executor.ReadRules}) {
+		if r.Protocol == "201" && r.Fwmark == "0x20000" && r.Fwmask == "0xe0000" && r.Table == "103" && r.Priority == 950 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the rule on the mark is not read back")
+	}
+	if out := g.top.GW.Must("ip", "route", "get", "10.99.1.1", "from", testbed.ClientAAddr, "iif", "br-lan0", "mark", "0x20000"); !strings.Contains(out, "mtu lock 1280") {
+		t.Errorf("a marked packet does not meet the size: %s", out)
+	}
+	if out := g.top.GW.Must("ip", "route", "get", "10.99.1.1", "from", testbed.ClientAAddr, "iif", "br-lan0"); strings.Contains(out, "mtu") {
+		t.Errorf("an unmarked packet meets the size: %s", out)
+	}
+	// another size is a replace: still one route
+	g.must(&executor.Routing{Target: tgt(g.ns), Routes: []executor.Route{route(1400)}})
+	routes = read[[]linux.Route](t, g, executor.Read{What: executor.ReadRoutes, Table: "103"})
+	if len(routes) != 1 || routes[0].MTU() != 1400 {
+		t.Errorf("%+v", routes)
+	}
+	g.must(&executor.Routing{Target: tgt(g.ns), Routes: []executor.Route{{Action: "delete", Family: 4, Table: 103, Dst: "10.99.0.0/16", Via: testbed.ServerAddr, Dev: "wan0", MTU: 1400}},
+		Rules: []executor.Rule{{Action: "delete", Family: 4, Priority: 950, Fwmark: "0x20000/0xe0000", Table: 103}}})
+	if routes := read[[]linux.Route](t, g, executor.Read{What: executor.ReadRoutes, Table: "103"}); len(routes) != 0 {
+		t.Errorf("routes left: %+v", routes)
+	}
+}
+
 // A foreign rule with the same selectors but another protocol tag cannot be touched: the executor
 // always deletes with its own tag, so the kernel does not find the foreign entry.
 func TestExecutorCannotDeleteForeignRulesOrRoutes(t *testing.T) {

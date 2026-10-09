@@ -98,3 +98,36 @@ func TestAnIdentityUpdateMovesTheClassificationElementsToo(t *testing.T) {
 		t.Errorf("elements without an identity map: %v", err)
 	}
 }
+
+// The MTU maps follow an address change like the impairment maps do (an element transaction of their own), and an MTU
+// fault that appeared or went, or a table whose size changed, is no element update (routes and rules change with it).
+func TestAnIdentityUpdateMovesTheMTUMapElementsAndAnMTUFaultThatChangedTakesTheFullApply(t *testing.T) {
+	target := func(a string, size int) *compiler.Target {
+		tg := &compiler.Target{IdentityMap: "ident4_x", DeviceNums: map[string]int{"d": 1}}
+		tg.PMTU = []compiler.PMTUFault{{Key: "overlay:x:mtu", Size: size, Mode: "icmp", Index: 1, Table: 103, Chain: "pmtu_x"}}
+		tg.Nft.Maps = []compiler.MapDef{
+			{Name: "pmtu_dev_x", KeyType: []string{"ipv4_addr"}, ValueType: "verdict", Flags: []string{"interval"}, Elements: []compiler.MapElement{{Key: a, Value: "pmtu_x"}}},
+			{Name: "ident4_x", KeyType: []string{"ipv4_addr"}, ValueType: "mark", Elements: []compiler.MapElement{{Key: a, Value: "1"}}},
+		}
+		return tg
+	}
+	ops, err := identityOps("ns", target("10.10.0.5", 1280), target("10.10.0.6", 1280))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tx int
+	for _, op := range ops {
+		if o, ok := op.(*executor.NftApply); ok {
+			tx++
+			if s := string(o.Ruleset); !strings.Contains(s, "pmtu_dev_x") {
+				t.Errorf("the classification transaction: %s", s)
+			}
+		}
+	}
+	if tx != 1 {
+		t.Errorf("%d transactions: %v", tx, ops)
+	}
+	if _, err := identityOps("ns", target("10.10.0.5", 1280), target("10.10.0.5", 1400)); !errors.Is(err, errNotIncremental) {
+		t.Errorf("another size is an element update: %v", err)
+	}
+}

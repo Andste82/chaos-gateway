@@ -226,6 +226,7 @@ func (e *Engine) withPeerEndpoints(ctx context.Context, in *compiler.Input) {
 		return
 	}
 	in.PeerEndpoints = eps
+	e.cfg.Log.Debug("the peers are reached at", "endpoints", eps)
 }
 
 type appliedState struct {

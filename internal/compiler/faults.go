@@ -348,7 +348,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 
 	// ---- tunnel faults: their own family, resolved per tunnel ----
 	tunWinners := map[string]bool{}
-	if !t.resolveTunnelFaults(in, w, idx, faults, keySet, tunWinners) {
+	if !t.resolveTunnelFaults(in, w, faults, keySet, tunWinners) {
 		return
 	}
 	for k := range winners {
@@ -406,7 +406,7 @@ func (t *Target) compileTC(in Input) {
 		}
 	}
 	// the IFB tree first: it needs the ids, and a fault of it that does not fit is reported before the rest
-	ifbTC, ok := t.compileTunnelTC(in, classes)
+	ifbTC, ok := t.compileTunnelTC(in)
 	if !ok {
 		return
 	}

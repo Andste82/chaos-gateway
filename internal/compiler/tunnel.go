@@ -231,7 +231,7 @@ func mismatchedKey(overlayID, publicKey string) string {
 // resolveTunnelFaults resolves the tunnel faults (one winner per tunnel, overlays before configuration,
 // the newest wins) and adds the winners that impair something to faults. winners are the keys of the
 // faults that win; every winner is in it, also one that impairs nothing or names a tunnel that is not up.
-func (t *Target) resolveTunnelFaults(in Input, w *domain.World, idx *domain.Index, faults map[string]*Fault, keySet, winners map[string]bool) bool {
+func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[string]*Fault, keySet, winners map[string]bool) bool {
 	results := w.ResolveTunnels()
 	if len(results) == 0 {
 		return true
@@ -302,12 +302,9 @@ func describeTunnel(p tunnelPeer) string {
 	return "tunnel of client " + p.name
 }
 
-// IsTunnel reports whether the fault impairs a tunnel.
-func (f Fault) IsTunnel() bool { return f.Tunnel != nil }
-
 // compileTunnelTC builds the IFB tree of the tunnel faults and checks its class limit; the classes of the
 // direction towards the peer are part of the interfaces' tree (compileTC). It runs after the ids exist.
-func (t *Target) compileTunnelTC(in Input, mainClasses int) (*TCTarget, bool) {
+func (t *Target) compileTunnelTC(in Input) (*TCTarget, bool) {
 	var classes []TCClass
 	for i := range t.Faults {
 		f := &t.Faults[i]

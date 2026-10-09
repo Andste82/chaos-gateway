@@ -1152,3 +1152,74 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   set of maps and a mark bit or a second table of sizes), or (2) the executor to read mirror routes with the plain `ip -d route`.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M10-05 A tunnel fault's directions are the remote side's, and its peer is found by the address it is seen at
+
+- Status: new
+- Severity: medium
+- Reason: needs-decision. Plan §2.2.1 says the output hook classifies the encrypted UDP "towards the peer" by peer endpoint
+  and an IFB with a flower filter handles the packets "from the peer", and the fault has `upload` and `download` like every
+  impairment. It does not say which is which, where the peer's address comes from when a hub client has none configured
+  (the client roams, and may not have connected yet), or what the mechanism does for packets that do not arrive on the uplink.
+- Evidence: `internal/compiler/tunnel.go`, docs/development.md "Tunnel faults and WireGuard actions",
+  `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse`, `TestAClientThatMovesTakesItsTunnelFaultWithIt`,
+  `TestATunnelFaultOfAPeerThatHasNotConnectedTakesEffectWhenItDoes`.
+- Task: chosen interpretation — the directions are the remote side's, as for a device: `upload` is what the client or the remote
+  site sends (the encrypted UDP from the peer, selected by a flower filter on its outer source address and port on the ingress
+  qdisc of the uplink and delayed in the IFB), `download` what it receives (the gateway's packets to the peer's address and
+  port, marked in the output hook with the id and direction bit 1, delayed by the class of the interfaces' tree). The peer's
+  address is the one the interface reports (`wg show dump`, read right before the compile when something selects by address,
+  and polled: a peer that is seen elsewhere makes the engine apply again); a link's configured endpoint is the fallback when
+  it is an address. A peer with no address is not compiled: the compiler warns (`tunnel_endpoint_unknown`), the overlay shows
+  `disabled`, and the fault takes effect when the poll sees the peer. Only the uplink's ingress is looked at (the underlay
+  arrives there), and only IPv4.
+- Acceptance: a maintainer confirms, or asks for (a) the directions the other way round (upload as the gateway sends), (b) a
+  selection by the interface's listen port for a link, which needs no address and does not follow a roaming peer, or (c) the
+  ingress side on every interface.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M10-06 WireGuard actions: disable removes the peer, key_mismatch derives the key, block_endpoint needs an address
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.2.1 names three actions and describes none beyond the OpenAPI text ("removes the peer from the
+  interface", "replaces the peer's public key on the gateway by a random one", "drops the peer's encrypted UDP").
+- Evidence: `internal/compiler/tunnel.go` (`wgActionsOf`, `mismatchedKey`, `compileTunnelNft`),
+  `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay`, `TestDisableTakesAPeerOffItsInterfaceAndItsRoutesWithIt`.
+- Task: chosen interpretation — `disable` is the configured `enabled: false`: the peer is off the interface, so are the routes
+  of its networks and, for a link, the peer, and the engine reports the peer offline at its next poll. `key_mismatch` gives the
+  gateway the key sha256("chaosgw key_mismatch", overlay id, real key) in base64, so that a compile is a pure function and a
+  re-apply keeps the kernel as it is; nobody holds its private key. `block_endpoint` is a verdict map on the output and input
+  hooks at raw priority (before connection tracking) keyed on peer address, peer port and the interface's port, one chain
+  and one named counter per overlay; the peer stays on the interface, its handshake ages. It cannot select a peer whose address
+  is not known: the compiler warns and the overlay shows `disabled`. An overlay whose peer is not on an interface (disabled in
+  the configuration) shows `disabled` too.
+- Acceptance: a maintainer confirms, or asks for a random key, for `block_endpoint` by the interface's listen port for a link
+  (works without an address), or for `disable` to keep the routes.
+- Needs maintainer: yes
+- Effort: S
+
+### P2-M10-07 One IFB with a fixed name, kept assigned while its tree retires; the host's ingress qdisc is shared
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §4.5 lists IFB for tunnel faults and §3.2 asks for make-before-break; neither says how many IFB
+  devices there are, what they are called, what the executor may do with them, or what happens to an ingress qdisc and filters
+  the host put on the uplink.
+- Evidence: `internal/executor/op.go` (`IFBName`), `internal/executor/tcgrammar.go` (`checkFlowerFilter`),
+  `internal/apply/ingress.go`, `internal/apply/plan.go` (`keepIFB`, `dropIFB`), `internal/apply/retire.go`,
+  `TestTheEndOfATunnelFaultKeepsTheIFBUntilItsQueuesHaveDrained`, `TestAForeignFilterOnTheIngressQdiscOfTheUplinkIsLeftAlone`,
+  `TestAnIFBLeftByAGatewayThatDiedIsCleanedUp`.
+- Task: chosen interpretation — one IFB, `ifb-cgw`, the only name the executor creates (`add_ifb`), brings up or deletes
+  (`delete_ifb`, after reading its kind: `ip link delete ... type ifb` deletes a device of any kind), and the only target of a
+  flower redirect. It exists while some tunnel fault impairs the packets from a peer. The filter that feeds it goes at once when
+  its fault ends; the class and the IFB wait for the retirer (largest delay plus one second) so that queued packets are
+  delivered, and the IFB stays in the executor's scope until then. A filter of the uplink's ingress qdisc is Chaos Gateway's
+  only if it is a flower filter that redirects to the IFB; the host's own filters stay, and the ingress qdisc is deleted only
+  when filters of ours were its last. An IFB (or filters of ours) that a gateway that died left is found by the first apply
+  and removed. The kernel needs the `ifb` module (the preflight lists it).
+- Acceptance: a maintainer confirms, or asks for the ingress qdisc to be deleted only when the gateway made it (which needs
+  to be remembered across a restart), or for one IFB per uplink.
+- Needs maintainer: yes
+- Effort: S

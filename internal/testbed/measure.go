@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -118,4 +119,31 @@ func Within(got, want, abs time.Duration, frac float64) bool {
 		d = -d
 	}
 	return d <= tol
+}
+
+// SNMPCounter reads one counter of /proc/net/snmp inside a namespace: proto is the line's prefix
+// ("Ip", "Udp") and name the field ("InHdrErrors", "InCsumErrors"). The kernel counts there the
+// packets it discards because their checksums do not hold, which is where corrupted packets end.
+func SNMPCounter(ns *Namespace, proto, name string) (int64, error) {
+	return snmpCounter(ns.Must("cat", "/proc/net/snmp"), proto, name)
+}
+
+func snmpCounter(text, proto, name string) (int64, error) {
+	var header []string
+	for _, line := range strings.Split(text, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != proto+":" {
+			continue
+		}
+		if header == nil {
+			header = f // the first line of a protocol names the fields, the second holds the values
+			continue
+		}
+		for i, h := range header {
+			if h == name && i < len(f) {
+				return strconv.ParseInt(f[i], 10, 64)
+			}
+		}
+	}
+	return 0, fmt.Errorf("testbed: no counter %s %s in /proc/net/snmp", proto, name)
 }

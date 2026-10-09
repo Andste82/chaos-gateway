@@ -92,11 +92,56 @@ type pmtuLab struct {
 func startPMTULab(t *testing.T) *pmtuLab {
 	t.Helper()
 	r := startFaultLab(t, nil)
-	p := r.top.Server.Start("python3", "-c", pmtuServer, testbed.ServerAddr, fmt.Sprint(pmtuPort))
+	p := startPMTUServer(t, r.top.Server, testbed.ServerAddr)
+	return &pmtuLab{real: r, server: p}
+}
+
+// bulk transfers bulkBytes through the gateway and back.
+func (l *pmtuLab) bulk(from *testbed.Namespace, timeout time.Duration) bulkResult {
+	l.t.Helper()
+	return bulkTo(l.t, from, testbed.ServerAddr, timeout)
+}
+
+// bulkTo is bulk against any host that runs pmtuServer on pmtuPort.
+func bulkTo(t *testing.T, from *testbed.Namespace, host string, timeout time.Duration) bulkResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+60*time.Second)
+	defer cancel()
+	out, err := from.Run(ctx, "python3", "-c", pmtuClient, host, fmt.Sprint(pmtuPort), fmt.Sprint(bulkBytes), fmt.Sprint(timeout.Seconds()))
+	if err != nil {
+		t.Fatalf("the transfer cannot be run: %v\n%s", err, out)
+	}
+	var res bulkResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &res); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("transfer: %+v", res)
+	return res
+}
+
+// serverMSS is the segment sizes the server negotiated, per connection in order.
+func (l *pmtuLab) serverMSS() []int { return negotiatedMSS(l.server) }
+
+// negotiatedMSS reads the segment sizes pmtuServer printed, per connection in order.
+func negotiatedMSS(server *testbed.Process) []int {
+	var out []int
+	for _, line := range strings.Split(server.Output(), "\n") {
+		var i, mss int
+		if _, err := fmt.Sscanf(strings.TrimSpace(line), "conn %d mss %d", &i, &mss); err == nil {
+			out = append(out, mss)
+		}
+	}
+	return out
+}
+
+// startPMTUServer runs pmtuServer in ns on addr and waits until it listens.
+func startPMTUServer(t *testing.T, ns *testbed.Namespace, addr string) *testbed.Process {
+	t.Helper()
+	p := ns.Start("python3", "-c", pmtuServer, addr, fmt.Sprint(pmtuPort))
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if out, err := r.top.Server.Run(context.Background(), "ss", "-ltn", "sport", "=", fmt.Sprint(pmtuPort)); err == nil && strings.Contains(out, fmt.Sprint(pmtuPort)) {
-			break
+		if out, err := ns.Run(context.Background(), "ss", "-ltn", "sport", "=", fmt.Sprint(pmtuPort)); err == nil && strings.Contains(out, fmt.Sprint(pmtuPort)) {
+			return p
 		}
 		select {
 		case <-p.Done():
@@ -107,36 +152,6 @@ func startPMTULab(t *testing.T) *pmtuLab {
 			t.Fatalf("the echo server does not listen: %s", p.Output())
 		}
 	}
-	return &pmtuLab{real: r, server: p}
-}
-
-// bulk transfers bulkBytes through the gateway and back.
-func (l *pmtuLab) bulk(from *testbed.Namespace, timeout time.Duration) bulkResult {
-	l.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout+60*time.Second)
-	defer cancel()
-	out, err := from.Run(ctx, "python3", "-c", pmtuClient, testbed.ServerAddr, fmt.Sprint(pmtuPort), fmt.Sprint(bulkBytes), fmt.Sprint(timeout.Seconds()))
-	if err != nil {
-		l.t.Fatalf("the transfer cannot be run: %v\n%s", err, out)
-	}
-	var res bulkResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &res); err != nil {
-		l.t.Fatalf("%v\n%s", err, out)
-	}
-	l.t.Logf("transfer: %+v", res)
-	return res
-}
-
-// serverMSS is the segment sizes the server negotiated, per connection in order.
-func (l *pmtuLab) serverMSS() []int {
-	var out []int
-	for _, line := range strings.Split(l.server.Output(), "\n") {
-		var i, mss int
-		if _, err := fmt.Sscanf(strings.TrimSpace(line), "conn %d mss %d", &i, &mss); err == nil {
-			out = append(out, mss)
-		}
-	}
-	return out
 }
 
 // flushPMTU forgets what the hosts have learned about paths: the cache of the server (the gateway's NAT address is

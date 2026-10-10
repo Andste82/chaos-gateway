@@ -1135,10 +1135,10 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: WireGuard
-  action and the mtu and tunnel families M10, profile M11, DNS M20, TLS M21, DHCP M23) are refused
-  with `unsupported_feature` before they reach the owner. The kind `rule` has been supported since M9
-  (see "Access rules (M9)").
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: profile M11,
+  DNS M20, TLS M21, DHCP M23) are refused with `unsupported_feature` before they reach the owner. The
+  kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
+  mtu and tunnel families since M10 (see "Extended faults (M10)").
 - **Verify and take back.** The writer is answered when the apply loop has verified a generation
   that is at least the one of its change, with that generation (`OverlayResult.Generation`: it can be
   newer than the one the change made, when later changes were applied together with it). The owner

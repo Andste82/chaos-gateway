@@ -227,6 +227,8 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 		}
 		t.PMTU = append(t.PMTU, *f)
 		t.Winners = append(t.Winners, k)
+		t.Effective = append(t.Effective, EffectiveFault{Key: k, Layer: f.Layer, Source: f.Source, Family: domain.FamilyMTU,
+			Profile: f.Profile, Scope: f.Scope, Summary: f.Summary()})
 	}
 	sort.Strings(t.Winners)
 

@@ -203,6 +203,8 @@ type Target struct {
 	// (domain.Table), also those that impair nothing and so have no id: a fault that is not here is
 	// overridden everywhere. Sorted.
 	Winners []string `json:"winners,omitempty"`
+	// Effective lists the same winners in the user's terms, with the profile each part comes from.
+	Effective []EffectiveFault `json:"effective,omitempty"`
 	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault
 	// impairs anything.
 	TC *TCTarget `json:"tc,omitempty"`

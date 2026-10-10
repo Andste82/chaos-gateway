@@ -269,6 +269,9 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	if len(p.Rules) > 0 {
 		body["rules"] = previewRules(p.Rules)
 	}
+	if fs := previewFaults(p.Target); len(fs) > 0 {
+		body["faults"] = fs
+	}
 	c.JSON(200, body)
 }
 

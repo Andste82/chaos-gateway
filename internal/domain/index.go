@@ -328,6 +328,11 @@ func BuildIndex(cfg *model.Configuration) (*Index, []model.ValidationError) {
 			continue
 		}
 		p := deref(cfg.Profiles)[key]
+		if IsBuiltinProfileID(key) {
+			// a configured profile with a built-in UUID would shadow it (the lookup tries configured profiles first)
+			b.add(path, CodeReservedName, "%s is the UUID of a built-in profile", key)
+			continue
+		}
 		if reserved, ok := x.names[KindProfile][strings.ToLower(p.Name)]; ok && IsBuiltinProfileID(reserved) {
 			b.add(path+"/name", CodeReservedName, "%q is the name of a built-in profile", p.Name)
 			continue

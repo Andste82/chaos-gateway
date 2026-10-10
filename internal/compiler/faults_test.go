@@ -82,6 +82,9 @@ func faultScenarios(t *testing.T) map[string]*Target {
 		"faults-nested":  scenarioNested(t),
 		"faults-neutral": scenarioNeutral(t),
 		"faults-shapes":  scenarioShapes(t),
+		// profiles (M11): the precedence of a profile's parts against faults, and the catalogue expanded
+		"faults-profiles":         scenarioProfilePrecedence(t, false),
+		"faults-builtin-profiles": scenarioBuiltinProfiles(t),
 	}
 }
 

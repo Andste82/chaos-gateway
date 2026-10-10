@@ -59,6 +59,8 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	// the tunnel faults and the WireGuard actions (M10): the output hook with its endpoint map, the chains of the faults,
 	// the blocked endpoints at raw priority on output and input
 	out["tunnel"] = scenarioTunnel(t)
+	// profiles (M11): the MTU part of a profile next to the impairment parts that faults replace
+	out["profiles-mtu"] = scenarioProfilePrecedence(t, true)
 	// the access rules (M9): the access chains, the source sets, the counters, reject with icmpx and
 	// with tcp reset, the cut chains
 	for name, tg := range accessScenarios(t) {

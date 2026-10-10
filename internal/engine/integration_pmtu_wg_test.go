@@ -271,15 +271,17 @@ func TestPMTUFaultsOfTheThreeModesHoldATCPTransferThroughATunnel(t *testing.T) {
 	if out, ok := pingDF(l.top.A, testbed.ClientNetHost, 1200); !ok {
 		t.Errorf("a small packet of A does not go through the tunnel:\n%s", out)
 	}
-	if b := bulk(l.top.B, 40*time.Second); !b.OK {
-		t.Errorf("B's transfer through the tunnel next to a black hole: %+v", b)
+	control := bulk(l.top.B, 40*time.Second)
+	if !control.OK {
+		t.Errorf("B's transfer through the tunnel next to a black hole: %+v", control)
 	}
 	conns++
-	if a := bulk(l.top.A, 8*time.Second); a.OK || a.Received >= bulkBytes {
-		t.Errorf("A's transfer through a black hole completed: %+v", a)
-	}
+	dropsBefore := counters()[f.CounterDrop].Packets
+	stalled := bulk(l.top.A, 8*time.Second)
 	conns++
-	if cs := counters(); cs[f.CounterDrop].Packets == 0 {
+	cs := counters()
+	assertStalled(t, "A's transfer through a black hole in the tunnel", stalled, control, 8*time.Second, dropsBefore, cs[f.CounterDrop].Packets)
+	if cs[f.CounterDrop].Packets == 0 {
 		t.Errorf("the drops of the black hole are not counted: %+v", cs[f.CounterDrop])
 	}
 	end(hole)

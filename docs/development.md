@@ -2404,6 +2404,17 @@ on both (7.0.0-38: the tunnel fault 150 ms / 5 % loss in the same three flows, f
 time of 4 s, the BGP session down 40.7 s and up again 36.4 s after the calls of the writes, on a machine that took 69 s over the write).
 A kernel other than the default is `make vm-down`, then `go run ./tools/testvm vm up -kernel 7.0.0-38-generic`.
 
+**Accuracy assertions of M10, reviewed by hand before CI** (the persistent VM, 6.8.0-142, emulated: the 24 M10 tests of
+`internal/engine`, the gates and the other packages with testbed tests pass; the 55 other testbed tests of the engine package pass except
+`TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused`, which fails on `main` in the same VM with the same line, a
+1 ms difference in BIRD's "since" time). The assertions that run only with `Accurate()` are the shares of duplicates, reordered and
+corrupted packets (99.9 % binomial interval, N of `impairedRun`), the Gilbert-Elliott losses and runs, the flapping toggles
+(`FlapTolerance`) and outages (`CheckFlaps`: tolerance plus two probe intervals, at least three complete outages in a 19 s run of a
+3 s up, 2 s down cycle), the tunnel latency and loss, the rate (±10 % of 2 Mbit/s) and the BGP withdrawal bound (at most hold time
++ 5 s after the answer of the write). The one with the least margin is the rate: netem counts the frame, so TCP payload shows as
+1.91 Mbit/s and the lower bound is 1.8; the emulated VM measured 1.82 to 1.90. If CI reports a value below 1.8, read the logged
+throughputs first; the bound is the plan's and is not to be widened without an open item.
+
 ### Acceptance map (plan M10 "Tests")
 
 Every bullet of the plan's test list has a test, named here. The real-kernel ones are testbed tests of `internal/engine` (run them in

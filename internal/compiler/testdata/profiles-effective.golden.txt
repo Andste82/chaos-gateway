@@ -1,0 +1,6 @@
+# effective
+impairment  overlay  profile bad-lte  "network IoT"  latency 150ms ± 50ms, loss 3%, rate 2Mbit
+impairment  overlay  -  "device esp32-42"  latency 300ms
+mtu  overlay  profile lte-small-mtu  "device esp32-43"  mtu 1400 (mss_clamp)
+impairment  overlay  -  "device esp32-43"  loss 7%
+impairment  overlay  profile satellite  "network Lab"  latency 600ms ± 30ms, loss 1%

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\":\"tc\",\"entries\":[{\"object\":\"qdisc\",\"action\":\"replace\",\"dev\":\"wan0\",\"parent\":\"root\",\"handle\":\"1:\",\"args\":[\"prio\",\"flowid\",\"00\"]}]}")

@@ -3,6 +3,8 @@
 package engine_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -379,4 +381,101 @@ func TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate(t *testing.T) {
 			return nil
 		})
 	}
+}
+
+// The TTL of an activation on the wire (plan M11 and §2.1.1): the profile impairs its scope while the activation
+// lives, and when the TTL runs out (the real clock of the lab) the profile leaves the kernel, the configuration
+// fault that it had replaced is back for device A (D24), and device B, which only the profile named, is clean.
+func TestAProfileActivationEndsWithItsTTLOnTheWire(t *testing.T) {
+	r := startFaultLab(t, func(c *model.Configuration) {
+		profileConfig(c)
+		c.Faults = &map[string]model.ConfigFault{prSlowCfg: {
+			Name: ptr("slow-a"), Source: &model.Scope{Device: ptr(flDevA)}, Latency: ptr("400ms")}}
+	})
+	a, b, c := serverFlows(t, r.top)
+	beforeB, beforeC := baseline(t, b), baseline(t, c)
+	expectFlow(t, a, slowConfig)
+
+	// A long TTL while the flows are measured (an emulated kernel takes minutes for that), then the same activation
+	// written again with a short one: a TTL starts over with every write, and only the wait that follows depends on
+	// the clock.
+	act := r.mustPut(admin, profileOf("network: IoT", "link-a")+"\nttl: 1h")
+	if act.Overlay.ExpiresAt == nil {
+		t.Fatalf("an activation with a TTL has no expiry: %+v", act.Overlay)
+	}
+	r.verifyKernel()
+	expectFlow(t, a, linkA)
+	expectFlow(t, b, linkA)
+	expectUnaffected(t, c, beforeC)
+
+	const ttl = 20 * time.Second
+	again := r.mustPut(admin, profileOf("network: IoT", "link-a")+"\nttl: 20s")
+	if again.Created || again.Overlay.Id != act.Overlay.Id || again.Overlay.ExpiresAt == nil || !again.Overlay.ExpiresAt.Before(act.Overlay.ExpiresAt.Add(-50*time.Minute)) {
+		t.Fatalf("writing the activation again with a shorter TTL: %+v", again)
+	}
+	// no verifyKernel here: the TTL is short and runs out while the kernel is read, which is the race it would lose
+
+	deadline := time.Now().Add(ttl + 2*time.Minute)
+	for len(r.e.Snapshot().Overlays) != 0 && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got := r.e.Snapshot().Overlays; len(got) != 0 {
+		t.Fatalf("the activation outlived its TTL: %+v", got)
+	}
+	if _, err := r.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if faults := r.e.Snapshot().Faults; len(faults) != 1 || faults[0].Source == act.Overlay.Id.String() {
+		t.Errorf("after the expiry only the configuration fault is left: %+v", faults)
+	}
+	r.verifyKernel()
+	expectFlow(t, a, slowConfig)
+	expectUnaffected(t, b, beforeB)
+	expectUnaffected(t, c, beforeC)
+}
+
+// Plan §2.1.1 for a profile, on the wire: deleting an activated profile is refused and the activation keeps
+// working; with force the activation is removed, the devices of its scope are back to what they were, and the
+// activation of another profile on the other network is not touched.
+func TestForceDeletingAnActivatedProfileTakesItOffTheWire(t *testing.T) {
+	r := startFaultLab(t, profileConfig)
+	a, b, c := serverFlows(t, r.top)
+	beforeA, beforeB := baseline(t, a), baseline(t, b)
+
+	onIoT := r.mustPut(admin, profileOf("network: IoT", "link-a"))
+	r.mustPut(admin, profileOf("network: Lab", "link-b"))
+	r.verifyKernel()
+	expectFlow(t, a, linkA)
+	expectFlow(t, c, linkB)
+
+	without := r.revision(func(cfg *model.Configuration) {
+		withDevices(cfg)
+		profileConfig(cfg)
+		delete(*cfg.Profiles, prLinkA)
+	})
+	_, err := r.apply(without, engine.ApplyOptions{})
+	var orphaned *engine.ErrOverlaysOrphaned
+	if !errors.As(err, &orphaned) || len(orphaned.References) != 1 || orphaned.References[0].Overlay.Id != onIoT.Overlay.Id {
+		t.Fatalf("deleting the activated profile without force: %v", err)
+	}
+	if got := r.e.Snapshot().Overlays; len(got) != 2 {
+		t.Fatalf("the refused revision changed the overlays: %+v", got)
+	}
+	r.verifyKernel()
+	expectFlow(t, b, linkA) // still impaired by the profile that was not deleted
+
+	res, err := r.apply(without, engine.ApplyOptions{Force: true, Actor: model.Actor{Type: "user", Id: "admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.RemovedOverlays) != 1 || res.RemovedOverlays[0] != onIoT.Overlay.Id {
+		t.Fatalf("removed %v", res.RemovedOverlays)
+	}
+	if got := r.e.Snapshot().Overlays; len(got) != 1 {
+		t.Fatalf("overlays %+v", got)
+	}
+	r.verifyKernel()
+	expectUnaffected(t, a, beforeA)
+	expectUnaffected(t, b, beforeB)
+	expectFlow(t, c, linkB)
 }

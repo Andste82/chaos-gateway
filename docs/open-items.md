@@ -1242,3 +1242,57 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Acceptance: the test passes on the hosted runners without a rerun over several runs, or the allowance is changed with a note here.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M11-01 A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. The plan keeps the DNS and TLS profiles out of M11 ("built-in (except DNS/TLS profiles, which arrive with
+  M20/M21)") and says a custom profile may add a DNS delay (§2.4). A custom profile can therefore be defined with a `dns` or `tls`
+  part today (the model and the validation have had them since Phase 1), and the question is what its activation does before the
+  family exists. Chosen reading: the activation is refused **as a whole** with `unsupported_feature` and the milestone (M20 for a
+  `dns` part, M21 for a `tls` part), and `GET /profiles` lists the profile with `available: false` and an `unavailable_reason`. The
+  alternative, activating only the impairment part, would silently produce another profile than the one the user named, and a test
+  that expects the DNS part would pass for the wrong reason. The built-in `dns-broken` and `tls-broken` follow the same rule.
+  A target that still holds such an overlay (it cannot be written) compiles the parts it can and ignores the others.
+- Evidence: `engine.checkProfileAvailable`, `domain.UnavailableParts`, `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges`,
+  `TestACustomProfileWithADNSPartIsStoredButCannotBeActivated`, `TestAProfileWithOnlyALaterFamilyCompilesToNothing`.
+- Task: M20 and M21 lift the check family by family (`domain.unavailableFamilies`); nothing else to do now.
+- Acceptance: with M20 a profile with a `dns` part activates and its DNS part competes in the DNS family (E5).
+- Needs maintainer: no
+- Effort: S
+
+### P2-M11-02 Custom profiles are created, changed and deleted with candidate revisions, not with endpoints of their own
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. The M11 entry asks for "custom profiles" and the task for CRUD with read-only built-ins. The spec has `GET
+  /profiles` and `GET /profiles/{id}` and no write operation, as for every other configured object (networks, devices, groups,
+  rules, faults): the configuration is edited as a candidate revision (`POST /revisions`, a merge patch or the whole document), previewed
+  and applied (§2.1.1), and "profiles are part of each revision". Chosen reading: no `POST /profiles`; `profiles` of the configuration
+  is the create/update/delete, the built-in profiles are not part of the configuration (a key equal to a built-in UUID or a name equal
+  to a built-in name, in any case, is `reserved_name`), and deleting a profile that an overlay activates needs `?force=true` and lists
+  `references[]` (`/profiles/<uuid>` is the object). The UI (M13) needs no more than that to offer profile cards.
+- Evidence: `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences`,
+  `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced`.
+- Task: none yet; if a maintainer wants single-profile endpoints they are sugar over a candidate revision and belong with M13/M18.
+- Acceptance: a decision, or none needed.
+- Needs maintainer: no
+- Effort: S
+
+### P2-M11-03 The rate of the built-in Bad LTE is not measured end to end
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan M11 asks for "measured values (integration)". The delay and loss of Bad LTE (150 ms ± 50 ms, 3 %) are
+  measured on both directions, and the rate of a profile is measured by a profile whose only parameter is a rate (E9: two devices
+  of a network get 2 Mbit/s each, ±10 %). The rate of Bad LTE itself is not measured with a TCP transfer: at 150 ms ± 50 ms and 3 %
+  loss a TCP flow is held to a few hundred kbit/s by the loss, not by the rate (the Mathis bound is about 0.2 Mbit/s), so the result
+  would be the loss' and not the profile's. The compiled rate is asserted (`TestEveryBuiltinProfileCompilesToItsConfiguredParameters`),
+  and the constructs are accepted by the kernel (`TestEveryCompiledTCTreeIsAcceptedByTheKernel`, scenario `faults-builtin-profiles`).
+- Evidence: `internal/engine/integration_profiles_test.go`.
+- Task: none yet; a UDP flood above the rate would measure the shaped throughput with the loss in it (`iperf3 -u -b 4M`: about 97 % of
+  2 Mbit/s), if a maintainer wants the number in the suite.
+- Acceptance: a UDP measurement of the built-in profile within ±10 % of 2 Mbit/s times the delivery share, or the decision that E9 is enough.
+- Needs maintainer: yes
+- Effort: S

@@ -1587,6 +1587,24 @@ func (e PreflightReportStatus) Valid() bool {
 	}
 }
 
+// Defines values for PreviewFaultLayer.
+const (
+	PreviewFaultLayerConfig  PreviewFaultLayer = "config"
+	PreviewFaultLayerOverlay PreviewFaultLayer = "overlay"
+)
+
+// Valid indicates whether the value is a known member of the PreviewFaultLayer enum.
+func (e PreviewFaultLayer) Valid() bool {
+	switch e {
+	case PreviewFaultLayerConfig:
+		return true
+	case PreviewFaultLayerOverlay:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PreviewRuleLayer.
 const (
 	PreviewRuleLayerConfig  PreviewRuleLayer = "config"
@@ -3501,7 +3519,9 @@ type DownstreamRoute struct {
 // Duration Example: 90s
 type Duration = string
 
-// EffectState Whether the fault, profile part or rule wins anywhere (plan §2.4).
+// EffectState Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
+// one part per family: `effective` when all of them win somewhere, `partially_overridden`
+// when some do and others lose everywhere, `overridden` when none wins.
 type EffectState string
 
 // Endpoint `host:port`, host a DNS name or IPv4 address.
@@ -3797,7 +3817,9 @@ type FaultView struct {
 	OverriddenBy *[]FaultRef   `json:"overridden_by,omitempty"`
 	Queues       *[]QueueStats `json:"queues,omitempty"`
 
-	// State Whether the fault, profile part or rule wins anywhere (plan §2.4).
+	// State Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
+	// one part per family: `effective` when all of them win somewhere, `partially_overridden`
+	// when some do and others lose everywhere, `overridden` when none wins.
 	State EffectState `json:"state"`
 }
 
@@ -4438,7 +4460,9 @@ type Overlay struct {
 	// Run Set when a run owns the overlay.
 	Run *OverlayRunRef `json:"run,omitempty"`
 
-	// State Whether the fault, profile part or rule wins anywhere (plan §2.4).
+	// State Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
+	// one part per family: `effective` when all of them win somewhere, `partially_overridden`
+	// when some do and others lose everywhere, `overridden` when none wins.
 	State *EffectState `json:"state,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
@@ -4654,6 +4678,13 @@ type Preview struct {
 	} `json:"capacity,omitempty"`
 	Domain []DomainChange `json:"domain"`
 
+	// Faults The faults and the parts of activated profiles that win for some traffic after the
+	// change, with the profile each part comes from (plan §2.4): the origin of the effective
+	// parameters. Overlays count as they are now, so a revision that changes a profile shows
+	// what its activations will produce. A winner that impairs nothing (the profile
+	// `normal`) is listed with the summary `no impairment`. Absent when there is none.
+	Faults *[]PreviewFault `json:"faults,omitempty"`
+
 	// Linux Unified diffs of the normalized target state per subsystem (empty when unchanged).
 	Linux struct {
 		Bird     *string `json:"bird,omitempty"`
@@ -4690,6 +4721,27 @@ type Preview struct {
 		Path    *string `json:"path,omitempty"`
 	} `json:"warnings,omitempty"`
 }
+
+// PreviewFault defines model for PreviewFault.
+type PreviewFault struct {
+	Family FaultFamily `json:"family"`
+
+	// Id Overlay id or configured fault id.
+	Id    Uuid              `json:"id"`
+	Layer PreviewFaultLayer `json:"layer"`
+
+	// Profile Name of the activated profile when this is one of its parts.
+	Profile *string `json:"profile,omitempty"`
+
+	// Scope Where it applies, in words (`network IoT`, `device esp32-42`).
+	Scope string `json:"scope"`
+
+	// Summary Example: latency 150ms ± 50ms, loss 3%, rate 2Mbit
+	Summary string `json:"summary"`
+}
+
+// PreviewFaultLayer defines model for PreviewFault.Layer.
+type PreviewFaultLayer string
 
 // PreviewRule defines model for PreviewRule.
 type PreviewRule struct {
@@ -4779,6 +4831,24 @@ type Profile struct {
 	Parts ProfileParts `json:"parts"`
 }
 
+// ProfileActivation defines model for ProfileActivation.
+type ProfileActivation struct {
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Overlay   Uuid       `json:"overlay"`
+
+	// Owner Owner of an overlay - `user`, `token` or `run`.
+	Owner Owner `json:"owner"`
+
+	// State `partially_overridden` when some parts of the profile win and others lose (e.g. a fault of the same scope beats its impairment part but its MTU part stays).
+	State *EffectState `json:"state,omitempty"`
+
+	// Target The source part of a selector (`source` in the configuration, `target` in overlays
+	// and scenarios). Exactly one property. Specificity levels (plan §2.4): device → 1–4,
+	// group → 5–6, network and remote_network → 7–8, global → 9–10 (with or without a
+	// destination/port).
+	Target Scope `json:"target"`
+}
+
 // ProfileParts defines model for ProfileParts.
 type ProfileParts struct {
 	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
@@ -4802,7 +4872,14 @@ type ProfileParts struct {
 
 // ProfileView defines model for ProfileView.
 type ProfileView struct {
-	// Available False while a part's family is not in this build (e.g. `dns-broken` before M20).
+	// Activations The overlays that activate this profile now (active revision only). An activation
+	// follows the definition: a new revision that changes the profile changes what the
+	// activation produces.
+	Activations *[]ProfileActivation `json:"activations,omitempty"`
+
+	// Available False while a part's family is not in this build (e.g. `dns-broken` before M20, a custom
+	// profile with a `dns` part). Such a profile can be defined and shown, but activating it
+	// is refused with `unsupported_feature`.
 	Available bool `json:"available"`
 
 	// Builtin Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).
@@ -4811,6 +4888,11 @@ type ProfileView struct {
 	// Config A named bundle across families (plan §2.9). Each part competes in its own family when the profile is activated (overlay).
 	Config Profile `json:"config"`
 	Id     Uuid    `json:"id"`
+
+	// UnavailableReason Set when `available` is false - the part and the milestone that brings it.
+	//
+	// Example: the dns part arrives with milestone M20
+	UnavailableReason *string `json:"unavailable_reason,omitempty"`
 }
 
 // ProfileViewPage defines model for ProfileViewPage.

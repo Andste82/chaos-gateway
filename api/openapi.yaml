@@ -1121,6 +1121,12 @@ paths:
       operationId: listProfiles
       summary: Built-in and user-defined profiles
       x-milestone: M11
+      description: |
+        The built-in profiles (fixed UUIDs, reserved names, read-only) and the profiles of the
+        revision, sorted by name. A profile is created, changed and deleted with a candidate
+        revision (`profiles` of the configuration), like every configured object. For the active
+        revision each profile lists where it is activated (`activations`); a revision other than
+        the active one shows the definitions alone.
       x-required-scope: read
       parameters:
         - $ref: '#/components/parameters/RevisionQuery'
@@ -1139,6 +1145,7 @@ paths:
       operationId: getProfile
       summary: One profile
       x-milestone: M11
+      description: By UUID or name (ignoring case).
       x-required-scope: read
       parameters:
         - name: profileId
@@ -3519,7 +3526,10 @@ components:
     EffectState:
       type: string
       enum: [effective, partially_overridden, overridden, disabled]
-      description: Whether the fault, profile part or rule wins anywhere (plan §2.4).
+      description: |
+        Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
+        one part per family: `effective` when all of them win somewhere, `partially_overridden`
+        when some do and others lose everywhere, `overridden` when none wins.
     Counter:
       type: object
       required: [packets, bytes, epoch]
@@ -3714,6 +3724,33 @@ components:
             the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
             `warnings` say so. Absent when there is no rule.
           items: {$ref: '#/components/schemas/PreviewRule'}
+        faults:
+          type: array
+          description: |
+            The faults and the parts of activated profiles that win for some traffic after the
+            change, with the profile each part comes from (plan §2.4): the origin of the effective
+            parameters. Overlays count as they are now, so a revision that changes a profile shows
+            what its activations will produce. A winner that impairs nothing (the profile
+            `normal`) is listed with the summary `no impairment`. Absent when there is none.
+          items: {$ref: '#/components/schemas/PreviewFault'}
+    PreviewFault:
+      type: object
+      required: [family, layer, id, scope, summary]
+      properties:
+        family: {$ref: '#/components/schemas/FaultFamily'}
+        layer:
+          type: string
+          enum: [overlay, config]
+        id:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Overlay id or configured fault id.
+        profile:
+          type: string
+          description: Name of the activated profile when this is one of its parts.
+        scope: {type: string, description: 'Where it applies, in words (`network IoT`, `device esp32-42`).'}
+        summary:
+          type: string
+          example: 'latency 150ms ± 50ms, loss 3%, rate 2Mbit'
     PreviewRule:
       type: object
       required: [key, layer, position, action, protocol]
@@ -4336,8 +4373,35 @@ components:
           description: Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).
         available:
           type: boolean
-          description: False while a part's family is not in this build (e.g. `dns-broken` before M20).
+          description: |
+            False while a part's family is not in this build (e.g. `dns-broken` before M20, a custom
+            profile with a `dns` part). Such a profile can be defined and shown, but activating it
+            is refused with `unsupported_feature`.
+        unavailable_reason:
+          type: string
+          description: Set when `available` is false - the part and the milestone that brings it.
+          example: 'the dns part arrives with milestone M20'
         config: {$ref: '#/components/schemas/Profile'}
+        activations:
+          type: array
+          description: |
+            The overlays that activate this profile now (active revision only). An activation
+            follows the definition: a new revision that changes the profile changes what the
+            activation produces.
+          items: {$ref: '#/components/schemas/ProfileActivation'}
+    ProfileActivation:
+      type: object
+      required: [overlay, target, owner]
+      properties:
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        target: {$ref: '#/components/schemas/Scope'}
+        owner: {$ref: '#/components/schemas/Owner'}
+        expires_at:
+          type: string
+          format: date-time
+        state:
+          allOf: [{$ref: '#/components/schemas/EffectState'}]
+          description: '`partially_overridden` when some parts of the profile win and others lose (e.g. a fault of the same scope beats its impairment part but its MTU part stays).'
     ScenarioView:
       type: object
       required: [id, config]

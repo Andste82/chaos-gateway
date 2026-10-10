@@ -1172,7 +1172,9 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   and polled: a peer that is seen elsewhere makes the engine apply again); a link's configured endpoint is the fallback when
   it is an address. A peer with no address is not compiled: the compiler warns (`tunnel_endpoint_unknown`), the overlay shows
   `disabled`, and the fault takes effect when the poll sees the peer. Only the uplink's ingress is looked at (the underlay
-  arrives there), and only IPv4.
+  arrives there), and only IPv4: a peer that is seen at an IPv6 address is treated like a peer with no address (the same warning,
+  the overlay shows `disabled`, no apply fails and none is repeated), and two peers seen at the same address and port get one
+  fault between them, the one whose tunnel key sorts first (`tunnel_endpoint_shared`).
 - Acceptance: a maintainer confirms, or asks for (a) the directions the other way round (upload as the gateway sends), (b) a
   selection by the interface's listen port for a link, which needs no address and does not follow a roaming peer, or (c) the
   ingress side on every interface.

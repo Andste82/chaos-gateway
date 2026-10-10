@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -456,9 +457,10 @@ func iperfServer(t *testing.T, ns *testbed.Namespace, port int) {
 }
 
 // iperfTCP runs a TCP transfer of secs seconds (the first omit seconds are not counted) and returns the
-// throughput the receiver saw, in bit/s. reverse makes the server send (the download of the device).
-func iperfTCP(t *testing.T, from *testbed.Namespace, port, secs, omit int, reverse bool) float64 {
-	t.Helper()
+// throughput the receiver saw, in bit/s. reverse makes the server send (the download of the device). An
+// error is the tool failing (not a measurement): a rate fault queues seconds of data, and a control
+// connection that has to wait behind them is sometimes given up by iperf3 itself.
+func iperfTCP(from *testbed.Namespace, port, secs, omit int, reverse bool) (float64, error) {
 	args := []string{"iperf3", "-c", testbed.ServerAddr, "-p", fmt.Sprint(port), "-t", fmt.Sprint(secs), "-O", fmt.Sprint(omit), "-J"}
 	if reverse {
 		args = append(args, "-R")
@@ -467,7 +469,7 @@ func iperfTCP(t *testing.T, from *testbed.Namespace, port, secs, omit int, rever
 	defer cancel()
 	out, err := from.Run(ctx, args[0], args[1:]...)
 	if err != nil {
-		t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+		return 0, fmt.Errorf("%s: %w\n%s", strings.Join(args, " "), err, out)
 	}
 	var res struct {
 		End struct {
@@ -477,26 +479,46 @@ func iperfTCP(t *testing.T, from *testbed.Namespace, port, secs, omit int, rever
 		} `json:"end"`
 	}
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		t.Fatalf("iperf3 output: %v\n%s", err, out)
+		return 0, fmt.Errorf("iperf3 output: %w\n%s", err, out)
 	}
-	return res.End.SumReceived.BitsPerSecond
+	return res.End.SumReceived.BitsPerSecond, nil
 }
 
-// parallel runs the transfers at the same time and returns their throughputs in order.
-func parallel(t *testing.T, transfers ...func() float64) []float64 {
+// parallel runs the transfers at the same time and returns their throughputs in order. It never calls
+// FailNow from a goroutine of its own (that would leave the wait below hanging until the test binary times
+// out): a failed transfer is an error of the result. If any transfer failed as a tool, all of them are
+// repeated once after the queues of the first round have drained (the flakiness policy of plan §4.3 applies
+// to the tool as well as to the measurement); a second failure fails the test.
+func parallel(t *testing.T, transfers ...func() (float64, error)) []float64 {
 	t.Helper()
-	out := make([]float64, len(transfers))
-	done := make(chan int, len(transfers))
-	for i, f := range transfers {
-		go func() {
-			out[i] = f()
-			done <- i
-		}()
+	for attempt := 1; ; attempt++ {
+		out := make([]float64, len(transfers))
+		errs := make([]error, len(transfers))
+		var wg sync.WaitGroup
+		for i, f := range transfers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				out[i], errs[i] = f()
+			}()
+		}
+		wg.Wait()
+		var failed error
+		for _, err := range errs {
+			if err != nil {
+				failed = err
+				break
+			}
+		}
+		if failed == nil {
+			return out
+		}
+		if attempt == 2 {
+			t.Fatalf("the transfers failed twice: %v", failed)
+		}
+		t.Logf("a transfer failed as a tool, repeating all of them once after the queues drained: %v", failed)
+		time.Sleep(15 * time.Second)
 	}
-	for range transfers {
-		<-done
-	}
-	return out
 }
 
 // Rate is per device (plan §2.4, D18, example E9): a 2 Mbit/s fault on a network gives every device of it
@@ -526,9 +548,9 @@ func TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit(t *testing.
 		ports   [3]int
 	}{{"download", true, [3]int{5201, 5202, 5203}}, {"upload", false, [3]int{5204, 5205, 5206}}} {
 		got := parallel(t,
-			func() float64 { return iperfTCP(t, r.top.A, dir.ports[0], secs, omit, dir.reverse) },
-			func() float64 { return iperfTCP(t, r.top.B, dir.ports[1], secs, omit, dir.reverse) },
-			func() float64 { return iperfTCP(t, r.top.C, dir.ports[2], secs, omit, dir.reverse) })
+			func() (float64, error) { return iperfTCP(r.top.A, dir.ports[0], secs, omit, dir.reverse) },
+			func() (float64, error) { return iperfTCP(r.top.B, dir.ports[1], secs, omit, dir.reverse) },
+			func() (float64, error) { return iperfTCP(r.top.C, dir.ports[2], secs, omit, dir.reverse) })
 		t.Logf("%s, A and B at 2 Mbit/s each, C unlimited: A %.2f, B %.2f, C %.2f Mbit/s", dir.name, got[0]/1e6, got[1]/1e6, got[2]/1e6)
 		// functional: neither device is starved by the other (a shared queue gives 1 Mbit/s each), both are
 		// held far below what the link gives the device of the other network

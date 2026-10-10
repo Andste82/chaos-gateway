@@ -2465,6 +2465,12 @@ fail it visibly.
 Its `go test` timeout is 60 minutes (`ARGS='-test-timeout 60m'`): the first run of M10 stopped
 the engine package at the default 20 minutes with every test up to then passing (234 of 256 tests
 had started), so the limit, not a test, was the failure.
+The VM job gives the package 100 minutes (`-test-timeout 100m -vm-timeout 3h`): under KVM the first
+124 tests took 25 minutes, so the 256 of M10 need about 50. The same run showed a hang of its own, not
+of a limit: `parallel` of the iperf3 rate test called `t.Fatalf` from goroutines, which ends the goroutine
+without the signal the wait is for, so an iperf3 that failed at the end of an upload through a 2 Mbit/s
+queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
+their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

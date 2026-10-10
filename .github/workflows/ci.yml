@@ -82,9 +82,9 @@ jobs:
         run: |
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
-          # The engine package alone needs more than the default 20 minutes since M8b: its measurement
+          # The engine package alone needs more than the default 20 minutes since M8b (about 50 minutes under KVM since M10): its measurement
           # tests of the fault engine send thousands of probes through delays of 100 to 600 ms each.
-          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS='-test-timeout 60m -vm-timeout 2h'
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS='-test-timeout 100m -vm-timeout 3h'
 
   # Level 1: the same tests directly in a privileged container. The container has no modules of
   # its own, so the runner's /lib/modules is mounted read-only and the tests load them into the

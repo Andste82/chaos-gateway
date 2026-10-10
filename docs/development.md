@@ -2519,6 +2519,8 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 | An overlay profile beats a configuration fault | `TestAnOverlayProfileBeatsAConfigurationFault` (compiler), `TestAnOverlayProfileBeatsAConfigurationFaultOnTheWire` |
 | Origin in explain and preview | `TestExplainAndThePreviewNameTheProfileAsTheOrigin` (engine), `TestThePreviewNamesTheProfileOfEachEffectivePart` (API) |
 | Deletion rules | `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced` (engine), `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences` (API) |
+| TTL and lease of an activation | `TestAProfileActivationExpiresWithItsTTL`, `TestAProfileActivationWithALeaseIsRenewedAndExpiresWithItsFaults`, `TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive` (engine, fake clock), `TestAProfileActivationEndsWithItsTTLOnTheWire` (the profile leaves the kernel, the configuration fault it replaced is back, a device only the profile named is clean) |
+| Force delete on the wire | `TestForceDeletingAnActivatedProfileTakesItOffTheWire` (refused without force and still impairing; with force the scope is back to baseline, the activation on the other network untouched) |
 | Catalogue, custom CRUD, availability | `internal/api/profiles_test.go` (`TestTheProfileCatalogueListsTheBuiltInProfilesAndMarksTheUnavailableOnes`, `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestACustomProfileWithADNSPartIsStoredButCannotBeActivated`, `TestAProfileIsActivatedSwitchedAndListedOverTheAPI`), `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges` |
 | The kernel accepts profile-expanded targets | `TestEveryCompiledTCTreeIsAcceptedByTheKernel` (`faults-profiles`, `faults-builtin-profiles`), `TestEveryCompiledRulesetIsAcceptedByTheKernel` (the same and `profiles-mtu`) |
 
@@ -2530,7 +2532,7 @@ loss within the 99.9 % binomial interval, jitter spread, rate ±10 %) with `test
 **What the persistent VM showed** (kernel 6.8.0-142, emulated, so the functional assertions only): the seven measurement tests of
 `integration_profiles_test.go` pass in one run of about 45 minutes (`make vm-test ARGS='-run "TestActivatingAndSwitching|..."
 -tags testbed -test-timeout 80m -vm-timeout 90m ./internal/engine'`; a lab takes 3 to 4 minutes to build under emulation, the
-switching test measures twelve flows). No tc or nftables construct was new, so nothing was proven by hand first; the gates
+switching test measures twelve flows). The two tests added when the acceptance list was closed (the TTL on the wire and the force delete) took 8 and 7 minutes each and passed; the TTL test measures under a long TTL and then writes the activation again with a short one, because a measurement under emulation takes longer than any TTL worth waiting for. No tc or nftables construct was new, so nothing was proven by hand first; the gates
 `TestEveryCompiledRulesetIsAcceptedByTheKernel` and `TestEveryCompiledTCTreeIsAcceptedByTheKernel` accepted the profile-expanded
 targets on the first run. The 7.0.0-38 kernel of the matrix was not run locally; the nightly matrix does. The accuracy
 assertions (medians, loss intervals, jitter spread, the rate) are written from plan §4.3 and run in CI; if one fails there, read

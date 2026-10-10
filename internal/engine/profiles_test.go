@@ -147,6 +147,65 @@ func TestAProfileActivationExpiresWithItsTTL(t *testing.T) {
 	h.verifyKernelWithOverlays()
 }
 
+// The lease of an activation: it needs renewing like the lease of any overlay, a renewal keeps the profile, and
+// when it runs out the profile's faults leave the state and the kernel with it, announced as a lease expiry.
+func TestAProfileActivationWithALeaseIsRenewedAndExpiresWithItsFaults(t *testing.T) {
+	h := startedWithRevision(t)
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	res := h.mustPut(alice, "target: {network: IoT}\nprofile: lte\nlease: 10s")
+	if len(h.e.Snapshot().Faults) != 1 {
+		t.Fatal("not applied")
+	}
+
+	h.clk.Advance(8 * time.Second)
+	if _, err := h.e.RenewOverlay(context.Background(), res.Overlay.Id, &alice); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.Advance(8 * time.Second) // 16 s after the write, 8 s after the renewal
+	if s := h.barrier(); len(s.Overlays) != 1 || len(s.Faults) != 1 {
+		t.Fatalf("the renewed activation is gone: %+v %+v", s.Overlays, s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+
+	h.clk.Advance(3 * time.Second)
+	s := h.waitOverlays(0)
+	if len(s.Faults) != 0 {
+		t.Errorf("faults of an expired activation: %+v", s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+	got := collect(ch, engine.EventOverlayExpired)
+	if len(got) != 1 || got[0].Data["reason"] != "lease" || got[0].Data["overlay"] != res.Overlay.Id.String() {
+		t.Errorf("events %+v", got)
+	}
+}
+
+// Switching the profile of an activation writes it again, and a TTL given with it starts over, as for every
+// overlay: the old expiry does not remove the new profile.
+func TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive(t *testing.T) {
+	h := startedWithRevision(t)
+	first := h.mustPut(alice, "target: {network: IoT}\nprofile: lte\nttl: 5m")
+	h.clk.Advance(4 * time.Minute)
+	second := h.mustPut(alice, "target: {network: IoT}\nprofile: satellite\nttl: 5m")
+	if second.Created || second.Overlay.Id != first.Overlay.Id {
+		t.Fatalf("%+v", second)
+	}
+	if want := h.clk.Now().Add(5 * time.Minute); second.Overlay.ExpiresAt == nil || !second.Overlay.ExpiresAt.Equal(want) {
+		t.Errorf("the TTL of the switched activation runs out at %v, want %v", second.Overlay.ExpiresAt, want)
+	}
+	h.clk.Advance(2 * time.Minute) // 6 min after the first write: its TTL is over, the second one is not
+	s := h.barrier()
+	fs := profileFaults(t, s, first.Overlay.Id.String())
+	if len(s.Overlays) != 1 || len(fs) != 1 || fs[0].Profile != "satellite" {
+		t.Fatalf("overlays %+v faults %+v", s.Overlays, s.Faults)
+	}
+	h.clk.Advance(4 * time.Minute)
+	if s := h.waitOverlays(0); len(s.Faults) != 0 {
+		t.Errorf("%+v", s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+}
+
 // A profile with a part of a later milestone is stored but cannot be activated: the whole activation is
 // refused with the milestone, and nothing changes. The built-in dns-broken and tls-broken are the same.
 func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing.T) {

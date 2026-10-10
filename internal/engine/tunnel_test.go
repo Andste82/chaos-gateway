@@ -236,6 +236,62 @@ func TestAPeerThatRoamsMakesOneDesiredStateWhileTheApplyForItIsOnItsWay(t *testi
 	h.verifyTunnelKernel()
 }
 
+// WireGuard listens on both address families. A peer that is seen at an IPv6 address cannot be selected by the flower filter
+// and the verdict maps (IPv4 only): it is a peer without an address. Its fault and a block of its endpoint are left out with a
+// warning, the apply succeeds, the polls that keep seeing it there do not apply again, and an unrelated revision applies too.
+func TestAPeerAtAnIPv6AddressDoesNotBreakTheApplyAndTheFaultComesBackAtAnIPv4Address(t *testing.T) {
+	h := newTunnelHarness(t)
+	h.connect(wgHub, "198.51.100.2:51820")
+	if err := h.e.PollWireGuard(context.Background(), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	h.mustPut(alice, tunBody)
+	h.mustPut(alice, "wireguard: {client: rA, action: block_endpoint}")
+	if len(h.e.Snapshot().Faults) != 1 || len(h.e.Snapshot().WGActions) != 1 || !h.ifbUp() {
+		t.Fatalf("%+v", h.e.Snapshot().Faults)
+	}
+
+	// the peer roams to an IPv6 address: the next poll applies again, without the fault and the block
+	h.connect(wgHub, "[2001:db8::1]:5000")
+	h.clk.BlockUntil(1)
+	h.clk.Advance(5 * time.Second)
+	h.wait(func() bool {
+		s := h.e.Snapshot()
+		return len(s.Faults) == 0 && len(s.WGActions) == 0 && s.PeerEndpoints[tunClient] == ""
+	}, "the fault and the block to be left out for a peer at an IPv6 address")
+	s := h.barrier()
+	var warned bool
+	for _, p := range s.Problems {
+		warned = warned || p.Code == compiler.CodeTunnelEndpointUnknown
+	}
+	// (the IFB itself stays until its queues have drained: TestTheEndOfATunnelFault...)
+	if !warned || len(h.ingressFilters()) != 0 {
+		t.Errorf("warned %v, ingress %v", warned, h.ingressFilters())
+	}
+	h.verifyTunnelKernel()
+
+	// the polls that see it there change nothing, an unrelated revision applies, and a new overlay is written
+	gen := s.Generation
+	for i := 0; i < 3; i++ {
+		h.clk.Advance(5 * time.Second)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if g := h.barrier().Generation; g != gen {
+		t.Errorf("the polls applied again for a peer that cannot be selected (generation %d -> %d)", gen, g)
+	}
+	h.mustApply(h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") }))
+	h.mustPut(alice, "fault: {family: tunnel, tunnel: {client: rA}, latency: 10ms}")
+	if len(h.e.Snapshot().Faults) != 0 {
+		t.Errorf("%+v", h.e.Snapshot().Faults)
+	}
+
+	// it comes back at an IPv4 address: the fault and the block take effect again
+	h.connect(wgHub, "198.51.100.7:51820")
+	h.clk.Advance(5 * time.Second)
+	h.wait(func() bool { s := h.e.Snapshot(); return len(s.Faults) == 1 && len(s.WGActions) == 1 && h.ifbUp() }, "the fault to take effect at an IPv4 address")
+	h.verifyTunnelKernel()
+}
+
 func TestTheEndOfATunnelFaultKeepsTheIFBUntilTheQueuesHaveDrainedThenRemovesIt(t *testing.T) {
 	h := newTunnelHarness(t)
 	h.connect(wgHub, "198.51.100.2:51820")

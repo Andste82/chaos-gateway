@@ -78,6 +78,10 @@ const (
 	// known (it has never connected, and the link names none). The mechanism cannot select its packets,
 	// so it does nothing until the endpoint is known. A warning.
 	CodeTunnelEndpointUnknown = "tunnel_endpoint_unknown"
+	// CodeTunnelEndpointShared: two tunnels are seen at the same address and port (a stale endpoint, or a NAT
+	// that gave both the same mapping). Their packets cannot be told apart, so the fault or blocked endpoint of the
+	// later tunnel (in the order of the tunnel keys) is not compiled; the earlier one is.
+	CodeTunnelEndpointShared = "tunnel_endpoint_shared"
 )
 
 // TunnelInfo says which tunnel a fault of family tunnel impairs and where its packets are found.
@@ -130,15 +134,43 @@ type tunnelPeer struct {
 func tunnelKeyOfClient(id string) string { return "client:" + strings.ToLower(id) }
 func tunnelKeyOfLink(id string) string   { return "link:" + strings.ToLower(id) }
 
+// UsableEndpoint is the endpoint a mechanism of this package can select a peer's packets by: an IPv4
+// address and a port (the flower filters, the verdict maps and the executor's grammar are IPv4 only; an
+// IPv4 address in its IPv6 form is unmapped). Any other endpoint, an IPv6 one included, is not usable and
+// gives the zero value: the peer is treated like one whose address is not known.
+func UsableEndpoint(ep netip.AddrPort) netip.AddrPort {
+	if !ep.IsValid() {
+		return netip.AddrPort{}
+	}
+	a := ep.Addr().Unmap()
+	if !a.Is4() || ep.Port() == 0 {
+		return netip.AddrPort{}
+	}
+	return netip.AddrPortFrom(a, ep.Port())
+}
+
+// UsableEndpointString is UsableEndpoint for the text `wg show` reports; "" when it is not usable.
+func UsableEndpointString(s string) string {
+	ep, err := netip.ParseAddrPort(s)
+	if err != nil {
+		return ""
+	}
+	if u := UsableEndpoint(ep); u.IsValid() {
+		return u.String()
+	}
+	return ""
+}
+
 // peerEndpoint is the endpoint a peer is reached at: the one observed, else the configured one when
-// it is an address (a host name is not resolved here).
+// it is an address (a host name is not resolved here). A peer that is observed at an endpoint that is
+// not usable (IPv6) has none: the configured one is not where its packets go.
 func peerEndpoint(in Input, p WGPeer) netip.AddrPort {
 	if ep, ok := in.PeerEndpoints[p.ID]; ok && ep.IsValid() {
-		return ep
+		return UsableEndpoint(ep)
 	}
 	if p.Endpoint != "" {
 		if ep, err := netip.ParseAddrPort(p.Endpoint); err == nil {
-			return ep
+			return UsableEndpoint(ep)
 		}
 	}
 	return netip.AddrPort{}
@@ -237,6 +269,7 @@ func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[strin
 		return true
 	}
 	peers := t.tunnelPeers(in)
+	claimed := map[netip.AddrPort]string{} // endpoint -> tunnel that selects its packets
 	for _, r := range results {
 		c := r.Winner
 		key := baseKey(c)
@@ -270,9 +303,14 @@ func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[strin
 		}
 		t.noteEndpoint(peer)
 		if !peer.ep.IsValid() {
-			t.warn(CodeTunnelEndpointUnknown, "", "the tunnel fault %s names %s, whose address is not known (it has not connected yet and no endpoint is configured): it takes effect when the peer is seen", c.ID, peer.name)
+			t.warn(CodeTunnelEndpointUnknown, "", "the tunnel fault %s names %s, whose address is not known (it has not connected yet and no endpoint is configured, or it is seen at an address that is not IPv4, which this mechanism does not select): it takes effect when the peer is seen at an IPv4 address", c.ID, peer.name)
 			continue
 		}
+		if other, taken := claimed[peer.ep]; taken {
+			t.warn(CodeTunnelEndpointShared, "", "the tunnel fault %s names %s, which is seen at %s like %s: the packets of the two cannot be told apart, so only the fault of %s is compiled", c.ID, peer.name, peer.ep, other, other)
+			continue
+		}
+		claimed[peer.ep] = peer.name
 		f := &Fault{Key: key, Layer: string(c.Layer), Source: c.ID, Scope: describeTunnel(peer),
 			Upload: up, Download: down,
 			CounterUp: faultCounterName(key, Upload), CounterDown: faultCounterName(key, Download),
@@ -475,6 +513,7 @@ func (t *Target) compileTunnelNft(in Input) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	blocked := map[string]string{} // map key -> peer whose packets it selects
 	for _, k := range keys {
 		peer, ok := peers[k]
 		if !ok {
@@ -482,19 +521,23 @@ func (t *Target) compileTunnelNft(in Input) {
 		}
 		t.noteEndpoint(peer)
 		if !peer.ep.IsValid() {
-			t.warn(CodeTunnelEndpointUnknown, "", "the overlay that blocks the endpoint of %s cannot select its packets, because the address of %s is not known (it has not connected yet and no endpoint is configured): it takes effect when the peer is seen", peer.name, peer.name)
+			t.warn(CodeTunnelEndpointUnknown, "", "the overlay that blocks the endpoint of %s cannot select its packets, because the address of %s is not known (it has not connected yet and no endpoint is configured, or it is seen at an address that is not IPv4, which this mechanism does not select): it takes effect when the peer is seen at an IPv4 address", peer.name, peer.name)
 			continue
 		}
+		mapKey := peer.ep.Addr().String() + " . " + strconv.Itoa(int(peer.ep.Port())) + " . " + strconv.Itoa(peer.listen)
+		if other, taken := blocked[mapKey]; taken {
+			t.warn(CodeTunnelEndpointShared, "", "the overlay that blocks the endpoint of %s names an address that %s is seen at too (%s, interface port %d): the packets of the two cannot be told apart, so only the block of %s is compiled", peer.name, other, peer.ep, peer.listen, other)
+			continue
+		}
+		blocked[mapKey] = peer.name
 		short := shortID(acts.block[k])
 		name := WGBlockChainPrefix + short
 		cname := WGBlockChainPrefix + short
 		t.Nft.Chains = append(t.Nft.Chains, Chain{Name: name, Rules: []Rule{newRule(counter(cname), verdict("drop"))}})
 		t.Nft.Counters = append(t.Nft.Counters, cname)
 		t.WGActions = append(t.WGActions, WGActionInfo{Overlay: acts.block[k], Action: "block_endpoint", Tunnel: k, Peer: peer.id, PeerName: peer.name, Counter: cname})
-		port := strconv.Itoa(peer.listen)
-		ep := peer.ep.Addr().String() + " . " + strconv.Itoa(int(peer.ep.Port()))
-		outEl = append(outEl, MapElement{Key: ep + " . " + port, Value: name})
-		inEl = append(inEl, MapElement{Key: ep + " . " + port, Value: name})
+		outEl = append(outEl, MapElement{Key: mapKey, Value: name})
+		inEl = append(inEl, MapElement{Key: mapKey, Value: name})
 	}
 	if len(outEl) == 0 {
 		return

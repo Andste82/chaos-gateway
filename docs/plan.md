@@ -1378,6 +1378,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M8a, S3.
 
 **M10 — Extended faults** (M)
+- **Status:** done — merged (PR #36, `1222a64`).
 - Scope: **tunnel faults** on WireGuard clients and links (§2.2.1: latency, loss, blackout, flapping of the encrypted UDP; output hook towards the peer, IFB with flower on the outer UDP from the peer); **WireGuard-action overlays** (peer or link disable, key mismatch, endpoint blocking); rate and queue limit per device (D18), reorder, duplicate, corrupt, burst loss (Gilbert-Elliott), blackout (netem loss 100 %), flapping, MTU/PMTUD with the three modes of §2.5; BIRD exports learned routes into the PMTU mirror tables too (one kernel protocol per table).
 - Tests: one measurement test per fault type on the kernels of the distribution matrix; flapping timing within tolerance; PMTUD: a 300 KB TCP transfer completes with ICMP mode and stalls in black-hole mode, the control device is unaffected (as in S13); MSS clamp limits segment size of the selected device only; a tunnel fault affects everything inside that tunnel and nothing else, and stacks with inner faults (as in S15); a tunnel blackout on a BGP link withdraws the learned routes and the re-convergence time is reported; PMTU faults through a tunnel; golden tests E9 and E10; per-device rate (D18): a 2 Mbit/s fault on a network gives two devices transferring at the same time 2 Mbit/s each (±10 %); exceeding the class limit returns `capacity_exceeded` in preview.
 - Depends on: M8b, M9.

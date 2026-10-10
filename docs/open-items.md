@@ -1225,3 +1225,20 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   to be remembered across a restart), or for one IFB per uplink.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M10-08 The per-packet delay check of the update test fails on a loaded native runner
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. `TestUpdatingOneFaultDoesNotDisturbTheOthers` holds C's 61 packets to the fault's bounds
+  (`testbed.CheckDelays`: at most 1 % rounded up, here one packet, outside them and none more than 10 ms outside). On the
+  post-merge run of PR #36 (level 1, native container, run 38039388769) two packets were outside, the largest 22.2 ms against an
+  upper bound of 19 ms (none far outside), while the same run failed `TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers`
+  (known flaky) on the same runner. The medians were exact, the repeat of the measurement afterwards was clean, the PR run of the same
+  code was green and the rerun of the job passed. M10 does not touch the test or the code it measures.
+- Evidence: `internal/engine/integration_faults_update_test.go`, `internal/testbed/stats.go` (`CheckDelays`), run 38039388769.
+- Task: none yet; chosen reading: runner noise. If it recurs, the allowance for a stream of 61 packets (one outlier) is too tight for
+  a loaded native runner, and a maintainer decides between a longer stream (N >= 200) and a larger allowance.
+- Acceptance: the test passes on the hosted runners without a rerun over several runs, or the allowance is changed with a note here.
+- Needs maintainer: yes
+- Effort: S

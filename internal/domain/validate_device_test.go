@@ -100,6 +100,9 @@ func TestNamesAndKeys(t *testing.T) {
 		}, "/probes/" + idESP, CodeDuplicateID},
 		{"a group named like a group", func(t *testing.T, d doc) { d.set(t, "G2", "groups", idSensors, "name") }, "/groups/" + idG2 + "/name", CodeDuplicateName},
 		{"a profile with the name of a built-in profile", func(t *testing.T, d doc) { d.set(t, "Bad-LTE", "profiles", idProfile, "name") }, "/profiles/" + idProfile + "/name", CodeReservedName},
+		{"a profile with the UUID of a built-in profile", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"name":"mine","parts":{"impairment":{"latency":"10ms"}}}`), "profiles", "b9b6e3e5-b89a-5b25-b7af-b1ac017bda16")
+		}, "/profiles/b9b6e3e5-b89a-5b25-b7af-b1ac017bda16", CodeReservedName},
 		{"two scenarios with one name", func(t *testing.T, d doc) {
 			d.set(t, d.node(t, "scenarios", idScenario), "scenarios", idNew)
 		}, "/scenarios/" + idNew + "/name", CodeDuplicateName},

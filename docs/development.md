@@ -2527,6 +2527,15 @@ functional assertions (effect present, direction, isolation) always, the accurac
 loss within the 99.9 % binomial interval, jitter spread, rate ±10 %) with `testbed.Accurate()` and the flakiness policy of
 `testbed.Statistically`. Bad LTE's own rate is not measured end to end (P2-M11-03).
 
+**What the persistent VM showed** (kernel 6.8.0-142, emulated, so the functional assertions only): the seven measurement tests of
+`integration_profiles_test.go` pass in one run of about 45 minutes (`make vm-test ARGS='-run "TestActivatingAndSwitching|..."
+-tags testbed -test-timeout 80m -vm-timeout 90m ./internal/engine'`; a lab takes 3 to 4 minutes to build under emulation, the
+switching test measures twelve flows). No tc or nftables construct was new, so nothing was proven by hand first; the gates
+`TestEveryCompiledRulesetIsAcceptedByTheKernel` and `TestEveryCompiledTCTreeIsAcceptedByTheKernel` accepted the profile-expanded
+targets on the first run. The 7.0.0-38 kernel of the matrix was not run locally; the nightly matrix does. The accuracy
+assertions (medians, loss intervals, jitter spread, the rate) are written from plan §4.3 and run in CI; if one fails there, read
+the printed distribution before touching a tolerance (a tolerance below the §4.3 definition needs an open item).
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:

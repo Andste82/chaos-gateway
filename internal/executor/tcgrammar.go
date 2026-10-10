@@ -107,6 +107,11 @@ func (e TCEntry) checkTCArgs() error {
 	if e.Action == "delete" {
 		return e.checkDeleteArgs()
 	}
+	// no kind may name a class outside the tree, not even one without a grammar (the nightly fuzzer
+	// found `flowid 00` on a prio qdisc after it had found `flowid 0` on a u32 filter)
+	if err := checkFlowids(e.Args); err != nil {
+		return err
+	}
 	switch e.Object {
 	case "qdisc":
 		switch e.Args[0] {
@@ -131,8 +136,8 @@ func (e TCEntry) checkTCArgs() error {
 	return nil
 }
 
-// checkFlowids requires that every `flowid` of a filter of another kind names a class of the own
-// tree (the fw grammar checks its own). The nightly fuzzer found `flowid 0` passing on a u32 filter.
+// checkFlowids requires that every `flowid` or `classid` among the arguments names a class of the own
+// tree, whatever the object and kind.
 func checkFlowids(args []string) error {
 	for i, a := range args {
 		if a != "flowid" && a != "classid" {

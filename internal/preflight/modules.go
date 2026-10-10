@@ -17,7 +17,7 @@ type Module struct {
 }
 
 // modules is the list of plan §3.4: sch_netem, sch_htb, cls_fw, cls_u32, cls_flower,
-// act_mirred, ifb, nf_conntrack, nf_tables with NAT/ct/dup/reject, veth, bridge, wireguard and,
+// sch_ingress, act_mirred, ifb, nf_conntrack, nf_tables with NAT/ct/dup/reject/numgen, veth, bridge, wireguard and,
 // later, 8021q.
 var modules = []Module{
 	{Name: "sch_netem", Feature: "fault engine: delay, jitter, loss, rate (netem)", Milestone: "M8b"},
@@ -25,6 +25,7 @@ var modules = []Module{
 	{Name: "cls_fw", Feature: "fault engine: mark to class (fw filter)", Milestone: "M7"},
 	{Name: "cls_u32", Feature: "tc filters (u32)", Milestone: "M7"},
 	{Name: "cls_flower", Feature: "tunnel faults from a WireGuard peer (flower on the outer UDP)", Milestone: "M10"},
+	{Name: "sch_ingress", Feature: "tunnel faults from a WireGuard peer (ingress qdisc of the uplink)", Milestone: "M10"},
 	{Name: "act_mirred", Feature: "tunnel faults and capture: redirect to IFB", Milestone: "M10"},
 	{Name: "ifb", Feature: "tunnel faults from a WireGuard peer (IFB device)", Milestone: "M10"},
 	{Name: "nf_conntrack", Feature: "connection tracking: classification by the original tuple", Milestone: "M4"},
@@ -39,6 +40,7 @@ var modules = []Module{
 	{Name: "nft_reject", Feature: "nftables: reject", Milestone: "M9"},
 	{Name: "nft_reject_inet", Feature: "nftables: reject (inet family)", Milestone: "M9"},
 	{Name: "nft_dup_netdev", Feature: "nftables: duplicate packets (fault duplication hook, capture)", Milestone: "M10"},
+	{Name: "nft_numgen", Feature: "nftables: the random draw of a fault's duplication (numgen random)", Milestone: "M10"},
 	{Name: "veth", Feature: "virtual cables: probes, service namespace, testbed", Milestone: "M1"},
 	{Name: "bridge", Feature: "one bridge per test network", Milestone: "M4"},
 	{Name: "wireguard", Feature: "WireGuard networks", Milestone: "M4b"},

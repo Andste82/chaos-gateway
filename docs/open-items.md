@@ -1296,3 +1296,24 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Acceptance: a UDP measurement of the built-in profile within ±10 % of 2 Mbit/s times the delivery share, or the decision that E9 is enough.
 - Needs maintainer: yes
 - Effort: S
+
+### P2-M11-04 The median of a profile with a rate and a jitter is not its delay: the accuracy check of Bad LTE is a bound
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. The built-in Bad LTE is 150 ms ± 50 ms with 2 Mbit/s. A rate is netem's `rate`, which keeps the packets in
+  order (plan, the latency row of the fault table and risk 4: "keep order uses netem rate, which shifts the delay distribution"): a
+  packet leaves no earlier than the one sent before it. On the native runner (level 1, run 38062010305) both directions of A and B
+  measured a median of 175 to 181 ms and a 5th to 95th percentile of 145 to 199 ms instead of 150 ms and a uniform spread of 90 ms,
+  with the loss inside its interval. The effect is the documented one, not a mistake of the compiler (the compiled netem carries delay
+  150 ms, jitter 50 ms and the rate). The §4.3 definition (median within ±2 ms + 5 %) describes a netem without ordering, so applying it to
+  a profile with a rate would assert something the kernel does not do. Chosen reading: for a flow that keeps its order the test asserts
+  the loss as before, and for the delay a bound that follows from the ordering: the median from the delay up to delay + jitter (plus
+  the 2 ms) and the 5th percentile not below delay - jitter. The medians stay exact for every profile without a rate.
+- Evidence: `internal/engine/integration_profiles_test.go` (`checkOrdered`, `flowShape.keepsOrder`),
+  `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues`, `TestADeviceFaultOverridesTheNetworkProfileForThatDeviceOnly`.
+- Task: none yet; if a maintainer wants an exact number, the distribution of the ordered delay depends on the probe interval and
+  would be a simulation of the netem queue, not a tolerance.
+- Acceptance: a decision that the bound is enough, or an expected-median model for an ordered delay.
+- Needs maintainer: yes
+- Effort: S

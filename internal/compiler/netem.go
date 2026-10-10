@@ -342,3 +342,6 @@ func computedLimit(n Netem, classes int, budget int64) int {
 	}
 	return int(pkts)
 }
+
+// Summary describes an MTU fault: "mtu 1400 (icmp)".
+func (f PMTUFault) Summary() string { return fmt.Sprintf("mtu %d (%s)", f.Size, f.Mode) }

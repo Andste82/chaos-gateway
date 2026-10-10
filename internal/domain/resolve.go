@@ -946,7 +946,10 @@ func (c Candidate) Summary() string {
 		if c.Impairment == nil {
 			return ""
 		}
-		return summarizeImpairment(*c.Impairment)
+		if s := summarizeImpairment(*c.Impairment); s != "" {
+			return s
+		}
+		return "no impairment" // the profile "normal": it wins its family and impairs nothing
 	case FamilyMTU:
 		if c.MTU != nil {
 			mode := "icmp"

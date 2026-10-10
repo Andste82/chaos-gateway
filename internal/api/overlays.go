@@ -220,6 +220,15 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 			ov.Queues = &q
 		}
 	}
+	if ov.Kind == model.OverlayKindProfile {
+		// the parts of the profile are faults of the overlay's id: their counters and queues add up
+		st := oc.profileEffect(ov)
+		ov.State = &st
+		ov.Counters = oc.counterOf("overlay", ov.Id.String())
+		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
+			ov.Queues = &q
+		}
+	}
 	if ov.Kind == model.OverlayKindRule {
 		return oc.overlayRule(ov)
 	}

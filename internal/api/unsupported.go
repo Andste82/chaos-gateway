@@ -16,15 +16,14 @@ func (s *Server) DeleteCapture(c *gin.Context, _ model.CaptureId)   { s.unsuppor
 func (s *Server) DownloadCapture(c *gin.Context, _ model.CaptureId, _ model.DownloadCaptureParams) {
 	s.unsupported(c)
 }
-func (s *Server) GetBusy(c *gin.Context)                                           { s.unsupported(c) }
-func (s *Server) GetCapture(c *gin.Context, _ model.CaptureId)                     { s.unsupported(c) }
-func (s *Server) GetCertificate(c *gin.Context)                                    { s.unsupported(c) }
-func (s *Server) GetMetrics(c *gin.Context)                                        { s.unsupported(c) }
-func (s *Server) GetProfile(c *gin.Context, _ model.Ref, _ model.GetProfileParams) { s.unsupported(c) }
-func (s *Server) GetRun(c *gin.Context, _ model.RunId)                             { s.unsupported(c) }
-func (s *Server) GetRunEvents(c *gin.Context, _ model.RunId)                       { s.unsupported(c) }
-func (s *Server) GetRunReportJson(c *gin.Context, _ model.RunId)                   { s.unsupported(c) }
-func (s *Server) GetRunReportJunit(c *gin.Context, _ model.RunId)                  { s.unsupported(c) }
+func (s *Server) GetBusy(c *gin.Context)                          { s.unsupported(c) }
+func (s *Server) GetCapture(c *gin.Context, _ model.CaptureId)    { s.unsupported(c) }
+func (s *Server) GetCertificate(c *gin.Context)                   { s.unsupported(c) }
+func (s *Server) GetMetrics(c *gin.Context)                       { s.unsupported(c) }
+func (s *Server) GetRun(c *gin.Context, _ model.RunId)            { s.unsupported(c) }
+func (s *Server) GetRunEvents(c *gin.Context, _ model.RunId)      { s.unsupported(c) }
+func (s *Server) GetRunReportJson(c *gin.Context, _ model.RunId)  { s.unsupported(c) }
+func (s *Server) GetRunReportJunit(c *gin.Context, _ model.RunId) { s.unsupported(c) }
 func (s *Server) GetScenario(c *gin.Context, _ model.Ref, _ model.GetScenarioParams) {
 	s.unsupported(c)
 }
@@ -34,7 +33,6 @@ func (s *Server) GetTlsServiceConfig(c *gin.Context, _ model.GetTlsServiceConfig
 }
 func (s *Server) ListCaptures(c *gin.Context, _ model.ListCapturesParams)   { s.unsupported(c) }
 func (s *Server) ListProbes(c *gin.Context, _ model.ListProbesParams)       { s.unsupported(c) }
-func (s *Server) ListProfiles(c *gin.Context, _ model.ListProfilesParams)   { s.unsupported(c) }
 func (s *Server) ListRuns(c *gin.Context, _ model.ListRunsParams)           { s.unsupported(c) }
 func (s *Server) ListScenarios(c *gin.Context, _ model.ListScenariosParams) { s.unsupported(c) }
 func (s *Server) PostDnsResolutions(c *gin.Context)                         { s.unsupported(c) }

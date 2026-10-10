@@ -167,7 +167,8 @@ func TestAReadOnlyTokenCannotWriteOverlays(t *testing.T) {
 func TestOverlaysOfLaterMilestonesAreRefusedAndInvalidOnesAreExplained(t *testing.T) {
 	g := ready(t)
 	for body, milestone := range map[string]string{
-		`{"target":{"network":"IoT"},"profile":"bad-lte"}`:                                 "M11",
+		`{"target":{"network":"IoT"},"profile":"dns-broken"}`:                              "M20",
+		`{"target":{"network":"IoT"},"profile":"tls-broken"}`:                              "M21",
 		`{"target":{"network":"IoT"},"dns":{"names":["example.com"],"action":"nxdomain"}}`: "M20",
 		`{"target":{"network":"IoT"},"tls":{"case":"expired"}}`:                            "M21",
 		`{"target":{"network":"IoT"},"dhcp":{"action":"silence"}}`:                         "M23",
@@ -271,10 +272,10 @@ func TestAnOverlayThatDoesNotFitTheClassLimitIsRefusedWithCapacityExceeded(t *te
 func TestCapabilitiesNameWhatOverlaysThisBuildTakes(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault rule wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu tunnel]" {
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu tunnel]" {
 		t.Errorf("%v", caps)
 	}
-	if !strings.Contains(fmt.Sprint(caps["features"]), "overlays") {
+	if f := fmt.Sprint(caps["features"]); !strings.Contains(f, "overlays") || !strings.Contains(f, "profiles") {
 		t.Errorf("%v", caps["features"])
 	}
 }

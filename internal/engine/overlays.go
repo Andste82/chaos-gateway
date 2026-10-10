@@ -76,10 +76,12 @@ func (e *CompileError) Error() string {
 }
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
-// /capabilities): faults of the impairment, mtu and tunnel families, access rules and WireGuard actions;
-// the kinds profile (M11), dns (M20), tls (M21) and dhcp (M23) follow with their milestones.
+// /capabilities): faults of the impairment, mtu and tunnel families, profile activations, access rules
+// and WireGuard actions; the kinds dns (M20), tls (M21) and dhcp (M23) follow with their milestones. A
+// profile is activated as a whole: one with a dns or tls part is refused until its family exists
+// (checkProfileAvailable).
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindRule, model.OverlayKindWireguard}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindWireguard}
 	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyTunnel}
 )
 
@@ -102,7 +104,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 			return nil
 		}
 	case "profile":
-		return &UnsupportedOverlayError{What: "a profile", Milestone: "M11"}
+		return nil // M11; a profile with a part of a later milestone is refused once the profile is known
 	case "rule":
 		return nil // M9
 	case "wireguard":
@@ -449,7 +451,31 @@ func (o *owner) validPut(c cmdOverlayPut) (*model.OverlayRequest, bool) {
 		o.reply(c.reply, OverlayResult{}, domain.ValidationErrors(verrs))
 		return nil, false
 	}
+	if err := checkProfileAvailable(cfg, req); err != nil {
+		o.reply(c.reply, OverlayResult{}, err)
+		return nil, false
+	}
 	return req, true
+}
+
+// checkProfileAvailable refuses the activation of a profile that has a part this build cannot
+// resolve (a dns part before M20, a tls part before M21), with the milestone that brings it. The
+// request has passed ValidateOverlay, so its profile is a UUID the configuration or the built-in
+// catalogue knows. Nil for every other request.
+func checkProfileAvailable(cfg *model.Configuration, req *model.OverlayRequest) error {
+	if req.Profile == nil {
+		return nil
+	}
+	p, _, ok := domain.ProfileByID(cfg, *req.Profile)
+	if !ok {
+		return nil
+	}
+	if parts := domain.UnavailableParts(p); len(parts) > 0 {
+		return &UnsupportedOverlayError{
+			What:      fmt.Sprintf("the profile %s (it has a %s part)", p.Name, strings.ToUpper(parts[0].Family)),
+			Milestone: parts[0].Milestone}
+	}
+	return nil
 }
 
 // finishBatch checks the open batch with a dry compile of the store as it is now. When it passes,

@@ -40,6 +40,22 @@ const (
 	CodeHostnameUnresolved = "hostname_unresolved"
 )
 
+// EffectiveFault is a fault or a part of an activated profile that wins for some traffic, in the
+// user's terms: the origin of the effective parameters (plan §2.14: the preview names the profile).
+// Unlike Fault it also lists the winners that impair nothing (the profile "normal"), and it has one
+// entry per winner, not one per device.
+type EffectiveFault struct {
+	// Key is `layer:id:family`, the entry of Target.Winners.
+	Key    string `json:"key"`
+	Layer  string `json:"layer"`
+	Source string `json:"source"`
+	Family string `json:"family"`
+	// Profile is the name of the activated profile when this is one of its parts.
+	Profile string `json:"profile,omitempty"`
+	Scope   string `json:"scope"`
+	Summary string `json:"summary"`
+}
+
 // Fault is one fault id of the target: a winning fault, per matched device when it has a rate, a
 // queue limit or keep order (plan §3.3, D18).
 type Fault struct {
@@ -358,6 +374,12 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		t.Winners = append(t.Winners, k)
 	}
 	sort.Strings(t.Winners)
+	for k, r := range winners {
+		c := r.cand
+		t.Effective = append(t.Effective, EffectiveFault{Key: k, Layer: string(c.Layer), Source: c.ID, Family: c.Family,
+			Profile: c.ProfileName, Scope: describeScope(idx, c.Scope), Summary: c.Summary()})
+	}
+	sort.Slice(t.Effective, func(i, j int) bool { return t.Effective[i].Key < t.Effective[j].Key })
 
 	// ---- stable ids -------------------------------------------------------------------------
 	keys := make([]string, 0, len(keySet))

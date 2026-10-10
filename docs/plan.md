@@ -1384,6 +1384,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M8b, M9.
 
 **M11 — Profiles** (S)
+- **Status:** done — merged (PR #38, `5af4a51`).
 - Scope: built-in (except DNS/TLS profiles, which arrive with M20/M21) and custom profiles, activation on scopes via overlays, precedence with individual faults.
 - Tests: activating/switching profiles yields the configured parameters (compiler) and measured values (integration); a device fault overrides the network profile's impairment part (same layer); a fault on the same scope replaces only the profile part of its family, other families stay active; an overlay profile beats a configuration fault.
 - Depends on: M10.

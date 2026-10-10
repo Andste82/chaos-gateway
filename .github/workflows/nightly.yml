@@ -114,8 +114,10 @@ jobs:
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
           if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi
       - name: Run the testbed tests in a VM with this kernel
+        # The same budget as ci.yml's testbed-vm job: the engine package alone needs about 50 minutes under KVM, and
+        # the slower kernel of the matrix has less headroom than the default one.
         run: |
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
-            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 60m -vm-timeout 2h"
+            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h"

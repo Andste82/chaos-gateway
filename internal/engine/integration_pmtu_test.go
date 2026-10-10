@@ -119,6 +119,26 @@ func bulkTo(t *testing.T, from *testbed.Namespace, host string, timeout time.Dur
 	return res
 }
 
+// assertStalled is the check of a transfer through a black hole: a stall is not a slow transfer. The first full-size window is
+// dropped, so nothing at all comes back, however slow the machine is; the client waited its whole timeout (it was not refused,
+// nor did it end early); the fault kept dropping while nothing came back (the sender retried into the hole); and the control,
+// which no fault names, finished within the time the stalled transfer was given, and in well under half of it.
+func assertStalled(t *testing.T, what string, stalled, control bulkResult, limit time.Duration, dropsBefore, dropsAfter int64) {
+	t.Helper()
+	if stalled.OK || stalled.Received != 0 {
+		t.Errorf("%s: %d bytes of 300000 came back (ok %v): a black hole drops the first full-size window, so none should: %+v", what, stalled.Received, stalled.OK, stalled)
+	}
+	if stalled.Seconds < 0.9*limit.Seconds() {
+		t.Errorf("%s: the client gave up after %.1f s of the %.0f s it was given: it was refused or reset, not stalled: %+v", what, stalled.Seconds, limit.Seconds(), stalled)
+	}
+	if dropsAfter <= dropsBefore {
+		t.Errorf("%s: the black hole's drop counter stayed at %d while the transfer was retrying into it", what, dropsBefore)
+	}
+	if !control.OK || control.Seconds*2 > limit.Seconds() {
+		t.Errorf("%s: the control needed %.1f s (ok %v), more than half of the %.0f s the stalled transfer was given: %+v", what, control.Seconds, control.OK, limit.Seconds(), control)
+	}
+}
+
 // serverMSS is the segment sizes the server negotiated, per connection in order.
 func (l *pmtuLab) serverMSS() []int { return negotiatedMSS(l.server) }
 
@@ -288,14 +308,14 @@ func TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls(t *testing.T) {
 		t.Errorf("B, whom the fault does not name, is limited:\n%s", out)
 	}
 	// the control completes, the device stalls: the handshake passes, the first full-size segment does not
-	if b := l.bulk(l.top.B, 40*time.Second); !b.OK {
+	b := l.bulk(l.top.B, 40*time.Second)
+	if !b.OK {
 		t.Errorf("B's transfer: %+v", b)
 	}
+	dropsBefore := l.counters()[f.CounterDrop].Packets
 	a := l.bulk(l.top.A, 8*time.Second)
-	if a.OK || a.Received >= bulkBytes {
-		t.Errorf("A's transfer through a black hole completed: %+v", a)
-	}
 	cs := l.counters()
+	assertStalled(t, "A's transfer through a black hole", a, b, 8*time.Second, dropsBefore, cs[f.CounterDrop].Packets)
 	if cs[f.CounterDrop].Packets == 0 {
 		t.Errorf("the drops are not counted: %+v", cs[f.CounterDrop])
 	}

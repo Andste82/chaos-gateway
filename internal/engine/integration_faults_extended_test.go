@@ -547,11 +547,15 @@ func TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit(t *testing.
 		reverse bool
 		ports   [3]int
 	}{{"download", true, [3]int{5201, 5202, 5203}}, {"upload", false, [3]int{5204, 5205, 5206}}} {
-		got := parallel(t,
-			func() (float64, error) { return iperfTCP(r.top.A, dir.ports[0], secs, omit, dir.reverse) },
-			func() (float64, error) { return iperfTCP(r.top.B, dir.ports[1], secs, omit, dir.reverse) },
-			func() (float64, error) { return iperfTCP(r.top.C, dir.ports[2], secs, omit, dir.reverse) })
-		t.Logf("%s, A and B at 2 Mbit/s each, C unlimited: A %.2f, B %.2f, C %.2f Mbit/s", dir.name, got[0]/1e6, got[1]/1e6, got[2]/1e6)
+		measure := func() []float64 {
+			got := parallel(t,
+				func() (float64, error) { return iperfTCP(r.top.A, dir.ports[0], secs, omit, dir.reverse) },
+				func() (float64, error) { return iperfTCP(r.top.B, dir.ports[1], secs, omit, dir.reverse) },
+				func() (float64, error) { return iperfTCP(r.top.C, dir.ports[2], secs, omit, dir.reverse) })
+			t.Logf("%s, A and B at 2 Mbit/s each, C unlimited: A %.2f, B %.2f, C %.2f Mbit/s", dir.name, got[0]/1e6, got[1]/1e6, got[2]/1e6)
+			return got
+		}
+		got := measure()
 		// functional: neither device is starved by the other (a shared queue gives 1 Mbit/s each), both are
 		// held far below what the link gives the device of the other network
 		for i, name := range []string{"A", "B"} {
@@ -571,11 +575,24 @@ func TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit(t *testing.
 			t.Errorf("%s of C, which the fault does not name: %.2f Mbit/s, want at least %.0f", dir.name, got[2]/1e6, floor/1e6)
 		}
 		if testbed.Accurate() {
-			for i, name := range []string{"A", "B"} {
-				if !within10(got[i], rate) {
-					t.Errorf("%s of %s: %.3f Mbit/s, not within ±10 %% of 2 Mbit/s (plan §4.3)", dir.name, name, got[i]/1e6)
+			// ±10 % is the assertion with the least margin (1.91 of a 1.8 lower bound): one noisy transfer on a
+			// loaded runner is the flakiness policy's case (plan §4.3). The first attempt is the measurement above;
+			// the repeat transfers anew.
+			measured := got
+			testbed.Statistically(t, dir.name+" rate of A and B", func() error {
+				g := measured
+				measured = nil
+				if g == nil {
+					time.Sleep(15 * time.Second) // the queues of the first round drain
+					g = measure()
 				}
-			}
+				for i, name := range []string{"A", "B"} {
+					if !within10(g[i], rate) {
+						return fmt.Errorf("%s of %s: %.3f Mbit/s, not within ±10 %% of 2 Mbit/s (plan §4.3)", dir.name, name, g[i]/1e6)
+					}
+				}
+				return nil
+			})
 		}
 	}
 }
@@ -602,30 +619,66 @@ for i in range(int(sys.argv[2])):
 // the computed limit all 300 are queued and a probe waits behind them for 2.4 s.
 func TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest(t *testing.T) {
 	r := startFaultLab(t, nil)
-	a, _, _ := serverFlows(t, r.top)
+	a, b, _ := serverFlows(t, r.top)
+	beforeB := baseline(t, b)
 
-	// phase runs probes through the fault, sends the burst 300 ms into the run and returns the probes
-	phase := func() testbed.ProbeResult {
+	// phase runs probes of A through the fault, sends the burst 300 ms into the run and returns the probes; B, whom the fault
+	// does not name, probes next to it for the same time (the unaffected control of plan §4.3)
+	phase := func() (testbed.ProbeResult, testbed.ProbeResult) {
+		opts := testbed.ProbeOptions{Count: 60, Interval: 50 * time.Millisecond, Settle: 6 * time.Second}
 		runDone := make(chan testbed.ProbeResult, 1)
-		go func() {
-			runDone <- a.run(t, testbed.ProbeOptions{Count: 60, Interval: 50 * time.Millisecond, Settle: 6 * time.Second})
-		}()
+		ctrlDone := make(chan testbed.ProbeResult, 1)
+		go func() { runDone <- a.run(t, opts) }()
+		go func() { ctrlDone <- b.run(t, opts) }()
 		time.Sleep(300 * time.Millisecond)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if out, err := r.top.A.Run(ctx, "python3", "-c", burstScript, testbed.ServerAddr, "300"); err != nil {
 			t.Fatalf("the burst: %v\n%s", err, out)
 		}
-		return <-runDone
+		return <-runDone, <-ctrlDone
+	}
+	// control checks B's probes of a phase: nothing lost and no later than before (functional), and the medians within the
+	// plan's tolerance of the baseline (accuracy, with the flakiness policy: the second attempt is another phase)
+	control := func(what string, res testbed.ProbeResult) {
+		t.Helper()
+		t.Logf("%s, B next to the burst: %s", what, res)
+		if res.UpLoss() != 0 || res.DownLoss() != 0 || res.Delivered == 0 {
+			t.Errorf("%s: B, whom the fault does not name, lost packets while A's burst was queued: %s", what, res)
+		}
+		if res.UpMedian() > beforeB.UpMedian()+25*time.Millisecond || res.DownMedian() > beforeB.DownMedian()+25*time.Millisecond {
+			t.Errorf("%s: B is slower next to A's burst: %s (before: %s)", what, res, beforeB)
+		}
+		if !testbed.Accurate() {
+			return
+		}
+		fresh := &res
+		testbed.Statistically(t, what+": B next to the burst", func() error {
+			cur := fresh
+			if cur == nil {
+				_, again := phase()
+				t.Logf("%s, B next to the burst again: %s", what, again)
+				cur = &again
+			}
+			fresh = nil
+			if !testbed.Within(cur.UpMedian(), beforeB.UpMedian(), 2*time.Millisecond, 0.05) || !testbed.Within(cur.DownMedian(), beforeB.DownMedian(), 2*time.Millisecond, 0.05) {
+				return fmt.Errorf("B's medians %v up, %v down; before the burst %v, %v", cur.UpMedian(), cur.DownMedian(), beforeB.UpMedian(), beforeB.DownMedian())
+			}
+			if cur.UpLoss() != 0 || cur.DownLoss() != 0 {
+				return fmt.Errorf("B lost packets: %s", cur)
+			}
+			return nil
+		})
 	}
 
 	// 1 Mbit/s and 20 packets of about 1000 bytes: at most 165 ms of queue
 	o := r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {rate: 1Mbit, queue_limit: 20}}")
 	r.verifyKernel()
 	f := faultOfOverlay(t, r.e.Snapshot(), o.Overlay)
-	limited := phase()
+	limited, limitedB := phase()
 	_, drops, _, _ := r.queueSum(f, compiler.Upload)
 	t.Logf("with queue_limit 20 at 1 Mbit/s: %s; the queue dropped %d packets; slowest probe %v", limited, drops, maxDelay(limited.Up))
+	control("queue_limit 20", limitedB)
 	if drops < 200 {
 		t.Errorf("a burst of 300 datagrams into a queue of 20 dropped %d at its tail, want at least 200", drops)
 	}
@@ -642,9 +695,10 @@ func TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest(t *testing.T) {
 	r.verifyKernel()
 	f = faultOfOverlay(t, r.e.Snapshot(), o.Overlay)
 	droppedBefore := drops // the queue is the same one (same fault, parameters changed in place): its counters go on
-	unlimited := phase()
+	unlimited, unlimitedB := phase()
 	_, drops, _, _ = r.queueSum(f, compiler.Upload)
 	t.Logf("without a limit: %s; the queue dropped %d packets; slowest probe %v", unlimited, drops-droppedBefore, maxDelay(unlimited.Up))
+	control("computed limit", unlimitedB)
 	if drops != droppedBefore {
 		t.Errorf("a queue of 1000 dropped %d of a burst of 300", drops-droppedBefore)
 	}

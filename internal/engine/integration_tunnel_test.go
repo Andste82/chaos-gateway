@@ -190,7 +190,10 @@ func TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse(t *testing.T) {
 // A tunnel fault of a link impairs the traffic over that link and no other tunnel: the gateway initiates the link (its endpoint is
 // configured), so the packets of the remote site come from the endpoint the link names; the traffic of the same device over the client's
 // tunnel, which crosses the same interface, is not touched. The directions are the remote site's.
-func TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel(t *testing.T) {
+// newLinkLab is the tunnel lab with the link site-b up: the remote site runs the exported configuration of the link and routes the
+// gateway's networks through it. toSite is A's flow to the remote site's network.
+func newLinkLab(t *testing.T) (*tunnelLab, flow) {
+	t.Helper()
 	l := newTunnelLab(t)
 	remote, err := wireguardLinkRemote(l.wgGW)
 	if err != nil {
@@ -205,12 +208,94 @@ func TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel(t *testi
 	echoSite := testbed.StartEcho(t, l.top.Site, testbed.SiteNetHost, probePort)
 	toSite := flow{name: "A to the remote site's network", from: l.top.A, echo: echoSite}
 	waitReach(t, toSite)
+	return l, toSite
+}
+
+func TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel(t *testing.T) {
+	l, toSite := newLinkLab(t)
 	beforeClient := baseline(t, l.toClient)
 
 	putFault(t, l.e, "fault: {family: tunnel, tunnel: {link: site-b}, upload: {latency: 30ms}, download: {latency: 150ms, loss: 5%}}")
 	expectImpaired(t, toSite, shape{up: 150 * time.Millisecond, upLoss: 0.05, down: 30 * time.Millisecond})
 	isolated(t, l.toClient, beforeClient)
 	isolated(t, l.underlay, baseline(t, l.underlay))
+}
+
+// The WireGuard actions on a link, on the real kernel (the client's side is TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay):
+// disable takes the link's peer off its interface and block_endpoint drops the encrypted UDP of the remote site in both directions,
+// counting what it dropped. The link carries nothing meanwhile, the client's tunnel on the same uplink does not notice, and the link
+// is back, without anyone touching the remote site, when the overlay is gone.
+func TestWireGuardActionsOnALinkCutTheLinkAndNotTheClientTunnelAndEndWithTheirOverlay(t *testing.T) {
+	l, _ := newLinkLab(t)
+	beforeClient := baseline(t, l.toClient)
+	linkIf := "wg-site-b"
+	linkPeers := func() string { return strings.TrimSpace(l.top.GW.Must("wg", "show", linkIf, "peers")) }
+	was := linkPeers()
+	if was == "" {
+		t.Fatal("no peer on the link's interface")
+	}
+	siteUp := func() bool { return pingOK(l.top.A, "", testbed.SiteNetHost) }
+	back := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(120 * time.Second)
+		for !siteUp() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the link did not come back\n%s\n%s", what, l.wgShow(), l.top.Site.Must("wg", "show"))
+			}
+		}
+	}
+	cut := func(what, body string) model.Overlay {
+		t.Helper()
+		res := putFault(t, l.e, body)
+		time.Sleep(time.Second) // a ping that was in flight
+		if siteUp() || pingOK(l.top.Site, "", "10.255.0.0") {
+			t.Errorf("%s: the link still carries traffic", what)
+		}
+		// the client's tunnel crosses the same uplink interface and is not the link's
+		if !pingOK(l.top.A, "", testbed.ClientNetHost) {
+			t.Errorf("%s: the client's tunnel went down with the link", what)
+		}
+		isolated(t, l.toClient, beforeClient)
+		return res.Overlay
+	}
+	end := func(o model.Overlay) {
+		t.Helper()
+		if _, err := l.e.DeleteOverlay(context.Background(), o.Id, nil, model.Actor{Type: "user", Id: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// disable: the peer is off the interface while the overlay lasts, with the routes through it
+	o := cut("disable", "wireguard: {link: site-b, action: disable}")
+	if now := linkPeers(); now != "" {
+		t.Errorf("the link's peer is still on the interface: %s", now)
+	}
+	end(o)
+	if now := linkPeers(); now != was {
+		t.Errorf("the peer did not come back as it was: %q, want %q", now, was)
+	}
+	back("disable")
+
+	// block_endpoint: the peer stays on the interface, its encrypted UDP is dropped and counted
+	o = cut("block_endpoint", "wireguard: {link: site-b, action: block_endpoint}")
+	if now := linkPeers(); now != was {
+		t.Errorf("a blocked endpoint leaves the peer on the interface: %q, want %q", now, was)
+	}
+	var act compiler.WGActionInfo
+	for _, a := range l.e.Snapshot().WGActions {
+		if a.Action == "block_endpoint" {
+			act = a
+		}
+	}
+	cs, err := l.e.ReadCounters(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if act.Counter == "" || act.Tunnel != "link:"+tLink || cs[act.Counter].Packets == 0 {
+		t.Errorf("the block of the link dropped nothing it counted: %+v %+v", act, cs[act.Counter])
+	}
+	end(o)
+	back("block_endpoint")
 }
 
 // E10 on the real kernel (plan §2.4): the fault of a device and the fault of the tunnel its traffic crosses add up. A has 40 ms

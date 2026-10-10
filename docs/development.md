@@ -326,7 +326,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `duplicate_id` | The same UUID is used by two objects that share a namespace (devices, WireGuard clients and probes). |
 | `duplicate_name` | Two objects of the same kind have the same name (case-insensitive). |
 | `name_is_uuid` | A name has the syntactic form of a UUID. |
-| `reserved_name` | A profile is named like a built-in profile. |
+| `reserved_name` | A profile is named like a built-in profile, or its key is the UUID of one. |
 | `unknown_reference` | A reference (name or UUID) does not resolve to an object of the expected kind. |
 | `wrong_reference` | Reserved; not produced yet. |
 | `invalid_network` | A network's `union` does not decode as the type its `type` field names. |
@@ -1135,10 +1135,11 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: profile M11,
-  DNS M20, TLS M21, DHCP M23) are refused with `unsupported_feature` before they reach the owner. The
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DNS M20, TLS M21,
+  DHCP M23) are refused with `unsupported_feature` before they reach the owner. The
   kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
-  mtu and tunnel families since M10 (see "Extended faults (M10)").
+  mtu and tunnel families since M10 (see "Extended faults (M10)"), the kind `profile` since M11 (see
+  "Profiles (M11)").
 - **Verify and take back.** The writer is answered when the apply loop has verified a generation
   that is at least the one of its change, with that generation (`OverlayResult.Generation`: it can be
   newer than the one the change made, when later changes were applied together with it). The owner
@@ -1178,7 +1179,7 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `GET /faults` and `/faults/{id}` show the configured faults with their state, counters and, for an
   overridden one, the faults that beat it (the winners over the devices of its scope at a destination
   and port it selects); a revision other than the active one shows the configuration alone.
-  `GET /capabilities` lists the `fault` and `rule` overlay kinds and the `impairment` family.
+  `GET /capabilities` lists the overlay kinds and fault families of the build (see the milestone sections).
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
   identity maps to a device), the access verdict (`domain.World.AccessDecision` since M9: the
@@ -2450,6 +2451,81 @@ the matrix (6.8.0-142 and 7.0.0-38).
 | Golden tests E9 and E10 | compiler: `TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate` (golden `e9.golden.txt`) and `TestE10ADeviceFaultAndATunnelFaultStack` (golden `e10.golden.txt`); through the overlay store: `TestE9ABadLTEOverlayOnTheNetworkReachesEveryDeviceOfIt` and `TestE10ADeviceFaultAndTheTunnelFaultOfAClientStack` (`internal/overlay/precedence_test.go`) |
 | Per-device rate (D18): 2 Mbit/s on a network, two devices at once get 2 Mbit/s each (±10 %) | `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit` (both directions; a third device of another network transfers at the same time and is not held); the ±10 % are asserted with `Accurate()` and the flakiness policy (`testbed.Statistically`: a failed measurement is made again, after the queues drained, and only a second failure fails), the functional bound (1.4 to 2.4 Mbit/s, a shared queue would give 1) always |
 | Exceeding the class limit returns `capacity_exceeded` in preview | `TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWithItsScope` (API, assumes the limit it sets: 6), `TestThePreviewOfAPerDeviceRateThatDoesNotFitTheClassLimitIsCapacityExceeded` (engine, limit 50, 31 queues per direction), `TestThePreviewOfMoreThanSevenIcmpSizesIsCapacityExceededWithTheScope`, `TestTheIFBTreeCountsAgainstTheClassLimitAndAFaultThatDoesNotFitIsRefused` |
+
+## Profiles (M11)
+
+Plan §2.4, §2.9 and M11. A profile is a named bundle of parts, one per family (impairment, MTU, and DNS and TLS
+once those families exist); activating it on a scope makes each part compete in its own family like a fault on that
+scope. Almost everything it needs was already there: the model (`Profile`, `ProfileParts`), the built-in catalogue
+(`domain/builtin.go`), the expansion of an activation into candidates (`World.profileParts`) and the precedence rules
+(E8, E9). M11 lifts the overlay kind, adds the views, the availability rule and the preview's account of origins,
+and tests the precedence of the plan end to end: in the compiler's goldens, the engine, the API and on the real
+kernel. No kernel construct is new: every part a profile can have in this build is an impairment (netem and HTB, as
+M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profile-expanded targets.
+
+- **The catalogue** (`domain/builtin.go`). `normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`,
+  `intermittent` have fixed UUIDs (version 5 of the name) and reserved names; `dns-broken` and `tls-broken` exist in the
+  catalogue and stay unavailable until M20 and M21. They are not part of any configuration: a key equal to a built-in
+  UUID and a name equal to a built-in name (any case) are `reserved_name`, so a configured profile can never shadow one.
+  Custom profiles are the `profiles` of the configuration, keyed by UUID. They are created, changed and deleted with a
+  candidate revision like every configured object (P2-M11-02); `GET /profiles` and `GET /profiles/{id}` (UUID or name) show
+  both kinds with `builtin`, `available` and `unavailable_reason`, and for the active revision the `activations` (the
+  overlays that activate the profile, with target, owner, expiry and state). Another revision shows the definitions alone.
+- **Validation.** A profile's parts are validated like the faults they stand for (`profileParts`: the same rules as an
+  impairment fault, an MTU fault, a DNS fault, a TLS case); a profile needs at least one part (the schema). A profile with a
+  `dns` or `tls` part can be defined. Its **activation** is refused as a whole with `unsupported_feature` and the milestone
+  (`engine.checkProfileAvailable`, after `ValidateOverlay` resolved the reference, P2-M11-01), so a half-working profile never
+  runs; the compiler ignores the parts of families it does not resolve yet.
+- **Activation** is an overlay of kind `profile` with the key *(owner, kind, target)*: one profile per owner and target, so
+  writing the activation again with another profile **switches** it (`200`, the same overlay id, the same TTL rules as any
+  overlay: `ttl`, `lease`, `renew`, reset, restart). The fault ids follow the existing rules (M8b): a switch between
+  profiles that both have a per-device rate or both have none keeps the fault id and changes the leaf in place; a switch that
+  adds or drops a rate (a queue per device, D18) makes new ids make-before-break. `normal` has an empty impairment part: it wins
+  its family and impairs nothing, which is how a device is taken out of a wider scope's impairment.
+- **Precedence** is the existing one and not re-implemented: each part is a candidate of its family on the scope of the
+  activation, in the overlay layer. A device fault beats a network profile by level (E2, E3 style), a fault beats a profile part
+  of the same scope whichever is newer (E8), a part of another family is not affected (a fault replaces only its own family's
+  part), an overlay profile beats a configuration fault whatever the levels (D24). Parameters are never merged. The goldens are
+  `TestGoldenProfilePrecedence` (`profiles-effective.golden.txt`, the effective list) and the scenarios `faults-profiles` and
+  `faults-builtin-profiles` of `faultScenarios` (the tc tree and the maps of the same targets, so every property test and both
+  kernel gates run on them; the MTU variant `profiles-mtu` is a scenario of the nftables gate only, because the MTU family
+  compiles to jumps that the impairment scenarios must not contain).
+- **State of an activation** (`GET /overlays`, `GET /profiles`). `effective` when each of its parts wins for some traffic,
+  `overridden` when none does, `partially_overridden` when some do (the fault of the same scope took the impairment part and
+  the MTU part stayed), `disabled` when the profile is gone or has no part this build resolves. `counters` and `queues` are the
+  sums over the faults of the activation, as for a fault overlay; the faults of an activation name it
+  (`compiler.Fault.Profile`).
+- **A revision changes the profile; the activation follows** (plan §2.1.1). Overlays hold the UUID of the profile, so editing
+  or renaming it keeps them, and the next compile expands the new definition under the same overlay id (and so the same fault
+  ids). Deleting a profile that an overlay activates is the orphan rule of M8a: `validation_failed` with `references[]`
+  (`object` is `/profiles/<uuid>`), or with `?force=true` the overlay is removed and `overlay_orphaned` is announced.
+  Deleting an unreferenced profile needs nothing. A profile that a scenario step refers to is a missing reference in the
+  scenario (M15).
+- **Preview and explain.** `compiler.Target.Effective` lists every winner in the user's terms (layer, source, family, scope, the
+  parameters as the fault or the profile gave them, and the profile when the winner is one of its parts), including a winner that
+  impairs nothing (`normal`); the preview answers it as `faults`. It is computed from the overlays as they are, so a revision that
+  edits a profile shows what its activations will produce. `explain` has always named the profile in `winner.profile` and in the
+  overridden entries (`FaultRef.profile`), with the reason a candidate lost (`level 4 beats level 8`, `a fault beats a profile
+  part at the same scope`).
+
+### Tests
+
+| What | Where |
+|---|---|
+| Activating/switching profiles yields the configured parameters (compiler) | `TestEveryBuiltinProfileCompilesToItsConfiguredParameters` (every activatable built-in: delay, jitter, loss, rate, burst loss, flapping, blackout), `TestSwitchingTheProfileOfAnActivationYieldsTheNewParameters`, `TestTheNormalProfileWinsItsFamilyAndImpairsNothing`, `TestAnActivationFollowsTheNewDefinitionOfItsProfile` (`internal/compiler/profiles_test.go`) |
+| ... and measured values (integration) | `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues` (a custom profile, another, the built-in Bad LTE, Normal, Offline on one activation; the other network never changes), `TestAnActivationFollowsTheNewDefinitionOfItsProfileOnTheWire`, `TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate` (E9 for a profile) (`internal/engine/integration_profiles_test.go`) |
+| A device fault overrides the network profile's impairment part (same layer) | `TestADeviceFaultOverridesTheNetworkProfilesImpairmentPart` (compiler), `TestADeviceFaultOverridesTheNetworkProfileForThatDeviceOnly` (wire: no merge of the profile's jitter, loss or rate; the other device keeps the profile; it comes back when the fault ends) |
+| A fault on the same scope replaces only the profile part of its family | `TestAFaultOnTheSameScopeReplacesOnlyTheProfilePartOfItsFamily` (compiler, both ways: impairment fault, MTU fault), `TestAFaultOnTheSameScopeReplacesOnlyThePartOfItsFamilyOnTheWire` (80 ms replaced by the fault, the MTU of 1280 stays), `TestAFaultOnTheSameScopeOverridesOnlyOnePartOfTheActivationOverTheAPI` (`partially_overridden`, then `overridden`), E8 `TestE8AFaultBeatsTheProfilePartOnTheSameScopeInTheCompiledTarget` |
+| An overlay profile beats a configuration fault | `TestAnOverlayProfileBeatsAConfigurationFault` (compiler), `TestAnOverlayProfileBeatsAConfigurationFaultOnTheWire` |
+| Origin in explain and preview | `TestExplainAndThePreviewNameTheProfileAsTheOrigin` (engine), `TestThePreviewNamesTheProfileOfEachEffectivePart` (API) |
+| Deletion rules | `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced` (engine), `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences` (API) |
+| Catalogue, custom CRUD, availability | `internal/api/profiles_test.go` (`TestTheProfileCatalogueListsTheBuiltInProfilesAndMarksTheUnavailableOnes`, `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestACustomProfileWithADNSPartIsStoredButCannotBeActivated`, `TestAProfileIsActivatedSwitchedAndListedOverTheAPI`), `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges` |
+| The kernel accepts profile-expanded targets | `TestEveryCompiledTCTreeIsAcceptedByTheKernel` (`faults-profiles`, `faults-builtin-profiles`), `TestEveryCompiledRulesetIsAcceptedByTheKernel` (the same and `profiles-mtu`) |
+
+What is asserted under emulation and what only with native execution or KVM is the split of the M8b tests: the
+functional assertions (effect present, direction, isolation) always, the accuracy ones of plan §4.3 (median ±2 ms + 5 %,
+loss within the 99.9 % binomial interval, jitter spread, rate ±10 %) with `testbed.Accurate()` and the flakiness policy of
+`testbed.Statistically`. Bad LTE's own rate is not measured end to end (P2-M11-03).
 
 ## Generated code
 

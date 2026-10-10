@@ -41,7 +41,12 @@ type dir struct {
 }
 
 // flowShape is what a profile does to a flow: the upload (the direction of the initiator) and the download.
-type flowShape struct{ up, down dir }
+type flowShape struct {
+	up, down dir
+	// keepsOrder is a profile with a rate: netem's rate keeps the packets in order, so a packet leaves no earlier than
+	// the one before it and the delay distribution is shifted up (plan, the latency row of the fault table and risk 4; P2-M11-04)
+	keepsOrder bool
+}
 
 func (s shape) flow() flowShape {
 	return flowShape{up: dir{s.up, s.upJitter, s.upLoss}, down: dir{s.down, 0, s.downLoss}}
@@ -53,7 +58,8 @@ var (
 	linkA = standard.flow()
 	linkB = shape{up: 60 * time.Millisecond, upJitter: 6 * time.Millisecond, down: 120 * time.Millisecond, downLoss: 0.03}.flow()
 	// badLTE is the built-in profile of that name (plan §2.9): 150 ms ± 50 ms, 3 % loss, in each direction
-	badLTE = flowShape{up: dir{150 * time.Millisecond, 50 * time.Millisecond, 0.03}, down: dir{150 * time.Millisecond, 50 * time.Millisecond, 0.03}}
+	// and 2 Mbit/s, which keeps the order of the packets
+	badLTE = flowShape{up: dir{150 * time.Millisecond, 50 * time.Millisecond, 0.03}, down: dir{150 * time.Millisecond, 50 * time.Millisecond, 0.03}, keepsOrder: true}
 	// slowConfig is the configuration fault that some tests put under a profile
 	slowConfig = flowShape{up: dir{delay: 400 * time.Millisecond}, down: dir{delay: 400 * time.Millisecond}}
 	// small is the impairment part of the profile with a small MTU
@@ -126,11 +132,21 @@ func expectFlow(t *testing.T, f flow, want flowShape) {
 		}
 		fresh = nil
 		errs := []error{
-			testbed.CheckLatency(f.name+" upload", cur.UpMedian(), want.up.delay),
-			testbed.CheckLatency(f.name+" download", cur.DownMedian(), want.down.delay),
 			testbed.CheckLoss(f.name+" upload", cur.Sent-cur.Delivered, cur.Sent, want.up.loss),
 			testbed.CheckLoss(f.name+" download", cur.Delivered-cur.Replied, cur.Delivered, want.down.loss),
 		}
+		if want.keepsOrder {
+			// A rate keeps the order, so with a jitter the median is not the configured delay (nor is the spread
+			// a uniform one): a packet is held back for the one before it. What holds is that no packet is faster
+			// than the least delay, and the median lies between the delay and the greatest delay (P2-M11-04).
+			errs = append(errs,
+				checkOrdered(f.name+" upload", cur.Up, cur.UpMedian(), want.up),
+				checkOrdered(f.name+" download", cur.Down, cur.DownMedian(), want.down))
+			return joinErrs(errs...)
+		}
+		errs = append(errs,
+			testbed.CheckLatency(f.name+" upload", cur.UpMedian(), want.up.delay),
+			testbed.CheckLatency(f.name+" download", cur.DownMedian(), want.down.delay))
 		if want.up.jitter > 0 {
 			errs = append(errs, testbed.CheckSpread(f.name+" upload", cur.Up, want.up.jitter))
 		}
@@ -139,6 +155,21 @@ func expectFlow(t *testing.T, f flow, want flowShape) {
 		}
 		return joinErrs(errs...)
 	})
+}
+
+// checkOrdered is the check of a direction whose packets are kept in order (a profile with a rate and a jitter): the
+// median lies from the delay up to delay + jitter (plus the 2 ms of §4.3), because a packet never leaves before the one
+// sent earlier, and the fastest packets are not faster than delay - jitter.
+func checkOrdered(what string, ds []time.Duration, median time.Duration, d dir) error {
+	const slack = 2 * time.Millisecond
+	var errs []error
+	if median < d.delay-slack || median > d.delay+d.jitter+slack {
+		errs = append(errs, fmt.Errorf("%s: median %v, outside %v to %v of an ordered delay of %v ± %v", what, median, d.delay-slack, d.delay+d.jitter+slack, d.delay, d.jitter))
+	}
+	if lo := testbed.Percentile(ds, 5); lo < d.delay-d.jitter-slack {
+		errs = append(errs, fmt.Errorf("%s: 5th percentile %v, below the least delay %v", what, lo, d.delay-d.jitter))
+	}
+	return joinErrs(errs...)
 }
 
 // profileOf is the overlay request that activates a profile on a target.

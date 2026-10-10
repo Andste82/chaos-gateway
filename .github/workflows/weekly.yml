@@ -27,6 +27,12 @@ jobs:
           tags: chaos-gateway-dev
           cache-from: type=gha,scope=dev
           cache-to: type=gha,scope=dev,mode=max
+      # Every testbed package but internal/engine: its measurement tests send thousands of probes through delays of
+      # 100 to 600 ms and need about 50 minutes under KVM; emulated they take many times that, more than a job's
+      # budget. They are covered with real timing by ci.yml and nightly.yml (KVM), and the emulated branches
+      # (!testbed.Accurate()) of the other packages are what this job is for. The engine package's emulated run is
+      # the persistent VM of the developer (docs/development.md, "Fast kernel loop").
       - name: Run the testbed tests in a VM, software emulation forced
         run: |
-          docker run --rm -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS=-no-kvm
+          docker run --rm -v "$PWD:/workspace" -w /workspace chaos-gateway-dev sh -c \
+            'make test-vm ARGS="-no-kvm $(go list ./... | grep -v "/internal/engine$" | tr "\n" " ")"'

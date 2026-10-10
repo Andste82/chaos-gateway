@@ -14,7 +14,7 @@ func TestRequiredModulesMatchThePlan(t *testing.T) {
 	// nf_tables with NAT/ct/dup/reject, veth, bridge, wireguard (M4b), later 8021q.
 	want := []string{
 		"sch_netem", "sch_htb", "cls_fw", "cls_u32", "cls_flower", "act_mirred", "ifb",
-		"nf_conntrack", "nf_tables", "nft_ct", "nft_nat", "nft_reject", "nft_dup_netdev",
+		"nf_conntrack", "nf_tables", "nft_ct", "nft_nat", "nft_reject", "nft_dup_netdev", "sch_ingress", "nft_numgen",
 		"veth", "bridge", "wireguard",
 	}
 	have := map[string]bool{}

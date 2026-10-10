@@ -20,7 +20,7 @@
 set -eu
 
 # The modules of the preflight (internal/preflight/modules.go; a test keeps the lists equal).
-REQUIRED_MODULES="sch_netem sch_htb cls_fw cls_u32 cls_flower act_mirred ifb nf_conntrack nf_conntrack_netlink nf_nat nf_tables nft_ct nft_nat nft_chain_nat nft_masq nft_redir nft_reject nft_reject_inet nft_dup_netdev veth bridge wireguard"
+REQUIRED_MODULES="sch_netem sch_htb cls_fw cls_u32 cls_flower sch_ingress act_mirred ifb nf_conntrack nf_conntrack_netlink nf_nat nf_tables nft_ct nft_nat nft_chain_nat nft_masq nft_redir nft_reject nft_reject_inet nft_dup_netdev nft_numgen veth bridge wireguard"
 # Needed only after V1 (VLAN networks): loaded when present, never an error.
 LATER_MODULES="8021q"
 

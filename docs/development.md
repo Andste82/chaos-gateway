@@ -95,7 +95,7 @@ Things to know:
   nightly kernel matrix, measurement tests and level 2 actually run with real timing. `-no-kvm`
   forces software emulation even where `/dev/kvm` exists, so the emulated branches
   (`!testbed.Accurate()`) can be exercised on a KVM-capable machine too, not only implicitly on
-  the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that.
+  the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that, on every testbed package but `internal/engine` (its measurement tests need about 50 minutes under KVM and many times that emulated; KVM runs of it are `ci.yml` and the nightly matrix, which have the same `-test-timeout 100m -vm-timeout 3h`).
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with
@@ -1969,7 +1969,7 @@ table netdev chaosgw_dup, one chain per interface of the tc tree, hook egress:
   and writes the table again; an interface that is deleted and created again behind the gateway's back
   loses its hook until the next apply, whose verify reports it (`nft: duplication hook: X has no hook`)
   and whose plan writes the table again. Nothing checks in between (drift detection is M38).
-- **Modules:** `nft_dup_netdev` was in the shared list for the capture of M17; M10 uses it as well.
+- **Modules:** `nft_dup_netdev` was in the shared list for the capture of M17; M10 uses it as well. M10 adds `sch_ingress` (the uplink's ingress qdisc of the tunnel faults) and `nft_numgen` (the duplication draw), so that the preflight, not the apply, names a kernel that lacks them. `nft_exthdr`, which the MSS clamp (`tcp option maxseg`) needs, is not a module of its own: it is compiled into `nf_tables` (Ubuntu 6.8: no `nft_exthdr.ko` in `modules.dep`, the source file is part of `nf_tables.ko`), so it is not on the list; a preflight that required it would fail on every kernel.
 
 ### Flapping (`internal/engine/flap.go`)
 
@@ -2041,6 +2041,8 @@ Compiler and capacity were M8a's; M10 measures them.
   are 165 ms); with the computed limit (1000 packets) nothing is dropped and the slowest probe waits 2.0
   to 2.3 s behind the burst (300 packets are 2.4 s). A sample of the queue's length does not work as the
   evidence: reading it takes longer than the queue lives under emulation.
+  Device B, whom the fault does not name, probes next to the burst as the control (§4.3): it loses nothing and its delay stays
+  within 25 ms of its baseline (within ±2 ms + 5 % with `Accurate()`, with the flakiness policy).
 
 ### MTU and PMTUD (plan §2.5, spike S13)
 
@@ -2303,6 +2305,17 @@ packets towards the peer (download)         packets from the peer (upload)
   fallback when it is an address. `PollWireGuard` finds a peer that moved (`roamed`: the endpoint in `Snapshot.PeerEndpoints`
   differs from the one seen) and makes a new desired state, a full apply; a peer with no address is in `Target.Endpoints` with
   `""`, so the poll applies as soon as it is seen. The overlay of a fault that is not compiled shows `disabled`.
+- **Only IPv4 endpoints** (`compiler.UsableEndpoint`): WireGuard listens on both families, so `wg show` can report a peer at
+  `[2001:db8::1]:5000`. The flower filter, the `tun_out` and `wgblk_*` maps (`ipv4_addr`) and the executor's grammar are IPv4
+  only, so an endpoint is usable when it is an IPv4 address with a port (IPv4 in its IPv6 form is unmapped); any other is
+  treated like no address: the `tunnel_endpoint_unknown` warning, the overlay shows `disabled`, the apply goes on without the
+  fault or the block (the configured endpoint of a link is not used either: that is not where its packets go), and the poll
+  does not apply again for a peer that stays there (`roamed` compares what the compiler would use). The fault takes effect when
+  the peer is seen at an IPv4 address.
+- **Two tunnels at one endpoint** (`tunnel_endpoint_shared`, a warning): a stale endpoint or a NAT that reuses a mapping can
+  give two peers the same address and port. A verdict map cannot hold a key twice (`nft`: `Could not process rule: File exists`,
+  tried on 6.8.0-142, and the transaction is refused) and the packets cannot be told apart, so the tunnel that sorts first by
+  its key (`client:` before `link:`, then the id) keeps its fault or block and the later one is left out with the warning.
 - **The target** (`compiler/tunnel.go`): `Target.IFB` (`Dev`, `Uplink`, `TC`: an ordinary `TCTarget` whose classes carry the
   peer's `Endpoint`, so that `TCClass.FilterEntry` writes a flower filter with the fault id as handle where the other trees
   have an fw filter) with `IngressEntries` (the ingress qdisc and a redirect filter per fault, pref 10, handle = id) and
@@ -2411,7 +2424,7 @@ A kernel other than the default is `make vm-down`, then `go run ./tools/testvm v
 corrupted packets (99.9 % binomial interval, N of `impairedRun`), the Gilbert-Elliott losses and runs, the flapping toggles
 (`FlapTolerance`) and outages (`CheckFlaps`: tolerance plus two probe intervals, at least three complete outages in a 19 s run of a
 3 s up, 2 s down cycle), the tunnel latency and loss, the rate (±10 % of 2 Mbit/s) and the BGP withdrawal bound (at most hold time
-+ 5 s after the answer of the write). The one with the least margin is the rate: netem counts the frame, so TCP payload shows as
++ 5 s after the answer of the write). The one with the least margin is the rate (under the flakiness policy of §4.3 like the others, a tool failure of iperf3 is repeated once as well): netem counts the frame, so TCP payload shows as
 1.91 Mbit/s and the lower bound is 1.8; the emulated VM measured 1.82 to 1.90. If CI reports a value below 1.8, read the logged
 throughputs first; the bound is the plan's and is not to be widened without an open item.
 
@@ -2426,16 +2439,16 @@ the matrix (6.8.0-142 and 7.0.0-38).
 
 | Plan bullet | Test |
 |---|---|
-| One measurement test per fault type | latency, jitter, loss and rate of a device, a group, a network, between two networks, through a tunnel and over a route BIRD learned: the M8b tests (`TestADeviceFaultImpairsThatDeviceAsConfiguredAndNoOther` and the others of `integration_faults_test.go`, `TestFaultsBetweenATestNetworkAndAWireGuardClientNetworkAreMeasuredPerDirection`, `TestAFaultOnTrafficOverARouteLearnedByBGPIsMeasuredPerDirection`); M10: duplicate `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults`, reorder `TestAReorderingFaultSendsTheConfiguredShareAheadOfTheDelayedOnes`, corrupt `TestACorruptingFaultCorruptsAsConfiguredAndTheReceiverCountsTheChecksumErrors`, burst loss `TestABurstLossFaultLosesInBurstsAsTheModelSays`, blackout `TestABlackoutDropsEverythingOfItsDeviceAndTheQueuesCountIt`, flapping `TestAFlappingFaultBlacksOutOnSchedule`, rate `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit`, queue limit `TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest`, MTU the four tests of `integration_pmtu_test.go`, tunnel latency and loss `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse` and `TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel`, tunnel blackout `TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse`, tunnel flapping `TestAFlappingTunnelBlacksOutOnSchedule`, the WireGuard actions `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` |
+| One measurement test per fault type | latency, jitter, loss and rate of a device, a group, a network, between two networks, through a tunnel and over a route BIRD learned: the M8b tests (`TestADeviceFaultImpairsThatDeviceAsConfiguredAndNoOther` and the others of `integration_faults_test.go`, `TestFaultsBetweenATestNetworkAndAWireGuardClientNetworkAreMeasuredPerDirection`, `TestAFaultOnTrafficOverARouteLearnedByBGPIsMeasuredPerDirection`); M10: duplicate `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults`, reorder `TestAReorderingFaultSendsTheConfiguredShareAheadOfTheDelayedOnes`, corrupt `TestACorruptingFaultCorruptsAsConfiguredAndTheReceiverCountsTheChecksumErrors`, burst loss `TestABurstLossFaultLosesInBurstsAsTheModelSays`, blackout `TestABlackoutDropsEverythingOfItsDeviceAndTheQueuesCountIt`, flapping `TestAFlappingFaultBlacksOutOnSchedule`, rate `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit`, queue limit `TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest`, MTU the four tests of `integration_pmtu_test.go`, tunnel latency and loss `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse` and `TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel`, tunnel blackout `TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse`, tunnel flapping `TestAFlappingTunnelBlacksOutOnSchedule`, the WireGuard actions of a client `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` and of a link (disable, block endpoint) `TestWireGuardActionsOnALinkCutTheLinkAndNotTheClientTunnelAndEndWithTheirOverlay` |
 | Flapping timing within tolerance | on the real kernel every toggle of the engine is within `engine.FlapTolerance` of its time, never early, and the outages of the stream are the down time to the precision of the probe spacing (`CheckFlaps`): `TestAFlappingFaultBlacksOutOnSchedule` and `TestAFlappingTunnelBlacksOutOnSchedule`; on the injected clock to the exact boundary: `internal/engine/flap_test.go` (`TestAFlappingFaultStartsUpAndTogglesOnTheClock`, `TestAClockThatJumpsOverFlappingBoundariesLandsInThePhaseItSays`, `TestAnApplyDuringTheDownPhaseKeepsTheBlackout`) |
-| PMTUD: 300 KB TCP transfer completes with ICMP, stalls in black-hole mode, the control device is unaffected (S13) | `TestAnIcmpMTUFaultMakesTheKernelAnswerLargePacketsAndTheTransferCompletes` and `TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls` (device A limited, device B the control, measured before and next to the fault) |
+| PMTUD: 300 KB TCP transfer completes with ICMP, stalls in black-hole mode, the control device is unaffected (S13) | `TestAnIcmpMTUFaultMakesTheKernelAnswerLargePacketsAndTheTransferCompletes` and `TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls` (device A limited, device B the control, measured before and next to the fault; the stall is asserted as a stall, not as a slow transfer: nothing at all comes back, the client waited its whole timeout, the drop counter grew meanwhile and the control finished in under half of that time, `assertStalled`) |
 | MSS clamp limits the segment size of the selected device only | `TestAnMSSClampLimitsTheSegmentsOfTheSelectedDeviceOnly` (the segments of both sides, the control, the other protocols of the device, the server's cache) |
 | A tunnel fault affects everything inside that tunnel and nothing else | `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse` (two devices' flows into the tunnel, the flow the client's network starts, the tunnel's own ping; not the flow to the server through the same interface, not the client machine's flow to the uplink address), `TestATunnelFaultOfALinkImpairsTheTrafficOverItAndNotTheOtherTunnel`, `TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse` |
 | ... and stacks with inner faults (S15, E10) | `TestE10TheDeviceFaultAndTheTunnelFaultOfTheClientAddUp` (40 ms of the device and 50 ms of the tunnel are 90 ms, 50 ms for another device through the tunnel, 40 ms to the server) |
 | A tunnel blackout on a BGP link withdraws the learned routes, the re-convergence time is reported | `TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported` (the times are logged and taken from the call, the answer and the `routing_session_changed` events) |
 | PMTU faults through a tunnel | `TestAPMTUFaultAppliesToTrafficThroughATunnel` (the kernel's answer, the mirror route into the tunnel), `TestPMTUFaultsOfTheThreeModesHoldATCPTransferThroughATunnel` (the three modes with the 300 KB transfer through a WireGuard interface, the control device), `TestLearnedRoutesAreExportedIntoThePMTUMirrorTablesToo` (the routes BIRD learned over a link) |
 | Golden tests E9 and E10 | compiler: `TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate` (golden `e9.golden.txt`) and `TestE10ADeviceFaultAndATunnelFaultStack` (golden `e10.golden.txt`); through the overlay store: `TestE9ABadLTEOverlayOnTheNetworkReachesEveryDeviceOfIt` and `TestE10ADeviceFaultAndTheTunnelFaultOfAClientStack` (`internal/overlay/precedence_test.go`) |
-| Per-device rate (D18): 2 Mbit/s on a network, two devices at once get 2 Mbit/s each (±10 %) | `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit` (both directions; a third device of another network transfers at the same time and is not held); the ±10 % are asserted with `Accurate()`, the functional bound (1.4 to 2.4 Mbit/s, a shared queue would give 1) always |
+| Per-device rate (D18): 2 Mbit/s on a network, two devices at once get 2 Mbit/s each (±10 %) | `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit` (both directions; a third device of another network transfers at the same time and is not held); the ±10 % are asserted with `Accurate()` and the flakiness policy (`testbed.Statistically`: a failed measurement is made again, after the queues drained, and only a second failure fails), the functional bound (1.4 to 2.4 Mbit/s, a shared queue would give 1) always |
 | Exceeding the class limit returns `capacity_exceeded` in preview | `TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWithItsScope` (API, assumes the limit it sets: 6), `TestThePreviewOfAPerDeviceRateThatDoesNotFitTheClassLimitIsCapacityExceeded` (engine, limit 50, 31 queues per direction), `TestThePreviewOfMoreThanSevenIcmpSizesIsCapacityExceededWithTheScope`, `TestTheIFBTreeCountsAgainstTheClassLimitAndAFaultThatDoesNotFitIsRefused` |
 
 ## Generated code

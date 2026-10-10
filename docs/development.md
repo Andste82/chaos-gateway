@@ -2462,6 +2462,9 @@ it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
 (`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem would
 fail it visibly.
+Its `go test` timeout is 60 minutes (`ARGS='-test-timeout 60m'`): the first run of M10 stopped
+the engine package at the default 20 minutes with every test up to then passing (234 of 256 tests
+had started), so the limit, not a test, was the failure.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

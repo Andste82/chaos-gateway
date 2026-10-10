@@ -104,7 +104,9 @@ jobs:
           tags: chaos-gateway-dev
           cache-from: type=gha,scope=dev
           cache-to: type=gha,scope=dev,mode=max
-      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged
+      # The engine package alone needs more than the default 20 minutes since M10 (about 25 native):
+      # its measurement tests send thousands of probes through delays of 100 to 600 ms each.
+      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS='-test-timeout 60m'
 
   # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).

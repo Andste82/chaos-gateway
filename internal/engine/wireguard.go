@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
@@ -181,7 +182,9 @@ func peerEndpoints(seen map[string]PeerStatus) map[string]string {
 // one now.
 func roamed(used map[string]string, seen map[string]PeerStatus) bool {
 	for id, ep := range used {
-		if st, ok := seen[id]; ok && st.Endpoint != "" && st.Endpoint != ep {
+		// compared as the compiler reads it: a peer at an address that cannot be selected (IPv6) is a peer
+		// without one, and applying again would not change that
+		if st, ok := seen[id]; ok && st.Endpoint != "" && compiler.UsableEndpointString(st.Endpoint) != ep {
 			return true
 		}
 	}

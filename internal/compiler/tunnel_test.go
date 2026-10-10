@@ -639,3 +639,160 @@ func TestGoldenTunnelTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// ---- endpoints the mechanisms cannot select ------------------------------------------------------------
+
+// WireGuard listens on both address families, so a peer can be seen at an IPv6 address. The flower filters, the verdict
+// maps and the executor's grammar are IPv4 only: such a peer is treated like one whose address is not known (a warning,
+// no fault), and a configured IPv4 endpoint is not where its packets go. Compiling it must not produce an IPv6 key or
+// filter that the apply would be refused for.
+func TestAPeerSeenAtAnIPv6AddressIsTreatedLikeOneWithoutAnAddress(t *testing.T) {
+	for _, ep := range []string{"[2001:db8::1]:5000", "[fe80::1%eth0]:5000"} {
+		if _, err := netip.ParseAddrPort(ep); err != nil {
+			t.Fatal(err)
+		}
+		w := newTunnelWorld(t)
+		w.overlay(`{fault: {family: tunnel, tunnel: {client: rA}, latency: 30ms}}`, 0)
+		w.overlay(`{wireguard: {client: rA, action: block_endpoint}}`, time.Second)
+		w.overlay(`{fault: {family: tunnel, tunnel: {link: site-b}, latency: 30ms}}`, 2*time.Second)
+		// the link is configured at an IPv4 endpoint but is seen at an IPv6 one: that is where its packets go
+		tg := compileTunnel(w, map[string]string{clientA: ep, linkID: ep})
+		if tg.HasErrors() {
+			t.Fatalf("%s: %+v", ep, tg.Problems)
+		}
+		if tg.IFB != nil || len(tg.Faults) != 0 || tg.TC != nil || len(tg.WGActions) != 0 {
+			t.Errorf("%s: something is compiled for an address that cannot be selected: %+v %+v", ep, tg.Faults, tg.WGActions)
+		}
+		for _, m := range tg.Nft.Maps {
+			if strings.HasPrefix(m.Name, "tun_out") || strings.HasPrefix(m.Name, "wgblk") {
+				t.Errorf("%s: map %s %+v", ep, m.Name, m.Elements)
+			}
+		}
+		if findChain(tg, TunnelOutChain) != nil || findChain(tg, WGBlockOutChain) != nil || findChain(tg, WGBlockInChain) != nil {
+			t.Errorf("%s: a chain selects by an IPv6 address", ep)
+		}
+		unknown := 0
+		for _, p := range tg.Problems {
+			if p.Code == CodeTunnelEndpointUnknown && p.Severity == SevWarning {
+				unknown++
+			}
+		}
+		if unknown != 3 {
+			t.Errorf("%s: want one warning per overlay (fault of the client, block of the client, fault of the link), got %d: %+v", ep, unknown, tg.Problems)
+		}
+		if v, ok := tg.Endpoints[clientA]; !ok || v != "" {
+			t.Errorf("%s: the engine must learn that an address it can use is wanted: %v", ep, tg.Endpoints)
+		}
+	}
+}
+
+// An IPv4 address that WireGuard reports in its IPv6 form is the IPv4 address.
+func TestAnIPv4AddressInItsIPv6FormIsTheIPv4Endpoint(t *testing.T) {
+	w := newTunnelWorld(t)
+	o := w.overlay(`{fault: {family: tunnel, tunnel: {client: rA}, latency: 30ms}}`, 0)
+	tg := compileTunnel(w, map[string]string{clientA: "[::ffff:198.51.100.2]:51820"})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if f := tunnelFault(t, tg, o.Id.String()); f.Tunnel.Endpoint != epClientA {
+		t.Errorf("%q", f.Tunnel.Endpoint)
+	}
+}
+
+func TestUsableEndpoint(t *testing.T) {
+	for in, want := range map[string]string{
+		"198.51.100.2:51820":      "198.51.100.2:51820",
+		"[::ffff:198.51.100.2]:5": "198.51.100.2:5",
+		"[2001:db8::1]:5000":      "",
+		"[::1]:5000":              "",
+		"198.51.100.2:0":          "",
+		"(none)":                  "",
+		"":                        "",
+		"198.51.100.2":            "",
+		"[2001:db8::1%eth0]:5000": "",
+	} {
+		if got := UsableEndpointString(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+	if UsableEndpoint(netip.AddrPort{}).IsValid() {
+		t.Error("the zero value is not usable")
+	}
+}
+
+// Two peers that are seen at the same address and port (a stale endpoint, a NAT that reuses a mapping) cannot be told apart by
+// the output hook or the flower filter: a verdict map cannot hold the key twice, so the later tunnel (by tunnel key) is not
+// compiled, with a warning, and the earlier one is.
+func TestTwoTunnelsSeenAtTheSameAddressAreNotBothCompiled(t *testing.T) {
+	w := newTunnelWorld(t)
+	first := w.overlay(`{fault: {family: tunnel, tunnel: {client: rA}, latency: 30ms}}`, 0)
+	second := w.overlay(`{fault: {family: tunnel, tunnel: {link: site-b}, latency: 40ms}}`, time.Second)
+	tg := compileTunnel(w, map[string]string{clientA: epClientA, linkID: epClientA})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if len(tg.Faults) != 1 || tg.Faults[0].Source != first.Id.String() {
+		t.Fatalf("one fault for one address: %+v", tg.Faults)
+	}
+	var shared bool
+	for _, p := range tg.Problems {
+		shared = shared || p.Code == CodeTunnelEndpointShared && p.Severity == SevWarning && strings.Contains(p.Message, second.Id.String())
+	}
+	if !shared {
+		t.Errorf("no warning for the tunnel that is left out: %+v", tg.Problems)
+	}
+	for _, m := range tg.Nft.Maps {
+		if !strings.HasPrefix(m.Name, "tun_out") {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, e := range m.Elements {
+			if seen[e.Key] {
+				t.Errorf("the key %q is in the map twice", e.Key)
+			}
+			seen[e.Key] = true
+		}
+	}
+	// each of them alone is compiled: the later one is left out because of the other, not because of itself
+	w2 := newTunnelWorld(t)
+	w2.overlay(`{fault: {family: tunnel, tunnel: {link: site-b}, latency: 40ms}}`, time.Second)
+	if one := compileTunnel(w2, map[string]string{linkID: epClientA}); len(one.Faults) != 1 {
+		t.Errorf("%+v", one.Problems)
+	}
+}
+
+// The block of two peers of one interface that are seen at the same address has the same map key: the later block is left out.
+func TestTwoBlockedEndpointsOfOneAddressAreNotBothCompiled(t *testing.T) {
+	w := newTunnelWorld(t)
+	n := (*w.cfg.Networks)[hubID]
+	wg, _ := n.AsWireGuardNetwork()
+	on := true
+	c := (*wg.Clients)[clientB]
+	c.Enabled = &on
+	(*wg.Clients)[clientB] = c
+	if err := n.FromWireGuardNetwork(wg); err != nil {
+		t.Fatal(err)
+	}
+	(*w.cfg.Networks)[hubID] = n
+	w.overlay(`{wireguard: {client: rA, action: block_endpoint}}`, 0)
+	w.overlay(`{wireguard: {client: rB, action: block_endpoint}}`, time.Second)
+	tg := compileTunnel(w, map[string]string{clientA: epClientA, clientB: epClientA})
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if len(tg.WGActions) != 1 {
+		t.Fatalf("%+v", tg.WGActions)
+	}
+	var shared bool
+	for _, p := range tg.Problems {
+		shared = shared || p.Code == CodeTunnelEndpointShared && p.Severity == SevWarning
+	}
+	if !shared {
+		t.Errorf("%+v", tg.Problems)
+	}
+	for _, m := range tg.Nft.Maps {
+		if strings.HasPrefix(m.Name, "wgblk") && len(m.Elements) != 1 {
+			t.Errorf("%s: %+v", m.Name, m.Elements)
+		}
+	}
+}

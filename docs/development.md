@@ -1554,8 +1554,8 @@ counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
 
 - **A queue** is the netem leaf below the class of one (fault id, direction) on one interface. The
   statistics are the kernel's counters of that leaf, read when the API asks (`Engine.ReadQueues`: one
-  `ReadTC` per interface of the tree, so three tool runs each; nothing is polled, P2-M8b-04 is the
-  cost): packets and bytes that left it, drops (the loss the fault configures and the packets that did
+  `ReadTC` per interface of the tree, so three tool runs each; nothing is polled; P2-M8b-04 made the
+  apply's own reads cheaper, not these): packets and bytes that left it, drops (the loss the fault configures and the packets that did
   not fit into the limit, both are `drops` on a netem leaf; `overlimits` stays 0), the backlog in
   packets and bytes. They are what `QueueStats` in the spec carries (`sent_bytes` and `backlog_bytes`
   were added in M8b) on `Overlay.queues` and on `FaultView.queues`, one entry per interface and

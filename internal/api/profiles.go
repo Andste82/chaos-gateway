@@ -56,7 +56,9 @@ func (s *Server) profileViews(ctx context.Context, v view) []model.ProfileView {
 	return out
 }
 
-// activationsOf lists the overlays that activate a profile (by UUID), oldest first. Nil without any.
+// activationsOf lists the overlays that activate a profile, oldest first. Nil without any. The order is
+// the overlay id's string order, which is the creation order only because overlay ids are UUIDv7
+// (their leading bits are a time stamp); a different id scheme would have to sort by created_at instead.
 func (oc overlayContext) activationsOf(profileID string) *[]model.ProfileActivation {
 	var out []model.ProfileActivation
 	for _, ov := range oc.snap.Overlays {

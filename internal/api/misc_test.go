@@ -133,7 +133,7 @@ func specOps(t *testing.T) (m5, later []struct {
 func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 	g := ready(t)
 	_, later := specOps(t)
-	if len(later) < 20 {
+	if len(later) < 28 { // 29 today: one operation may move into a milestone, a bigger drop is a mistake
 		t.Fatalf("only %d operations of later milestones", len(later))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body

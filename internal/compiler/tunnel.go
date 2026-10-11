@@ -262,8 +262,9 @@ func mismatchedKey(overlayID, publicKey string) string {
 
 // resolveTunnelFaults resolves the tunnel faults (one winner per tunnel, overlays before configuration,
 // the newest wins) and adds the winners that impair something to faults. winners are the keys of the
-// faults that win; every winner is in it, also one that impairs nothing or names a tunnel that is not up.
-func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[string]*Fault, keySet, winners map[string]bool) bool {
+// faults that win, with the account of each in the user's terms (Target.Effective); every winner is in it,
+// also one that impairs nothing or names a tunnel that is not up.
+func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[string]*Fault, keySet map[string]bool, winners map[string]EffectiveFault) bool {
 	results := w.ResolveTunnels()
 	if len(results) == 0 {
 		return true
@@ -273,8 +274,13 @@ func (t *Target) resolveTunnelFaults(in Input, w *domain.World, faults map[strin
 	for _, r := range results {
 		c := r.Winner
 		key := baseKey(c)
-		winners[key] = true
 		peer, ok := peers[r.Tunnel]
+		scope := "tunnel " + r.Tunnel
+		if ok {
+			scope = describeTunnel(peer)
+		}
+		winners[key] = EffectiveFault{Key: key, Layer: string(c.Layer), Source: c.ID, Family: c.Family,
+			Profile: c.ProfileName, Scope: scope, Summary: c.Summary()}
 		if !ok {
 			continue // no such peer on an interface: nothing to impair
 		}

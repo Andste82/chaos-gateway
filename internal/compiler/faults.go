@@ -363,15 +363,16 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	}
 
 	// ---- tunnel faults: their own family, resolved per tunnel ----
-	tunWinners := map[string]bool{}
+	tunWinners := map[string]EffectiveFault{}
 	if !t.resolveTunnelFaults(in, w, faults, keySet, tunWinners) {
 		return
 	}
 	for k := range winners {
 		t.Winners = append(t.Winners, k)
 	}
-	for k := range tunWinners {
+	for k, e := range tunWinners {
 		t.Winners = append(t.Winners, k)
+		t.Effective = append(t.Effective, e) // the preview lists the tunnel faults, too
 	}
 	sort.Strings(t.Winners)
 	for k, r := range winners {

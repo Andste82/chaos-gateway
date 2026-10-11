@@ -3575,9 +3575,15 @@ type DownstreamRoute struct {
 // Duration Example: 90s
 type Duration = string
 
-// EffectState Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
-// one part per family: `effective` when all of them win somewhere, `partially_overridden`
-// when some do and others lose everywhere, `overridden` when none wins.
+// EffectState How much of the traffic it selects the fault, profile part or rule wins (plan §2.4), over
+// every source of its scope: `effective` all of it, `partially_overridden` a part (other faults
+// beat it on the rest, e.g. a device fault on one device of a network fault's network, or a fault
+// on one port), `overridden` none, `disabled` for a fault with `enabled: false` and for what the
+// kernel does not run. Impairment and MTU faults are counted against the classification of every
+// source; a fault of another family, or one that names a hostname, is `effective` when it wins at
+// all. A profile activation has one part per family, each counted like a fault of its family:
+// `effective` when every part wins all of its traffic, `overridden` when none wins anything,
+// `partially_overridden` otherwise. `GET /explain` names the winner of one traffic tuple.
 type EffectState string
 
 // Endpoint `host:port`, host a DNS name or IPv4 address.
@@ -3868,15 +3874,23 @@ type FaultView struct {
 	// Config A persistent fault (configuration layer). Only families `impairment`, `mtu` and
 	// `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
 	// `source` is required except for `tunnel`.
-	Config       ConfigFault   `json:"config"`
-	Counters     *Counter      `json:"counters,omitempty"`
-	Id           Uuid          `json:"id"`
+	Config   ConfigFault `json:"config"`
+	Counters *Counter    `json:"counters,omitempty"`
+	Id       Uuid        `json:"id"`
+
+	// OverriddenBy For an `overridden` or `partially_overridden` fault, the faults that beat it (the winners over the devices of its scope at a destination and port it selects).
 	OverriddenBy *[]FaultRef   `json:"overridden_by,omitempty"`
 	Queues       *[]QueueStats `json:"queues,omitempty"`
 
-	// State Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
-	// one part per family: `effective` when all of them win somewhere, `partially_overridden`
-	// when some do and others lose everywhere, `overridden` when none wins.
+	// State How much of the traffic it selects the fault, profile part or rule wins (plan §2.4), over
+	// every source of its scope: `effective` all of it, `partially_overridden` a part (other faults
+	// beat it on the rest, e.g. a device fault on one device of a network fault's network, or a fault
+	// on one port), `overridden` none, `disabled` for a fault with `enabled: false` and for what the
+	// kernel does not run. Impairment and MTU faults are counted against the classification of every
+	// source; a fault of another family, or one that names a hostname, is `effective` when it wins at
+	// all. A profile activation has one part per family, each counted like a fault of its family:
+	// `effective` when every part wins all of its traffic, `overridden` when none wins anything,
+	// `partially_overridden` otherwise. `GET /explain` names the winner of one traffic tuple.
 	State EffectState `json:"state"`
 }
 
@@ -4526,9 +4540,15 @@ type Overlay struct {
 	// Run Set when a run owns the overlay.
 	Run *OverlayRunRef `json:"run,omitempty"`
 
-	// State Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
-	// one part per family: `effective` when all of them win somewhere, `partially_overridden`
-	// when some do and others lose everywhere, `overridden` when none wins.
+	// State How much of the traffic it selects the fault, profile part or rule wins (plan §2.4), over
+	// every source of its scope: `effective` all of it, `partially_overridden` a part (other faults
+	// beat it on the rest, e.g. a device fault on one device of a network fault's network, or a fault
+	// on one port), `overridden` none, `disabled` for a fault with `enabled: false` and for what the
+	// kernel does not run. Impairment and MTU faults are counted against the classification of every
+	// source; a fault of another family, or one that names a hostname, is `effective` when it wins at
+	// all. A profile activation has one part per family, each counted like a fault of its family:
+	// `effective` when every part wins all of its traffic, `overridden` when none wins anything,
+	// `partially_overridden` otherwise. `GET /explain` names the winner of one traffic tuple.
 	State *EffectState `json:"state,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
@@ -4923,7 +4943,7 @@ type ProfileActivation struct {
 	// Owner Owner of an overlay - `user`, `token` or `run`.
 	Owner Owner `json:"owner"`
 
-	// State `partially_overridden` when some parts of the profile win and others lose (e.g. a fault of the same scope beats its impairment part but its MTU part stays).
+	// State `partially_overridden` when the parts of the profile win only a part of their traffic (e.g. a fault of the same scope beats its impairment part but its MTU part stays, or a device fault takes one device of the activation's network).
 	State *EffectState `json:"state,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays

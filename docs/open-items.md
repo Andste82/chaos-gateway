@@ -54,7 +54,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, and the eleven that stay open need no decision.
+2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the tables under "Phase 2 open items" list them and the items closed with them; one item stays open, a hardware measurement for H1.
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).
@@ -376,19 +376,23 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 ## Phase 2 open items
 
 Phase 2 (M7 to M11) produced 42 items: 39 from the first review, and three that the review of M9 and M11 and the first CI runs
-added (P2-M9-11, P2-M10-09, P2-M11-05). On 2026-10-11 the maintainer decided 31 of them (table below); their blocks are gone from this
-file, like the closed items of Phase 1, and the decisions are recorded where the behavior is documented: the milestone's section in
+added (P2-M9-11, P2-M10-09, P2-M11-05). On 2026-10-11 the maintainer decided 36 of them (first table below): 31 in the first round, then
+the three confirmations P2-M7-02, P2-M8b-07 and P2-M11-02 and the two items transferred to the acceptance criteria of M20 and M21 in
+`docs/plan.md` (P2-M9-02, P2-M11-01). The decisions are recorded where the behavior is documented: the milestone's section in
 `docs/development.md`, the description in `api/openapi.yaml` where the behavior is user-visible, and `docs/plan.md` where the plan said
-otherwise. The item ids stay as names: the code and the documents refer to them. Seven decisions changed behavior and were implemented
-with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M9-11, P2-M10-08, P2-M11-03, P2-M11-05); the others confirmed the interpretation the item had chosen
-(for P2-M9-11 the second question, the meaning of `uplink`, was confirmed and documented). P2-M8a-07 was resolved in M9. Eleven items need no
-decision and stay (below); P2-M10-09 is the one that was found after the others.
+otherwise. Seven decisions changed behavior and were implemented with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M9-11, P2-M10-08, P2-M11-03,
+P2-M11-05); the others confirmed the interpretation the item had chosen (for P2-M9-11 the second question, the meaning of `uplink`, was
+confirmed and documented). P2-M8a-07 was resolved in M9. Five items needed no decision and were closed by work on 2026-10-11 (second
+table: P2-M8a-06, P2-M8b-02, P2-M8b-04, P2-M8b-08, P2-M10-09). The blocks of all 41 are gone from this file, like the closed items of
+Phase 1; the item ids stay as names, since the code and the documents refer to them. One item stays open (below): P2-M9-06, a hardware
+measurement for H1, which also carries the arm64 apply-cost measurement left from P2-M8b-04.
 
 ### Decisions (made 2026-10-11)
 
 | Item | Question | Decision |
 |---|---|---|
 | P2-M7-01 | Should M7 write the service-selection mark (bit 20)? | Confirmed: no, it stays deferred to M20/M21, where the real redirect-interaction test is |
+| P2-M7-02 | Classification maps keyed by address, not by the identity map's device number | Confirmed: keyed by address (a device that gets a new address changes 6 elements in all maps, `TestAnAddressChangeChangesAHandfulOfElements`); recorded in `docs/development.md` (M8a) |
 | P2-M7-03 | Convergence bound of the identity map on a shared CI runner | Confirmed: 3 s on CI, the plan's 1 s is the target on dedicated hardware (H1) |
 | P2-M8a-01 | Group and network scopes folded into per-source tables | Confirmed: folded |
 | P2-M8a-02 | Packet size, memory budget and link speed of the computed queue limit | Confirmed: 1500 bytes, 256 MiB per interface, never below netem's 1000 packets, 1 Gbit/s as the cap; the link speed from the host stays a later refinement |
@@ -399,7 +403,9 @@ decision and stay (below); P2-M10-09 is the one that was found after the others.
 | P2-M8b-03 | Make-before-break holds old and new classes at once; its time limits | Confirmed: the three limits as constants, the class limit does not count the waiting classes |
 | P2-M8b-05 | Counter epochs are generations and a restart starts a new one | Confirmed |
 | P2-M8b-06 | Tolerance for the spread of a jitter and for "no change" | Confirmed: 0.5 to 1.5 times the uniform spread plus 2 ms; median within ±2 ms + 5 % of before and no loss |
+| P2-M8b-07 | A burst through a delay fault loses replies in the echo server's own output path on a slow runner | Confirmed: the burst test accounts for the echo server's own output errors (`Icmp.OutErrors`) and the host's receive drops and fails on any packet nothing counts; the burst is not paced |
 | P2-M9-01 | An allow rule in the input path | **Changed:** it accepts, so it also opens the gateway's closed ports for its selector; the UI/API port rule for other sources and the anti-lockout rule stand in front of the rules |
+| P2-M9-02 | A rule that names a hostname is not compiled before M20 | **Transferred to the plan:** M20's acceptance criteria (`docs/plan.md`) include a drop rule with a hostname destination that blocks the addresses the device resolved; until then the rule stays out of the chain with the warning `hostname_unresolved` |
 | P2-M9-03 | The type of a `reject` | **Changed:** chosen per rule with `reject_with` (`port_unreachable` by default, `host_unreachable`, `admin_prohibited`, `no_route`) |
 | P2-M9-04 | The network scope and the networks behind a test network's static routes | **Changed:** "network X" includes them, for rules and faults alike |
 | P2-M9-05 | Fault counters count packets a rule drops afterwards | Confirmed: left as it is |
@@ -416,270 +422,44 @@ decision and stay (below); P2-M10-09 is the one that was found after the others.
 | P2-M10-06 | The WireGuard actions | Confirmed |
 | P2-M10-07 | One IFB with a fixed name; the host's ingress qdisc is shared | Confirmed |
 | P2-M10-08 | The per-packet delay check of the update test on a loaded runner | **Changed:** the measured stream is at least 200 packets (sent 5 ms apart); the bounds and the rule that none is more than 10 ms outside stay |
+| P2-M11-01 | A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21 | **Transferred to the plan:** M20 (`dns`) and M21 (`tls`) lift `domain.unavailableFamilies` family by family, and their acceptance criteria include that such a profile activates and its part competes in its family; until then the activation is refused with `unsupported_feature` |
+| P2-M11-02 | Custom profiles only through candidate revisions, no endpoints of their own | Confirmed: no `POST /profiles`; the configuration's `profiles` are created, changed and deleted with a revision |
 | P2-M11-03 | The rate of the built-in Bad LTE end to end | **Changed:** a UDP measurement above the rate was added (`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd`) |
 | P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
 | P2-M11-05 | A revision that adds a DNS or TLS part to a custom profile that an overlay activates | **Changed:** the revision is refused with `unsupported_feature` naming the profile and the milestone (M20 for `dns`, M21 for `tls`) while the activation exists, as the write of the activation is; without the activation it is accepted |
 
+### Closed by work (2026-10-11)
+
+| Item | Question | Outcome |
+|---|---|---|
+| P2-M8a-06 | An overlay or fault that wins only for a part of its selector is shown as effective | Done on 2026-10-11. The compiler now counts, per fault, the table cells it matches and wins over every source's table (`domain.Table.Coverage`, `compiler.Target.Coverage`), so the API reports a fault, overlay or profile activation that wins only some of its traffic as `partially_overridden`, one that wins all of it as `effective`, and one that wins none as `overridden`. A test checks the coverage cell by cell against `Resolve` on random worlds (`TestTheCoverageOfATableIsWhatResolveSaysCellByCell`), and an API test shows a network fault as `partially_overridden` next to an effective device fault (`TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden`). A fault that wins no traffic is no longer in `Target.Winners` or the preview's effective list. |
+| P2-M8b-02 | Verification cannot see the HTB quantum or the netem distribution table | Done on 2026-10-11. The first apply after an engine start treats every leaf it has not written as possibly holding a distribution table: a leaf that is to be uniform with a jitter is made again and a named table is written in place, so a table left from before the start is gone at the first apply (`TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft`). The HTB quantum turned out to be reported by the kernel (tc prints it with `-d` on 6.8 and 6.17), so the executor now reads classes with `-d` and verify compares the quantum; a quantum changed from outside is found and repaired in place (`TestTheRealKernelShowsAChangedQuantumAndTheApplyRepairsIt`). Not covered (documented in `docs/development.md`): a table written into a leaf while the engine runs, without changing what the listing shows, is replaced only at the next change of that leaf. |
+| P2-M8b-04 | The tc state of every assigned interface is read at every apply and every verify | Done on 2026-10-11, except the arm64 measurement, which moved to P2-M9-06 (H1). A state read lists the qdiscs of all interfaces in one tc run and reads the full tc state only of the interfaces holding a tree: an apply with ten assigned interfaces and the tree on three runs tc 20 times to read instead of 38 (`TestAnApplyWithTenAssignedInterfacesListsTheQdiscsOnce`). `ReadHost` (the compiler's input) no longer reads the tc state at all. |
+| P2-M8b-08 | The first packets of the first flow of a lab wait about a second on a fast kernel | Done on 2026-10-11. Cause: in the product-test topology Switch1's port q1 has the same interface index as its peer `lan1`, so the kernel's link-watch treats q1's carrier event as non-urgent and leaves the port disabled for up to a second after the topology is built; device C's first ARP request was lost and C's first packets waited for the 1 s retry. The testbed now returns the topology only when every veth end is up and every switch port forwards (`Bed.WaitLinks`, called by `NewDefault`; `TestTheFirstPacketOfEveryDeviceGoesThroughRightAfterTheTopologyIsBuilt`). The warm-up stays as `meetDevices` plus `settleIdentity`, documented: it exists only so the engine has discovered every device before a test compares its compile with the kernel, not for timing. |
+| P2-M10-09 | One probe of a stream is not classified while other faults are changed | Done on 2026-10-11. Cause: every apply flushed and refilled the static nft sets and maps in one transaction, and the kernel's interval sets (pipapo, rbtree) can miss lookups during that commit; the new test `TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten` measured 23 to 122 misses per stream of about 150k on the native runner (6.17) and 7 to 136 on 6.8.0-142. The apply now changes set and map elements by their difference with the kernel listing, which missed none in every native, level-1b and emulated run, and `TestUpdatingOneFaultDoesNotDisturbTheOthers` passed in all six native level-1 runs and both level-1b runs. Known limit (documented): an element whose value changes (traffic that moves to another fault) is still deleted and added in one commit. |
+
 ### Items that stay open
 
-### P2-M7-02 Classification maps are keyed by address, not by the identity map's device number
+### P2-M9-06 The limits of the access rules and the cost of an apply are not measured on small hardware
 
-- Status: decided in M8a (kept), confirmation open
-- Severity: low
-- Reason: needs-decision. "Identity maps keyed by address → device id REPLACE the per-device
-  nftables sets used in Phase 1 for DHCP/device classification" can be read as meaning the
-  classification lookup-chain maps themselves should be keyed by the device's numeral (stable
-  across an address change), with only one indirection (the identity map) ever needing an element
-  update. What is implemented instead follows plan §3.3's literal key tuples (`ct original ip
-  saddr`, …): the classification maps (`cls_dev`, `cls_devdest`, `cls_devport`,
-  `cls_devdestport`) are keyed directly by the device's current address, and the identity map
-  (`ident4`, address → device number) is a separate structure that nothing yet consumes — it only
-  replaces the Phase 1 per-device address sets (`dhcp.go`'s old `dev_<id>` sets), as M6a-07
-  deferred.
-- Evidence: `internal/compiler/classify.go` (`compileClassify`, `classifyLevels`);
-  `internal/compiler/dhcp.go` (`compileIdentity`). Confirmed against the real `nft -c` parser
-  (not simulated): a map lookup cannot be combined with other expressions such as the bitwise ops
-  that write the fault id (`Expression type map not allowed in context (RHS, STMT, PRIMARY)`), so
-  either design needs one small chain per classification id either way (`MarkChainName`) — keying
-  by device number would not avoid that, only move which map's element changes on an address
-  change (today: every level's entry for that device's old/new address; with the indirection:
-  only the identity map's one entry).
-- Task: chosen interpretation — keep address-keyed classification maps (simpler, and the plan's
-  own key tuples read literally); M8a, which first populates these maps from
-  `domain.Resolve`'s winners, is the natural point to revisit this if per-device churn at scale
-  (many destinations/ports per device) turns out to need the device-number indirection instead.
-- Acceptance: a maintainer confirms the interpretation, or asks for the device-number indirection
-  before M8a builds on the current map shape.
-- M8a outcome (decided with evidence, 2026-10-07): keep the address-keyed maps. M8a built them
-  out as interval maps (a range of source addresses, a range of destinations, protocol, a port
-  range), and the churn test `TestAnAddressChangeChangesAHandfulOfElements` measures what a device
-  that gets a new address costs: 250 devices, each with its own per-device queue (rate fault on the
-  network) and two further faults with destination and port entries, one device moves to another
-  address: 6 element changes in all maps (the identity map and the classification maps), no fault id
-  renumbered, no tc class touched. The elements that name the address are the device's own and the
-  two stretches next to it that are cut at its old and new address. A device-number indirection
-  would turn those 6 into 1-2 but would need the identity lookup on every packet and a second
-  level of maps, and it would not help the destination and port entries, which are the bulk of a
-  table. `TestAnElementTransactionMovesIntervalElementsOnTheRealKernel` shows on a real kernel that
-  such a move (delete and add in one transaction, even where the new element overlaps one that was
-  there) leaves the maps exactly as a full apply would. The engine's identity update takes these
-  element changes too (`identityOps`): a device's address change is incremental also while faults
-  are active.
-- Needs maintainer: confirmation only
-- Effort: S (design confirmation only)
-
-### P2-M8a-06 An overlay or fault that wins only for a part of its selector is shown as effective
-
-- Status: new
-- Severity: low
-- Reason: deferred (to M13, the faults screen, which is the first consumer). The spec's `EffectState`
-  has four values (`effective`, `partially_overridden`, `overridden`, `disabled`). M8a decides
-  `effective` and `overridden` from one fact the compiler reports: whether the fault wins for any
-  traffic of any source (`Target.Winners`). Telling "wins for all of its traffic" from "wins for
-  some" needs the coverage of every selector against every other one, which the per-source tables
-  contain (`domain.Table`) but the compiler does not report per fault.
-- Evidence: `internal/api/overlays.go` (`overlayContext.effectOf`), `internal/compiler/faults.go`
-  (`Target.Winners`). `explain` answers the question per destination exactly.
-- Task: M13 adds the per-fault coverage to the compiler's output (the number of table entries a
-  fault wins out of those it matches) and the API reports `partially_overridden` from it.
-- Acceptance: a test where a device fault covers part of a network fault's selector shows the
-  network fault as `partially_overridden` and the device fault as `effective`.
-- Needs maintainer: no
-- Effort: S
-
-### P2-M8b-02 Verification cannot see the HTB quantum or the netem distribution table
-
-- Status: new (the distribution half is handled by the apply: see Task)
-- Severity: low
-- Reason: deferred. `tc -j` does not print an HTB class's `quantum` (the kernel does not report it)
-  and does not print a netem qdisc's distribution table at all; both only matter through what the
-  traffic does. The normalizer (`linux.NormTree`) therefore compares rate, ceil, prio and every
-  printed netem attribute, but a class whose quantum was changed from outside, or a leaf whose table
-  is not the one the target names, looks right. Proven in the VM: a `change` or `replace` that names
-  no distribution keeps the old table (the share of round trips outside delay ± jitter stays at a
-  third for a normal table, `TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt`); only a
-  qdisc that is created again is uniform.
-- Evidence: `internal/linux/tcnorm.go` (`NormClass` has no quantum; `NetemSpec` has no distribution),
-  the recorded listings under `internal/linux/testdata/tc`.
-- Task: done for the apply (M8b): the `apply.Retirer` remembers the table it gave each leaf and makes
-  a leaf that is to be uniform with a jitter again when it holds or may hold one
-  (`TestTheDistributionOfAFaultFollowsAChangeBackToUniform`, `TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`).
-  What stays open: a table that someone else put on a leaf, or that survived a restart of the
-  gateway, is not seen when the leaf already has the configuration the target names (the apply leaves
-  such a leaf alone, because re-creating every uniform leaf at every start would drop queues for
-  nothing); it is replaced at the next change of that leaf. The class quantum is a constant of the
-  compiler (`TCClassQuantum`), written whenever a class is created, not verified.
-- Acceptance: a restart of the engine with a table in the kernel and a target without one ends uniform
-  at the first change of the leaf; or a maintainer decides that the apply re-creates leaves it did not
-  create.
-- Needs maintainer: no
-- Effort: S
-
-### P2-M8b-04 The tc state of every assigned interface is read at every apply and every verify
-
-- Status: new
-- Severity: low
-- Reason: deferred (measure first). An apply reads the qdisc listing of every assigned interface
-  (one `tc` run each, to find a tree that is no longer wanted) and the whole tc state (three runs)
-  of the ones that hold a tree, before it plans and again to verify. With three interfaces carrying
-  the tree and a handful of ports that is about 20 tool runs per apply, which matters on a Raspberry
-  Pi when an overlay burst costs one apply per few writes.
-- Evidence: `internal/apply/state.go` (`readTC`).
-- Task: if the measurement of M8b's performance step shows it, read the qdisc listing of all
-  interfaces in one run (`tc -j qdisc show` without a device) and keep which interfaces carry a tree
-  from the last apply, reading only those and the target's.
-- Acceptance: the cost of an apply with ten assigned interfaces is measured on the arm64 runner and
-  stays within the budget of plan §3.11.
-- Needs maintainer: no
-- Effort: S
-
-### P2-M8b-07 A burst through a delay fault loses replies outside the queues on a slow environment
-
-- Status: cause found in M8b (the echo server of the lab, not the gateway); the test accounts for it
-- Severity: low
-- Reason: needs-decision. `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops` first
-  required exact conservation through both queues (the download queue sends what the upload queue sent,
-  because "the echo server answers every request"). On the hosted level 1b runner (kernel 6.8 in a VM on
-  a VM) a burst of 4000 pings loses half of its packets between the two queues, with no drop in either of
-  them: the download queue sent 1851 to 2011 of the 4000 that the upload queue sent (740 to 797 of 1000
-  with the limit of 1000), and ping received exactly what the download queue sent. On the hosted level 1
-  runner (kernel 6.17, native) every packet is counted by both queues; with KVM on a developer machine and
-  emulated (kernel 6.8, TCG) the queues count every packet too, and only ping's own receive buffer loses
-  replies.
-- Evidence: the CI runs of PR #33 (level 1b), `internal/engine/integration_queues_test.go`. The first
-  suspect, the receive queue of the next hop (`netdev_max_backlog`), is ruled out: `/proc/net/softnet_stat`
-  did not move. The counters of every namespace, logged for the gap, name the place (run 37735996258): the
-  gateway forwarded every packet it got (`ForwDatagrams` +5851 = 4000 requests and 1851 replies), the echo
-  server received all 4000 requests (`Icmp.InEchos` +4000) and sent 1851 replies; for the other 2149 its
-  `Icmp.OutErrors` and `Ip.OutDiscards` moved by exactly that number (260 of 1000 in the second burst).
-  The replies are discarded in the echo server's own output path (`Icmp.OutErrors` is what the kernel
-  counts when it fails to build or queue an ICMP reply, `Ip.OutDiscards` the same packets at the IP layer),
-  not by the gateway. Why the server's output fails under a burst on a slow, nested CPU (a full send
-  buffer of the kernel's ICMP socket is the likely reason) was not examined further.
-- Task: done for the test — the upload queue keeps the exact law (sent + drops = the burst, no drop and
-  no backlog with the computed limit); the download queue must not drop or hold anything with the
-  computed limit; every packet missing between the two queues must be accounted for by a drop of the
-  host's receive queues or by a reply the echo server could not send (its `Icmp.OutErrors`), else the test
-  fails and prints the counters that moved. What stays open is only whether the lab should avoid the
-  server's discards (for example a slower burst) so that the exact law holds on every runner.
-- Acceptance: a maintainer confirms that accounting for the echo server's output errors is the right
-  test, or the burst is paced so that the exact law holds without it.
-- Needs maintainer: no (confirmation only)
-- Effort: S
-
-### P2-M8b-08 The first packets of the first flow of a lab wait about a second on a fast kernel
-
-- Status: new
-- Severity: low
-- Reason: cause-unknown. In the CI runs of PR #33 the probes of the first flow measured from the Lab
-  device C right after the lab came up (a 5 ms interval, no fault anywhere) had a median in microseconds and a
-  95th percentile of 860 to 970 ms in the upload direction only, in 4 of 4 runs on the hosted level 1
-  (kernel 6.17) and 1b (6.8 under KVM) runners, and in no run of the second flow of the same test or on the
-  emulated kernel. All the probes sent in that first second reach the echo at about the same moment, which
-  is what a packet queue waiting for a neighbor resolution (ARP retry after 1 s) looks like. The stream of
-  `TestUpdatingOneFaultDoesNotDisturbTheOthers` (91 probes, 1.8 s) took it for a median of 142 ms and the
-  test failed once on level 1.
-- Evidence: the logs of the CI runs 37701957026 and 37711403220 (the `C to the server, before:` lines).
-- Task: chosen interpretation — the cause is not found, and no fault is involved (no tc tree exists in the
-  flows that show it), so the measurement tests bring the lab to its steady state first (`warmUp` in
-  `startFaultLab`: three pings from each device, logged with the slowest round trip; on level 1 the first
-  ping of C took 1.00 to 1.06 s in every test, A's and B's 0.1 ms, which is the evidence that it is C's
-  first packet and one second; then `settleIdentity` waits for the engine to absorb the neighbors the pings
-  made it meet). To find the
-  cause: `ip neigh` and a capture on the gateway's `lan1` and `wan0` for the first second after `startFaultLab`.
-  If it is the product (a port or an address that is not ready when the apply returns), the apply
-  has to wait for it.
-- Acceptance: the cause is named; the warm-up either goes or stays as a documented part of the lab.
-- Needs maintainer: no
-- Effort: M
-
-### P2-M9-02 A rule that names a hostname is not compiled before M20
-
-- Status: new
-- Severity: medium
-- Reason: deferred (to M20, the DNS-derived address sets). Plan §2.4 allows a hostname as the
-  destination of a rule. Its addresses are known at run time only, so a drop rule that names one
-  would compile to a rule that matches nothing, and the traffic the operator wants blocked goes through.
-- Evidence: `internal/compiler/access.go` (`compileAccess`), `TestAHostnameRuleIsLeftOutWithAWarning`.
-- Task: chosen interpretation — the rule stays out of the chain and the compile reports the warning
-  `hostname_unresolved` (the code faults use), which the preview and the events show. M20 adds the
-  DNS-derived set as the rule's destination.
-- Acceptance: M20's test that a drop rule with a hostname destination blocks the addresses the device
-  resolved.
-- Needs maintainer: no
-- Effort: S
-
-### P2-M9-06 The limits of the access rules are not measured on small hardware
-
-- Status: new
+- Status: new (extended on 2026-10-11 with the arm64 measurement left from P2-M8b-04)
 - Severity: low
 - Reason: env-limit (H1). The compiler refuses more than 1000 rules (overlays included) and more than
   65536 source addresses in all rule sets with `capacity_exceeded`, on every architecture. Rules are
   evaluated for the first packet of each connection only (established traffic is accepted first), so
   the chain is a linear scan per new connection; nothing in the repository measures what 1000 rules
-  cost a Raspberry Pi at the connection rates of a test lab.
-- Evidence: `internal/compiler/access.go` (`DefaultRuleLimit`, `MaxRuleElements`).
+  cost a Raspberry Pi at the connection rates of a test lab. Likewise the cost of an apply was only
+  counted in tool runs, not timed on arm64: P2-M8b-04 cut the tc reads of an apply with ten assigned
+  interfaces and the tree on three from 38 tool runs to 20 (one qdisc listing of all interfaces,
+  `TestAnApplyWithTenAssignedInterfacesListsTheQdiscsOnce`).
+- Evidence: `internal/compiler/access.go` (`DefaultRuleLimit`, `MaxRuleElements`); `internal/apply/state.go`
+  (`readTC`, `devsWithTree`).
 - Task: chosen interpretation — one limit for all architectures (the class limit has two because tc
   classes cost memory and CPU per packet; rules cost per connection). H1 measures new connections per
-  second with 1000 rules on the target hardware and sets an ARM64 default if needed.
-- Acceptance: the H1 measurement exists and the limit is confirmed or lowered for ARM64.
-- Needs maintainer: no
-- Effort: S
-
-### P2-M10-09 One probe of a stream is not classified while other faults are changed, once in about 470 on the native runner
-
-- Status: new (cause unknown)
-- Severity: low
-- Reason: cause-unknown. With the stream of `TestUpdatingOneFaultDoesNotDisturbTheOthers` lengthened to 200 packets (P2-M10-08, a probe every
-  5 ms), the first run on the hosted native level-1 runner (run 38123998475) measured C's 219 probes during the four changes of other faults
-  with one upload delay of 49 µs against a fault of 40 ms ± 4 ms: that packet passed without the fault (the fault's nft counter and the
-  queue counted 218 of the 219 sent), so classification missed it. The same code ran green on the next push (249 probes, run 38129136548) and on
-  the level-1b runner (3645 probes in both runs). Before the stream was lengthened and made denser the test could not see it (61 probes 20 ms
-  apart). Not reproduced: the persistent VM is emulated and cannot run the test (the executor's reads starve behind the stream; the test fails there on
-  `main` too).
-- Evidence: the log of run 38123998475, job "testbed (level 1, privileged container)" (`integration_faults_update_test.go:115`, "1 of 219 delays outside
-  [34ms, 46ms], 1 of them more than 10ms outside (smallest 49.559µs ...)"); since then the test logs where an outlier falls in the stream and when each step
-  was done. A guess, not a finding: a lookup in an interval map that a full apply flushes and fills again in one transaction (`Nft.Transaction`) can
-  miss for a moment when old and new elements with the same key exist in the tree.
-- Task: if the test fails again with a delay near zero, the log names the step it falls into; then try the apply with a delta of the map
-  elements (delete what is gone, add what is new, leave what stays) instead of flush and fill for the maps and interval sets, and compare.
-- Acceptance: the cause is named, or the test passes over several runs and the item is closed with that evidence.
-- Needs maintainer: no
-- Effort: M
-
-### P2-M11-01 A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. The plan keeps the DNS and TLS profiles out of M11 ("built-in (except DNS/TLS profiles, which arrive with
-  M20/M21)") and says a custom profile may add a DNS delay (§2.4). A custom profile can therefore be defined with a `dns` or `tls`
-  part today (the model and the validation have had them since Phase 1), and the question is what its activation does before the
-  family exists. Chosen reading: the activation is refused **as a whole** with `unsupported_feature` and the milestone (M20 for a
-  `dns` part, M21 for a `tls` part), and `GET /profiles` lists the profile with `available: false` and an `unavailable_reason`. The
-  alternative, activating only the impairment part, would silently produce another profile than the one the user named, and a test
-  that expects the DNS part would pass for the wrong reason. The built-in `dns-broken` and `tls-broken` follow the same rule.
-  A target that still holds such an overlay (it cannot be written) compiles the parts it can and ignores the others.
-- Evidence: `engine.checkProfileAvailable`, `domain.UnavailableParts`, `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges`,
-  `TestACustomProfileWithADNSPartIsStoredButCannotBeActivated`, `TestAProfileWithOnlyALaterFamilyCompilesToNothing`.
-- Task: M20 and M21 lift the check family by family (`domain.unavailableFamilies`); nothing else to do now.
-- Acceptance: with M20 a profile with a `dns` part activates and its DNS part competes in the DNS family (E5).
-- Needs maintainer: no
-- Effort: S
-
-### P2-M11-02 Custom profiles are created, changed and deleted with candidate revisions, not with endpoints of their own
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. The M11 entry asks for "custom profiles" and the task for CRUD with read-only built-ins. The spec has `GET
-  /profiles` and `GET /profiles/{id}` and no write operation, as for every other configured object (networks, devices, groups,
-  rules, faults): the configuration is edited as a candidate revision (`POST /revisions`, a merge patch or the whole document), previewed
-  and applied (§2.1.1), and "profiles are part of each revision". Chosen reading: no `POST /profiles`; `profiles` of the configuration
-  is the create/update/delete, the built-in profiles are not part of the configuration (a key equal to a built-in UUID or a name equal
-  to a built-in name, in any case, is `reserved_name`), and deleting a profile that an overlay activates needs `?force=true` and lists
-  `references[]` (`/profiles/<uuid>` is the object). The UI (M13) needs no more than that to offer profile cards.
-- Evidence: `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences`,
-  `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced`.
-- Task: none yet; if a maintainer wants single-profile endpoints they are sugar over a candidate revision and belong with M13/M18.
-- Acceptance: a decision, or none needed.
+  second with 1000 rules on the target hardware and sets an ARM64 default if needed, and times an apply
+  with ten assigned interfaces (the tree on three) on the arm64 runner against the budget of plan §3.11.
+- Acceptance: the H1 measurements exist; the rule limit is confirmed or lowered for ARM64, and the apply
+  with ten assigned interfaces stays within the budget of plan §3.11 (or the reads are reduced further,
+  for example by keeping which interfaces carried a tree at the last apply).
 - Needs maintainer: no
 - Effort: S

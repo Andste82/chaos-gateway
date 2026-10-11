@@ -54,7 +54,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, of the new items P2-M9-11 and P2-M11-05 carry "Needs maintainer: yes" (P2-M10-09 needs none), and the ten that stay open from before need no decision.
+2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, and the eleven that stay open need no decision.
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).
@@ -375,12 +375,14 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 ## Phase 2 open items
 
-Phase 2 (M7 to M11) produced 39 items. On 2026-10-11 the maintainer decided 29 of them (table below); their blocks are gone from this
+Phase 2 (M7 to M11) produced 42 items: 39 from the first review, and three that the review of M9 and M11 and the first CI runs
+added (P2-M9-11, P2-M10-09, P2-M11-05). On 2026-10-11 the maintainer decided 31 of them (table below); their blocks are gone from this
 file, like the closed items of Phase 1, and the decisions are recorded where the behavior is documented: the milestone's section in
 `docs/development.md`, the description in `api/openapi.yaml` where the behavior is user-visible, and `docs/plan.md` where the plan said
-otherwise. The item ids stay as names: the code and the documents refer to them. Five decisions changed behavior and were implemented
-with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M10-08, P2-M11-03); the others confirmed the interpretation the item had chosen. P2-M8a-07 was
-resolved in M9. Ten items need no decision and stay (below), and three new ones came out of the review of M9 and M11 and of the first CI runs of this change.
+otherwise. The item ids stay as names: the code and the documents refer to them. Seven decisions changed behavior and were implemented
+with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M9-11, P2-M10-08, P2-M11-03, P2-M11-05); the others confirmed the interpretation the item had chosen
+(for P2-M9-11 the second question, the meaning of `uplink`, was confirmed and documented). P2-M8a-07 was resolved in M9. Eleven items need no
+decision and stay (below); P2-M10-09 is the one that was found after the others.
 
 ### Decisions (made 2026-10-11)
 
@@ -405,6 +407,7 @@ resolved in M9. Ten items need no decision and stay (below), and three new ones 
 | P2-M9-08 | `lockout_protected` is never produced | Confirmed: commit-confirm is enough, the code stays reserved |
 | P2-M9-09 | Access rules select IPv4 only | Confirmed: IPv6 selectors come with M32 |
 | P2-M9-10 | What "also cut existing connections" does at its edges | Confirmed |
+| P2-M9-11 | Does the two-port guard stand in front of the access rules, and what does the destination `uplink` mean? | **Changed (1):** the guard stands in front of the jump to the access rules (chain `mgmt_guard`), so no rule, an `allow` rule included, opens the management network behind the uplink; only an explicit matrix entry does, and `explain` agrees with the kernel. Confirmed (2): `uplink` keeps its meaning (in no configured network and not in the management prefixes), so learned prefixes (BGP, OSPF) and the service namespace's 169.254.100.0/30 count as uplink; documented in the spec and in `docs/development.md` |
 | P2-M10-01 | Duplication as a draw plus a copy on the netdev egress hook | Confirmed |
 | P2-M10-02 | When a flapping starts, and a boundary during an apply | Confirmed |
 | P2-M10-03 | A rate below 8 bit/s is refused; the phase of a flapping in the API | Confirmed |
@@ -415,6 +418,7 @@ resolved in M9. Ten items need no decision and stay (below), and three new ones 
 | P2-M10-08 | The per-packet delay check of the update test on a loaded runner | **Changed:** the measured stream is at least 200 packets (sent 5 ms apart); the bounds and the rule that none is more than 10 ms outside stay |
 | P2-M11-03 | The rate of the built-in Bad LTE end to end | **Changed:** a UDP measurement above the rate was added (`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd`) |
 | P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
+| P2-M11-05 | A revision that adds a DNS or TLS part to a custom profile that an overlay activates | **Changed:** the revision is refused with `unsupported_feature` naming the profile and the milestone (M20 for `dns`, M21 for `tls`) while the activation exists, as the write of the activation is; without the activation it is accepted |
 
 ### Items that stay open
 
@@ -622,30 +626,6 @@ resolved in M9. Ten items need no decision and stay (below), and three new ones 
 - Needs maintainer: no
 - Effort: S
 
-### P2-M9-11 A broad allow in forward accepts before the matrix and the two-port guard, and the destination `uplink` includes learned prefixes and the service namespace
-
-- Status: new
-- Severity: medium
-- Reason: needs-decision. Two things about how the access rules meet the rest of the packet path, found in the review of M9.
-  (1) An `allow` rule in forward is a plain `accept` in front of the access matrix and in front of the two-port guard (the rule that
-  stops devices under test from reaching the management network when it lies behind the uplink interface, plan §2.16). A broad allow, for
-  example from the global scope to any destination, therefore opens the management network behind the uplink for the devices it selects.
-  docs/development.md documents it as an exception to the matrix; no decision is
-  recorded on whether the guard should stand in front of the rules as the anti-lockout rule does for the control plane.
-  (2) The destination `uplink` means "in no configured network and not in the management prefixes" (`World.NonUplinkPrefixes`,
-  `viaUplink`). Prefixes that BIRD learned (BGP, OSPF) and the service namespace's address 169.254.100.2 lie in no configured network,
-  so a rule counts them as uplink: "drop to uplink" also drops traffic to a learned remote site and to the namespace of the DNS proxy.
-- Evidence: `internal/compiler/rules.go` (the forward chain: the jump to `access_forward` stands before `matrixRules` and the guard),
-  `internal/domain/access_selector.go` (`NonUplinkPrefixes`), `internal/domain/resolve.go` (`viaUplink`),
-  `TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses` (the non-uplink set), docs/development.md "Access rules (M9)".
-- Task: none yet. For (1): put the guard in front of the jump, so that no rule can open the management network behind the uplink, or keep
-  it as the power of an allow rule and say so in the spec. For (2): add the learned prefixes and 169.254.100.0/30 to the non-uplink set,
-  or define `uplink` as "routed via the uplink interface" by the routing table, or document the present meaning in the spec.
-- Acceptance: a decision, and tests of the chosen behavior (an allow rule and the guard on the real kernel; a rule with the destination
-  `uplink` against a learned prefix and the namespace's address).
-- Needs maintainer: yes
-- Effort: M
-
 ### P2-M10-09 One probe of a stream is not classified while other faults are changed, once in about 470 on the native runner
 
 - Status: new (cause unknown)
@@ -702,23 +682,4 @@ resolved in M9. Ten items need no decision and stay (below), and three new ones 
 - Task: none yet; if a maintainer wants single-profile endpoints they are sugar over a candidate revision and belong with M13/M18.
 - Acceptance: a decision, or none needed.
 - Needs maintainer: no
-- Effort: S
-
-### P2-M11-05 A revision can add a DNS or TLS part to a custom profile that is already activated
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. P2-M11-01 refuses the activation of a profile with a `dns` or `tls` part as a whole, so that no activation runs
-  half a profile. The check (`engine.checkProfileAvailable`) runs when an activation is written. A candidate revision that adds a `dns` or
-  `tls` part to a custom profile that an overlay already activates is accepted, because the profile validates and exists; the next compile
-  expands the new definition under the same overlay id and ignores the parts of families it does not resolve yet (M20, M21). The
-  activation then runs the impairment part only: the half profile that the check at the write is there to prevent.
-- Evidence: `internal/engine/overlays.go` (`checkProfileAvailable`, called from the overlay write only), `domain.UnavailableParts`,
-  docs/development.md "A revision changes the profile; the activation follows", `TestAnActivationFollowsTheNewDefinitionOfItsProfile`.
-- Task: none yet. Options: (a) refuse the revision (`unsupported_feature` naming the profile and the activations that would run it) while an
-  overlay activates the profile, which keeps the rule "never half a profile" whole; (b) accept it and report the activation as partially
-  active (a warning in the preview, a note on the activation in `GET /profiles` and `GET /overlays`, the unavailable part named), so that the
-  profile can be edited ahead of M20 and M21.
-- Acceptance: a decision, and a test that writes the revision with an activation present.
-- Needs maintainer: yes
 - Effort: S

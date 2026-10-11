@@ -177,6 +177,10 @@ type Candidate struct {
 // IsProfilePart reports whether the candidate comes from an activated profile.
 func (c Candidate) IsProfilePart() bool { return c.ProfileID != "" }
 
+// Key names the candidate as `layer:id:family`: a configured fault, a fault overlay or one part of an
+// activated profile (the overlay's id and the part's family).
+func (c Candidate) Key() string { return string(c.Layer) + ":" + c.ID + ":" + c.Family }
+
 // Overridden is a candidate that matched but lost, with the reason.
 type Overridden struct {
 	Candidate

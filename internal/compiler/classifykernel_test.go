@@ -126,17 +126,18 @@ func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {
 		}()
 		return func() { quit.Store(true); wg.Wait(); _ = pc.Close() }
 	}
-	// phase runs the streams for d while churn (if not nil) switches the table, and returns what the
-	// counters counted in the phase and how many transactions ran. The streams stop before the
-	// counters are read, so no packet is between the two hooks then.
-	phase := func(d time.Duration, churn func(to *Target)) (counts, int) {
+	// phase runs the streams for d, and at least for minTx transactions, while churn (if not nil)
+	// switches the table, and returns what the counters counted in the phase and how many
+	// transactions ran. The streams stop before the counters are read, so no packet is between the two
+	// hooks then.
+	phase := func(d time.Duration, minTx int, churn func(to *Target)) (counts, int) {
 		t.Helper()
 		before := read()
 		stop42 := stream(h42, "10.10.0.42", "10.10.0.1")
 		stopLab := stream(hLab, "10.20.0.50", churnDest)
 		n := 0
 		deadline := time.Now().Add(d)
-		for time.Now().Before(deadline) {
+		for time.Now().Before(deadline) || (churn != nil && n < minTx) {
 			if churn == nil {
 				time.Sleep(50 * time.Millisecond)
 				continue
@@ -157,17 +158,18 @@ func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {
 	}
 	missed := func(n counts) (int64, int64) { return n.arrived42 - n.classified42, n.arrivedLab - n.classifiedLab }
 
-	quiet, _ := phase(time.Second, nil)
+	quiet, _ := phase(time.Second, 0, nil)
 	t.Logf("without changes: esp32-42 %d arrived, %d classified; lab-host %d arrived, %d classified", quiet.arrived42, quiet.classified42, quiet.arrivedLab, quiet.classifiedLab)
 	if m42, mLab := missed(quiet); quiet.arrived42 == 0 || quiet.arrivedLab == 0 || m42 != 0 || mLab != 0 {
 		t.Fatalf("the streams are not classified even without changes: %+v", quiet)
 	}
 
-	d := 8 * time.Second
+	// natively a phase is a few hundred transactions; an emulated machine needs seconds for one
+	d, minTx := 8*time.Second, 20
 	if !testbed.Accurate() {
-		d = 15 * time.Second
+		d, minTx = 10*time.Second, 6
 	}
-	flushed, nf := phase(d, func(to *Target) {
+	flushed, nf := phase(d, minTx, func(to *Target) {
 		tx, err := to.Nft.transaction(listing(), false)
 		if err != nil {
 			t.Fatal(err)
@@ -183,14 +185,14 @@ func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {
 
 	// back to a: the transaction of the product from here on
 	apply(mustTx(t, c.a.Nft, listing()))
-	diffed, nd := phase(d, func(to *Target) { apply(mustTx(t, to.Nft, listing())) })
+	diffed, nd := phase(d, minTx, func(to *Target) { apply(mustTx(t, to.Nft, listing())) })
 	d42, dLab := missed(diffed)
 	t.Logf("by difference, %d transactions: esp32-42 (dev map) %d of %d not classified, lab-host (devdest map) %d of %d not classified",
 		nd, d42, diffed.arrived42, dLab, diffed.arrivedLab)
 	if d42 != 0 || dLab != 0 {
 		t.Errorf("packets of flows whose fault did not change were not classified while other faults were written: %d of esp32-42's, %d of lab-host's", d42, dLab)
 	}
-	if nd < 10 || diffed.arrived42 < 1000 || diffed.arrivedLab < 1000 {
+	if diffed.arrived42 < 1000 || diffed.arrivedLab < 1000 {
 		t.Errorf("the churn was too short to say anything: %d transactions, %d and %d packets", nd, diffed.arrived42, diffed.arrivedLab)
 	}
 

@@ -147,6 +147,23 @@ type Table struct {
 	// Cells is the work the build took (see MaxTableCells); 0 for a table that was shared with an
 	// earlier source.
 	Cells int
+	// Coverage says, by Candidate.Key, how much of the source's traffic each candidate of the table
+	// matches and how much of it it wins (see Cover). A candidate that matches nothing of the source's
+	// traffic (a destination that names nothing known) and one that names a hostname (Unresolved) are
+	// not in it. Shared with the sources that share the table: read only.
+	Coverage map[string]Cover
+}
+
+// Cover is the share of a source's traffic a candidate takes, counted in the cells of the table's
+// grid: the destination pieces (plus the addresses no destination selector names) times the
+// protocol/port pieces (plus the protocols and ports no selector names). On a cell nothing changes,
+// so a candidate matches all of a cell or none of it, and one candidate wins all of it. The counts
+// are not traffic volumes; they only tell "all", "some" and "none" apart.
+type Cover struct {
+	// Matched is the number of cells the candidate's selector covers.
+	Matched int
+	// Won is the number of those cells it wins.
+	Won int
 }
 
 // Signature is a string that is equal for tables with equal entries, whatever source they are
@@ -647,17 +664,22 @@ func buildTable(t Table, relevant []tableCand, destCover []span, sels []PortSel)
 			}
 		}
 	}
-	g = reduceCandidates(g)
+	// the candidates a reduction drops lose wherever their list applies: the coverage counts them below
+	var cov coverage
+	var gOut []Candidate
+	g, gOut = reduceSplit(g)
+	dlOut := make([][]Candidate, len(dests))
+	plOut := make([][]Candidate, len(ports))
 	nd, np := 0, 0
 	for i := range dl {
 		if len(dl[i]) > 0 {
-			dl[i] = reduceCandidates(dl[i])
+			dl[i], dlOut[i] = reduceSplit(dl[i])
 			nd++
 		}
 	}
 	for j := range pl {
 		if len(pl[j]) > 0 {
-			pl[j] = reduceCandidates(pl[j])
+			pl[j], plOut[j] = reduceSplit(pl[j])
 			np++
 		}
 	}
@@ -706,6 +728,9 @@ func buildTable(t Table, relevant []tableCand, destCover []span, sels []PortSel)
 			l2 = append(l2, Entry{Level: 2, Dest: &r, Winner: byDest[i]})
 		}
 	}
+	// the cells the loops below look at, per destination piece and per protocol/port piece: the
+	// coverage of the candidates of a row or a column counts them
+	rowCells, colCells, cells := make([]int, len(dests)), make([]int, len(ports)), 0
 	cell := func(i, j int) {
 		below := v4 // what the levels below level 1 give here
 		switch {
@@ -714,10 +739,16 @@ func buildTable(t Table, relevant []tableCand, destCover []span, sels []PortSel)
 		case !sameWinner(byPort[j], v4):
 			below = byPort[j]
 		}
-		if got := winner(g, dl[i], pl[j], reduceCandidates(dp[[2]int{i, j}])); !sameWinner(got, below) {
+		here := dp[[2]int{i, j}]
+		got := winner(g, dl[i], pl[j], reduceCandidates(here))
+		if !sameWinner(got, below) {
 			r, p := dests[i].ipRange(), ports[j]
 			l1 = append(l1, Entry{Level: 1, Dest: &r, Port: &p, Winner: got})
 		}
+		cov.add(1, got, g, dl[i], pl[j], here)
+		rowCells[i]++
+		colCells[j]++
+		cells++
 	}
 	for i := range dests {
 		if len(dl[i]) == 0 {
@@ -735,9 +766,136 @@ func buildTable(t Table, relevant []tableCand, destCover []span, sels []PortSel)
 		}
 		cell(ij[0], ij[1])
 	}
+
+	// ---- the coverage of the cells nobody looked at ----
+	// Every other cell has no candidate that names both a destination and a port, and no
+	// destination-only candidate or no port-only one: its winner is that of its row (byDest), of its
+	// column (byPort) or of level 4. The cells are counted per row and column, not looked at.
+	emptyD, emptyP := 0, 1 // the destination pieces and port pieces without a candidate of their own
+	if len(complementSpans(destCover)) > 0 {
+		emptyD++ // the addresses no destination selector names
+	}
+	for i := range dests {
+		if len(dl[i]) == 0 {
+			emptyD++
+		}
+	}
+	for j := range ports {
+		if len(pl[j]) == 0 {
+			emptyP++
+		}
+	}
+	// the cells of those pieces that a destination-and-port candidate took (looked at above)
+	takenA, takenB, takenC := 0, make([]int, len(ports)), make([]int, len(dests))
+	for ij := range dp {
+		i, j := ij[0], ij[1]
+		switch {
+		case len(dl[i]) == 0 && len(pl[j]) == 0:
+			takenA++
+		case len(dl[i]) == 0:
+			takenB[j]++
+		case len(pl[j]) == 0:
+			takenC[i]++
+		}
+	}
+	n := emptyD*emptyP - takenA
+	cov.add(n, v4, g)
+	cells += n
+	for j := range ports {
+		if len(pl[j]) > 0 {
+			n := emptyD - takenB[j]
+			cov.add(n, byPort[j], g, pl[j])
+			colCells[j] += n
+			cells += n
+		}
+	}
+	for i := range dests {
+		if len(dl[i]) > 0 {
+			n := emptyP - takenC[i]
+			cov.add(n, byDest[i], g, dl[i])
+			rowCells[i] += n
+			cells += n
+		}
+	}
+	cov.add(cells, nil, gOut)
+	for i := range dests {
+		cov.add(rowCells[i], nil, dlOut[i])
+	}
+	for j := range ports {
+		cov.add(colCells[j], nil, plOut[j])
+	}
+	t.Coverage = cov.result()
+
 	t.Entries = append(append(append(mergeLevel1(l1), mergeLevel2(l2)...), mergeLevel3(l3)...), t.Entries...)
 	t.Cells = work
 	return t, nil
+}
+
+// reduceSplit is reduceCandidates that also returns the candidates it dropped.
+func reduceSplit(cs []Candidate) (kept, dropped []Candidate) {
+	kept = reduceCandidates(cs)
+	if len(kept) == len(cs) {
+		return kept, nil
+	}
+	in := make(map[candKey]bool, len(kept))
+	for _, c := range kept {
+		in[keyOf(c)] = true
+	}
+	for _, c := range cs {
+		if !in[keyOf(c)] {
+			dropped = append(dropped, c)
+		}
+	}
+	return kept, dropped
+}
+
+// candKey identifies a candidate like Candidate.Key, without building a string.
+type candKey struct {
+	layer      Layer
+	id, family string
+}
+
+func keyOf(c Candidate) candKey { return candKey{c.Layer, c.ID, c.Family} }
+
+// coverage collects the Cover of the candidates of a table while it is built.
+type coverage map[candKey]*Cover
+
+// add counts n cells on which the candidates of the lists match and win wins.
+func (cv *coverage) add(n int, win *Candidate, lists ...[]Candidate) {
+	if n <= 0 {
+		return
+	}
+	if *cv == nil {
+		*cv = coverage{}
+	}
+	get := func(c Candidate) *Cover {
+		k := keyOf(c)
+		x := (*cv)[k]
+		if x == nil {
+			x = &Cover{}
+			(*cv)[k] = x
+		}
+		return x
+	}
+	for _, l := range lists {
+		for _, c := range l {
+			get(c).Matched += n
+		}
+	}
+	if win != nil {
+		get(*win).Won += n
+	}
+}
+
+func (cv coverage) result() map[string]Cover {
+	if len(cv) == 0 {
+		return nil
+	}
+	out := make(map[string]Cover, len(cv))
+	for k, x := range cv {
+		out[string(k.layer)+":"+k.id+":"+k.family] = *x
+	}
+	return out
 }
 
 func protoOrder(p string) int {

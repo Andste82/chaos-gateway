@@ -715,12 +715,46 @@ func TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe(t *testing
 	if !recreated() || x.k.TCSeed("br-iot", leaf) == seed {
 		t.Fatalf("a leaf of unknown table was changed in place to uniform:\n%s", x.tcLog())
 	}
-	// but a leaf that already is what the target says is left alone, known or not
-	x.ret = apply.NewRetirer(x.clock)
+	// a leaf that already is what the target says is left alone once its table is known
 	seed = x.k.TCSeed("br-iot", leaf)
 	change(uniform2)
 	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
 		t.Fatalf("an unchanged leaf was touched:\n%s", x.tcLog())
+	}
+	// but after a restart even an unchanged uniform leaf with a jitter may hold a table (one that
+	// survived the restart, or one someone else put there): the first apply makes it again, the next
+	// one leaves it alone
+	x.k.SetTCTable("br-iot", leaf, "normal")
+	x.ret = apply.NewRetirer(x.clock)
+	change(uniform2)
+	if !recreated() || x.k.TCSeed("br-iot", leaf) == seed || x.k.TCTable("br-iot", leaf) != "" {
+		t.Fatalf("the first apply after a restart kept the leaf with its table %q:\n%s", x.k.TCTable("br-iot", leaf), x.tcLog())
+	}
+	seed = x.k.TCSeed("br-iot", leaf)
+	change(uniform2)
+	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
+		t.Fatalf("the second apply after a restart touched an unchanged leaf:\n%s", x.tcLog())
+	}
+	// a leaf without a jitter is left alone after a restart: a table shapes nothing there
+	change(noJitter)
+	x.ret = apply.NewRetirer(x.clock)
+	seed = x.k.TCSeed("br-iot", leaf)
+	change(noJitter)
+	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
+		t.Fatalf("an unchanged leaf without a jitter was touched after a restart:\n%s", x.tcLog())
+	}
+	// a leaf that is to have a table gets it written in place after a restart: no queue is dropped
+	change(normal)
+	x.k.SetTCTable("br-iot", leaf, "pareto")
+	x.ret = apply.NewRetirer(x.clock)
+	seed = x.k.TCSeed("br-iot", leaf)
+	change(normal)
+	if recreated() || !strings.Contains(x.tcLog(), "distribution normal") || x.k.TCTable("br-iot", leaf) != "normal" {
+		t.Fatalf("the table of an unchanged leaf was not written in place after a restart (now %q):\n%s", x.k.TCTable("br-iot", leaf), x.tcLog())
+	}
+	// and without a retirer (a one-shot apply, a preview) nothing is known and nothing is made again
+	if p, err := apply.Preview(context.Background(), x.exec(), "", x.compileWith(o)); err != nil || !p.Empty() {
+		t.Fatalf("a preview without a memory plans work for unchanged leaves: %v %v", err, p)
 	}
 }
 

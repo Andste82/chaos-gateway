@@ -106,6 +106,22 @@ func (k *Kernel) TCTable(dev, handle string) string {
 	return ""
 }
 
+// SetTCTable gives the netem qdisc with the handle a distribution table behind the apply's back (a
+// table that survived a restart, or one that someone else wrote): the listing does not change.
+func (k *Kernel) SetTCTable(dev, handle, table string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	l := k.links[dev]
+	if l == nil || l.tc == nil {
+		return
+	}
+	for _, q := range l.tc.leaves {
+		if q.handle == handle {
+			q.table = table
+		}
+	}
+}
+
 // netemTable is the distribution table the netem arguments name.
 func netemTable(a []string) string {
 	for i := 0; i+1 < len(a); i++ {

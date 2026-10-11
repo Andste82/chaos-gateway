@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -912,5 +913,78 @@ func TestATreeAtTheClassLimitIsAppliedOnEveryInterface(t *testing.T) {
 		if q := x.readTC(d).Subtree("1:").Qdiscs; len(q) != 0 {
 			t.Errorf("%s still holds %d qdiscs", d, len(q))
 		}
+	}
+}
+
+// P2-M8b-04: an apply reads the tc state before it plans and again to verify. Which interfaces hold a
+// tree is told by one listing of the qdiscs of all interfaces, so the number of tool runs follows the
+// interfaces that carry the tree, not the assigned ones: with ten assigned interfaces and the tree on
+// three, a read is 1 + 3 x 3 runs of tc (a listing per interface and three for each tree were 10 + 9).
+func TestAnApplyWithTenAssignedInterfacesListsTheQdiscsOnce(t *testing.T) {
+	x := newTCEnv(t)
+	raw, err := os.ReadFile("../compiler/testdata/gateway.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, r := range []struct{ old, ports string }{
+		{"[{name: lan0, mac: '02:00:00:00:00:01'}]", "{name: lan2}, {name: lan3}, {name: lan4}"},
+		{"[{name: lan1, mac: '02:00:00:00:01:01'}]", "{name: lan5}"},
+	} {
+		if !strings.Contains(text, r.old) {
+			t.Fatalf("gateway.yaml has no %s", r.old)
+		}
+		text = strings.Replace(text, r.old, strings.TrimSuffix(r.old, "]")+", "+r.ports+"]", 1)
+	}
+	cfg, err := domain.DecodeConfiguration([]byte(text), domain.FormatYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Devices = x.cfg.Devices
+	norm, errs := domain.Normalize(cfg)
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	x.cfg = norm
+	for i := 2; i <= 5; i++ {
+		x.k.AddLink(fmt.Sprintf("lan%d", i), fmt.Sprintf("02:00:00:00:%02x:01", 0x10+i), "veth", true)
+	}
+
+	o := x.overlay(dev150)
+	res := x.applyRetiring(x.compileWith(o))
+	if n := len(res.After.Assigned); n != 10 {
+		t.Fatalf("%d interfaces assigned, want 10: %v", n, res.After.Assigned)
+	}
+	if n := len(res.After.TC); n != len(tcDevs) {
+		t.Fatalf("%d interfaces hold a tree, want %d", n, len(tcDevs))
+	}
+
+	// a change of the fault: read, plan, carry out, read again to verify
+	n := x.overlay(`{target: {device: dev-a}, fault: {latency: 160ms, jitter: 20ms}}`)
+	o.Target, o.Fault = n.Target, n.Fault
+	tg := x.compileWith(o)
+	x.k.ClearLog()
+	if res := x.applyRetiring(tg); len(res.Plan.Ops) == 0 {
+		t.Fatal("the change planned nothing")
+	}
+	var perDev, all, reads int
+	for _, c := range x.k.Commands() {
+		switch {
+		case c == "tc -j qdisc show":
+			all++
+			reads++
+		case strings.HasPrefix(c, "tc -j qdisc show dev "):
+			perDev++
+			reads++
+		case strings.HasPrefix(c, "tc -s -j "):
+			reads++
+		}
+	}
+	if perDev != 0 || all != 2 {
+		t.Errorf("the apply listed the qdiscs of one interface %d times and of all of them %d times, want 0 and 2", perDev, all)
+	}
+	// two reads of 1 + 3 x 3 runs
+	if want := 2 * (1 + 3*len(tcDevs)); reads != want {
+		t.Errorf("the apply ran tc %d times to read, want %d:\n%s", reads, want, strings.Join(x.k.Commands(), "\n"))
 	}
 }

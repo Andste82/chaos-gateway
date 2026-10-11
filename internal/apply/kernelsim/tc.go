@@ -1,6 +1,7 @@
 package kernelsim
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -153,8 +154,25 @@ func (k *Kernel) tcCmd(c executor.Command) (executor.Result, error) {
 	if len(a) == 5 && a[0] == "filter" && a[1] == "show" && a[2] == "dev" && a[4] == "ingress" {
 		return k.tcShow(a[0], a[3], true)
 	}
+	// qdisc show: the qdiscs of every interface, each entry naming its interface (the listing of one
+	// interface does not); the simulator lists classes and filters per interface only
+	if len(a) == 2 && a[0] == "qdisc" && a[1] == "show" {
+		all := []any{}
+		for _, l := range k.sortedLinks() {
+			res, _ := k.tcShow("qdisc", l.name, false)
+			var entries []map[string]any
+			if err := json.Unmarshal([]byte(res.Stdout), &entries); err != nil {
+				return executor.Result{}, err
+			}
+			for _, e := range entries {
+				e["dev"] = l.name
+				all = append(all, e)
+			}
+		}
+		return jsonOut(all)
+	}
 	if len(a) == 2 && a[1] == "show" {
-		return executor.Result{Exit: 1, Stderr: "the simulated tc lists one interface at a time\n"}, nil
+		return executor.Result{Exit: 1, Stderr: "the simulated tc lists " + a[0] + "s one interface at a time\n"}, nil
 	}
 	return executor.Result{Exit: 1, Stderr: "the simulated tc does not know: " + strings.Join(c.Args, " ") + "\n"}, nil
 }

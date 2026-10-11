@@ -382,6 +382,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `empty_fault` | A fault sets no parameter at all. |
 | `invalid_mtu` | An MTU fault's size is outside 552-1500 bytes. |
 | `cut_existing_with_allow` | `cut_existing` is set on an `allow` rule (only `drop`, `reject` and `reset` cut connections). |
+| `reject_with_requires_reject` | `reject_with` (the ICMP type of a rejection) is set on a rule whose action is not `reject`. |
 | `tunnel_parameter` | A tunnel fault sets a parameter other than latency, jitter, loss, burst_loss, blackout or flapping. |
 | `invalid_dns_fault` | A DNS fault's action and its fields do not match (a field required by the action is missing, or set for the wrong one). |
 | `invalid_tls_case` | A TLS case's fields do not match its case (protocol not tcp, interception fields outside `intercept`, ...). |
@@ -892,8 +893,10 @@ also changes two things said here: the maps are interval maps, and an element `g
 
 - **Mark bits.** Bits 4-15 hold the fault id (12 bits, up to the 4095 of plan §3.3's capacity limit),
   bit 16 the direction (0 = original/upload, 1 = reply/download, read from `ct direction`). Bits
-  17-19 (PMTU), 20 (service selection, already compiled by M6b but not yet written by real traffic,
-  see `docs/open-items.md` P2-M7-01) and 21-23 (reserved) are untouched by this chain; so are bits 0-3
+  17-19 (PMTU), 20 (service selection, already compiled by M6b but not yet written by real traffic: the
+  maintainer confirmed on 2026-10-11 that writing it stays with M20/M21, because setting it changes which
+  policy-routing rule wins for real DNS/TLS traffic, `ServiceRulePriority` 900 before the policy table's 1000, a
+  behavior change that needs the real redirect-interaction test, P2-M7-01) and 21-23 (reserved) are untouched by this chain; so are bits 0-3
   and 24-31. `MarkKeepOnIDWrite` (0xffff000f) is the mask kept when the id is (re)written: it leaves
   the direction bit alone. `TestMarkMasksKeepTheDirectionBit` pins this against spike S15's bug
   (0xfffe000f), which cleared the direction bit on every classification and gave both directions of a
@@ -957,14 +960,19 @@ also changes two things said here: the maps are interval maps, and an element `g
   (`TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination`,
   `TestClassificationOverAWireGuardLink`). `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`
   checks the real kernel's identity-map entry (not only the API event) follows a forced address
-  change within a second, and `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` (over the
+  change: within 3 seconds, the bound the test asserts on the shared CI runners (the convergence path adds two
+  real `nft` round trips; one level-1 run took 1.96 s and a loaded level-1b VM 4.7 s before the bound was
+  loosened, and no extra throttling is on the path), and within the plan's one second on dedicated hardware
+  (H1), which is the target. Decided by the maintainer on 2026-10-11 (P2-M7-03); what the test asserts functionally,
+  that the map reaches the new address and not a stale one, is unchanged. In the persistent VM (software
+  emulation) the test says nothing, because the first full apply outlasts its wait. `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` (over the
   simulated kernel, a `blockingNftExec` wrapper above the kernel's own lock) proves a full apply
   racing an incremental identity update does not win with the stale address.
 - **Not in M7:** real fault ids (M8a onward), group- and network-level selectors (M8a/M9; the access
   rules of M9 expand their scopes into address sets, not into this lookup chain), the output
   hook and IFB for tunnel faults (M10), writing the service-selection mark bit from real traffic
-  (M20/M21, P2-M7-01) and the connections-redirected-to-a-gateway-service classification test that
-  goes with it.
+  (M20/M21, confirmed by the maintainer on 2026-10-11, P2-M7-01) and the connections-redirected-to-a-gateway-service
+  classification test that goes with it.
 
 ## Overlays and precedence (M8a)
 
@@ -1019,8 +1027,24 @@ steps.
   the minimum that makes the first-match lookup give the resolved winner everywhere. `Table.Lookup`
   simulates the chain; `TestTheLookupChainGivesWhatResolveSays` checks it against `Resolve` for
   random worlds. `uplink` is the complement of the known prefixes; hostnames are not in a table
-  (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. See
-  `docs/open-items.md` P2-M8a-01 for why group and network scopes are folded into the tables.
+  (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. Group and
+  network scopes are folded into the tables of the sources they apply to, and not given lookup levels of
+  their own as plan §3.3 can be read: the winner of a key can come from any scope, and that is what makes the
+  precedence rules (D24, E1) hold with a first-match lookup (with separate levels an overlay at a less
+  specific scope could never override a more specific configured fault). The price is map size (devices
+  times entries instead of one entry per network); if that turns out too large, a device's entries that
+  equal what its stretch's table gives can be dropped (`Table.Signature` makes the comparison cheap).
+  Decided by the maintainer on 2026-10-11 (P2-M8a-01).
+  *The prefixes of a network* (`domain.prefixesOf`, which scope matching, the destination `network`,
+  `ResolveAccess`, the fault tables, `NetworkOf` and the access rules' source sets all use) are its subnet and,
+  for a local test network, the networks behind its downstream routes (plan §2.3: devices behind another router in the
+  network), like the networks behind a hub's clients and a link's routes. So "network IoT" in a rule or in a fault
+  selects a host at 10.30.0.5 behind IoT's router although no device is configured for it, the destination
+  `uplink` does not include it, and the classification guard (`classify_nets`) covers the same addresses.
+  Decided by the maintainer on 2026-10-11 (P2-M9-04; before, a local network meant its subnet only).
+  `TestANetworkIncludesTheNetworksBehindItsDownstreamRoutes`, `TestARuleForANetworkSelectsTheHostsBehindItsRouter`,
+  `TestAFaultForANetworkReachesTheHostsBehindItsRouter` and `TestExplainSelectsAHostBehindANetworksRouterByTheNetwork` pin it, and the
+  random worlds of `TestTheLookupChainGivesWhatResolveSays` and `TestTheCompiledLookupGivesTheResolvedWinner` include such a host.
   *Cost.* The first version looked at every cell of the (destination piece x port piece) grid and
   scanned all candidates per cell: cubic in the number of overlays that name their own destination
   and port (4.5 ms for 10, 11.7 s for 160, 42 s for 240), and the compile runs inside the state
@@ -1052,7 +1076,9 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   fault that names a hostname is left out with a `hostname_unresolved` warning (M20).
 - **Fault ids.** One id (12 bits, 1 to 4095; 0 is "no fault") per winning fault, per matched device
   when the fault has a rate, an explicit queue limit or keep order in either direction (D18); the
-  addresses no device owns share one id per winning fault (P2-M8a-03). The key is
+  addresses no device owns share one id per winning fault (the devices in between cut those addresses into
+  several stretches and a fault can name several scopes that reach them, so "one queue per scope" is "one per
+  winning fault"; decided by the maintainer on 2026-10-11, P2-M8a-03). The key is
   `layer:overlay-or-fault-uuid:family[@device]`. A key that had an id keeps it
   (`Input.FaultIDs`), a new key takes the lowest id the previous allocation did not use at all (a
   released id is not handed out again while packets queued under it may still be in flight; the
@@ -1085,7 +1111,14 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   for none. Blackout is `loss 100%`, flapping compiles the phase the engine holds (`Input.FlapPhase`) and `Netem.Down()` is the blackout
   (the engine toggles it, "Extended faults (M10)"), `keep_order` is a rate (the fault's, else 1 Gbit/s). The queue limit is the explicit one,
   or delay+jitter × rate / 1500 bytes (rate: the fault's, else 1 Gbit/s), at least 1000 and at most the
-  class's share of the interface's memory budget (P2-M8a-02).
+  class's share of the interface's memory budget. The three numbers are assumptions plan §2.5 does not give
+  (it names neither a packet size nor a budget, and the host description has no link speed): a packet of 1500
+  bytes (an Ethernet MTU), a budget of 256 MiB per interface (`Input.QueueBudget`) shared by the active classes
+  of the interface, and never below netem's own 1000 packets (so a tree of thousands of classes keeps 1000 each and
+  may exceed the budget; the class limit bounds the memory then); an explicit `queue_limit` is never changed. The
+  rate of a fault without one is the 1 Gbit/s cap itself, `keep_order` without a rate uses the same 1 Gbit/s as
+  netem's `rate`, and the link speed from `ethtool` (and 100 Mbit/s links) stays a later refinement. Decided by the
+  maintainer on 2026-10-11 (P2-M8a-02).
 - **What the VM proved first** (kernel 6.8.0-142, iproute2 6.19, nftables 1.1.6), before any compiler code
   was written around it: an HTB root cannot be replaced or changed once it exists (`Change
   operation not supported by specified qdisc`, so the root entry is `add` and only when it is missing
@@ -1099,9 +1132,12 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   concatenated ranges, prefixes, protocols and port ranges are accepted by the kernel, and nft
   prints an aligned range as a prefix, a one-address range as the address and `53-53` as `53`.
 - **Capacity.** More fault ids than 4095, or more classes than `Input.ClassLimit` (default 1000 on
-  x86, 200 on ARM64, counting the default class, P2-M8a-04), is a `capacity_exceeded` problem (an
-  error: the target is not applied). It names the scope of the biggest cause (`Problem.Scope`, "network
-  IoT") and lists the overlays or faults that contribute (`Problem.Faults`, the biggest first).
+  x86, 200 on ARM64, counting the default class: a tree of 999 fault classes fits the default limit of 1000), is a
+  `capacity_exceeded` problem (an error: the target is not applied). Every interface carries the same tree (the direction bit
+  makes (id, direction) to class the same on all of them), so one limit counts the classes of the tree for all
+  interfaces alike; a count per interface would need trees that differ between interfaces. The problem names the scope of the
+  biggest cause (`Problem.Scope`, "network IoT") and lists the overlays or faults that contribute (`Problem.Faults`, the
+  biggest first), so the API can name the overlay that tipped the balance. Decided by the maintainer on 2026-10-11 (P2-M8a-04).
 - **Incremental identity updates** (`engine/applyloop.go`). The classification maps are keyed by
   address, so a device's new address changes their elements too. `identityOps` diffs every map
   (`compiler.DiffMap`), applies the identity map as before and the classification maps in one atomic
@@ -1183,7 +1219,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
   identity maps to a device), the access verdict (`domain.World.AccessDecision` since M9: the
-  control plane, the access rules, then the gateway's protection or the matrix; P2-M8a-07), the
+  control plane, the access rules, then the gateway's protection or the matrix; before M9 only the matrix and the
+  protection, P2-M8a-07), the
   winner and the overridden candidates of every family that has candidates (`domain.World.Resolve`),
   the fault id and the two marks the compiler gave the impairment winner, `dns_proxy` for a query to
   the gateway's own address on port 53, and the route. The route is the kernel's answer to
@@ -1378,8 +1415,14 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   is looked at again every second, for at most five minutes (`retireBacklogCap`: a netem with a low
   rate can hold a queue for minutes; after that the class goes with its queue). A class that is
   already gone, or whose interface is gone or no longer assigned, is forgotten; a deletion that
-  fails is retried every second for half an hour. `Apply` without a retirer (the one-shot
-  `chaosgw apply`, tests) deletes the stale class right after the transaction.
+  fails is retried every second for half an hour (`retireGiveUp`). `Apply` without a retirer (the one-shot
+  `chaosgw apply`, tests) deletes the stale class right after the transaction. These limits are choices, not numbers of
+  the plan (§3.2 says only "the largest configured delay plus 1 s"), and so is a consequence of the design: the classes of
+  the old and the new ids exist side by side for that time, so an interface can carry up to twice the class limit for a
+  moment (`Input.ClassLimit` counts the target's classes; the compiler does not count the ones that wait; a limit of half
+  the number per interface would make 1000 on x86 effectively 500, should that be wanted). An interface that leaves Chaos
+  Gateway's control (the uplink changes) loses its tree in the apply itself, with the packets queued in it, because nobody
+  can delete anything on it later. Decided by the maintainer on 2026-10-11 (P2-M8b-03).
 - **What the retirer remembers.** Only when it first saw each stale class, and which distribution
   table each leaf was last given (below). Every apply recomputes the stale set from the live tc
   state, so a class that a fault wants again drops out (nothing is deleted, its queue stays), an
@@ -1469,8 +1512,13 @@ counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
   epoch of all of them together (`trackCounters`): the generation of the engine's first apply, and of
   every apply that finds the table of Chaos Gateway missing (`Plan.NftNew`: a reboot, `chaosgw teardown`),
   and then every fault counter starts a new epoch as well. A gateway that merely restarts cannot tell
-  whether the counters it finds are the ones it left, so it counts as a new epoch (P2-M8b-05); the
-  generation is persisted (`GenerationFile`), so the numbers never repeat.
+  whether the counters it finds are the ones it left (it keeps no counter state, and the kernel shows no creation time), so
+  its first apply starts new epochs for every queue and fault although the counters did survive; a consumer then discards
+  one delta and never subtracts across a reset. The generation is persisted (`GenerationFile`), so the numbers never repeat.
+  The plan (§2.12) says only that counters reset on reboot and that a re-created queue starts a new epoch; that an epoch is
+  the generation of the apply that made the object, and that a restart starts a new one, is decided by the maintainer on
+  2026-10-11 (P2-M8b-05). Epochs that survive a restart would need the engine to store the epoch of every queue and fault
+  with the checkpoint and to compare the kernel's counters with the stored ones.
 - **Tests.** `internal/engine/queues_test.go` (simulated kernel: the readings, the epoch through a
   change in place, a leaf made again, an update that leaves another fault's queue and epoch alone, a
   fault that comes back, a failed apply, the counter epoch and a restart), `internal/api`
@@ -1485,7 +1533,15 @@ counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
   wait), and every packet is accounted for by the queues: upload sent + dropped = 4000, download sent +
   dropped = what left the upload queue. What `ping` itself receives is not a measure (a burst of replies
   overruns its socket buffer: 2000 to 2500 of 4000 on the emulated kernel with no drop in the queues). The
-  outcome and the cost are in P2-M8a-02. On the hosted nested-virtualisation runner (level 1b) about half of the
+  outcome: without a queue limit the compiler's limit holds all of it with no drop in either direction, and with the
+  limit of 1000 (netem's own default, which is also what a limit below it is raised to) the queue passes the first
+  2000 and drops the other 2000 while the first wait. A 600 ms fault with the default limit is therefore a rate limit of
+  about 1667 packets per second (about 20 Mbit/s of 1500-byte packets) that nobody configured, which is why the
+  computed limit exists. The price is memory: a full queue of 44739 packets holds up to that many socket buffers (an
+  estimate, not measured: about 2 KiB each with the packet itself, roughly 90 MB for one queue), and the 256 MiB budget of
+  the interface is shared by its queues, so a burst through one queue is covered but many full queues are bounded by the
+  budget, not by the delay. A packet size of 1500 bytes under-counts small packets (a queue of 64-byte packets holds more of
+  them than the estimate), which only makes the limit larger in packets than needed. On the hosted nested-virtualisation runner (level 1b) about half of the
   replies of the 4000-packet burst vanish between the two queues without a drop in either and without a
   drop in the host's receive queues: the echo server's own ICMP output fails (`Icmp.OutErrors`) while the
   gateway forwards everything. The test accounts for exactly those (and for softnet drops) and fails on
@@ -1508,7 +1564,12 @@ overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are
 - **Statistics.** `BinomialBounds` is the central 99.9 % interval of the count of lost packets (`CheckLoss`),
   `CheckLatency` the tolerance of ±2 ms + 5 %, `CheckSpread` compares the 5th to 95th percentile spread
   of the upload with that of a uniform jitter (1.8 x jitter; the plan gives no tolerance for the spread,
-  the test's own is 0.5 to 1.5 times plus 2 ms). `Statistically` is the flakiness policy: an attempt that
+  the test's own is 0.5 to 1.5 times plus 2 ms, wide on purpose: with 200 to 2000 probes the percentiles are stable to a
+  few percent, and the point is to tell a jitter from none and from a wrong one). An unaffected flow is "unchanged" when
+  its median in each direction is within ±2 ms + 5 % of what the same flow measured before the fault and it lost
+  nothing (plan §4.3 gives tolerances for the median, the loss and the rate only). Decided by the maintainer on 2026-10-11
+  (P2-M8b-06); the spread bounds can be tightened if nightly measurements on KVM show they are never near their limits.
+  `Statistically` is the flakiness policy: an attempt that
   fails is run once more (the attempt measures anew), only a second failure fails the test, and the
   message carries both measurements.
 - **What runs where.** The functional assertions always run: the effect is present, the upload is
@@ -1529,7 +1590,7 @@ overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are
 | test network and WireGuard client network | `TestFaultsBetweenATestNetworkAndAWireGuardClientNetworkAreMeasuredPerDirection` |
 | route learned via BGP | `TestAFaultOnTrafficOverARouteLearnedByBGPIsMeasuredPerDirection` |
 | isolation (every fault test above) | `expectUnaffected`: a device or flow the fault does not name, measured before and after |
-| updating one fault does not disturb others | `TestUpdatingOneFaultDoesNotDisturbTheOthers` (also holds every delay of C's stream during the changes to the fault's bounds with `testbed.CheckDelays`: at most 1 % (and always one packet) outside, none more than 10 ms outside, the tests' own tolerance since the plan gives one for the median only) |
+| updating one fault does not disturb others | `TestUpdatingOneFaultDoesNotDisturbTheOthers` (also holds every delay of C's stream during the changes to the fault's bounds with `testbed.CheckDelays`: at most 1 % (and always one packet) outside, none more than 10 ms outside, the tests' own tolerance since the plan gives one for the median only; the stream is at least 200 packets, sent 5 ms apart, so that the allowance is two packets and means something: decided by the maintainer on 2026-10-11, P2-M10-08, after a loaded native runner put two of 61 packets outside the bounds) |
 | 600 ms fault changed under load loses no queued packet | `TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket` (engine, sent = delivered + the fault's own drops) and `TestChangingAFaultOf600msUnderLoadLosesNoPacket` (apply) |
 | make before break | `TestSwitchingADeviceToANewFaultIdThroughTheEngineLosesNoPacketAndTheOldClassesGoLater` (engine) and `TestMovingADeviceToANewFaultIdLosesNoPacketAndTheOldClassesGoLater` (apply), `internal/apply/tcapply_test.go` for the plans |
 | golden tests for the `tc -j` normalizer | `internal/linux/tcnorm_test.go` on `internal/linux/testdata/tc` |
@@ -1613,21 +1674,34 @@ forward   jump cut_forward*
 - **The rules decide before the matrix.** `allow` in forward is `accept`: an exception to the matrix
   ("IoT may not reach management, but this device may reach that host on port 22"). Traffic that no
   rule selects goes on to the matrix, which stays the default policy per network.
-- **`allow` does not open the gateway.** In input an allow rule is `return`: the rules end for this
-  packet, and the gateway's protection of the test networks (DHCP, DNS and ICMP echo, nothing else,
-  never the UI) applies as without rules. The UI port is dropped for everybody but the management
-  sources in front of the rules, so no rule, not even a reject, changes what a device sees there. A drop, reject or reset rule in input acts before the
+- **`allow` accepts, in input too.** In input an allow rule is `accept`: it opens the gateway's own ports that
+  the protection of the test networks closes (the protection answers DHCP, DNS and ICMP echo and drops
+  the rest) for the rule's selector, and the routing protocols' accepts behind the rules no longer
+  matter for it. Two rules stand in front of the jump to the access rules and keep standing: the
+  anti-lockout rule (below), and the UI port, which is dropped for everybody but the management
+  sources, so the UI/API stays unreachable from the test networks whatever a rule or an overlay says,
+  and no rule locks the management network out. A drop, reject or reset rule in input acts before the
   gateway answers, so "drop UDP 53" silences the DNS proxy for a device, and a rule can block BGP on a
-  link (the routing protocols' accepts stand behind the rules). `docs/open-items.md` P2-M9-01.
+  link. Decided by the maintainer on 2026-10-11 (P2-M9-01; before, an allow rule in input was a
+  `return` to the protection). `TestAnAllowRuleOpensTheGatewaysClosedPortsButNeverTheUIAndNeverLocksOutManagement`
+  proves it on the real kernel and compares `explain` with the packets.
 - **The anti-lockout rule is not part of the rules.** It stands in front of the jump, nothing is
   inserted before it, and `TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay` compares every rule in
   front of the jump with the chain compiled without rules. It has a counter (`anti_lockout`) and is
   listed, locked, as `AntiLockoutRule` (`system_rules` of `GET /rules`). The cut chain of input starts
-  with the same match, so a cut window never resets the control plane.
+  with the same match, so a cut window never resets the control plane. No rule and no overlay can take the control
+  plane away, so there is nothing for the code `lockout_protected` (422) to refuse for rules; what can still lock the
+  administrator out is a configuration change that moves the UI port or the management interface or its sources
+  (`engine.LockoutRelevant` flags those and the apply waits for confirmation, commit-confirm, rolled back when it runs
+  out: the protection plan §2.16 names for risk 20). The maintainer decided on 2026-10-11 (P2-M9-08) that commit-confirm
+  is enough: no change is refused outright and `lockout_protected` stays reserved in the spec.
 - **New connections only.** Established traffic is accepted before the rules (spike S3, C2; D11), so
   a rule changes the fate of new connections. The rule's counter counts the packets the rule decided,
   which are those of new connections: a hit means "this rule just refused something", and it does not
-  grow while an established connection runs through.
+  grow while an established connection runs through. For an allow rule that is the first packets of
+  the connections it let through (and the retransmitted SYNs of dropped ones): counting every packet of a decided
+  connection would need a conntrack mark per rule, or a counting rule per allow rule behind the established
+  accept. The spec says so (`AccessRuleView.counters`). Decided by the maintainer on 2026-10-11 (P2-M9-07).
 - **The original tuple.** Every rule matches `ct original ip saddr` (a set), `ct original ip daddr`,
   `meta l4proto` and `ct original proto-dst`, never the packet's own addresses or interfaces, so a
   connection the gateway redirected is judged by what the device meant (plan §2.2, E11), and a reply
@@ -1648,7 +1722,7 @@ removed rule (plan §3.2). An overlay that is written again keeps its id and so 
   (two scopes whose names collide with different addresses are a compile error, never a shared set),
   refilled at every apply from the identity of the devices (`domain.World.ScopePrefixes`): a device
   or group is the addresses of its devices (and the ranges that identify them), a network its
-  prefixes (subnet, the networks behind a hub's clients, a link's routes) and the addresses of the
+  prefixes (the subnet and the networks behind its downstream routes, the networks behind a hub's clients, a link's routes) and the addresses of the
   devices that belong to it, a remote network its prefixes. The global scope is the classification's
   set of test, WireGuard and remote networks, never the management network or the uplink. A scope
   without an address yet keeps its rule with an empty set (the rule takes effect with the first
@@ -1658,9 +1732,20 @@ removed rule (plan §3.2). An overlay that is written again keeps its id and so 
   `domain.World.viaUplink`). A hostname needs the DNS-derived sets of M20: such a rule stays out of the
   chain with a `hostname_unresolved` warning (P2-M9-02).
 - **Ports** are merged into disjoint ranges (an anonymous interval set refuses overlapping elements).
-- **Verdicts**: `drop`; `reject` is `reject with icmpx type port-unreachable`, one statement for
-  IPv4 and IPv6; `reset` is `reject with tcp reset` (validation requires protocol `tcp`). V1's
-  selectors are IPv4, and forwarded IPv6 is dropped before the rules.
+- **Verdicts**: `allow` is `accept` in both hooks; `drop`; `reject` is `reject with icmpx type <t>`, one statement for
+  IPv4 and IPv6, where `<t>` is chosen per rule (below); `reset` is `reject with tcp reset` (validation requires protocol `tcp`).
+  V1's selectors are IPv4 (IPv6 selectors come with M32; decided by the maintainer on 2026-10-11, P2-M9-09), and forwarded IPv6
+  is dropped before the rules.
+- **The type of a reject** is chosen per rule with the optional `reject_with` of the rule and of a rule overlay
+  (`AccessRuleBody`): `port_unreachable` (the default and the only behavior before the field existed; the output of a rule
+  without the field is byte for byte what it was), `host_unreachable`, `admin_prohibited` and `no_route`, which compile to
+  `reject with icmpx type port-unreachable|host-unreachable|admin-prohibited|no-route`. A client sees "connection refused" for the first,
+  "no route to host" for the second and third (told apart by the ICMP code on the wire: 3/3, 3/1, 3/13) and "network unreachable" for the
+  last (3/0). Validation refuses `reject_with` on any other action (`reject_with_requires_reject`), the preview carries it,
+  `explain` names it. Decided by the maintainer on 2026-10-11 (P2-M9-03; plan §2.4 says "reject (ICMP)" without the type).
+  Tests: the `access-reject` golden (every type, a rule without a type, an overlay rule), `TestARejectRuleAnswersWithItsOwnIcmpType`,
+  the kernel gate (the `access-reject` scenario is one of `transactionScenarios`) and
+  `TestARejectAnswersWithTheIcmpErrorTheRuleNamesOnTheRealKernel`, which reads type and code off the sender's socket error queue.
 - **Limits** (`capacity_exceeded`, a compile error that names the overlays that contributed): 1000 rules,
   overlays included (`Input.RuleLimit`, `DefaultRuleLimit`, the same on every architecture) and 65536
   source addresses in all sets (`Input.RuleElementLimit`). `TestTooManyRulesAreRefused...` names the limit it assumes.
@@ -1701,7 +1786,7 @@ rules that reset the packets of established connections, then the window is clos
   the reset cannot reach (UDP, ICMP): the engine reads them and deletes those for which
   `Winner(tuple)` is a cutting rule of the window.
 
-What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
+What the cut does and does not do at the edges (decided by the maintainer on 2026-10-11, P2-M9-10):
 
 - The comparison is between the plans, and a plan holds the resolved source addresses. A device whose
   addresses first appear after the daemon's first apply (the set was empty at start and the identity
@@ -1718,6 +1803,10 @@ What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
   connection of the cut is ESTABLISHED no window opens at all. Plan §2.4's "immediate reset" holds for
   established connections.
 
+The alternatives, should they be wanted later: a cut on an edit of the rule only (the comparison would ignore the
+sources of the old plan), and a window whenever a cutting rule selects a TCP connection in any state but TIME_WAIT, CLOSE
+and LAST_ACK.
+
 ### Tests
 
 - Unit and golden: `access_test.go` (order, verdicts, selectors, scopes, counters, capacity, cut
@@ -1730,11 +1819,12 @@ What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
 - Kernel behavior (`accesskernel_test.go`, testbed): the compiled transaction on a gateway namespace with
   a device, a server and a management host. Established connections continue under a drop rule and new
   ones hang (C1/C2), reject and reset refuse at once, order and overlays, an allow rule as an exception
-  to the matrix, the DNS rule in input, the anti-lockout rule under a global drop-everything rule, and
+  to the matrix, the DNS rule in input, an allow rule that opens a closed port of the gateway (not the UI port),
+  the four ICMP types of a reject, the anti-lockout rule under a global drop-everything rule, and
   the cut window with a connection that an earlier rule owns, and (on a bridged bed with `br_netfilter`
   loaded by the test) a window that leaves switched traffic between two devices and the gateway's own
   loopback connection alone. These tests run in the persistent VM
-  (`make vm-test ARGS='-run "TestAccessRule|TestACutWindowResets" -tags testbed -test-timeout 15m ./internal/compiler'`);
+  (`make vm-test ARGS='-run "TestAccessRule|TestACutWindowResets|TestAnAllowRuleOpens|TestARejectAnswers" -tags testbed -test-timeout 15m ./internal/compiler'`);
   python3 starts slowly under emulation, so a run takes about six minutes.
 
 ### Rules in the engine and over the API
@@ -1758,7 +1848,10 @@ What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
   both directions and rules on three ports: the rejected connection is refused in far less than the delay,
   the dropped one never comes up (it is not merely late), the port no rule names is delayed by the fault as
   before, and a device without fault or rule is not delayed. The fault counters of the classification
-  still count what a rule drops afterwards, P2-M9-05.
+  still count what a rule drops afterwards: the counters say how many packets were classified, the queue
+  statistics (`QueueStats`) how many a fault handled, and a rule's own counter what it dropped. Decided by the
+  maintainer on 2026-10-11 (P2-M9-05; counting after the rules would move the counting rules behind the decision,
+  for instance into a postrouting chain).
 - **The cut** (`internal/engine/cut.go`). It runs in the apply loop right after a full apply (not after
   an incremental identity update) that verified, so the writer of the overlay waits for it, and it
   never fails the apply. The engine keeps the target of the last verified apply (`verified`, kept
@@ -1800,11 +1893,14 @@ What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
   `Snapshot.RuleEpochs` the generation in which each rule key first appeared (like the fault epochs; a
   new table resets them all). A rule's counter is read with `Engine.ReadCounters` by `AccessRule.Counter`.
 - **`explain`** (`domain.World.AccessDecision`). Towards the gateway: the control plane first (a
-  management source is allowed; the UI port is dropped for everybody else, whatever a rule says), then the
-  rules, then the gateway's protection (DHCP, DNS, ICMP echo). Towards anything else: the rules, then the
+  management source is allowed to SSH and the UI port, exactly what the anti-lockout rule guarantees, and the
+  reason says so; on any other port the explanation says that the protection covers the test networks only and
+  nothing is guaranteed to a management source; the UI port is dropped for everybody else, whatever a rule says), then
+  the rules, then the gateway's protection (DHCP, DNS, ICMP echo). Towards anything else: the rules, then the
   matrix. The first matching rule decides, overlay rules first (`ResolveAccess`); `access.layer` is
   `overlay_rule` or `config_rule` and `access.rule` its id. An allow rule in front of the gateway's own
-  address leaves the verdict to the protection (the reason says so, P2-M9-01). A drop rule on `udp/53`
+  address allows (the reason says that it opens the gateway's port, P2-M9-01), as the kernel does; a reject
+  names its ICMP type. A drop rule on `udp/53`
   is what `explain` names for the gateway's DNS address and for 169.254.100.2 alike
   (`TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`). A hostname destination has no address
   to judge and is not explained by rules (the rules that name hostnames are not compiled before M20).
@@ -1819,7 +1915,7 @@ What the cut does and does not do at the edges (docs/open-items.md P2-M9-10):
 - **Preview.** `POST /revisions/{id}/preview` has `rules`: the effective list after the change, overlay
   rules first, each with its key, layer, place, action, selector in words and `new` when the kernel does
   not run it in this form yet. A hostname rule is not in the list and the warning
-  `hostname_unresolved` says why; more rules than the limit is `capacity_exceeded` at preview and apply
+  `hostname_unresolved` says why; a reject carries its `reject_with`; more rules than the limit is `capacity_exceeded` at preview and apply
   (`TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply`).
 - **Tests.** Simulator and fake clock: `internal/engine/access_test.go`, `cut_internal_test.go`,
   `internal/api/rules_test.go`, `internal/executor/conntrack_delete_test.go`. Real kernel (testbed, run in
@@ -1861,11 +1957,12 @@ compiler tests 1 to 2 minutes each. Select them with `-run`, and pass `-test-tim
 | The anti-lockout rule cannot be overridden | `TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay` (ruleset, unit), `TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel`, `TestTheAntiLockoutRuleHoldsAgainstRulesThatSelectTheManagementHost` (rules that really select the host: UDP is refused, SSH and the UI are not, a window with every rule does not reset the host's SSH), `TestNoRuleOrOverlayLocksTheManagementNetworkOut` (the same through the engine) |
 | A drop rule on UDP 53 blocks the DNS proxy, queries to the gateway address and direct queries to 169.254.100.2 | `TestARuleOverlayCreatedOverTheAPIRefusesTheDNSQueriesOfItsNetworkAndCountsThem`, `TestAConfiguredDropRuleOnUDP53SilencesTheDNSProxyForBothAddresses` (a configured rule over a revision); input path in the compiled ruleset: `TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel` |
 | "Also cut existing connections" | `TestARuleOverlayRefusesNewConnectionsAndCutsExistingOnesOfItsDeviceOnly` (TCP reset, UDP flow deleted), `TestACutTakesOnlyWhatTheSelectorOwnsOnTheRealKernel` (the named port only, another device's connection and the entries of the others stay; a tracked ping flow is deleted), simulated: `TestACuttingRuleOverlayResetsAndDeletesTheConnectionsItOwnsAndNothingElse`, `TestACutLeavesTheControlPlaneFinishedConnectionsAndOtherProtocolsAlone` |
-| reject and reset variants | `TestRejectResetAndDropAnswerWithTheirOwnPacketsOnTheWire` (ICMP port unreachable, TCP RST from the server's address, nothing for drop) |
+| reject and reset variants | `TestRejectResetAndDropAnswerWithTheirOwnPacketsOnTheWire` (ICMP port unreachable, TCP RST from the server's address, nothing for drop), `TestARejectAnswersWithTheIcmpErrorTheRuleNamesOnTheRealKernel` (the four reject types in forward and input: the sender reads ICMP type and code 3/3, 3/1, 3/13 and 3/0 off its socket's error queue) |
+| An allow rule in input opens the gateway's closed ports, but not the UI | `TestAnAllowRuleOpensTheGatewaysClosedPortsButNeverTheUIAndNeverLocksOutManagement` (a device reaches SSH and a closed port of the gateway through an allow rule, never the UI port, the management host keeps SSH and the UI under a drop rule for everybody; `explain` agrees with the kernel for every probe), `TestAnAllowRuleOpensTheGatewayButNoRuleChangesItsControlPlane` (engine, simulated) |
 | Named per-rule counters | `TestEachRuleHasACounterOfItsOwnThatCountsWhatItDecided` (exact counts per rule, an allow rule counts the first packet only, P2-M9-07), `TestTheCounterOfARuleFollowsTheRuleNotItsPlace` (unit) |
-| IPv6 | `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow` (an allow rule does not open forwarded IPv6, no rule counts an IPv6 packet; V1 selectors are IPv4, D7), `TestEveryActionHasItsVerdictInForwardAndInput` (one reject statement for both families). Rules select IPv4 only until M32: docs/open-items.md P2-M9-09 |
+| IPv6 | `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow` (an allow rule does not open forwarded IPv6, no rule counts an IPv6 packet; V1 selectors are IPv4, D7), `TestEveryActionHasItsVerdictInForwardAndInput` (one reject statement for both families). Rules select IPv4 only until M32 (decided by the maintainer on 2026-10-11, P2-M9-09) |
 | `capacity_exceeded` | `TestTooManyRulesAreRefusedAndTheOverlaysThatCausedItAreNamed`, `TestTooManyRulesAreRefusedWithCapacityExceededAndNothingChanges`, `TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply` (each names its limit) |
-| Explain and preview of the effective result | `TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`, `TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes`; against the kernel: `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` (for every probe, explain's verdict is the one the packets get, and every rule that decided counted) |
+| Explain and preview of the effective result | `TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`, `TestTheExplanationOfARejectNamesItsIcmpType`, `TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes`; against the kernel: `TestRuleOrderOverlaysAndExplainAgreeWithTheKernel` (for every probe, explain's verdict is the one the packets get, and every rule that decided counted) |
 
 The cases C4 and C5 hold their connection with one message per second and act right after an answer; C6 sends
 every 300 ms, so that the 500 ms window of the cut is sure to meet a message, and opens the window right after an
@@ -1923,8 +2020,14 @@ emits (below, "Kernel matrix"):
 
 ### Duplication (P2-M10-01)
 
-The decision of P2-M8b-01. Netem's `duplicate` is never used: `Netem.Args()` writes `duplicate 0% 0%` in
-every leaf and `Netem.Duplicate` only keeps the fault's probability.
+The decision of P2-M8b-01, confirmed by the maintainer on 2026-10-11 (P2-M10-01; P2-M8b-01 is resolved by it). Netem's
+`duplicate` is never used: `Netem.Args()` writes `duplicate 0% 0%` in every leaf and `Netem.Duplicate` only keeps the
+fault's probability. The alternative that was not chosen is netem's duplicate, allowed only when the tree holds no
+other netem (`capacity_exceeded` naming it, and a delete-before-add order in the apply). The consequences below are
+the ones the maintainer weighed: the copy is made after the fault's classification, so the fault's nft counters do not
+count it and the queue statistics do; the table is a second one next to `inet chaosgw`; it needs the netdev egress hook
+(kernel 5.16 or later, `nft_dup_netdev`, both in the plan's minimum kernel and in the preflight list); the bit is
+one of the reserved routing mark bits; the cost of the clone on a Raspberry Pi is not measured (H1).
 
 ```
 classify (prerouting)   mark_<id>: ... meta mark set mark | 0x200000     with probability p, per direction
@@ -2000,6 +2103,13 @@ unchanged) for `down`, and so on, starting up. The phase is not configuration; i
   and exits: nothing toggles it afterwards.
 - **A failed toggle** is tried again a second later (`flapRetry`); the schedule does not get stuck, and the
   next full apply writes the phase anyway.
+- **What is decided, and what is not** (maintainer, 2026-10-11, P2-M10-02): the first up phase starts when the apply
+  that contains the flapping has been verified (the moment the overlay write is answered); the schedule is the start
+  plus multiples of up and down on the injected clock; all classes of one fault and direction, on all devices, flap in
+  step, and upload and download of a flat flapping have separate schedules that happen to coincide; a toggle runs in
+  the apply loop's goroutine, so one that falls into an apply is made right after it (a full apply of a large target
+  takes seconds on small hardware, the figure is for H1). A toggle that cannot be late (one between the operations of an
+  apply) and a phase that survives a restart were not asked for.
 - **Timing tolerance.** Plan §2.10 gives scenario steps ±100 ms on a native or KVM machine, counted at the
   executor's commit; a boundary is a step of the same kind, and `engine.FlapTolerance` (100 ms) is the
   same figure: from the scheduled moment to the moment the executor answered (`FlapChange.Late`). The
@@ -2027,7 +2137,9 @@ Compiler and capacity were M8a's; M10 measures them.
   The throughput iperf3 reports is the TCP payload and netem's rate counts the IP packet (1448 of 1500
   bytes), so 2 Mbit/s shows as 1.93 Mbit/s, inside the plan's ±10 %.
 - **Rates below 8 bit/s are refused** (`invalid_rate`): netem counts bytes per second, so `rate: 7bit` would
-  not limit at all.
+  not limit at all (a rate of zero as "no limit" is a parameter that does nothing, and was not chosen). The queues of a flapping
+  fault carry `flapping: {phase, since, next_change_at}` (optional and additive), because the UI needs to say that a device is in
+  the down phase and the spec had nothing for it. Decided by the maintainer on 2026-10-11 (P2-M10-03).
 - **`capacity_exceeded` in the preview** names the scope and the limit and is refused at the apply too:
   `TestThePreviewOfAPerDeviceRateThatDoesNotFitTheClassLimitIsCapacityExceeded` (engine; 30 known devices
   need 63 classes at a limit of 50; the limit it names is the one it sets),
@@ -2136,11 +2248,20 @@ for every family and `kernel.pmtu_table` (the index; absent for a black hole, a 
 marks are absent when only an MTU fault matches). `GET /capabilities` lists the family and the feature `faults.mtu`. A new
 overlay or revision whose MTU faults need an eighth table is refused with `capacity_exceeded`, in the preview as well.
 
-**Where it is weaker than it looks.**
+**Where it is weaker than it looks** (decided by the maintainer on 2026-10-11, P2-M10-04).
 
-- The black hole drops in the classify chain (prerouting), before the access rules of M9 run in the forward chain: a packet that
-  is both too long and rejected by a rule is dropped silently instead of being rejected, and its drop is counted by the MTU fault
-  (P2-M10-04).
+- The black hole drops in the classify chain (prerouting), before the access rules of M9 run in the forward chain (plan §2.4 says
+  access rules are evaluated first, but the classify chain is the one place that knows the winner without a mark bit, and mark
+  bits 17-19 are the index of the seven mirror tables, so they cannot also carry black-hole sizes): a packet that
+  is both too long and rejected by a rule (tcp reset, icmp unreachable) is dropped silently instead of being rejected, and its drop is counted by the MTU fault;
+  drop rules are not affected (both drop). The alternative, a second lookup in the forward chain after the access rules, needs a
+  second set of maps and a mark bit or a second table of sizes.
+- A clamp's MSS is `size - 40`, the headers of IPv4 and TCP without options: a connection with options (timestamps: 12 bytes) sends
+  packets shorter than `size`, one without options exactly `size`, so a clamp never produces a packet longer than the size, but it
+  does not make every packet that long.
+- The verify checks the size of a mirror route and not the lock, because `ip -j route` does not print whether `mtu` is locked: a route
+  whose lock was cleared behind the gateway's back (same size, no lock) is not noticed until the next apply, which rewrites it. (The
+  alternative is the executor reading mirror routes with the plain `ip -d route`.)
 - `meta length` is the length of the skb, so a black hole is only right where the kernel does not merge packets (GRO). The compiler
   switches the offloads off on the ports, the bridges and the uplink (plan §3.4), and a WireGuard interface has none.
 - An icmp fault limits what the gateway forwards. A packet to the gateway itself (DNS proxy, UI) is not routed through a mirror
@@ -2294,12 +2415,16 @@ packets towards the peer (download)         packets from the peer (upload)
  -> the fw filters of the interface's tree -> the class of the fault -> its netem leaf
 ```
 
-- **The directions are the remote side's** (P2-M10-05): `upload` is what the client sends, `download` what it receives, as for a
-  device. `Fault.Upload` is the IFB class, `Fault.Download` a class of the interfaces' tree (one per interface, like every
+- **The directions are the remote side's** (decided by the maintainer on 2026-10-11, P2-M10-05; plan §2.2.1 says the output hook
+  classifies the encrypted UDP "towards the peer" by its endpoint and an IFB handles the packets "from the peer", and does not say
+  which direction is which): `upload` is what the client or the remote site sends, `download` what it receives, as for a
+  device. The alternatives that were not chosen: the directions the other way round (upload as the gateway sends), a selection by
+  the interface's listen port for a link (no address needed, but it does not follow a roaming peer), and the ingress side on every
+  interface instead of the uplink only. `Fault.Upload` is the IFB class, `Fault.Download` a class of the interfaces' tree (one per interface, like every
   other fault). Ids come from the same 12-bit pool and the same allocation as the other faults (`overlay:<id>:tunnel` keys,
   stable across compiles), the class minors are `ClassIDOf(id, dir)`, so queue statistics, epochs, the retirer and the flapper
   treat them like any class.
-- **The peer's address** (`compiler.Input.PeerEndpoints`, `Target.Endpoints`): the engine reads `wg show dump` of the applied
+- **The peer's address** (part of the decision P2-M10-05 of 2026-10-11; `compiler.Input.PeerEndpoints`, `Target.Endpoints`): the engine reads `wg show dump` of the applied
   interfaces right before it compiles when `compiler.NeedsPeerEndpoints` says something selects by address (a tunnel fault or a
   blocked endpoint, in the configuration or in an overlay), in the apply loop, in the preview and when an overlay is written
   (so the check of the write, `capacity_exceeded` included, compiles what the apply will). A link's configured endpoint is the
@@ -2332,7 +2457,10 @@ packets towards the peer (download)         packets from the peer (upload)
   selector or redirect differs (its counters would start again; `Plan.IngressRestarted` tells the engine, which starts a new epoch
   for the fault's counter). A filter of the uplink's ingress qdisc is Chaos Gateway's when it is a flower filter that redirects
   to the IFB (`ownIngressFilters`); the host's own are left alone and the ingress qdisc goes only with the last filter of ours
-  (P2-M10-07). When the last fault that impairs the packets from a peer ends, its filter goes at once, the class and the IFB wait for the
+  (decided by the maintainer on 2026-10-11, P2-M10-07: one IFB, `ifb-cgw`, the only name the executor creates, brings up or
+  deletes and the only target of a flower redirect; it exists while some tunnel fault impairs the packets from a peer; the
+  kernel needs the `ifb` module, which the preflight lists; the alternatives were one IFB per uplink, and deleting the
+  ingress qdisc only when the gateway made it, which would have to be remembered across a restart). When the last fault that impairs the packets from a peer ends, its filter goes at once, the class and the IFB wait for the
   retirer (the IFB stays in the executor's scope: `keepIFB`), the retirer deletes the tree and then the device (`Retirer.Reap`), and the
   next apply takes it out of the assigned interfaces. Without a retirer (the one-shot apply) the device goes at the end of
   the plan, after everything that refers to it. An IFB that nobody wants and nobody assigned (a gateway that died) is
@@ -2357,7 +2485,14 @@ the peer out (the same as `enabled: false`: its routes go with it), `key_mismatc
 overlay, `block_endpoint` is nftables: a base chain on the output hook and one on the input hook at priority -300 (raw), each a
 verdict map keyed on peer address, peer port and the interface's port, one chain with one named counter per overlay (`wgblock_<id>`).
 `Target.WGActions` lists the overlays that change something; the API shows `effective` for them and `disabled` for the others (a
-peer that is off its interface already, a block with no address), and the counter of a block.
+peer that is off its interface already, a block with no address), and the counter of a block. Decided by the maintainer on
+2026-10-11 (P2-M10-06): `disable` is the configured `enabled: false` (the peer is off the interface, so are the routes of its networks
+and, for a link, the peer, and the engine reports the peer offline at its next poll); `key_mismatch` gives the gateway the key
+sha256("chaosgw key_mismatch", overlay id, real key) in base64, so that a compile stays a pure function, a re-apply keeps the kernel as
+it is, and nobody holds the private key; `block_endpoint` keeps the peer on the interface (its handshake ages) and cannot select a peer
+whose address is not known (the compiler warns, the overlay shows `disabled`, an overlay whose peer is not on an interface shows
+`disabled` too). A random key, `block_endpoint` by a link's listen port (works without an address) and a `disable` that keeps the
+routes were not asked for.
 
 **Tests.** Compiler (`tunnel_test.go`): both sides of the tunnel, the endpoint map, the chain and its mask, a peer without an address,
 the resolution per tunnel, E10 (golden `e10`), flapping on both sides, the class limit of the IFB, disable, key mismatch, block endpoint
@@ -2503,7 +2638,8 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   scenario (M15).
 - **Preview and explain.** `compiler.Target.Effective` lists every winner in the user's terms (layer, source, family, scope, the
   parameters as the fault or the profile gave them, and the profile when the winner is one of its parts), including a winner that
-  impairs nothing (`normal`); the preview answers it as `faults`. It is computed from the overlays as they are, so a revision that
+  impairs nothing (`normal`), and the tunnel faults (scope "tunnel of client rA", also one whose peer has no address yet;
+  `TestTheEffectiveFaultsListTheTunnelFaultsToo`: every key of `Winners` is in `Effective`); the preview answers it as `faults`. It is computed from the overlays as they are, so a revision that
   edits a profile shows what its activations will produce. `explain` has always named the profile in `winner.profile` and in the
   overridden entries (`FaultRef.profile`), with the reason a candidate lost (`level 4 beats level 8`, `a fault beats a profile
   part at the same scope`).
@@ -2513,7 +2649,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 | What | Where |
 |---|---|
 | Activating/switching profiles yields the configured parameters (compiler) | `TestEveryBuiltinProfileCompilesToItsConfiguredParameters` (every activatable built-in: delay, jitter, loss, rate, burst loss, flapping, blackout), `TestSwitchingTheProfileOfAnActivationYieldsTheNewParameters`, `TestTheNormalProfileWinsItsFamilyAndImpairsNothing`, `TestAnActivationFollowsTheNewDefinitionOfItsProfile` (`internal/compiler/profiles_test.go`) |
-| ... and measured values (integration) | `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues` (a custom profile, another, the built-in Bad LTE, Normal, Offline on one activation; the other network never changes), `TestAnActivationFollowsTheNewDefinitionOfItsProfileOnTheWire`, `TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate` (E9 for a profile) (`internal/engine/integration_profiles_test.go`) |
+| ... and measured values (integration) | `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues` (a custom profile, another, the built-in Bad LTE, Normal, Offline on one activation; the other network never changes), `TestAnActivationFollowsTheNewDefinitionOfItsProfileOnTheWire`, `TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate` (E9 for a profile), `TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd` (the built-in profile's rate with UDP above it, P2-M11-03) (`internal/engine/integration_profiles_test.go`) |
 | A device fault overrides the network profile's impairment part (same layer) | `TestADeviceFaultOverridesTheNetworkProfilesImpairmentPart` (compiler), `TestADeviceFaultOverridesTheNetworkProfileForThatDeviceOnly` (wire: no merge of the profile's jitter, loss or rate; the other device keeps the profile; it comes back when the fault ends) |
 | A fault on the same scope replaces only the profile part of its family | `TestAFaultOnTheSameScopeReplacesOnlyTheProfilePartOfItsFamily` (compiler, both ways: impairment fault, MTU fault), `TestAFaultOnTheSameScopeReplacesOnlyThePartOfItsFamilyOnTheWire` (80 ms replaced by the fault, the MTU of 1280 stays), `TestAFaultOnTheSameScopeOverridesOnlyOnePartOfTheActivationOverTheAPI` (`partially_overridden`, then `overridden`), E8 `TestE8AFaultBeatsTheProfilePartOnTheSameScopeInTheCompiledTarget` |
 | An overlay profile beats a configuration fault | `TestAnOverlayProfileBeatsAConfigurationFault` (compiler), `TestAnOverlayProfileBeatsAConfigurationFaultOnTheWire` |
@@ -2527,7 +2663,29 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 What is asserted under emulation and what only with native execution or KVM is the split of the M8b tests: the
 functional assertions (effect present, direction, isolation) always, the accuracy ones of plan §4.3 (median ±2 ms + 5 %,
 loss within the 99.9 % binomial interval, jitter spread, rate ±10 %) with `testbed.Accurate()` and the flakiness policy of
-`testbed.Statistically`. Bad LTE's own rate is not measured end to end (P2-M11-03).
+`testbed.Statistically`.
+
+**The rate of Bad LTE** (decided by the maintainer on 2026-10-11, P2-M11-03) is measured end to end with UDP:
+`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd` sends 4 Mbit/s downstream to a device on a network that has Bad LTE
+(`iperf3 -u -b 4M`, datagrams of 1400 bytes) and reads off what the receiver gets, next to a device of another network that the
+profile does not name. A TCP transfer would not do: at 150 ms ± 50 ms and 3 % loss a TCP flow is held to a few hundred kbit/s by
+the loss (the Mathis bound is about 0.2 Mbit/s), so the result would be the loss' and not the rate's. The functional part always
+runs (what arrives is well below what is offered, 1 to 3 Mbit/s, and the unnamed device gets its load through); with
+`Accurate()` the throughput must lie within ±10 % of 2 Mbit/s times the 97 % that Bad LTE delivers (`testbed.Statistically`; the
+datagrams are 1400 bytes in 1428 on the wire, which is inside the tolerance). The compiled rate is asserted by
+`TestEveryBuiltinProfileCompilesToItsConfiguredParameters`, and E9 measures the rate of a profile whose only parameter is a rate.
+
+**The delay of a profile with a rate** (decided by the maintainer on 2026-10-11, P2-M11-04: a bound is enough). A rate is netem's
+`rate`, which keeps the packets in order (plan, the latency row of the fault table and risk 4: "keep order uses netem rate, which shifts
+the delay distribution"): a packet leaves no earlier than the one sent before it. On the native runner both directions of a Bad LTE
+device measured a median of 175 to 181 ms and a 5th to 95th percentile of 145 to 199 ms instead of 150 ms and a uniform spread of 90 ms,
+with the loss inside its interval. That is the documented effect and not a mistake of the compiler (the compiled netem carries delay
+150 ms, jitter 50 ms and the rate), and the §4.3 definition (median within ±2 ms + 5 %) describes a netem without ordering, so applying it
+to a profile with a rate would assert something the kernel does not do. For a flow that keeps its order (`flowShape.keepsOrder`)
+the tests assert the loss as before, and for the delay the bound that follows from the ordering (`checkOrdered`): the median from the delay
+up to delay + jitter (plus the 2 ms) and the 5th percentile not below delay - jitter. The medians stay exact for every profile without a
+rate. An exact number would be a simulation of the netem queue (the distribution of the ordered delay depends on the probe interval), not a
+tolerance, and was not asked for.
 
 **What the persistent VM showed** (kernel 6.8.0-142, emulated, so the functional assertions only): the seven measurement tests of
 `integration_profiles_test.go` pass in one run of about 45 minutes (`make vm-test ARGS='-run "TestActivatingAndSwitching|..."

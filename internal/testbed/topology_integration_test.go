@@ -4,9 +4,11 @@ package testbed_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,54 @@ func TestClientPingsServerThroughPlainForwardingGateway(t *testing.T) {
 		for _, ttl := range r.TTLs {
 			if ttl != 63 {
 				t.Errorf("%s: ttl %d, want 63 (one routing hop)", c.name, ttl)
+			}
+		}
+	}
+}
+
+// P2-M8b-08: the topology is returned when every switch port forwards, so the first packet of every
+// device goes through at once. The topology of the product tests is the case: with the gateway's bare
+// ports, lan1 and Switch1's q1 are both the third interface of their namespace, and q1 used to stay
+// operationally down (and so a disabled bridge port) for up to a second after it was set up. The first
+// ARP request of C was lost and C's first ping waited a second for the retry, longer than the one second
+// this ping waits.
+func TestTheFirstPacketOfEveryDeviceGoesThroughRightAfterTheTopologyIsBuilt(t *testing.T) {
+	top := testbed.NewDefault(t, testbed.WithGatewayBridges(false))
+	top.GW.Addr("lan0", testbed.LAN0Gateway+"/24")
+	top.GW.Addr("lan1", testbed.LAN1Gateway+"/24")
+	devices := []*testbed.Namespace{top.A, top.B, top.C}
+	got := make([]testbed.PingResult, len(devices))
+	errs := make([]error, len(devices))
+	var wg sync.WaitGroup
+	for i, ns := range devices {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i], errs[i] = testbed.Ping(ctx(t), ns, testbed.ServerAddr, 1, time.Second)
+		}()
+	}
+	wg.Wait()
+	for i, ns := range devices {
+		if errs[i] != nil {
+			t.Fatalf("%s: %v", ns.Short, errs[i])
+		}
+		if got[i].Received != 1 {
+			t.Errorf("%s: the first ping to the server got no answer within a second", ns.Short)
+			continue
+		}
+		t.Logf("%s: the first ping took %v", ns.Short, got[i].RTTs[0])
+	}
+	for _, sw := range []*testbed.Namespace{top.Switch0, top.Switch1} {
+		var ports []struct {
+			Name  string `json:"ifname"`
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(sw.Must("bridge", "-j", "link", "show")), &ports); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range ports {
+			if p.State != "forwarding" {
+				t.Errorf("%s: port %s is %s", sw.Short, p.Name, p.State)
 			}
 		}
 	}

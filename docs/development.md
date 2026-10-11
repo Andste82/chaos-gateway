@@ -231,6 +231,21 @@ func TestSomething(t *testing.T) {
 never collide, and removes everything at the end of the test, killing processes first. With
 `WithPlainGateway(false)` the gateway is left unconfigured for tests of the product itself.
 
+`NewDefault` returns when every veth end it made is operationally up and every switch port forwards
+(`Bed.WaitLinks`; a test that builds its own topology with `Bed.Link` can call it too). "Up" alone was
+not enough (P2-M8b-08): a bridge enables a port only once the port's operational state is up, which
+the kernel's link-watch work sets, and that work handles a veth's carrier event at most once a second
+when it does not count it as urgent. It counts it as urgent when the peer has another interface index,
+but the indexes are per namespace: with the gateway's bare ports (`WithGatewayBridges(false)`, the
+product tests) the gateway's `lan1` and Switch1's port `q1` are both the third interface of their
+namespace, so `q1` stayed down for up to a second after the topology was built. Device C's first ARP
+request was lost in that time and its first packets waited a second for the retry: on a native or KVM
+kernel, where a test starts sending within that second, the first flow of the Lab network measured a
+95th percentile of 0.9 to 1 s. `TestTheFirstPacketOfEveryDeviceGoesThroughRightAfterTheTopologyIsBuilt`
+pins it. The product side was ready all along: a capture showed the gateway's `br-lab` up with its port
+forwarding before the apply returned, the ARP request never reaching `lan1`, and Switch1 dropping it.
+The measurement tests therefore need no warm-up before they measure.
+
 ## The executor
 
 `chaosgw exec` is the only process that writes the kernel's network configuration (plan §3.1). It

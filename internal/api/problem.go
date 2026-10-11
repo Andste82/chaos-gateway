@@ -149,6 +149,7 @@ func (s *Server) problemFor(err error) *problem {
 		pe       *domain.ParseError
 		af       *engine.ErrApplyFailed
 		unsup    *engine.UnsupportedOverlayError
+		unsupRev *engine.UnsupportedProfileRevisionError
 		comp     *engine.CompileError
 		orphans  *engine.ErrOverlaysOrphaned
 	)
@@ -180,6 +181,8 @@ func (s *Server) problemFor(err error) *problem {
 		return newProblem(model.ErrorCodeApplyFailed, "%s", firstLine(af.Error()))
 	case errors.As(err, &unsup):
 		return newProblem(model.ErrorCodeUnsupportedFeature, "%s", unsup.Error())
+	case errors.As(err, &unsupRev):
+		return newProblem(model.ErrorCodeUnsupportedFeature, "%s", unsupRev.Error())
 	case errors.As(err, &comp):
 		if p := problemsToError(comp.Problems); p != nil {
 			return p

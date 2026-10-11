@@ -2658,7 +2658,18 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   ids). Deleting a profile that an overlay activates is the orphan rule of M8a: `validation_failed` with `references[]`
   (`object` is `/profiles/<uuid>`), or with `?force=true` the overlay is removed and `overlay_orphaned` is announced.
   Deleting an unreferenced profile needs nothing. A profile that a scenario step refers to is a missing reference in the
-  scenario (M15).
+  scenario (M15). The activation follows an edit of the impairment and MTU parts, but not into a profile that has a
+  part this build cannot resolve: a revision that gives a custom profile a `dns` or `tls` part while an overlay activates it
+  is **refused** with `unsupported_feature`, naming the profile and the milestone (M20 for `dns`, M21 for `tls`), by the
+  same rule as the write of the activation (`checkProfileAvailable`), so no revision leaves an activation with a half profile
+  (`engine.unavailableProfileRevision`, `UnsupportedProfileRevisionError`, called where the apply settles the overlays
+  of a revision and by the preview, which reports it as a problem; the API answers 422 before it applies). `force` does
+  not lift it: it removes orphans, and this is no orphan. The remedy is to remove the activation first; the
+  revision is then accepted, the profile is stored and listed with `available: false`, and its activation is refused as
+  before. Decided by the maintainer on 2026-10-11 (P2-M11-05; the alternative, to accept it and report the activation as partly active, was not
+  chosen). Tests: `TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused` (engine: refused with nothing changed, the
+  preview, accepted without the activation, an impairment-only change accepted) and
+  `TestARevisionThatAddsADNSPartToAnActivatedProfileIsRefusedOverTheAPI`.
 - **Preview and explain.** `compiler.Target.Effective` lists every winner in the user's terms (layer, source, family, scope, the
   parameters as the fault or the profile gave them, and the profile when the winner is one of its parts), including a winner that
   impairs nothing (`normal`), and the tunnel faults (scope "tunnel of client rA", also one whose peer has no address yet;

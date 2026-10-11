@@ -4963,7 +4963,10 @@ type ProfileView struct {
 
 	// Available False while a part's family is not in this build (e.g. `dns-broken` before M20, a custom
 	// profile with a `dns` part). Such a profile can be defined and shown, but activating it
-	// is refused with `unsupported_feature`.
+	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
+	// such a part while an overlay activates it (the profile and the milestone are named; remove
+	// the activation first, `force` does not lift it), so that no activation runs half a profile.
+	// Decided by the maintainer on 2026-10-11.
 	Available bool `json:"available"`
 
 	// Builtin Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).

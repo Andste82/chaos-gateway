@@ -75,9 +75,11 @@ func (oc overlayContext) activationsOf(profileID string) *[]model.ProfileActivat
 	return &out
 }
 
-// profileEffect says whether the parts of an activated profile win: `effective` when each part wins
-// for some traffic, `overridden` when none does, `partially_overridden` when some do. A profile that
-// is gone from the configuration, or has no part this build resolves, is `disabled`.
+// profileEffect says how much of their traffic the parts of an activated profile win, each part like a
+// fault of its family (effectOf): `effective` when every part wins all of its traffic, `overridden` when
+// none wins anything, `partially_overridden` otherwise (a fault of the same scope took the impairment
+// part and the MTU part stayed, or a device fault took one device of the activation's network). A profile
+// that is gone from the configuration, or has no part this build resolves, is `disabled`.
 func (oc overlayContext) profileEffect(ov model.Overlay) model.EffectState {
 	if ov.Profile == nil || oc.snap.Config == nil {
 		return model.EffectStateDisabled
@@ -86,22 +88,25 @@ func (oc overlayContext) profileEffect(ov model.Overlay) model.EffectState {
 	if !ok {
 		return model.EffectStateDisabled
 	}
-	won, total := 0, 0
+	effective, overridden, total := 0, 0, 0
 	for _, fam := range domain.ProfileFamilies(p) {
 		if len(domain.UnavailableParts(model.Profile{Parts: partsOf(p, fam)})) > 0 {
 			continue
 		}
 		total++
-		if oc.snap.Winners["overlay:"+strings.ToLower(ov.Id.String())+":"+fam] {
-			won++
+		switch oc.effectOf("overlay", ov.Id.String(), fam) {
+		case model.EffectStateEffective:
+			effective++
+		case model.EffectStateOverridden:
+			overridden++
 		}
 	}
 	switch {
 	case total == 0:
 		return model.EffectStateDisabled
-	case won == total:
+	case effective == total:
 		return model.EffectStateEffective
-	case won == 0:
+	case overridden == total:
 		return model.EffectStateOverridden
 	}
 	return model.EffectStatePartiallyOverridden

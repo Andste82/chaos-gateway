@@ -191,11 +191,25 @@ func (oc overlayContext) queuesOf(layer, source string) []model.QueueStats {
 	return out
 }
 
-// effectOf says whether the fault wins for some traffic: `effective`, or `overridden` when another
-// fault beats it everywhere. A fault that wins only for a part of its selector is shown as
-// effective (the explanation of a single destination says more).
+// effectOf says how much of the traffic it selects a fault (or one part of an activated profile) wins,
+// over every source of its scope: `effective` all of it, `partially_overridden` a part (other faults beat
+// it on the rest: a device fault on one device of a network fault's network, a fault on one port of
+// it), `overridden` none. The compiler counts it for the families with a classification table
+// (impairment, MTU); a fault of another family, or one whose traffic the tables do not classify (a
+// hostname), is `effective` when it wins at all. The explanation of a single destination says who wins
+// there.
 func (oc overlayContext) effectOf(layer, source, family string) model.EffectState {
-	if oc.snap.Winners[layer+":"+strings.ToLower(source)+":"+family] {
+	key := layer + ":" + strings.ToLower(source) + ":" + family
+	if c, ok := oc.snap.Coverage[key]; ok && c.Matched > 0 {
+		switch {
+		case c.Won == 0:
+			return model.EffectStateOverridden
+		case c.Partial():
+			return model.EffectStatePartiallyOverridden
+		}
+		return model.EffectStateEffective
+	}
+	if oc.snap.Winners[key] {
 		return model.EffectStateEffective
 	}
 	return model.EffectStateOverridden
@@ -510,7 +524,7 @@ func (s *Server) faultViews(ctx context.Context, v view) []faultView {
 			fv.State = oc.effectOf("config", id, faultFamilyOf(f))
 			fv.Counters = oc.counterOf("config", id)
 			fv.Queues = oc.queuesOf("config", id)
-			if fv.State == model.EffectStateOverridden && world != nil {
+			if fv.State != model.EffectStateEffective && world != nil {
 				fv.OverriddenBy = s.overriddenBy(oc.snap, world, id, f)
 			}
 		}

@@ -435,6 +435,103 @@ func TestConfiguredFaultsAreListedWithTheirStateAndWhatOverridesThem(t *testing.
 	}
 }
 
+// P2-M8a-06: a fault that wins only a part of the traffic it selects is `partially_overridden`, one that
+// wins all of it `effective`, one that wins none `overridden`, a disabled one stays `disabled`; overlays,
+// configured faults and profile activations follow the same rule.
+func TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden(t *testing.T) {
+	g := ready(t)
+	slow := "5f1c7a9e-6d3b-4e8a-9c2f-1a2b3c4d5e70"
+	off := "5f1c7a9e-6d3b-4e8a-9c2f-1a2b3c4d5e71"
+	rev := g.mustPatch(map[string]any{
+		// esp32-42 is one device of the network IoT, and the only member of the group sensors
+		"devices": map[string]any{"aaaaaaaa-1111-4111-8111-aaaaaaaaaaab": map[string]any{
+			"name": "esp32-42", "network": iotID, "identifiers": map[string]any{"ipv4": []any{"10.10.0.42"}},
+		}},
+		"groups": map[string]any{"c0a80001-0000-4000-8000-000000000002": map[string]any{"name": "sensors", "members": []any{"esp32-42"}}},
+		"faults": map[string]any{
+			slow: map[string]any{"name": "slow-iot", "source": map[string]any{"network": "IoT"}, "latency": "150ms"},
+			off:  map[string]any{"name": "off-iot", "source": map[string]any{"network": "IoT"}, "loss": "5%", "enabled": false},
+		},
+	})
+	if r := g.apply(rev); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.observe() // the identity: the address of esp32-42
+	state := func(path string) any {
+		t.Helper()
+		r := g.do("GET", path, nil, nil, nil)
+		if r.Status != 200 {
+			t.Fatalf("%s: %d %s", path, r.Status, r.Body)
+		}
+		return r.json(t)["state"]
+	}
+	if st := state("/faults/slow-iot"); st != "effective" {
+		t.Fatalf("alone, the network fault wins all of its traffic: %v", st)
+	}
+
+	// a device fault takes one device of the network: the network fault keeps the rest
+	dev := g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"fault":{"latency":"40ms"}}`)
+	v := g.do("GET", "/faults/slow-iot", nil, nil, nil).json(t)
+	if v["state"] != "partially_overridden" {
+		t.Errorf("the configured network fault: %v", v["state"])
+	}
+	if by, ok := v["overridden_by"].([]any); !ok || len(by) != 1 || by[0].(map[string]any)["id"] != dev["id"] {
+		t.Errorf("overridden_by %v", v["overridden_by"])
+	}
+	if st := state("/overlays/" + dev["id"].(string)); st != "effective" {
+		t.Errorf("the device fault: %v", st)
+	}
+	if st := state("/faults/off-iot"); st != "disabled" {
+		t.Errorf("a disabled fault stays disabled: %v", st)
+	}
+
+	// the same between overlays; an overlay beats the configured fault everywhere, and a fault whose every
+	// device has a fault of its own wins nothing
+	net := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"80ms"}}`)
+	group := g.mustCreateOverlay(`{"target":{"group":"sensors"},"fault":{"latency":"90ms"}}`)
+	if st := state("/overlays/" + net["id"].(string)); st != "partially_overridden" {
+		t.Errorf("the network overlay: %v", st)
+	}
+	if st := state("/faults/slow-iot"); st != "overridden" {
+		t.Errorf("the configured network fault below the overlays: %v", st)
+	}
+	if st := state("/overlays/" + group["id"].(string)); st != "overridden" {
+		t.Errorf("the group overlay: %v", st)
+	}
+	listed := map[any]any{}
+	for _, it := range g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any) {
+		listed[it.(map[string]any)["id"]] = it.(map[string]any)["state"]
+	}
+	if listed[net["id"]] != "partially_overridden" || listed[group["id"]] != "overridden" || listed[dev["id"]] != "effective" {
+		t.Errorf("the list shows other states: %v", listed)
+	}
+	for _, id := range []any{net["id"], group["id"]} {
+		if d := g.do("DELETE", "/overlays/"+id.(string), nil, nil, nil); d.Status != 204 {
+			t.Fatalf("%d %s", d.Status, d.Body)
+		}
+	}
+
+	// a profile activation follows the same rule: the device fault takes one device of its network
+	prof := g.mustCreateOverlay(`{"target":{"network":"IoT"},"profile":"lte"}`)
+	if st := state("/overlays/" + prof["id"].(string)); st != "partially_overridden" {
+		t.Errorf("the activation: %v", st)
+	}
+	card := g.do("GET", "/profiles/lte", nil, nil, nil).json(t)
+	if acts, _ := card["activations"].([]any); len(acts) != 1 || acts[0].(map[string]any)["state"] != "partially_overridden" {
+		t.Errorf("%v", card["activations"])
+	}
+	// without the device fault, all of its network is the activation's again
+	if d := g.do("DELETE", "/overlays/"+dev["id"].(string), nil, nil, nil); d.Status != 204 {
+		t.Fatalf("%d %s", d.Status, d.Body)
+	}
+	if st := state("/overlays/" + prof["id"].(string)); st != "effective" {
+		t.Errorf("the activation alone: %v", st)
+	}
+	if st := state("/faults/slow-iot"); st != "overridden" {
+		t.Errorf("the activation beats the configured fault: %v", st)
+	}
+}
+
 // A retried POST with the same Idempotency-Key answers what the first one answered and does not
 // write the overlay a second time (a replay of a 201 stays a 201).
 func TestARetriedOverlayWriteWithTheSameKeyIsReplayed(t *testing.T) {

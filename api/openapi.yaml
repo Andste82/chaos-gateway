@@ -3559,9 +3559,15 @@ components:
       type: string
       enum: [effective, partially_overridden, overridden, disabled]
       description: |
-        Whether the fault, profile part or rule wins anywhere (plan §2.4). A profile activation has
-        one part per family: `effective` when all of them win somewhere, `partially_overridden`
-        when some do and others lose everywhere, `overridden` when none wins.
+        How much of the traffic it selects the fault, profile part or rule wins (plan §2.4), over
+        every source of its scope: `effective` all of it, `partially_overridden` a part (other faults
+        beat it on the rest, e.g. a device fault on one device of a network fault's network, or a fault
+        on one port), `overridden` none, `disabled` for a fault with `enabled: false` and for what the
+        kernel does not run. Impairment and MTU faults are counted against the classification of every
+        source; a fault of another family, or one that names a hostname, is `effective` when it wins at
+        all. A profile activation has one part per family, each counted like a fault of its family:
+        `effective` when every part wins all of its traffic, `overridden` when none wins anything,
+        `partially_overridden` otherwise. `GET /explain` names the winner of one traffic tuple.
     Counter:
       type: object
       required: [packets, bytes, epoch]
@@ -4357,6 +4363,7 @@ components:
         state: {$ref: '#/components/schemas/EffectState'}
         overridden_by:
           type: array
+          description: For an `overridden` or `partially_overridden` fault, the faults that beat it (the winners over the devices of its scope at a destination and port it selects).
           items: {$ref: '#/components/schemas/FaultRef'}
         counters: {$ref: '#/components/schemas/Counter'}
         queues:
@@ -4437,7 +4444,7 @@ components:
           format: date-time
         state:
           allOf: [{$ref: '#/components/schemas/EffectState'}]
-          description: '`partially_overridden` when some parts of the profile win and others lose (e.g. a fault of the same scope beats its impairment part but its MTU part stays).'
+          description: '`partially_overridden` when the parts of the profile win only a part of their traffic (e.g. a fault of the same scope beats its impairment part but its MTU part stays, or a device fault takes one device of the activation''s network).'
     ScenarioView:
       type: object
       required: [id, config]

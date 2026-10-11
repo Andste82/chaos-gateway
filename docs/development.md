@@ -959,8 +959,8 @@ also changes two things said here: the maps are interval maps, and an element `g
 - **The lookup chain.** Four nftables verdict maps, most specific first: device+destination+port,
   device+destination, device+port, device — the granularities the current domain model supports
   without groups or networks. Group- and network-level selectors (plan §3.3 levels 5-10) need the
-  access-matrix/fault-resolution machinery M8a/M9 bring; `docs/open-items.md` P2-M7-02 tracks the
-  deferral. Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
+  access-matrix/fault-resolution machinery M8a/M9 bring; M8a added them and kept the maps keyed by
+  address (P2-M7-02, below). Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
   `inet_proto`, `inet_service`, as needed) and its value is a verdict that jumps to a per-id chain
   (`mark_<id>`) and ends; a classification map cannot combine the lookup with the bitwise mark
   write in one nft statement (confirmed against the real `nft` parser), hence the extra indirection
@@ -1200,7 +1200,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   nft transaction (`Nft.ElementTransaction`: deletes first, then adds; an interval map takes no element
   that overlaps one still there), and takes the full apply as soon as anything but map elements
   differs (a fault that came or went: another id, chain, counter or class). `apply.VerifyMaps` checks
-  all maps afterwards. P2-M7-02 records the decision to keep the address keys, with the churn figure.
+  all maps afterwards. P2-M7-02 records the decision to keep the address keys, with the churn figure; decided by
+  the maintainer on 2026-10-11: the classification maps stay keyed by address, without the device-number indirection.
 - **Kernel gates.** The fault scenarios (`faults-mixed`, `faults-nested`, `faults-neutral`) are in
   `transactionScenarios`, so `TestEveryCompiledRulesetIsAcceptedByTheKernel` runs them through
   `nft -c`; `TestEveryCompiledTCTreeIsAcceptedByTheKernel` runs the executor's own `tc -batch`
@@ -1651,7 +1652,8 @@ counter epoch". `internal/engine/queues.go`, `internal/api/overlays.go`.
   replies of the 4000-packet burst vanish between the two queues without a drop in either and without a
   drop in the host's receive queues: the echo server's own ICMP output fails (`Icmp.OutErrors`) while the
   gateway forwards everything. The test accounts for exactly those (and for softnet drops) and fails on
-  any packet that nothing counts, printing the counters of every namespace that moved (P2-M8b-07).
+  any packet that nothing counts, printing the counters of every namespace that moved (P2-M8b-07). Decided by the
+  maintainer on 2026-10-11: accounting for the echo server's own output errors is the right test; the burst is not paced.
 
 ### Measurement tests of the fault engine (M8b)
 
@@ -1859,7 +1861,8 @@ removed rule (plan §3.2). An overlay that is written again keeps its id and so 
   namespace of the DNS proxy. A rule that must leave them out names its destination with a `cidr`. Decided by the
   maintainer on 2026-10-11 (P2-M9-11), documented in the spec (`Destination`); `TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses`
   pins the set. A hostname needs the DNS-derived sets of M20: such a rule stays out of the
-  chain with a `hostname_unresolved` warning (P2-M9-02).
+  chain with a `hostname_unresolved` warning (P2-M9-02). Transferred to the plan on 2026-10-11: M20's acceptance
+  criteria include a drop rule with a hostname destination that blocks the addresses the device resolved.
 - **Ports** are merged into disjoint ranges (an anonymous interval set refuses overlapping elements).
 - **Verdicts**: `allow` is `accept` in both hooks; `drop`; `reject` is `reject with icmpx type <t>`, one statement for
   IPv4 and IPv6, where `<t>` is chosen per rule (below); `reset` is `reject with tcp reset` (validation requires protocol `tcp`).
@@ -2732,14 +2735,17 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   catalogue and stay unavailable until M20 and M21. They are not part of any configuration: a key equal to a built-in
   UUID and a name equal to a built-in name (any case) are `reserved_name`, so a configured profile can never shadow one.
   Custom profiles are the `profiles` of the configuration, keyed by UUID. They are created, changed and deleted with a
-  candidate revision like every configured object (P2-M11-02); `GET /profiles` and `GET /profiles/{id}` (UUID or name) show
+  candidate revision like every configured object (P2-M11-02; decided by the maintainer on 2026-10-11: no endpoints of
+  their own, single-profile writes would only be sugar over a candidate revision); `GET /profiles` and `GET /profiles/{id}` (UUID or name) show
   both kinds with `builtin`, `available` and `unavailable_reason`, and for the active revision the `activations` (the
   overlays that activate the profile, with target, owner, expiry and state). Another revision shows the definitions alone.
 - **Validation.** A profile's parts are validated like the faults they stand for (`profileParts`: the same rules as an
   impairment fault, an MTU fault, a DNS fault, a TLS case); a profile needs at least one part (the schema). A profile with a
   `dns` or `tls` part can be defined. Its **activation** is refused as a whole with `unsupported_feature` and the milestone
   (`engine.checkProfileAvailable`, after `ValidateOverlay` resolved the reference, P2-M11-01), so a half-working profile never
-  runs; the compiler ignores the parts of families it does not resolve yet.
+  runs; the compiler ignores the parts of families it does not resolve yet. Transferred to the plan on 2026-10-11: M20 and M21
+  lift the check family by family (`domain.unavailableFamilies`), and their acceptance criteria include that a profile with a
+  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family.
 - **Activation** is an overlay of kind `profile` with the key *(owner, kind, target)*: one profile per owner and target, so
   writing the activation again with another profile **switches** it (`200`, the same overlay id, the same TTL rules as any
   overlay: `ttl`, `lease`, `renew`, reset, restart). The fault ids follow the existing rules (M8b): a switch between

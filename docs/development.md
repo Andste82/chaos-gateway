@@ -1291,7 +1291,8 @@ below; the queue statistics follow in a later step.
 
 `linux.NormalizeTC(dev, qdiscs, classes, filters)` (`internal/linux/tcnorm.go`) turns the three
 listings of one interface into a `linux.NormTree`; the executor's read `tc` (`ReadTC`, `Dev`
-required) runs `tc -s -j qdisc|class|filter show dev X` and returns it. What it does, and why each
+required) runs `tc -s -j qdisc|filter show dev X` and `tc -s -d -j class show dev X` (the class
+listing with details, for the quantum) and returns it. What it does, and why each
 step was needed (all of it read from real output, recorded by `internal/linux/testdata/tc/record.sh`
 on kernel 6.8.0-142 with iproute2 6.19.0 into the fixtures next to it):
 
@@ -1334,8 +1335,24 @@ on kernel 6.8.0-142 with iproute2 6.19.0 into the fixtures next to it):
   `loss state`, whatever a later iproute2 adds) ends in `Extra` as canonical JSON, a filter of another
   kind keeps its options canonical; a listing that does not parse or whose handle is not hex is an
   error. `FuzzNormalizeTC` runs the normalizer on arbitrary bytes.
-- **What the listing cannot show.** The HTB class's `quantum` and the netem distribution table are not
-  printed at all (P2-M8b-02). The `-s` counters of the three listings come from three tool runs and are
+- **The quantum.** The kernel reports an HTB class's quantum, but tc prints it only in the listing
+  with details (`-d`), and only for a class without children; that is why the executor's class
+  listing has `-d` (P2-M8b-02). The details add the class's `level` and what the tool derives from the
+  rate (`burst_cell`, `cburst_cell`) and print the link layer and the minimum packet units even at
+  their defaults (`linklayer` ethernet, `mpu_rate`/`mpu_ceil` 0); the normalizer drops those (a
+  value other than the default stays in `Extra`), so a class reads the same with and without details,
+  plus `NormClass.Quantum`, which is part of the class's configuration (`Line`). The compiler writes
+  `TCClassQuantum` (60000 bytes) at every class it creates or writes again and predicts it in
+  `TCTarget.Norm`; a quantum changed from outside is a difference verify reports and the next apply
+  writes the class again in place, its leaf and counters stay
+  (`TestTheDetailsOfAClassListingShowTheQuantum` on the recordings `class_details_*.json`,
+  `TestAQuantumChangedFromOutsideIsFoundAndRepaired`, on the real kernel
+  `TestTheRealKernelShowsAChangedQuantumAndTheApplyRepairsIt`). Measured on 6.8.0-142 (emulated VM)
+  and 6.17.0-1022-azure (the level 1 runner), both with iproute2 6.19.0: `-d` prints `"quantum":60000`
+  for a class given 60000, the value a `class change ... quantum 1514` gave it afterwards, and the
+  kernel's own 200000 for a class written without one.
+- **What the listing cannot show.** The netem distribution table is not printed at all (P2-M8b-02;
+  the apply's memory of the tables is in "The tc tree in the apply"). The `-s` counters of the three listings come from three tool runs and are
   not one instant.
 
 Counters, as the recordings show them (`NormStats`): a netem qdisc's `packets` and `bytes` count what
@@ -1503,11 +1520,14 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   like every other failure, and nothing of the failed plan is handed to the retirer.
 - **kernelsim** (`internal/apply/kernelsim/tc.go`) simulates the tc tool for the cases above: it keeps
   the root, classes, leaves and filters per interface, answers `-s -j qdisc|class|filter show` in the
-  recorded format (so the real normalizer reads it), refuses what the kernel refuses (a second root,
+  recorded format (so the real normalizer reads it), the class listing with details (`-d`: the quantum
+  a class was given, or the kernel's own from the rate) and the qdisc listing of all interfaces
+  (`tc -j qdisc show`, every entry with its `dev`), refuses what the kernel refuses (a second root,
   a class a filter selects, a class below a root that is not there), makes the answers of a
   `-force` batch the executor knows as benign, keeps the seed through a `replace` of a leaf and draws a
   new one for a new leaf. It keeps the distribution table a leaf was given (`TCTable`, which the
-  listing does not show) through a change that names none, as the kernel does. It does not queue
+  listing does not show) through a change that names none, as the kernel does; `SetTCTable` gives a
+  leaf a table behind the apply's back (one a previous run left). It does not queue
   packets (`SetTCStats` sets backlog and counters for the tests of the retirer) and does not keep the
   other attributes of a `change` that is not given (the compiler's sets are complete). `Kernel.SetAfter`
   sets a function that runs after each command, outside the lock, to change the kernel behind the caller's back
@@ -1522,9 +1542,10 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   stream delivered and no drop counted, a move of the fault id under load with the same conservation
   and every datagram counted by the old or the new class, the old classes' deletion, the tree that
   goes with the last fault, a normal distribution going back to uniform, a table that a previous run
-  left behind dropped by the first apply after the restart). The load is a sender that
+  left behind dropped by the first apply after the restart, a quantum changed from outside found and
+  written again). The load is a sender that
   runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
-  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestTheFirstApplyAfterARestart" -tags testbed -test-timeout 30m ./internal/apply'`.
+  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestTheFirstApplyAfterARestart|TestTheRealKernelShowsAChangedQuantum" -tags testbed -test-timeout 30m ./internal/apply'`.
 
 ### Queue statistics and counter epochs (M8b)
 

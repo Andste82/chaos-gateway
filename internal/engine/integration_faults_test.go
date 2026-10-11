@@ -5,8 +5,6 @@ package engine_test
 import (
 	"context"
 	"fmt"
-	"sort"
-	"sync"
 	"testing"
 	"time"
 
@@ -87,7 +85,10 @@ func resolveDevices(t *testing.T, e *engine.Engine) {
 }
 
 // startFaultLab applies the configuration with the test devices (and what mod adds) and lets the
-// engine resolve them.
+// engine resolve them. A test measures right after it, without a warm-up: the testbed returns the
+// topology when every switch port forwards (testbed.WaitLinks), and a bridge the apply sets up forwards
+// at once through a port that is already up, so the first packet of the first flow goes through without
+// waiting (P2-M8b-08).
 func startFaultLab(t *testing.T, mod func(*model.Configuration)) *real {
 	t.Helper()
 	r := newReal(t, nil, realClock)
@@ -100,75 +101,7 @@ func startFaultLab(t *testing.T, mod func(*model.Configuration)) *real {
 		t.Fatal(err)
 	}
 	resolveDevices(t, r.e)
-	warmUp(t, r.top)
-	settleIdentity(t, r.e)
 	return r
-}
-
-// settleIdentity waits until what the engine knows of the hosts has not changed for a second and a half
-// (three observations) and its work on it is done. The pings of warmUp make the gateway meet hosts it did
-// not know (the neighbors of the server's side), the engine learns them at its next observation, and a
-// discovered device takes a numeral in the identity map: a test that compiles the snapshot at that moment
-// and reads the kernel a moment later would see the two differ.
-func settleIdentity(t *testing.T, e *engine.Engine) {
-	t.Helper()
-	signature := func() string {
-		id := e.Snapshot().Identity
-		var disc []string
-		for _, d := range id.Discovered {
-			disc = append(disc, d.ID)
-		}
-		sort.Strings(disc)
-		return fmt.Sprint(id.Addresses, disc)
-	}
-	last, quiet := signature(), 0
-	deadline := time.Now().Add(30 * time.Second)
-	for quiet < 3 && time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
-		if now := signature(); now != last {
-			last, quiet = now, 0
-		} else {
-			quiet++
-		}
-	}
-	if _, err := e.Barrier(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// warmUp sends a few pings from every test device to the server, once the lab stands. On a fast kernel
-// (native, KVM) the first packets of the first flow of the Lab network, which a test measures right after
-// the lab came up, have waited about a second before they went on (the probes of a 5 ms interval:
-// median in microseconds, the 95th percentile at 860 to 970 ms, and the same in 4 of 4 runs on the hosted
-// level 1 and 1b runners; none of it on a slow emulated kernel). Everything after it is clean. The
-// cause was not found (P2-M8b-08); what a measurement of one flow must not do is to take that second for
-// the fault, so the lab is brought to its steady state before any test starts. The ping that waited is
-// logged.
-func warmUp(t *testing.T, top *testbed.Topology) {
-	t.Helper()
-	var wg sync.WaitGroup
-	out := make([]string, 3)
-	for i, ns := range []*testbed.Namespace{top.A, top.B, top.C} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			text, _ := ns.Run(ctx, "ping", "-n", "-c", "3", "-i", "0.4", "-W", "3", testbed.ServerAddr)
-			res, err := testbed.ParsePing(text)
-			if err != nil {
-				out[i] = fmt.Sprintf("%s: %v", ns.Short, err)
-				return
-			}
-			var worst time.Duration
-			for _, d := range res.RTTs {
-				worst = max(worst, d)
-			}
-			out[i] = fmt.Sprintf("%s %d of %d answered, slowest %v", ns.Short, res.Received, res.Sent, worst)
-		}()
-	}
-	wg.Wait()
-	t.Logf("warm-up: %v", out)
 }
 
 // withMatrix lets the two test networks reach each other.

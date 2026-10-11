@@ -380,7 +380,7 @@ file, like the closed items of Phase 1, and the decisions are recorded where the
 `docs/development.md`, the description in `api/openapi.yaml` where the behavior is user-visible, and `docs/plan.md` where the plan said
 otherwise. The item ids stay as names: the code and the documents refer to them. Five decisions changed behavior and were implemented
 with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M10-08, P2-M11-03); the others confirmed the interpretation the item had chosen. P2-M8a-07 was
-resolved in M9. Ten items need no decision and stay (below), and two new ones came out of the review of M9 and M11.
+resolved in M9. Ten items need no decision and stay (below), and three new ones came out of the review of M9 and M11 and of the first CI runs of this change.
 
 ### Decisions (made 2026-10-11)
 
@@ -644,6 +644,27 @@ resolved in M9. Ten items need no decision and stay (below), and two new ones ca
 - Acceptance: a decision, and tests of the chosen behavior (an allow rule and the guard on the real kernel; a rule with the destination
   `uplink` against a learned prefix and the namespace's address).
 - Needs maintainer: yes
+- Effort: M
+
+### P2-M10-09 One probe of a stream is not classified while other faults are changed, once in about 470 on the native runner
+
+- Status: new (cause unknown)
+- Severity: low
+- Reason: cause-unknown. With the stream of `TestUpdatingOneFaultDoesNotDisturbTheOthers` lengthened to 200 packets (P2-M10-08, a probe every
+  5 ms), the first run on the hosted native level-1 runner (run 38123998475) measured C's 219 probes during the four changes of other faults
+  with one upload delay of 49 µs against a fault of 40 ms ± 4 ms: that packet passed without the fault (the fault's nft counter and the
+  queue counted 218 of the 219 sent), so classification missed it. The same code ran green on the next push (249 probes, run 38129136548) and on
+  the level-1b runner (3645 probes in both runs). Before the stream was lengthened and made denser the test could not see it (61 probes 20 ms
+  apart). Not reproduced: the persistent VM is emulated and cannot run the test (the executor's reads starve behind the stream; the test fails there on
+  `main` too).
+- Evidence: the log of run 38123998475, job "testbed (level 1, privileged container)" (`integration_faults_update_test.go:115`, "1 of 219 delays outside
+  [34ms, 46ms], 1 of them more than 10ms outside (smallest 49.559µs ...)"); since then the test logs where an outlier falls in the stream and when each step
+  was done. A guess, not a finding: a lookup in an interval map that a full apply flushes and fills again in one transaction (`Nft.Transaction`) can
+  miss for a moment when old and new elements with the same key exist in the tree.
+- Task: if the test fails again with a delay near zero, the log names the step it falls into; then try the apply with a delta of the map
+  elements (delete what is gone, add what is new, leave what stays) instead of flush and fill for the maps and interval sets, and compare.
+- Acceptance: the cause is named, or the test passes over several runs and the item is closed with that evidence.
+- Needs maintainer: no
 - Effort: M
 
 ### P2-M11-01 A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21

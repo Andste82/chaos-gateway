@@ -258,11 +258,12 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 // TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten measured it on the native CI runner
 // (6.17.0-1022-azure): with flush and fill, 113 of 152920 packets through the single-field interval
 // map (rbtree) and 67 of 159680 through the concatenated one (pipapo) in 540 transactions were not
-// classified; by difference, none. Upstream has worked on such false negatives in 2025 ("netfilter:
-// nft_set_pipapo: don't check genbit from packetpath lookups", "netfilter: nft_set_rbtree: continue
-// traversal if element is inactive", "netfilter: nf_tables: restart set lookup on base_seq change"),
-// but a kernel the gateway runs on cannot be assumed to have all of it. An element that is not touched
-// is active in both generations and is always found.
+// classified, by difference none; on 6.8.0-142-generic (the minimum supported kernel, level 1b) flush
+// and fill missed 15 and 136 in 81 transactions, the difference none. Upstream has worked on such
+// false negatives in 2025 ("netfilter: nft_set_pipapo: don't check genbit from packetpath lookups",
+// "netfilter: nft_set_rbtree: continue traversal if element is inactive", "netfilter: nf_tables:
+// restart set lookup on base_seq change"), but a kernel the gateway runs on cannot be assumed to have
+// all of it. An element that is not touched is active in both generations and is always found.
 func setUpdate(s SetDef, current *linux.Ruleset) []any {
 	var have map[string]json.RawMessage
 	ok := false

@@ -2946,6 +2946,13 @@ components:
         the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
         port stays closed to every other source, so it is never reachable from a test network.
         Decided by the maintainer on 2026-10-11.
+
+        The same holds for the two-port topology (the management interface is the uplink interface, plan
+        §2.16): the guard that stops devices under test from reaching the management network behind the
+        uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
+        a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
+        Only an explicit entry of the access matrix from the device's network to the management network
+        opens it. Decided by the maintainer on 2026-10-11.
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object

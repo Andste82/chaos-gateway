@@ -2501,6 +2501,13 @@ type AccessRule struct {
 // the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
 // port stays closed to every other source, so it is never reachable from a test network.
 // Decided by the maintainer on 2026-10-11.
+//
+// The same holds for the two-port topology (the management interface is the uplink interface, plan
+// §2.16): the guard that stops devices under test from reaching the management network behind the
+// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
+// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
+// Only an explicit entry of the access matrix from the device's network to the management network
+// opens it. Decided by the maintainer on 2026-10-11.
 type AccessRuleBody struct {
 	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
 	// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
@@ -4493,6 +4500,13 @@ type Overlay struct {
 	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
 	// port stays closed to every other source, so it is never reachable from a test network.
 	// Decided by the maintainer on 2026-10-11.
+	//
+	// The same holds for the two-port topology (the management interface is the uplink interface, plan
+	// §2.16): the guard that stops devices under test from reaching the management network behind the
+	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
+	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
+	// Only an explicit entry of the access matrix from the device's network to the management network
+	// opens it. Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Run Set when a run owns the overlay.
@@ -4613,6 +4627,13 @@ type OverlayRequest struct {
 	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
 	// port stays closed to every other source, so it is never reachable from a test network.
 	// Decided by the maintainer on 2026-10-11.
+	//
+	// The same holds for the two-port topology (the management interface is the uplink interface, plan
+	// §2.16): the guard that stops devices under test from reaching the management network behind the
+	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
+	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
+	// Only an explicit entry of the access matrix from the device's network to the management network
+	// opens it. Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
@@ -5523,6 +5544,13 @@ type Step struct {
 	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
 	// port stays closed to every other source, so it is never reachable from a test network.
 	// Decided by the maintainer on 2026-10-11.
+	//
+	// The same holds for the two-port topology (the management interface is the uplink interface, plan
+	// §2.16): the guard that stops devices under test from reaching the management network behind the
+	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
+	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
+	// Only an explicit entry of the access matrix from the device's network to the management network
+	// opens it. Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target Narrows the scenario target (e.g. one device of the target group).

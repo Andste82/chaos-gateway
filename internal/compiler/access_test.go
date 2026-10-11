@@ -147,6 +147,25 @@ func TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay(t *testing.T) {
 	}
 }
 
+// The two-port guard stands in front of the jump to the access rules, as the anti-lockout rule does
+// for the control plane: no access rule, an allow rule included, opens the management network
+// behind the uplink for a device under test (P2-M9-11, decided on 2026-10-11).
+func TestNoAccessRuleCanOpenTheManagementNetworkBehindTheUplink(t *testing.T) {
+	w := accessWorld(t)
+	w.cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+	w.addConfigRule(ruleA, `{name: everything, source: {global: true}, action: allow}`)
+	w.ruleOverlay(`{target: {network: IoT}, rule: {action: allow, destination: {cidr: 203.0.113.0/24}}}`, time.Hour)
+	tg := w.compile(nil)
+	fwd := chainOf(t, tg, "forward")
+	guard, rules := indexOfRule(fwd, "jump "+MgmtGuardChain), indexOfRule(fwd, "jump "+AccessForwardChain)
+	if guard < 0 || rules < 0 || guard > rules {
+		t.Fatalf("the guard (%d) must stand in front of the access rules (%d):\n%v", guard, rules, renderRules(fwd))
+	}
+	if g := renderRules(chainOf(t, tg, MgmtGuardChain)); len(g) != 1 || !strings.HasSuffix(g[0], `counter "forward_drop" drop`) {
+		t.Errorf("the guard chain: %v", g)
+	}
+}
+
 func TestOverlayRulesComeBeforeConfigurationRulesNewestFirst(t *testing.T) {
 	w := accessWorld(t)
 	w.addConfigRule(ruleA, `{name: first, source: {global: true}, protocol: tcp, ports: [1], action: drop}`)
@@ -731,6 +750,22 @@ func scenarioAccess(t *testing.T) *Target {
 	w.addConfigRule(ruleD, `{name: no-bgp, source: {global: true}, protocol: tcp, ports: [179], action: reset}`)
 	w.ruleOverlay(`{target: {device: esp32-42}, rule: {action: drop, protocol: tcp, ports: [8883], destination: {cidr: 203.0.113.10}}}`, time.Second)
 	return w.compile(nil)
+}
+
+// scenarioAccessTwoPort has the management network behind the uplink, a rule for everything and an
+// explicit matrix entry that opens it for Lab: the guard chain with a return and the drop.
+func scenarioAccessTwoPort(t *testing.T) *Target {
+	t.Helper()
+	w := accessWorld(t)
+	w.cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+	entries := []model.MatrixEntry{matrixEntry(lanEP(labID), mgmtEP(), model.MatrixEntryPolicyAllow)}
+	w.cfg.AccessMatrix = &model.AccessMatrix{Entries: &entries}
+	w.addConfigRule(ruleA, `{name: everything, source: {global: true}, action: allow}`)
+	tg := w.compile(nil)
+	if g := renderRules(chainOf(t, tg, MgmtGuardChain)); len(g) != 2 || !strings.HasSuffix(g[0], "return") {
+		t.Fatalf("the guard chain: %v", g)
+	}
+	return tg
 }
 
 func scenarioAccessCut(t *testing.T) *Target {

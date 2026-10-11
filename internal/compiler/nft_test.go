@@ -274,25 +274,47 @@ func TestTwoPortTopologyDeniesTestToManagementByDefault(t *testing.T) {
 	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
 		cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
 	})
-	var guard, accept = -1, -1
+	jump, accept := indexOfRule(chainOf(t, tg, "forward"), "jump "+MgmtGuardChain), -1
 	for i, r := range chainOf(t, tg, "forward").Rules {
 		s := js(r.Expr)
-		if strings.Contains(s, "mgmt_src") && strings.Contains(s, "drop") && strings.Contains(s, "ifs_test") && strings.Contains(s, `"wan0"`) {
-			guard = i
-		}
 		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept") {
 			accept = i
 		}
 	}
-	if guard < 0 || accept < 0 || guard > accept {
-		t.Fatalf("with the management network behind the uplink interface the default must deny test -> management before it allows test -> uplink (%d, %d)", guard, accept)
+	if jump < 0 || accept < 0 || jump > accept {
+		t.Fatalf("with the management network behind the uplink interface the default must deny test -> management before it allows test -> uplink (%d, %d)", jump, accept)
+	}
+	guard := renderRules(chainOf(t, tg, MgmtGuardChain))
+	if len(guard) != 1 || !strings.Contains(guard[0], "@mgmt_src") || !strings.Contains(guard[0], "@ifs_test") || !strings.Contains(guard[0], "oifname wan0") || !strings.HasSuffix(guard[0], "drop") {
+		t.Errorf("the guard chain: %v", guard)
 	}
 	// with a separate management interface no such rule is needed
 	tg = compileBasic(t, nil)
+	if hasChain(tg, MgmtGuardChain) {
+		t.Error("a guard chain without a management network behind the uplink")
+	}
 	for _, r := range chainOf(t, tg, "forward").Rules {
 		if strings.Contains(js(r.Expr), "mgmt_src") {
 			t.Errorf("an unneeded management guard: %s", js(r.Expr))
 		}
+	}
+}
+
+// An explicit matrix entry that allows a network to reach the management network is the one thing
+// that still opens it behind the uplink (plan §2.16): it returns from the guard, so the entry's
+// own place in the matrix decides. Entries that deny, or that name another destination, do not.
+func TestAnExplicitMatrixEntryReturnsFromTheTwoPortGuard(t *testing.T) {
+	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
+		cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+		cfg.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{
+			matrixEntry(lanEP(iotID), mgmtEP(), model.MatrixEntryPolicyAllow),
+			matrixEntry(lanEP(labID), mgmtEP(), model.MatrixEntryPolicyDeny),
+			matrixEntry(lanEP(labID), uplinkEP(), model.MatrixEntryPolicyAllow),
+		}}
+	})
+	g := renderRules(chainOf(t, tg, MgmtGuardChain))
+	if len(g) != 2 || !strings.HasSuffix(g[0], "return") || !strings.Contains(g[0], "@mgmt_src") || !strings.HasSuffix(g[1], "drop") {
+		t.Fatalf("the guard chain: %v", g)
 	}
 }
 

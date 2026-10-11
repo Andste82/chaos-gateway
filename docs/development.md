@@ -1667,6 +1667,7 @@ input     jump cut_input*                    only when a rule can cut (below)
 forward   jump cut_forward*
           ct state established,related accept
           (service guard, switched traffic, invalid, IPv6)
+          jump mgmt_guard*                   only with the management network behind the uplink
           jump access_forward                <- the rules
           the access matrix, the service rules, the default
 ```
@@ -1674,6 +1675,23 @@ forward   jump cut_forward*
 - **The rules decide before the matrix.** `allow` in forward is `accept`: an exception to the matrix
   ("IoT may not reach management, but this device may reach that host on port 22"). Traffic that no
   rule selects goes on to the matrix, which stays the default policy per network.
+- **The two-port guard stands in front of the rules.** When the management interface is the uplink interface (the
+  two-port topology, plan §2.16) the management network lies behind the uplink, and a device under test must not
+  reach it. The rule that drops this (`ifs_test` to the uplink, destination in `mgmt_src`, counter `forward_drop`) is the
+  last rule of the chain `mgmt_guard`, which forward jumps to in front of `jump access_forward`, as the anti-lockout rule
+  stands in front of the input rules. No access rule, an `allow` rule for every source and every destination included,
+  and no overlay opens the management network behind the uplink for a device under test (a local test network, a
+  WireGuard network of the role test and its clients). The one thing that still does is an explicit entry of the
+  access matrix that allows the device's network to reach the management network: the chain starts with a `return` for
+  each such entry, so that traffic goes on to the rules and meets the entry in its place in the matrix. What a client's
+  `reachable` list implies does not open it, and an explicit entry "to the uplink" does not either (it matches the
+  interface only). `domain.World.AccessDecision` checks the same guard (`twoPortGuard`) before the rules and answers a drop by the
+  access matrix without a rule, so `explain` and the kernel agree. Decided by the maintainer on 2026-10-11 (P2-M9-11;
+  before, the guard stood behind the jump, and an `allow` rule for such a destination opened the management network).
+  Tests: `TestNoAccessRuleCanOpenTheManagementNetworkBehindTheUplink`, `TestAnExplicitMatrixEntryReturnsFromTheTwoPortGuard`,
+  `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (the domain layer), the `access-twoport` scenario of the kernel
+  gate, and on the real kernel `TestNoAllowRuleOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` and
+  `TestAnExplicitMatrixEntryStillOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` (`explain` against the packets).
 - **`allow` accepts, in input too.** In input an allow rule is `accept`: it opens the gateway's own ports that
   the protection of the test networks closes (the protection answers DHCP, DNS and ICMP echo and drops
   the rest) for the rule's selector, and the routing protocols' accepts behind the rules no longer

@@ -796,3 +796,45 @@ func TestTwoBlockedEndpointsOfOneAddressAreNotBothCompiled(t *testing.T) {
 		}
 	}
 }
+
+// The preview lists the faults that win (Target.Effective): the tunnel faults are among them, in the user's
+// terms, also one whose peer has no address yet (it wins and waits), so Effective and Winners name the same faults.
+func TestTheEffectiveFaultsListTheTunnelFaultsToo(t *testing.T) {
+	tg := scenarioTunnel(t)
+	have := map[string]EffectiveFault{}
+	for _, e := range tg.Effective {
+		have[e.Key] = e
+	}
+	if len(have) != len(tg.Effective) {
+		t.Errorf("a fault is listed twice: %+v", tg.Effective)
+	}
+	for _, k := range tg.Winners {
+		if _, ok := have[k]; !ok {
+			t.Errorf("the winner %s is not among the effective faults %+v", k, tg.Effective)
+		}
+	}
+	if len(have) != len(tg.Winners) {
+		t.Errorf("%d effective faults for %d winners", len(have), len(tg.Winners))
+	}
+	var tunnels []EffectiveFault
+	for _, e := range tg.Effective {
+		if e.Family == domain.FamilyTunnel {
+			tunnels = append(tunnels, e)
+		}
+	}
+	if len(tunnels) != 2 {
+		t.Fatalf("the tunnel faults of the scenario: %+v", tunnels)
+	}
+	for _, e := range tunnels {
+		if e.Layer != "overlay" || e.Source == "" || e.Summary == "" || !strings.HasPrefix(e.Scope, "tunnel of ") {
+			t.Errorf("%+v", e)
+		}
+	}
+	// a fault whose peer has no address yet wins, too
+	w := newTunnelWorld(t)
+	o := w.overlay(`{fault: {family: tunnel, tunnel: {client: rA}, latency: 30ms}}`, 0)
+	tg = compileTunnel(w, nil)
+	if len(tg.Effective) != 1 || tg.Effective[0].Source != o.Id.String() || tg.Effective[0].Family != domain.FamilyTunnel || !strings.Contains(tg.Effective[0].Scope, "rA") {
+		t.Errorf("%+v", tg.Effective)
+	}
+}

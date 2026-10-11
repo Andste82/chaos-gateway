@@ -749,7 +749,7 @@ func TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe(t *testing
 	x.ret = apply.NewRetirer(x.clock)
 	seed = x.k.TCSeed("br-iot", leaf)
 	change(normal)
-	if recreated() || !strings.Contains(x.tcLog(), "distribution normal") || x.k.TCTable("br-iot", leaf) != "normal" {
+	if recreated() || x.k.TCSeed("br-iot", leaf) != seed || !strings.Contains(x.tcLog(), "distribution normal") || x.k.TCTable("br-iot", leaf) != "normal" {
 		t.Fatalf("the table of an unchanged leaf was not written in place after a restart (now %q):\n%s", x.k.TCTable("br-iot", leaf), x.tcLog())
 	}
 	// and without a retirer (a one-shot apply, a preview) nothing is known and nothing is made again

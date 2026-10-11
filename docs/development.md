@@ -415,16 +415,21 @@ Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.
   what the target no longer names; dynamic sets and named counters are never flushed. Not flush and
   fill (P2-M10-09): a flush makes every element of an interval set old for the moment of the commit,
   and the kernel's interval set types can miss a lookup then (pipapo, the concatenated intervals of
-  the classification maps: fixed upstream in 2025 by "netfilter: nft_set_pipapo: don't check genbit
-  from packetpath lookups"; rbtree, the single-field interval sets and maps such as `classify_nets` and
-  the `dev` map: "netfilter: nft_set_rbtree: continue traversal if element is inactive"), so a packet of a
-  flow whose fault did not change could pass unclassified while another fault was written. An element
-  that is not touched is active in both generations and always found; an element whose value changes
-  (traffic that moves to another fault) is deleted and added in the same commit and can still miss
-  for that moment on a kernel without the fixes. `TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten`
-  (`internal/compiler/classifykernel_test.go`) streams two flows through the `dev` and the `devdest`
-  map while the table is switched between two targets in a loop, first with flush and fill (the misses
-  are logged, they depend on the kernel) and then with the difference (not one packet may miss).
+  the classification maps such as `devdest`; rbtree, the single-field interval sets and maps such as
+  `classify_nets` and the `dev` map; upstream worked on such false negatives in 2025, e.g. "netfilter:
+  nft_set_pipapo: don't check genbit from packetpath lookups" and "netfilter: nft_set_rbtree: continue
+  traversal if element is inactive"), so a packet of a flow whose fault did not change passed
+  unclassified now and then while another fault was written (which explains the one probe in about 470
+  that `TestUpdatingOneFaultDoesNotDisturbTheOthers` once saw pass without its fault). An element that is not touched is active in both
+  generations and always found; an element whose value changes (traffic that moves to another fault)
+  is deleted and added in the same commit and can still miss for that moment.
+  `TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten` (`internal/compiler/classifykernel_test.go`)
+  streams two flows (about 20,000 packets a second each) through the `dev` and the `devdest` map while
+  the table is switched between two targets in a loop, first with flush and fill (the misses are
+  logged, not asserted) and then with the difference (not one packet may miss). On the native CI
+  runner (6.17.0-1022-azure) flush and fill missed 113 of 152,920 packets through `dev` and 67 of
+  159,680 through `devdest` in 540 transactions; the difference missed none of about 155,000 each in
+  547 transactions.
   Verify recognizes a rule by the hash of its expression in the rule's comment, a set by
   its elements, the generation by the comment of the one rule in the chain `generation`.
 - **`engine.Engine`** owns the desired state: commands go to one goroutine, readers use

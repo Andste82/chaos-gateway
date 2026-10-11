@@ -24,9 +24,9 @@ import (
 // arrived; the fault's own counter (in its mark chain) what was classified. The difference is the
 // number of packets classification missed.
 //
-// First with every set and map flushed and filled (what every apply did before): on a kernel without
-// the fixes of the interval sets named at setUpdate this misses packets, and the number is logged,
-// not asserted (it depends on the kernel). Then with the transaction of the product, which changes the
+// First with every set and map flushed and filled (what every apply did before): the kernel's interval
+// sets can miss lookups during such a commit (see setUpdate; the native CI runner's 6.17 kernel does), and
+// the number is logged, not asserted (it depends on the kernel and on the timing). Then with the transaction of the product, which changes the
 // elements by their difference: the elements of the two flows are never touched, so not one packet
 // may be missed.
 func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {

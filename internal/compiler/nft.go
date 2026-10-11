@@ -252,14 +252,17 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 // or whose listing cannot be read completely, is flushed and filled.
 //
 // Not flush and fill (docs/open-items.md P2-M10-09): the kernel's interval sets can miss a lookup
-// while a transaction that holds old and new copies of the same element commits. The concatenated
-// interval sets (pipapo) checked the generation of the element they found against the new generation
-// before the new copy was visible (fixed upstream in 2025, "netfilter: nft_set_pipapo: don't check
-// genbit from packetpath lookups"), and the single-field interval sets (rbtree) stopped at an inactive
-// range that covers the key ("netfilter: nft_set_rbtree: continue traversal if element is inactive"). A
-// flush makes every element old for that moment, so a packet of a flow whose classification did not
-// change at all could pass unclassified while another fault was written; an element that is not
-// touched is active in both generations and is always found.
+// while a transaction that holds old and new copies of the same element commits. A flush makes every
+// element old for that moment, so a packet of a flow whose classification did not change at all
+// passed unclassified now and then while another fault was written. The kernel test
+// TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten measured it on the native CI runner
+// (6.17.0-1022-azure): with flush and fill, 113 of 152920 packets through the single-field interval
+// map (rbtree) and 67 of 159680 through the concatenated one (pipapo) in 540 transactions were not
+// classified; by difference, none. Upstream has worked on such false negatives in 2025 ("netfilter:
+// nft_set_pipapo: don't check genbit from packetpath lookups", "netfilter: nft_set_rbtree: continue
+// traversal if element is inactive", "netfilter: nf_tables: restart set lookup on base_seq change"),
+// but a kernel the gateway runs on cannot be assumed to have all of it. An element that is not touched
+// is active in both generations and is always found.
 func setUpdate(s SetDef, current *linux.Ruleset) []any {
 	var have map[string]json.RawMessage
 	ok := false
@@ -299,7 +302,7 @@ func setUpdate(s SetDef, current *linux.Ruleset) []any {
 // mapUpdate is setUpdate for a map: a key that is gone or whose value changed is deleted, a key that
 // is new or whose value changed is added, and an element that stays as it is is not touched. (An
 // element whose value changes is deleted and added in the same commit: its traffic moves to another
-// chain, and on a kernel without the fixes named at setUpdate it can miss for that moment.)
+// chain, and like a flushed element it can miss for the moment of the commit.)
 func mapUpdate(m MapDef, current *linux.Ruleset) []any {
 	var have map[string]json.RawMessage
 	var haveVal map[string]string

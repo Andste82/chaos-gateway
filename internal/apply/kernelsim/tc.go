@@ -46,7 +46,7 @@ type simQdisc struct {
 type simClass struct {
 	id, parent, leaf string
 	rate, ceil       int64
-	prio             int
+	prio, quantum    int
 	stats            linux.NormStats
 }
 
@@ -160,22 +160,24 @@ func (k *Kernel) tcCmd(c executor.Command) (executor.Result, error) {
 	if len(a) >= 2 && a[0] == "-batch" {
 		return k.tcBatch(strings.Split(strings.TrimSpace(c.Stdin), "\n"), force)
 	}
-	for len(a) > 0 && (a[0] == "-s" || a[0] == "-j") {
+	details := false
+	for len(a) > 0 && (a[0] == "-s" || a[0] == "-j" || a[0] == "-d") {
+		details = details || a[0] == "-d"
 		a = a[1:]
 	}
 	// <kind> show dev X
 	if len(a) == 4 && a[1] == "show" && a[2] == "dev" {
-		return k.tcShow(a[0], a[3], false)
+		return k.tcShow(a[0], a[3], false, details)
 	}
 	if len(a) == 5 && a[0] == "filter" && a[1] == "show" && a[2] == "dev" && a[4] == "ingress" {
-		return k.tcShow(a[0], a[3], true)
+		return k.tcShow(a[0], a[3], true, details)
 	}
 	// qdisc show: the qdiscs of every interface, each entry naming its interface (the listing of one
 	// interface does not); the simulator lists classes and filters per interface only
 	if len(a) == 2 && a[0] == "qdisc" && a[1] == "show" {
 		all := []any{}
 		for _, l := range k.sortedLinks() {
-			res, _ := k.tcShow("qdisc", l.name, false)
+			res, _ := k.tcShow("qdisc", l.name, false, details)
 			var entries []map[string]any
 			if err := json.Unmarshal([]byte(res.Stdout), &entries); err != nil {
 				return executor.Result{}, err
@@ -390,6 +392,7 @@ func (k *Kernel) tcClass(tc *simTC, action, parent, classid string, args []strin
 	}
 	args = args[1:]
 	var rate, ceil int64
+	quantum := 0
 	for i := 0; i+1 < len(args); i += 2 {
 		bits, err := parseRateBits(args[i+1])
 		switch args[i] {
@@ -400,6 +403,10 @@ func (k *Kernel) tcClass(tc *simTC, action, parent, classid string, args []strin
 			}
 		case "ceil":
 			ceil = bits / 8
+		case "quantum":
+			if quantum, err = strconv.Atoi(args[i+1]); err != nil || quantum <= 0 {
+				return "Error: invalid quantum"
+			}
 		}
 	}
 	if rate == 0 {
@@ -407,6 +414,10 @@ func (k *Kernel) tcClass(tc *simTC, action, parent, classid string, args []strin
 	}
 	if ceil == 0 {
 		ceil = rate
+	}
+	if quantum == 0 {
+		// the kernel's own: the rate over r2q (10), within 1000 and 200000 bytes
+		quantum = int(min(max(rate/10, 1000), 200000))
 	}
 	old := tc.classes[classid]
 	switch {
@@ -416,10 +427,10 @@ func (k *Kernel) tcClass(tc *simTC, action, parent, classid string, args []strin
 		return "Error: Specified class not found."
 	}
 	if old != nil {
-		old.rate, old.ceil = rate, ceil
+		old.rate, old.ceil, old.quantum = rate, ceil, quantum
 		return ""
 	}
-	tc.classes[classid] = &simClass{id: classid, parent: parent, rate: rate, ceil: ceil}
+	tc.classes[classid] = &simClass{id: classid, parent: parent, rate: rate, ceil: ceil, quantum: quantum}
 	return ""
 }
 
@@ -620,7 +631,7 @@ func (k *Kernel) SetIngressStats(dev string, handle int, s linux.NormStats) {
 
 // ---- reading ----------------------------------------------------------------------------------
 
-func (k *Kernel) tcShow(kind, dev string, ingress bool) (executor.Result, error) {
+func (k *Kernel) tcShow(kind, dev string, ingress, details bool) (executor.Result, error) {
 	l := k.links[dev]
 	if l == nil {
 		return executor.Result{Exit: 1, Stderr: fmt.Sprintf("Cannot find device %q\n", dev)}, nil
@@ -653,6 +664,11 @@ func (k *Kernel) tcShow(kind, dev string, ingress bool) (executor.Result, error)
 		for _, id := range sortedKeys(tc.classes) {
 			c := tc.classes[id]
 			m := map[string]any{"class": "htb", "handle": c.id, "root": true, "prio": c.prio, "rate": c.rate, "ceil": c.ceil, "burst": 1680, "cburst": 1680}
+			if details {
+				// what `-d` adds, as iproute2 6.19 prints it for an HTB class without children
+				m["quantum"], m["linklayer"], m["level"] = c.quantum, "ethernet", 0
+				m["burst_cell"], m["cburst_cell"], m["mpu_rate"], m["mpu_ceil"] = 1, 1, 0, 0
+			}
 			if c.leaf != "" {
 				m["leaf"] = "0x" + strings.TrimSuffix(c.leaf, ":")
 			}

@@ -52,7 +52,8 @@ const (
 	TCClassRate = "10gbit"
 	// TCClassQuantum is HTB's quantum for those classes. At the class rate the kernel's own
 	// default is above its limit of 200000 bytes and tc warns ("quantum of class ... is big"); an
-	// explicit value is silent and does not matter for classes that never compete.
+	// explicit value is silent and does not matter for classes that never compete. Verify compares
+	// it (TCTarget.Norm): the class listing with details shows it (P2-M8b-02).
 	TCClassQuantum = "60000"
 
 	// MarkMask are the mark bits a fw filter looks at: the fault id and the direction (plan §3.3).

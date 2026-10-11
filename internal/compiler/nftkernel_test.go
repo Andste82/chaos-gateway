@@ -283,7 +283,7 @@ func TestTheKernelTakesTheLongestValuesTheAPIAccepts(t *testing.T) {
 // qdisc included.
 func normalizedTC(ns *testbed.Namespace, dev string) (*linux.NormTree, error) {
 	return linux.NormalizeTCIngress(dev, []byte(ns.Must("tc", "-s", "-j", "qdisc", "show", "dev", dev)),
-		[]byte(ns.Must("tc", "-s", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)),
+		[]byte(ns.Must("tc", "-s", "-d", "-j", "class", "show", "dev", dev)), []byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev)),
 		[]byte(ns.Must("tc", "-s", "-j", "filter", "show", "dev", dev, "ingress")))
 }
 

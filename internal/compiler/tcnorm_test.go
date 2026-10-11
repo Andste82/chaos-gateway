@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +69,12 @@ func TestTheNormOfATreeHasTheShapeTheCompilerBuilds(t *testing.T) {
 	}
 	if n.Classes[0].ID != "1:1" || n.Classes[0].Leaf != "" || n.Classes[1].Leaf != "24:" || n.Classes[2].ID != "1:25" {
 		t.Errorf("classes %+v", n.Classes)
+	}
+	// every class has the quantum the compiler writes (P2-M8b-02), as the listing with details shows it
+	for _, c := range n.Classes {
+		if strconv.Itoa(c.Quantum) != TCClassQuantum || !strings.Contains(c.Line(), "quantum="+TCClassQuantum) {
+			t.Errorf("class %s: %s, want the quantum %s", c.ID, c.Line(), TCClassQuantum)
+		}
 	}
 	if f := n.Filters[0]; f.Mark != MarkOf(10, Upload) || f.Mask != MarkMask || f.Flowid != "1:24" || f.Kind != "fw" || f.Pref != 1 {
 		t.Errorf("filter %+v", f)

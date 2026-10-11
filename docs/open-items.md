@@ -54,7 +54,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Decisions.** All open questions were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision.
+2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, the two new items (P2-M9-11, P2-M11-05) carry "Needs maintainer: yes", and the ten that stay open from before need no decision.
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).
@@ -345,7 +345,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M4: Docker started after the last apply is not noticed (`DOCKER-USER`) | M38 drift detection (partial) |
 | M4c: received-prefix list in routing view | M14 |
 | M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
-| M5: `lockout_protected` never produced — M9 does not produce it either; the kernel rule cannot be overridden and lockout-relevant configuration changes take commit-confirm. Whether to also refuse them: P2-M9-08 | decision |
+| ~~M5: `lockout_protected` never produced~~ — decided 2026-10-11 (P2-M9-08): the anti-lockout rule cannot be overridden and lockout-relevant configuration changes take commit-confirm, which is enough; the code stays reserved | decided |
 | ~~M5: `capacity_exceeded` never produced~~ — produced for classes, fault ids, map cells and rules since M8a; the preview refuses with it (M10 test) | M8a, M10 |
 | M5: `target_busy` never produced | M15 |
 | M5: IPv6 management addresses never bound | M32 |
@@ -370,40 +370,53 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | Overlay removal on stop | M27 |
 | M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
-| M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (P2-M7-01) |
+| M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (confirmed 2026-10-11, P2-M7-01) |
 | M6b: TLS responder joins the service namespace | M21 |
 
 ## Phase 2 open items
 
-### P2-M7-01 Should M7 write the service-selection mark (bit 20), or keep deferring it?
+Phase 2 (M7 to M11) produced 39 items. On 2026-10-11 the maintainer decided 29 of them (table below); their blocks are gone from this
+file, like the closed items of Phase 1, and the decisions are recorded where the behavior is documented: the milestone's section in
+`docs/development.md`, the description in `api/openapi.yaml` where the behavior is user-visible, and `docs/plan.md` where the plan said
+otherwise. The item ids stay as names: the code and the documents refer to them. Five decisions changed behavior and were implemented
+with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M10-08, P2-M11-03); the others confirmed the interpretation the item had chosen. P2-M8a-07 was
+resolved in M9. Ten items need no decision and stay (below), and two new ones came out of the review of M9 and M11.
 
-- Status: new
-- Severity: low
-- Reason: needs-decision. This file's own deferral table (above) assigned "classification sets the
-  service mark (bit 20) that table 102 routes on" to M7. But M7's detailed task text says the
-  redirect-interaction test belongs to M20/M21 and asks only not to break the existing M6b
-  service-namespace redirect path, which today reaches `svc0` through the DNAT in
-  `service.go`'s `prerouting` chain (prio -100) and table 100's connected route to the pair's
-  subnet, never through the fwmark/table 102 path that is already compiled (`ServiceMark`,
-  `ServiceTable`, M6b-04's test) but unused by real traffic.
-- Evidence: `internal/compiler/service.go` (`serviceRedirect`, `serviceRouting`); `internal/api/e2e_dns_test.go` M6b-04 (`ip route get ... mark 0x100000` is the test's own synthetic mark, not one real traffic carries); `internal/compiler/classify.go` (M7's new `classify` chain runs at prio -150, before `service.go`'s prerouting at -100, so "right after classification" is satisfiable there).
-- Task: chosen interpretation — M7 leaves bit 20 unset, exactly as Phase 1 left it: the new `classify`
-  chain's masks (`MarkKeepOnIDWrite`, `MarkKeepOnDirectionWrite`) only ever touch bits 4-16, so
-  nothing in M7 clears or sets bit 20 either. Writing it (`mark set mark | 0x00100000` next to the
-  DNAT in `serviceRedirect`) is deferred to whichever milestone adds the real redirect-interaction
-  test (M20/M21 per the task text), because setting it changes which policy-routing rule wins for
-  real DNS/TLS traffic (`ServiceRulePriority` 900 sits before the policy table's rule 1000), a
-  behavior change this environment cannot verify against a real kernel (no privileged network
-  namespaces here; `nft -c`/`go vet` only check syntax, not kernel routing behavior).
-- Acceptance: a maintainer either confirms the deferral (and this file's table is corrected, as
-  done above) or asks for bit 20 to be written now, with a testbed test added that the existing
-  M6b-04 scenario (DNS through the service namespace, and failing closed without it) still passes
-  with the mark set on real traffic.
-- M8a: unchanged. The faults compile to ids and tc classes, the `mark_<id>` chains only touch
-  bits 4-16 (`TestClassifyRunsBeforeServiceRedirectAndNeverTouchesItsMark` with a real fault), and
-  nothing writes bit 20 yet.
-- Needs maintainer: yes
-- Effort: S
+### Decisions (made 2026-10-11)
+
+| Item | Question | Decision |
+|---|---|---|
+| P2-M7-01 | Should M7 write the service-selection mark (bit 20)? | Confirmed: no, it stays deferred to M20/M21, where the real redirect-interaction test is |
+| P2-M7-03 | Convergence bound of the identity map on a shared CI runner | Confirmed: 3 s on CI, the plan's 1 s is the target on dedicated hardware (H1) |
+| P2-M8a-01 | Group and network scopes folded into per-source tables | Confirmed: folded |
+| P2-M8a-02 | Packet size, memory budget and link speed of the computed queue limit | Confirmed: 1500 bytes, 256 MiB per interface, never below netem's 1000 packets, 1 Gbit/s as the cap; the link speed from the host stays a later refinement |
+| P2-M8a-03 | Unknown addresses of a network share one queue per fault | Confirmed: one per winning fault |
+| P2-M8a-04 | The class limit counts the default class and applies to every interface alike | Confirmed |
+| P2-M8a-07 | `explain` by rules | Resolved in M9 (`World.AccessDecision`) |
+| P2-M8b-01 | A duplicating netem cannot share an interface's tree | Resolved by P2-M10-01 |
+| P2-M8b-03 | Make-before-break holds old and new classes at once; its time limits | Confirmed: the three limits as constants, the class limit does not count the waiting classes |
+| P2-M8b-05 | Counter epochs are generations and a restart starts a new one | Confirmed |
+| P2-M8b-06 | Tolerance for the spread of a jitter and for "no change" | Confirmed: 0.5 to 1.5 times the uniform spread plus 2 ms; median within ±2 ms + 5 % of before and no loss |
+| P2-M9-01 | An allow rule in the input path | **Changed:** it accepts, so it also opens the gateway's closed ports for its selector; the UI/API port rule for other sources and the anti-lockout rule stand in front of the rules |
+| P2-M9-03 | The type of a `reject` | **Changed:** chosen per rule with `reject_with` (`port_unreachable` by default, `host_unreachable`, `admin_prohibited`, `no_route`) |
+| P2-M9-04 | The network scope and the networks behind a test network's static routes | **Changed:** "network X" includes them, for rules and faults alike |
+| P2-M9-05 | Fault counters count packets a rule drops afterwards | Confirmed: left as it is |
+| P2-M9-07 | A rule's counter counts new connections only | Confirmed; documented in the spec |
+| P2-M9-08 | `lockout_protected` is never produced | Confirmed: commit-confirm is enough, the code stays reserved |
+| P2-M9-09 | Access rules select IPv4 only | Confirmed: IPv6 selectors come with M32 |
+| P2-M9-10 | What "also cut existing connections" does at its edges | Confirmed |
+| P2-M10-01 | Duplication as a draw plus a copy on the netdev egress hook | Confirmed |
+| P2-M10-02 | When a flapping starts, and a boundary during an apply | Confirmed |
+| P2-M10-03 | A rate below 8 bit/s is refused; the phase of a flapping in the API | Confirmed |
+| P2-M10-04 | Black hole before the access rules, the route lock, the clamp's headers | Confirmed |
+| P2-M10-05 | Directions and peer address of a tunnel fault | Confirmed |
+| P2-M10-06 | The WireGuard actions | Confirmed |
+| P2-M10-07 | One IFB with a fixed name; the host's ingress qdisc is shared | Confirmed |
+| P2-M10-08 | The per-packet delay check of the update test on a loaded runner | **Changed:** the measured stream is at least 200 packets (sent 5 ms apart); the bounds and the rule that none is more than 10 ms outside stay |
+| P2-M11-03 | The rate of the built-in Bad LTE end to end | **Changed:** a UDP measurement above the rate was added (`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd`) |
+| P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
+
+### Items that stay open
 
 ### P2-M7-02 Classification maps are keyed by address, not by the identity map's device number
 
@@ -451,172 +464,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: confirmation only
 - Effort: S (design confirmation only)
 
-### P2-M7-03 The identity map's one-second convergence target, measured on a shared CI runner
-
-- Status: new
-- Severity: low
-- Reason: needs-decision.
-  `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (plan §3.3's own acceptance
-  item, "after a forced address change the device's map entry follows within 1 second") measures
-  wall-clock time from the triggering ping to the real kernel's `ident4` map showing the new
-  address, including two real `nft` subprocess round trips (add the element, list the map back to
-  verify) through the executor. In the one CI run (testbed level 1, privileged container) this
-  path has run against a real kernel so far, it took 1.96 s, failing the original one-second
-  assertion; `TestAnAddressChangeIsAnEventWithinASecond`, which only waits for the in-memory event
-  the observe step emits directly (no kernel round trip), passed the same run in 0.88 s. Tracing
-  the convergence code (`internal/engine/owner.go`'s `triggerIdentityConverge`/`converge`,
-  `internal/engine/applyloop.go`'s `applyIdentity`) found no extra throttling on this path: an
-  existing device's address change always converges at once (only a new device joining or leaving
-  the set waits out `identityConvergeWindow`), so the gap looks like real subprocess and
-  scheduling latency on a shared, non-dedicated CI runner, the same category of noise plan.md's
-  own "Timing precision" item (§3.1) and D9 already name for timing-sensitive tests: exact numbers
-  need real, dedicated hardware (H1), which is explicitly out of scope for now. The level 1b (VM)
-  job shows the same test degrading further, in step with that job's own total runtime: three
-  consecutive runs on the same PR took 10 m, 14 m and 17 m, and the test's own margin over its
-  (already loosened) 3 s bound went from 4.7 s to never converging within the test's 5 s polling
-  loop at all - on a VM instance that was visibly getting more loaded each time, not randomly
-  flaky. `TestABurstOfNeighborChangesIsOneIdentityUpdate` (already on the pre-approved flaky list,
-  unrelated to M7: it exercises M6a-07's pre-existing neighbor-burst debounce, which M7 does not
-  touch) failed alongside it on every one of those runs, further evidence this is the runner being
-  overloaded rather than a new, M7-specific regression.
-- Evidence: CI run 37525100078, job "testbed (level 1, privileged container)":
-  `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` logged "the identity map
-  followed after 1.956427894s, the target is one second"; the same run's
-  `TestAnAddressChangeIsAnEventWithinASecond` passed at 0.88 s. CI run 37537539633 (PR 29), job
-  "testbed (level 1b, VM)", reran twice after its first failure: the 14 m rerun logged "...followed
-  after 4.737352475s, the target is three seconds"; the 17 m rerun after that logged "the identity
-  map never followed the address change: holds \"10.10.0.11\"" (the old address, never updated
-  within the test's 5 s setup-and-assert loop). `internal/engine/owner.go`,
-  `internal/engine/applyloop.go`.
-- Task: chosen interpretation — keep the test (it is the one named in M7's own acceptance list and
-  it still proves the map follows, and does so without caching a stale value), but loosen its
-  timing assertion to 3 s, documenting why in the test itself. The functional assertion (the map
-  reaches the new address, not some stale one) is unchanged and unweakened.
-- Acceptance: a maintainer either confirms 3 s as the CI-grade bound (and the plan's "within one
-  second" stays the dedicated-hardware target, confirmed once H1 runs), or asks for the
-  convergence path itself to be profiled and sped up so the original one-second bound holds on
-  shared CI hardware too.
-- M8a re-check in the persistent VM (kernel 6.8.0-142, software emulation, 2 CPUs, 2026-10-07):
-  no figure can be had there. `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`
-  fails in its setup ("the identity map holds []": the first full apply, which under emulation
-  takes longer than the test's wait, was cancelled, `apply execute: context canceled`) on `main`
-  exactly as on the M8a branch, and so do `TestAReservationIsHonored`,
-  `TestAnAddressChangeIsAnEventWithinASecond` and `TestABurstOfNeighborChangesIsOneIdentityUpdate`
-  (same engine log lines, same failing assertions, run on both trees one after the other in the same
-  VM). The other 72 tests of the engine package pass there, as do the 85 of `internal/apply`.
-  What M8a changes on the path is one more executor round trip, and only when classification
-  elements move (the atomic `nft -j -f` of the element transaction next to the identity map's own
-  delete and add); `ReadSets` for the verification is unchanged. The conclusion does not change:
-  the bound stays 3 s on shared CI hardware and 1 s is the target for dedicated hardware (H1).
-- Needs maintainer: yes
-- Effort: S (bound confirmation) to M (profiling/optimizing the convergence path, if asked for)
-
-### P2-M8a-01 Group and network scopes are folded into per-source tables, not given lookup levels
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §3.3 lists the lookup chain as "…4. device; 5. then the same for
-  groups and networks, then any source + destination/port, then global", maps keyed on the
-  conntrack original tuple. M8a's resolver (`domain.World.Table`) does not give groups, networks,
-  "any" and global their own lookup levels: it folds every scope that applies to a source into that
-  source's table, so the compiled maps keep the four device levels of M7 and hold the *resolved*
-  winner per key (which is what §3.3 says the maps must hold). A device that belongs to the
-  network IoT gets the network fault's entries in its own table; addresses no device owns
-  (`Sources`: "stretches") get a table of their own, built from the network, remote-network, "any"
-  and global scopes only, so a device that is not known yet is covered until discovery adds it.
-  Reading §3.3 literally would need extra source-prefix-keyed maps for the levels 5–10.
-- Evidence: `internal/domain/table.go` (`Table`), `internal/domain/sources.go` (`Sources`);
-  `TestTheLookupChainGivesWhatResolveSays` compares the first-match lookup of a table with
-  `World.Resolve` for random worlds (several hundred thousand traffic samples per run, ten scopes,
-  both layers, profiles, all selector shapes). Entries per table: one per destination piece and
-  protocol/port piece that changes the winner, so a network-wide fault with no selector costs one
-  entry per device (the level-4 default), and an `uplink` destination costs one entry per gap
-  between the known prefixes. The cost of a table is about 85 µs.
-- Task: chosen interpretation — keep the folding. It is what makes the precedence rules (D24,
-  E1) hold with a first-match lookup, because the winner of a key can come from any scope; with
-  separate group/network levels an overlay at a less specific scope could never override a more
-  specific configured fault, which is exactly what §3.3 says the compiler must handle. The price is
-  map size (devices × entries instead of one network entry). If the compiler step finds that too
-  large (many devices, many network-wide selectors), an optimisation is to drop a device's entries
-  that equal what its stretch's table gives (`Table.Signature` makes the comparison cheap).
-- Acceptance: a maintainer confirms the folding, or asks for source-prefix-keyed network/global
-  levels (then `Sources` and `Table` produce them separately and the property test checks the
-  chain of both).
-- Needs maintainer: yes
-- Effort: S (confirmation) to M (separate levels)
-
-### P2-M8a-02 The queue limit's packet size, memory budget and link speed are assumptions of the compiler
-
-- Status: measured in M8b (the numbers are kept), confirmation open
-- Severity: low
-- Reason: needs-decision. Plan §2.5 says the compiler computes the queue limit "from delay × rate,
-  where rate is the fault's rate or, without one, the egress interface's link speed capped at 1
-  Gbit/s, and caps the result by a memory budget per interface". The compiler does not know the
-  speed of an interface (the host description has no speed), and the plan names neither a packet
-  size nor a budget.
-- Evidence: `internal/compiler/netem.go` (`computedLimit`, `KeepOrderRate`, `QueuePacketSize`,
-  `DefaultQueueBudget`), `TestQueueLimitsAreComputedFromDelayAndRate`.
-- Task: chosen interpretation — the rate of a fault without one is the cap itself, 1 Gbit/s; the
-  packet size is 1500 bytes (an Ethernet MTU); the budget is 256 MiB per interface (`Input.QueueBudget`),
-  shared by the active classes of the interface, never below netem's own default of 1000 packets
-  (so a tree of thousands of classes keeps 1000 each and may exceed the budget; the class limit is
-  what bounds the memory then), and an explicit `queue_limit` is never changed. `keep_order`
-  without a rate uses the same 1 Gbit/s as netem's `rate`. Link speed from `ethtool` (and 100
-  Mbit/s links) is a later refinement.
-- Measured in M8b (real kernel 6.8.0-142, `TestTheComputedQueueLimitHoldsABurstThatTheDefaultLimitOfNetemDrops`):
-  a burst of 4000 packets through a 600 ms fault. Without a queue limit the compiler's limit (44739
-  packets, the budget share of four classes) holds all of it, with no drop in either direction. With the
-  limit of 1000 (netem's own default, which is also what a limit below it is raised to) the queue passes
-  the first 2000 and drops the other 2000 while the first wait: a 600 ms fault with the default limit
-  is a rate limit of about 1667 packets per second (about 20 Mbit/s of 1500-byte packets) that nobody
-  configured, which is why the computed limit exists. The price is memory: a full queue of 44739 packets
-  holds up to that many socket buffers (an estimate, not measured: about 2 KiB each with the packet itself, so up to roughly 90 MB
-  for one queue), and the budget of 256 MiB per interface is shared by the queues of the interface, so a
-  burst through one queue is covered but many full queues are bounded by the budget, not by the delay.
-  The packet size of 1500 bytes under-counts small packets (a queue of 64-byte packets holds
-  more of them than the delay x rate estimate), which only makes the limit larger in packets than needed.
-- Acceptance: a maintainer confirms the three numbers, or names others; or asks for the link speed
-  to be read from the host.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M8a-03 Unknown addresses of a network share one queue per fault, not per scope or per stretch
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.4: "Addresses in a network that are not (yet) known as devices
-  share one queue per scope until discovery adds them." A fault with a rate on a network has one id
-  per device (D18). The addresses of the network that no device owns are cut into several stretches
-  by the devices in between, and a fault can name several scopes that reach them.
-- Evidence: `internal/compiler/faults.go` (`compileFaults`: per-device key `...@shared`),
-  `TestARateFaultOnANetworkGetsOneIDPerDeviceAndOneForTheUnknownOnes`.
-- Task: chosen interpretation — the winning fault (an overlay or a configured fault, which has one
-  scope) gets one shared id for all the addresses of all stretches it reaches, however many stretches
-  the devices cut them into, so "per scope" is "per winning fault".
-- Acceptance: a maintainer confirms, or asks for one queue per stretch.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M8a-04 The class limit counts the default class and applies to every interface alike
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §3.3: "The compiler enforces a configurable class limit per
-  interface (default 1000 on x86 ...) and reports capacity_exceeded with the scope that caused it."
-  Every interface carries the same tree (the direction bit makes (id, direction) -> class the same
-  on all of them), so the number of classes is the same everywhere; it is not the number of
-  classes of one interface that carries traffic.
-- Evidence: `internal/compiler/faults.go` (`compileTC`), `TestTooManyClassesAreRefusedWithTheScopeThatCausedIt`.
-- Task: chosen interpretation — the limit counts the classes of the tree, including the default
-  class (a tree of 999 fault classes fits the default limit of 1000), one limit for all interfaces.
-  The scope in the problem is that of the fault that needs the most classes; the problem also
-  lists every fault that contributes, the biggest first, so the API can name the overlay that tipped
-  the balance.
-- Acceptance: a maintainer confirms or asks for a count per interface (which would need a tree that
-  differs between interfaces).
-- Needs maintainer: yes
-- Effort: S
-
 ### P2-M8a-06 An overlay or fault that wins only for a part of its selector is shown as effective
 
 - Status: new
@@ -635,57 +482,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   network fault as `partially_overridden` and the device fault as `effective`.
 - Needs maintainer: no
 - Effort: S
-
-### P2-M8a-07 `explain` judges access by the matrix and the gateway's protection, not by access rules
-
-- Status: resolved in M9 (`World.AccessDecision` puts the rules in front of the matrix and names the deciding rule)
-- Severity: low
-- Reason: deferred (to M9). The spec's `access.layer` can name `overlay_rule` and `config_rule`, but
-  access rules do not take effect before M9 (the compiler does not compile them, overlays of kind
-  `rule` are refused), so naming one as the reason would claim something the kernel does not do.
-  `domain.World.AccessVerdict` reproduces the compiler's forward chain at the level of one address
-  pair (gateway protection, explicit matrix entries with the more specific endpoint first, the
-  clients' `reachable` lists, the two-port guard, the default); `ResolveAccess` exists in the domain
-  layer and joins in with M9.
-- Evidence: `internal/domain/access.go`, `TestTheAccessVerdictFollowsTheMatrixAndItsDefault`.
-- Task: M9 puts `ResolveAccess` in front of the matrix in `Engine.Explain` and compiles the rules.
-- Acceptance: M9's test that a drop rule is what `explain` names as the decider.
-- Needs maintainer: no
-- Effort: S
-
-
-### P2-M8b-01 A duplicating netem cannot share an interface's tree with any other netem
-
-- Status: resolved in M10 by the decision in P2-M10-01 (the copy is made by an egress hook, not by netem)
-- Severity: medium (for M10; none for M8b, whose faults have no duplicate)
-- Reason: needs-decision. Plan §3.3 builds one HTB tree per interface with a netem leaf per active
-  (fault id, direction), and §2.2 lists `duplicate` among the faults. The kernel (6.8.0-142, the
-  minimum supported one; `check_netem_in_tree`) refuses a netem with a duplicate probability above
-  zero as soon as another netem exists on the same interface, and refuses any netem while another one
-  on the interface duplicates: `Error: netem: cannot mix duplicating netems with other netems in
-  tree.` The check is per interface (a duplicating leaf on another interface is fine) and is made on
-  creation and on every change, so it also bites during an in-place update (changing leaf B to
-  `duplicate 5%` while leaf A exists fails; deleting A first lets it through). With the compiler's
-  complete parameter sets every leaf says `duplicate 0%`, which is not duplicating and is fine; one
-  fault with a duplicate probability on any interface breaks the tree of that interface for every other
-  fault there.
-- Evidence: VM session of M8b (`make vm-exec`, orders: plain A and B, then B to `duplicate 5%`: refused;
-  A deleted, B to `duplicate 5%`: accepted; C added beside the duplicating B: refused, with and
-  without duplicate); `TestTheNormOfEveryNetemShapeIsWhatTheKernelReports` puts the duplicating shape on
-  an interface of its own for that reason.
-- Task: decide how M10 realizes `duplicate` next to other faults. Candidates: (a) the compiler
-  reports `capacity_exceeded`/`fault_invalid` for a duplicate fault whenever its tree would hold
-  another netem (honest, but then duplicate works only on an otherwise unimpaired interface); (b)
-  the duplicate is done by a second mechanism that the kernel does not count as netem (a `mirred`
-  mirror of the packet back to the same egress); the check walks every qdisc of the device, so a
-  netem anywhere below the root counts. M8b's apply must in any case order
-  its operations so that a transition never has two netems with one duplicating (delete before add).
-- Acceptance: M10's duplicate test passes with a second fault active on the same interface, or the
-  restriction is documented in the API (a `capacity_exceeded` problem that names it) and tested.
-  Met by `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults` (a delay fault of another device
-  next to the duplicating one, both measured on the real kernel).
-- Needs maintainer: yes (P2-M10-01)
-- Effort: M
 
 ### P2-M8b-02 Verification cannot see the HTB quantum or the netem distribution table
 
@@ -715,55 +511,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: no
 - Effort: S
 
-### P2-M8b-03 Make-before-break holds old and new classes at once, and its time limits are choices
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §3.2 says the old classes go "after the largest configured delay
-  plus 1 s". Three things in it are not numbers of the plan. (1) The classes of the old and the new
-  ids exist side by side for that time, so an interface can carry up to twice the class limit
-  (`Input.ClassLimit` counts the target's classes, P2-M8a-04) for a moment; the compiler does not
-  count the ones that wait. (2) A class that still has packets after its time (a netem with a low
-  rate queues for minutes: 1000 packets of 1500 bytes at 100 kbit/s are two minutes) is looked at
-  again every second and goes with its queue after five minutes (`retireBacklogCap`). (3) A
-  deletion that keeps failing is tried for half an hour (`retireGiveUp`). An interface that leaves
-  Chaos Gateway's control (the uplink changes) loses its tree in the apply itself, with the packets
-  queued in it, because nobody can delete anything on it later.
-- Evidence: `internal/apply/retire.go`, `internal/apply/tcplan.go` (`planTC`, `immediate`),
-  `TestADeletionWaitsForTheQueuedPacketsUpToACap`, `TestAQueueThatNeverDrainsIsDeletedAfterTheCap`.
-- Task: chosen interpretation — the three limits above, as constants. A maintainer confirms them, or
-  asks for the class limit to cover the transient (a limit of half the number per interface would
-  make 1000 on x86 effectively 500).
-- Acceptance: a maintainer confirms the limits; or a test in the compiler counts retiring classes
-  against `ClassLimit` and the engine refuses a write that would exceed it with `capacity_exceeded`.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M8b-05 The counter epochs are generations, and a restart starts a new one
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.12 says nft counters reset only on reboot, which the API reports as
-  a counter epoch, and that a re-created netem queue starts a new epoch. It does not say what the
-  epoch's value is, nor what a restart of the gateway (not of the machine) does. The spec has
-  `GatewayState.counter_epoch`, `Counter.epoch` and `QueueStats.epoch`, all integers.
-- Evidence: `internal/engine/queues.go` (`trackQueues`, `trackCounters`), `TestTheCounterEpochOfTheStateChangesWithARestartOnly`,
-  `TestAQueueKeepsItsEpochThroughAChangeAndStartsAnotherWhenTheLeafIsMadeAgain`.
-- Task: chosen interpretation — an epoch is the generation (persisted, so never reused) of the apply
-  that made the object: a leaf made new (a new class, a leaf deleted and made again, P2-M8a-05), a fault
-  that is new in an applied target, the nft table when an apply finds it missing. The state's
-  `counter_epoch` is that of the table as a whole. A gateway that restarts cannot tell whether the
-  counters it finds are the ones it left (it keeps no counter state, and the kernel shows no creation
-  time), so its first apply starts new epochs for every queue and fault, although the counters did survive;
-  a consumer then discards one delta, never subtracts across a reset. After an apply that failed, the
-  queues that were there start new epochs too. The statistics are read from the kernel when the API is
-  asked, not polled and not stored.
-- Acceptance: a maintainer confirms; or asks for epochs that survive a restart (the engine would then
-  have to store the epoch of every queue and fault with the checkpoint, and compare the kernel's counters
-  with the stored ones to notice a reset it did not cause).
-- Needs maintainer: yes
-- Effort: S
-
 ### P2-M8b-04 The tc state of every assigned interface is read at every apply and every verify
 
 - Status: new
@@ -780,27 +527,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Acceptance: the cost of an apply with ten assigned interfaces is measured on the arm64 runner and
   stays within the budget of plan §3.11.
 - Needs maintainer: no
-- Effort: S
-
-### P2-M8b-06 The plan gives no tolerance for the spread of a jitter, and none for "no change" of an unaffected flow
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §4.3 says to compare "the spread with the configured jitter" and that an
-  isolation measurement "must show no change", and defines tolerances only for the median (±2 ms + 5 %),
-  the loss (99.9 % binomial interval) and the rate (±10 %). The measurement tests need a number for both.
-- Evidence: `internal/testbed/stats.go` (`CheckSpread`, `SpreadOfUniform`), `internal/engine/integration_faults_test.go`
-  (`expectUnaffected`).
-- Task: chosen interpretation — the spread is the width between the 5th and the 95th percentile of the
-  upload delay, 1.8 x jitter for netem's default uniform distribution; it passes within 0.5 to 1.5 times
-  that plus 2 ms (wide on purpose: with 200 to 2000 probes the percentiles are stable to a few percent, and
-  the point is to tell a jitter from none and from a wrong one). An unaffected flow is "unchanged" when its
-  median in each direction is within ±2 ms + 5 % of what the same flow measured before the fault, and it
-  lost nothing. Under emulation, which has tens of milliseconds of noise, the same measurement only asserts
-  that the flow did not get more than 25 ms slower.
-- Acceptance: a maintainer confirms the numbers, or names others; if the nightly measurements on KVM show
-  that the spread bounds are never near their limits, they can be tightened.
-- Needs maintainer: yes
 - Effort: S
 
 ### P2-M8b-07 A burst through a delay fault loses replies outside the queues on a slow environment
@@ -863,27 +589,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: no
 - Effort: M
 
-### P2-M9-01 An allow rule in the input path returns to the gateway's protection instead of accepting
-
-- Status: new
-- Severity: medium
-- Reason: needs-decision. Plan §2.4 lists `allow` among the actions and §2.2 says rules are evaluated
-  "in the forward and the input path". It does not say whether an allow rule can open something the
-  gateway's protection of the test networks closes (everything but DHCP, DNS and ICMP echo; the UI/API
-  never, SSH left to the OS). The UI prototype lists only the "Control plane access" system rule above
-  the others.
-- Evidence: `internal/compiler/access.go` (`verdictFor`), `internal/compiler/rules.go` (where the jumps
-  stand), `TestEveryActionHasItsVerdictInForwardAndInput`, `TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel`.
-- Task: chosen interpretation — in forward `allow` is `accept` (an exception to the access matrix); in
-  input it is `return` from the rule chain, after which the gateway's protection applies as without
-  rules. So a rule `allow any -> any` cannot make the UI/API, BIRD or Kea reachable from a test
-  network, and a drop, reject or reset rule in input still acts before the gateway answers. The UI/API
-  port rule for non-management sources and the anti-lockout rule stand in front of the rules.
-- Acceptance: a maintainer confirms, or asks for `accept` in input (an allow rule then also opens the
-  gateway's closed ports for its selector, except the UI port).
-- Needs maintainer: yes
-- Effort: S
-
 ### P2-M9-02 A rule that names a hostname is not compiled before M20
 
 - Status: new
@@ -899,54 +604,6 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
   resolved.
 - Needs maintainer: no
 - Effort: S
-
-### P2-M9-03 `reject` answers with ICMP port unreachable for every protocol
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.4 says "reject (ICMP)" without the type.
-- Evidence: `internal/compiler/access.go` (`rejectICMP`), spike S3 (C3 used a TCP reset).
-- Task: chosen interpretation — `reject with icmpx type port-unreachable`: the same statement for IPv4
-  and IPv6, and the one that makes clients fail at once ("connection refused") for TCP and UDP alike.
-  `admin-prohibited` would say "a firewall did it", which some stacks treat as a different error.
-- Acceptance: a maintainer confirms the type or names another (or asks for a choice per rule).
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M9-04 The network scope of a rule does not include the networks behind a test network's static routes
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.3 gives a test network "downstream routes" for devices behind another
-  router. `domain.prefixesOf` (which scope matching, `ResolveAccess` and the fault tables all use)
-  counts a LAN's subnet only; the routes of a hub's clients and of a link are part of their networks,
-  a LAN's are not. A rule or fault for "network IoT" therefore does not select a host at 10.30.0.5
-  behind IoT's router unless a device is configured for it. The classification guard
-  (`classify_nets`) does include the routes, so the global scope reaches such a host.
-- Evidence: `internal/domain/resolve.go` (`prefixesOf`), `internal/compiler/classify.go`
-  (`classifyNets`).
-- Task: chosen interpretation — keep one definition for faults and rules (the subnet).
-- Acceptance: a maintainer confirms, or asks for the downstream routes in `prefixesOf` (a one-line
-  change that also moves the fault tables).
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M9-05 The fault counters of the classification count packets that a rule drops afterwards
-
-- Status: new
-- Severity: low
-- Reason: deferred. Plan §2.4: "access rules are evaluated first. A dropped packet does not reach any
-  fault." The tc side holds (the dropped packet never reaches an egress queue), but classification
-  runs in prerouting, before forward and input, so a packet that a rule drops has already been counted
-  in the named counters of its fault id (`counter_up`/`counter_down` of the `mark_<id>` chain).
-- Evidence: `internal/compiler/classify.go` (priority -150), the forward chain.
-- Task: chosen interpretation — leave it; the counters say how many packets were classified, the
-  queue statistics (`QueueStats`) say how many a fault actually handled. A rule's own counter shows
-  what it dropped.
-- Acceptance: a maintainer confirms, or asks for the fault counters to count after the rules (the
-  counting rules would move to the egress side of the decision, e.g. a postrouting chain).
-- Needs maintainer: yes
-- Effort: M
 
 ### P2-M9-06 The limits of the access rules are not measured on small hardware
 
@@ -965,283 +622,29 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: no
 - Effort: S
 
-### P2-M9-07 A rule's counter counts the packets of new connections, not of every connection it decides
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.14/§3: "per access rule: matched packets and bytes" and "the counters
-  show whether a rule actually matches". Established traffic is accepted before the rules (D11, spike
-  S3), so an allow rule's counter does not grow while a connection that it allowed runs; it counts the
-  packets that were judged by it, which are the first packets of connections and the retransmitted
-  SYNs of dropped ones. A drop or reject rule's counter is exact: nothing it decided is established.
-- Evidence: `internal/compiler/rules.go` (the jump stands behind the established accept),
-  `TestAccessRulesOnTheRealKernelChangeNewConnectionsOnly`.
-- Task: chosen interpretation — document it in the spec (`AccessRuleView.counters`) and the UI text;
-  counting every packet of a decided connection would need a conntrack mark per rule or a counting
-  rule per allow rule behind the established accept.
-- Acceptance: a maintainer confirms, or asks for byte and packet counts of the connections an allow
-  rule let through (a ct label or mark written by the rule, one counter chain per rule).
-- Needs maintainer: yes
-- Effort: M
-
-### P2-M9-08 `lockout_protected` is still never produced
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. The spec lists `lockout_protected` (422, "the change would remove control-plane
-  access from the management network") since M5, and the Covered-later table gave it to M9. M9 cannot
-  produce it for rules: the anti-lockout rule is a system rule in front of the jump to the access rules,
-  so no rule and no overlay can take the control plane away (`TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay`),
-  and there is nothing to refuse. What can still lock the administrator out is a configuration change
-  that moves the UI port or the management interface or its sources; `engine.LockoutRelevant` flags
-  those and the apply waits for confirmation (commit-confirm, rolled back when it runs out), which is
-  the protection plan §2.16 names for risk 20.
-- Evidence: `internal/engine/lockout.go`, `internal/compiler/access.go` (the guard of the cut chain),
-  `api/openapi.yaml` (`lockout_protected`).
-- Task: chosen interpretation — commit-confirm stays the only protection; no change is refused
-  outright. If an outright refusal is wanted (for example a change that removes every management source
-  while the request has no confirm window), the code would be returned by the revision validation.
-- Acceptance: a maintainer confirms that commit-confirm is enough and the code may stay reserved, or
-  names the changes that must be refused with `lockout_protected`.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M9-09 Access rules select IPv4 only; IPv6 comes with M32
-
-- Status: new
-- Severity: low
-- Reason: deferred (to M32, IPv6 in the networks). The task text for M9 says "IPv4 + IPv6" for the
-  compiler output. The V1 networks are IPv4 only and forwarded IPv6 is dropped before the rules (plan
-  §2.2.2, D7), so there is no IPv6 packet that a rule could decide in forward; the selectors (sources,
-  destinations, `ct original ip saddr`) are IPv4 sets. The verdicts are written so they need no change:
-  `reject with icmpx type port-unreachable` is one statement for both families, and the `inet` table
-  carries both. What is missing for IPv6 is the address families of the scopes and destinations
-  (`ip6` sets, `ct original ip6 saddr`) and a rule that selects an IPv6 destination.
-- Evidence: `internal/compiler/access.go` (`matchExpr`, `verdictFor`), `TestForwardedIPv6StaysBlockedWhateverTheRulesAllow`,
-  `TestEveryActionHasItsVerdictInForwardAndInput`.
-- Task: chosen interpretation — IPv6 rule selectors are M32's; M9 keeps IPv6 blocked and says so.
-- Acceptance: a maintainer confirms, or asks for IPv6 selectors before M32. M32 adds the `ip6` sets and
-  the IPv6 variants of the rule tests.
-- Needs maintainer: yes
-- Effort: M
-
-### P2-M9-10 What "also cut existing connections" does at its edges
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.4 promises that existing connections get an immediate reset. The
-  cut compares the plan the kernel ran with the new plan, and three consequences of that are not in
-  the plan's text:
-  1. The plan holds the resolved source addresses. A device whose addresses first appear after the
-     first apply (an empty set at start, filled by the identity on a later apply) enters the scope of
-     a long-standing cutting rule at that moment, and its existing connections are cut then.
-  2. Every address change of a device in a rule's scope changes the plan, so the identity update is a
-     full apply instead of an incremental one, and with a cutting rule it reads the whole conntrack table.
-  3. Only conntrack state ESTABLISHED counts as a TCP connection a window of resets reaches. A
-     half-closed connection (FIN_WAIT, CLOSE_WAIT, SYN_RECV) still matches `ct state established`
-     and keeps passing data; it is deleted without a reset, so the device sees a stall, not an
-     immediate reset, and when no tracked connection is ESTABLISHED no window opens.
-- Evidence: `internal/engine/cut.go` (`sameRules`, `cutFlows`, `cutExisting`), the cut section of
-  docs/development.md "Access rules (M9)".
-- Task: chosen interpretation — keep it: (1) is the rule doing what it says for a device it now
-  selects, (2) costs one table read per address change of a device in a cutting rule's scope, (3) is
-  the best the kernel offers for a connection a TCP reset cannot be matched to.
-- Acceptance: a maintainer confirms, or asks for (1) a cut only on an edit of the rule (the comparison
-  would ignore the sources of the old plan), (3) a window whenever a cutting rule selects a TCP
-  connection in any state but TIME_WAIT, CLOSE and LAST_ACK.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-01 Duplication is a draw in the mark chain and a copy made by nftables on the egress hook, not netem's duplicate
+### P2-M9-11 A broad allow in forward accepts before the matrix and the two-port guard, and the destination `uplink` includes learned prefixes and the service namespace
 
 - Status: new
 - Severity: medium
-- Reason: needs-decision. Resolves P2-M8b-01. The kernel refuses a netem with a duplicate probability
-  next to any other netem of the interface, and the tree has every class on every interface, so with
-  netem a duplicating fault in both directions would not even fit by itself, and a duplicating fault
-  could only exist when nothing else is impaired anywhere (candidate (a) of P2-M8b-01). Candidate (b),
-  a second mechanism the kernel does not count as netem, works and is what M10 does. The first version
-  of (b), a clsact egress filter that mirrors the packet back to the interface (`mirred egress mirror`),
-  duplicated on kernel 6.8.0-142 and not at all on 7.0.0-38, whose mirred action counts an overlimit and
-  sends nothing; it was replaced by a netdev table with an egress base chain and `dup to` the same
-  interface, which duplicates on both.
-- Evidence: the proofs on both kernels and the design in docs/development.md "Extended faults (M10)";
-  `internal/compiler/classify.go` (`markChain`, `dupThreshold`), `internal/executor/nftdup.go`
-  (`NftDup`, `DupTransaction`), `internal/apply/dup.go`; measured by
-  `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults` (a delay fault of another device next to it,
-  both directions) on both kernels.
-- Task: chosen interpretation — the probability is drawn per packet in the fault's mark chain (`numgen
-  random`, resolution 10^-7 percent) and sets mark bit 21; one netdev table `chaosgw_dup` holds an egress
-  chain per interface of the tree that clears the bit and sends a clone of the packet to the same
-  interface, so the copy goes through the same class as the original. Consequences a maintainer may want
-  to weigh: the copy is made after the fault's classification, so the fault's nft counters do not count
-  it (the queue statistics do); the table is a second one next to `inet chaosgw` (`nft_dup`, a closed
-  executor operation that takes interfaces, not rules; `nft_apply` stays closed to every other table);
-  it needs the netdev egress hook (kernel 5.16 or later, `nft_dup_netdev`, both in the plan's minimum
-  kernel and in the preflight list); the bit is one of the reserved routing mark bits (21; plan §3.3 and
-  §2.5 are updated); the kernel removes the chain of an interface that is deleted and does not restore it
-  when the interface returns, so an interface that is re-created behind the gateway's back loses its hook
-  until the next apply (the verify reports it). Not measured on the target hardware (H1): the cost of the
-  clone on a Raspberry Pi.
-- Acceptance: a maintainer confirms, or asks for the restriction instead (netem's duplicate, allowed only
-  when the tree holds no other netem, `capacity_exceeded` naming it, and a delete-before-add order in
-  the apply).
+- Reason: needs-decision. Two things about how the access rules meet the rest of the packet path, found in the review of M9.
+  (1) An `allow` rule in forward is a plain `accept` in front of the access matrix and in front of the two-port guard (the rule that
+  stops devices under test from reaching the management network when it lies behind the uplink interface, plan §2.16). A broad allow, for
+  example from the global scope to any destination, therefore opens the management network behind the uplink for the devices it selects.
+  docs/development.md documents it as an exception to the matrix; no decision is
+  recorded on whether the guard should stand in front of the rules as the anti-lockout rule does for the control plane.
+  (2) The destination `uplink` means "in no configured network and not in the management prefixes" (`World.NonUplinkPrefixes`,
+  `viaUplink`). Prefixes that BIRD learned (BGP, OSPF) and the service namespace's address 169.254.100.2 lie in no configured network,
+  so a rule counts them as uplink: "drop to uplink" also drops traffic to a learned remote site and to the namespace of the DNS proxy.
+- Evidence: `internal/compiler/rules.go` (the forward chain: the jump to `access_forward` stands before `matrixRules` and the guard),
+  `internal/domain/access_selector.go` (`NonUplinkPrefixes`), `internal/domain/resolve.go` (`viaUplink`),
+  `TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses` (the non-uplink set), docs/development.md "Access rules (M9)".
+- Task: none yet. For (1): put the guard in front of the jump, so that no rule can open the management network behind the uplink, or keep
+  it as the power of an allow rule and say so in the spec. For (2): add the learned prefixes and 169.254.100.0/30 to the non-uplink set,
+  or define `uplink` as "routed via the uplink interface" by the routing table, or document the present meaning in the spec.
+- Acceptance: a decision, and tests of the chosen behavior (an allow rule and the guard on the real kernel; a rule with the destination
+  `uplink` against a learned prefix and the namespace's address).
 - Needs maintainer: yes
 - Effort: M
-
-### P2-M10-02 A flapping starts when the write is answered, and a boundary during an apply is made after it
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.5 says "Flapping: up/down durations, timed blackout, starting with
-  `up`" and §2.10 gives scenario steps ±100 ms. It does not say when the first up phase starts, what
-  a restart or a replacement does to the schedule, or how late a boundary may be when an apply is running.
-- Evidence: `internal/engine/flap.go`, `TestAFlappingFaultStartsUpAndTogglesOnTheClock`,
-  `TestAReplacedFlappingKeepsItsScheduleUnlessItsTimesChange`, `TestAClockThatJumpsOverFlappingBoundariesLandsInThePhaseItSays`,
-  `TestAFlappingFaultBlacksOutOnSchedule` (real kernel).
-- Task: chosen interpretation — the first up phase starts when the apply that contains the flapping has
-  been verified (the moment the overlay write is answered); the schedule is the start plus multiples of
-  up and down on the injected clock; a change of the other parameters keeps the schedule, a change of up
-  or down starts a new one (up); a restart starts every flapping up (overlays are gone anyway);
-  all classes of one fault and direction, on all devices, flap in step, and upload and download of a
-  flat flapping have separate schedules that happen to coincide; a toggle runs in the apply loop's
-  goroutine, so one that falls into an apply is made right after it (a full apply of a large target
-  takes seconds on small hardware, the figure is for H1); ±100 ms (`engine.FlapTolerance`) is the
-  tolerance of §2.10 applied to a boundary, measured from the schedule to the answer of the executor.
-- Acceptance: a maintainer confirms, or asks for a toggle that cannot be late (a toggle between the
-  operations of an apply) or for the phase to survive a restart.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-03 A rate below 8 bit/s is refused, and the API shows the phase of a flapping
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Two small decisions the spec does not make. (1) netem takes its rate in bytes
-  per second, so `rate: 7bit` (or `0kbit`) is no rate at all: the fault would pass everything. (2) The
-  UI will need to say that a device is in the down phase of a flapping fault; the spec has nothing for it.
-- Evidence: `internal/domain/validate_fault.go` (`invalid_rate`), `TestFaultRules`'s rate cases and the overlay cases of `internal/domain/overlay_test.go`,
-  `api/openapi.yaml` (`QueueStats.flapping`, `FlapState`), `TestTheQueuesOfAFlappingFaultShowTheirPhase`.
-- Task: chosen interpretation — validation refuses a rate below 8 bit/s with `invalid_rate` (the code
-  is documented in docs/development.md); the queues of a flapping fault carry `flapping: {phase,
-  since, next_change_at}`, which is optional and additive.
-- Acceptance: a maintainer confirms, or asks for a rate of zero to mean "no limit" (a parameter that
-  does nothing) or for the phase in another place (the overlay itself, `explain`).
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-04 The black hole drops before the access rules, the verify cannot see the route lock, and the clamp counts the headers without options
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Three small things plan §2.5 and §2.4 leave open for the MTU family. (1) §2.4 says access
-  rules are evaluated first and a dropped packet does not reach any fault; the black hole is a rule of the fault's chain
-  in the classify chain (prerouting), the one place that knows the winner without a mark bit, and mark bits 17-19
-  are the index of the seven mirror tables, so they cannot also carry black-hole sizes. (2) `ip -j route` does not print
-  whether `mtu` is locked, so the verify checks the size of a mirror route and not the lock. (3) The MSS of a clamp
-  is `size - 40`, the headers of IPv4 and TCP without options.
-- Evidence: `internal/compiler/pmtu.go` (`chain`), `internal/apply/plan.go` (`routeSig`), docs/development.md "MTU and PMTUD",
-  `TestABlackholeDropsLargePacketsSilentlyAndTheTransferStalls`, `TestAnMSSClampLimitsTheSegmentsOfTheSelectedDeviceOnly`.
-- Task: chosen interpretation — (1) a packet that an access rule would reject (tcp reset, icmp unreachable) and that
-  is longer than a black hole's size is dropped silently by the black hole and counted in its drop counter; drop rules are not
-  affected (both drop). (2) The verify reports a mirror route whose size is wrong or missing; a route whose lock was cleared
-  behind the gateway's back (same size, no lock) is not noticed until the next apply, which rewrites it. (3) A connection
-  with options (timestamps: 12 bytes) sends packets of at most `size` bytes, one without options `size`; so a clamp never
-  produces a packet longer than the size, but it does not make every packet that long.
-- Acceptance: a maintainer confirms, or asks for (1) a second lookup in the forward chain after the access rules (a second
-  set of maps and a mark bit or a second table of sizes), or (2) the executor to read mirror routes with the plain `ip -d route`.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-05 A tunnel fault's directions are the remote side's, and its peer is found by the address it is seen at
-
-- Status: new
-- Severity: medium
-- Reason: needs-decision. Plan §2.2.1 says the output hook classifies the encrypted UDP "towards the peer" by peer endpoint
-  and an IFB with a flower filter handles the packets "from the peer", and the fault has `upload` and `download` like every
-  impairment. It does not say which is which, where the peer's address comes from when a hub client has none configured
-  (the client roams, and may not have connected yet), or what the mechanism does for packets that do not arrive on the uplink.
-- Evidence: `internal/compiler/tunnel.go`, docs/development.md "Tunnel faults and WireGuard actions",
-  `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse`, `TestAClientThatMovesTakesItsTunnelFaultWithIt`,
-  `TestATunnelFaultOfAPeerThatHasNotConnectedTakesEffectWhenItDoes`.
-- Task: chosen interpretation — the directions are the remote side's, as for a device: `upload` is what the client or the remote
-  site sends (the encrypted UDP from the peer, selected by a flower filter on its outer source address and port on the ingress
-  qdisc of the uplink and delayed in the IFB), `download` what it receives (the gateway's packets to the peer's address and
-  port, marked in the output hook with the id and direction bit 1, delayed by the class of the interfaces' tree). The peer's
-  address is the one the interface reports (`wg show dump`, read right before the compile when something selects by address,
-  and polled: a peer that is seen elsewhere makes the engine apply again); a link's configured endpoint is the fallback when
-  it is an address. A peer with no address is not compiled: the compiler warns (`tunnel_endpoint_unknown`), the overlay shows
-  `disabled`, and the fault takes effect when the poll sees the peer. Only the uplink's ingress is looked at (the underlay
-  arrives there), and only IPv4: a peer that is seen at an IPv6 address is treated like a peer with no address (the same warning,
-  the overlay shows `disabled`, no apply fails and none is repeated), and two peers seen at the same address and port get one
-  fault between them, the one whose tunnel key sorts first (`tunnel_endpoint_shared`).
-- Acceptance: a maintainer confirms, or asks for (a) the directions the other way round (upload as the gateway sends), (b) a
-  selection by the interface's listen port for a link, which needs no address and does not follow a roaming peer, or (c) the
-  ingress side on every interface.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-06 WireGuard actions: disable removes the peer, key_mismatch derives the key, block_endpoint needs an address
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §2.2.1 names three actions and describes none beyond the OpenAPI text ("removes the peer from the
-  interface", "replaces the peer's public key on the gateway by a random one", "drops the peer's encrypted UDP").
-- Evidence: `internal/compiler/tunnel.go` (`wgActionsOf`, `mismatchedKey`, `compileTunnelNft`),
-  `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay`, `TestDisableTakesAPeerOffItsInterfaceAndItsRoutesWithIt`.
-- Task: chosen interpretation — `disable` is the configured `enabled: false`: the peer is off the interface, so are the routes
-  of its networks and, for a link, the peer, and the engine reports the peer offline at its next poll. `key_mismatch` gives the
-  gateway the key sha256("chaosgw key_mismatch", overlay id, real key) in base64, so that a compile is a pure function and a
-  re-apply keeps the kernel as it is; nobody holds its private key. `block_endpoint` is a verdict map on the output and input
-  hooks at raw priority (before connection tracking) keyed on peer address, peer port and the interface's port, one chain
-  and one named counter per overlay; the peer stays on the interface, its handshake ages. It cannot select a peer whose address
-  is not known: the compiler warns and the overlay shows `disabled`. An overlay whose peer is not on an interface (disabled in
-  the configuration) shows `disabled` too.
-- Acceptance: a maintainer confirms, or asks for a random key, for `block_endpoint` by the interface's listen port for a link
-  (works without an address), or for `disable` to keep the routes.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-07 One IFB with a fixed name, kept assigned while its tree retires; the host's ingress qdisc is shared
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. Plan §4.5 lists IFB for tunnel faults and §3.2 asks for make-before-break; neither says how many IFB
-  devices there are, what they are called, what the executor may do with them, or what happens to an ingress qdisc and filters
-  the host put on the uplink.
-- Evidence: `internal/executor/op.go` (`IFBName`), `internal/executor/tcgrammar.go` (`checkFlowerFilter`),
-  `internal/apply/ingress.go`, `internal/apply/plan.go` (`keepIFB`, `dropIFB`), `internal/apply/retire.go`,
-  `TestTheEndOfATunnelFaultKeepsTheIFBUntilItsQueuesHaveDrained`, `TestAForeignFilterOnTheIngressQdiscOfTheUplinkIsLeftAlone`,
-  `TestAnIFBLeftByAGatewayThatDiedIsCleanedUp`.
-- Task: chosen interpretation — one IFB, `ifb-cgw`, the only name the executor creates (`add_ifb`), brings up or deletes
-  (`delete_ifb`, after reading its kind: `ip link delete ... type ifb` deletes a device of any kind), and the only target of a
-  flower redirect. It exists while some tunnel fault impairs the packets from a peer. The filter that feeds it goes at once when
-  its fault ends; the class and the IFB wait for the retirer (largest delay plus one second) so that queued packets are
-  delivered, and the IFB stays in the executor's scope until then. A filter of the uplink's ingress qdisc is Chaos Gateway's
-  only if it is a flower filter that redirects to the IFB; the host's own filters stay, and the ingress qdisc is deleted only
-  when filters of ours were its last. An IFB (or filters of ours) that a gateway that died left is found by the first apply
-  and removed. The kernel needs the `ifb` module (the preflight lists it).
-- Acceptance: a maintainer confirms, or asks for the ingress qdisc to be deleted only when the gateway made it (which needs
-  to be remembered across a restart), or for one IFB per uplink.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M10-08 The per-packet delay check of the update test fails on a loaded native runner
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. `TestUpdatingOneFaultDoesNotDisturbTheOthers` holds C's 61 packets to the fault's bounds
-  (`testbed.CheckDelays`: at most 1 % rounded up, here one packet, outside them and none more than 10 ms outside). On the
-  post-merge run of PR #36 (level 1, native container, run 38039388769) two packets were outside, the largest 22.2 ms against an
-  upper bound of 19 ms (none far outside), while the same run failed `TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers`
-  (known flaky) on the same runner. The medians were exact, the repeat of the measurement afterwards was clean, the PR run of the same
-  code was green and the rerun of the job passed. M10 does not touch the test or the code it measures.
-- Evidence: `internal/engine/integration_faults_update_test.go`, `internal/testbed/stats.go` (`CheckDelays`), run 38039388769.
-- Task: none yet; chosen reading: runner noise. If it recurs, the allowance for a stream of 61 packets (one outlier) is too tight for
-  a loaded native runner, and a maintainer decides between a longer stream (N >= 200) and a larger allowance.
-- Acceptance: the test passes on the hosted runners without a rerun over several runs, or the allowance is changed with a note here.
-- Needs maintainer: yes
-- Effort: S
 
 ### P2-M11-01 A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21
 
@@ -1280,40 +683,21 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 - Needs maintainer: no
 - Effort: S
 
-### P2-M11-03 The rate of the built-in Bad LTE is not measured end to end
+### P2-M11-05 A revision can add a DNS or TLS part to a custom profile that is already activated
 
 - Status: new
 - Severity: low
-- Reason: needs-decision. Plan M11 asks for "measured values (integration)". The delay and loss of Bad LTE (150 ms ± 50 ms, 3 %) are
-  measured on both directions, and the rate of a profile is measured by a profile whose only parameter is a rate (E9: two devices
-  of a network get 2 Mbit/s each, ±10 %). The rate of Bad LTE itself is not measured with a TCP transfer: at 150 ms ± 50 ms and 3 %
-  loss a TCP flow is held to a few hundred kbit/s by the loss, not by the rate (the Mathis bound is about 0.2 Mbit/s), so the result
-  would be the loss' and not the profile's. The compiled rate is asserted (`TestEveryBuiltinProfileCompilesToItsConfiguredParameters`),
-  and the constructs are accepted by the kernel (`TestEveryCompiledTCTreeIsAcceptedByTheKernel`, scenario `faults-builtin-profiles`).
-- Evidence: `internal/engine/integration_profiles_test.go`.
-- Task: none yet; a UDP flood above the rate would measure the shaped throughput with the loss in it (`iperf3 -u -b 4M`: about 97 % of
-  2 Mbit/s), if a maintainer wants the number in the suite.
-- Acceptance: a UDP measurement of the built-in profile within ±10 % of 2 Mbit/s times the delivery share, or the decision that E9 is enough.
-- Needs maintainer: yes
-- Effort: S
-
-### P2-M11-04 The median of a profile with a rate and a jitter is not its delay: the accuracy check of Bad LTE is a bound
-
-- Status: new
-- Severity: low
-- Reason: needs-decision. The built-in Bad LTE is 150 ms ± 50 ms with 2 Mbit/s. A rate is netem's `rate`, which keeps the packets in
-  order (plan, the latency row of the fault table and risk 4: "keep order uses netem rate, which shifts the delay distribution"): a
-  packet leaves no earlier than the one sent before it. On the native runner (level 1, run 38062010305) both directions of A and B
-  measured a median of 175 to 181 ms and a 5th to 95th percentile of 145 to 199 ms instead of 150 ms and a uniform spread of 90 ms,
-  with the loss inside its interval. The effect is the documented one, not a mistake of the compiler (the compiled netem carries delay
-  150 ms, jitter 50 ms and the rate). The §4.3 definition (median within ±2 ms + 5 %) describes a netem without ordering, so applying it to
-  a profile with a rate would assert something the kernel does not do. Chosen reading: for a flow that keeps its order the test asserts
-  the loss as before, and for the delay a bound that follows from the ordering: the median from the delay up to delay + jitter (plus
-  the 2 ms) and the 5th percentile not below delay - jitter. The medians stay exact for every profile without a rate.
-- Evidence: `internal/engine/integration_profiles_test.go` (`checkOrdered`, `flowShape.keepsOrder`),
-  `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues`, `TestADeviceFaultOverridesTheNetworkProfileForThatDeviceOnly`.
-- Task: none yet; if a maintainer wants an exact number, the distribution of the ordered delay depends on the probe interval and
-  would be a simulation of the netem queue, not a tolerance.
-- Acceptance: a decision that the bound is enough, or an expected-median model for an ordered delay.
+- Reason: needs-decision. P2-M11-01 refuses the activation of a profile with a `dns` or `tls` part as a whole, so that no activation runs
+  half a profile. The check (`engine.checkProfileAvailable`) runs when an activation is written. A candidate revision that adds a `dns` or
+  `tls` part to a custom profile that an overlay already activates is accepted, because the profile validates and exists; the next compile
+  expands the new definition under the same overlay id and ignores the parts of families it does not resolve yet (M20, M21). The
+  activation then runs the impairment part only: the half profile that the check at the write is there to prevent.
+- Evidence: `internal/engine/overlays.go` (`checkProfileAvailable`, called from the overlay write only), `domain.UnavailableParts`,
+  docs/development.md "A revision changes the profile; the activation follows", `TestAnActivationFollowsTheNewDefinitionOfItsProfile`.
+- Task: none yet. Options: (a) refuse the revision (`unsupported_feature` naming the profile and the activations that would run it) while an
+  overlay activates the profile, which keeps the rule "never half a profile" whole; (b) accept it and report the activation as partially
+  active (a warning in the preview, a note on the activation in `GET /profiles` and `GET /overlays`, the unavailable part named), so that the
+  profile can be edited ahead of M20 and M21.
+- Acceptance: a decision, and a test that writes the revision with an activation present.
 - Needs maintainer: yes
 - Effort: S

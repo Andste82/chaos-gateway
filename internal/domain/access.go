@@ -23,7 +23,8 @@ type AccessFacts struct {
 	// interface's subnet).
 	Management []netip.Prefix
 	// TwoPort reports that the management network lies behind the uplink interface: devices under
-	// test do not reach it unless an explicit entry says so (plan §2.16).
+	// test do not reach it, whatever an access rule says, unless an explicit matrix entry allows it
+	// (plan §2.16).
 	TwoPort bool
 	// UIPort is the port of the UI and API: the gateway answers it for the management sources only,
 	// and no access rule changes that (0: unknown).
@@ -158,9 +159,11 @@ func containsEndpoint(set []matrixEndpoint, e matrixEndpoint) bool {
 // matrix. The first access rule that selects the traffic decides, overlay rules before configured
 // ones. A drop, reject or reset rule refuses; an allow rule accepts: in the forward path it is an
 // exception to the matrix, in the input path it also opens the gateway's closed ports for its
-// selector (decided by the maintainer on 2026-10-11). The access rules select the test, WireGuard
-// and remote networks, so a management source is judged by the control-plane rule and the
-// protection's default only. q.Source.IP and q.DestIP must be set.
+// selector (decided by the maintainer on 2026-10-11). The one exception to the exception is the
+// two-port guard: when the management network lies behind the uplink interface, it stands in front
+// of the rules and no rule opens it for a device under test (P2-M9-11). The access rules select the
+// test, WireGuard and remote networks, so a management source is judged by the control-plane rule
+// and the protection's default only. q.Source.IP and q.DestIP must be set.
 func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 	src, dst := q.Source.IP, q.DestIP
 	toGateway := false
@@ -181,6 +184,13 @@ func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 			return w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
 		case f.UIPort > 0 && q.Port == f.UIPort && (q.Protocol == "tcp" || q.Protocol == ""):
 			return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "the UI and API are reachable from the management network only; no access rule changes that"}
+		}
+	}
+	// the two-port guard stands in front of the rules, as in the forward chain: no rule, an allow rule
+	// included, opens the management network behind the uplink for a device under test
+	if !toGateway {
+		if g, ok := w.twoPortGuard(src, dst, f); ok {
+			return g
 		}
 	}
 	r := w.ResolveAccess(q)
@@ -256,6 +266,9 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
 	}
+	if g, ok := w.twoPortGuard(src, dst, f); ok {
+		return g
+	}
 	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
 
 	type entry struct {
@@ -296,34 +309,14 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		return items[i].rank < items[j].rank
 	})
-	// the two-port guard stands after the explicit entries and before everything implicit
-	guard := func() (AccessExplanation, bool) {
-		if !f.TwoPort || !containsEndpoint(to, matrixEndpoint{"management", ""}) {
-			return AccessExplanation{}, false
-		}
-		for _, e := range from {
-			if e.kind == "network" && w.Index.Networks[e.id].IsLan() {
-				return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink"}, true
-			}
-		}
-		return AccessExplanation{}, false
-	}
 	if len(items) > 0 {
-		// the first entry that matches decides; what a client's reachable list implies stands behind the guard
+		// the first entry that matches decides
 		it := items[0]
-		if it.implicit {
-			if g, ok := guard(); ok {
-				return g
-			}
-		}
 		verdict := "drop"
 		if it.allow {
 			verdict = "allow"
 		}
 		return AccessExplanation{Verdict: verdict, Layer: AccessMatrix, Reason: it.why}
-	}
-	if g, ok := guard(); ok {
-		return g
 	}
 	// the default: local test networks reach the uplink, everything else is denied
 	if containsEndpoint(to, matrixEndpoint{"uplink", ""}) {
@@ -334,6 +327,60 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 	}
 	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "the default: no entry allows this traffic"}
+}
+
+// twoPortGuard is the guard of the forward chain (plan §2.16): with the management network behind the
+// uplink interface, a device under test (a packet that comes in on a test interface: a local test
+// network or a WireGuard network of the role test, with its clients) does not reach it. It stands in
+// front of the access rules and of the matrix; the one thing that opens it is an explicit matrix
+// entry that allows the source to reach the management network (the clients' `reachable` lists do
+// not).
+func (w *World) twoPortGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
+	if !f.TwoPort {
+		return AccessExplanation{}, false
+	}
+	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
+	mgmt := matrixEndpoint{"management", ""}
+	if !containsEndpoint(to, mgmt) || !w.viaTestInterface(from) {
+		return AccessExplanation{}, false
+	}
+	if w.Config.AccessMatrix != nil {
+		for _, e := range deref(w.Config.AccessMatrix.Entries) {
+			fe, ok1 := endpointOf(e.From)
+			te, ok2 := endpointOf(e.To)
+			if ok1 && ok2 && e.Policy != model.MatrixEntryPolicyDeny && te == mgmt && containsEndpoint(from, fe) {
+				return AccessExplanation{}, false
+			}
+		}
+	}
+	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink; no access rule changes that"}, true
+}
+
+// viaTestInterface reports whether traffic from these endpoints comes in on a test interface: a
+// bridge of a local test network, or a WireGuard interface whose role is not management.
+func (w *World) viaTestInterface(from []matrixEndpoint) bool {
+	test := func(n *NetInfo) bool {
+		return n.IsLan() || (n.WG != nil && (n.WG.Role == nil || *n.WG.Role != model.WireGuardNetworkRoleManagement))
+	}
+	for _, e := range from {
+		switch e.kind {
+		case "network":
+			if test(w.Index.Networks[e.id]) {
+				return true
+			}
+		case "client":
+			for _, nid := range sortedKeys(w.Index.Networks) {
+				n := w.Index.Networks[nid]
+				if !n.IsHub() || !test(n) {
+					continue
+				}
+				if _, ok := deref(n.WG.Clients)[e.id]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // NetworkOf returns the network an address belongs to: the one whose prefix contains it most

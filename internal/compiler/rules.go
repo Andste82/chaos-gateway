@@ -215,22 +215,29 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		newRule(iifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 		newRule(oifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 	)
+	var mgmtGuard *Chain
+	explicit, implicit, mgmtOpen := t.matrixRules(cfg, tp, mgmtSrc.Name)
+	uplink := t.Uplink.Name
+	twoPort := uplink != "" && t.Management.Name == uplink
+	if twoPort {
+		// two-port topology: the management network lies behind the uplink interface. Devices under
+		// test cannot reach it (plan §2.16). The guard stands in front of the access rules, as the
+		// anti-lockout rule does for the control plane: no rule, an allow rule included, opens the
+		// management network for them. Only an explicit matrix entry that allows the traffic does: it
+		// returns from the guard chain (the matrix entries stay where they were, behind the rules).
+		guard := Chain{Name: MgmtGuardChain}
+		guard.Rules = append(guard.Rules, mgmtOpen...)
+		guard.Rules = append(guard.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
+		mgmtGuard = &guard
+		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": MgmtGuardChain}}))
+	}
 	// the access rules stand in front of the access matrix: an allow rule is an exception to it, a
 	// drop, reject or reset rule decides before the matrix is asked (plan §2.2, §2.4)
 	if t.Access != nil {
 		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": AccessForwardChain}}))
 	}
-	explicit, implicit := t.matrixRules(cfg, tp, mgmtSrc.Name)
 	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
-	uplink := t.Uplink.Name
-	if uplink != "" && t.Management.Name == uplink {
-		// two-port topology: the management network lies behind the uplink interface. Devices under
-		// test cannot reach it (plan §2.16) unless an explicit entry says so: this guard stands after
-		// the explicit entries and before the allows that follow from a client's reachable list and
-		// before the default.
-		forward.Rules = append(forward.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
-	}
 	forward.Rules = append(forward.Rules, implicit...)
 	forward.Rules = append(forward.Rules, t.serviceForward(ifsCG.Name, uplink)...)
 	if uplink != "" {
@@ -259,6 +266,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
+	if mgmtGuard != nil {
+		t.Nft.Chains = append(t.Nft.Chains, *mgmtGuard)
+	}
 	if t.Access != nil {
 		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain), t.Access.chain(AccessInputChain))
 		if t.Access.HasCuts() {
@@ -333,11 +343,12 @@ func prefixValue(p netip.Prefix) any {
 }
 
 // matrixRules turns the access matrix into forward rules: the explicit entries first, then the
-// implicit allows of the clients' `reachable` lists. Networks (bridges and WireGuard interfaces),
+// implicit allows of the clients' `reachable` lists. mgmtOpen are the explicit entries that allow
+// traffic to the management network, as rules that return from the two-port guard. Networks (bridges and WireGuard interfaces),
 // single WireGuard clients with the networks behind them, the uplink and the management network are
 // endpoints. The more specific endpoint comes first: a client before a network, the management
 // network (told apart from the uplink by its addresses) before the uplink.
-func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) (explicit, implicit []Rule) {
+func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) (explicit, implicit, mgmtOpen []Rule) {
 	resolve := func(ep model.MatrixEndpoint, from bool) (endpoint, int, bool) {
 		dev := func(name string, addrs any) endpoint {
 			var e endpoint
@@ -404,6 +415,9 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			expr = append(expr, counter("forward_drop"))
 			v = "drop"
 		}
+		if !implicit && policy != model.MatrixEntryPolicyDeny && to.Management != nil && bool(*to.Management) {
+			mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+		}
 		expr = append(expr, verdict(v))
 		items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})
 	}
@@ -429,5 +443,5 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			explicit = append(explicit, it.rule)
 		}
 	}
-	return explicit, implicit
+	return explicit, implicit, mgmtOpen
 }

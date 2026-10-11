@@ -434,12 +434,9 @@ func TestADeviceUnderTestCannotReachTheManagementNetworkBehindTheUplinkEvenWithA
 	tg := compileWG(t, func(cfg *model.Configuration, in *Input) {
 		cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
 	})
-	guard, implicit := -1, -1
+	guard, implicit := indexOfRule(chainOf(t, tg, "forward"), "jump "+MgmtGuardChain), -1
 	for i, r := range chainOf(t, tg, "forward").Rules {
 		s := js(r.Expr)
-		if strings.Contains(s, "mgmt_src") && strings.Contains(s, "ifs_test") && strings.Contains(s, "drop") {
-			guard = i
-		}
 		if strings.Contains(s, `"10.99.0.2"`) && strings.Contains(s, `"right":"wan0"`) && strings.Contains(s, "accept") {
 			implicit = i
 		}

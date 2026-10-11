@@ -66,5 +66,7 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	for name, tg := range accessScenarios(t) {
 		out[name] = tg
 	}
+	// the two-port guard in front of the access rules (P2-M9-11)
+	out["access-twoport"] = scenarioAccessTwoPort(t)
 	return out
 }

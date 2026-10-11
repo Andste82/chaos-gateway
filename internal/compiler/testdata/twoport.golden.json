@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "f2efb0327538c620",
+  "hash": "52165b9af022c437",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -718,47 +718,12 @@
           {
             "expr": [
               {
-                "match": {
-                  "left": {
-                    "meta": {
-                      "key": "iifname"
-                    }
-                  },
-                  "op": "==",
-                  "right": "@ifs_test_bf4feb"
+                "jump": {
+                  "target": "mgmt_guard"
                 }
-              },
-              {
-                "match": {
-                  "left": {
-                    "meta": {
-                      "key": "oifname"
-                    }
-                  },
-                  "op": "==",
-                  "right": "wan0"
-                }
-              },
-              {
-                "match": {
-                  "left": {
-                    "payload": {
-                      "field": "daddr",
-                      "protocol": "ip"
-                    }
-                  },
-                  "op": "==",
-                  "right": "@mgmt_src_8743d6"
-                }
-              },
-              {
-                "counter": "forward_drop"
-              },
-              {
-                "drop": null
               }
             ],
-            "comment": "b2e03b0238ac"
+            "comment": "6c9925fa09d4"
           },
           {
             "expr": [
@@ -1117,6 +1082,56 @@
               }
             ],
             "comment": "3fb664d93e2f"
+          }
+        ]
+      },
+      {
+        "name": "mgmt_guard",
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wan0"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "daddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@mgmt_src_8743d6"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "b2e03b0238ac"
           }
         ]
       },

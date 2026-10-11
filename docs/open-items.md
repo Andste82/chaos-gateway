@@ -54,7 +54,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, the two new items (P2-M9-11, P2-M11-05) carry "Needs maintainer: yes", and the ten that stay open from before need no decision.
+2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the table under "Phase 2 open items" lists them, of the new items P2-M9-11 and P2-M11-05 carry "Needs maintainer: yes" (P2-M10-09 needs none), and the ten that stay open from before need no decision.
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).

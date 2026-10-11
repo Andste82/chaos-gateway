@@ -302,6 +302,12 @@ func tcFixtureText(t *testing.T, name string) string {
 
 func TestTheTCReadReturnsTheNormalizedTreeWithCounters(t *testing.T) {
 	fr := &fakeRunner{respond: func(c Command) (Result, error) {
+		// the class listing has the details: the quantum is printed only with them
+		if c.Tool == ToolTC && len(c.Args) == 7 && c.Args[1] == "-d" && c.Args[3] == "class" {
+			c.Args = append(c.Args[:1:1], c.Args[2:]...)
+		} else if c.Tool == ToolTC && len(c.Args) > 3 && c.Args[2] == "class" {
+			t.Errorf("the class listing has no details: %s", c)
+		}
 		if c.Tool != ToolTC || len(c.Args) < 6 || c.Args[0] != "-s" || c.Args[1] != "-j" || c.Args[3] != "show" || c.Args[4] != "dev" || c.Args[5] != "dum0" {
 			t.Errorf("unexpected command %s", c)
 		}

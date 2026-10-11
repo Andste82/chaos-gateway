@@ -622,6 +622,33 @@ func TestAnApplyRepairsAChangedTree(t *testing.T) {
 	}
 }
 
+// P2-M8b-02: the class listing with details shows the quantum, so a class whose quantum was changed
+// from outside is a difference verify reports and the next apply writes the class again (in place).
+func TestAQuantumChangedFromOutsideIsFoundAndRepaired(t *testing.T) {
+	x := newTCEnv(t)
+	tg := x.compileWith(x.overlay(dev150))
+	x.applyRetiring(tg)
+	cls := tg.TC.Classes[0].ClassID()
+	line := "class change dev wan0 parent 1: classid " + cls + " htb rate 10gbit quantum 1514"
+	if r, _ := x.k.Run(context.Background(), executor.Command{Tool: executor.ToolTC, Args: []string{"-batch", "-"}, Stdin: line + "\n"}); r.Exit != 0 {
+		t.Fatalf("%s: %s", line, r.Stderr)
+	}
+	mm := x.strictVerify(tg)
+	if len(mm) != 1 || !strings.Contains(mm[0].String(), "wan0") || !strings.Contains(mm[0].String(), "quantum=1514") {
+		t.Fatalf("verify: %v", mm)
+	}
+	x.log = nil
+	if res := x.applyRetiring(tg); len(res.Mismatches) != 0 || len(res.Plan.QueuesCreated) != 0 {
+		t.Fatalf("%v %v", res.Mismatches, res.Plan.QueuesCreated)
+	}
+	if want := "class replace dev wan0 parent 1: classid " + cls + " htb rate " + compiler.TCClassRate + " quantum " + compiler.TCClassQuantum; !strings.Contains(x.tcLog(), want) || strings.Contains(x.tcLog(), "dev br-") {
+		t.Errorf("the repair is not the one class written again:\n%s", x.tcLog())
+	}
+	if mm := x.strictVerify(tg); len(mm) != 0 {
+		t.Errorf("%v", mm)
+	}
+}
+
 func TestThePreviewListsTheTCWorkAndTheRetirement(t *testing.T) {
 	x := newTCEnv(t)
 	x.applyRetiring(x.compileWith(x.overlay(fmt.Sprintf(devLat, "600ms"))))
@@ -1010,7 +1037,7 @@ func TestAnApplyWithTenAssignedInterfacesListsTheQdiscsOnce(t *testing.T) {
 		case strings.HasPrefix(c, "tc -j qdisc show dev "):
 			perDev++
 			reads++
-		case strings.HasPrefix(c, "tc -s -j "):
+		case strings.HasPrefix(c, "tc -s "):
 			reads++
 		}
 	}

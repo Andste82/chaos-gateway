@@ -603,6 +603,36 @@ func TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft(t *testing.T) {
 	}
 }
 
+// P2-M8b-02: the kernel reports an HTB class's quantum and tc prints it in the listing with details,
+// which the executor reads: a quantum changed from outside is found by verify and written again by the
+// next apply, in place (the leaf and its counters stay).
+func TestTheRealKernelShowsAChangedQuantumAndTheApplyRepairsIt(t *testing.T) {
+	g := newGateway(t)
+	g.withDevices()
+	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 20ms}}}`)
+	tg := g.compileFaults(o)
+	g.applyRetiring(tg)
+	cls := classOf(t, tg, faultOf(t, tg, o, "").ID, compiler.Upload)
+	if mm := g.strictVerify(tg); len(mm) != 0 {
+		t.Fatalf("%v", mm)
+	}
+	seed := g.seeds("wan0")[cls.LeafHandle()]
+	g.top.GW.Must("tc", "class", "change", "dev", "wan0", "parent", "1:", "classid", cls.ClassID(), "htb", "rate", compiler.TCClassRate, "quantum", "1514")
+	mm := g.strictVerify(tg)
+	if len(mm) != 1 || !strings.Contains(mm[0].String(), "quantum=1514") {
+		t.Fatalf("verify does not see the changed quantum: %v", mm)
+	}
+	if res := g.applyRetiring(tg); len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
+	if mm := g.strictVerify(tg); len(mm) != 0 {
+		t.Errorf("after the repair: %v", mm)
+	}
+	if now := g.seeds("wan0")[cls.LeafHandle()]; now != seed {
+		t.Errorf("the repair made the leaf again (seed %d, was %d)", now, seed)
+	}
+}
+
 // A tree at the class limit is applied by the real kernel on every interface of the gateway, in the
 // operations the planner makes (one per interface): the limit is the compiler's default for the
 // architecture, 1000 on x86-64 and 200 on arm64 (plan §3.3).

@@ -131,13 +131,16 @@ type NormClass struct {
 	Leaf   string `json:"leaf,omitempty"`
 
 	// Rate and Ceil are in bytes per second, Prio is HTB's priority. Burst and Cburst are what the
-	// kernel computed from the rate (and the tool's clock): reported, never compared. The quantum
-	// is not reported by the kernel at all.
-	Rate   int64 `json:"rate"`
-	Ceil   int64 `json:"ceil"`
-	Prio   int   `json:"prio"`
-	Burst  int   `json:"burst,omitempty"`
-	Cburst int   `json:"cburst,omitempty"`
+	// kernel computed from the rate (and the tool's clock): reported, never compared. Quantum is
+	// HTB's quantum in bytes: tc prints it only in the listing with details (`-d`, which the executor's
+	// read asks for, P2-M8b-02), and only for a class without children; 0 when the listing does not
+	// show it. It is part of the class's configuration (Line).
+	Rate    int64 `json:"rate"`
+	Ceil    int64 `json:"ceil"`
+	Prio    int   `json:"prio"`
+	Quantum int   `json:"quantum,omitempty"`
+	Burst   int   `json:"burst,omitempty"`
+	Cburst  int   `json:"cburst,omitempty"`
 
 	Extra string     `json:"extra,omitempty"`
 	Stats *NormStats `json:"stats,omitempty"`
@@ -798,11 +801,23 @@ func normClass(o rawObj) (NormClass, error) {
 	prio, e3 := getInt(o, "prio")
 	burst, e4 := getInt(o, "burst")
 	cburst, e5 := getInt(o, "cburst")
-	if err := firstErr(e1, e2, e3, e4, e5); err != nil {
+	quantum, e6 := getInt(o, "quantum")
+	if err := firstErr(e1, e2, e3, e4, e5, e6); err != nil {
 		return c, fmt.Errorf("class %s: %w", c.ID, err)
 	}
-	c.Rate, c.Ceil, c.Prio, c.Burst, c.Cburst = rate, ceil, int(prio), int(burst), int(cburst)
-	if c.Extra, err = canonical(o, "class", "handle", "root", "parent", "leaf", "rate", "ceil", "prio", "burst", "cburst", "stats", "dev"); err != nil {
+	c.Rate, c.Ceil, c.Prio, c.Quantum, c.Burst, c.Cburst = rate, ceil, int(prio), int(quantum), int(burst), int(cburst)
+	skip := []string{"class", "handle", "root", "parent", "leaf", "rate", "ceil", "prio", "quantum", "burst", "cburst", "stats", "dev"}
+	// What the details add besides the quantum: the level in the hierarchy (the parents say it) and
+	// the cell sizes the tool derived from the rate are never configuration; the link layer and the
+	// minimum packet units are, but only where they are not the defaults the listing without details
+	// leaves out (ethernet, 0), so a tree reads the same with and without the details.
+	skip = append(skip, "level", "burst_cell", "cburst_cell")
+	for k, def := range map[string]string{"linklayer": `"ethernet"`, "mpu_rate": "0", "mpu_ceil": "0"} {
+		if v, ok := o[k]; ok && string(v) == def {
+			skip = append(skip, k)
+		}
+	}
+	if c.Extra, err = canonical(o, skip...); err != nil {
 		return c, err
 	}
 	if st, err := getObj(o, "stats"); err != nil {
@@ -1090,6 +1105,9 @@ func (q NormQdisc) Line() string {
 // Line is the class's configuration as text.
 func (c NormClass) Line() string {
 	s := fmt.Sprintf("%s parent %s %s rate=%d ceil=%d prio=%d", c.Key(), c.Parent, c.Kind, c.Rate, c.Ceil, c.Prio)
+	if c.Quantum != 0 {
+		s += fmt.Sprintf(" quantum=%d", c.Quantum)
+	}
 	if c.Leaf != "" {
 		s += " leaf=" + c.Leaf
 	}

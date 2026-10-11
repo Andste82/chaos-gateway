@@ -242,6 +242,59 @@ func TestSpecLeavesOnlyConfiguration(t *testing.T) {
 	}
 }
 
+// P2-M8b-02: the class listing with details (`tc -s -d -j class show`, what the executor reads) shows
+// the quantum the class was given; the other details are the level and what the tool derives from the
+// rate, so the configuration of a class is the same as without them, plus the quantum. A changed
+// quantum is a different class line. The two listings were recorded on 6.8.0-142 with iproute2 6.19
+// (record.sh, the details section).
+func TestTheDetailsOfAClassListingShowTheQuantum(t *testing.T) {
+	classes := func(name string) map[string]NormClass {
+		t.Helper()
+		tree, err := NormalizeTC("d0", []byte("[]"), tcFixture(t, name), []byte("[]"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]NormClass{}
+		for _, c := range tree.Classes {
+			m[c.ID] = c
+		}
+		return m
+	}
+	before := classes("class_details_stats.json")
+	for _, id := range []string{"1:1", "1:24"} {
+		c := before[id]
+		if c.Quantum != 60000 || c.Extra != "" || c.Rate != 1_250_000_000 || c.Stats == nil {
+			t.Errorf("%s: quantum %d, extra %q, rate %d, stats %v", id, c.Quantum, c.Extra, c.Rate, c.Stats)
+		}
+		if !strings.Contains(c.Line(), "quantum=60000") {
+			t.Errorf("%s: the quantum is not in the configuration: %s", id, c.Line())
+		}
+	}
+	after := classes("class_details_changed.json")
+	if after["1:24"].Quantum != 1514 || after["1:24"].Line() == before["1:24"].Line() {
+		t.Errorf("a changed quantum is not seen: %s", after["1:24"].Line())
+	}
+	if after["1:1"].Line() != before["1:1"].Line() {
+		t.Errorf("an unchanged class reads differently:\n%s\n%s", before["1:1"].Line(), after["1:1"].Line())
+	}
+	// a listing without details has no quantum, and nothing else differs
+	plain := norm(t, "dum0", "tree_qdisc.json", "tree_class.json", "tree_filter.json")
+	for _, c := range plain.Classes {
+		if c.Quantum != 0 || c.Extra != "" {
+			t.Errorf("%s without details: quantum %d, extra %q", c.ID, c.Quantum, c.Extra)
+		}
+	}
+	// a link layer or minimum packet unit that is not the default stays configuration
+	odd := `[{"class":"htb","handle":"1:5","root":true,"prio":0,"quantum":1514,"rate":125000,"ceil":125000,"linklayer":"atm","burst":1600,"burst_cell":8,"mpu_rate":64,"cburst":1600,"cburst_cell":8,"mpu_ceil":0,"level":0}]`
+	tree, err := NormalizeTC("d0", []byte("[]"), []byte(odd), []byte("[]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := tree.Classes[0].Extra; !strings.Contains(e, `"linklayer":"atm"`) || !strings.Contains(e, `"mpu_rate":64`) || strings.Contains(e, "mpu_ceil") || strings.Contains(e, "level") {
+		t.Errorf("extra %q", e)
+	}
+}
+
 func TestCountersAreRead(t *testing.T) {
 	tree := norm(t, "dum0", "tree_qdisc_stats.json", "tree_class_stats.json", "tree_filter_stats.json")
 	by := map[string]NormQdisc{}

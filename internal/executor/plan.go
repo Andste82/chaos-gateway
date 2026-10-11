@@ -447,8 +447,12 @@ func ReadCommand(o *Read) Command {
 }
 
 // tcListing is one of the three listings a tc read consists of: qdisc, class or filter, with
-// counters and JSON output, for the one interface of the read.
+// counters and JSON output, for the one interface of the read. The class listing has the details
+// (`-d`): only with them does tc print an HTB class's quantum, which the kernel reports (P2-M8b-02).
 func tcListing(o *Read, kind string) Command {
+	if kind == "class" {
+		return Command{Tool: ToolTC, Args: []string{"-s", "-d", "-j", kind, "show", "dev", o.Dev}, NS: o.NS}
+	}
 	return Command{Tool: ToolTC, Args: []string{"-s", "-j", kind, "show", "dev", o.Dev}, NS: o.NS}
 }
 

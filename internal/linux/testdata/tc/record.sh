@@ -123,3 +123,14 @@ $T filter replace dev dum1 parent 1: handle 0x000e0/0x1fff0 protocol ip prio 1 f
 for k in qdisc class filter; do $T -j $k show dev dum1 > $OUT/tc_${k}_dup.json; done
 
 ip netns del m8b
+
+setup
+# the class listing with details, as the executor reads it (P2-M8b-02): only it shows the quantum;
+# then the quantum changed from outside
+$T class replace dev dum0 parent 1: classid 1:24 htb rate 10gbit quantum 60000
+$T qdisc replace dev dum0 parent 1:24 handle 24: netem delay 50ms 10ms distribution normal
+$T -s -d -j class show dev dum0 > $OUT/class_details_stats.json
+$T class change dev dum0 parent 1: classid 1:24 htb rate 10gbit quantum 1514
+$T -d -j class show dev dum0 > $OUT/class_details_changed.json
+
+ip netns del m8b

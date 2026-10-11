@@ -15,6 +15,9 @@ import (
 // tcClassRateBytes is TCClassRate (10 Gbit/s) as the class listing prints it: bytes per second.
 const tcClassRateBytes = 1_250_000_000
 
+// tcClassQuantumBytes is TCClassQuantum as the class listing with details prints it (P2-M8b-02).
+const tcClassQuantumBytes = 60000
+
 // Norm is the configuration of the netem qdisc as the listing shows it. Two things are not visible:
 // the distribution table (a qdisc keeps its table through a change, so it is not part of the
 // comparison; the apply remembers which table it gave a leaf and makes the leaf again to go back to
@@ -58,11 +61,11 @@ func (tc *TCTarget) Norm(dev string) *linux.NormTree {
 	t.Qdiscs = append(t.Qdiscs, linux.NormQdisc{Handle: TCRootHandle, Parent: "root", Kind: "htb",
 		HTB: &linux.HTBSpec{Default: TCDefaultMinor}})
 	t.Classes = append(t.Classes, linux.NormClass{ID: fmt.Sprintf("1:%x", TCDefaultMinor), Parent: TCRootHandle, Kind: "htb",
-		Rate: tcClassRateBytes, Ceil: tcClassRateBytes})
+		Rate: tcClassRateBytes, Ceil: tcClassRateBytes, Quantum: tcClassQuantumBytes})
 	for _, c := range tc.Classes {
 		spec := c.Config().Norm()
 		t.Classes = append(t.Classes, linux.NormClass{ID: c.ClassID(), Parent: TCRootHandle, Kind: "htb", Leaf: c.LeafHandle(),
-			Rate: tcClassRateBytes, Ceil: tcClassRateBytes})
+			Rate: tcClassRateBytes, Ceil: tcClassRateBytes, Quantum: tcClassQuantumBytes})
 		t.Qdiscs = append(t.Qdiscs, linux.NormQdisc{Handle: c.LeafHandle(), Parent: c.ClassID(), Kind: "netem", Netem: &spec})
 		t.Filters = append(t.Filters, c.NormFilter())
 	}

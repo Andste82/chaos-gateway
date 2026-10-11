@@ -23,8 +23,11 @@ import (
 // tests do the same one level down, with the plans in their hands.)
 
 // streamRun is a probe run that goes on while the test changes faults.
-func streamRun(f flow) *testbed.Running {
-	return f.echo.Begin(f.from, testbed.ProbeOptions{Src: f.src, Interval: 20 * time.Millisecond, Settle: 3 * time.Second})
+func streamRun(f flow) *testbed.Running { return streamRunEvery(f, 20*time.Millisecond) }
+
+// streamRunEvery is streamRun with the interval between two datagrams given.
+func streamRunEvery(f flow, interval time.Duration) *testbed.Running {
+	return f.echo.Begin(f.from, testbed.ProbeOptions{Src: f.src, Interval: interval, Settle: 3 * time.Second})
 }
 
 // waitDelivered waits until the echo has had n datagrams of the run.
@@ -58,7 +61,12 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 	}
 	r.verifyKernel()
 
-	run := streamRun(c)
+	// The stream is C's measurement and must be long enough for the allowance of testbed.CheckDelays
+	// ("at most 1 % outside the bounds" is one packet of 100 and means nothing for fewer): at least
+	// minStream packets, which a 5 ms interval delivers in about a second after the changes.
+	// P2-M10-08 (decided by the maintainer on 2026-10-11): the interval is short, the count is long.
+	const minStream = 200
+	run := streamRunEvery(c, 5*time.Millisecond)
 	waitDelivered(t, run, 20)
 
 	// 1 a change in place, 2 a netem made again, 3 a new fault with new classes on every interface,
@@ -72,13 +80,14 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.verifyKernel()
+	waitDelivered(t, run, minStream)
 
 	res, err := run.Stop()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("C during the changes of the other faults: %s", res)
-	if res.Sent < 40 {
+	if res.Sent < minStream {
 		t.Fatalf("the stream was too short to say anything: %s", res)
 	}
 	if res.UpLoss() != 0 || res.DownLoss() != 0 {
@@ -91,10 +100,10 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 		t.Errorf("C's download delay is %v while the fault says %v", got, cShape.down)
 	}
 	if testbed.Accurate() {
-		// A median cannot see a few delayed packets, and the stream may be too short for the tolerance of
-		// the median (N >= 200 is asked for it): the packets of the stream are held to the fault's own
-		// bounds (testbed.CheckDelays: at most 1 % outside them, none far outside), so a change somewhere
-		// else that delayed C's packets fails here.
+		// A median cannot see a few delayed packets: the packets of the stream (at least 200, so that
+		// the allowance of 1 % is two packets and not a rounding) are held to the fault's own bounds
+		// (testbed.CheckDelays: at most 1 % outside them, none more than 10 ms outside), so a change
+		// somewhere else that delayed C's packets fails here.
 		const slack = 2 * time.Millisecond
 		if err := joinErrs(
 			testbed.CheckDelays("C upload during the changes", res.Up, cShape.up-cShape.upJitter-slack, cShape.up+cShape.upJitter+slack),
@@ -119,11 +128,8 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 	}
 	if testbed.Accurate() {
 		measure := func() testbed.ProbeResult { return c.run(t, impairedRun()) }
-		// the stream is the first attempt only when it was long enough for the median (N >= 200, plan §4.3)
+		// the stream is the first attempt: it was long enough for the median (N >= 200, plan §4.3)
 		fresh := &res
-		if res.Sent < 200 {
-			fresh = nil
-		}
 		testbed.Statistically(t, "C's delay after the changes", func() error {
 			cur := fresh
 			if cur == nil {

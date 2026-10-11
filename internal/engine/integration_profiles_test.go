@@ -414,6 +414,62 @@ func TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate(t *testing.T) {
 	}
 }
 
+// P2-M11-03 (decided by the maintainer on 2026-10-11): the rate of the built-in Bad LTE measured end to end. A TCP
+// transfer would be held to a few hundred kbit/s by the 3 % loss at 150 ms (the Mathis bound), which is the loss'
+// and not the rate's result, so UDP is sent above the rate (4 Mbit/s against 2 Mbit/s) through the profile and
+// the throughput that arrives is read off: the rate shapes it, the loss takes its share of the packets, and what
+// is left is about 97 % of 2 Mbit/s (of payload: the datagrams are 1400 bytes in 1428 on the wire, which is
+// inside the tolerance). The device of the other network, which the profile does not name, passes the same load.
+func TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd(t *testing.T) {
+	r := startFaultLab(t, profileConfig)
+	srv := r.top.Server
+	iperfServer(t, srv, 5311)
+	iperfServer(t, srv, 5312)
+	const (
+		rate    = 2e6
+		offered = 4e6
+		share   = 0.97 // delivered: Bad LTE loses 3 % of the packets
+	)
+	secs, omit := 12, 3
+	if !testbed.Accurate() {
+		secs, omit = 10, 3
+	}
+	r.mustPut(admin, profileOf("network: IoT", "bad-lte"))
+	r.verifyKernel()
+	measure := func() []float64 {
+		got := parallel(t,
+			func() (float64, error) { return iperfUDP(r.top.A, 5311, secs, omit, offered, true) },
+			func() (float64, error) { return iperfUDP(r.top.C, 5312, secs, omit, offered, true) })
+		t.Logf("UDP at %.0f Mbit/s downstream, A under Bad LTE, C unnamed: A %.2f, C %.2f Mbit/s", offered/1e6, got[0]/1e6, got[1]/1e6)
+		return got
+	}
+	got := measure()
+	// the functional part, on every kernel: the rate is in force (well below what is offered, though something
+	// arrives), and the device the profile does not name gets the load through
+	if got[0] < 1.0e6 || got[0] > 3.0e6 {
+		t.Errorf("device A under Bad LTE received %.2f Mbit/s of %.0f offered, want the rate's 2 (at most 3)", got[0]/1e6, offered/1e6)
+	}
+	if got[1] < 0.85*offered {
+		t.Errorf("device C, which the profile does not name, received %.2f Mbit/s of %.0f offered", got[1]/1e6, offered/1e6)
+	}
+	if testbed.Accurate() {
+		measured := got
+		testbed.Statistically(t, "UDP rate of Bad LTE", func() error {
+			g := measured
+			measured = nil
+			if g == nil {
+				time.Sleep(15 * time.Second) // the queue of the first round drains
+				g = measure()
+			}
+			if !within10(g[0], rate*share) {
+				return fmt.Errorf("device A received %.3f Mbit/s, not within ±10 %% of %.2f Mbit/s (2 Mbit/s of rate times the %.0f %% that Bad LTE delivers)",
+					g[0]/1e6, rate*share/1e6, share*100)
+			}
+			return nil
+		})
+	}
+}
+
 // The TTL of an activation on the wire (plan M11 and §2.1.1): the profile impairs its scope while the activation
 // lives, and when the TTL runs out (the real clock of the lab) the profile leaves the kernel, the configuration
 // fault that it had replaced is back for device A (D24), and device B, which only the profile named, is clean.

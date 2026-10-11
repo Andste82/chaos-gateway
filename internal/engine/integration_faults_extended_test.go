@@ -484,6 +484,41 @@ func iperfTCP(from *testbed.Namespace, port, secs, omit int, reverse bool) (floa
 	return res.End.SumReceived.BitsPerSecond, nil
 }
 
+// iperfUDP sends UDP at offered bit/s for secs seconds (the first omit seconds are not counted), datagrams
+// of 1400 bytes (no fragmentation on a 1500 byte link), and returns the throughput the receiver saw, in
+// bit/s of payload. reverse makes the server send (the download of the device). An error is the tool
+// failing, as for iperfTCP: the control connection shares the queue with the flood.
+func iperfUDP(from *testbed.Namespace, port, secs, omit int, offered float64, reverse bool) (float64, error) {
+	args := []string{"iperf3", "-c", testbed.ServerAddr, "-p", fmt.Sprint(port), "-u", "-b", fmt.Sprintf("%.0f", offered), "-l", "1400",
+		"-t", fmt.Sprint(secs), "-O", fmt.Sprint(omit), "-J"}
+	if reverse {
+		args = append(args, "-R")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(secs+120)*time.Second)
+	defer cancel()
+	out, err := from.Run(ctx, args[0], args[1:]...)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w\n%s", strings.Join(args, " "), err, out)
+	}
+	var res struct {
+		End struct {
+			Sum struct {
+				BitsPerSecond float64 `json:"bits_per_second"`
+			} `json:"sum"`
+			SumReceived struct {
+				BitsPerSecond float64 `json:"bits_per_second"`
+			} `json:"sum_received"`
+		} `json:"end"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		return 0, fmt.Errorf("iperf3 output: %w\n%s", err, out)
+	}
+	if res.End.SumReceived.BitsPerSecond > 0 {
+		return res.End.SumReceived.BitsPerSecond, nil
+	}
+	return res.End.Sum.BitsPerSecond, nil // an iperf3 that reports no sum_received for UDP: the sum is the receiver's
+}
+
 // parallel runs the transfers at the same time and returns their throughputs in order. It never calls
 // FailNow from a goroutine of its own (that would leave the wait below hanging until the test binary times
 // out): a failed transfer is an error of the result. If any transfer failed as a tool, all of them are

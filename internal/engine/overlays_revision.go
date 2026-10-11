@@ -13,8 +13,10 @@ import (
 // This file is what applying a revision means for the overlays that are active (plan §2.1.1): a
 // revision that deletes an object an overlay refers to is refused, unless it is applied with force,
 // which removes those overlays; a revision that merges a discovered device into a configured one
-// moves the overlays of the discovered device to the configured one. Overlays are never part of a
-// revision, so both are decided here, by the state owner, in the same step that starts the apply.
+// moves the overlays of the discovered device to the configured one; a revision that gives a profile
+// a part this build cannot resolve (dns, tls) is refused while an overlay activates that profile.
+// Overlays are never part of a revision, so all of it is decided here, by the state owner, in the
+// same step that starts the apply.
 
 // OverlayReference is an active overlay that a revision would orphan, with the object of the
 // configuration that is deleted.
@@ -36,6 +38,55 @@ func (e *ErrOverlaysOrphaned) Error() string {
 		ids[r.Overlay.Id] = true
 	}
 	return fmt.Sprintf("the revision deletes objects that %d active overlays refer to: apply with force to remove those overlays", len(ids))
+}
+
+// UnsupportedProfileRevisionError is returned by Apply, and reported by Preview, for a revision that
+// gives a profile a part of a later milestone (a dns part before M20, a tls part before M21) while an
+// overlay activates the profile. checkProfileAvailable refuses the same activation at the write, so no
+// activation runs half a profile (P2-M11-05, decided on 2026-10-11); nothing has changed. The revision
+// is accepted again once the activation is gone, and the profile is then stored but cannot be activated.
+type UnsupportedProfileRevisionError struct {
+	// Profile is the name of the profile and Family its part that this build cannot resolve.
+	Profile, Family string
+	// Milestone is the milestone that brings the family.
+	Milestone string
+	// Overlays are the activations of the profile.
+	Overlays []uuid.UUID
+}
+
+func (e *UnsupportedProfileRevisionError) Error() string {
+	return fmt.Sprintf("the revision gives the profile %s a %s part, which arrives with milestone %s, while %d active overlays activate the profile: "+
+		"an activation never runs half a profile; remove the activations first", e.Profile, strings.ToUpper(e.Family), e.Milestone, len(e.Overlays))
+}
+
+// unavailableProfileRevision reports the first profile of next that an overlay activates and that has
+// a part this build cannot resolve, nil when there is none. Such an activation cannot be written
+// (checkProfileAvailable), so it exists only because a revision changed the profile afterwards.
+func unavailableProfileRevision(next *model.Configuration, overlays []model.Overlay) *UnsupportedProfileRevisionError {
+	if next == nil {
+		return nil
+	}
+	var out *UnsupportedProfileRevisionError
+	for _, ov := range overlays {
+		if ov.Kind != model.OverlayKindProfile || ov.Profile == nil {
+			continue
+		}
+		p, _, ok := domain.ProfileByID(next, *ov.Profile)
+		if !ok {
+			continue
+		}
+		parts := domain.UnavailableParts(p)
+		if len(parts) == 0 {
+			continue
+		}
+		if out == nil {
+			out = &UnsupportedProfileRevisionError{Profile: p.Name, Family: parts[0].Family, Milestone: parts[0].Milestone}
+		}
+		if strings.EqualFold(out.Profile, p.Name) {
+			out.Overlays = append(out.Overlays, ov.Id)
+		}
+	}
+	return out
 }
 
 // referencesOf turns orphans (one per overlay) into one reference per overlay and deleted object.
@@ -104,6 +155,9 @@ func overlaysAfter(list []model.Overlay, orphans []domain.Orphan, merges map[str
 func (o *owner) revisionOverlays(next *model.Configuration, force bool, gen uint64) (changes []actedChange, err error) {
 	if o.committed == nil || o.ov.store.Len() == 0 {
 		return nil, nil
+	}
+	if err := unavailableProfileRevision(next, o.ov.list); err != nil {
+		return nil, err
 	}
 	var found []domain.DiscoveredDevice
 	if o.identity != nil {

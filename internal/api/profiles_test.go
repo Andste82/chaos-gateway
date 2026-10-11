@@ -348,3 +348,52 @@ func TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences(t *testing.T)
 		t.Errorf("overlays %v", items)
 	}
 }
+
+// A revision that gives an activated profile a dns part is refused when it is applied, with
+// unsupported_feature, the profile and the milestone, and nothing changes. The preview says the same. Without the
+// activation the revision is accepted (P2-M11-05).
+func TestARevisionThatAddsADNSPartToAnActivatedProfileIsRefusedOverTheAPI(t *testing.T) {
+	g := ready(t)
+	flaky := func(parts map[string]any) map[string]any {
+		return map[string]any{"profiles": map[string]any{pFlaky: map[string]any{"name": "flaky", "parts": parts}}}
+	}
+	if r := g.apply(g.mustPatch(flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}}))); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	admin := g.token
+	g.mintToken("overlays")
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"profile":"flaky"}`)
+	g.token = admin
+
+	withDNS := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "dns": map[string]any{"action": "delay", "delay": "2s"}})
+	rev := g.mustPatch(withDNS)
+	for _, path := range []string{"/revisions/" + itoa(rev) + "/preview", "/revisions/" + itoa(rev) + "/apply", "/revisions/" + itoa(rev) + "/apply?force=true"} {
+		r := g.do("POST", path, nil, nil, nil)
+		if r.Status != 422 || r.code(t) != "unsupported_feature" {
+			t.Fatalf("%s: %d %s", path, r.Status, r.Body)
+		}
+		if d := r.json(t)["detail"].(string); !strings.Contains(d, "flaky") || !strings.Contains(d, "M20") {
+			t.Errorf("%s: the detail does not name the profile and the milestone: %s", path, d)
+		}
+	}
+	// nothing changed: the profile is as it was, the activation is there
+	it := profileItems(t, g)["flaky"]
+	if it["available"] != true {
+		t.Errorf("%v", it)
+	}
+	if items := g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any); len(items) != 1 || items[0].(map[string]any)["id"] != ov["id"] {
+		t.Errorf("overlays %v", items)
+	}
+
+	// without the activation the revision is accepted, and the profile cannot be activated
+	if r := g.do("DELETE", "/overlays/"+ov["id"].(string), nil, nil, nil); r.Status != 204 && r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	if r := g.apply(rev); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	it = profileItems(t, g)["flaky"]
+	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M20") {
+		t.Errorf("%v", it)
+	}
+}

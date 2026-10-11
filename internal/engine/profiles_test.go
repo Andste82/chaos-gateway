@@ -287,6 +287,95 @@ func TestAnActiveProfileFollowsItsNewDefinition(t *testing.T) {
 	}
 }
 
+// A revision that gives a custom profile a dns or a tls part while an overlay activates it is refused with
+// the profile and the milestone, as the write of the activation would be: no activation runs half a profile
+// (P2-M11-05, decided on 2026-10-11). Nothing changes, the preview names the same problem, and without
+// the activation the same revision is accepted: the profile is stored and cannot be activated. A change of the
+// impairment part alone is not touched by the rule.
+func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.T) {
+	h := overlaysHarness(t)
+	flaky := func(mod func(*model.Profile)) func(*model.Configuration) {
+		p := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
+		if mod != nil {
+			mod(&p)
+		}
+		return withProfiles(map[string]model.Profile{profFlaky: p})
+	}
+	withDNS := func(p *model.Profile) { p.Parts.Dns = &model.DnsFault{Action: "delay", Delay: ptr("2s")} }
+	withTLS := func(p *model.Profile) { p.Parts.Tls = &model.TlsCase{Case: "expired"} }
+	h.mustApply(h.revision(flaky(nil)))
+	res := h.mustPut(alice, "target: {network: IoT}\nprofile: flaky")
+	id := res.Overlay.Id.String()
+	before := h.barrier()
+
+	for _, c := range []struct {
+		name, family, milestone string
+		mod                     func(*model.Profile)
+	}{{"a dns part", "dns", "M20", withDNS}, {"a tls part", "tls", "M21", withTLS}} {
+		rev := h.revision(flaky(c.mod))
+		_, err := h.apply(rev)
+		var ue *engine.UnsupportedProfileRevisionError
+		if !errors.As(err, &ue) || ue.Profile != "flaky" || ue.Family != c.family || ue.Milestone != c.milestone || len(ue.Overlays) != 1 || ue.Overlays[0] != res.Overlay.Id {
+			t.Fatalf("%s: got %v, want unsupported until %s", c.name, err, c.milestone)
+		}
+		if !strings.Contains(ue.Error(), "flaky") || !strings.Contains(ue.Error(), c.milestone) {
+			t.Errorf("%s: the error does not name the profile and the milestone: %v", c.name, ue)
+		}
+		// nothing changed: the same active revision, the same activation, the old parameters in the kernel
+		s := h.barrier()
+		if s.Generation != before.Generation || s.Revision != before.Revision || len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {
+			t.Errorf("%s: a refused revision changed the state: generation %d -> %d, revision %d -> %d, overlays %+v", c.name, before.Generation, s.Generation, before.Revision, s.Revision, s.Overlays)
+		}
+		if fs := profileFaults(t, s, id); len(fs) != 1 || fs[0].Upload.Delay != 100*time.Millisecond {
+			t.Errorf("%s: %+v", c.name, fs)
+		}
+		// the preview says the same, as a problem the API turns into unsupported_feature
+		p, err := h.e.Preview(context.Background(), rev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, pr := range p.Problems {
+			if pr.Code == compiler.CodeUnsupported && pr.Severity == compiler.SevError && strings.Contains(pr.Message, "flaky") && strings.Contains(pr.Message, c.milestone) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: the preview does not name the problem: %+v", c.name, p.Problems)
+		}
+		// force removes orphans; it is no way round this rule
+		if _, err := h.apply(rev, engine.ApplyOptions{Force: true}); !errors.As(err, &ue) {
+			t.Errorf("%s: a forced apply gave %v", c.name, err)
+		}
+	}
+	h.verifyKernelWithOverlays()
+
+	// a change of the impairment part alone is not refused, and the activation follows it
+	h.mustApply(h.revision(withProfiles(map[string]model.Profile{
+		profFlaky: impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("300ms")}),
+	})))
+	if fs := profileFaults(t, h.barrier(), id); len(fs) != 1 || fs[0].Upload.Delay != 300*time.Millisecond {
+		t.Errorf("%+v", fs)
+	}
+
+	// without the activation the revision is accepted: the profile is stored, and cannot be activated
+	if _, err := h.e.DeleteOverlay(context.Background(), res.Overlay.Id, nil, model.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	h.mustApply(h.revision(flaky(withDNS)))
+	if _, err := h.put(alice, "target: {network: IoT}\nprofile: flaky"); err == nil {
+		t.Error("the profile with a dns part was activated")
+	} else {
+		var ue *engine.UnsupportedOverlayError
+		if !errors.As(err, &ue) || ue.Milestone != "M20" {
+			t.Errorf("got %v", err)
+		}
+	}
+	if s := h.barrier(); len(s.Overlays) != 0 {
+		t.Errorf("%+v", s.Overlays)
+	}
+}
+
 // Plan §2.1.1: a revision that deletes an object referenced by an active overlay is rejected with the
 // references; with force the orphaned overlays are removed and each announces itself. A profile is such an
 // object; the built-in ones cannot be deleted and so never orphan anything.

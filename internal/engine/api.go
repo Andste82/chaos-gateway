@@ -168,6 +168,10 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	e.withPeerEndpoints(ctx, &in)
 	tg := compiler.Compile(in)
 	p.Target, p.Problems = tg, tg.Problems
+	if err := unavailableProfileRevision(cfg, overlays); err != nil {
+		// the apply refuses it (startApply); the API answers unsupported_feature for this problem
+		p.Problems = append(append([]compiler.Problem(nil), p.Problems...), compiler.Problem{Severity: compiler.SevError, Code: compiler.CodeUnsupported, Message: err.Error()})
+	}
 	p.Rules = previewRules(tg.Access, snap.Access)
 	if tg.HasErrors() {
 		return p, nil

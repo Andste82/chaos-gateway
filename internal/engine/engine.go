@@ -135,6 +135,9 @@ type Snapshot struct {
 	PMTUTables map[int]int
 	// Winners are the keys of the faults that win for some traffic (compiler.Target.Winners).
 	Winners map[string]bool
+	// Coverage is how much of its traffic each impairment and MTU fault wins (compiler.Target.Coverage):
+	// all of it, a part or none.
+	Coverage map[string]compiler.Coverage
 	// Access is the effective list of access rules of the last applied target, overlay rules first;
 	// nil when there was none. RuleEpochs is the generation in which each rule, by key, first
 	// appeared: the epoch of its counter (it restarts when a rule is new or the table was made anew).

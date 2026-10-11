@@ -159,6 +159,7 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 			return
 		}
 		tables[i] = tab
+		t.addCoverage(tab)
 		for _, c := range tab.Unresolved {
 			if k := baseKey(c); !hostnames[k] {
 				hostnames[k] = true
@@ -226,6 +227,9 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 			f.Table = PMTUTableOf(f.Index)
 		}
 		t.PMTU = append(t.PMTU, *f)
+		if t.winsNothing(k) {
+			continue
+		}
 		t.Winners = append(t.Winners, k)
 		t.Effective = append(t.Effective, EffectiveFault{Key: k, Layer: f.Layer, Source: f.Source, Family: domain.FamilyMTU,
 			Profile: f.Profile, Scope: f.Scope, Summary: f.Summary()})

@@ -203,6 +203,12 @@ type Target struct {
 	// (domain.Table), also those that impair nothing and so have no id: a fault that is not here is
 	// overridden everywhere. Sorted.
 	Winners []string `json:"winners,omitempty"`
+	// Coverage says, by the same keys, how much of the traffic it selects each fault of a family with
+	// a classification table (impairment, MTU) wins, summed over the tables of every source: all of it,
+	// a part or none (the API's `effective`, `partially_overridden` and `overridden`). A fault that is not
+	// here selects no traffic the tables classify (a hostname, a destination that names nothing known)
+	// or is of another family; Winners alone tells about it.
+	Coverage map[string]Coverage `json:"coverage,omitempty"`
 	// Effective lists the same winners in the user's terms, with the profile each part comes from.
 	Effective []EffectiveFault `json:"effective,omitempty"`
 	// TC is the tc tree of every interface classified traffic leaves through; nil when no fault

@@ -91,6 +91,38 @@ type Fault struct {
 	Tunnel *TunnelInfo `json:"tunnel,omitempty"`
 }
 
+// Coverage is how much of the traffic a fault selects it wins (domain.Cover, summed over the tables of
+// every source). The numbers count pieces of the tables, not traffic; they tell "all", "some" and "none"
+// apart.
+type Coverage struct {
+	Matched int `json:"matched"`
+	Won     int `json:"won"`
+}
+
+// Partial reports whether the fault wins some of the traffic it selects but not all of it.
+func (c Coverage) Partial() bool { return c.Won > 0 && c.Won < c.Matched }
+
+// addCoverage adds the coverage of a source's table to the target's.
+func (t *Target) addCoverage(tab domain.Table) {
+	for k, c := range tab.Coverage {
+		if t.Coverage == nil {
+			t.Coverage = map[string]Coverage{}
+		}
+		x := t.Coverage[k]
+		x.Matched += c.Matched
+		x.Won += c.Won
+		t.Coverage[k] = x
+	}
+}
+
+// winsNothing reports whether the tables say that a fault wins none of the traffic it selects: a fault can
+// be the winner of a table entry that no traffic reaches (a level-4 entry below destinations that cover
+// every address).
+func (t *Target) winsNothing(key string) bool {
+	c, ok := t.Coverage[key]
+	return ok && c.Won == 0
+}
+
 // netem returns the configuration of a direction.
 func (f Fault) netem(d Direction) *Netem {
 	if d == Download {
@@ -158,9 +190,7 @@ type resolvedFault struct {
 // faults) but needs no id and no class.
 func (r resolvedFault) neutral() bool { return r.up == nil && r.down == nil }
 
-func baseKey(c domain.Candidate) string {
-	return string(c.Layer) + ":" + c.ID + ":" + c.Family
-}
+func baseKey(c domain.Candidate) string { return c.Key() }
 
 func (t *Target) resolveWinner(c domain.Candidate) (resolvedFault, bool) {
 	r := resolvedFault{cand: c}
@@ -316,6 +346,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 			return
 		}
 		tables[i] = tab
+		t.addCoverage(tab)
 		for _, c := range tab.Unresolved {
 			if k := baseKey(c); !hostnames[k] {
 				hostnames[k] = true
@@ -368,7 +399,9 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		return
 	}
 	for k := range winners {
-		t.Winners = append(t.Winners, k)
+		if !t.winsNothing(k) {
+			t.Winners = append(t.Winners, k)
+		}
 	}
 	for k, e := range tunWinners {
 		t.Winners = append(t.Winners, k)
@@ -376,6 +409,9 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	}
 	sort.Strings(t.Winners)
 	for k, r := range winners {
+		if t.winsNothing(k) {
+			continue
+		}
 		c := r.cand
 		t.Effective = append(t.Effective, EffectiveFault{Key: k, Layer: string(c.Layer), Source: c.ID, Family: c.Family,
 			Profile: c.ProfileName, Scope: describeScope(idx, c.Scope), Summary: c.Summary()})

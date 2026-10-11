@@ -772,6 +772,7 @@ func (o *owner) trackFaults(t *compiler.Target, gen uint64, plan *apply.Plan) {
 		win[k] = true
 	}
 	o.snap.Winners = win
+	o.snap.Coverage = t.Coverage
 	o.snap.FaultIDs = t.FaultIDs
 	o.snap.FaultEpochs = born
 }

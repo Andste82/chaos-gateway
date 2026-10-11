@@ -45,6 +45,8 @@ var fuzzSeeds = []string{
 	`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"1:24","handle":"24:","args":["netem","limit","1000","delay","1ms","distribution","../../etc/passwd"]}]}`,
 	`{"type":"tc","entries":[{"object":"qdisc","action":"delete","dev":"wan0","parent":"root","handle":"8001:"}]}`,
 	`{"type":"read","what":"tc","dev":"wan0"}`,
+	// the qdisc listing of all interfaces, one tool run (apply's readTC, P2-M8b-04)
+	`{"type":"read","namespace":"gw","what":"qdiscs"}`,
 	// M10: the duplication hook and its read
 	`{"type":"nft_dup","namespace":"gw","devs":["br-iot","br-lab","wan0"]}`,
 	`{"type":"nft_dup","devs":[]}`,

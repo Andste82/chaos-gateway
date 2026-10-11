@@ -91,12 +91,22 @@ func NewWorld(cfg *model.Configuration, overlays []model.Overlay) (*World, error
 	return w, nil
 }
 
-// prefixesOf returns the prefixes that belong to a network: its subnet, for a hub also the
-// networks behind its clients, for a link its static routes.
+// prefixesOf returns the prefixes that belong to a network: its subnet, for a local test network
+// also the networks behind its downstream routes (plan §2.3: devices behind another router in that
+// network), for a hub the networks behind its clients, for a link its static routes. "Network X" in a
+// rule or a fault means all of them (decided by the maintainer on 2026-10-11), and the
+// classification guard (`classify_nets`) covers the same addresses.
 func prefixesOf(n *NetInfo) []netip.Prefix {
 	var out []netip.Prefix
 	if s, ok := networkSubnet(n); ok {
 		out = append(out, s)
+	}
+	if n.IsLan() {
+		for _, r := range deref(n.Lan.Routes) {
+			if p, ok := parsePrefix(r.Destination); ok {
+				out = append(out, p.Masked())
+			}
+		}
 	}
 	if n.IsHub() {
 		for _, c := range deref(n.WG.Clients) {
@@ -863,6 +873,20 @@ type AccessResult struct {
 	RuleID, Name string
 	Action       string
 	CutExisting  bool
+	// RejectWith is the ICMP type of a reject (the API's reject_with; port_unreachable when the rule
+	// names none), empty for the other actions.
+	RejectWith string
+}
+
+// rejectWithOf is the type a rule's reject answers with: the rule's own, port_unreachable by default.
+func rejectWithOf(action model.AccessAction, with *model.RejectType) string {
+	if action != model.AccessActionReject {
+		return ""
+	}
+	if with != nil {
+		return string(*with)
+	}
+	return string(model.PortUnreachable)
 }
 
 // ResolveAccess finds the rule that decides: first match wins; overlay rules come before
@@ -888,7 +912,7 @@ func (w *World) ResolveAccess(q Query) AccessResult {
 	})
 	for _, r := range ov {
 		if w.scopeMatches(r.sc, q.Source) && w.trafficMatches(convert[model.TrafficMatch](r.body), q) {
-			return AccessResult{true, LayerOverlay, r.id, "", string(r.body.Action), deref(r.body.CutExisting)}
+			return AccessResult{true, LayerOverlay, r.id, "", string(r.body.Action), deref(r.body.CutExisting), rejectWithOf(r.body.Action, r.body.RejectWith)}
 		}
 	}
 	rules := deref(w.Config.AccessRules)
@@ -899,7 +923,7 @@ func (w *World) ResolveAccess(q Query) AccessResult {
 			continue
 		}
 		if w.scopeMatches(r.Source, q.Source) && w.trafficMatches(convert[model.TrafficMatch](r), q) {
-			return AccessResult{true, LayerConfig, id, deref(r.Name), string(r.Action), deref(r.CutExisting)}
+			return AccessResult{true, LayerConfig, id, deref(r.Name), string(r.Action), deref(r.CutExisting), rejectWithOf(r.Action, r.RejectWith)}
 		}
 	}
 	return AccessResult{}

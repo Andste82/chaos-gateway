@@ -59,6 +59,9 @@ devdest (ipv4_addr . ipv4_addr, flags [interval])
     10.20.0.0/24 . 10.0.0.0/16 : mark_1
     10.20.0.0/24 . 10.1.0.0/16 : mark_2
     10.20.0.0/24 . 10.2.0.0-10.255.255.255 : mark_1
+    10.30.0.0/24 . 10.0.0.0/16 : mark_1
+    10.30.0.0/24 . 10.1.0.0/16 : mark_2
+    10.30.0.0/24 . 10.2.0.0-10.255.255.255 : mark_1
 devport (ipv4_addr . inet_proto . inet_service, flags [interval])
     10.10.0.43 . tcp . 80-399 : mark_3
     10.10.0.43 . tcp . 400-500 : mark_4

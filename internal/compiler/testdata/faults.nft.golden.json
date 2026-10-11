@@ -702,6 +702,19 @@
                   "target": "mark_6"
                 }
               }
+            ],
+            [
+              {
+                "prefix": {
+                  "addr": "10.30.0.0",
+                  "len": 24
+                }
+              },
+              {
+                "goto": {
+                  "target": "mark_3"
+                }
+              }
             ]
           ],
           "family": "inet",

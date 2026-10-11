@@ -202,10 +202,10 @@ func TestEveryActionHasItsVerdictInForwardAndInput(t *testing.T) {
 		chain string
 		want  [4]string
 	}{
-		// an allow rule accepts in forward (an exception to the matrix) and returns in input (the
-		// gateway's protection of the test networks stays what it is; P2-M9-01)
+		// an allow rule accepts in both hooks: in forward it is an exception to the matrix, in input
+		// it opens the gateway's closed ports for its selector (decided on 2026-10-11)
 		{AccessForwardChain, [4]string{"accept", "drop", "reject with icmpx port-unreachable", "reject with tcp reset"}},
-		{AccessInputChain, [4]string{"return", "drop", "reject with icmpx port-unreachable", "reject with tcp reset"}},
+		{AccessInputChain, [4]string{"accept", "drop", "reject with icmpx port-unreachable", "reject with tcp reset"}},
 	} {
 		rules := renderRules(chainOf(t, tg, c.chain))
 		for i, want := range c.want {
@@ -245,14 +245,14 @@ func TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses(t *testing.T) 
 			t.Errorf("rule %d = %s\nwant it to contain %s", i, rules[i], want)
 		}
 	}
-	// "uplink" is everything outside the networks and the management network
+	// "uplink" is everything outside the networks (their downstream routes included) and the management network
 	var up SetDef
 	for _, s := range tg.Nft.Sets {
 		if s.Name == nonUplinkSetName() {
 			up = s
 		}
 	}
-	if strings.Join(up.Elements, ",") != "10.10.0.0/24,10.20.0.0/24,192.168.56.0/24" {
+	if strings.Join(up.Elements, ",") != "10.10.0.0/24,10.20.0.0/24,10.30.0.0/24,192.168.56.0/24" {
 		t.Errorf("non-uplink set = %v", up.Elements)
 	}
 }
@@ -620,8 +620,8 @@ func TestTheCompiledRulesDecideLikeTheDomainLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srcs := []string{"10.10.0.42", "10.10.0.43", "10.10.0.99", "10.10.0.200", "10.20.0.50", "10.20.0.77"}
-	dsts := []string{"203.0.113.10", "10.20.0.50", "10.10.0.1", "10.10.0.42", "198.51.100.7", "198.51.100.8", "192.168.56.5", "8.8.8.8"}
+	srcs := []string{"10.10.0.42", "10.10.0.43", "10.10.0.99", "10.10.0.200", "10.20.0.50", "10.20.0.77", "10.30.0.5"}
+	dsts := []string{"203.0.113.10", "10.20.0.50", "10.10.0.1", "10.10.0.42", "198.51.100.7", "198.51.100.8", "192.168.56.5", "8.8.8.8", "10.30.0.5"}
 	traffic := []struct {
 		proto string
 		port  int
@@ -742,10 +742,58 @@ func scenarioAccessCut(t *testing.T) *Target {
 	return w.compile(nil)
 }
 
+// scenarioAccessReject has a reject rule of every ICMP type and one without a type (the default).
+func scenarioAccessReject(t *testing.T) *Target {
+	t.Helper()
+	w := accessWorld(t)
+	w.addConfigRule(ruleA, `{name: default, source: {global: true}, protocol: tcp, ports: [1], action: reject}`)
+	w.addConfigRule(ruleB, `{name: port, source: {global: true}, protocol: tcp, ports: [2], action: reject, reject_with: port_unreachable}`)
+	w.addConfigRule(ruleC, `{name: host, source: {global: true}, protocol: tcp, ports: [3], action: reject, reject_with: host_unreachable}`)
+	w.addConfigRule(ruleD, `{name: admin, source: {global: true}, protocol: tcp, ports: [4], action: reject, reject_with: admin_prohibited}`)
+	w.addConfigRule(ruleE, `{name: route, source: {global: true}, protocol: udp, ports: [5], action: reject, reject_with: no_route}`)
+	w.ruleOverlay(`{target: {device: esp32-42}, rule: {action: reject, reject_with: admin_prohibited, protocol: udp, ports: [6]}}`, time.Second)
+	return w.compile(nil)
+}
+
 func accessScenarios(t *testing.T) map[string]*Target {
 	return map[string]*Target{
-		"access":     scenarioAccess(t),
-		"access-cut": scenarioAccessCut(t),
+		"access":        scenarioAccess(t),
+		"access-cut":    scenarioAccessCut(t),
+		"access-reject": scenarioAccessReject(t),
+	}
+}
+
+// The type of a reject is the rule's own, in both hooks, from the configuration and from an overlay;
+// a rule without a type and one that names port_unreachable compile to the same statement.
+func TestARejectRuleAnswersWithItsOwnIcmpType(t *testing.T) {
+	tg := scenarioAccessReject(t)
+	if tg.HasErrors() || len(tg.Problems) != 0 {
+		t.Fatalf("problems: %+v", tg.Problems)
+	}
+	// the overlay rule stands first
+	want := []string{"admin-prohibited", "port-unreachable", "port-unreachable", "host-unreachable", "admin-prohibited", "no-route"}
+	for _, name := range []string{AccessForwardChain, AccessInputChain} {
+		rules := renderRules(chainOf(t, tg, name))
+		if len(rules) != len(want) {
+			t.Fatalf("%s: %v", name, rules)
+		}
+		for i, typ := range want {
+			if !strings.HasSuffix(rules[i], " reject with icmpx "+typ) {
+				t.Errorf("%s rule %d = %s, want the type %s", name, i, rules[i], typ)
+			}
+		}
+	}
+	wantWith := []string{"admin_prohibited", "port_unreachable", "port_unreachable", "host_unreachable", "admin_prohibited", "no_route"}
+	for i, r := range tg.Access.Rules {
+		if r.RejectWith != wantWith[i] {
+			t.Errorf("rule %d: reject_with = %q, want %q", i, r.RejectWith, wantWith[i])
+		}
+	}
+	// other actions carry no type
+	w := accessWorld(t)
+	w.addConfigRule(ruleA, `{source: {global: true}, action: drop}`)
+	if r := w.compile(nil).Access.Rules[0]; r.RejectWith != "" {
+		t.Errorf("a drop rule has the type %q", r.RejectWith)
 	}
 }
 
@@ -819,5 +867,39 @@ func TestASourceSetNameIsLongAndACollisionIsRefused(t *testing.T) {
 	}
 	if _, err := addSourceSet(sets, SetDef{Name: "asrc_x", Elements: []string{"10.10.0.43"}}); err == nil {
 		t.Error("a set name used by two scopes with different addresses must be refused")
+	}
+}
+
+// "Network IoT" includes the network behind IoT's router (the downstream route 10.30.0.0/24 of the
+// fixture; decided by the maintainer on 2026-10-11): a host at 10.30.0.5 that no device owns is
+// selected by a rule for network IoT, by a destination "network IoT", and is not "uplink".
+func TestARuleForANetworkSelectsTheHostsBehindItsRouter(t *testing.T) {
+	w := accessWorld(t)
+	w.addConfigRule(ruleA, `{name: iot-8883, source: {network: IoT}, protocol: tcp, ports: [8883], action: drop}`)
+	w.addConfigRule(ruleB, `{name: to-iot, source: {network: Lab}, destination: {network: IoT}, action: reject}`)
+	w.addConfigRule(ruleC, `{name: to-uplink, source: {global: true}, destination: {uplink: true}, protocol: icmp, action: drop}`)
+	tg := w.compile(nil)
+	if got := strings.Join(sourcesOf(tg, "config:"+ruleA), " "); got != "10.10.0.0/24 10.30.0.0/24" {
+		t.Errorf("the sources of network IoT: %q", got)
+	}
+	behind := netip.MustParseAddr("10.30.0.5")
+	if r := tg.Access.Winner(Tuple{Src: behind, Dst: netip.MustParseAddr("203.0.113.10"), Proto: "tcp", Port: 8883}); r == nil || r.ID != ruleA {
+		t.Errorf("the host behind the router: %+v", r)
+	}
+	if r := tg.Access.Winner(Tuple{Src: netip.MustParseAddr("10.20.0.50"), Dst: behind, Proto: "udp", Port: 53}); r == nil || r.ID != ruleB {
+		t.Errorf("a destination in the network behind the router: %+v", r)
+	}
+	if r := tg.Access.Winner(Tuple{Src: netip.MustParseAddr("10.20.0.50"), Dst: behind, Proto: "icmp"}); r == nil || r.ID != ruleB {
+		t.Errorf("the host behind the router is not uplink: %+v", r)
+	}
+	// the kernel's source set holds the route, too
+	var found bool
+	for _, s := range tg.Nft.Sets {
+		if s.Name == tg.Access.Rules[0].SourceSet {
+			found = strings.Contains(strings.Join(s.Elements, " "), "10.30.0.0/24")
+		}
+	}
+	if !found {
+		t.Error("the source set of the rule lacks the downstream route")
 	}
 }

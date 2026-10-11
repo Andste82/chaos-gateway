@@ -370,6 +370,7 @@ func randomWorld(t *testing.T, rng *rand.Rand) *World {
 	if len(errs) != 0 {
 		t.Fatal(errs)
 	}
+	withIoTRouter(t, cfg)
 	faults := map[string]model.ConfigFault{}
 	cfg.Faults = &faults
 	scopeIDs := map[string]string{}
@@ -448,7 +449,7 @@ func mergeMaps(a, b map[string]any) map[string]any {
 }
 
 var propIPs = []string{
-	"0.0.0.0", "8.8.8.8", "10.0.0.1", "10.10.0.5", "10.10.1.1", "10.11.0.1", "10.50.0.5", "10.50.0.15", "10.50.0.16", "10.50.0.200",
+	"0.0.0.0", "8.8.8.8", "10.0.0.1", "10.10.0.5", "10.10.1.1", "10.30.0.5", "10.11.0.1", "10.50.0.5", "10.50.0.15", "10.50.0.16", "10.50.0.200",
 	"10.99.0.2", "10.255.0.1", "10.255.0.3", "192.168.88.7", "203.0.0.1", "203.0.112.255", "203.0.113.0", "203.0.113.10", "203.0.113.127",
 	"203.0.113.128", "203.0.113.255", "203.0.114.0", "203.1.0.0", "255.255.255.255",
 }
@@ -466,12 +467,13 @@ var propTraffic = []struct {
 
 func TestTheLookupChainGivesWhatResolveSays(t *testing.T) {
 	subjects := map[string]Subject{
-		"device A":           subjectA,
-		"lab host (device)":  {Device: idLab, IP: netip.MustParseAddr("10.50.0.10")},
-		"unknown IoT host":   {IP: netip.MustParseAddr("10.10.0.77")},
-		"client network":     {IP: netip.MustParseAddr("10.50.0.5")},
-		"client network far": {IP: netip.MustParseAddr("10.50.0.99")},
-		"hub address":        {IP: netip.MustParseAddr("10.99.0.50")},
+		"device A":                 subjectA,
+		"lab host (device)":        {Device: idLab, IP: netip.MustParseAddr("10.50.0.10")},
+		"unknown IoT host":         {IP: netip.MustParseAddr("10.10.0.77")},
+		"host behind IoT's router": {IP: netip.MustParseAddr("10.30.0.5")},
+		"client network":           {IP: netip.MustParseAddr("10.50.0.5")},
+		"client network far":       {IP: netip.MustParseAddr("10.50.0.99")},
+		"hub address":              {IP: netip.MustParseAddr("10.99.0.50")},
 	}
 	rng := rand.New(rand.NewSource(20261007))
 	checked := 0

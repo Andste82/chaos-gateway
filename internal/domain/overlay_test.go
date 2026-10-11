@@ -85,6 +85,7 @@ func TestOverlayRequestRules(t *testing.T) {
 		{"blackout with flapping", `{target: {global: true}, fault: {blackout: true, flapping: {up: 5s, down: 5s}}}`, "/fault/flapping", CodeExclusive},
 		{"an empty fault", `{target: {global: true}, fault: {destination: {uplink: true}}}`, "/fault", CodeEmptyFault},
 		{"a reset on udp", `{target: {global: true}, rule: {action: reset, protocol: udp}}`, "/rule/action", CodeResetRequiresTCP},
+		{"a reject type on a drop rule", `{target: {global: true}, rule: {action: drop, reject_with: host_unreachable}}`, "/rule/reject_with", CodeRejectTypeNeedsReject},
 		{"a dns delay without a delay", `{target: {global: true}, dns: {action: delay}}`, "/dns/delay", CodeInvalidDNSFault},
 		{"a tls case over udp", `{target: {global: true}, tls: {case: expired, protocol: udp}}`, "/tls/protocol", CodeInvalidTLSCase},
 		{"a dhcp action on a group", `{target: {group: sensors}, dhcp: {action: silence}}`, "/target", CodeTargetKind},

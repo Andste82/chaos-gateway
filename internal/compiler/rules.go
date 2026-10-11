@@ -260,7 +260,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post}
 	if t.Access != nil {
-		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain, "forward"), t.Access.chain(AccessInputChain, "input"))
+		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain), t.Access.chain(AccessInputChain))
 		if t.Access.HasCuts() {
 			// empty until the engine opens a window (CutRules)
 			t.Nft.Chains = append(t.Nft.Chains, Chain{Name: CutForwardChain}, Chain{Name: CutInputChain})

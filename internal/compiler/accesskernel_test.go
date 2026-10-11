@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/preflight"
@@ -134,7 +136,7 @@ while True:
 // tryScript makes one attempt: tcp or udp, address, port, timeout; it prints ok, refused, reset or
 // timeout.
 const tryScript = `
-import socket, sys, time
+import errno, socket, sys, time
 proto, ip, port, t = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
 try:
     if proto == "tcp":
@@ -145,6 +147,7 @@ try:
 except ConnectionRefusedError: print("refused")
 except ConnectionResetError: print("reset")
 except socket.timeout: print("timeout")
+except OSError as e: print("error-" + errno.errorcode.get(e.errno, str(e.errno)))
 `
 
 // holdScript keeps one TCP connection busy: a byte every 100 ms, one line per answer, until the
@@ -318,8 +321,8 @@ func TestAccessRuleOrderAndOverlaysOnTheRealKernel(t *testing.T) {
 }
 
 // The gateway's own services: a rule drops DNS to the gateway before the gateway answers it, an
-// allow rule does not open anything the gateway's protection closes, and the control plane stays
-// reachable for the management sources whatever the rules say (the anti-lockout rule).
+// allow rule opens a port the gateway's protection closes (but not the UI port), and the control
+// plane stays reachable for the management sources whatever the rules say (the anti-lockout rule).
 func TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel(t *testing.T) {
 	b := newAccessBed(t)
 	b.apply()
@@ -351,11 +354,175 @@ func TestAccessRulesInInputAndTheAntiLockoutRuleOnTheRealKernel(t *testing.T) {
 	// the UI port is dropped for everybody but the management sources before the rules are asked:
 	// no rule, not even a reject, changes what a device sees there
 	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
-	// the same gateway without the overlay: the allow rule returns to the protection, which drops it
+	// the same gateway without the overlay: the allow rule accepts SSH for the device, which the
+	// protection would drop, and still not the UI port
 	b.w.overlays = nil
 	b.apply()
-	b.expect(b.dev, "tcp", "10.10.0.1", 22, "timeout")
+	b.expect(b.dev, "tcp", "10.10.0.1", 22, "ok")
 	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
+}
+
+// An allow rule in the input path accepts (decided by the maintainer on 2026-10-11): it opens the
+// gateway's own ports that the protection of the test networks closes, for the rule's selector and
+// nothing else. The two rules in front of the access rules stay: the UI/API port is closed to a
+// test network whatever a rule says, and the management sources reach SSH and the UI/API whatever
+// the rules say.
+func TestAnAllowRuleOpensTheGatewaysClosedPortsButNeverTheUIAndNeverLocksOutManagement(t *testing.T) {
+	b := newAccessBed(t)
+	tg := b.apply()
+	// explain (domain.World.AccessDecision) and the kernel agree on every probe: an allowed packet
+	// reaches the gateway's stack (answered, or refused by a closed port), a dropped one hangs
+	agree := func(stage string) {
+		t.Helper()
+		world, err := domain.NewWorld(b.w.cfg, b.w.overlays)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts := domain.AccessFacts{Gateway: []netip.Addr{netip.MustParseAddr("10.10.0.1")},
+			Management: tg.Management.Sources, UIPort: tg.Management.UIPort}
+		for _, p := range []struct {
+			ns         *testbed.Namespace
+			src, proto string
+			port       int
+		}{
+			{b.dev, "10.10.0.42", "tcp", 22}, {b.dev, "10.10.0.42", "tcp", 8080}, {b.dev, "10.10.0.42", "tcp", tg.Management.UIPort},
+			{b.dev, "10.10.0.42", "udp", 53}, {b.dev, "10.10.0.42", "udp", 5353},
+			{b.m, "192.168.56.2", "tcp", 22}, {b.m, "192.168.56.2", "tcp", tg.Management.UIPort}, {b.m, "192.168.56.2", "tcp", 8080},
+		} {
+			src := netip.MustParseAddr(p.src)
+			sub := domain.Subject{IP: src}
+			if dev, ok := b.w.id.OwnerOf(src); ok {
+				sub.Device = dev
+			}
+			if n, ok := world.NetworkOf(src); ok {
+				sub.Network = n
+			}
+			ex := world.AccessDecision(domain.Query{Source: sub, DestIP: netip.MustParseAddr("10.10.0.1"), Protocol: p.proto, Port: p.port}, facts)
+			got := b.try(p.ns, p.proto, "10.10.0.1", p.port)
+			ok := map[string]bool{"allow": got == "ok" || got == "refused", "drop": got == "timeout", "reject": got == "refused" || got == "reset"}[ex.Verdict]
+			if !ok {
+				t.Errorf("%s, %s %s/%d: the kernel gave %q, explain says %+v", stage, p.src, p.proto, p.port, got, ex)
+			}
+		}
+	}
+	// the protection of the test network: DNS is answered, everything else is dropped
+	b.expect(b.dev, "udp", "10.10.0.1", 53, "ok")
+	b.expect(b.dev, "tcp", "10.10.0.1", 22, "timeout")
+	b.expect(b.dev, "tcp", "10.10.0.1", 8080, "timeout")
+	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
+	agree("without rules")
+
+	// an allow rule for SSH and the UI port: SSH opens, the UI port does not
+	b.w.addConfigRule(ruleA, `{name: allow-gw, source: {device: esp32-42}, protocol: tcp, ports: [22, 443], action: allow}`)
+	tg = b.apply()
+	b.expect(b.dev, "tcp", "10.10.0.1", 22, "ok")
+	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
+	b.expect(b.dev, "tcp", "10.10.0.1", 8080, "timeout") // not selected by the rule
+	if b.counter(tg.Access.Rules[0].Counter) == 0 {
+		t.Error("the allow rule counts nothing")
+	}
+	agree("an allow rule for SSH and the UI")
+
+	// allow everything from everybody: a port nothing listens on is open now (the gateway's kernel
+	// answers with a refusal instead of the protection's silence), the UI port is still closed
+	b.w.addConfigRule(ruleB, `{name: allow-all, source: {global: true}, action: allow}`)
+	tg = b.apply()
+	b.expect(b.dev, "tcp", "10.10.0.1", 8080, "refused")
+	b.expect(b.dev, "udp", "10.10.0.1", 5353, "refused")
+	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
+	agree("an allow rule for everything")
+
+	// a drop or reject rule that stands first still wins over the allow rule behind it
+	b.w.ruleOverlay(`{target: {device: esp32-42}, rule: {action: drop, protocol: tcp, ports: [22]}}`, time.Hour)
+	tg = b.apply()
+	b.expect(b.dev, "tcp", "10.10.0.1", 22, "timeout")
+	agree("a drop overlay in front")
+
+	// the anti-lockout rule: the newest rule drops everything from everybody, and the management
+	// host reaches SSH and the UI/API all the same
+	b.w.ruleOverlay(`{target: {global: true}, rule: {action: drop}}`, 2*time.Hour)
+	tg = b.apply()
+	b.expect(b.m, "tcp", "192.168.56.1", 22, "ok")
+	b.expect(b.m, "tcp", "192.168.56.1", 443, "ok")
+	if b.counter(AntiLockoutCounter) == 0 {
+		t.Error("the anti-lockout rule counts nothing")
+	}
+	b.expect(b.dev, "tcp", "10.10.0.1", 443, "timeout")
+	agree("a drop rule for everybody")
+}
+
+// icmpScript sends one UDP datagram and prints the ICMP error that comes back as "type/code" (read
+// from the socket's error queue, so a code that Linux maps to the same errno as another is still
+// told apart), or "none".
+const icmpScript = `
+import socket, struct, sys, time
+ip, port = sys.argv[1], int(sys.argv[2])
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_IP, 11, 1)  # IP_RECVERR
+s.setblocking(False)
+s.connect((ip, port)); s.send(b"hi")
+end = time.time() + 3
+while time.time() < end:
+    try:
+        _, anc, _, _ = s.recvmsg(100, 256, socket.MSG_ERRQUEUE)
+    except BlockingIOError:
+        time.sleep(0.05); continue
+    for level, typ, data in anc:
+        if level == socket.SOL_IP and typ == 11:
+            _, origin, t, c = struct.unpack("=IBBB", data[:7])
+            if origin == 2:  # SO_EE_ORIGIN_ICMP
+                print("%d/%d" % (t, c)); sys.exit()
+print("none")
+`
+
+// icmp returns the ICMP error "type/code" that a datagram from ns gets back.
+func (b *accessBed) icmp(ns *testbed.Namespace, ip string, port int) string {
+	b.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := ns.Run(ctx, "python3", "-c", icmpScript, ip, fmt.Sprint(port))
+	if err != nil {
+		b.t.Fatalf("%v", err)
+	}
+	return strings.TrimSpace(out)
+}
+
+// A reject answers with the ICMP error the rule names, in the forward path (a datagram to the
+// server behind the uplink) and in the input path (a datagram to the gateway): the sender reads
+// the type and the code off the wire, and a rule without a type answers with port unreachable.
+func TestARejectAnswersWithTheIcmpErrorTheRuleNamesOnTheRealKernel(t *testing.T) {
+	b := newAccessBed(t)
+	for i, c := range []struct{ name, with, want string }{
+		{"default", "", "3/3"},                // port unreachable
+		{"port", "port_unreachable", "3/3"},   // port unreachable
+		{"host", "host_unreachable", "3/1"},   // host unreachable
+		{"admin", "admin_prohibited", "3/13"}, // communication administratively prohibited
+		{"route", "no_route", "3/0"},          // network unreachable
+	} {
+		body := fmt.Sprintf("{name: %s, source: {device: esp32-42}, protocol: udp, ports: [%d], action: reject", c.name, 5001+i)
+		if c.with != "" {
+			body += ", reject_with: " + c.with
+		}
+		b.w.addConfigRule(fmt.Sprintf("a1000000-0000-4000-8000-00000000010%d", i), body+"}")
+	}
+	b.apply()
+	for i, want := range []string{"3/3", "3/3", "3/1", "3/13", "3/0"} {
+		port := 5001 + i
+		if got := b.icmp(b.dev, "203.0.113.10", port); got != want {
+			t.Errorf("forward, udp %d: ICMP %s, want %s", port, got, want)
+		}
+		if got := b.icmp(b.dev, "10.10.0.1", port); got != want {
+			t.Errorf("input, udp %d: ICMP %s, want %s", port, got, want)
+		}
+	}
+	// a port no rule names: the gateway's protection drops the datagram to the gateway silently
+	if got := b.icmp(b.dev, "10.10.0.1", 5999); got != "none" {
+		t.Errorf("the protection answered a datagram no rule names: ICMP %s", got)
+	}
+	// TCP: administratively prohibited arrives as the sender's "no route to host" error
+	b.w.cfg = b.replaceRule("a1000000-0000-4000-8000-000000000100", `{name: tcp-admin, source: {device: esp32-42}, protocol: tcp, ports: [8883], action: reject, reject_with: admin_prohibited}`)
+	b.apply()
+	b.expect(b.dev, "tcp", "203.0.113.10", 8883, "error-EHOSTUNREACH")
 }
 
 // The cut window (spike S3, C6): a rule that cuts resets the packets of the connections that

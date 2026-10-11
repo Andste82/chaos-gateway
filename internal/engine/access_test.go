@@ -677,7 +677,7 @@ func TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder(t *testing.T) 
 	}
 }
 
-func TestNoRuleChangesWhatTheGatewayAnswersOnItsControlPlane(t *testing.T) {
+func TestAnAllowRuleOpensTheGatewayButNoRuleChangesItsControlPlane(t *testing.T) {
 	h := newHarness(t)
 	h.start()
 	h.mustApply(h.revision(withConfigRules(map[string]model.AccessRule{
@@ -687,19 +687,27 @@ func TestNoRuleChangesWhatTheGatewayAnswersOnItsControlPlane(t *testing.T) {
 	if ui == 0 {
 		t.Fatal("the snapshot has no UI port")
 	}
-	// an allow rule does not open the UI for a test network, nor any other port of the gateway
+	// an allow rule does not open the UI for a test network ...
 	ex := h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.77"), Dst: "10.10.0.1", Protocol: "tcp", Port: ui})
 	if ex.Access.Verdict != "drop" || ex.Access.Layer != "gateway_protection" {
 		t.Errorf("%+v", ex.Access)
 	}
+	// ... but it opens any other port of the gateway for its selector (decided on 2026-10-11)
 	ex = h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.77"), Dst: "10.10.0.1", Protocol: "tcp", Port: 179})
-	if ex.Access.Verdict != "drop" || ex.Access.Layer != "gateway_protection" || !strings.Contains(ex.Access.Reason, "allow") {
+	if ex.Access.Verdict != "allow" || ex.Access.Layer != "config_rule" || ex.Access.Rule != cfgRuleA || !strings.Contains(ex.Access.Reason, "opens the gateway") {
 		t.Errorf("%+v", ex.Access)
 	}
-	// and a drop-everything rule leaves the management sources alone
+	// and a drop-everything rule leaves the management sources alone: SSH and the UI always, and the
+	// explanation does not promise anything else (the rules select the test networks)
 	h.mustPut(alice, "target: {global: true}\nrule: {action: drop}")
-	ex = h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("192.168.56.2"), Dst: "10.10.0.1", Protocol: "tcp", Port: ui})
-	if ex.Access.Verdict != "allow" || ex.Access.Layer != "gateway_protection" {
+	for _, port := range []int{22, ui} {
+		ex = h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("192.168.56.2"), Dst: "10.10.0.1", Protocol: "tcp", Port: port})
+		if ex.Access.Verdict != "allow" || ex.Access.Layer != "gateway_protection" || !strings.Contains(ex.Access.Reason, "anti-lockout") {
+			t.Errorf("port %d: %+v", port, ex.Access)
+		}
+	}
+	ex = h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("192.168.56.2"), Dst: "10.10.0.1", Protocol: "tcp", Port: 8080})
+	if ex.Access.Verdict != "allow" || ex.Access.Layer != "gateway_protection" || strings.Contains(ex.Access.Reason, "anti-lockout") {
 		t.Errorf("%+v", ex.Access)
 	}
 }
@@ -725,4 +733,31 @@ func TestARuleOverlayAndAFaultCombineWithTheRuleFirst(t *testing.T) {
 		t.Errorf("faults %+v access %+v", s.Faults, s.Access)
 	}
 	h.verifyKernelWithOverlays()
+}
+
+// "Network IoT" includes the network behind IoT's router (the downstream route 10.30.0.0/24 of the
+// fixture; decided by the maintainer on 2026-10-11): `explain` for a host there, which no device
+// owns, names the rule and the fault of the network IoT.
+func TestExplainSelectsAHostBehindANetworksRouterByTheNetwork(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(withConfigRules(map[string]model.AccessRule{
+		cfgRuleA: configRule("no-mqtt", "IoT", "tcp", []int{8883}, model.AccessActionDrop, false),
+	}, cfgRuleA)))
+	h.mustPut(alice, iotLatency)
+	ex := h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.30.0.5"), Dst: "203.0.113.10", Protocol: "tcp", Port: 8883})
+	if ex.Access.Verdict != "drop" || ex.Access.Layer != "config_rule" || ex.Access.Rule != cfgRuleA {
+		t.Errorf("the rule of network IoT: %+v", ex.Access)
+	}
+	if ex.Source.Network == nil || ex.Source.Network.Name != "IoT" {
+		t.Errorf("the source is placed in %+v, want IoT", ex.Source.Network)
+	}
+	if len(ex.Faults) != 1 || ex.Faults[0].Winner == nil {
+		t.Errorf("the fault of network IoT does not apply to the host behind its router: %+v", ex.Faults)
+	}
+	// the same host on another port: no rule, the fault applies, the matrix lets IoT reach the uplink
+	ex = h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.30.0.5"), Dst: "203.0.113.10", Protocol: "tcp", Port: 443})
+	if ex.Access.Verdict != "allow" || ex.Access.Rule != "" || len(ex.Faults) != 1 {
+		t.Errorf("%+v", ex)
+	}
 }

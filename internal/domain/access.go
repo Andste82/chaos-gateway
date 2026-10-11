@@ -152,13 +152,15 @@ func containsEndpoint(set []matrixEndpoint, e matrixEndpoint) bool {
 
 // AccessDecision decides what the gateway does with the first packet of a connection described by q
 // (the source, the destination address and the original port), in the order of the packet path
-// (plan §2.2): towards the gateway itself the control plane (management sources, the UI port for
-// everybody else) comes first, then the access rules, then the gateway's protection of the test
-// networks; towards anything else the access rules, then the access matrix. The first access rule that
-// selects the traffic decides, overlay rules before configured ones. A drop, reject or reset rule
-// refuses; an allow rule is an exception to the matrix in the forward path, and in the input path it
-// leaves the decision to the gateway's protection (a rule cannot open the gateway; open item P2-M9-01).
-// q.Source.IP and q.DestIP must be set.
+// (plan §2.2): towards the gateway itself the control plane comes first (the management sources reach
+// SSH and the UI port, the UI port is closed to everybody else), then the access rules, then the
+// gateway's protection of the test networks; towards anything else the access rules, then the access
+// matrix. The first access rule that selects the traffic decides, overlay rules before configured
+// ones. A drop, reject or reset rule refuses; an allow rule accepts: in the forward path it is an
+// exception to the matrix, in the input path it also opens the gateway's closed ports for its
+// selector (decided by the maintainer on 2026-10-11). The access rules select the test, WireGuard
+// and remote networks, so a management source is judged by the control-plane rule and the
+// protection's default only. q.Source.IP and q.DestIP must be set.
 func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 	src, dst := q.Source.IP, q.DestIP
 	toGateway := false
@@ -193,22 +195,31 @@ func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 		}
 		switch {
 		case r.Action != "allow":
-			return AccessExplanation{Verdict: r.Action, Layer: layer, Reason: label + " " + ruleVerb(r.Action) + " this traffic", Rule: r.RuleID, RuleName: r.Name}
-		case !toGateway:
-			return AccessExplanation{Verdict: "allow", Layer: layer, Reason: label + " allows this traffic before the access matrix is asked", Rule: r.RuleID, RuleName: r.Name}
+			return AccessExplanation{Verdict: r.Action, Layer: layer, Reason: label + " " + ruleVerb(r) + " this traffic", Rule: r.RuleID, RuleName: r.Name}
+		case toGateway:
+			return AccessExplanation{Verdict: "allow", Layer: layer, Reason: label + " allows this traffic, which opens the gateway's port for it (the gateway's protection of the test networks is not asked)", Rule: r.RuleID, RuleName: r.Name}
 		}
-		// an allow rule towards the gateway: the gateway's protection decides
-		a := w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
-		a.Reason = label + " allows it, which leaves the decision to the gateway's protection: " + a.Reason
-		return a
+		return AccessExplanation{Verdict: "allow", Layer: layer, Reason: label + " allows this traffic before the access matrix is asked", Rule: r.RuleID, RuleName: r.Name}
 	}
 	return w.AccessVerdict(src, dst, q.Protocol, q.Port, f)
 }
 
-func ruleVerb(action string) string {
-	switch action {
+// rejectWords says in words what an ICMP type of a reject is.
+var rejectWords = map[string]string{
+	string(model.PortUnreachable): "port unreachable",
+	string(model.HostUnreachable): "host unreachable",
+	string(model.AdminProhibited): "administratively prohibited",
+	string(model.NoRoute):         "no route",
+}
+
+func ruleVerb(r AccessResult) string {
+	switch r.Action {
 	case "reject":
-		return "rejects (ICMP port unreachable)"
+		with := r.RejectWith
+		if with == "" {
+			with = string(model.PortUnreachable)
+		}
+		return "rejects (ICMP " + rejectWords[with] + ")"
 	case "reset":
 		return "resets (TCP reset)"
 	}
@@ -233,8 +244,13 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		// the input chain: management sources reach the control plane; test networks are answered
 		// only for DHCP, DNS and ICMP echo
 		switch {
+		case inMgmt(src) && (protocol == "tcp" || protocol == "") && (port == 22 || (f.UIPort > 0 && port == f.UIPort)):
+			// the anti-lockout rule: exactly SSH and the UI port, which no access rule can take away
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "management sources always reach SSH and the UI/API of the gateway (the anti-lockout rule)"}
 		case inMgmt(src):
-			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "management sources reach the gateway's control plane"}
+			// the protection filters the test networks only: a management source on any other
+			// port is answered by the policy of the input chain (and by the services behind it)
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway's protection covers the test networks only; a management source is not filtered outside SSH and the UI/API (nothing is guaranteed there)"}
 		case protocol == "icmp", port == 53 && (protocol == "udp" || protocol == "tcp" || protocol == ""), port == 67 && (protocol == "udp" || protocol == ""):
 			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway answers ICMP echo, DNS and DHCP on a test network"}
 		}

@@ -492,6 +492,9 @@ func (b *accessBed) icmp(ns *testbed.Namespace, ip string, port int) string {
 // the type and the code off the wire, and a rule without a type answers with port unreachable.
 func TestARejectAnswersWithTheIcmpErrorTheRuleNamesOnTheRealKernel(t *testing.T) {
 	b := newAccessBed(t)
+	// the kernel rate-limits ICMP errors per destination (a burst of six, then one a second): ten errors to
+	// one device within moments would lose the last ones on a fast kernel
+	b.gw.Sysctl("net.ipv4.icmp_ratelimit", "0")
 	for i, c := range []struct{ name, with, want string }{
 		{"default", "", "3/3"},                // port unreachable
 		{"port", "port_unreachable", "3/3"},   // port unreachable

@@ -5,6 +5,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,15 +75,26 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 	waitDelivered(t, run, 20)
 
 	// 1 a change in place, 2 a netem made again, 3 a new fault with new classes on every interface,
-	// 4 a removal: the classes of the removed fault stay for the largest delay plus a second
+	// 4 a removal: the classes of the removed fault stay for the largest delay plus a second.
+	// The times of the steps (from the start of the stream) go into the log: a packet that is outside the
+	// bounds is reported with its place in the stream, and which step it falls into says what disturbed it.
+	began := time.Now()
+	var steps []string
+	step := func(what string) {
+		steps = append(steps, fmt.Sprintf("%s done at %v", what, time.Since(began).Round(time.Millisecond)))
+	}
 	r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {latency: 120ms, jitter: 10ms, distribution: normal}, download: {latency: 25ms}}")
+	step("change in place")
 	r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {latency: 120ms, jitter: 10ms}, download: {latency: 25ms}}")
+	step("netem made again")
 	r.mustPut(admin, "target: {device: dev-b}\nfault: {latency: 70ms}")
+	step("new fault")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if _, err := r.e.DeleteOverlay(ctx, x.Overlay.Id, &admin, admin); err != nil {
 		t.Fatal(err)
 	}
+	step("removal")
 	r.verifyKernel()
 	waitDelivered(t, run, minStream)
 
@@ -113,6 +125,18 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 			testbed.CheckDelays("C upload during the changes", res.Up, cShape.up-cShape.upJitter-slack, cShape.up+cShape.upJitter+slack),
 			testbed.CheckDelays("C download during the changes", res.Down, cShape.down-slack, cShape.down+slack)); err != nil {
 			t.Errorf("C's flow was disturbed while other faults changed: %v", err)
+			t.Logf("the stream sent a probe every %v; the steps, from the moment before the first one: %s", interval, strings.Join(steps, ", "))
+			for _, d := range []struct {
+				name   string
+				delays []time.Duration
+				lo, hi time.Duration
+			}{{"upload", res.Up, cShape.up - cShape.upJitter - slack, cShape.up + cShape.upJitter + slack}, {"download", res.Down, cShape.down - slack, cShape.down + slack}} {
+				for i, v := range d.delays {
+					if v < d.lo || v > d.hi {
+						t.Logf("%s delay of probe %d (in the order the answers came, about %v into the stream): %v, bounds [%v, %v]", d.name, i, time.Duration(i)*interval, v, d.lo, d.hi)
+					}
+				}
+			}
 		}
 	}
 	up, upDrops, backlog, upNow := r.queueSum(fy, compiler.Upload)

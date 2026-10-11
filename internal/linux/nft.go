@@ -151,6 +151,40 @@ func (s *NftSet) Pairs() map[string]string {
 	return out
 }
 
+// RawElements returns the elements of a set keyed by their normalized form (the one of Elements),
+// each with its JSON as nft printed it: the form a `delete element` names it by. ok is false when an
+// element cannot be read, so the listing may be incomplete and must not be the base of a difference.
+func (s *NftSet) RawElements() (elems map[string]json.RawMessage, ok bool) {
+	out := make(map[string]json.RawMessage, len(s.Elem))
+	for _, raw := range s.Elem {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, false
+		}
+		out[NormalizeElement(elemString(v))] = raw
+	}
+	return out, true
+}
+
+// RawKeys returns the keys of the elements of a map keyed by their normalized form (the one of
+// Pairs), each with its JSON as nft printed it: the form a `delete element` names it by. ok is false
+// when an element is not a [key, value] pair, so the listing must not be the base of a difference.
+func (s *NftSet) RawKeys() (keys map[string]json.RawMessage, ok bool) {
+	out := make(map[string]json.RawMessage, len(s.Elem))
+	for _, raw := range s.Elem {
+		var pair []json.RawMessage
+		if err := json.Unmarshal(raw, &pair); err != nil || len(pair) != 2 {
+			return nil, false
+		}
+		var k any
+		if err := json.Unmarshal(pair[0], &k); err != nil {
+			return nil, false
+		}
+		out[NormalizeElement(elemString(k))] = pair[0]
+	}
+	return out, true
+}
+
 // mapValueString renders a map element's data as nft prints it: a decimal number as itself, a
 // goto (or jump) verdict as the chain's name.
 func mapValueString(v any) string {

@@ -1747,7 +1747,12 @@ removed rule (plan §3.2). An overlay that is written again keeps its id and so 
   address, the counter exists).
 - **Destinations**: an address or prefix, the prefixes of a network, or `uplink`, which is everything
   outside the networks and the management network (`anon_uplink_*` is the set that is excluded;
-  `domain.World.viaUplink`). A hostname needs the DNS-derived sets of M20: such a rule stays out of the
+  `domain.World.NonUplinkPrefixes`, `domain.World.viaUplink`). The meaning is the configuration's, not the routing
+  table's: prefixes that BIRD learned (BGP, OSPF) and the service namespace's 169.254.100.0/30 lie in no configured
+  network, so they count as the uplink, and "drop to uplink" also drops traffic to a learned remote site and to the
+  namespace of the DNS proxy. A rule that must leave them out names its destination with a `cidr`. Decided by the
+  maintainer on 2026-10-11 (P2-M9-11), documented in the spec (`Destination`); `TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses`
+  pins the set. A hostname needs the DNS-derived sets of M20: such a rule stays out of the
   chain with a `hostname_unresolved` warning (P2-M9-02).
 - **Ports** are merged into disjoint ranges (an anonymous interval set refuses overlapping elements).
 - **Verdicts**: `allow` is `accept` in both hooks; `drop`; `reject` is `reject with icmpx type <t>`, one statement for

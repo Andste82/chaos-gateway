@@ -3128,11 +3128,25 @@ type Destination struct {
 	// Network UUID or name of an object. Stored configurations contain UUIDs only.
 	Network *Ref `json:"network,omitempty"`
 
-	// Uplink Anything routed via the uplink.
+	// Uplink Every address that lies in no configured network (local, WireGuard, the networks behind their
+	// routes and clients, the prefixes of a link) and in no management prefix. It is decided by the
+	// configuration, not by the routing table: prefixes that the routing daemon learned (BGP, OSPF,
+	// Babel) and the service namespace's 169.254.100.0/30 (the DNS proxy) lie in no configured
+	// network and so count as the uplink. A rule or a fault with the destination `uplink` applies
+	// to them too: "drop to uplink" also drops traffic to a learned remote site and to the DNS
+	// proxy's namespace. Name such a destination with `cidr` to tell it apart. Decided by the
+	// maintainer on 2026-10-11.
 	Uplink *DestinationUplink `json:"uplink,omitempty"`
 }
 
-// DestinationUplink Anything routed via the uplink.
+// DestinationUplink Every address that lies in no configured network (local, WireGuard, the networks behind their
+// routes and clients, the prefixes of a link) and in no management prefix. It is decided by the
+// configuration, not by the routing table: prefixes that the routing daemon learned (BGP, OSPF,
+// Babel) and the service namespace's 169.254.100.0/30 (the DNS proxy) lie in no configured
+// network and so count as the uplink. A rule or a fault with the destination `uplink` applies
+// to them too: "drop to uplink" also drops traffic to a learned remote site and to the DNS
+// proxy's namespace. Name such a destination with `cidr` to tell it apart. Decided by the
+// maintainer on 2026-10-11.
 type DestinationUplink bool
 
 // Device A configured device (plan §2.3). Discovered devices have UUIDs too; adopting one stores

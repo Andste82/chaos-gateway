@@ -409,9 +409,24 @@ Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.
 - **`apply.Apply`** reads the state (`ip -j`, `nft -j list`, sysctls, offloads, DOCKER-USER),
   plans the difference in a fixed order, runs it as one executor request and verifies by reading
   back. Stale routes and rules go before the links they refer to, new ones after. nftables is one
-  atomic transaction that re-creates the structure, flushes the compiled chains and sets, refills
-  them and deletes what the target no longer names; dynamic sets and named counters are never
-  flushed. Verify recognizes a rule by the hash of its expression in the rule's comment, a set by
+  atomic transaction that re-creates the structure, flushes and refills the compiled chains, changes
+  the elements of the static sets and maps by their difference with what the kernel holds (the
+  elements that are gone are deleted, the new ones added, the ones that stay are not touched; a set
+  or map that is new, or whose listing cannot be read completely, is flushed and filled) and deletes
+  what the target no longer names; dynamic sets and named counters are never flushed. Not flush and
+  fill (P2-M10-09): a flush makes every element of an interval set old for the moment of the commit,
+  and the kernel's interval set types can miss a lookup then (pipapo, the concatenated intervals of
+  the classification maps: fixed upstream in 2025 by "netfilter: nft_set_pipapo: don't check genbit
+  from packetpath lookups"; rbtree, the single-field interval sets and maps such as `classify_nets` and
+  the `dev` map: "netfilter: nft_set_rbtree: continue traversal if element is inactive"), so a packet of a
+  flow whose fault did not change could pass unclassified while another fault was written. An element
+  that is not touched is active in both generations and always found; an element whose value changes
+  (traffic that moves to another fault) is deleted and added in the same commit and can still miss
+  for that moment on a kernel without the fixes. `TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten`
+  (`internal/compiler/classifykernel_test.go`) streams two flows through the `dev` and the `devdest`
+  map while the table is switched between two targets in a loop, first with flush and fill (the misses
+  are logged, they depend on the kernel) and then with the difference (not one packet may miss).
+  Verify recognizes a rule by the hash of its expression in the rule's comment, a set by
   its elements, the generation by the comment of the one rule in the chain `generation`.
 - **`engine.Engine`** owns the desired state: commands go to one goroutine, readers use
   `Snapshot()`. A failed apply restores the committed revision, a change that could lock the
@@ -939,7 +954,7 @@ also changes two things said here: the maps are interval maps, and an element `g
   already diffed per-device sets one at a time in M6a: a changed key is deleted and re-added in the
   same incremental request (a map add refuses an existing key), a full apply still fills the map from
   the latest observed state. `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
-  a full apply, with the same object-cleanup handling `nft.go`'s `Transaction` already had for sets,
+  a full apply, since P2-M10-09 changed by their difference like a set, with the same object-cleanup handling `nft.go`'s `Transaction` already had for sets,
   and a latent bug fixed there: a removed map was deleted with `delete set`, not `delete map`);
   `kernelsim` simulates map objects (add/flush/delete, element add/delete, jump-target and
   set/map reference checks) so the apply and engine test suites exercise the new mechanism without a

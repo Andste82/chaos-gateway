@@ -248,6 +248,7 @@ func TestReadCommands(t *testing.T) {
 		`{"type":"read","what":"route_get","dst":"203.0.113.9","src":"10.10.0.31","dev":"br-a"}`: "ip -4 -j route get 203.0.113.9 from 10.10.0.31 iif br-a",
 		`{"type":"read","what":"nft"}`:                                                           "nft -j list table inet chaosgw",
 		`{"type":"read","what":"qdiscs","dev":"wan0"}`:                                           "tc -j qdisc show dev wan0",
+		`{"type":"read","namespace":"gw","what":"qdiscs"}`:                                       "[gw] tc -j qdisc show",
 		`{"type":"read","what":"classes"}`:                                                       "tc -j class show",
 		`{"type":"read","what":"filters","dev":"wan0"}`:                                          "tc -j filter show dev wan0",
 		`{"type":"read","what":"offloads","dev":"wan0"}`:                                         "ethtool -k wan0",

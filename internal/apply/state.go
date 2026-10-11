@@ -152,19 +152,8 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 	if s.Assigned, err = decode[[]string](out, 0, "assigned"); err != nil {
 		return nil, err
 	}
-	links, err := decode[[]linux.Link](out, 1, "links")
-	if err != nil {
+	if err := s.setLinks(out, 1, 2); err != nil {
 		return nil, err
-	}
-	for _, l := range links {
-		s.Links[l.Name] = l
-	}
-	addrs, err := decode[[]linux.Addrs](out, 2, "addrs")
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range addrs {
-		s.Addrs[a.Name] = a.Addrs
 	}
 	if s.Rules, err = decode[[]linux.Rule](out, 3, "rules"); err != nil {
 		return nil, err
@@ -271,10 +260,34 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 	return s, nil
 }
 
+// setLinks fills Links and Addrs from the link and address listings at the indexes li and ai of out.
+func (s *State) setLinks(out executor.Outcome, li, ai int) error {
+	links, err := decode[[]linux.Link](out, li, "links")
+	if err != nil {
+		return err
+	}
+	for _, l := range links {
+		s.Links[l.Name] = l
+	}
+	addrs, err := decode[[]linux.Addrs](out, ai, "addrs")
+	if err != nil {
+		return err
+	}
+	for _, a := range addrs {
+		s.Addrs[a.Name] = a.Addrs
+	}
+	return nil
+}
+
 // readTC reads the tc state of the interfaces that may hold a tree of Chaos Gateway's own: the ones
 // the target names and every assigned one (a tree on an interface the target no longer uses has to be
-// found). The qdisc listing of each is one tool run; only an interface with a root qdisc 1: or an
-// ingress qdisc gets the whole read (qdiscs, classes, filters, with counters).
+// found). Which of them hold one is told by the qdisc listing of all interfaces, one tool run however
+// many interfaces are assigned (P2-M8b-04); only an interface with a root qdisc 1: or an ingress qdisc
+// gets the whole read (qdiscs, classes, filters, with counters: three or four runs).
+//
+// No memory of the interfaces that held a tree at the last apply is needed: the listing says it at the
+// cost of one run, and it also finds a tree that a previous run of the gateway or someone else left on
+// an assigned interface, which a memory would not.
 func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) (map[string]*linux.NormTree, error) {
 	var devs []string
 	for _, d := range union(wanted, s.Assigned) {
@@ -286,37 +299,19 @@ func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) 
 	if len(devs) == 0 {
 		return trees, nil
 	}
-	ops := make([]executor.Operation, len(devs))
-	for i, d := range devs {
-		ops[i] = read(ns, executor.ReadQdiscs, d)
-	}
-	out, err := ex.Do(ctx, ops...)
+	withTree, err := devsWithTree(ctx, ex, ns, devs)
 	if err != nil {
-		return nil, fmt.Errorf("read the qdiscs: %w", err)
-	}
-	var withTree []string
-	for i, d := range devs {
-		qs, err := decode[[]linux.Qdisc](out, i, "qdiscs "+d)
-		if err != nil {
-			return nil, err
-		}
-		for _, q := range qs {
-			// the entries of a listing that names a device belong to it; `dev` is empty when a
-			// version does not print it
-			if (q.Handle == compiler.TCRootHandle && q.Root || q.Kind == "ingress") && (q.Dev == "" || q.Dev == d) {
-				withTree = append(withTree, d)
-				break
-			}
-		}
+		return nil, err
 	}
 	if len(withTree) == 0 {
 		return trees, nil
 	}
-	ops = ops[:0]
+	ops := make([]executor.Operation, 0, len(withTree))
 	for _, d := range withTree {
 		ops = append(ops, read(ns, executor.ReadTC, d))
 	}
-	if out, err = ex.Do(ctx, ops...); err != nil {
+	out, err := ex.Do(ctx, ops...)
+	if err != nil {
 		return nil, fmt.Errorf("read the tc state: %w", err)
 	}
 	for i, d := range withTree {
@@ -329,6 +324,37 @@ func readTC(ctx context.Context, ex Exec, ns string, s *State, wanted []string) 
 		}
 	}
 	return trees, nil
+}
+
+// devsWithTree returns the interfaces among devs (in their order) that hold a root qdisc 1: or an
+// ingress qdisc, from the qdisc listing of all interfaces (`tc -j qdisc show`, one run). tc names the
+// interface of every entry of a listing that is not about one interface; an entry without it cannot be
+// attributed and fails the read rather than hide a tree.
+func devsWithTree(ctx context.Context, ex Exec, ns string, devs []string) ([]string, error) {
+	out, err := ex.Do(ctx, read(ns, executor.ReadQdiscs, ""))
+	if err != nil {
+		return nil, fmt.Errorf("read the qdiscs: %w", err)
+	}
+	qs, err := decode[[]linux.Qdisc](out, 0, "qdiscs")
+	if err != nil {
+		return nil, err
+	}
+	has := map[string]bool{}
+	for _, q := range qs {
+		if q.Dev == "" {
+			return nil, fmt.Errorf("read the qdiscs: the listing of all interfaces has a %s qdisc %s without its interface", q.Kind, q.Handle)
+		}
+		if q.Handle == compiler.TCRootHandle && q.Root || q.Kind == "ingress" {
+			has[q.Dev] = true
+		}
+	}
+	var withTree []string
+	for _, d := range devs {
+		if has[d] {
+			withTree = append(withTree, d)
+		}
+	}
+	return withTree, nil
 }
 
 // readService reads the service namespace. A namespace that cannot be read is a namespace that does
@@ -438,10 +464,20 @@ func dockerNoise(name string) bool {
 	return strings.HasPrefix(name, "br-") && len(name) == 15 && strings.Trim(name[3:], "0123456789abcdef") == ""
 }
 
-// ReadHost reads the observed host: the compiler's input.
+// ReadHost reads the observed host: the compiler's input. It reads only what the host is made of (the
+// links, their addresses and the routes, one executor round trip), not the whole state: it runs after
+// every burst of network events, and the tc state of the assigned interfaces alone is several tool
+// runs (P2-M8b-04).
 func ReadHost(ctx context.Context, ex Exec, ns string) (compiler.Host, error) {
-	s, err := ReadState(ctx, ex, ns, Want{})
+	out, err := ex.Do(ctx, read(ns, executor.ReadLinks, ""), read(ns, executor.ReadAddrs, ""), read(ns, executor.ReadRoutes, ""))
 	if err != nil {
+		return compiler.Host{}, fmt.Errorf("read the kernel state: %w", err)
+	}
+	s := &State{Links: map[string]linux.Link{}, Addrs: map[string][]linux.Address{}}
+	if err := s.setLinks(out, 0, 1); err != nil {
+		return compiler.Host{}, err
+	}
+	if s.Routes, err = decode[[]linux.Route](out, 2, "routes"); err != nil {
 		return compiler.Host{}, err
 	}
 	return s.Host(), nil

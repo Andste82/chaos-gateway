@@ -2887,7 +2887,15 @@ components:
         uplink:
           type: boolean
           enum: [true]
-          description: Anything routed via the uplink.
+          description: |
+            Every address that lies in no configured network (local, WireGuard, the networks behind their
+            routes and clients, the prefixes of a link) and in no management prefix. It is decided by the
+            configuration, not by the routing table: prefixes that the routing daemon learned (BGP, OSPF,
+            Babel) and the service namespace's 169.254.100.0/30 (the DNS proxy) lie in no configured
+            network and so count as the uplink. A rule or a fault with the destination `uplink` applies
+            to them too: "drop to uplink" also drops traffic to a learned remote site and to the DNS
+            proxy's namespace. Name such a destination with `cidr` to tell it apart. Decided by the
+            maintainer on 2026-10-11.
         network: {$ref: '#/components/schemas/Ref'}
         cidr: {$ref: '#/components/schemas/Ipv4OrCidr'}
         hostname:

@@ -1468,6 +1468,91 @@ func TestWinnersAreTheFaultsThatWinSomewhere(t *testing.T) {
 	}
 }
 
+// coverageOf says how much of its traffic a fault wins by the target's coverage: "all", "some", "none".
+func coverageOf(tg *Target, key string) string {
+	c, ok := tg.Coverage[key]
+	switch {
+	case !ok:
+		return "absent"
+	case c.Matched == 0:
+		return "nothing matched"
+	case c.Won == c.Matched:
+		return "all"
+	case c.Won == 0:
+		return "none"
+	}
+	return "some"
+}
+
+// Coverage tells a fault that wins all of the traffic it selects from one that wins a part and one that
+// wins none (P2-M8a-06): a device fault takes one device of a network fault's network, a port fault one
+// port of another device, a configured fault loses to the overlays everywhere and an older global fault
+// is shadowed by a newer one. The parts of a profile activation and MTU faults are counted the same way.
+func TestCoverageTellsAFaultThatWinsAllSomeOrNoneOfItsTraffic(t *testing.T) {
+	w := newFaultWorld(t)
+	cfgDevice := "00000000-0000-4000-8000-0000000c0e01"
+	w.addConfigFault(cfgDevice, `{source: {device: esp32-42}, latency: 1ms}`, 0)
+	network := w.overlay(`{target: {network: IoT}, fault: {latency: 100ms}}`, 0)
+	device := w.overlay(`{target: {device: esp32-42}, fault: {latency: 200ms}}`, time.Second)
+	port := w.overlay(`{target: {device: esp32-43}, fault: {protocol: tcp, ports: [8883], loss: 5%}}`, 2*time.Second)
+	shadowed := w.overlay(`{target: {global: true}, fault: {loss: 1%}}`, 3*time.Second)
+	newer := w.overlay(`{target: {global: true}, fault: {latency: 30ms}}`, 4*time.Second)
+	profile := w.overlay(`{target: {device: lab-host}, profile: bad-lte}`, 5*time.Second)
+	labPort := w.overlay(`{target: {device: lab-host}, fault: {protocol: tcp, ports: [443], loss: 2%}}`, 6*time.Second)
+	mtu := w.overlay(`{target: {network: IoT}, fault: {family: mtu, mtu: {size: 1280, mode: mss_clamp}}}`, 7*time.Second)
+	mtuDev := w.overlay(`{target: {device: esp32-42}, fault: {family: mtu, mtu: {size: 1200, mode: mss_clamp}}}`, 8*time.Second)
+	tg := w.compile(nil)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	key := func(o model.Overlay, family string) string { return "overlay:" + o.Id.String() + ":" + family }
+	for k, want := range map[string]string{
+		key(device, "impairment"):             "all",  // the most specific fault of esp32-42
+		key(network, "impairment"):            "some", // esp32-42 is the device fault's, tcp/8883 of esp32-43 the port fault's
+		key(port, "impairment"):               "all",
+		"config:" + cfgDevice + ":impairment": "none", // an overlay wins over the configuration whatever the levels
+		key(shadowed, "impairment"):           "none", // the newer global fault of the same level everywhere
+		key(newer, "impairment"):              "some", // the network IoT has its own fault, the rest is the global one's
+		key(profile, "impairment"):            "some", // tcp/443 of lab-host is the port fault's
+		key(labPort, "impairment"):            "all",
+		key(mtu, "mtu"):                       "some", // esp32-42 has an MTU fault of its own
+		key(mtuDev, "mtu"):                    "all",
+	} {
+		if got := coverageOf(tg, k); got != want {
+			t.Errorf("%s wins %s of its traffic (%+v), want %s", k, got, tg.Coverage[k], want)
+		}
+		if inWinners := contains(tg.Winners, k); inWinners != (want != "none") {
+			t.Errorf("%s: in Winners %v, wins %s", k, inWinners, want)
+		}
+	}
+}
+
+// A fault can be the winner of a table entry that no traffic reaches: destination faults of a device that
+// cover every address leave nothing to the device's fault without a destination (its level-4 entry). It
+// wins nothing, so it is neither a winner nor in the preview's list.
+func TestAFaultWhoseEntryNoTrafficReachesWinsNothing(t *testing.T) {
+	w := newFaultWorld(t)
+	below := w.overlay(`{target: {device: esp32-42}, fault: {latency: 5ms}}`, 0)
+	w.overlay(`{target: {device: esp32-42}, fault: {destination: {cidr: 0.0.0.0/1}, loss: 1%}}`, time.Second)
+	w.overlay(`{target: {device: esp32-42}, fault: {destination: {cidr: 128.0.0.0/1}, loss: 2%}}`, 2*time.Second)
+	tg := w.compile(nil)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	k := "overlay:" + below.Id.String() + ":impairment"
+	if got := coverageOf(tg, k); got != "none" {
+		t.Errorf("the fault below the destinations wins %s of its traffic: %+v", got, tg.Coverage[k])
+	}
+	if contains(tg.Winners, k) {
+		t.Errorf("it is a winner: %v", tg.Winners)
+	}
+	for _, e := range tg.Effective {
+		if e.Key == k {
+			t.Errorf("the preview lists it: %+v", e)
+		}
+	}
+}
+
 // ---- the cost of resolving many overlays -----------------------------------------------------------
 
 // scaleOverlays adds n overlays on the network IoT; kind says what each selects: "dp" its own /24 and

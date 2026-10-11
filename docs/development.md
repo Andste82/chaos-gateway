@@ -185,7 +185,8 @@ Things to know:
   One more since M8b, `TestAHundredWritesWithoutAHeldExecutorAreQuick`: its 5 s bound is far from
   what a native or KVM run needs (about 0.3 s) but an emulated apply of 100 faults takes 6.9 s since
   every apply reads the tc state of all assigned interfaces before and after (P2-M8b-04), where
-  `main` needed 3.3 s (measured on 2026-10-07 in the same VM, one apply each). The bound is not
+  `main` needed 3.3 s (measured on 2026-10-07 in the same VM, one apply each; since then the qdiscs of
+  all interfaces are listed in one tool run, "The tc tree in the apply"). The bound is not
   widened: it guards against a cost that grows with the square of the burst, and the run that
   counts is the native one.
   A full run of the engine package takes about two hours since M8b (`make vm-test ARGS='-tags testbed
@@ -1400,11 +1401,20 @@ deletions.
 `apply.Apply` carries `Target.TC` into the kernel and verifies it like the rest of the state.
 Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal/engine/applyloop.go`.
 
-- **Reading.** `ReadState` lists the qdiscs (one tool run) of every interface the target names
-  (`Target.TCCandidates`: the bridges, the WireGuard interfaces, the uplink, the service namespace's
-  host side) and of every assigned one, and reads the whole tc state (`ReadTC`, with counters) only of
-  those that hold a root `1:`. `State.TC` maps an interface to its tree; an interface without one is
-  not in it. The interfaces of the host's own (the management NIC, the ports) cost one tool run each.
+- **Reading.** `ReadState` lists the qdiscs of all interfaces in one tool run (`tc -j qdisc show`
+  without a device, every entry names its interface; P2-M8b-04) and reads the whole tc state
+  (`ReadTC`, with counters: three tool runs, four with an ingress qdisc) only of the interfaces that
+  hold a root `1:` or an ingress qdisc among the ones the target names (`Target.TCCandidates`: the
+  bridges, the WireGuard interfaces, the uplink, the service namespace's host side) and the assigned
+  ones. `State.TC` maps an interface to its tree; an interface without one is not in it. The
+  interfaces of the host's own (the management NIC, the ports) cost nothing beyond the one listing:
+  an apply with ten assigned interfaces and the tree on three runs tc 2 × (1 + 3 × 3) = 20 times to
+  read, before the plan and to verify, where a listing per interface made it 2 × (10 + 9) = 38
+  (`TestAnApplyWithTenAssignedInterfacesListsTheQdiscsOnce`). No memory of the interfaces that held a
+  tree at the last apply is kept: the listing tells it at the cost of one run, and it also finds a tree
+  that a previous run of the gateway or someone else left on an assigned interface. `ReadHost` (the
+  compiler's input, read after every burst of network events) reads only the links, addresses and
+  routes, in one executor round trip, and no tc state at all.
 - **The diff** (`planTC`) compares the target's normalized tree (`TCTarget.Norm`) with the interface's
   own subtree (`NormTree.Subtree("1:")`) object by object and plans per interface:
   the root (`qdisc replace ... root handle 1: htb default 1`, only when `1:` is not there: `replace`
@@ -1462,9 +1472,19 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   old table. The retirer therefore remembers the table it gave each leaf. A leaf that is to be uniform
   with a jitter (the only thing a table shapes) while it holds or may hold a table is made again
   (delete, create: a new seed, the queue is dropped); a leaf that is to get a table gets it
-  in place; one that the retirer did not create (the first apply after a restart) counts as one that
-  may hold a table, but is left alone when it is already what the target says
-  (`TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`). An apply that fails while it
+  in place. A leaf the retirer has no memory of (the first apply after a restart of the engine finds
+  leaves it did not write) counts as one that may hold a table, also when it is already what the
+  target says: a table that survived the restart, or that someone else put there before the start, is
+  invisible in the listing. That first apply therefore makes every such leaf that is to be uniform with
+  a jitter again and writes the table of every such leaf that is to have one in place; from then on the
+  memory knows them and an unchanged leaf is not touched (P2-M8b-02,
+  `TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`, on the real kernel
+  `TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft`). The cost is the queue of the leaves
+  with a jitter, once per start of the engine, which is accepted for a verify that would otherwise hold
+  a leaf for uniform that is not; a leaf without a jitter is left alone (a table shapes nothing there),
+  and so is every leaf for an apply without a retirer (`apply.Apply`, the CLI's one-shot apply,
+  `apply.Preview`), which has no memory to fill. A table that someone else writes while the engine runs,
+  into a leaf whose listing it leaves as it was, is not seen until the next change of that leaf. An apply that fails while it
   is carried out may have written a table that the memory would not know: the leaves its tc operations
   wrote are then remembered as holding an unknown table (`Retirer.failed`), so the restore of the
   previous revision makes a leaf that is to be uniform again even though the listing shows no
@@ -1501,9 +1521,10 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   a 600 ms fault changed twice (to 900 ms and 50 ms) under load with every datagram of a numbered UDP
   stream delivered and no drop counted, a move of the fault id under load with the same conservation
   and every datagram counted by the old or the new class, the old classes' deletion, the tree that
-  goes with the last fault, a normal distribution going back to uniform). The load is a sender that
+  goes with the last fault, a normal distribution going back to uniform, a table that a previous run
+  left behind dropped by the first apply after the restart). The load is a sender that
   runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
-  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution" -tags testbed -test-timeout 30m ./internal/apply'`.
+  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestTheFirstApplyAfterARestart" -tags testbed -test-timeout 30m ./internal/apply'`.
 
 ### Queue statistics and counter epochs (M8b)
 

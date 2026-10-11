@@ -428,8 +428,10 @@ Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.
   the table is switched between two targets in a loop, first with flush and fill (the misses are
   logged, not asserted) and then with the difference (not one packet may miss). On the native CI
   runner (6.17.0-1022-azure) flush and fill missed 113 of 152,920 packets through `dev` and 67 of
-  159,680 through `devdest` in 540 transactions; the difference missed none of about 155,000 each in
-  547 transactions.
+  159,680 through `devdest` in 540 transactions, the difference none of about 155,000 each in 547
+  transactions; in the level-1b VM (6.8.0-142-generic, the minimum supported kernel, with KVM) flush
+  and fill missed 15 of 147,940 and 136 of 148,260 in 81 transactions, the difference none of 147,300
+  and 156,600 in 81.
   Verify recognizes a rule by the hash of its expression in the rule's comment, a set by
   its elements, the generation by the comment of the one rule in the chain `generation`.
 - **`engine.Engine`** owns the desired state: commands go to one goroutine, readers use

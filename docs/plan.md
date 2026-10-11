@@ -1353,6 +1353,8 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 ## Phase 2 — Faults (core value)
 
+**Status:** M7 to M11 done; the Phase 2 open items closed (PR #46), except P2-M9-06, a hardware measurement that stays with H1 (`docs/open-items.md`).
+
 **M7 — Classification layer** (M)
 - **Status:** done — merged (PR #29, `ef9fea5`). Convention for Phase 2: a milestone gets this line, right under its heading, once its PR has merged to `main` with green CI.
 - Scope: the lookup chain of §3.3 (device + destination + port … any + destination … global, protocol-only maps, splitting of overlapping selectors) on prerouting, only for test traffic, direction bit, identity updates as incremental map operations from the observed state; identity maps keyed by address → device id replace the per-device sets of Phase 1, so a new device is an element update too. No IFB and no output-hook classification here: gateway services are reached through `svc0` egress (D29, S16); the output hook and IFB are only used for tunnel faults (M10).

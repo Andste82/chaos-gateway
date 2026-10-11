@@ -244,7 +244,11 @@ kernel, where a test starts sending within that second, the first flow of the La
 95th percentile of 0.9 to 1 s. `TestTheFirstPacketOfEveryDeviceGoesThroughRightAfterTheTopologyIsBuilt`
 pins it. The product side was ready all along: a capture showed the gateway's `br-lab` up with its port
 forwarding before the apply returned, the ARP request never reaching `lan1`, and Switch1 dropping it.
-The measurement tests therefore need no warm-up before they measure.
+The measurement tests therefore wait for nothing before they measure. What `startFaultLab` still does
+first (`meetDevices`, `settleIdentity`) is for the identity, not for timing: the gateway meets every
+test device once, so that the engine has discovered them and applied the new identity map before a test
+compiles the snapshot and compares it with the kernel (a host the gateway meets for the first time takes
+a numeral in the identity map, which shifts the numerals of the others).
 
 ## The executor
 

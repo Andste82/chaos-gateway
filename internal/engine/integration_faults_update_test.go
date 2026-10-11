@@ -63,10 +63,14 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 
 	// The stream is C's measurement and must be long enough for the allowance of testbed.CheckDelays
 	// ("at most 1 % outside the bounds" is one packet of 100 and means nothing for fewer): at least
-	// minStream packets, which a 5 ms interval delivers in about a second after the changes.
+	// minStream packets, which a 5 ms interval delivers in about a second after the changes (20 ms under emulation).
 	// P2-M10-08 (decided by the maintainer on 2026-10-11): the interval is short, the count is long.
 	const minStream = 200
-	run := streamRunEvery(c, 5*time.Millisecond)
+	interval := 5 * time.Millisecond
+	if !testbed.Accurate() {
+		interval = 20 * time.Millisecond // an emulated machine cannot serve 200 probes a second and the executor's reads too
+	}
+	run := streamRunEvery(c, interval)
 	waitDelivered(t, run, 20)
 
 	// 1 a change in place, 2 a netem made again, 3 a new fault with new classes on every interface,

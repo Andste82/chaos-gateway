@@ -146,6 +146,8 @@ type Bed struct {
 	mu    sync.Mutex
 	nss   []*Namespace
 	procs []*Process
+	// ends are the veth ends Link created, for WaitLinks
+	ends []End
 }
 
 // New returns an empty Bed. It fails the test, with the way out, if the machine cannot create

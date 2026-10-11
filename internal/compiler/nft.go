@@ -42,7 +42,8 @@ type SetDef struct {
 	Name  string   `json:"name"`
 	Type  string   `json:"type"`
 	Flags []string `json:"flags,omitempty"`
-	// Elements are the compiled content of a static set, flushed and refilled at every apply.
+	// Elements are the compiled content of a static set; an apply changes the kernel's set to them by
+	// their difference (Nft.Transaction).
 	Elements []string `json:"elements,omitempty"`
 	// Dynamic sets (filled at run time, such as the DNS-derived address sets) are never flushed:
 	// their elements survive every apply.
@@ -51,8 +52,8 @@ type SetDef struct {
 
 // MapDef is a named map: a key (one or more concatenated nft types) to a value (plan §3.3). Like
 // SetDef its name carries a short hash of the definition, so a changed key or value type creates a
-// new map instead of a failing `add map`. A map is always flushed and refilled at a full apply,
-// like the Phase 1 per-device sets it replaces for device identity (dhcp.go); an identity-only or
+// new map instead of a failing `add map`. A full apply changes a map's elements by the difference
+// with what the kernel holds (Nft.Transaction, docs/open-items.md P2-M10-09); an identity-only or
 // classification-only change updates its elements directly instead (executor.NftAddMapElements,
 // NftDelMapElements), the map counterpart of a SetDef's incremental element update.
 type MapDef struct {
@@ -66,7 +67,7 @@ type MapDef struct {
 	// Flags are the map's flags; "interval" lets keys be ranges and prefixes (the classification
 	// maps, whose elements are disjoint ranges, plan §3.2 "overlapping selectors").
 	Flags []string `json:"flags,omitempty"`
-	// Elements are the compiled content, flushed and refilled at every apply. A MapElement's Key
+	// Elements are the compiled content (changed by the difference at every apply). A MapElement's Key
 	// joins KeyType's parts with " . " (nft's own concatenation syntax); its Value is a decimal
 	// integer for ValueType "mark", or the chain an element goes to for ValueType "verdict".
 	Elements []MapElement `json:"elements,omitempty"`
@@ -123,10 +124,16 @@ func cmd(command, kind string, fields map[string]any) any {
 }
 
 // Transaction builds the nftables JSON of one apply (plan §3.2): the static structure is
-// re-created (a no-op for what exists), the compiled chains and sets are flushed and refilled,
-// and objects that are in `current` but no longer in the target are deleted at the end. Dynamic
-// sets and all named counters that stay are never flushed or reset.
-func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
+// re-created (a no-op for what exists), the compiled chains are flushed and refilled, the elements of
+// the static sets and maps that `current` holds are changed by their difference with the target and
+// those of new ones filled (setUpdate), and objects that are in `current` but no longer in the target
+// are deleted at the end. Dynamic sets and all named counters that stay are never flushed or reset.
+// Without `current` (a first apply, or a check of the syntax) every set and map is flushed and filled.
+func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) { return n.transaction(current, true) }
+
+// transaction is Transaction; with diff false every static set and map is flushed and filled, as
+// every apply did before P2-M10-09 (kept for the kernel test that shows what that costs).
+func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 	var cmds []any
 	cmds = append(cmds, map[string]any{"add": map[string]any{"table": map[string]any{"family": executor.NftFamily, "name": executor.NftTable}}})
 
@@ -161,20 +168,18 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 	for _, c := range n.chains() {
 		cmds = append(cmds, cmd("flush", "chain", map[string]any{"name": c.Name}))
 	}
+	base := current
+	if !diff {
+		base = nil
+	}
 	for _, s := range n.Sets {
 		if s.Dynamic {
 			continue
 		}
-		cmds = append(cmds, cmd("flush", "set", map[string]any{"name": s.Name}))
-		if len(s.Elements) > 0 {
-			cmds = append(cmds, cmd("add", "element", map[string]any{"name": s.Name, "elem": setElements(s)}))
-		}
+		cmds = append(cmds, setUpdate(s, base)...)
 	}
 	for _, m := range n.Maps {
-		cmds = append(cmds, cmd("flush", "map", map[string]any{"name": m.Name}))
-		if len(m.Elements) > 0 {
-			cmds = append(cmds, cmd("add", "element", map[string]any{"name": m.Name, "elem": mapElements(m)}))
-		}
+		cmds = append(cmds, mapUpdate(m, base)...)
 	}
 	for _, c := range n.chains() {
 		for _, r := range c.Rules {
@@ -239,6 +244,128 @@ func (n Nft) Transaction(current *linux.Ruleset) ([]byte, error) {
 		}
 	}
 	return json.Marshal(map[string]any{"nftables": cmds})
+}
+
+// setUpdate is the part of a transaction that gives a static set the elements of the target. A set
+// the kernel holds already (current names it) is changed by the difference: the elements that are
+// gone are deleted, the new ones added, and an element that stays is not touched. A set that is new,
+// or whose listing cannot be read completely, is flushed and filled.
+//
+// Not flush and fill (docs/open-items.md P2-M10-09): the kernel's interval sets can miss a lookup
+// while a transaction that holds old and new copies of the same element commits. The concatenated
+// interval sets (pipapo) checked the generation of the element they found against the new generation
+// before the new copy was visible (fixed upstream in 2025, "netfilter: nft_set_pipapo: don't check
+// genbit from packetpath lookups"), and the single-field interval sets (rbtree) stopped at an inactive
+// range that covers the key ("netfilter: nft_set_rbtree: continue traversal if element is inactive"). A
+// flush makes every element old for that moment, so a packet of a flow whose classification did not
+// change at all could pass unclassified while another fault was written; an element that is not
+// touched is active in both generations and is always found.
+func setUpdate(s SetDef, current *linux.Ruleset) []any {
+	var have map[string]json.RawMessage
+	ok := false
+	if current != nil {
+		if got := current.Set(s.Name); got != nil {
+			have, ok = got.RawElements()
+		}
+	}
+	if !ok {
+		out := []any{cmd("flush", "set", map[string]any{"name": s.Name})}
+		if len(s.Elements) > 0 {
+			out = append(out, cmd("add", "element", map[string]any{"name": s.Name, "elem": setElements(s)}))
+		}
+		return out
+	}
+	want := make(map[string]bool, len(s.Elements))
+	var add []any
+	for _, e := range s.Elements {
+		k := linux.NormalizeElement(e)
+		if want[k] {
+			continue
+		}
+		want[k] = true
+		if _, there := have[k]; !there {
+			add = append(add, setElement(s.Type, e))
+		}
+	}
+	var gone []string
+	for k := range have {
+		if !want[k] {
+			gone = append(gone, k)
+		}
+	}
+	return elementCommands(s.Name, gone, have, add)
+}
+
+// mapUpdate is setUpdate for a map: a key that is gone or whose value changed is deleted, a key that
+// is new or whose value changed is added, and an element that stays as it is is not touched. (An
+// element whose value changes is deleted and added in the same commit: its traffic moves to another
+// chain, and on a kernel without the fixes named at setUpdate it can miss for that moment.)
+func mapUpdate(m MapDef, current *linux.Ruleset) []any {
+	var have map[string]json.RawMessage
+	var haveVal map[string]string
+	ok := false
+	if current != nil {
+		if got := current.Set(m.Name); got != nil {
+			have, ok = got.RawKeys()
+			haveVal = got.Pairs()
+		}
+	}
+	if !ok {
+		out := []any{cmd("flush", "map", map[string]any{"name": m.Name})}
+		if len(m.Elements) > 0 {
+			out = append(out, cmd("add", "element", map[string]any{"name": m.Name, "elem": mapElements(m)}))
+		}
+		return out
+	}
+	want := make(map[string]string, len(m.Elements))
+	var add []MapElement
+	var changed []string
+	for _, e := range m.Elements {
+		k := linux.NormalizeElement(e.Key)
+		if _, dup := want[k]; dup {
+			continue
+		}
+		want[k] = e.Value
+		if _, there := have[k]; there {
+			if haveVal[k] == e.Value {
+				continue
+			}
+			changed = append(changed, k)
+		}
+		add = append(add, e)
+	}
+	gone := changed
+	for k := range have {
+		if _, ok := want[k]; !ok {
+			gone = append(gone, k)
+		}
+	}
+	var adds []any
+	if len(add) > 0 {
+		d := m
+		d.Elements = add
+		adds = mapElements(d)
+	}
+	return elementCommands(m.Name, gone, have, adds)
+}
+
+// elementCommands deletes the elements named by gone (by the JSON the kernel printed for them) and
+// then adds add: in this order, because an interval set refuses an element that overlaps one that is
+// still there, and both are in the same commit.
+func elementCommands(name string, gone []string, raw map[string]json.RawMessage, add []any) []any {
+	var out []any
+	if len(gone) > 0 {
+		sort.Strings(gone)
+		elem := make([]any, len(gone))
+		for i, k := range gone {
+			elem[i] = raw[k]
+		}
+		out = append(out, cmd("delete", "element", map[string]any{"name": name, "elem": elem}))
+	}
+	if len(add) > 0 {
+		out = append(out, cmd("add", "element", map[string]any{"name": name, "elem": add}))
+	}
+	return out
 }
 
 // chains returns the chains of the target including the generation chain, which every apply

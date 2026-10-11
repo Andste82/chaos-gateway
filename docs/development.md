@@ -1035,6 +1035,20 @@ steps.
   times entries instead of one entry per network); if that turns out too large, a device's entries that
   equal what its stretch's table gives can be dropped (`Table.Signature` makes the comparison cheap).
   Decided by the maintainer on 2026-10-11 (P2-M8a-01).
+  *Coverage* (`Table.Coverage`, P2-M8a-06). The pieces span a grid: the destination pieces plus the addresses no
+  destination selector names, times the protocol/port pieces plus the protocols and ports no selector names. On a cell
+  of the grid nothing changes, so every candidate matches all of it or none, and one wins all of it. `Table.Coverage`
+  counts, per candidate (`Candidate.Key`, `layer:id:family`), the cells it matches and the cells it wins
+  (`domain.Cover`). The build looks only at the cells where a candidate names both a destination and a port, or where a
+  destination-only and a port-only candidate meet; the other cells are counted per row and column (their winner is the
+  row's, the column's or level 4's), and the candidates the build drops before it looks at a cell (an older one of the
+  same scope and level) are counted as matching every cell of their row, column or the whole grid. The counts are not
+  traffic volumes; they tell "all", "some" and "none" apart. `TestTheCoverageOfATableIsWhatResolveSaysCellByCell` asks
+  `Resolve` for one traffic of every cell of random worlds and compares; `TestTheCoverageCountsDroppedCandidatesAndAFullDestinationCover`
+  adds the dropped candidates and destinations that cover every address. The compiler sums the coverage of every
+  source's table into `Target.Coverage` (impairment and MTU). A fault can be the winner of an entry that no traffic
+  reaches (the level-4 entry below destination faults that cover every address); it wins nothing, so `Target.Winners`
+  and `Target.Effective` leave it out (`TestAFaultWhoseEntryNoTrafficReachesWinsNothing`).
   *The prefixes of a network* (`domain.prefixesOf`, which scope matching, the destination `network`,
   `ResolveAccess`, the fault tables, `NetworkOf` and the access rules' source sets all use) are its subnet and,
   for a local test network, the networks behind its downstream routes (plan §2.3: devices behind another router in the
@@ -1197,7 +1211,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   overlays and recompiles the kernel from the committed revision and the observed state
   (`TestARestartDropsTheOverlays`, `TestARestartOfTheAPIDropsTheOverlays`).
 - **Snapshot.** `Snapshot.Overlays` (what the desired state holds, oldest first), `Faults`, `FaultIDs`,
-  `Winners` (which faults win for some traffic) and `FaultEpochs` (the generation in which a fault first
+  `Winners` (which faults win for some traffic), `Coverage` (how much of its traffic each impairment and MTU fault
+  wins) and `FaultEpochs` (the generation in which a fault first
   appeared in an applied target: the epoch of its counters, which restart when the fault is new)
   come from the last applied target; the API reads the snapshot and, for the counters, the named nft
   counters through one executor read per response (`Engine.ReadCounters`).
@@ -1210,11 +1225,19 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `aborted_runs: 0` until M15. The owner is the token itself, or the admin user for what the UI does
   (plan §2.15); runs become owners with M15. Create, replace, delete and reset are audited
   (`overlay.create`, `overlay.replace`, `overlay.delete`, `overlay.reset`, `overlay.apply_failed`);
-  a renewal is a heartbeat and is not. An overlay's `state` is `effective`, or `overridden` when it
-  wins nowhere (P2-M8a-06), its `counters` the sum of the named counters of its faults.
-  `GET /faults` and `/faults/{id}` show the configured faults with their state, counters and, for an
-  overridden one, the faults that beat it (the winners over the devices of its scope at a destination
-  and port it selects); a revision other than the active one shows the configuration alone.
+  a renewal is a heartbeat and is not. An overlay's `state` says how much of the traffic it selects it
+  wins over every source of its scope (`overlayContext.effectOf`, from `Snapshot.Coverage`, P2-M8a-06):
+  `effective` all of it, `partially_overridden` a part (a device fault took one device of its network, a
+  fault took one of its ports), `overridden` none. A fault of a family without a classification table
+  (tunnel), or one that names a hostname, is `effective` when it is a winner at all (`Snapshot.Winners`).
+  Its `counters` are the sum of the named counters of its faults.
+  `GET /faults` and `/faults/{id}` show the configured faults with their state (the same rule; `disabled`
+  for `enabled: false`), counters and, for an overridden or partially overridden one, the faults that
+  beat it (the winners over the devices of its scope at a destination and port it selects); a revision
+  other than the active one shows the configuration alone. `explain` names the winner of one traffic
+  tuple and agrees with the state: it is computed by the same resolution
+  (`TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` over the API,
+  `TestCoverageTellsAFaultThatWinsAllSomeOrNoneOfItsTraffic` in the compiler).
   `GET /capabilities` lists the overlay kinds and fault families of the build (see the milestone sections).
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
@@ -2648,9 +2671,10 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   `faults-builtin-profiles` of `faultScenarios` (the tc tree and the maps of the same targets, so every property test and both
   kernel gates run on them; the MTU variant `profiles-mtu` is a scenario of the nftables gate only, because the MTU family
   compiles to jumps that the impairment scenarios must not contain).
-- **State of an activation** (`GET /overlays`, `GET /profiles`). `effective` when each of its parts wins for some traffic,
-  `overridden` when none does, `partially_overridden` when some do (the fault of the same scope took the impairment part and
-  the MTU part stayed), `disabled` when the profile is gone or has no part this build resolves. `counters` and `queues` are the
+- **State of an activation** (`GET /overlays`, `GET /profiles`). Each part is counted like a fault of its family (P2-M8a-06):
+  `effective` when every part wins all of its traffic, `overridden` when none wins anything, `partially_overridden` otherwise
+  (the fault of the same scope took the impairment part and the MTU part stayed, or a device fault took one device of the
+  activation's network), `disabled` when the profile is gone or has no part this build resolves. `counters` and `queues` are the
   sums over the faults of the activation, as for a fault overlay; the faults of an activation name it
   (`compiler.Fault.Profile`).
 - **A revision changes the profile; the activation follows** (plan §2.1.1). Overlays hold the UUID of the profile, so editing

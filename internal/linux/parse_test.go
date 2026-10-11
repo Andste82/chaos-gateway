@@ -1,6 +1,7 @@
 package linux
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -234,5 +235,65 @@ func TestParseWGDump(t *testing.T) {
 		if _, err := ParseWGDump(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// RawElements and RawKeys give each element (each key of a map) in the form nft printed it, under the
+// normalized name Elements and Pairs use; a listing with an element they cannot read is refused, so
+// no difference is built on an incomplete one (P2-M10-09).
+func TestRawElementsAndKeysKeepNftsOwnForm(t *testing.T) {
+	rs, err := ParseNft([]byte(`{"nftables":[
+ {"set":{"family":"inet","table":"chaosgw","name":"s","type":"ipv4_addr","flags":["interval"],
+  "elem":["10.0.0.1",{"prefix":{"addr":"10.1.0.0","len":24}},{"range":["10.2.0.5","10.2.0.9"]}]}},
+ {"map":{"family":"inet","table":"chaosgw","name":"m","type":["ipv4_addr","ipv4_addr"],"map":"verdict","flags":["interval"],
+  "elem":[[{"concat":["10.0.0.1",{"prefix":{"addr":"203.0.113.0","len":24}}]},{"goto":{"target":"mark_1"}}],
+          [{"concat":[{"range":["10.0.0.2","10.0.0.9"]},"198.51.100.7"]},{"goto":{"target":"mark_2"}}]]}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	els, ok := rs.Set("s").RawElements()
+	if !ok {
+		t.Fatal("a readable set is refused")
+	}
+	want := map[string]string{
+		"10.0.0.1":          `"10.0.0.1"`,
+		"10.1.0.0/24":       `{"prefix":{"addr":"10.1.0.0","len":24}}`,
+		"10.2.0.5-10.2.0.9": `{"range":["10.2.0.5","10.2.0.9"]}`,
+	}
+	if len(els) != len(want) {
+		t.Fatalf("%v", els)
+	}
+	for k, v := range want {
+		if string(els[k]) != v {
+			t.Errorf("%s: %s, want %s", k, els[k], v)
+		}
+	}
+	keys, ok := rs.Set("m").RawKeys()
+	if !ok {
+		t.Fatal("a readable map is refused")
+	}
+	wantKeys := map[string]string{
+		"10.0.0.1 . 203.0.113.0/24":        `{"concat":["10.0.0.1",{"prefix":{"addr":"203.0.113.0","len":24}}]}`,
+		"10.0.0.2-10.0.0.9 . 198.51.100.7": `{"concat":[{"range":["10.0.0.2","10.0.0.9"]},"198.51.100.7"]}`,
+	}
+	if len(keys) != len(wantKeys) {
+		t.Fatalf("%v", keys)
+	}
+	pairs := rs.Set("m").Pairs()
+	for k, v := range wantKeys {
+		if string(keys[k]) != v {
+			t.Errorf("%s: %s, want %s", k, keys[k], v)
+		}
+		if _, ok := pairs[k]; !ok {
+			t.Errorf("RawKeys names %s, Pairs does not", k)
+		}
+	}
+
+	bad := &NftSet{Elem: []json.RawMessage{json.RawMessage(`"10.0.0.1"`), json.RawMessage(`{`)}}
+	if _, ok := bad.RawElements(); ok {
+		t.Error("a set with an element that cannot be read is accepted")
+	}
+	if _, ok := (&NftSet{Elem: []json.RawMessage{json.RawMessage(`"10.0.0.1"`)}}).RawKeys(); ok {
+		t.Error("a map element that is not a pair is accepted")
 	}
 }

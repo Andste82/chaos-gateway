@@ -54,6 +54,9 @@ func (b *Bed) Link(x, y End) {
 	b.mu.Unlock()
 }
 
+// DiagNoLinkWait is TEMPORARY (P2-M8b-08 diagnostic): NewDefault does not wait for the links.
+var DiagNoLinkWait bool
+
 // WaitLinks waits until every veth end that Link created is operationally up and every one that is
 // a port of a bridge forwards. NewDefault calls it; a test that builds its own topology with Link
 // can call it before it sends.

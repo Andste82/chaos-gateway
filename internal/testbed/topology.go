@@ -137,7 +137,9 @@ func NewDefault(t testing.TB, opts ...Option) *Topology {
 	if b.cfg.plainGateway {
 		top.PlainGateway()
 	}
-	b.WaitLinks()
+	if !DiagNoLinkWait {
+		b.WaitLinks()
+	}
 	return top
 }
 

@@ -529,6 +529,80 @@ func TestARestoreAfterAFailedApplyRemovesTheTableThatApplyWrote(t *testing.T) {
 	}
 }
 
+// P2-M8b-02: a distribution table that a previous run of the gateway left on a leaf (or that someone
+// else put there before the start) is not in the listing, and the leaf may already have the
+// configuration the new target names. The first apply of a fresh process (a new Retirer, as after a
+// restart of the engine) makes such a leaf again when the target wants it uniform with a jitter; the
+// next apply leaves it alone. The distribution is observed as in
+// TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt (round trips outside delay ± jitter), the
+// re-creation by the leaf's packet counter, which starts again at zero.
+func TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft(t *testing.T) {
+	g := newGateway(t)
+	g.withDevices()
+	const delay, jitter = 100 * time.Millisecond, 20 * time.Millisecond
+	const slack = 2*time.Millisecond + delay/20
+	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms, distribution: normal}}}`)
+	normal := g.compileFaults(o)
+	g.applyRetiring(normal) // the previous run of the gateway
+	f := faultOf(t, normal, o, "")
+	leaf := classOf(t, normal, f.ID, compiler.Upload).LeafHandle()
+	measure := func() float64 {
+		r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 150, 30*time.Millisecond)
+		if r.Received < 140 {
+			t.Fatalf("received %d of %d", r.Received, r.Sent)
+		}
+		return outsideShare(r, delay, jitter+slack)
+	}
+	testbed.Statistically(t, "the table of the previous run", func() error {
+		if s := measure(); s < 0.08 {
+			return fmt.Errorf("a normal distribution should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100)
+		}
+		return nil
+	})
+
+	// the restart: a new process knows nothing of the tables; its target is the same fault, uniform,
+	// which the listing cannot tell from the leaf as it is
+	g.ret = nil
+	uniform := g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms}}}`))
+	for _, d := range uniform.TC.Devs {
+		if diff := linux.DiffTC(uniform.TC.Norm(d), g.kernelTree(d)); len(diff) != 0 {
+			t.Fatalf("%s: the leaf is not already what the uniform target names, the test proves nothing: %v", d, diff)
+		}
+	}
+	before := g.leafPackets("wan0", leaf)
+	if before == 0 {
+		t.Fatal("no packet went through the leaf: the test proves nothing")
+	}
+	res := g.applyRetiring(uniform)
+	if len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
+	if after := g.leafPackets("wan0", leaf); after >= before {
+		t.Fatalf("the first apply after the restart did not make the leaf again (%d packets before, %d after): the normal table stays", before, after)
+	}
+	if !strings.Contains(strings.Join(res.Plan.Summary, "\n"), "leaf "+leaf+" is made again") {
+		t.Errorf("the plan does not say that the leaf is made again:\n%s", strings.Join(res.Plan.Summary, "\n"))
+	}
+	share := measure()
+	if testbed.Accurate() && share > 0 {
+		// flakiness policy of plan §4.3: repeat once, a second failure fails
+		if share = measure(); share > 0 {
+			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", share*100)
+		}
+	} else if !testbed.Accurate() {
+		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", share*100)
+	}
+
+	// the second apply of the same process knows the leaf is uniform: it stays, with its counters
+	before = g.leafPackets("wan0", leaf)
+	if res := g.applyRetiring(uniform); !res.Plan.Empty() {
+		t.Errorf("the second apply after the restart plans work: %v", res.Plan.Summary)
+	}
+	if after := g.leafPackets("wan0", leaf); after < before {
+		t.Errorf("the second apply made the leaf again (%d packets before, %d after)", before, after)
+	}
+}
+
 // A tree at the class limit is applied by the real kernel on every interface of the gateway, in the
 // operations the planner makes (one per interface): the limit is the compiler's default for the
 // architecture, 1000 on x86-64 and 200 on arm64 (plan §3.3).

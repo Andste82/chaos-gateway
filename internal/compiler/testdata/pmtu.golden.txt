@@ -14,6 +14,7 @@ dev (ipv4_addr, flags [interval])
     10.10.0.42 : pmtu_036be7c47b
     10.10.0.43-10.10.0.255 : pmtu_b943c6bd80
     10.20.0.50 : pmtu_1fd8b4e765
+    10.30.0.0/24 : pmtu_b943c6bd80
 # chains
 classify
     [{"match":{"left":{"ct":{"dir":"original","key":"ip saddr"}},"op":"!=","right":"@classify_nets_8743d6"}},{"match":{"left":{"ct":{"dir":"original","key":"ip daddr"}},"op":"!=","right":"@classify_nets_8743d6"}},{"return":null}]

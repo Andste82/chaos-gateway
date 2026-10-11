@@ -147,6 +147,9 @@ func previewRules(rules []engine.PreviewRule) []model.PreviewRule {
 		if r.Name != "" {
 			pr.Name = ptr(r.Name)
 		}
+		if r.RejectWith != "" {
+			pr.RejectWith = ptr(model.RejectType(r.RejectWith))
+		}
 		if r.CutExisting {
 			pr.CutExisting = ptr(true)
 		}

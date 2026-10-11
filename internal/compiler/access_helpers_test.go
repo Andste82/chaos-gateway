@@ -19,6 +19,7 @@ const (
 	ruleB = "a1000000-0000-4000-8000-000000000002"
 	ruleC = "a1000000-0000-4000-8000-000000000003"
 	ruleD = "a1000000-0000-4000-8000-000000000004"
+	ruleE = "a1000000-0000-4000-8000-000000000005"
 )
 
 // addConfigRule adds a configured access rule (a YAML body) and appends it to the order.

@@ -34,10 +34,12 @@ import (
 // the established accept (CutRules), run by the engine, which also deletes the conntrack entries
 // of the cut connections (Target.Access.Winner tells which entries a rule owns).
 //
-// An allow rule means "this rule decides, and the answer is yes". In forward that is an accept: the
-// rule is an exception to the access matrix. In input it is a return: the gateway's protection of
-// the test networks stays what it is (it answers DHCP, DNS and ping, nothing else), a rule cannot
-// open a port of the gateway. docs/open-items.md P2-M9-01 records the choice.
+// An allow rule means "this rule decides, and the answer is yes": an accept in both hooks. In
+// forward the rule is an exception to the access matrix. In input it opens the gateway's own ports
+// that the protection of the test networks closes (it answers DHCP, DNS and ping, nothing else) for
+// the rule's selector. What stands in front of the rules stays: the anti-lockout rule and the UI/API
+// port rule for every other source, so no rule and no overlay can lock the management network out
+// or open the UI/API to a test network (decided by the maintainer on 2026-10-11).
 //
 // The sources of a rule are address sets (`asrc_*`), refilled at every apply from the identity of
 // the devices, like the other sets. A rule whose scope has no address yet stays in the chain with
@@ -99,8 +101,11 @@ type AccessRule struct {
 	Name  string `json:"name,omitempty"`
 	// Position is the 0-based place in the effective order: overlay rules (newest first), then the
 	// configured rules in their order.
-	Position    int    `json:"position"`
-	Action      string `json:"action"`
+	Position int    `json:"position"`
+	Action   string `json:"action"`
+	// RejectWith is the ICMP type of a reject (the API's reject_with, always set for the action
+	// reject: port_unreachable by default), empty for every other action.
+	RejectWith  string `json:"reject_with,omitempty"`
 	CutExisting bool   `json:"cut_existing,omitempty"`
 	// Scope and Destination describe the selector for messages.
 	Scope       string `json:"scope"`
@@ -422,7 +427,7 @@ func accessCandidates(cfg *model.Configuration, overlays []model.Overlay) []cand
 			if r.Name != nil {
 				name = *r.Name
 			}
-			body := model.AccessRuleBody{Action: r.Action, CutExisting: r.CutExisting,
+			body := model.AccessRuleBody{Action: r.Action, CutExisting: r.CutExisting, RejectWith: r.RejectWith,
 				Destination: r.Destination, Ports: r.Ports, PortRanges: r.PortRanges, Protocol: r.Protocol}
 			out = append(out, candidateRule{domain.LayerConfig, id, name, r.Source, body})
 		}
@@ -481,6 +486,12 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 			Protocol: "any", Counter: ruleCounterName(key)}
 		if b.Protocol != nil {
 			r.Protocol = string(*b.Protocol)
+		}
+		if b.Action == model.AccessActionReject {
+			r.RejectWith = string(model.PortUnreachable)
+			if b.RejectWith != nil {
+				r.RejectWith = string(*b.RejectWith)
+			}
 		}
 		prefixes, all := w.ScopePrefixes(c.scope, identity)
 		if all {
@@ -646,40 +657,50 @@ func portValue(ports []PortRange) any {
 	return anon(vals...)
 }
 
+// rejectTypes maps the API's reject_with to the icmpx type of nftables.
+var rejectTypes = map[string]string{
+	string(model.PortUnreachable): "port-unreachable",
+	string(model.HostUnreachable): "host-unreachable",
+	string(model.AdminProhibited): "admin-prohibited",
+	string(model.NoRoute):         "no-route",
+}
+
 // rejectICMP is the statement of the action reject. icmpx names the same error for IPv4 (ICMP) and
-// IPv6 (ICMPv6): the rule needs no variant per family.
-func rejectICMP() any {
-	return map[string]any{"reject": map[string]any{"type": "icmpx", "expr": "port-unreachable"}}
+// IPv6 (ICMPv6): the rule needs no variant per family. An empty type is the default, port
+// unreachable, and compiles to the same statement as before the type was selectable.
+func rejectICMP(with string) any {
+	expr, ok := rejectTypes[with]
+	if !ok {
+		expr = rejectTypes[string(model.PortUnreachable)]
+	}
+	return map[string]any{"reject": map[string]any{"type": "icmpx", "expr": expr}}
 }
 
 func rejectTCPReset() any {
 	return map[string]any{"reject": map[string]any{"type": "tcp reset"}}
 }
 
-// verdictFor is the statement that ends a rule in a hook. An allow rule accepts in forward and
-// returns in input (see the file comment).
-func verdictFor(action, hook string) any {
-	switch action {
+// verdictFor is the statement that ends a rule in a hook. An allow rule accepts in both (see the
+// file comment).
+func verdictFor(r AccessRule) any {
+	switch r.Action {
 	case "allow":
-		if hook == "input" {
-			return verdict("return")
-		}
 		return verdict("accept")
 	case "drop":
 		return verdict("drop")
 	case "reject":
-		return rejectICMP()
+		return rejectICMP(r.RejectWith)
 	default: // reset
 		return rejectTCPReset()
 	}
 }
 
 // chain builds the access chain of a hook.
-func (p *AccessPlan) chain(name, hook string) Chain {
+func (p *AccessPlan) chain(name string) Chain {
 	c := Chain{Name: name}
 	for _, r := range p.Rules {
 		expr := p.matchExpr(r)
-		expr = append(expr, counter(r.Counter), verdictFor(r.Action, hook))
+		expr = append(expr, counter(r.Counter), verdictFor(r))
 		c.Rules = append(c.Rules, newRule(expr...))
 	}
 	return c

@@ -155,3 +155,20 @@ type uuidT = uuid.UUID
 func mustUUID(s string) uuid.UUID { return uuid.MustParse(s) }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// withIoTRouter gives the network IoT a router at 10.10.0.2 with the network 10.30.0.0/24 behind it
+// (a downstream route, plan §2.3): hosts there are in "network IoT" without being configured devices.
+func withIoTRouter(t *testing.T, cfg *model.Configuration) {
+	t.Helper()
+	nets := *cfg.Networks
+	n := nets[idIoT]
+	lan, err := n.AsLanNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lan.Routes = &[]model.DownstreamRoute{{Destination: "10.30.0.0/24", Via: "10.10.0.2"}}
+	if err := n.FromLanNetwork(lan); err != nil {
+		t.Fatal(err)
+	}
+	nets[idIoT] = n
+}

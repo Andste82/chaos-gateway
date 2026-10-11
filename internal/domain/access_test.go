@@ -2,6 +2,7 @@ package domain
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ func TestTheNetworkOfAnAddressIsTheMostSpecificPrefix(t *testing.T) {
 
 // The access rules come first, in the order of the packet path: the control plane in front of them, then the
 // rules, then the gateway's protection or the matrix. An allow rule is an exception to the matrix and
-// cannot open the gateway.
+// also opens the gateway's closed ports for its selector, except the UI port (decided on 2026-10-11).
 func TestTheAccessDecisionPutsTheRulesBeforeTheMatrixAndKeepsTheControlPlane(t *testing.T) {
 	iot := ""
 	rule := func(name string, proto string, ports []int, action model.AccessAction, dst *model.Destination) model.AccessRule {
@@ -161,13 +162,26 @@ func TestTheAccessDecisionPutsTheRulesBeforeTheMatrixAndKeepsTheControlPlane(t *
 		{"a reject rule on a destination", "10.10.0.5", "198.51.100.9", "tcp", 443, "reject", AccessConfigRule, uuids[1]},
 		{"an allow rule is an exception to the matrix (IoT does not reach 10.99.0.9)", "10.10.0.5", "10.99.0.9", "tcp", 80, "allow", AccessConfigRule, uuids[2]},
 		{"another network is not selected, the matrix decides", "10.99.0.9", "10.10.0.9", "tcp", 80, "allow", AccessMatrix, ""},
-		{"an allow rule does not open the gateway", "10.10.0.5", "10.10.0.1", "tcp", 22, "drop", AccessGatewayProtection, ""},
+		{"an allow rule opens a port of the gateway that its protection closes", "10.10.0.5", "10.10.0.1", "tcp", 22, "allow", AccessConfigRule, uuids[2]},
+		{"and a port nothing listens on is opened the same way", "10.10.0.5", "10.10.0.1", "udp", 5353, "allow", AccessConfigRule, uuids[2]},
 		{"the UI port is closed to a test network, whatever a rule says", "10.10.0.5", "10.10.0.1", "tcp", 443, "drop", AccessGatewayProtection, ""},
-		{"the management sources reach the control plane", "192.168.56.9", "10.10.0.1", "tcp", 443, "allow", AccessGatewayProtection, ""},
+		{"the management sources reach the UI", "192.168.56.9", "10.10.0.1", "tcp", 443, "allow", AccessGatewayProtection, ""},
+		{"the management sources reach SSH", "192.168.56.9", "10.10.0.1", "tcp", 22, "allow", AccessGatewayProtection, ""},
 	} {
 		got := w.AccessDecision(Query{Source: subject(c.src), DestIP: a(c.dst), Protocol: c.proto, Port: c.port}, facts)
 		if got.Verdict != c.verdict || got.Layer != c.layer || got.Rule != c.rule || got.Reason == "" {
 			t.Errorf("%s: %+v, want %s in %s by %q", c.name, got, c.verdict, c.layer, c.rule)
+		}
+	}
+	// the anti-lockout rule names exactly SSH and the UI port; any other port of the gateway is not
+	// guaranteed to a management source, and the reason says so
+	for _, c := range []struct {
+		port        int
+		antiLockout bool
+	}{{22, true}, {443, true}, {8080, false}} {
+		got := w.AccessDecision(Query{Source: subject("192.168.56.9"), DestIP: a("10.10.0.1"), Protocol: "tcp", Port: c.port}, facts)
+		if got.Verdict != "allow" || got.Layer != AccessGatewayProtection || strings.Contains(got.Reason, "anti-lockout") != c.antiLockout {
+			t.Errorf("management source, tcp %d: %+v", c.port, got)
 		}
 	}
 	// an overlay rule stands before the configured ones
@@ -186,3 +200,79 @@ func TestTheAccessDecisionPutsTheRulesBeforeTheMatrixAndKeepsTheControlPlane(t *
 }
 
 func ptrProtocol(p string) *model.Protocol { v := model.Protocol(p); return &v }
+
+// The explanation names the ICMP type a reject answers with: the rule's own, port unreachable by default.
+func TestTheExplanationOfARejectNamesItsIcmpType(t *testing.T) {
+	a := netip.MustParseAddr
+	for _, c := range []struct {
+		with, want string
+	}{{"", "port unreachable"}, {"port_unreachable", "port unreachable"}, {"host_unreachable", "host unreachable"},
+		{"admin_prohibited", "administratively prohibited"}, {"no_route", "no route"}} {
+		iot := ""
+		id := "a1000000-0000-4000-8000-000000000001"
+		w := accessWorld(t, func(cfg *model.Configuration) {
+			idx, _ := BuildIndex(cfg)
+			iot, _ = idx.Resolve(KindNetwork, "IoT")
+			r := model.AccessRule{Source: model.Scope{Network: &iot}, Action: model.AccessActionReject}
+			if c.with != "" {
+				r.RejectWith = ptr(model.RejectType(c.with))
+			}
+			cfg.AccessRules = &map[string]model.AccessRule{id: r}
+			cfg.AccessRuleOrder = &[]uuid.UUID{uuid.MustParse(id)}
+		})
+		got := w.AccessDecision(Query{Source: Subject{IP: a("10.10.0.5"), Network: iot}, DestIP: a("198.51.100.9"), Protocol: "tcp", Port: 443}, AccessFacts{})
+		if got.Verdict != "reject" || !strings.Contains(got.Reason, "ICMP "+c.want) {
+			t.Errorf("reject_with %q: %+v, want the type %q", c.with, got, c.want)
+		}
+	}
+}
+
+// "Network IoT" includes the networks behind IoT's downstream routes (decided by the maintainer on
+// 2026-10-11): a host at 10.30.0.5 behind IoT's router is selected by a rule and by a fault for
+// the network IoT, and by a destination "network IoT", without being a configured device.
+func TestANetworkIncludesTheNetworksBehindItsDownstreamRoutes(t *testing.T) {
+	tw := newTestWorld(t, false)
+	withIoTRouter(t, tw.cfg)
+	tw.overlay("target: {network: IoT}\nfault: {latency: 120ms}", 0)
+	rule := tw.overlay("target: {network: IoT}\nrule: {protocol: tcp, ports: [8883], action: drop}", 0)
+	toIoT := tw.overlay("target: {global: true}\nfault: {destination: {network: IoT}, loss: 4%}", 0)
+	w := tw.world()
+	a := netip.MustParseAddr
+	host := Subject{IP: a("10.30.0.5")} // no device owns it
+
+	if id, ok := w.NetworkOf(a("10.30.0.5")); !ok || id != idIoT {
+		t.Errorf("NetworkOf(10.30.0.5) = %q, %v, want IoT", id, ok)
+	}
+	if got := prefixList(w.NetworkPrefixes(idIoT)); got != "10.10.0.0/24 10.30.0.0/24" {
+		t.Errorf("the prefixes of IoT: %s", got)
+	}
+	// the source scope in the fault tables and in the rules
+	if res := w.Resolve(Query{Source: host, DestIP: a("203.0.113.10"), Protocol: "tcp", Port: 443}); Winner(res, FamilyImpairment) == nil || latencyOf(*Winner(res, FamilyImpairment)) != "120ms" {
+		t.Errorf("the fault of network IoT does not select a host behind its router: %+v", res)
+	}
+	if r := w.ResolveAccess(Query{Source: host, DestIP: a("203.0.113.10"), Protocol: "tcp", Port: 8883}); !r.Matched || r.RuleID != rule.Id.String() {
+		t.Errorf("the rule of network IoT does not select a host behind its router: %+v", r)
+	}
+	// and as a destination: a fault for traffic to network IoT, and the destination "uplink" excludes it
+	toHost := Query{Source: Subject{IP: a("10.20.0.7")}, DestIP: a("10.30.0.5"), Protocol: "udp", Port: 53}
+	if win := Winner(w.Resolve(toHost), FamilyImpairment); win == nil || win.ID != toIoT.Id.String() {
+		t.Errorf("a destination network IoT does not select 10.30.0.5: %+v", win)
+	}
+	if w.viaUplink(a("10.30.0.5")) {
+		t.Error("10.30.0.5 is reached through IoT's router, not through the uplink")
+	}
+	// the sources of a scope for the kernel: the subnet and the route
+	if got := prefixList(mustPrefixes(w, model.Scope{Network: ptrTo(idIoT)})); got != "10.10.0.0/24 10.30.0.0/24" {
+		t.Errorf("the source addresses of network IoT: %s", got)
+	}
+	// explain: the rule decides for the host behind the router, not the matrix
+	ex := w.AccessDecision(Query{Source: host, DestIP: a("203.0.113.10"), Protocol: "tcp", Port: 8883}, AccessFacts{})
+	if ex.Verdict != "drop" || ex.Layer != AccessOverlayRule || ex.Rule != rule.Id.String() {
+		t.Errorf("explain: %+v", ex)
+	}
+}
+
+func mustPrefixes(w *World, sc model.Scope) []netip.Prefix {
+	p, _ := w.ScopePrefixes(sc, Identity{})
+	return p
+}

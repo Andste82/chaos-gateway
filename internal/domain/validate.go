@@ -66,6 +66,7 @@ const (
 	CodeEmptyFault             = "empty_fault"
 	CodeInvalidMTU             = "invalid_mtu"
 	CodeCutWithAllow           = "cut_existing_with_allow"
+	CodeRejectTypeNeedsReject  = "reject_with_requires_reject"
 	CodeTunnelParameter        = "tunnel_parameter"
 	CodeInvalidDNSFault        = "invalid_dns_fault"
 	CodeInvalidTLSCase         = "invalid_tls_case"

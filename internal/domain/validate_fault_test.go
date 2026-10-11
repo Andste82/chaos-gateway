@@ -121,6 +121,14 @@ func TestAccessRuleRules(t *testing.T) {
 			d.set(t, "udp", "access_rules", idRule, "protocol")
 			d.set(t, true, "access_rules", idRule, "cut_existing")
 		}, r + "/cut_existing", CodeCutRequiresTCP},
+		{"a reject type on a drop rule", func(t *testing.T, d doc) {
+			d.set(t, "drop", "access_rules", idRule, "action")
+			d.set(t, "admin_prohibited", "access_rules", idRule, "reject_with")
+		}, r + "/reject_with", CodeRejectTypeNeedsReject},
+		{"a reject type on an allow rule", func(t *testing.T, d doc) {
+			d.set(t, "allow", "access_rules", idRule, "action")
+			d.set(t, "no_route", "access_rules", idRule, "reject_with")
+		}, r + "/reject_with", CodeRejectTypeNeedsReject},
 		{"ports with any protocol", func(t *testing.T, d doc) { d.del(t, "access_rules", idRule, "protocol") }, r + "/protocol", CodePortsRequireProtocol},
 		{"an unknown source", func(t *testing.T, d doc) { d.set(t, obj(t, `{"network":"nowhere"}`), "access_rules", idRule, "source") }, r + "/source/network", CodeUnknownReference},
 		{"a rule that is missing from the order", func(t *testing.T, d doc) {
@@ -130,6 +138,22 @@ func TestAccessRuleRules(t *testing.T) {
 		{"an unknown rule in the order", func(t *testing.T, d doc) { d.set(t, []any{idRule, idNew}, "access_rule_order") }, "/access_rule_order/1", CodeUnknownReference},
 		{"no order at all", func(t *testing.T, d doc) { d.del(t, "access_rule_order") }, "/access_rule_order", CodeRuleOrder},
 	})
+}
+
+// Every reject type is accepted on a reject rule; a name that is no type is a schema error.
+func TestEveryRejectTypeIsAcceptedOnARejectRule(t *testing.T) {
+	for _, typ := range []string{"port_unreachable", "host_unreachable", "admin_prohibited", "no_route"} {
+		d := baseDoc(t)
+		d.set(t, "reject", "access_rules", idRule, "action")
+		d.set(t, typ, "access_rules", idRule, "reject_with")
+		wantValid(t, d.validate(t))
+	}
+	d := baseDoc(t)
+	d.set(t, "reject", "access_rules", idRule, "action")
+	d.set(t, "teapot", "access_rules", idRule, "reject_with")
+	if errs := d.validate(t); len(errs) == 0 {
+		t.Error("a reject type that does not exist is accepted")
+	}
 }
 
 func TestAccessRulesKeepTheirOrder(t *testing.T) {

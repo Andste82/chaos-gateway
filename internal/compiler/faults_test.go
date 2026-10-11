@@ -642,9 +642,10 @@ func TestAFaultWithoutRateSharesOneIDForAllDevices(t *testing.T) {
 	if len(tg.Faults) != 1 || tg.Faults[0].Device != "" || tg.Faults[0].Source != o.Id.String() {
 		t.Fatalf("%+v", tg.Faults)
 	}
-	// ... and one element covers every address of the network, devices included
+	// ... and one element per prefix of the network covers every address of it, devices included:
+	// the subnet and the network behind IoT's router (the downstream route 10.30.0.0/24, P2-M9-04)
 	m := findMap(tg, tg.ClassifyMaps["dev"])
-	if len(m.Elements) != 1 || m.Elements[0].Key != "10.10.0.0/24" {
+	if len(m.Elements) != 2 || m.Elements[0].Key != "10.10.0.0/24" || m.Elements[1].Key != "10.30.0.0/24" || m.Elements[0].Value != m.Elements[1].Value {
 		t.Errorf("%+v", m.Elements)
 	}
 }
@@ -1027,6 +1028,7 @@ func TestTheCompiledLookupGivesTheResolvedWinner(t *testing.T) {
 		{domain.Subject{IP: netip.MustParseAddr("10.10.0.77")}, "10.10.0.77"},
 		{domain.Subject{IP: netip.MustParseAddr("10.10.0.1")}, "10.10.0.1"},
 		{domain.Subject{IP: netip.MustParseAddr("10.20.0.9")}, "10.20.0.9"},
+		{domain.Subject{IP: netip.MustParseAddr("10.30.0.5")}, "10.30.0.5"}, // behind IoT's router (a downstream route)
 	}
 	dests := []string{"203.0.113.10", "203.0.113.70", "203.0.113.200", "198.51.100.1", "10.1.2.3", "10.0.0.1", "10.2.0.9",
 		"10.10.0.42", "10.20.0.50", "8.8.8.8", "192.0.2.1", "10.255.255.255", "203.0.113.64", "203.0.113.127", "203.0.114.0"}
@@ -1110,8 +1112,8 @@ func TestSourcesThatHaveTheSameEntriesShareElements(t *testing.T) {
 	w.overlay(`{target: {network: IoT}, fault: {latency: 100ms}}`, 0)
 	tg := w.compile(nil)
 	m := findMap(tg, tg.ClassifyMaps["dev"])
-	if len(m.Elements) != 1 || m.Elements[0].Key != "10.10.0.0/24" {
-		t.Errorf("a network fault without a rate is one element: %+v", m.Elements)
+	if len(m.Elements) != 2 || m.Elements[0].Key != "10.10.0.0/24" || m.Elements[1].Key != "10.30.0.0/24" || m.Elements[0].Value != m.Elements[1].Value {
+		t.Errorf("a network fault without a rate is one element per prefix of the network, sharing one mark: %+v", m.Elements)
 	}
 }
 
@@ -1583,5 +1585,40 @@ func TestWhatTheAPIAcceptsIsWhatTheExecutorsTCGrammarTakes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A fault for network IoT impairs the hosts behind IoT's router, too (the downstream route
+// 10.30.0.0/24 of the fixture, P2-M9-04): the host at 10.30.0.5 is no configured device, and the
+// classification gives it the fault of the network, like it gives one to an unknown host in the subnet.
+func TestAFaultForANetworkReachesTheHostsBehindItsRouter(t *testing.T) {
+	w := newFaultWorld(t)
+	o := w.overlay(`{target: {network: IoT}, fault: {latency: 150ms, loss: 3%}}`, 0)
+	toIoT := w.overlay(`{target: {global: true}, fault: {destination: {network: IoT}, latency: 30ms}}`, time.Second)
+	tg := w.compile(nil)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	levels := levelsOf(t, tg)
+	byID := map[int]Fault{}
+	for _, f := range tg.Faults {
+		byID[f.ID] = f
+	}
+	host, other, upstream := netip.MustParseAddr("10.30.0.5"), netip.MustParseAddr("10.10.0.77"), netip.MustParseAddr("203.0.113.10")
+	id, found := lookup(levels, host, upstream, "tcp", 443)
+	if !found || byID[id].Source != o.Id.String() {
+		t.Errorf("the host behind the router: id %d (%+v), want the fault of network IoT", id, byID[id])
+	}
+	if id2, _ := lookup(levels, other, upstream, "tcp", 443); id2 != id {
+		t.Errorf("an unknown host in the subnet gets id %d, the host behind the router %d: one fault, one id", id2, id)
+	}
+	// as a destination, from a network that has no fault of its own
+	id, found = lookup(levels, netip.MustParseAddr("10.20.0.9"), host, "udp", 53)
+	if !found || byID[id].Source != toIoT.Id.String() {
+		t.Errorf("traffic to the host behind the router: id %d (%+v), want the destination fault", id, byID[id])
+	}
+	// and the classification guard covers it already
+	if !strings.Contains(strings.Join(tg.classifyNets(), " "), "10.30.0.0/24") {
+		t.Errorf("classify_nets = %v", tg.classifyNets())
 	}
 }

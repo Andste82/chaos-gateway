@@ -18,6 +18,7 @@ devdest (ipv4_addr . ipv4_addr, flags [interval])
 devport (ipv4_addr . inet_proto . inet_service, flags [interval])
 dev (ipv4_addr, flags [interval])
     10.10.0.0/24 : mark_1
+    10.30.0.0/24 : mark_1
 # mark chains
 mark_0: 2 rules
 mark_1: 4 rules

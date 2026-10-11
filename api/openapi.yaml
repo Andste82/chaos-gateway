@@ -2913,8 +2913,20 @@ components:
       type: string
       enum: [allow, drop, reject, reset]
       description: |
-        `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-        (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+        `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+        IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+        fails at once. `reset` - answer with a TCP reset (TCP only).
+    RejectType:
+      type: string
+      enum: [port_unreachable, host_unreachable, admin_prohibited, no_route]
+      default: port_unreachable
+      description: |
+        The ICMP error a `reject` rule answers with (nftables `reject with icmpx type ...`, the same
+        statement for IPv4 and IPv6). `port_unreachable` - the default: clients fail at once with
+        "connection refused", for TCP and UDP alike. `host_unreachable` - "no route to host".
+        `admin_prohibited` - "a firewall did it" (ICMP communication administratively prohibited).
+        `no_route` - network unreachable (ICMPv6 no route; ICMP network unreachable for IPv4).
+        Decided by the maintainer on 2026-10-11.
     AccessRuleBody:
       description: |
         The selector and the action of an access rule (plan §2.4). A rule is evaluated on the conntrack
@@ -2927,11 +2939,13 @@ components:
         Rules take effect for **new connections**: established traffic is accepted before the rules
         (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
 
-        An `allow` rule is an exception to the access matrix in the forward path. It does not open
-        the gateway itself: traffic to the gateway's own addresses that its protection of the test
-        networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
-        The management sources always reach SSH and the UI/API: this system rule stands in front of
-        every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+        An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
+        input path it also opens the gateway's own ports that its protection of the test networks
+        closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
+        front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
+        the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
+        port stays closed to every other source, so it is never reachable from a test network.
+        Decided by the maintainer on 2026-10-11.
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object
@@ -2947,6 +2961,9 @@ components:
                 (the server side stays half-open, as in a real outage), and the rule's conntrack entries
                 are deleted so that other protocols are judged again as new traffic. Not allowed with
                 `allow`; the protocol must be `tcp` or `any`.
+            reject_with:
+              allOf: [{$ref: '#/components/schemas/RejectType'}]
+              description: Only with action `reject`; the default is `port_unreachable`. A type on another action is refused.
     AccessRule:
       description: |
         A configured access rule. Evaluated in forward and input on the conntrack original tuple;
@@ -3763,6 +3780,7 @@ components:
         name: {type: string}
         position: {type: integer, description: '0-based place in the effective order.'}
         action: {$ref: '#/components/schemas/AccessAction'}
+        reject_with: {$ref: '#/components/schemas/RejectType'}
         cut_existing: {type: boolean}
         scope: {type: string, description: 'Who the rule applies to, in words (`network IoT`, `device esp32-42`).'}
         destination: {type: string, description: 'Where to, in words; absent for any destination.'}

@@ -58,6 +58,7 @@ dev (ipv4_addr, flags [interval])
     10.10.0.42 : mark_1
     10.10.0.43 : mark_3
     10.10.0.44-10.10.0.255 : mark_2
+    10.30.0.0/24 : mark_2
 # mark chains
 mark_1: 4 rules
 mark_2: 4 rules

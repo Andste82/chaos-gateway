@@ -467,6 +467,12 @@
             },
             {
               "prefix": {
+                "addr": "10.30.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
                 "addr": "192.168.56.0",
                 "len": 24
               }
@@ -494,6 +500,12 @@
             {
               "prefix": {
                 "addr": "10.10.0.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "10.30.0.0",
                 "len": 24
               }
             }
@@ -901,7 +913,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "7bf8287e3f43",
+          "comment": "dc8c9f826d8a",
           "expr": [
             {
               "match": {
@@ -925,10 +937,20 @@
                 },
                 "op": "==",
                 "right": {
-                  "prefix": {
-                    "addr": "10.10.0.0",
-                    "len": 24
-                  }
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
                 }
               }
             },
@@ -1204,7 +1226,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "803c73b5f233",
+          "comment": "dc8c9f826d8a",
           "expr": [
             {
               "match": {
@@ -1228,10 +1250,20 @@
                 },
                 "op": "==",
                 "right": {
-                  "prefix": {
-                    "addr": "10.10.0.0",
-                    "len": 24
-                  }
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
                 }
               }
             },
@@ -1239,7 +1271,7 @@
               "counter": "rule_a41eb09061"
             },
             {
-              "return": null
+              "accept": null
             }
           ],
           "family": "inet",

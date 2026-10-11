@@ -1665,6 +1665,30 @@ func (e QueueStatsDirection) Valid() bool {
 	}
 }
 
+// Defines values for RejectType.
+const (
+	AdminProhibited RejectType = "admin_prohibited"
+	HostUnreachable RejectType = "host_unreachable"
+	NoRoute         RejectType = "no_route"
+	PortUnreachable RejectType = "port_unreachable"
+)
+
+// Valid indicates whether the value is a known member of the RejectType enum.
+func (e RejectType) Valid() bool {
+	switch e {
+	case AdminProhibited:
+		return true
+	case HostUnreachable:
+		return true
+	case NoRoute:
+		return true
+	case PortUnreachable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RevisionStatus.
 const (
 	RevisionStatusActive         RevisionStatus = "active"
@@ -2409,8 +2433,9 @@ func (e ExportRevisionParamsFormat) Valid() bool {
 	}
 }
 
-// AccessAction `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+// AccessAction `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+// fails at once. `reset` - answer with a TCP reset (TCP only).
 type AccessAction string
 
 // AccessMatrix Default policy between networks (firewall layer 2, plan §2.2). Without an entry:
@@ -2426,8 +2451,9 @@ type AccessMatrix struct {
 // rules select more than 65536 source addresses together, is refused with `capacity_exceeded`
 // naming the overlays or rules that caused it.
 type AccessRule struct {
-	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+	// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+	// fails at once. `reset` - answer with a TCP reset (TCP only).
 	Action AccessAction `json:"action"`
 
 	// CutExisting Also cut established connections (plan §2.4): for a short time, TCP packets of established
@@ -2448,6 +2474,9 @@ type AccessRule struct {
 	Ports      *[]int       `json:"ports,omitempty"`
 	Protocol   *Protocol    `json:"protocol,omitempty"`
 
+	// RejectWith Only with action `reject`; the default is `port_unreachable`. A type on another action is refused.
+	RejectWith *RejectType `json:"reject_with,omitempty"`
+
 	// Source The source part of a selector (`source` in the configuration, `target` in overlays
 	// and scenarios). Exactly one property. Specificity levels (plan §2.4): device → 1–4,
 	// group → 5–6, network and remote_network → 7–8, global → 9–10 (with or without a
@@ -2465,14 +2494,17 @@ type AccessRule struct {
 // Rules take effect for **new connections**: established traffic is accepted before the rules
 // (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
 //
-// An `allow` rule is an exception to the access matrix in the forward path. It does not open
-// the gateway itself: traffic to the gateway's own addresses that its protection of the test
-// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
-// The management sources always reach SSH and the UI/API: this system rule stands in front of
-// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+// An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
+// input path it also opens the gateway's own ports that its protection of the test networks
+// closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
+// front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
+// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
+// port stays closed to every other source, so it is never reachable from a test network.
+// Decided by the maintainer on 2026-10-11.
 type AccessRuleBody struct {
-	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+	// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+	// fails at once. `reset` - answer with a TCP reset (TCP only).
 	Action AccessAction `json:"action"`
 
 	// CutExisting Also cut established connections (plan §2.4): for a short time, TCP packets of established
@@ -2487,6 +2519,9 @@ type AccessRuleBody struct {
 	PortRanges  *[]PortRange `json:"port_ranges,omitempty"`
 	Ports       *[]int       `json:"ports,omitempty"`
 	Protocol    *Protocol    `json:"protocol,omitempty"`
+
+	// RejectWith Only with action `reject`; the default is `port_unreachable`. A type on another action is refused.
+	RejectWith *RejectType `json:"reject_with,omitempty"`
 }
 
 // AccessRulePage defines model for AccessRulePage.
@@ -3587,8 +3622,9 @@ type Explanation struct {
 		// Rule The overlay or configured rule that decided; absent for `gateway_protection` and `access_matrix`.
 		Rule *Uuid `json:"rule,omitempty"`
 
-		// Verdict `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-		// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+		// Verdict `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+		// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+		// fails at once. `reset` - answer with a TCP reset (TCP only).
 		Verdict AccessAction `json:"verdict"`
 	} `json:"access"`
 	Destination *struct {
@@ -4450,11 +4486,13 @@ type Overlay struct {
 	// Rules take effect for **new connections**: established traffic is accepted before the rules
 	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
 	//
-	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
-	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
-	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
-	// The management sources always reach SSH and the UI/API: this system rule stands in front of
-	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	// An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
+	// input path it also opens the gateway's own ports that its protection of the test networks
+	// closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
+	// front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
+	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
+	// port stays closed to every other source, so it is never reachable from a test network.
+	// Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Run Set when a run owns the overlay.
@@ -4568,11 +4606,13 @@ type OverlayRequest struct {
 	// Rules take effect for **new connections**: established traffic is accepted before the rules
 	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
 	//
-	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
-	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
-	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
-	// The management sources always reach SSH and the UI/API: this system rule stands in front of
-	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	// An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
+	// input path it also opens the gateway's own ports that its protection of the test networks
+	// closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
+	// front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
+	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
+	// port stays closed to every other source, so it is never reachable from a test network.
+	// Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
@@ -4745,8 +4785,9 @@ type PreviewFaultLayer string
 
 // PreviewRule defines model for PreviewRule.
 type PreviewRule struct {
-	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with ICMP port unreachable
-	// (ICMPv6 for IPv6), so the sender fails at once. `reset` - answer with a TCP reset (TCP only).
+	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
+	// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
+	// fails at once. `reset` - answer with a TCP reset (TCP only).
 	Action      AccessAction `json:"action"`
 	CutExisting *bool        `json:"cut_existing,omitempty"`
 
@@ -4766,6 +4807,14 @@ type PreviewRule struct {
 	// Position 0-based place in the effective order.
 	Position int      `json:"position"`
 	Protocol Protocol `json:"protocol"`
+
+	// RejectWith The ICMP error a `reject` rule answers with (nftables `reject with icmpx type ...`, the same
+	// statement for IPv4 and IPv6). `port_unreachable` - the default: clients fail at once with
+	// "connection refused", for TCP and UDP alike. `host_unreachable` - "no route to host".
+	// `admin_prohibited` - "a firewall did it" (ICMP communication administratively prohibited).
+	// `no_route` - network unreachable (ICMPv6 no route; ICMP network unreachable for IPv4).
+	// Decided by the maintainer on 2026-10-11.
+	RejectWith *RejectType `json:"reject_with,omitempty"`
 
 	// Scope Who the rule applies to, in words (`network IoT`, `device esp32-42`).
 	Scope *string `json:"scope,omitempty"`
@@ -4940,6 +4989,14 @@ type QueueStatsDirection string
 
 // Ref UUID or name of an object. Stored configurations contain UUIDs only.
 type Ref = string
+
+// RejectType The ICMP error a `reject` rule answers with (nftables `reject with icmpx type ...`, the same
+// statement for IPv4 and IPv6). `port_unreachable` - the default: clients fail at once with
+// "connection refused", for TCP and UDP alike. `host_unreachable` - "no route to host".
+// `admin_prohibited` - "a firewall did it" (ICMP communication administratively prohibited).
+// `no_route` - network unreachable (ICMPv6 no route; ICMP network unreachable for IPv4).
+// Decided by the maintainer on 2026-10-11.
+type RejectType string
 
 // RemoteNetworkRef Exactly one of: the client networks of a WireGuard client, the prefixes routed via a link, or a CIDR inside those.
 type RemoteNetworkRef struct {
@@ -5459,11 +5516,13 @@ type Step struct {
 	// Rules take effect for **new connections**: established traffic is accepted before the rules
 	// (spike S3). `cut_existing` also cuts the connections that exist when the rule comes into effect.
 	//
-	// An `allow` rule is an exception to the access matrix in the forward path. It does not open
-	// the gateway itself: traffic to the gateway's own addresses that its protection of the test
-	// networks closes (everything but DHCP, DNS and ICMP echo; the UI/API) stays closed.
-	// The management sources always reach SSH and the UI/API: this system rule stands in front of
-	// every access rule and cannot be overridden by a rule or an overlay (`system_rules` of the list).
+	// An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
+	// input path it also opens the gateway's own ports that its protection of the test networks
+	// closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
+	// front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
+	// the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
+	// port stays closed to every other source, so it is never reachable from a test network.
+	// Decided by the maintainer on 2026-10-11.
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target Narrows the scenario target (e.g. one device of the target group).

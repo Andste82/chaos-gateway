@@ -437,11 +437,11 @@ func TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd(t *testing.T) {
 	r.mustPut(admin, profileOf("network: IoT", "bad-lte"))
 	r.verifyKernel()
 	measure := func() []float64 {
-		got := parallel(t,
-			func() (float64, error) { return iperfUDP(r.top.A, 5311, secs, omit, offered, true) },
-			func() (float64, error) { return iperfUDP(r.top.C, 5312, secs, omit, offered, true) })
-		t.Logf("UDP at %.0f Mbit/s downstream, A under Bad LTE, C unnamed: A %.2f, C %.2f Mbit/s", offered/1e6, got[0]/1e6, got[1]/1e6)
-		return got
+		// one after the other: two floods at once share the CPU of an emulated machine and cut each other short
+		a := parallel(t, func() (float64, error) { return iperfUDP(r.top.A, 5311, secs, omit, offered, true) })
+		c := parallel(t, func() (float64, error) { return iperfUDP(r.top.C, 5312, secs, omit, offered, true) })
+		t.Logf("UDP at %.0f Mbit/s downstream, A under Bad LTE, C unnamed: A %.2f, C %.2f Mbit/s", offered/1e6, a[0]/1e6, c[0]/1e6)
+		return []float64{a[0], c[0]}
 	}
 	got := measure()
 	// the functional part, on every kernel: the rate is in force (well below what is offered, though something
@@ -449,8 +449,13 @@ func TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd(t *testing.T) {
 	if got[0] < 1.0e6 || got[0] > 3.0e6 {
 		t.Errorf("device A under Bad LTE received %.2f Mbit/s of %.0f offered, want the rate's 2 (at most 3)", got[0]/1e6, offered/1e6)
 	}
-	if got[1] < 0.85*offered {
-		t.Errorf("device C, which the profile does not name, received %.2f Mbit/s of %.0f offered", got[1]/1e6, offered/1e6)
+	// an emulated machine cannot send the whole load, but the device that is not named must clearly pass the rate
+	floorC := 1.25 * rate
+	if testbed.Accurate() {
+		floorC = 0.85 * offered
+	}
+	if got[1] < floorC {
+		t.Errorf("device C, which the profile does not name, received %.2f Mbit/s of %.0f offered, want at least %.2f", got[1]/1e6, offered/1e6, floorC/1e6)
 	}
 	if testbed.Accurate() {
 		measured := got

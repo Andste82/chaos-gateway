@@ -1,9 +1,17 @@
-# Phase 1 audit and open items
+# Phase 1 and Phase 2 audits and open items
+
+This file holds the audits of two phases of `docs/plan.md` §5 and what they left open:
+
+- **Phase 1** (M1–M6b): audited on 2026-10-04, closed on 2026-10-05. The result, the decisions and the
+  per-milestone verdicts follow directly below.
+- **Phase 2** (M7–M11): audited on 2026-10-12. The result is in
+  [Phase 2 audit result](#phase-2-audit-result), right before the Phase 2 open items; the items the audit
+  found are P2-AUDIT-01 to P2-AUDIT-16 under [Phase 2 open items](#phase-2-open-items).
+
+## Phase 1 audit result
 
 Date: 2026-10-04. Audited against `main` at `c4d51d3` (M6b merged) and `docs/plan.md` §5 Phase 1 (M1–M6b).
 Closed: 2026-10-05, work package 12.
-
-## Result
 
 **Phase 1 is complete.** Every milestone delivers its scope, every test the plan lists exists and
 passes, and every item this audit found — all 11 "Suggested work packages" plus the 13 small items
@@ -54,7 +62,7 @@ The most common causes are:
    - Commit messages and all written text in English.
    - No AI attribution of any kind in commits, PRs or issues (no `Co-Authored-By`, no "Generated with").
    - Commit as the repository's git user.
-2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the tables under "Phase 2 open items" list them and the items closed with them; one item stays open, a hardware measurement for H1.
+2. **Decisions.** All open questions of Phase 1 were decided on 2026-10-04 (table below, and in each item's "Needs maintainer" line). Implement the decided option. Where it differs from the recommendation, the task was rewritten to match the decision. The Phase 2 items (M7 to M11) were decided on 2026-10-11: the tables under "Phase 2 open items" list them and the items closed with them; one item stays open, a hardware measurement for H1. The Phase 2 audit (2026-10-12) added the items P2-AUDIT-01 to P2-AUDIT-16; those that say "Needs maintainer: yes" wait for a decision, the others can be worked on as written (work packages in "Phase 2 audit result").
 3. **Test levels.**
    - **Local:** unit tests (`make test`, `go test ./internal/...`), lint (`make lint`), `make check-generated`.
    - **CI only:** tests with build tag `testbed` (levels 1 and 1b; they need network namespaces, which the dev container lacks) and `appliance` (nightly job, needs KVM).
@@ -64,7 +72,7 @@ The most common causes are:
 4. **Toolchain.**
    - Generated code: after editing `api/openapi.yaml`, run `make generate` and commit the generated files; CI runs `make check-spec check-generated check-clients`.
    - Formatting: run `gofmt` (CI lint fails on it) and keep `make lint` at 0 issues.
-5. **Updating this file.** When an item is done, delete its block here in the same PR and mention the item id in the commit message. Keep the tables in "Result" up to date.
+5. **Updating this file.** When an item is done, delete its block here in the same PR and mention the item id in the commit message. Keep the tables in "Phase 1 audit result" and "Phase 2 audit result" up to date.
 6. **Plan changes.** Edit `docs/plan.md` only where an item says so (`plan-error` tasks).
 
 ## Decisions (made 2026-10-04)
@@ -373,6 +381,125 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (confirmed 2026-10-11, P2-M7-01) |
 | M6b: TLS responder joins the service namespace | M21 |
 
+## Phase 2 audit result
+
+Date: 2026-10-12. Audited against `main` at `c97b9ba` and `docs/plan.md` §5 Phase 2 (M7, M8a, M8b, M9, M10,
+M11; H1 is dropped from scope, since there is no target hardware). Every milestone was checked against its
+Scope, Tests and Acceptance lines, the behavior sections of the plan they refer to (§2.2–§2.5, §2.13, §3.2,
+§3.3, §3.11, §4.3), its section in `docs/development.md`, `api/openapi.yaml` (normative for the API shape)
+and the code. Every test the plan lists was looked up by name and its result read from CI.
+
+**Phase 2 is complete except P2-AUDIT-01 and P2-AUDIT-02**, the two findings of medium severity: a new
+device still reaches the kernel through a (throttled) full apply instead of an element update, as the M7
+scope says, and the revision preview does not return the tc diff, the per-interface class capacity and the
+per-scope queue count that the plan (§2.4, §2.14, D18) and the spec promise. Every other scope item is
+delivered, and every test the plan lists exists and passes in CI on a native kernel and under KVM with the
+§4.3 accuracy assertions on. The other 14 findings are of low severity: documentation and spec text that
+the code overtook, four test gaps, the per-night record of measurements that §4.3 asks for, and an edge
+case of commit-confirm with overlays. One of them, P2-AUDIT-06 (a sentence in `docs/development.md` that
+still called orphaning and the device merge the next steps of M8a), was fixed in the audit's own PR,
+together with a second stale M8a sentence of P2-AUDIT-16; 15 audit items stay open. P2-M9-06 (the hardware
+measurements of H1) stays open by scope.
+
+| Milestone | Verdict | Items |
+|---|---|---|
+| M7 Classification layer | done with gaps | P2-AUDIT-01 (medium), P2-AUDIT-03, P2-AUDIT-04 |
+| M8a Overlays | done with gaps | P2-AUDIT-05 (P2-AUDIT-06 fixed in the audit's PR) |
+| M8b Fault engine: latency, jitter, loss | done with gaps | P2-AUDIT-07 |
+| M9 Access rules | done with gaps | P2-AUDIT-08, P2-AUDIT-09, P2-AUDIT-10 (P2-M9-06 stays open for H1) |
+| M10 Extended faults | done with gaps | P2-AUDIT-07, P2-AUDIT-11, P2-AUDIT-12, P2-AUDIT-13 |
+| M11 Profiles | done | — |
+| Cross-cutting | done with gaps | P2-AUDIT-02 (medium), P2-AUDIT-07, P2-AUDIT-14, P2-AUDIT-15, P2-AUDIT-16 |
+
+### Evidence
+
+- **CI on `main`:** run 38219524690 on `c97b9ba`, conclusion success; all five jobs green (level0 with
+  `go test -race ./...`, e2e, arm64 under qemu, testbed level 1 in a native privileged container on
+  6.17.0-1022-azure, testbed level 1b in a VM with KVM on 6.8.0-142). Both testbed jobs logged
+  `accurate=true` and 1245 `--- PASS` lines with 0 `--- SKIP` and 0 `--- FAIL`; the engine package
+  reported 285 passed and 0 skipped.
+- **Nightly:** 38126430957 (2026-10-11, `d435aa9`) success: the kernel matrix 6.8.0-142 and 7.0.0-38
+  booted with `kvm=true` and passed every Phase 2 measurement test with 0 skipped, and the fuzz targets ran
+  60 minutes each. 38228641768 on `c97b9ba`: the kernel matrix (6.8, 7.0) and the appliance jobs (Ubuntu
+  24.04, 26.04) succeeded; its fuzz job was still running when the audit ended.
+- **Weekly (emulated, no KVM):** 38212356584 (`3e854ce`, the tree of `c97b9ba`) success, without
+  `internal/engine` (documented in `docs/development.md`); the run before it, 38158196621, failed in the
+  engine package (P2-AUDIT-14).
+- **Local:** `go test ./internal/...`, `make check-spec` and `make check-generated` pass.
+
+### Per milestone
+
+- **M7** — the lookup chain (four levels with groups, networks and global folded into the per-source
+  tables, P2-M8a-01), the guard for test traffic, the direction bit, overlap splitting and the identity map
+  are delivered; all M7 tests of the plan pass on level 1 and 1b, among them
+  `TestClassificationMarksOnlyMatchingTrafficBehindNAT`,
+  `TestClassificationForAWireGuardClientNetworkAsInitiatorAndAsDestination`,
+  `TestAMapChangeMovesAnEstablishedConnectionToItsNewClass` and
+  `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (3 s bound, P2-M7-03). Gaps: a new
+  device is a full apply (P2-AUDIT-01), plan §3.3 still describes the old levels (P2-AUDIT-03), and the
+  concurrent-full-apply test covers only the sequential case (P2-AUDIT-04).
+- **M8a** — overlay store, TTL and lease, `reset`, precedence goldens E1–E8 and E12, stable ids, the tc
+  output, named counters, `explain` with the effective route, coalescing (200 concurrent writes, on the
+  real kernel too), the reader pool, orphaning with `?force` and the move of overlays on a merge are
+  delivered and tested; the nine M8a operations of the spec match the code. Gaps: a commit-confirm rollback
+  leaves the overlay changes of the rolled-back revision in place (P2-AUDIT-05), and a stale sentence in
+  `docs/development.md` (P2-AUDIT-06, fixed in the audit's PR).
+- **M8b** — in-place tc changes, make-before-break, overlay writes that return after verify with the new
+  generation, and netem queue statistics with epochs are delivered; every measurement test of the plan
+  (device, group, network, two test networks, WireGuard client network, a BGP route, isolation, updating
+  one fault, the 600 ms fault under load, the `tc -j` normalizer goldens) passes on level 1, level 1b and
+  the nightly kernels. Gap: the measured distributions are not stored per night (P2-AUDIT-07).
+- **M9** — ordered rules in configuration and as overlays on the conntrack original tuple, cutting
+  existing connections, precedence before faults, named counters, preview and `explain` are delivered; the
+  S3 behavior matrix (C0–C6), rule order, overlays first, the anti-lockout rule and the UDP 53 test against
+  the gateway address and 169.254.100.2 pass in CI and on both nightly kernels. Gaps: one spec sentence on
+  `system_rules` (P2-AUDIT-08), one validation code described wrongly (P2-AUDIT-09), one assertion that
+  checks nothing (P2-AUDIT-10).
+- **M10** — tunnel faults, the WireGuard actions, per-device rate and queue limit (D18), reorder,
+  duplicate, corrupt, burst loss, blackout, flapping, the three PMTU modes and BIRD's export into the
+  mirror tables are delivered; one measurement test per fault type passes on level 1, level 1b and the
+  nightly kernels 6.8 and 7.0, as do E9 and E10 and the `capacity_exceeded` previews. Gaps: P2-AUDIT-07,
+  user-visible decisions missing from the spec and plan §2.4 (P2-AUDIT-11), a BGP re-convergence under KVM
+  that contradicts the documented expectation (P2-AUDIT-12), and no real-kernel test that a duplicate meets
+  the class of the original (P2-AUDIT-13).
+- **M11** — built-in and custom profiles, activation on device, group and network through overlays, and
+  precedence with individual faults are delivered; every test of the plan passes with measured values
+  (e.g. `TestActivatingAndSwitchingProfilesYieldsTheMeasuredValues`,
+  `TestADeviceFaultOverridesTheNetworkProfileForThatDeviceOnly`,
+  `TestAnOverlayProfileBeatsAConfigurationFaultOnTheWire`), on level 1, level 1b and both nightly kernels.
+  P2-M11-01 to P2-M11-05 hold in the code. No gap.
+- **Cross-cutting** — "measured on x86" holds (accuracy assertions run natively and under KVM, never
+  skipped); every Phase 2 operation of the spec is implemented and none is answered as unsupported; the
+  Phase 2 counts in this file and the plan agree; every Phase 2 package passes on arm64. Gaps: the preview
+  fields (P2-AUDIT-02), the emulated branch of the engine tests (P2-AUDIT-14), `Capabilities.limits`
+  (P2-AUDIT-15), stale rows in the documents (P2-AUDIT-16).
+
+### Checked and not recorded as items
+
+- Latency `distribution` and `keep_order` are never measured on a real kernel: not a plan gap. M8b and
+  §4.3 ask for the median and the spread against the jitter, which the tests check; `keep_order` is a latency
+  parameter, not a fault type, and its effect is bounded through the rate profiles (P2-M11-04).
+- The SSE event type `counter_epoch` is in the spec's enum but never emitted: not a Phase 2 gap. §2.13 asks
+  for the reset to be reported as a counter epoch, which the state's `counter_epoch` and the epoch on every
+  counter and queue reading do (P2-M8b-05); the enum also lists events of later milestones.
+- `lockout_protected` kept in the spec but never produced: decided (P2-M9-08). The rule limits answering
+  `capacity_exceeded`: documented in the spec at the rule limits. Only the `system_rules` sentence of the
+  spec remains (P2-AUDIT-08).
+
+### Suggested work packages
+
+Ordered by value. Each package is one branch and one PR, and stays green in CI.
+
+1. **Preview and capabilities** (`phase2-audit-preview`): P2-AUDIT-02 (medium), P2-AUDIT-15.
+2. **A new device as an element update** (`phase2-audit-identity`), after the decision of P2-AUDIT-01:
+   P2-AUDIT-01 (medium), with the concurrent-apply test P2-AUDIT-04.
+3. **Overlays across a rollback** (`phase2-audit-rollback`): P2-AUDIT-05.
+4. **Test gaps** (`phase2-audit-tests`): P2-AUDIT-10, P2-AUDIT-13, P2-AUDIT-14.
+5. **Measurement record and BGP re-convergence** (`phase2-audit-measurements`), after the decision of
+   P2-AUDIT-07: P2-AUDIT-07, P2-AUDIT-12.
+6. **Spec and docs sync** (one PR): P2-AUDIT-03, P2-AUDIT-08, P2-AUDIT-09, P2-AUDIT-11, P2-AUDIT-16.
+   (P2-AUDIT-06 was done in the audit's PR.)
+
 ## Phase 2 open items
 
 Phase 2 (M7 to M11) produced 42 items: 39 from the first review, and three that the review of M9 and M11 and the first CI runs
@@ -384,8 +511,13 @@ otherwise. Seven decisions changed behavior and were implemented with them (P2-M
 P2-M11-05); the others confirmed the interpretation the item had chosen (for P2-M9-11 the second question, the meaning of `uplink`, was
 confirmed and documented). P2-M8a-07 was resolved in M9. Five items needed no decision and were closed by work on 2026-10-11 and
 2026-10-12 (second table: P2-M8a-06, P2-M8b-02, P2-M8b-04, P2-M8b-08, P2-M10-09). The blocks of all 41 are gone from this file, like
-the closed items of Phase 1; the item ids stay as names, since the code and the documents refer to them. One item stays open (below):
+the closed items of Phase 1; the item ids stay as names, since the code and the documents refer to them. One of the 42 stays open (below):
 P2-M9-06, a hardware measurement for H1, which also carries the arm64 apply-cost measurement left from P2-M8b-04.
+
+The Phase 2 audit of 2026-10-12 ("Phase 2 audit result" above) added 16 items, P2-AUDIT-01 to P2-AUDIT-16 (two of medium
+severity, fourteen low; the per-night record of measurements was found under M8b, M10 and the cross-cutting checks and is
+one item, P2-AUDIT-07). P2-AUDIT-06 was fixed in the audit's own PR and its block is gone, so 16 Phase 2 items are open:
+P2-M9-06 and 15 audit items, all listed under "Items that stay open".
 
 ### Decisions (made 2026-10-11)
 
@@ -440,6 +572,9 @@ P2-M9-06, a hardware measurement for H1, which also carries the arm64 apply-cost
 
 ### Items that stay open
 
+P2-M9-06 (from the Phase 2 review), then the items of the Phase 2 audit, P2-AUDIT-01 to P2-AUDIT-16 without
+P2-AUDIT-06 (done), ordered by severity and then by milestone. The reasons are the ones of "Why items stayed open".
+
 ### P2-M9-06 The limits of the access rules and the cost of an apply are not measured on small hardware
 
 - Status: new (extended on 2026-10-11 with the arm64 measurement left from P2-M8b-04; both measurements are in the Scope and Tests of plan H1)
@@ -461,5 +596,329 @@ P2-M9-06, a hardware measurement for H1, which also carries the arm64 apply-cost
 - Acceptance: the H1 measurements exist; the rule limit is confirmed or lowered for ARM64, and the apply
   with ten assigned interfaces stays within the overlay apply latency of plan §3.10 (or the reads are reduced further,
   for example by keeping which interfaces carried a tree at the last apply).
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-01 A new device is still a full apply, not an element update as the M7 scope says
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: medium
+- Reason: partial. The M7 scope (`docs/plan.md` §5, M7: "identity maps keyed by address → device id replace
+  the per-device sets of Phase 1, so a new device is an element update too") and plan §2.3 (identity changes
+  as incremental map-element operations, no ruleset rebuild, ≤ 1 s) are delivered for an address change
+  only. The compiler numbers devices by their position in the sorted UUID list, so a new device changes
+  `DeviceNums` and may renumber the others; `identityOps` then refuses the incremental path and the owner
+  sends the new device through the full apply, throttled by `identityConvergeWindow` (2 s). Nothing records
+  a decision to drop the promise, and `docs/development.md` (M7, "Identity map") even calls the device
+  number "a small stable number".
+- Evidence: `internal/compiler/dhcp.go:208-217` (`t.DeviceNums[did] = num + 1` over the sorted ids);
+  `internal/engine/applyloop.go:272-292` (`errNotIncremental` when `DeviceNums` differ; the comment says
+  "a device was added or removed, which renumbers every DeviceNums entry"); `internal/engine/owner.go:897-914`
+  (`triggerIdentityConverge` for new devices, still with the Phase 1 comment "a set is created or removed");
+  `internal/engine/integration_dhcp_test.go:586-587` ("a device that has just appeared reaches the kernel
+  through the throttled full apply (identityConvergeWindow), not an element update").
+- Task: (a) make device numbers stable across compiles (feed the previous allocation back into the
+  compiler, as `Input.FaultIDs` does for fault ids) and let `identityOps` add a new device's `ident4` and
+  classification elements incrementally while the fault structure is unchanged; or (b) record that a new
+  device takes the throttled full apply and amend `docs/plan.md` (M7 scope, §2.3) and `docs/development.md`
+  (M7, "Identity map") to say so. Recommendation: (a), it is the plan's scope and the identity map's name
+  does not depend on the devices, so only elements change.
+- Acceptance: (a) a test shows that a new device without faults of its own reaches the identity map
+  without a full apply (no nft transaction beyond the element transaction), and on level 1 within the
+  P2-M7-03 bound; existing devices keep their numbers. (b) the plan and `docs/development.md` describe the
+  full apply for a new device, and the stale comment in `owner.go` is corrected.
+- Needs maintainer: yes (option (a) or (b))
+- Effort: M
+
+### P2-AUDIT-02 The revision preview omits the tc diff, the class capacity per interface and the queues per scope
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: medium
+- Reason: forgotten. Plan §2.4 says "The preview shows how many queues a scope creates" (D18), §2.14 says
+  the preview shows the Linux changes "nftables, tc, routes", and the spec's `Preview` declares `linux.tc`,
+  `capacity[]` and `queues[]` (`api/openapi.yaml:3702-3753`). None of the three is ever returned. A user
+  cannot see before applying how many queues a rate-limited network fault creates or what changes in tc;
+  they only get a `capacity_exceeded` refusal once a limit is crossed. Neither `docs/development.md` nor
+  this file defers them.
+- Evidence: `internal/api/revisions.go:233-275` (`PreviewRevision` fills `linux` from nftables, routes,
+  WireGuard and BIRD only, and never sets `capacity` or `queues`); `internal/apply/diff.go:15-28`
+  (`LinuxDiff` has no tc field); `internal/engine/api.go:93-114` (`Preview` carries no class or queue
+  counts); `internal/api/profiles.go:163-181` (`previewFaults`). No API test asserts these fields.
+  (`linux.services` is never filled either; it belongs to M6b and is outside this audit.)
+- Task: add a normalized tc rendering to `apply.LinuxDiff` (per interface: classes, netem leaves with their
+  parameters, filters; seeds left out) and return it as `linux.tc`; fill `capacity[]` (interface, classes,
+  limit) and `queues[]` (fault, scope, queues per D18) from `compiler.Target`.
+- Acceptance: an API test previews a 2 Mbit/s network fault over N known devices and gets the number of
+  queues D18 gives that scope in `queues` (one per device, plus the queue that unknown addresses share,
+  P2-M8a-03), the matching class count in `capacity`, and the change in `linux.tc`; the responses validate
+  against the spec.
+- Needs maintainer: no
+- Effort: M
+
+### P2-AUDIT-03 Plan §3.3 still describes group and network levels and `meta l4proto` maps that the code does not build
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: plan-error. The code builds exactly four lookup levels; group, network and global scopes are
+  folded into the per-source entries (decided as P2-M8a-01, recorded only in `docs/development.md`), and a
+  protocol-only selector becomes a device+port element over the full port range (ICMP: 0-65535) instead of a
+  map keyed on `meta l4proto`. The behavior is equivalent, but the plan was not amended although the
+  decisions above are to be recorded "in `docs/plan.md` where the plan said otherwise", and the
+  protocol-only choice is recorded nowhere.
+- Evidence: `docs/plan.md:826-835` (level 5 "then the same for groups and networks, then any source +
+  destination/port, then global"; "Protocol-only selectors … use a map keyed on `meta l4proto`") and the M7
+  scope line ("protocol-only maps"); `internal/compiler/classify.go:89-102`; `internal/compiler/faults.go`
+  (`clsKey`, ICMP over 0-65535); `docs/development.md:1072-1079`.
+- Task: amend plan §3.3 and the M7 scope line: four levels, groups, networks and global folded into the
+  per-source tables (P2-M8a-01), protocol-only selectors as level-3 elements over the full port range;
+  add the protocol-only rule to `docs/development.md` (M7).
+- Acceptance: plan §3.3, the M7 scope line and `docs/development.md` describe what `classify.go` builds.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-04 The concurrent-full-apply test only covers an observation that arrives after the apply returned
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: test-gap. The M7 test "a concurrent full apply does not restore the old address" exists, but the
+  neighbor table changes while the full apply is blocked and the observation runs only after the apply has
+  returned, so the test shows that a later observation corrects a stale full apply. The race the plan means
+  (an identity update delivered into the owner while a full apply is in flight) is never exercised;
+  `docs/development.md:1010-1012` says the test "proves a full apply racing an incremental identity update
+  does not win with the stale address". The code looks correct (`startApply` sets `o.current`, the loop
+  diffs against the applied target); the test does not show it. The test runs over kernelsim only.
+- Evidence: `internal/engine/observed_test.go:722-769` (`TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress`;
+  `h.observe()` at line 765, after `<-done`); the nearest race test,
+  `TestAnObserverEventDuringAnApplyIsContainedInTheNextApply` (`engine_test.go:593`), observes the uplink,
+  not a device identity.
+- Task: add a variant that delivers the observation (`cmdObserved`) while `blockingNftExec` holds the full
+  apply, then releases it; optionally a level 1 counterpart.
+- Acceptance: the identity map holds the new address after the apply without any further observation, and
+  the test fails if the loop diffs against the stale desired state.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-05 A commit-confirm rollback ignores the overlays
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: partial. Orphaning and the merge move (M8a scope, §2.1.1) run only when a revision is applied.
+  During the confirm window overlays are validated against the pending revision, and the rollback re-applies
+  the committed configuration with the unchanged overlay list. Two cases, both reproduced by the audit with
+  throwaway engine tests in a scratch copy: (a) a pending revision adds a device (with a lockout-relevant
+  change), an overlay targets that device, the confirm timeout rolls back: the overlay stays active with no
+  `overlay_orphaned` or `overlay_removed` event, dormant until its TTL, and comes back to life if a later
+  revision adds the same UUID; later revisions cannot find it as an orphan, since the committed
+  configuration never had the object. (b) a pending merge revision moves an overlay of a discovered device
+  to the configured one and is rolled back: the overlay stays on the configured device and is compiled
+  there, and the discovered device it was written for is no longer impaired. `docs/development.md` covers
+  only a failed apply.
+- Evidence: `internal/engine/owner.go:565` (`revisionOverlays` in `startApply`), `owner.go:807-827`
+  (`rollback` calls `nextDesired(o.committed.Config, …)` only); `internal/engine/overlays.go:322-330`
+  (`liveConfig()` is `o.current`, the pending revision); `internal/domain/orphans.go:62`.
+- Task: in `owner.rollback`, compute the impact of going from the pending to the committed configuration:
+  remove the overlays whose object is gone with `overlay_orphaned` (reason `rollback`), and undo the
+  `Store.Retarget` moves of the pending revision (keep its merge map in the pending state and reverse it).
+  Document the behavior in `docs/development.md` ("What applying a revision does to overlays").
+- Acceptance: engine tests for both cases: after a rollback the overlay on a pending-only device is gone
+  with an `overlay_orphaned` event, and an overlay moved by a rolled-back merge targets the discovered device
+  again.
+- Needs maintainer: no
+- Effort: M
+
+### P2-AUDIT-07 Measured distributions are not stored per night (§4.3)
+
+- Status: new (Phase 2 audit, 2026-10-12; found under M8b, M10 and the cross-cutting checks)
+- Severity: low
+- Reason: forgotten. The flakiness policy of plan §4.3 has two halves: a failed statistical assertion is
+  repeated once (done, `testbed.Statistically`), and "Measured distributions are stored per night, so drift
+  shows up as a trend before it fails a test" (not done). The measurement tests write their medians,
+  percentiles and losses only with `t.Logf` into the job logs, which expire and carry no structure; the
+  nightly `testbed-matrix` job uploads no artifact. P2-M8b-06 (`docs/development.md:1683`) assumes the data
+  exist ("the spread bounds can be tightened if nightly measurements on KVM show they are never near their
+  limits"). No decision defers this.
+- Evidence: `docs/plan.md:1147`; `internal/testbed/stats.go:90-104`; `internal/testbed/probe.go:240`
+  (`String()` for the log) and `:307` (the only file write, the stop file); `.github/workflows/nightly.yml`
+  (upload-artifact only in the fuzz job, on failure, and the appliance job).
+- Task: (a) have the measurement helpers (`expectImpaired`, `expectUnaffected`, the stream and rate tests,
+  `Statistically`) write one JSON line per assertion (test, flow, direction, kernel, accurate, N, configured
+  value, median, p5, p95, loss, bounds, attempt) into a file named by an environment variable, have the VM
+  runner copy it out, upload it from each nightly matrix job, and optionally compare it with the previous
+  nights in a small script; or (b) decide that the job logs are the record and change the §4.3 sentence and
+  the P2-M8b-06 note.
+- Acceptance: (a) every nightly matrix job has a measurement artifact per kernel, and the file holds one
+  line per accuracy assertion; (b) plan §4.3 and `docs/development.md` say what is kept and where.
+- Needs maintainer: yes (option (a) or (b)); recommendation (a)
+- Effort: M
+
+### P2-AUDIT-08 The spec says `system_rules` lists the closed UI/API port, but it lists only the anti-lockout rule
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: forgotten. `AccessRuleBody` names two things that stand in front of every rule, the anti-lockout
+  rule and the closed UI/API port, and points to "`system_rules` of the list" for both; the API returns only
+  the anti-lockout rule, and the UI-port drop has only the shared `input_drop` counter.
+  `docs/development.md:1821` and `:2047` already say `system_rules` is the anti-lockout rule alone.
+- Evidence: `api/openapi.yaml:2952-2956`; `internal/api/rules.go:32-38` (`systemRules()` returns
+  `compiler.AntiLockoutRule` only).
+- Task: either say in `AccessRuleBody` that `system_rules` lists the anti-lockout rule and that the closure
+  of the UI/API port is described there in words, or add a second system rule (for example
+  `system:ui_closed`) with its own counter to `systemRules()`.
+- Acceptance: the spec and the `GET /rules` response agree; `make check-spec check-generated` passes.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-09 `docs/development.md` describes `cut_existing_requires_tcp` as "protocol is not tcp", but `any` is accepted
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: forgotten. The validation refuses `cut_existing` only when the protocol is neither `tcp` nor
+  `any`, as the spec says; the cut tests rely on `any` too (a UDP flow is deleted).
+- Evidence: `docs/development.md:380`; `internal/domain/validate_rules.go:59`; `api/openapi.yaml`
+  (`AccessRuleBody.cut_existing`: "the protocol must be `tcp` or `any`").
+- Task: change the row to "`cut_existing` is set on a rule whose protocol is neither `tcp` nor `any`."
+- Acceptance: the row matches `validate_rules.go`.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-10 A rule-counter test compares the counter epoch with itself
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: test-gap. `TestReplacingARuleOverlayKeepsItsIdItsPlaceInTheKeyAndItsCounter` says "the epoch of
+  the counter did not change either" but compares the snapshot taken after the replacement with a fresh
+  snapshot taken with nothing in between, so the check can never fail; only the `== 0` half checks anything.
+  No other test checks that a rule counter keeps its epoch across a replacement (plan §2.13: monotonic,
+  epoch reported); the behavior rests on `trackRules` alone.
+- Evidence: `internal/engine/access_test.go:251-260`; `internal/engine/overlays.go:780-800` (`trackRules`).
+- Task: record `e0 := h.e.Snapshot().RuleEpochs[r0.Key]` before the replacement and assert
+  `s.RuleEpochs[r0.Key] == e0 && e0 != 0` after it.
+- Acceptance: the test fails if `trackRules` gives a replaced rule a new epoch.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-11 User-visible M10 decisions are missing from the spec and plan §2.4
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: plan-error. The Phase 2 decisions are to be recorded in `api/openapi.yaml` where user-visible and
+  in `docs/plan.md` where the plan said otherwise; three are not. (1) P2-M10-06: the spec says `key_mismatch`
+  replaces the key "by a random one", but the key is derived (sha256 over a fixed string, the overlay id and
+  the real key), and the decision says a random key was not chosen; the spec also says `block_endpoint` is
+  effective when "the link names an endpoint", but only an endpoint that parses as an IPv4 address:port is
+  used, not a host name. (2) P2-M10-03: the 8 bit/s minimum rate (`invalid_rate`) is not in the spec.
+  (3) P2-M10-04: the black-hole drop of the MTU fault runs before the access rules, so a too-long packet
+  that a rule would reject is dropped silently and counted by the MTU fault, yet the `explain` description
+  and plan §2.4 state without exception that the access rules come first.
+- Evidence: `api/openapi.yaml:3501` and `:3506` (`WireGuardAction`), `internal/compiler/tunnel.go:164-177`
+  (`peerEndpoint`) and `:253-257` (`mismatchedKey`); `api/openapi.yaml:2069-2072` (`Bitrate`) and
+  `:3014-3019` (`NetemParams`), `internal/domain/validate_fault.go:155-160`; `api/openapi.yaml:4511-4513`,
+  `docs/plan.md:332`.
+- Task: update the `WireGuardAction` description (derived key; an endpoint only when it is an IPv4
+  address:port); add the 8 bit/s minimum and `invalid_rate` to the `NetemParams` (or `Bitrate`) text; add
+  the black-hole exception (P2-M10-04) to the `explain` description and to the precedence paragraph of plan
+  §2.4.
+- Acceptance: the three texts match the code and the decisions; `make check-spec check-generated` passes.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-12 BGP re-convergence after a tunnel blackout takes 39 to 56 s under KVM, not the documented 2.5 s
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: forgotten. The M10 test "a tunnel blackout on a BGP link withdraws the learned routes and the
+  re-convergence time is reported" passes and reports the time, bounded at 90 s. `docs/development.md`
+  states S15's figures as the expectation "on a native or KVM machine: withdrawn after about 6 s, back after
+  2.5 s". Natively the routes are back after 4.0 s; under KVM the withdrawal matches the timers but the
+  return takes ten times as long, unexplained and undocumented.
+- Evidence: CI run 38219524690, level 1b (`kvm=true`): "re-convergence: the routes were back 43.4 s after
+  the call … 39.2 s after its answer … the session was down for 46.0 s"; level 1 (native): back after 4.0 s,
+  down for 5.0 s. Nightly 38126430957 (`kvm=true`): 7.0.0-38 back 52.3 s after the answer, 6.8.0-142 50.9 s,
+  both down for 58.5 s. `internal/engine/integration_tunnel_test.go:702`, `:732-733`;
+  `docs/development.md:2676-2677`.
+- Task: find out why the session stays down for 45 to 58 s under KVM (BIRD's error-wait or connect-retry
+  timers after both hold timers expired are a likely cause); then correct the expectation in
+  `docs/development.md`, and tighten the test's accurate bound to the real protocol timers.
+- Acceptance: the cause is documented, the documented expectation matches the native and KVM figures, and
+  the bound of the test follows from the timers.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-13 No real-kernel test shows that a duplicated copy meets the same class as the original
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: test-gap. Plan §2.5 (Duplication): "the copy meets the same class (delay, loss, rate) as the
+  original". The measurement test duplicates only (`upload: {duplicate: 10%}`, then
+  `download: {duplicate: 20%}`), so a copy that skipped the class would pass. The property was observed by
+  hand in the VM only, and the copy path is kernel-sensitive (the earlier mirred-based copy worked on 6.8
+  and silently failed on 7.0).
+- Evidence: `internal/engine/integration_faults_extended_test.go:75-166`
+  (`TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults`); the kernel gate only accepts the shape
+  `{Delay 20ms, Duplicate 5}` (`internal/compiler/nftkernel_test.go:491`); `docs/development.md:2142-2152`, `:2180-2182`.
+- Task: extend the duplicate measurement with a fault that combines duplicate and latency (for example
+  50 ms and 10 %) and assert that the duplicated datagrams arrive with the fault's delay.
+- Acceptance: the test fails when copies bypass the netem leaf, and passes on level 1, level 1b and both
+  nightly kernels.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-14 The emulated branch of a Phase 2 engine test fails, undocumented, and has no CI run
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: test-gap. Under emulation the measurement tests run with functional assertions (plan §4.3
+  "Where", §4.4). The weekly emulated run 38158196621 (`86d594b`, `kvm=false`) failed
+  `TestAFlappingTunnelBlacksOutOnSchedule` in its emulated branch ("1 complete outages in the run (1
+  outages, 58 lost of 700)", the assertion `whole >= 2`), then the engine package timed out after 1h40m (182
+  passed, 1 failed). The response was to leave `internal/engine` out of the weekly run (documented); the
+  test was not changed, and the failure is not among the known emulated failures. So the functional branch
+  of the engine's Phase 2 tests runs only on the developer's persistent VM, with no recorded result. The
+  test passes natively and under KVM, which are the runs that count.
+- Evidence: weekly run 38158196621; `internal/engine/integration_tunnel_test.go:449-462`;
+  `docs/development.md:98`, `:169-198` (known emulated failures), `:2654` (the test checks "whole outages of
+  about the down time (emulated)").
+- Task: run the engine package emulated in the persistent VM (or a manual weekly dispatch with `-run` on the
+  Phase 2 tests); fix the emulated branch of `TestAFlappingTunnelBlacksOutOnSchedule` (for example count the
+  run in toggles rather than probe time, or lengthen it so it spans at least two down phases at the emulated
+  probe rate), or add it to the documented emulated failures. Optionally give the weekly job a `-run`-selected
+  subset of the engine's Phase 2 functional tests.
+- Acceptance: an emulated run of the engine's Phase 2 tests has a recorded result, and every failure in it
+  is fixed or listed in `docs/development.md`.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-15 `Capabilities.limits` is never filled although M8a introduced both limits
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: forgotten. The spec declares `limits.fault_ids` and `limits.class_limit_per_interface`; the class
+  limit differs per architecture and is configurable (plan §3.3: 4095 ids, ARM64 default 200), so a client
+  can learn it only from a `capacity_exceeded` refusal. No document defers the fields.
+- Evidence: `api/openapi.yaml:3896-3900`; `internal/api/system.go:126-135` (`GetCapabilities` sets no
+  `Limits`); `internal/compiler/tc.go:63-67`, `:300-306`; `internal/engine/applyloop.go:188`
+  (`e.cfg.ClassLimit`).
+- Task: fill `limits.fault_ids` (4095) and `limits.class_limit_per_interface` (the effective limit) in
+  `GetCapabilities`.
+- Acceptance: `TestSystemEndpoints` (or a new API test) asserts both values, also with a configured class
+  limit.
+- Needs maintainer: no
+- Effort: S
+
+### P2-AUDIT-16 Stale rows in the documents that Phase 2 work made outdated
+
+- Status: new (Phase 2 audit, 2026-10-12)
+- Severity: low
+- Reason: forgotten. (1) "Covered later" in this file still lists "M2: overlay `expires_at` /
+  `lease_expires_at` not set by `NewOverlay`", which `internal/overlay/store.go:182-190` sets since M8a.
+  (2) It still lists "M5: capabilities lists (`overlay_kinds`, `fault_families`, `step_types`) empty",
+  although the first two are filled since M8a to M10 (`internal/api/system.go:131-132`); only `step_types`
+  (M15) is empty. (3) Plan §8 still lists "ICMP type for reject" as a small fault addition after V1, which
+  M9's `reject_with` (P2-M9-03, `docs/plan.md:267`) delivered. A fourth statement,
+  "what is still open of M8a is listed there" in `docs/development.md` (M8a), was removed in the audit's PR.
+- Evidence: the lines above; `docs/plan.md:1661`.
+- Task: strike row (1); narrow row (2) to `step_types` → M15; remove "ICMP type for reject" from the plan §8
+  row.
+- Acceptance: none of the three statements remains.
 - Needs maintainer: no
 - Effort: S

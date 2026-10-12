@@ -1021,8 +1021,8 @@ also changes two things said here: the maps are interval maps, and an element `g
 The domain layer of M8a, built on `domain.Resolve` (Phase 1) and on M7's classification maps, the
 compiler's side of it (the subsection "Faults in the compiler") and the state owner's and the API's
 side ("Overlays in the engine and over the API"). Coalescing and the reader pool are described under
-"Coalescing and the reader pool (M8a)"; orphaning and the merge of discovered devices are the next
-steps.
+"Coalescing and the reader pool (M8a)"; orphaning and the merge of discovered devices under "What
+applying a revision does to overlays" in "Overlays in the engine and over the API (M8a)".
 
 - **Store** (`internal/overlay`). Holds the active overlays in memory; a restart starts empty
   (plan §2.1.1). `Put` takes an owner and a validated request (`domain.ValidateOverlay`, references
@@ -1215,8 +1215,7 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `mark_0` to `mark_4095` (`TestDecodeRejects`), range keys and `0xa0/0x1fff0`-style filter
   handles.
 - **Applying the tree** is `apply.Apply`'s job since M8b (in-place updates, make-before-break, verify:
-  "The tc tree in the apply" below). The engine, API and `explain` side of M8a follows below; what is
-  still open of M8a is listed there.
+  "The tc tree in the apply" below). The engine, API and `explain` side of M8a follows below.
 
 ### Overlays in the engine and over the API (M8a)
 

@@ -301,7 +301,7 @@ func (c Config) renderProtocol(b *strings.Builder, p Protocol) {
 		if p.BGP.Passive {
 			b.WriteString("  passive on;\n")
 		}
-		fmt.Fprintf(b, "  hold time %d;\n  keepalive time %d;\n  connect retry time 5;\n  error wait time 1, 30;\n  %s\n", p.BGP.HoldTime, p.BGP.KeepaliveTime, channel)
+		fmt.Fprintf(b, "  hold time %d;\n  keepalive time %d;\n%s  %s\n", p.BGP.HoldTime, p.BGP.KeepaliveTime, reconnectTimers, channel)
 	case "ospf":
 		fmt.Fprintf(b, "protocol ospf v2 %s {\n  %s\n  area %s {\n    interface %q { type ptp; hello %d; dead %d;", p.Name, channel, p.OSPF.Area, p.Interface, p.OSPF.HelloInterval, p.OSPF.DeadInterval)
 		if p.OSPF.Cost > 0 {

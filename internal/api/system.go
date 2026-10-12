@@ -142,7 +142,7 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M6a provide.
+// M11 provide.
 var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain"}
 
 // GetSystemInfo implements GET /system/info.

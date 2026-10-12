@@ -125,7 +125,8 @@ type fakeReporter struct {
 	logs, errs []string
 }
 
-func (f *fakeReporter) Helper() {}
+func (f *fakeReporter) Helper()      {}
+func (f *fakeReporter) Name() string { return "TestFake" }
 func (f *fakeReporter) Logf(format string, args ...any) {
 	f.logs = append(f.logs, fmt.Sprintf(format, args...))
 }

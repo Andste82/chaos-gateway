@@ -131,27 +131,28 @@ func expectFlow(t *testing.T, f flow, want flowShape) {
 			cur = &again
 		}
 		fresh = nil
+		m := testbed.Measure(t, f.name)
 		errs := []error{
-			testbed.CheckLoss(f.name+" upload", cur.Sent-cur.Delivered, cur.Sent, want.up.loss),
-			testbed.CheckLoss(f.name+" download", cur.Delivered-cur.Replied, cur.Delivered, want.down.loss),
+			m.Loss("upload", cur.Sent-cur.Delivered, cur.Sent, want.up.loss),
+			m.Loss("download", cur.Delivered-cur.Replied, cur.Delivered, want.down.loss),
 		}
 		if want.keepsOrder {
 			// A rate keeps the order, so with a jitter the median is not the configured delay (nor is the spread
 			// a uniform one): a packet is held back for the one before it. What holds is that no packet is faster
 			// than the least delay, and the median lies between the delay and the greatest delay (P2-M11-04).
 			errs = append(errs,
-				checkOrdered(f.name+" upload", cur.Up, cur.UpMedian(), want.up),
-				checkOrdered(f.name+" download", cur.Down, cur.DownMedian(), want.down))
+				checkOrdered(m, "upload", cur.Up, want.up),
+				checkOrdered(m, "download", cur.Down, want.down))
 			return joinErrs(errs...)
 		}
 		errs = append(errs,
-			testbed.CheckLatency(f.name+" upload", cur.UpMedian(), want.up.delay),
-			testbed.CheckLatency(f.name+" download", cur.DownMedian(), want.down.delay))
+			m.Latency("upload", cur.Up, want.up.delay),
+			m.Latency("download", cur.Down, want.down.delay))
 		if want.up.jitter > 0 {
-			errs = append(errs, testbed.CheckSpread(f.name+" upload", cur.Up, want.up.jitter))
+			errs = append(errs, m.Spread("upload", cur.Up, want.up.jitter))
 		}
 		if want.down.jitter > 0 {
-			errs = append(errs, testbed.CheckSpread(f.name+" download", cur.Down, want.down.jitter))
+			errs = append(errs, m.Spread("download", cur.Down, want.down.jitter))
 		}
 		return joinErrs(errs...)
 	})
@@ -159,17 +160,25 @@ func expectFlow(t *testing.T, f flow, want flowShape) {
 
 // checkOrdered is the check of a direction whose packets are kept in order (a profile with a rate and a jitter): the
 // median lies from the delay up to delay + jitter (plus the 2 ms of §4.3), because a packet never leaves before the one
-// sent earlier, and the fastest packets are not faster than delay - jitter.
-func checkOrdered(what string, ds []time.Duration, median time.Duration, d dir) error {
+// sent earlier, and the fastest packets are not faster than delay - jitter. Both go into the measurement record.
+func checkOrdered(m testbed.Recorder, direction string, ds []time.Duration, d dir) error {
 	const slack = 2 * time.Millisecond
-	var errs []error
+	ms := func(x time.Duration) float64 { return float64(x.Microseconds()) / 1e3 }
+	what := m.Flow() + " " + direction
+	median, lo := testbed.Median(ds), testbed.Percentile(ds, 5)
+	low, high, least := ms(d.delay-slack), ms(d.delay+d.jitter+slack), ms(d.delay-d.jitter-slack)
+	var errMedian, errLow error
 	if median < d.delay-slack || median > d.delay+d.jitter+slack {
-		errs = append(errs, fmt.Errorf("%s: median %v, outside %v to %v of an ordered delay of %v ± %v", what, median, d.delay-slack, d.delay+d.jitter+slack, d.delay, d.jitter))
+		errMedian = fmt.Errorf("%s: median %v, outside %v to %v of an ordered delay of %v ± %v", what, median, d.delay-slack, d.delay+d.jitter+slack, d.delay, d.jitter)
 	}
-	if lo := testbed.Percentile(ds, 5); lo < d.delay-d.jitter-slack {
-		errs = append(errs, fmt.Errorf("%s: 5th percentile %v, below the least delay %v", what, lo, d.delay-d.jitter))
+	if lo < d.delay-d.jitter-slack {
+		errLow = fmt.Errorf("%s: 5th percentile %v, below the least delay %v", what, lo, d.delay-d.jitter)
 	}
-	return joinErrs(errs...)
+	return joinErrs(
+		m.Record(direction, testbed.WithDelays(testbed.Measurement{Quantity: "median ordered delay", Unit: "ms", N: len(ds),
+			Configured: ms(d.delay), Value: ms(median), Low: &low, High: &high}, ds), errMedian),
+		m.Record(direction, testbed.WithDelays(testbed.Measurement{Quantity: "p5 ordered delay", Unit: "ms", N: len(ds),
+			Configured: ms(d.delay - d.jitter), Value: ms(lo), Low: &least}, ds), errLow))
 }
 
 // profileOf is the overlay request that activates a profile on a target.
@@ -404,12 +413,9 @@ func TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate(t *testing.T) {
 				time.Sleep(15 * time.Second) // the queues of the first round drain
 				g = measure()
 			}
-			for i, name := range []string{"A", "B"} {
-				if !within10(g[i], rate) {
-					return fmt.Errorf("download of %s: %.3f Mbit/s, not within ±10 %% of 2 Mbit/s (plan §4.3)", name, g[i]/1e6)
-				}
-			}
-			return nil
+			return joinErrs(
+				testbed.Measure(t, "A").Rate("download", g[0], rate, rateTolerance),
+				testbed.Measure(t, "B").Rate("download", g[1], rate, rateTolerance))
 		})
 	}
 }
@@ -466,11 +472,8 @@ func TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd(t *testing.T) {
 				time.Sleep(15 * time.Second) // the queue of the first round drains
 				g = measure()
 			}
-			if !within10(g[0], rate*share) {
-				return fmt.Errorf("device A received %.3f Mbit/s, not within ±10 %% of %.2f Mbit/s (2 Mbit/s of rate times the %.0f %% that Bad LTE delivers)",
-					g[0]/1e6, rate*share/1e6, share*100)
-			}
-			return nil
+			// the configured figure is 2 Mbit/s of rate times the 97 % that Bad LTE delivers
+			return testbed.Measure(t, "A, UDP").Rate("download", g[0], rate*share, rateTolerance)
 		})
 	}
 }

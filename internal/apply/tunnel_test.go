@@ -258,6 +258,43 @@ func TestATunnelFaultMakesTheIFBItsTreeAndTheIngressFiltersInOrder(t *testing.T)
 	}
 }
 
+// The preview's tc diff covers the IFB's tree and the ingress side of the uplink (P2-AUDIT-02): a new tunnel fault shows the
+// ingress qdisc and the filter that redirects the peer, nothing once it is applied, and a peer that roams its two filters.
+func TestTheLinuxDiffShowsTheIFBTreeAndTheIngressFiltersOfATunnelFault(t *testing.T) {
+	x := newTunEnv(t)
+	o := x.overlay(tunFlt)
+	tg := x.compileWith(o)
+	id := tg.Faults[0].ID
+	up := compiler.ClassIDOf(id, compiler.Upload)
+	d := diffOf(t, x.env, tg).TC
+	made := strings.Join(signed(d, '+'), "\n")
+	for _, want := range []string{
+		"ifb-cgw: qdisc 1: parent root htb default=0x1",
+		"ifb-cgw: class " + up + " parent 1: htb",
+		fmt.Sprintf("ifb-cgw: filter parent 1: pref %d flower handle %d flowid=%s udp src=198.51.100.2:51820", compiler.IFBFlowerPref, id, up),
+		"wan0 ingress: qdisc ffff: parent ingress ingress",
+		fmt.Sprintf("wan0 ingress: filter parent ingress pref %d flower handle %d udp src=198.51.100.2:51820 redirect=ifb-cgw", compiler.IngressPref, id),
+		"wan0: class " + compiler.ClassIDOf(tg.Faults[0].ID, compiler.Download) + " parent 1: htb",
+	} {
+		if !strings.Contains(made, want) {
+			t.Errorf("the diff of a new tunnel fault lacks %q:\n%s", want, d)
+		}
+	}
+	if len(signed(d, '-')) != 0 {
+		t.Errorf("nothing goes:\n%s", d)
+	}
+	x.applyRetiring(tg)
+	if d := diffOf(t, x.env, tg).TC; d != "" {
+		t.Fatalf("the applied tunnel fault still differs:\n%s", d)
+	}
+	x.ends[clientA] = netip.MustParseAddrPort(epRA2)
+	d = diffOf(t, x.env, x.compileWith(o)).TC
+	gone, made2 := signed(d, '-'), signed(d, '+')
+	if len(gone) != 2 || len(made2) != 2 || !strings.Contains(gone[0], "src=198.51.100.2:51820") || !strings.Contains(made2[1], "src=198.51.100.9:40000 redirect=ifb-cgw") {
+		t.Errorf("a peer that roams changes its two filters:\n%s", d)
+	}
+}
+
 // A peer that is seen at another address moves its filters in place: the flower filters are replaced (the handle is the fault id),
 // the leaf of the class keeps its queue and the counters of the redirect restart (the plan says so).
 func TestAPeerThatRoamsMovesItsFiltersInPlace(t *testing.T) {

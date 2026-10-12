@@ -121,6 +121,24 @@ func planIngress(t *compiler.Target, s *State) (entries []executor.TCEntry, word
 // ingressProblems compares the ingress side of the state with the target's: what the target wants is
 // there, and no filter of ours is left over. The host's own filters are not looked at.
 func ingressProblems(t *compiler.Target, s *State, bad func(sub, format string, a ...any)) {
+	for _, p := range ingressSides(t, s) {
+		for _, d := range linux.CompareTC(p.want, p.have) {
+			bad("tc", "%s ingress: %s", p.dev, d)
+		}
+	}
+}
+
+// ingressSide is the ingress side of an interface as the target wants it and as the state has it, both
+// limited to what is Chaos Gateway's: the filters of ours, and the ingress qdisc only where the target
+// wants one.
+type ingressSide struct {
+	dev        string
+	want, have *linux.NormTree
+}
+
+// ingressSides returns the ingress sides the verification and the preview compare (ingressDevs).
+func ingressSides(t *compiler.Target, s *State) []ingressSide {
+	var out []ingressSide
 	for _, dev := range ingressDevs(t, s) {
 		have := emptyTree
 		if tree := s.TC[dev]; tree != nil {
@@ -132,8 +150,7 @@ func ingressProblems(t *compiler.Target, s *State, bad func(sub, format string, 
 			want = t.IFB.IngressNorm()
 			cmp.Qdiscs = have.Qdiscs
 		}
-		for _, d := range linux.CompareTC(want, cmp) {
-			bad("tc", "%s ingress: %s", dev, d)
-		}
+		out = append(out, ingressSide{dev: dev, want: want, have: cmp})
 	}
+	return out
 }

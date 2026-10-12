@@ -732,6 +732,95 @@ func TestThePreviewListsTheTCWorkAndTheRetirement(t *testing.T) {
 	}
 }
 
+// signed returns the lines of a unified diff that start with sign ('+', '-' or ' '), without it.
+func signed(d string, sign byte) []string {
+	var out []string
+	for _, l := range strings.Split(d, "\n") {
+		if l != "" && l[0] == sign {
+			out = append(out, l[1:])
+		}
+	}
+	return out
+}
+
+// The preview's tc diff (plan §2.14, P2-AUDIT-02) compares the trees the plan compares, in the form the
+// verification uses: a new fault is its whole tree on every interface, an applied target nothing, a
+// changed parameter its one leaf per interface, damage what the apply would put back, and the last
+// fault's removal the whole trees as going.
+func TestTheLinuxDiffShowsTheTCTreesAsTheApplyWouldChangeThem(t *testing.T) {
+	x := newTCEnv(t)
+	o := x.overlay(dev150)
+	tg := x.compileWith(o)
+	cls := tg.TC.Classes[0]
+	if len(tg.TC.Classes) != 2 {
+		t.Fatalf("a fault in both directions has two classes: %+v", tg.TC.Classes)
+	}
+	d := diffOf(t, x.env, tg).TC
+	var want []string
+	for _, dev := range tcDevs {
+		want = append(want, dev+": qdisc 1: parent root htb default=0x1")
+		for _, c := range tg.TC.Classes {
+			want = append(want, fmt.Sprintf("%s: qdisc %s parent %s netem limit=%d delay=0.15 jitter=0.02 delay_corr=0 loss=0 loss_corr=0 reorder=0/0 gap=0 duplicate=0/0 corrupt=0/0 rate=0",
+				dev, c.LeafHandle(), c.ClassID(), c.Netem.Limit))
+		}
+		want = append(want, dev+": class 1:1 parent 1: htb rate=1250000000 ceil=1250000000 prio=0 quantum=60000")
+		for _, c := range tg.TC.Classes {
+			want = append(want, dev+": class "+c.ClassID()+" parent 1: htb rate=1250000000 ceil=1250000000 prio=0 quantum=60000 leaf="+c.LeafHandle())
+		}
+		for _, c := range tg.TC.Classes {
+			want = append(want, dev+": filter parent 1: pref 1 fw "+fmt.Sprintf("%#x/%#x", c.Mark, compiler.MarkMask)+" flowid="+c.ClassID())
+		}
+	}
+	if got := signed(d, '+'); strings.Join(got, "\n") != strings.Join(want, "\n") || len(signed(d, '-')) != 0 {
+		t.Errorf("the diff of a new fault:\n%s\nwant the additions\n%s", d, strings.Join(want, "\n"))
+	}
+
+	x.applyRetiring(tg)
+	if d := diffOf(t, x.env, tg); d.TC != "" {
+		t.Fatalf("the applied tree still differs:\n%s", d.TC)
+	}
+
+	// another delay of the same overlay: the same key and id, one leaf per interface changes
+	o2 := x.overlay(fmt.Sprintf(devLat, "600ms"))
+	o2.Id = o.Id
+	tgLat := x.compileWith(o2)
+	if tgLat.TC.Classes[0].ClassID() != cls.ClassID() {
+		t.Fatalf("the id moved: %s, was %s", tgLat.TC.Classes[0].ClassID(), cls.ClassID())
+	}
+	d = diffOf(t, x.env, tgLat).TC
+	gone, made := signed(d, '-'), signed(d, '+')
+	if len(gone) != 2*len(tcDevs) || len(made) != 2*len(tcDevs) {
+		t.Fatalf("a changed delay is a leaf per class and interface:\n%s", d)
+	}
+	for i := range gone {
+		dev, c := tcDevs[i/2], tg.TC.Classes[i%2]
+		leaf := dev + ": qdisc " + c.LeafHandle() + " parent " + c.ClassID() + " netem "
+		if !strings.HasPrefix(gone[i], leaf) || !strings.Contains(gone[i], "delay=0.15 jitter=0.02") ||
+			!strings.HasPrefix(made[i], leaf) || !strings.Contains(made[i], "delay=0.6 jitter=0 ") {
+			t.Errorf("%s: the leaf changes from\n%s\nto\n%s", dev, gone[i], made[i])
+		}
+	}
+
+	// damage: a leaf changed by hand shows against the target
+	if r, _ := x.k.Run(context.Background(), executor.Command{Tool: executor.ToolTC, Args: []string{"-force", "-batch", "-"},
+		Stdin: "qdisc replace dev br-lab parent " + cls.ClassID() + " handle " + cls.LeafHandle() + " netem limit 10 delay 1ms 0ms 0% loss random 5% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit\n"}); r.Exit != 0 {
+		t.Fatal(r.Stderr)
+	}
+	d = diffOf(t, x.env, tg).TC
+	gone, made = signed(d, '-'), signed(d, '+')
+	if len(gone) != 1 || len(made) != 1 || !strings.HasPrefix(gone[0], "br-lab: qdisc "+cls.LeafHandle()+" parent "+cls.ClassID()+" netem limit=10 delay=0.001") ||
+		!strings.HasPrefix(made[0], "br-lab: qdisc "+cls.LeafHandle()) || !strings.Contains(made[0], "delay=0.15") {
+		t.Errorf("a leaf changed by hand:\n%s", d)
+	}
+
+	// without faults, every tree goes
+	x.applyRetiring(tg)
+	d = diffOf(t, x.env, x.compileWith()).TC
+	if len(signed(d, '-')) != len(want) || len(signed(d, '+')) != 0 {
+		t.Errorf("the trees do not go:\n%s", d)
+	}
+}
+
 // The listing shows no distribution table and a change that names none keeps the old one, so the one
 // update that drops a queue is the one to a uniform delay with a jitter from a leaf that may have a
 // table.

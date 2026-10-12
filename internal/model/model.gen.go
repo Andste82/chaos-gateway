@@ -5562,7 +5562,10 @@ type SessionUser string
 
 // Settings defines model for Settings.
 type Settings struct {
-	// ClassLimitPerInterface Default 1000 on x86-64, 200 on ARM64 (plan §3.3).
+	// ClassLimitPerInterface tc classes one interface may carry, the default class included (plan §3.3). Without it the limit is the
+	// gateway's default, 1000 on x86-64 and 200 on ARM64. Faults beyond it are refused with
+	// `capacity_exceeded`; the preview of a revision counts against the revision's own setting, and
+	// `limits.class_limit_per_interface` of the capabilities reports the limit of the applied configuration.
 	ClassLimitPerInterface *int               `json:"class_limit_per_interface,omitempty"`
 	CommitConfirmTimeout   *Duration          `json:"commit_confirm_timeout,omitempty"`
 	CounterPollInterval    *Duration          `json:"counter_poll_interval,omitempty"`

@@ -507,6 +507,69 @@ func TestAnOverlayThatExceedsTheClassLimitIsRefusedAndNothingChanges(t *testing.
 	}
 }
 
+// The configuration's setting class_limit_per_interface is the class limit of the compile, the preview and
+// the capabilities, in place of the engine's own (P2-AUDIT-17).
+func TestTheClassLimitOfTheConfigurationIsTheOneEnforced(t *testing.T) {
+	h := newHarness(t)
+	h.startWith(engine.Config{ClassLimit: 1000})
+	limit := 10
+	withLimit := func(c *model.Configuration) {
+		if c.Settings == nil {
+			c.Settings = &model.Settings{}
+		}
+		c.Settings.ClassLimitPerInterface = &limit
+	}
+	if got := h.e.ClassLimit(); got != 1000 {
+		t.Errorf("without the setting the limit is %d, want the engine's 1000", got)
+	}
+	h.mustApply(h.revision(withLimit))
+	if got := h.e.ClassLimit(); got != 10 {
+		t.Errorf("with the setting of 10 the limit is %d", got)
+	}
+	// the default class and two classes per impaired fault: four faults fit into 10 (9 classes), a fifth
+	// does not (11)
+	var cerr *engine.CompileError
+	n := 0
+	for i := 0; i < 6 && cerr == nil; i++ {
+		_, err := h.put(alice, fmt.Sprintf("target: {network: IoT}\nfault: {latency: %dms, destination: {cidr: 198.51.100.%d/32}}", 10+i, i))
+		if errors.As(err, &cerr) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		n++
+	}
+	if n != 4 || cerr == nil || len(cerr.Problems) == 0 || cerr.Problems[0].Code != compiler.CodeCapacityExceeded {
+		t.Fatalf("%d faults were written before %v, want 4 and capacity_exceeded", n, cerr)
+	}
+	// a candidate that raises the setting previews against its own limit, and its apply takes it
+	limit = 20
+	rev := h.revision(withLimit)
+	p, err := h.e.Preview(context.Background(), rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Capacity) == 0 {
+		t.Fatalf("the preview shows no capacity: %+v", p)
+	}
+	for _, c := range p.Capacity {
+		if c.Limit != 20 {
+			t.Errorf("the preview's limit of %s is %d, want the candidate's 20", c.Dev, c.Limit)
+		}
+	}
+	if got := h.e.ClassLimit(); got != 10 {
+		t.Errorf("a preview changed the limit to %d", got)
+	}
+	h.mustApply(rev)
+	if _, err := h.put(alice, "target: {network: IoT}\nfault: {latency: 30ms, destination: {cidr: 198.51.100.9/32}}"); err != nil {
+		t.Errorf("a fifth fault under a limit of 20: %v", err)
+	}
+	if got := h.e.ClassLimit(); got != 20 {
+		t.Errorf("after the apply the limit is %d, want 20", got)
+	}
+}
+
 func (h *harness) startWith(cfg engine.Config) {
 	h.t.Helper()
 	cfg.Store, cfg.Exec, cfg.Clock = h.st, apply.Local{E: h.ex}, h.clk

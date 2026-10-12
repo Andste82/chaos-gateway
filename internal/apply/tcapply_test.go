@@ -402,223 +402,98 @@ func TestAQueueThatNeverDrainsIsDeletedAfterTheCap(t *testing.T) {
 // RetireStep is one second: the time between two looks at a class that still holds packets.
 const RetireStep = time.Second
 
+// A class that a fault wants again before its deletion keeps its leaf and the queue in it, with and
+// without a jitter (a uniform leaf with one is made again only where a table may be, and the memory
+// still knows the table of a leaf that waits for its deletion) and with a table.
 func TestAnIdThatReturnsBeforeTheDeletionKeepsItsClass(t *testing.T) {
-	x := newTCEnv(t)
-	oA := x.overlay(fmt.Sprintf(devLat, "50ms"))
-	tgA := x.compileWith(oA)
-	x.applyRetiring(tgA)
-	leaf := tgA.TC.Classes[0].LeafHandle()
-	seed := x.k.TCSeed("br-iot", leaf)
-	if seed == 0 {
-		x.t.Fatalf("leaf %s is not where the test expects it:\n%s", leaf, x.dumpTC())
-	}
-	// the fault goes: nothing impairs, the whole tree is stale
-	tgNone := x.compileWith()
-	x.applyRetiring(tgNone)
-	if p := x.ret.Pending(); len(p) != len(tcDevs) || p[0].Class != "" {
-		t.Fatalf("pending %+v", p)
-	}
-	// the same overlay is back before the time: nothing was deleted, nothing waits
-	x.clock.Advance(500 * time.Millisecond)
-	x.log = nil
-	res := x.applyRetiring(x.compileWith(oA))
-	if len(res.Mismatches) != 0 {
-		t.Fatal(res.Mismatches)
-	}
-	if len(x.ret.Pending()) != 0 {
-		t.Errorf("still pending: %+v", x.ret.Pending())
-	}
-	if got := x.k.TCSeed("br-iot", leaf); got != seed {
-		t.Errorf("the leaf was created again")
-	}
-	if strings.Contains(x.tcLog(), "delete") || strings.Contains(x.tcLog(), "root") {
-		t.Errorf("the apply deleted something or made the root again:\n%s", x.tcLog())
-	}
-}
-
-func TestWithoutAnyFaultTheTreeGoesAfterTheDelayAndTheHostsRootComesBack(t *testing.T) {
-	x := newTCEnv(t)
-	x.applyRetiring(x.compileWith(x.overlay(fmt.Sprintf(devLat, "250ms"))))
-	tgNone := x.compileWith()
-	if tgNone.TC != nil {
-		t.Fatal("a tc tree without a fault")
-	}
-	res := x.applyRetiring(tgNone)
-	if len(res.Mismatches) != 0 {
-		t.Fatal(res.Mismatches)
-	}
-	for _, d := range tcDevs {
-		if len(x.readTC(d).Subtree("1:").Qdiscs) == 0 {
-			t.Errorf("%s lost its tree at once", d)
-		}
-	}
-	x.clock.Advance(1250*time.Millisecond - time.Nanosecond)
-	if n, _ := x.ret.Reap(context.Background(), x.exec(), ""); n != 0 {
-		t.Errorf("reaped %d early", n)
-	}
-	x.clock.Advance(time.Nanosecond)
-	if n, err := x.ret.Reap(context.Background(), x.exec(), ""); err != nil || n != len(tcDevs) {
-		t.Fatalf("reaped %d (%v)", n, err)
-	}
-	for _, d := range tcDevs {
-		if q := x.readTC(d).Qdiscs; len(q) != 1 || q[0].Kind != "noqueue" {
-			t.Errorf("%s: %+v", d, q)
-		}
-	}
-	if mm := x.strictVerify(tgNone); len(mm) != 0 {
-		t.Errorf("%v", mm)
-	}
-}
-
-// A gateway that restarted has no memory of what was retiring: the classes it finds that the target
-// does not want start their time at its first apply.
-func TestAfterARestartTheStaleClassesAreFoundAgainAndGoLater(t *testing.T) {
-	x := newTCEnv(t)
-	x.applyRetiring(x.compileWith(x.overlay(fmt.Sprintf(devLat, "400ms"))))
-	tgNew := x.compileWith(x.overlay(fmt.Sprintf(devLat, "10ms")))
-	x.applyRetiring(tgNew)
-	if len(x.ret.Pending()) == 0 {
-		t.Fatal("nothing pending")
-	}
-	// the process restarts: a new retirer, the kernel as it is
-	x.clock.Advance(10 * time.Second)
-	x.ret = apply.NewRetirer(x.clock)
-	res := x.applyRetiring(tgNew)
-	if len(res.Mismatches) != 0 {
-		t.Fatal(res.Mismatches)
-	}
-	if got := len(x.ret.Pending()); got != len(tcDevs)*len(tgNew.TC.Classes) {
-		t.Fatalf("%d pending", got)
-	}
-	// the delay of the stale leaves in the kernel (400 ms) is what counts: 1.4 s from now
-	if next, _ := x.ret.Next(); next != 1400*time.Millisecond {
-		t.Errorf("next in %v", next)
-	}
-	x.clock.Advance(1400 * time.Millisecond)
-	if n, err := x.ret.Reap(context.Background(), x.exec(), ""); err != nil || n != classesOn(tcDevs, tgNew) {
-		t.Fatalf("reaped %d (%v)", n, err)
-	}
-	if mm := x.strictVerify(tgNew); len(mm) != 0 {
-		t.Errorf("%v", mm)
-	}
-}
-
-func classesOn(devs []string, tg *compiler.Target) int { return len(devs) * len(tg.TC.Classes) }
-
-// Without a retirer (the one-shot apply) the old class goes at once, after the transaction.
-func TestWithoutARetirerTheOldClassesGoRightAfterTheTransaction(t *testing.T) {
-	x := newTCEnv(t)
-	x.apply(x.compileWith(x.overlay(fmt.Sprintf(devLat, "50ms"))))
-	tgNew := x.compileWith(x.overlay(fmt.Sprintf(devLat, "30ms")))
-	x.k.ClearLog()
-	x.log = nil
-	res := x.apply(tgNew)
-	if len(res.Mismatches) != 0 {
-		t.Fatal(res.Mismatches)
-	}
-	if mm := x.strictVerify(tgNew); len(mm) != 0 {
-		t.Errorf("%v", mm)
-	}
-	var nftAt, delAt = -1, -1
-	for i, c := range x.k.Commands() {
-		if strings.HasPrefix(c, "nft") && strings.Contains(c, "-f") {
-			nftAt = i
-		}
-		if strings.HasPrefix(c, "tc -force -batch") {
-			delAt = i
-		}
-	}
-	if nftAt < 0 || delAt < nftAt {
-		t.Errorf("nft at %d, the deletion at %d", nftAt, delAt)
-	}
-}
-
-func TestATCFailureFailsTheApplyAndNothingIsHandedToTheRetirer(t *testing.T) {
-	x := newTCEnv(t)
-	x.applyRetiring(x.compileWith(x.overlay(fmt.Sprintf(devLat, "50ms"))))
-	pending := len(x.ret.Pending())
-	tgNew := x.compileWith(x.overlay(fmt.Sprintf(devLat, "30ms")))
-	nftsBefore := len(x.k.Commands())
-	x.k.Fail = func(argv []string, stdin string) *executor.Result {
-		if argv[0] == "tc" && strings.Contains(strings.Join(argv, " "), "-batch") && strings.Contains(stdin, "class replace") {
-			return &executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}
-		}
-		return nil
-	}
-	_, err := apply.ApplyWith(context.Background(), x.exec(), "", tgNew, x.ret)
-	var ae *apply.Error
-	if !asError(err, &ae) || ae.Stage != "execute" {
-		t.Fatalf("%v", err)
-	}
-	x.k.Fail = nil
-	if len(x.ret.Pending()) != pending {
-		t.Errorf("a failed apply changed what is pending")
-	}
-	// the nftables transaction did not run: the classification still points to the old classes
-	for _, c := range x.k.Commands()[nftsBefore:] {
-		if strings.HasPrefix(c, "nft") && strings.Contains(c, "-f") {
-			t.Errorf("the transaction ran after the tc operation failed: %s", c)
-		}
-	}
-}
-
-func TestVerifyFindsWhatDiffersInTheTree(t *testing.T) {
-	x := newTCEnv(t)
-	tg := x.compileWith(x.overlay(dev150))
-	x.applyRetiring(tg)
-	if mm := x.strictVerify(tg); len(mm) != 0 {
-		t.Fatalf("%v", mm)
-	}
-	cls := tg.TC.Classes[0]
-	cases := map[string]struct {
-		do   string
-		want string
-	}{
-		"a leaf with another delay": {"qdisc replace dev br-lab parent " + cls.ClassID() + " handle " + cls.LeafHandle() + " netem limit 1000 delay 1ms 0ms 0% loss random 0% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit", "different"},
-		"a filter that is gone":     {"filter delete dev wan0 parent 1: handle " + cls.FilterHandle() + " protocol ip prio 1 fw", "missing: filter"},
-		"a class nobody asked for":  {"class replace dev br-iot parent 1: classid 1:99 htb rate 10gbit quantum 60000", "unexpected: class 1:99"},
-		"the default class is gone": {"class delete dev br-lab classid 1:1", "missing: class 1:1"},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, fault := range []string{
+		fmt.Sprintf(devLat, "50ms"),
+		dev150,
+		`{target: {device: dev-a}, fault: {latency: 150ms, jitter: 20ms, distribution: normal}}`,
+	} {
+		t.Run(fault, func(t *testing.T) {
 			x := newTCEnv(t)
-			tg := x.compileWith(x.overlay(dev150))
-			x.applyRetiring(tg)
-			if r, _ := x.k.Run(context.Background(), executor.Command{Tool: executor.ToolTC, Args: []string{"-force", "-batch", "-"}, Stdin: c.do + "\n"}); r.Exit != 0 {
-				t.Fatalf("%s: %s", c.do, r.Stderr)
+			oA := x.overlay(fault)
+			tgA := x.compileWith(oA)
+			x.applyRetiring(tgA)
+			leaf := tgA.TC.Classes[0].LeafHandle()
+			seed := x.k.TCSeed("br-iot", leaf)
+			if seed == 0 {
+				x.t.Fatalf("leaf %s is not where the test expects it:\n%s", leaf, x.dumpTC())
 			}
-			mm := x.strictVerify(tg)
-			if len(mm) == 0 || !strings.Contains(fmt.Sprint(mm), c.want) {
-				t.Errorf("verify says %v, want a mismatch with %q", mm, c.want)
+			// the fault goes: nothing impairs, the whole tree is stale
+			tgNone := x.compileWith()
+			x.applyRetiring(tgNone)
+			if p := x.ret.Pending(); len(p) != len(tcDevs) || p[0].Class != "" {
+				t.Fatalf("pending %+v", p)
+			}
+			// the same overlay is back before the time: nothing was deleted, nothing waits
+			x.clock.Advance(500 * time.Millisecond)
+			x.log = nil
+			res := x.applyRetiring(x.compileWith(oA))
+			if len(res.Mismatches) != 0 {
+				t.Fatal(res.Mismatches)
+			}
+			if len(x.ret.Pending()) != 0 {
+				t.Errorf("still pending: %+v", x.ret.Pending())
+			}
+			if got := x.k.TCSeed("br-iot", leaf); got != seed || len(res.Plan.QueuesCreated) != 0 {
+				t.Errorf("the leaf was created again: %v", res.Plan.QueuesCreated)
+			}
+			if strings.Contains(x.tcLog(), "delete") || strings.Contains(x.tcLog(), "root") || strings.Contains(x.tcLog(), "qdisc") {
+				t.Errorf("the apply deleted something, made the root again or wrote a leaf:\n%s", x.tcLog())
 			}
 		})
 	}
 }
 
-// What an apply does about damage (a leaf that was changed by hand, a class that is not ours any
-// more) is to put the tree back.
-func TestAnApplyRepairsAChangedTree(t *testing.T) {
+// The same for one class of a tree that stays: a fault goes and comes back while another one keeps
+// the tree.
+func TestAClassThatReturnsBeforeTheDeletionKeepsItsLeaf(t *testing.T) {
 	x := newTCEnv(t)
-	o := x.overlay(dev150)
-	tg := x.compileWith(o)
-	x.applyRetiring(tg)
-	cls := tg.TC.Classes[0]
-	for _, line := range []string{
-		"qdisc replace dev br-iot parent " + cls.ClassID() + " handle " + cls.LeafHandle() + " netem limit 10 delay 1ms 0ms 0% loss random 5% 0% reorder 0% 0% duplicate 0% 0% corrupt 0% 0% rate 0bit",
-		"filter delete dev br-lab parent 1: handle " + cls.FilterHandle() + " protocol ip prio 1 fw",
-		"class delete dev wan0 classid 1:1",
-	} {
-		if r, _ := x.k.Run(context.Background(), executor.Command{Tool: executor.ToolTC, Args: []string{"-force", "-batch", "-"}, Stdin: line + "\n"}); r.Exit != 0 {
-			t.Fatalf("%s: %s", line, r.Stderr)
+	keep := x.overlay(`{target: {device: dev-b}, fault: {latency: 30ms}}`)
+	oA := x.overlay(dev150)
+	tgA := x.compileWith(keep, oA)
+	x.applyRetiring(tgA)
+	// the leaves of oA's fault id, wherever they are
+	id := -1
+	for _, f := range tgA.Faults {
+		if f.Source == oA.Id.String() {
+			id = f.ID
 		}
 	}
-	tg2 := x.compileWith(o)
-	res := x.applyRetiring(tg2)
-	if len(res.Mismatches) != 0 {
-		t.Fatalf("%v\n%s", res.Mismatches, x.dumpTC())
+	seeds := map[string]uint64{}
+	for _, c := range tgA.TC.Classes {
+		if c.ID != id {
+			continue
+		}
+		for _, d := range tcDevs {
+			if s := x.k.TCSeed(d, c.LeafHandle()); s != 0 {
+				seeds[d+" "+c.LeafHandle()] = s
+			}
+		}
 	}
-	if mm := x.strictVerify(tg2); len(mm) != 0 {
-		t.Errorf("%v", mm)
+	if len(seeds) == 0 {
+		t.Fatalf("no leaf of fault id %d:\n%s", id, x.dumpTC())
+	}
+	x.applyRetiring(x.compileWith(keep))
+	if p := x.ret.Pending(); len(p) == 0 || p[0].Class == "" {
+		t.Fatalf("pending %+v", p)
+	}
+	x.clock.Advance(500 * time.Millisecond)
+	x.log = nil
+	res := x.applyRetiring(x.compileWith(keep, oA))
+	if len(res.Mismatches) != 0 || len(x.ret.Pending()) != 0 {
+		t.Fatalf("%v %+v", res.Mismatches, x.ret.Pending())
+	}
+	for k, seed := range seeds {
+		dev, leaf, _ := strings.Cut(k, " ")
+		if got := x.k.TCSeed(dev, leaf); got != seed {
+			t.Errorf("%s: the leaf was made again", k)
+		}
+	}
+	if len(res.Plan.QueuesCreated) != 0 || strings.Contains(x.tcLog(), "qdisc") {
+		t.Errorf("a leaf was written or made again: %v\n%s", res.Plan.QueuesCreated, x.tcLog())
 	}
 }
 

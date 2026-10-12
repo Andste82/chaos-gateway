@@ -67,7 +67,7 @@ type Retiring struct {
 
 // commit takes over the stale set of a plan that has been carried out: the classes it names are
 // pending (those seen before keep their time, new ones get the plan's grace), every other one is
-// forgotten.
+// forgotten. The table memory keeps what it knows of the leaves still in the kernel.
 func (r *Retirer) commit(p *Plan) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -86,8 +86,33 @@ func (r *Retirer) commit(p *Plan) {
 		}
 		items[st.Key()] = &retiree{TCStale: st, first: now, due: now + p.Grace}
 	}
+	// the tables of the target's leaves, and those of the leaves of the stale classes and trees: they
+	// stay in the kernel until they are deleted, and a class that a fault wants again before that is
+	// to keep its leaf as it is (with what the memory knows of its table)
+	tables := make(map[string]string, len(p.Dists))
+	for k, v := range p.Dists {
+		tables[k] = v
+	}
+	for _, st := range p.Stale {
+		classes := st.Classes
+		if st.Class != "" {
+			classes = []string{st.Class}
+		}
+		for _, c := range classes {
+			_, minor, ok := strings.Cut(c, ":")
+			if !ok {
+				continue
+			}
+			k := st.Dev + " " + minor + ":"
+			if v, ok := r.tables[k]; ok {
+				if _, target := tables[k]; !target {
+					tables[k] = v
+				}
+			}
+		}
+	}
 	r.items = items
-	r.tables = p.Dists
+	r.tables = tables
 }
 
 // treeWith returns the pending whole tree of the interface of a stale class that has the class

@@ -61,8 +61,8 @@ func WantOf(t *compiler.Target) Want {
 
 // Preview reads the current state and plans what an apply would do, without changing anything. It
 // plans as BuildPlanRetiring does: the classes the target no longer wants stay, and without a memory of
-// the distribution tables a leaf that is what the target names is left alone (a fresh Retirer makes a
-// uniform leaf with a jitter again, P2-M8b-02); PreviewWith asks the engine's.
+// the distribution tables a leaf that is what the target names is left alone (a fresh Retirer writes
+// the table of such a leaf that is to have one, P2-M8b-02); PreviewWith asks the engine's.
 func Preview(ctx context.Context, ex Exec, ns string, t *compiler.Target) (*Plan, error) {
 	return PreviewWith(ctx, ex, ns, t, nil)
 }

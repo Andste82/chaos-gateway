@@ -1532,17 +1532,21 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   with a jitter (the only thing a table shapes) while it holds or may hold a table is made again
   (delete, create: a new seed, the queue is dropped); a leaf that is to get a table gets it
   in place. A leaf the retirer has no memory of (the first apply after a restart of the engine finds
-  leaves it did not write) counts as one that may hold a table, also when it is already what the
-  target says: a table that survived the restart, or that someone else put there before the start, is
-  invisible in the listing. That first apply therefore makes every such leaf that is to be uniform with
-  a jitter again and writes the table of every such leaf that is to have one in place; from then on the
-  memory knows them and an unchanged leaf is not touched (P2-M8b-02,
+  leaves it did not write) counts as one that may hold a table: a table that survived the restart, or
+  that someone else put there before the start, is invisible in the listing. When such a leaf is
+  already what the target says, the apply writes the table of one that is to have a table in place
+  (the queue stays) and leaves one that is to be uniform alone: making every uniform leaf with a jitter
+  again at every start would drop their queues for nothing, so a table left from before the start
+  stays until the first change of that leaf, which makes the leaf again (P2-M8b-02,
   `TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe`, on the real kernel
-  `TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft`). The cost is the queue of the leaves
-  with a jitter, once per start of the engine, which is accepted for a verify that would otherwise hold
-  a leaf for uniform that is not; a leaf without a jitter is left alone (a table shapes nothing there),
-  and so is every leaf for an apply without a retirer (`apply.Apply`, the CLI's one-shot apply,
-  `apply.Preview`), which has no memory to fill. A table that someone else writes while the engine runs,
+  `TestAfterARestartTheFirstChangeOfALeafDropsTheTableThePreviousRunLeft`); from then on the memory
+  knows it. A leaf without a jitter is never made again for its table (a table shapes nothing there),
+  and an apply without a retirer (`apply.Apply`, the CLI's one-shot apply, `apply.Preview`) has no
+  memory and leaves every leaf that is what the target says alone. The memory keeps the tables of the
+  leaves of the stale classes and trees as long as they wait for their deletion: a class that a fault
+  wants again before that keeps its leaf, its queue and what is known of its table
+  (`TestAnIdThatReturnsBeforeTheDeletionKeepsItsClass`, `TestAClassThatReturnsBeforeTheDeletionKeepsItsLeaf`).
+  A table that someone else writes while the engine runs,
   into a leaf whose listing it leaves as it was, is not seen until the next change of that leaf. An apply that fails while it
   is carried out may have written a table that the memory would not know: the leaves its tc operations
   wrote are then remembered as holding an unknown table (`Retirer.failed`), so the restore of the
@@ -1584,10 +1588,10 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   stream delivered and no drop counted, a move of the fault id under load with the same conservation
   and every datagram counted by the old or the new class, the old classes' deletion, the tree that
   goes with the last fault, a normal distribution going back to uniform, a table that a previous run
-  left behind dropped by the first apply after the restart, a quantum changed from outside found and
+  left behind dropped by the first change of the leaf after the restart, a quantum changed from outside found and
   written again). The load is a sender that
   runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
-  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestTheFirstApplyAfterARestart|TestTheRealKernelShowsAChangedQuantum" -tags testbed -test-timeout 30m ./internal/apply'`.
+  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestAfterARestartTheFirstChange|TestTheRealKernelShowsAChangedQuantum" -tags testbed -test-timeout 30m ./internal/apply'`.
 
 ### Queue statistics and counter epochs (M8b)
 

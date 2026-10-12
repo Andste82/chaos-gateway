@@ -311,21 +311,12 @@ func (p *tcPlan) planDev(tc *compiler.TCTarget, dev string, live *linux.NormTree
 			changed++
 		case known:
 			p.dists[dkey] = last
-		case mem != nil && dist == "" && c.Netem.Jitter > 0:
-			// A leaf that is what the target names, but that this process has never written: a
-			// table that survived a restart of the gateway, or that someone else put there, is
-			// invisible in the listing. An apply with a memory (the engine's, through a Retirer)
-			// makes such a leaf again once, at its first apply after the start; from then on the
-			// memory knows it is uniform. It costs the queue of the leaves with a jitter once per
-			// start, and nothing for a leaf without one, whose table shapes nothing.
-			repair = append(repair, executor.TCEntry{Object: "qdisc", Action: "delete", Dev: dev, Parent: id, Handle: c.LeafHandle()})
-			words = append(words, dev+": leaf "+c.LeafHandle()+" is made again (not written since the start, it may hold a distribution table, the target has none)")
-			change = append(change, leafEntry)
-			changed++
-			p.created = append(p.created, dev+" "+id)
-			p.dists[dkey] = ""
 		case mem != nil && dist != "":
-			// the same for a leaf that is to have a table: it is written in place, the queue stays
+			// A leaf that is what the target names and is to have a table, but that this process has
+			// never written (a table that survived a restart of the gateway, or that someone else put
+			// there, is invisible in the listing): the table is written in place, the queue stays. A
+			// leaf that is to be uniform is left alone until its first change (P2-M8b-02): making it
+			// again would drop its queue at every start.
 			change = append(change, leafEntry)
 			changed++
 			p.dists[dkey] = dist

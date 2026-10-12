@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: planning complete · October 2026
+Status: Phase 1 complete; Phase 2 complete except two medium items of its audit (P2-AUDIT-01, P2-AUDIT-02); both audits in `docs/open-items.md`; Phase 3 next · October 2026
 
 ---
 
@@ -1353,7 +1353,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 
 ## Phase 2 — Faults (core value)
 
-**Status:** M7 to M11 done; the Phase 2 open items closed (PR #46), except P2-M9-06, a hardware measurement that stays with H1 (`docs/open-items.md`).
+**Status:** M7 to M11 done; the Phase 2 open items closed (PR #46), except P2-M9-06, a hardware measurement that stays with H1 (`docs/open-items.md`). Audited on 2026-10-12 against `main` at `c97b9ba` (`docs/open-items.md`, "Phase 2 audit result"): M11 done, M7, M8a, M8b, M9, M10 and the cross-cutting checks done with gaps; Phase 2 is complete except P2-AUDIT-01 (a new device is still a full apply, not an element update) and P2-AUDIT-02 (the preview omits the tc diff, the class capacity and the queues per scope), with 13 low items open (P2-AUDIT-03 to P2-AUDIT-16; P2-AUDIT-06 was fixed with the audit).
 
 **M7 — Classification layer** (M)
 - **Status:** done — merged (PR #29, `ef9fea5`). Convention for Phase 2: a milestone gets this line, right under its heading, once its PR has merged to `main` with green CI.

@@ -222,6 +222,61 @@ func TestTheTreeOfAFaultIsAppliedVerifiedAndAReApplyChangesNothing(t *testing.T)
 	}
 }
 
+// The preview's tc diff on the real kernel (P2-AUDIT-02): it compares the trees the kernel lists in the form the
+// verification uses, so a tree the kernel accepted from the apply has no diff (no seed, counter or derived value shows up
+// as a change), and a change of parameters is its leaves and nothing else.
+func TestThePreviewsTCDiffIsEmptyForTheKernelsTreeAndAChangeIsItsLeaves(t *testing.T) {
+	g := newGateway(t)
+	g.withDevices()
+	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 120ms, jitter: 15ms, loss: 1%, rate: 5Mbit, corrupt: 0.5%}, download: {latency: 30ms, reorder: 10%, queue_limit: 50}}}`)
+	tg := g.compileFaults(o)
+	if tg.HasErrors() || tg.TC == nil {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	diff := func(tg *compiler.Target) string {
+		t.Helper()
+		s, err := apply.ReadState(context.Background(), g.exec(), g.ns(), apply.WantOf(tg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return apply.Diff(tg, s).TC
+	}
+	if d := diff(tg); !strings.Contains(d, "+wan0: qdisc 1: parent root htb default=0x1") || strings.Contains(d, "\n-") {
+		t.Errorf("before the apply the whole tree is new:\n%s", d)
+	}
+	if res := g.apply(tg); len(res.Mismatches) != 0 {
+		t.Fatalf("%v\n%s", res.Mismatches, g.dump())
+	}
+	if d := diff(tg); d != "" {
+		t.Fatalf("the kernel's tree differs from the one it accepted:\n%s", d)
+	}
+	tg2 := g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 80ms, jitter: 15ms, loss: 1%, rate: 5Mbit, corrupt: 0.5%}, download: {latency: 30ms, reorder: 20%, queue_limit: 50}}}`))
+	d := diff(tg2)
+	var gone, made int
+	for _, l := range strings.Split(strings.TrimSuffix(d, "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+"):
+			if !strings.Contains(l, " netem ") {
+				t.Errorf("a change of parameters changes more than leaves: %s", l)
+			}
+			if l[0] == '-' {
+				gone++
+			} else {
+				made++
+			}
+		}
+	}
+	if want := len(tg.TC.Classes) * len(tg.TC.Devs); gone != want || made != want {
+		t.Errorf("%d leaves go and %d come, want %d each:\n%s", gone, made, want, d)
+	}
+	if res := g.apply(tg2); len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
+	if d := diff(tg2); d != "" {
+		t.Errorf("after the change the kernel's tree differs:\n%s", d)
+	}
+}
+
 // What the plan promises (§4.3): changing the parameters of a 600 ms fault while packets are queued in
 // it loses none of them. The kernel keeps the queue of a netem that is changed, and the packets that
 // are in it leave at the time they were given.

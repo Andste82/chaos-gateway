@@ -116,9 +116,10 @@ func ownTree(s *State, dev string) *linux.NormTree {
 	return emptyTree
 }
 
-// planTC compares the tree of every interface with the target's.
-func planTC(t *compiler.Target, s *State, removed []string, mem map[string]string) *tcPlan {
-	p := &tcPlan{immediate: map[string]bool{}, dists: map[string]string{}}
+// tcWanted lists, sorted, the interfaces whose trees the plan, the verification and the preview compare:
+// the ones the target may put its tree on and every one that holds a tree of Chaos Gateway's now. It
+// maps the interfaces that are to hold a tree to that tree.
+func tcWanted(t *compiler.Target, s *State) (names []string, wants map[string]*compiler.TCTarget) {
 	devs := map[string]bool{}
 	for _, d := range t.TCCandidates() {
 		devs[d] = true
@@ -126,18 +127,34 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 	for d := range s.TC {
 		devs[d] = true
 	}
-	names := make([]string, 0, len(devs))
+	names = make([]string, 0, len(devs))
 	for d := range devs {
 		names = append(names, d)
 	}
 	sort.Strings(names)
-
-	wantsTree := map[string]*compiler.TCTarget{}
-	var maxDelay float64
+	wants = map[string]*compiler.TCTarget{}
 	for _, tr := range t.TCTrees() {
 		for _, d := range tr.Devs {
-			wantsTree[d] = tr
+			wants[d] = tr
 		}
+	}
+	return names, wants
+}
+
+// wantTree is the normalized tree an interface is to hold: the target's, or none.
+func wantTree(wants map[string]*compiler.TCTarget, dev string) *linux.NormTree {
+	if tr := wants[dev]; tr != nil {
+		return tr.Norm(dev)
+	}
+	return emptyTree
+}
+
+// planTC compares the tree of every interface with the target's.
+func planTC(t *compiler.Target, s *State, removed []string, mem map[string]string) *tcPlan {
+	p := &tcPlan{immediate: map[string]bool{}, dists: map[string]string{}}
+	names, wantsTree := tcWanted(t, s)
+	var maxDelay float64
+	for _, tr := range t.TCTrees() {
 		for _, c := range tr.Classes {
 			maxDelay = max(maxDelay, linux.NetemTime(c.Netem.Delay+c.Netem.Jitter))
 		}
@@ -397,30 +414,9 @@ func staleEntries(st TCStale, live *linux.NormTree) []executor.TCEntry {
 // the tree has exactly it, every other one holds none of Chaos Gateway's. What the apply left
 // standing for the delayed deletion (State.TCRetiring) is accepted as unexpected.
 func verifyTC(t *compiler.Target, s *State, bad func(sub, format string, a ...any)) {
-	devs := map[string]bool{}
-	for _, d := range t.TCCandidates() {
-		devs[d] = true
-	}
-	for d := range s.TC {
-		devs[d] = true
-	}
-	wantsTree := map[string]*compiler.TCTarget{}
-	for _, tr := range t.TCTrees() {
-		for _, d := range tr.Devs {
-			wantsTree[d] = tr
-		}
-	}
-	names := make([]string, 0, len(devs))
-	for d := range devs {
-		names = append(names, d)
-	}
-	sort.Strings(names)
+	names, wantsTree := tcWanted(t, s)
 	for _, dev := range names {
-		want := emptyTree
-		if tr := wantsTree[dev]; tr != nil {
-			want = tr.Norm(dev)
-		}
-		for _, d := range linux.CompareTC(want, ownTree(s, dev)) {
+		for _, d := range linux.CompareTC(wantTree(wantsTree, dev), ownTree(s, dev)) {
 			if d.Kind == "unexpected" && (s.TCRetiring[dev+" "+compiler.TCRootHandle] || d.Class != "" && s.TCRetiring[dev+" "+d.Class]) {
 				continue
 			}

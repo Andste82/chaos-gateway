@@ -25,6 +25,12 @@ type LinuxDiff struct {
 	// Bird is the running BIRD configuration text against the target's (or, with routing switched
 	// off, the idle text); empty when the executor has no BIRD directory.
 	Bird string
+	// TC covers the qdisc trees of Chaos Gateway per interface (plan §3.3): the HTB root, the classes,
+	// the netem leaves with their parameters and the filters, in the normalized form the verification
+	// compares (linux.NormTree.Spec: no seeds, counters or values the kernel derives), and the ingress
+	// side of the tunnel faults. A class that the apply retires after its grace period is shown as
+	// going.
+	TC string
 }
 
 // line is one line of a normalized rendering. Key decides equality; Text is what the diff shows
@@ -38,7 +44,34 @@ func Diff(t *compiler.Target, s *State) LinuxDiff {
 		Routes:    unified(hostLines(s, t), targetHostLines(t)),
 		WireGuard: unified(wgLines(s, t), targetWGLines(t)),
 		Bird:      birdDiff(t, s),
+		TC:        tcDiff(t, s),
 	}
+}
+
+// tcDiff compares the trees of the interfaces the apply's tc plan looks at (tcWanted) and their ingress
+// sides with the target's.
+func tcDiff(t *compiler.Target, s *State) string {
+	var have, want []line
+	names, wants := tcWanted(t, s)
+	for _, dev := range names {
+		have = append(have, treeLines(dev+": ", ownTree(s, dev))...)
+		want = append(want, treeLines(dev+": ", wantTree(wants, dev))...)
+	}
+	for _, p := range ingressSides(t, s) {
+		have = append(have, treeLines(p.dev+" ingress: ", p.have)...)
+		want = append(want, treeLines(p.dev+" ingress: ", p.want)...)
+	}
+	return unified(have, want)
+}
+
+// treeLines renders a tree's configuration, one object per line, each line led by the interface so that
+// every part of the diff names it.
+func treeLines(prefix string, tr *linux.NormTree) []line {
+	var out []line
+	for _, l := range tr.Spec().Sorted().Lines() {
+		out = append(out, line{prefix + l, prefix + l})
+	}
+	return out
 }
 
 // birdDiff compares the running BIRD configuration with the target's, or, when the target has no

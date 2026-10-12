@@ -15,7 +15,7 @@ func diffOf(t *testing.T, e *env, targets ...*compiler.Target) apply.LinuxDiff {
 	if len(targets) > 0 {
 		tg = targets[0]
 	}
-	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})
+	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tg))
 	if err != nil {
 		t.Fatal(err)
 	}

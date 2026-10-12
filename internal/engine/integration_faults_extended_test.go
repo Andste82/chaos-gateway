@@ -454,6 +454,7 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	}
 	body := fmt.Sprintf("target: {device: dev-a}\nfault: {flapping: {up: %ds, down: %ds}}", int(up.Seconds()), int(down.Seconds()))
 	r.mustPut(admin, body)
+	gen := r.e.Snapshot().Generation
 	// (no verifyKernel here or later: it compiles the snapshot and reads the kernel a moment later, and a
 	// boundary in between makes the two differ for a reason that is no defect; the apply's own verify
 	// compared the kernel with the phase the engine held, and the toggles are checked below)
@@ -487,41 +488,20 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	if len(upload) < 4 {
 		t.Fatalf("%d toggles of the upload in a run of %v: %+v", len(upload), time.Duration(count)*iv, upload)
 	}
-	for i, c := range upload {
-		if c.Down != (i%2 == 0) {
-			t.Errorf("toggle %d goes %v, the first one is the start of a blackout", i, c.Down)
-		}
-		if i > 0 {
-			// a toggle into the down phase comes one up phase after the previous toggle, one back up a down
-			// phase after it
-			want := down
-			if c.Down {
-				want = up
-			}
-			if got := c.Scheduled - upload[i-1].Scheduled; got != want {
-				t.Errorf("toggle %d is scheduled %v after the previous one, want %v", i, got, want)
-			}
-		}
-		if c.Late() < 0 {
-			t.Errorf("toggle %d committed %v before its time", i, -c.Late())
-		}
-		if testbed.Accurate() && c.Late() > engine.FlapTolerance {
-			t.Errorf("toggle %d committed %v after its time, the tolerance is %v", i, c.Late(), engine.FlapTolerance)
-		}
-	}
+	skipped := checkFlapSchedule(t, upload, up, down, appliesAfter(t, r.e, gen))
 	if testbed.Accurate() {
 		checkStat(t, "A flapping", res, measure, func(x testbed.ProbeResult) error {
 			return testbed.CheckFlaps("A flapping", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
 		})
 		return
 	}
-	// emulated: the outages are there, whole, about as long as the down time
+	// emulated: the outages are there, whole, about as long as the down time (and the cycles an apply held)
 	var whole int
 	for _, o := range outages {
 		if o.First > 0 && o.Last < res.Sent-1 {
 			whole++
-			if o.Len < down/2 || o.Len > 2*down {
-				t.Errorf("an outage of %v where %v is configured", o.Len, down)
+			if o.Len < down/2 || o.Len > 2*down+skipped {
+				t.Errorf("an outage of %v where %v is configured (%v of skipped cycles)", o.Len, down, skipped)
 			}
 		}
 	}
@@ -595,6 +575,69 @@ func logToggles(t *testing.T, toggles []engine.FlapChange) {
 	for i, c := range toggles {
 		t.Logf("toggle %d: down %v, scheduled at %v, committed %v late on %d interfaces", i, c.Down, c.Scheduled, c.Late(), c.Devices)
 	}
+}
+
+// appliesAfter logs the applies of a generation after gen and the changes that start one (the observed host,
+// a peer, an identity), and returns the number of those applies. A flapping boundary that falls into an apply
+// is made right after it (flap.go); under emulation an apply can take longer than a phase, and then the
+// boundaries it held are skipped as a whole.
+func appliesAfter(t *testing.T, e *engine.Engine, gen uint64) int {
+	t.Helper()
+	evs, _, cancel := e.SubscribeFrom(0)
+	cancel()
+	n := 0
+	for _, ev := range evs {
+		switch ev.Type {
+		case engine.EventApplied, engine.EventApplyFailed:
+			if g, ok := ev.Data["generation"].(uint64); !ok || g <= gen {
+				continue
+			}
+			n++
+		case engine.EventObservedChanged, engine.EventPeerOnline, engine.EventPeerOffline, engine.EventDeviceIdentityChanged:
+		default:
+			continue
+		}
+		t.Logf("event %s at %s: %v", ev.Type, ev.Time.Format("15:04:05.000"), ev.Data)
+	}
+	return n
+}
+
+// checkFlapSchedule checks that the toggles alternate, starting with a blackout, at the distances of the
+// schedule, never early and (with native execution or KVM) within FlapTolerance. Under emulation, where an
+// apply can hold the loop over boundaries, a distance that is longer by whole cycles is accepted when an apply
+// ran during the flapping; it returns the time the skipped cycles add to one down phase at most.
+func checkFlapSchedule(t *testing.T, toggles []engine.FlapChange, up, down time.Duration, applies int) (skipped time.Duration) {
+	t.Helper()
+	for i, c := range toggles {
+		if c.Down != (i%2 == 0) {
+			t.Errorf("toggle %d goes %v, the first one is the start of a blackout", i, c.Down)
+		}
+		if i > 0 {
+			// a toggle into the down phase comes one up phase after the previous toggle, one back up a down
+			// phase after it
+			want := down
+			if c.Down {
+				want = up
+			}
+			got := c.Scheduled - toggles[i-1].Scheduled
+			switch {
+			case got == want:
+			case !testbed.Accurate() && applies > 0 && got > want && (got-want)%(up+down) == 0:
+				t.Logf("toggle %d is scheduled %v after the previous one, %v later than %v: an apply held the loop over the boundaries in between (emulated)",
+					i, got, got-want, want)
+				skipped = max(skipped, got-want)
+			default:
+				t.Errorf("toggle %d is scheduled %v after the previous one, want %v (%d applies during the flapping)", i, got, want, applies)
+			}
+		}
+		if c.Late() < 0 {
+			t.Errorf("toggle %d committed %v before its time", i, -c.Late())
+		}
+		if testbed.Accurate() && c.Late() > engine.FlapTolerance {
+			t.Errorf("toggle %d committed %v after its time, the tolerance is %v", i, c.Late(), engine.FlapTolerance)
+		}
+	}
+	return skipped
 }
 
 // ---- rate and queue limit (D18) --------------------------------------------------------------------

@@ -135,9 +135,11 @@ appends one JSON line (`testbed.Measurement`) to the file `CHAOS_MEASUREMENTS` n
 assertion (the name `testbed.Statistically` gives it), the flow, the direction, the quantity and its
 unit, the kernel, `accurate`, N, the configured value, the measured value, the bounds the check
 accepts, the median, 5th and 95th percentile of the delays where the check had them, the loss where it
-counted one, the attempt (1, or 2 for the repetition of the flakiness policy) and the verdict with the
-message of a failure. An attempt of `Statistically` that recorded nothing leaves one line with its
-verdict (`"quantity":"assertion"`). Checks outside `Statistically` are recorded as attempt 1: the stream
+counted one, the number of the `Statistically` call in the test (`call`, absent outside one), the
+attempt (1, or 2 for the repetition of the flakiness policy) and the verdict with the message of a
+failure. An attempt of `Statistically` that recorded nothing leaves one line with its verdict
+(`"quantity":"assertion"`); an attempt that stops the test (a helper's `t.Fatal`) still leaves the lines
+it recorded. Checks outside `Statistically` are recorded as attempt 1: the stream
 of `TestUpdatingOneFaultDoesNotDisturbTheOthers` (`Delays`), the largest lateness of the toggles of the
 flapping tests, and the withdrawal and the re-convergence of the BGP blackout test (`Duration`). Without
 the variable nothing is written.
@@ -152,7 +154,9 @@ Where the record is kept:
 - **Comparison:** `go run ./tools/measurements [-match REGEXP] [-tsv] FILE|DIR...` prints, for every
   check, one line per run, oldest first: the value, its ratio to the configured value and where it
   lies between the bounds (0 % the lower, 100 % the upper bound), with the last attempt and the
-  verdict. A directory stands for the `*.jsonl` files below it, so the artifacts of several nights
+  verdict. A check a test makes more than once in a run (the phases of a profile switch, each with its
+  own configured value) stays apart: the n-th of a run is shown as `#n` and compared with the n-th of
+  the other runs, and a repetition replaces only the first attempt of its own call. A directory stands for the `*.jsonl` files below it, so the artifacts of several nights
   can be downloaded side by side and compared at once:
 
 ```

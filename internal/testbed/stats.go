@@ -95,6 +95,7 @@ type reporter interface {
 // attempt's verdict when it recorded none.
 func Statistically(t reporter, what string, attempt func() error) bool {
 	t.Helper()
+	call := nextCall(t.Name())
 	run := func(n int) (err error) {
 		a := &attemptLines{}
 		prev := openAttempt(t.Name(), a)
@@ -110,7 +111,7 @@ func Statistically(t reporter, what string, attempt func() error) bool {
 				a.lines = append(a.lines, assertionLine(t, what, err))
 			}
 			for _, m := range a.lines {
-				m.Assertion, m.Attempt = what, n
+				m.Assertion, m.Call, m.Attempt = what, call, n
 				writeMeasurement(t, m)
 			}
 		}()

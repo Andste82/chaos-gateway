@@ -131,9 +131,6 @@ type cmdRoutingStatus struct {
 
 type cmdRetry struct{}
 
-// cmdIdentityConverge runs an identity-driven converge throttled by triggerIdentityConverge.
-type cmdIdentityConverge struct{}
-
 // cmdObserved carries a reading of what the gateway sees (leases, neighbors, connections).
 type cmdObserved struct {
 	obs   observation
@@ -148,20 +145,19 @@ type cmdServiceStatus struct{ exists, holderMatches, holderExists bool }
 // retryDelay is how long the owner waits before it tries a failed apply or rollback again.
 const retryDelay = 10 * time.Second
 
-func (cmdApply) command()            {}
-func (cmdConfirm) command()          {}
-func (cmdRollback) command()         {}
-func (cmdObserve) command()          {}
-func (cmdResync) command()           {}
-func (cmdBarrier) command()          {}
-func (cmdTimeout) command()          {}
-func (cmdWGStatus) command()         {}
-func (cmdRoutingStatus) command()    {}
-func (cmdRetry) command()            {}
-func (cmdIdentityConverge) command() {}
-func (cmdObserved) command()         {}
-func (cmdDHCPStatus) command()       {}
-func (cmdServiceStatus) command()    {}
+func (cmdApply) command()         {}
+func (cmdConfirm) command()       {}
+func (cmdRollback) command()      {}
+func (cmdObserve) command()       {}
+func (cmdResync) command()        {}
+func (cmdBarrier) command()       {}
+func (cmdTimeout) command()       {}
+func (cmdWGStatus) command()      {}
+func (cmdRoutingStatus) command() {}
+func (cmdRetry) command()         {}
+func (cmdObserved) command()      {}
+func (cmdDHCPStatus) command()    {}
+func (cmdServiceStatus) command() {}
 
 // applyResult is what the apply loop reports about one desired state.
 type applyResult struct {
@@ -234,10 +230,6 @@ type owner struct {
 	// tracker works out identity, device state and their events from observations.
 	tracker  *tracker
 	identity *domain.Identity
-	// lastIdentityConverge is when an identity-driven converge last ran; identityThrottled reports
-	// whether one is already scheduled to run at the end of the current window (M6a-07).
-	lastIdentityConverge time.Time
-	identityThrottled    bool
 	// ov is the overlay store and what waits for the kernel to confirm its changes (overlays.go).
 	ov *overlayState
 	// batch is the run of overlay writes that is being taken in; it is closed (checked and made one
@@ -470,8 +462,6 @@ func (o *owner) handle(ctx context.Context, c command) {
 		}
 	case cmdRetry:
 		o.retry()
-	case cmdIdentityConverge:
-		o.identityConverge()
 	case cmdWGStatus:
 		o.wireguardStatus(c.status)
 	case cmdObserved:
@@ -603,6 +593,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Bird = r.target.Bird
 		o.snap.Bridges = r.target.Bridges
 		o.snap.Management = r.target.Management
+		o.snap.DeviceNums, o.snap.DeviceNumHigh = r.target.DeviceNums, r.target.DeviceNumHigh
 		o.snap.Service = r.target.Service
 		o.snap.ServiceError = ""
 		o.snap.CutWindowError = ""
@@ -870,18 +861,14 @@ func (o *owner) observed(obs observation) {
 	}
 	id, states, events := o.tracker.step(cfg, obs)
 	changed := o.identity == nil || !sameIdentity(*o.identity, id)
-	// an identity with no devices at all (the very first reading, before anything is seen) has
-	// nothing to rate-limit: let it converge right away without starting the window's clock, so the
-	// first real device to appear shortly after is not throttled by it.
-	newDevices := len(id.Addresses) > 0 && (o.identity == nil || deviceSetMembershipChanged(*o.identity, id))
 	o.identity = &id
 	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
 	o.snap.ObserveError = obs.ObserveError
 
 	// the desired state is built before the events are emitted, so device_identity_changed can name
-	// the generation it belongs to (spec Event.generation, "set for ... identity changes"); a
-	// throttled converge may later coalesce it with others into a different, newer generation (see
-	// triggerIdentityConverge), the same way a superseded apply never individually reaches the
+	// the generation it belongs to (spec Event.generation, "set for ... identity changes"); the apply
+	// loop may hold a full apply back for the window and coalesce it with newer ones
+	// (identityConvergeWindow), the same way a superseded apply never individually reaches the
 	// kernel either.
 	var d *desired
 	if changed && o.current != nil {
@@ -895,65 +882,20 @@ func (o *owner) observed(obs observation) {
 		o.event(ev.Type, ev.Data)
 	}
 	if d != nil {
-		if newDevices {
-			// a device appeared or disappeared: the ruleset itself changes (a set is created or
-			// removed), so this is the case the window throttles.
-			o.triggerIdentityConverge(d)
-		} else {
-			// an existing device's address changed: an element update of an existing set, cheap
-			// enough to run at once (plan §2.3, "identity changes take a second at most").
-			o.converge(d)
-		}
+		// an address change and a device that came or went are element updates of the maps (plan
+		// §2.3, "identity changes take a second at most"): they converge at once. When devices that
+		// came or went take a full apply after all, the apply loop holds it back for the window.
+		o.converge(d)
 	}
 	o.publish()
 }
 
-// identityConvergeWindow bounds how often an identity change converges the running configuration: a
-// host rotating MACs, or any other churn that keeps adding devices across several polls, coalesces
-// into at most one converge per window instead of one per poll (M6a-07).
+// identityConvergeWindow bounds how often devices that come or go take a full apply: a host rotating
+// MACs, or any other churn that keeps adding devices across several polls, coalesces into at most one
+// full apply per window instead of one per poll (M6a-07). It holds back only what is no element
+// update (a new device that gets a queue of its own from a rate fault on its network, D18): a device
+// that only adds elements of the maps, and an address change, converge at once.
 const identityConvergeWindow = 2 * time.Second
-
-// triggerIdentityConverge converges at once with d when the window has elapsed, or schedules exactly
-// one converge for the end of the current window otherwise; further calls before it fires change
-// nothing, since the scheduled converge (identityConverge) rebuilds its own desired state from
-// whatever identity is current when it runs, rather than using d, which by then may be stale.
-func (o *owner) triggerIdentityConverge(d *desired) {
-	now := o.now()
-	if o.lastIdentityConverge.IsZero() || now.Sub(o.lastIdentityConverge) >= identityConvergeWindow {
-		o.lastIdentityConverge = now
-		o.converge(d)
-		return
-	}
-	if o.identityThrottled {
-		return
-	}
-	o.identityThrottled = true
-	wait := identityConvergeWindow - now.Sub(o.lastIdentityConverge)
-	e := o.e
-	e.cfg.Clock.AfterFunc(wait, func() {
-		go func() {
-			select {
-			case e.cmds <- cmdIdentityConverge{}:
-			case <-e.ctx.Done():
-			}
-		}()
-	})
-}
-
-func (o *owner) identityConverge() {
-	o.identityThrottled = false
-	if o.current == nil {
-		return
-	}
-	o.lastIdentityConverge = o.now()
-	o.convergeIdentity()
-}
-
-func (o *owner) convergeIdentity() {
-	d := o.nextDesired(o.current.Config, o.current.Revision)
-	d.IdentityOnly = true
-	o.converge(d)
-}
 
 // sameIdentity compares what the compiler uses: the addresses of every device.
 func sameIdentity(a, b domain.Identity) bool {
@@ -967,20 +909,4 @@ func sameIdentity(a, b domain.Identity) bool {
 		}
 	}
 	return true
-}
-
-// deviceSetMembershipChanged reports whether the set of devices with a resolved address differs
-// between two identities, regardless of what the addresses themselves are. A device appearing or
-// disappearing changes how many per-device nft sets exist (M6a-07), unlike an existing device's
-// address changing, which only updates an existing set's elements.
-func deviceSetMembershipChanged(a, b domain.Identity) bool {
-	if len(a.Addresses) != len(b.Addresses) {
-		return true
-	}
-	for dev := range a.Addresses {
-		if _, ok := b.Addresses[dev]; !ok {
-			return true
-		}
-	}
-	return false
 }

@@ -171,7 +171,7 @@ func (r *real) target() *compiler.Target {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: host, Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables,
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: host, Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables, DeviceNums: s.DeviceNums, DeviceNumHigh: s.DeviceNumHigh,
 		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation},
 		FlapPhase: r.e.FlapPhase})
 	if tg.HasErrors() {

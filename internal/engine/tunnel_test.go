@@ -94,7 +94,7 @@ func (h *harness) verifyTunnelKernel() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables, Keys: keys,
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables, DeviceNums: s.DeviceNums, DeviceNumHigh: s.DeviceNumHigh, Keys: keys,
 		PeerEndpoints: ends, Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation},
 		ClassLimit: h.classLimit, FlapPhase: h.e.FlapPhase})
 	st, err = apply.ReadState(context.Background(), apply.Local{E: h.ex}, "", apply.WantOf(tg))

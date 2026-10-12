@@ -372,7 +372,7 @@ func (o *owner) compileProblems() []compiler.Problem {
 		cp := *o.identity
 		id = &cp
 	}
-	in := o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, o.snap.FaultIDs, o.snap.PMTUTables, o.e.retirer.IDs())
+	in := o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, allocationOf(&o.snap), o.e.retirer.IDs())
 	// the peers are reached where the last poll saw them: the check needs the classes of the tunnel faults
 	// that would exist, and they exist for the peers that have an address
 	in.PeerEndpoints = map[string]netip.AddrPort{}

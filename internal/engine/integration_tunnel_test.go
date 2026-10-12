@@ -396,7 +396,12 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	opts := testbed.ProbeOptions{Count: count, Interval: iv, Settle: settle()}
 	runB := l.bToServer.echo.Begin(l.bToServer.from, opts)
 	measure := func() testbed.ProbeResult { return l.toClient.run(t, opts) }
-	res := measure()
+	var res testbed.ProbeResult
+	if testbed.Accurate() {
+		res = measure()
+	} else {
+		res = emulatedFlapRun(t, l.e, l.toClient, opts, 2, up+down)
+	}
 	resB, err := runB.Stop()
 	if err != nil {
 		t.Fatal(err)
@@ -410,12 +415,8 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	if res.Delivered == 0 {
 		t.Fatalf("nothing got through in the up phases: %s", res)
 	}
-	var toggles []engine.FlapChange
-	for _, c := range l.e.FlapLog() {
-		if strings.HasSuffix(c.Key, "|upload") {
-			toggles = append(toggles, c)
-		}
-	}
+	toggles := uploadToggles(l.e)
+	logToggles(t, toggles)
 	if len(toggles) < 4 {
 		t.Fatalf("%d toggles in a run of %v: %+v", len(toggles), time.Duration(count)*iv, toggles)
 	}
@@ -458,7 +459,8 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 		}
 	}
 	if whole < 2 {
-		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d)", whole, len(outages), len(res.UpLost()), res.Sent)
+		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d; every run of losses: %v)", whole, len(outages), len(res.UpLost()), res.Sent,
+			testbed.Outages(res.UpLost(), iv, 1))
 	}
 }
 

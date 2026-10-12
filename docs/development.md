@@ -1280,7 +1280,12 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   tuple and agrees with the state: it is computed by the same resolution
   (`TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` over the API,
   `TestCoverageTellsAFaultThatWinsAllSomeOrNoneOfItsTraffic` in the compiler).
-  `GET /capabilities` lists the overlay kinds and fault families of the build (see the milestone sections).
+  `GET /capabilities` lists the overlay kinds and fault families of the build (see the milestone sections),
+  and its `limits` the two capacity limits of plan §3.3: `fault_ids` (4095, the mark layout) and
+  `class_limit_per_interface` (`Engine.ClassLimit`: the engine's configured limit or the default of the
+  architecture, 1000 on x86-64 and 200 on arm64). `TestSystemEndpoints` checks both, also with a configured
+  limit (P2-AUDIT-15). The setting `settings.class_limit_per_interface` of the configuration is not read
+  by the engine: the limit is the engine's.
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
   identity maps to a device), the access verdict (`domain.World.AccessDecision` since M9: the
@@ -1563,6 +1568,19 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   made again are the ones the apply would make again. An overlay write is answered after the apply that contains it verified,
   and that verify includes the tc tree; a failing tc operation (`apply: execute`) takes the batch back
   like every other failure, and nothing of the failed plan is handed to the retirer.
+- **The preview's tc diff** (`LinuxDiff.TC`, `linux.tc` of the revision preview, plan §2.14; P2-AUDIT-02)
+  compares what the plan and the verify compare: the interfaces of `tcWanted` (the target's candidates and
+  every interface with a tree of ours) and the ingress sides of `ingressSides`, the wanted tree against
+  the own subtree the kernel lists, both as `NormTree.Spec().Lines()`. So seeds, counters, burst sizes
+  and the HTB root's r2q and direct queue length never show, and a tree that verifies has an empty diff.
+  Every line starts with the interface (`br-iot: qdisc 12: parent 1:12 netem limit=… delay=0.15 …`,
+  `wan0 ingress: filter …`), so every hunk names it. A class the retirer still holds shows as going.
+  Tests: `TestTheLinuxDiffShowsTheTCTreesAsTheApplyWouldChangeThem` and
+  `TestTheLinuxDiffShowsTheIFBTreeAndTheIngressFiltersOfATunnelFault` (simulated kernel: a new fault, the
+  applied target, a changed delay, a leaf changed by hand, the last fault going, a roaming peer),
+  `TestThePreviewsTCDiffIsEmptyForTheKernelsTreeAndAChangeIsItsLeaves` (tag `testbed`: the real kernel's
+  listing of an applied tree with loss, rate, corrupt, reorder and a queue limit has no diff, a change of
+  parameters is its leaves only).
 - **kernelsim** (`internal/apply/kernelsim/tc.go`) simulates the tc tool for the cases above: it keeps
   the root, classes, leaves and filters per interface, answers `-s -j qdisc|class|filter show` in the
   recorded format (so the real normalizer reads it), the class listing with details (`-d`: the quantum
@@ -1590,7 +1608,7 @@ Everything below is in `internal/apply` (`tcplan.go`, `retire.go`) and `internal
   left behind dropped by the first change of the leaf after the restart, a quantum changed from outside found and
   written again). The load is a sender that
   runs until the test stops it, not a fixed-length ping: an apply takes minutes on the emulated
-  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestAfterARestartTheFirstChange|TestTheRealKernelShowsAChangedQuantum" -tags testbed -test-timeout 30m ./internal/apply'`.
+  kernel and the change has to happen while packets are queued: `make vm-test ARGS='-run "TestTheTreeOfAFault|TestChangingAFaultOf600ms|TestMovingADevice|TestWithoutFaultsTheTree|TestTheDistribution|TestAfterARestartTheFirstChange|TestTheRealKernelShowsAChangedQuantum|TestThePreviewsTCDiff" -tags testbed -test-timeout 30m ./internal/apply'`.
 
 ### Queue statistics and counter epochs (M8b)
 
@@ -2281,6 +2299,17 @@ Compiler and capacity were M8a's; M10 measures them.
   `TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWithItsScope` (API, limit 6),
   and the compiler's `TestARateLimitedNetworkOf250DevicesNeeds500Classes` (1000 on x86-64, 200 on arm64:
   the tests that depend on it set the limit they mean).
+- **The preview shows what a scope costs before the limit is reached** (plan §2.4, D18; P2-AUDIT-02):
+  `queues` has one entry per winning fault or profile part that needs classes (`Target.Queues`: its fault
+  ids, so for a rate, a queue limit or keep order one per matched device plus the one that the addresses no
+  device owns share, otherwise one), `capacity` the classes of every interface that carries a tree, the
+  IFB device included (`Target.ClassesPerInterface`), with the limit, and `linux.tc` the tc change (M8b
+  section). Both are absent when no fault needs a class. Tests: the API's
+  `TestThePreviewOfARateOnANetworkShowsItsQueuesTheClassesAndTheTCChange` (2 Mbit/s on a network of three
+  known devices: 4 queues, 9 classes on each of the five interfaces at a limit of 50, eight 2 Mbit/s leaves
+  per interface in `linux.tc`, nothing left in tc after the apply), the compiler's
+  `TestTheQueuesOfEachFaultAndTheClassesOfEachInterfaceAreCounted` and the tunnel case in
+  `TestATunnelFaultHasAClassOnEachSideOfTheTunnelAndIsFoundByTheEndpointOfItsPeer`.
 - **An explicit queue limit** is a small buffer: `TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest`
   sends a burst of 300 datagrams of 1000 bytes (back to back, from a script: a paced flood is only as steady
   as the sender's timer, which under emulation is not) into a 1 Mbit/s fault while probes run through it.

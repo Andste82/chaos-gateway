@@ -362,10 +362,7 @@ func (t *Target) compileTunnelTC(in Input) (*TCTarget, bool) {
 	if len(classes) == 0 {
 		return nil, true
 	}
-	limit := in.ClassLimit
-	if limit <= 0 {
-		limit = DefaultClassLimit()
-	}
+	limit := EffectiveClassLimit(in.ClassLimit)
 	if len(classes)+1 > limit {
 		byKey := map[string]*Fault{}
 		for i := range t.Faults {

@@ -466,7 +466,7 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	if testbed.Accurate() {
 		res = measure()
 	} else {
-		res = emulatedFlapRun(t, r.e, a, opts, 2, up+down)
+		res = emulatedFlapRun(t, r.e, a, opts, 2, up, down)
 	}
 	resB, err := runB.Stop()
 	if err != nil {
@@ -495,18 +495,29 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 		})
 		return
 	}
-	// emulated: the outages are there, whole, about as long as the down time (and the cycles an apply held)
+	checkEmulatedOutages(t, res, iv, down, skipped, 2)
+}
+
+// checkEmulatedOutages is the functional assertion on the outages of a flapping under emulation: at least want
+// whole outages (not cut off by the start or the end of the run), each of at least a quarter of the down time
+// and at most twice the down time plus the cycles an apply held (skipped). The bounds are loose: the toggles
+// are committed seconds late there, a boundary that an apply held shortens a down phase (the toggle into it
+// comes late, the one out of it on time), and the sender falls behind its own schedule, so an outage counted
+// in probes is shorter than in time.
+func checkEmulatedOutages(t *testing.T, res testbed.ProbeResult, iv, down, skipped time.Duration, want int) {
+	t.Helper()
+	lost := res.UpLost()
 	var whole int
-	for _, o := range outages {
+	for _, o := range testbed.Outages(lost, iv, int(down/iv)/4) {
 		if o.First > 0 && o.Last < res.Sent-1 {
 			whole++
-			if o.Len < down/2 || o.Len > 2*down+skipped {
+			if o.Len < down/4 || o.Len > 2*down+skipped {
 				t.Errorf("an outage of %v where %v is configured (%v of skipped cycles)", o.Len, down, skipped)
 			}
 		}
 	}
-	if whole < 2 {
-		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d; every run of losses: %v)", whole, len(outages), len(lost), res.Sent,
+	if whole < want {
+		t.Errorf("%d complete outages in the run, want %d (%d lost of %d; every run of losses: %v)", whole, want, len(lost), res.Sent,
 			testbed.Outages(lost, iv, 1))
 	}
 }
@@ -524,12 +535,14 @@ func uploadToggles(e *engine.Engine) []engine.FlapChange {
 
 // emulatedFlapRun is the probe run of a flapping test under emulation, counted in toggles rather than in
 // probes: it goes on until the engine has committed `downs` whole down phases (the toggle into the blackout
-// and the one out of it) after the first probe arrived, and one more probe has arrived after the last of
-// them, so that the run holds that many whole outages however far the sender and the toggles fall behind
-// their schedules. A run of a fixed number of probes did not: on an emulated hosted runner the 700 probes of
-// the tunnel test held one whole outage (P2-AUDIT-14). o.Count is ignored. The toggles are logged.
-func emulatedFlapRun(t *testing.T, e *engine.Engine, f flow, o testbed.ProbeOptions, downs int, cycle time.Duration) testbed.ProbeResult {
+// and the one out of it, at least half the down time apart) after the first probe arrived, and one more probe
+// has arrived after the last of them, so that the run holds that many whole outages however far the sender and
+// the toggles fall behind their schedules. A run of a fixed number of probes did not: on an emulated hosted
+// runner the 700 probes of the tunnel test held one whole outage (P2-AUDIT-14). A down phase whose toggle into
+// it was held by an apply until shortly before the toggle out of it is not counted. o.Count is ignored.
+func emulatedFlapRun(t *testing.T, e *engine.Engine, f flow, o testbed.ProbeOptions, downs int, up, down time.Duration) testbed.ProbeResult {
 	t.Helper()
+	cycle := up + down
 	o.Count, o.Src = 0, f.src
 	run := f.echo.Begin(f.from, o)
 	stop := func() testbed.ProbeResult {
@@ -556,7 +569,7 @@ func emulatedFlapRun(t *testing.T, e *engine.Engine, f flow, o testbed.ProbeOpti
 		whole = 0
 		ts := uploadToggles(e)
 		for i := from + 1; i < len(ts); i++ {
-			if ts[i-1].Down && !ts[i].Down {
+			if ts[i-1].Down && !ts[i].Down && ts[i].Committed-ts[i-1].Committed >= down/2 {
 				whole++
 			}
 		}

@@ -1156,6 +1156,7 @@ Faults are random processes; tests use statistics, not exact values:
 
 - **Every commit:** levels 0, 1b (hosted CI runners with `/dev/kvm`) and 1 (hosted CI, privileged container) in the repository's hosted CI. One VM boots per test run, not per test (§4.5). On the development VPS, which has neither privileges nor KVM, `make test-vm` runs the same tests in software emulation before a merge — functional assertions only.
 - **Nightly:** a level 1b job per kernel of the matrix (Ubuntu 24.04 and 26.04, GA and HWE kernels where they exist; functional, runs anywhere). Measurement tests (§4.3) and level 2 appliance VMs also run nightly on the hosted KVM runners.
+- **Weekly:** level 1b with software emulation forced on a hosted runner (`-no-kvm`), so the functional branches of the measurement tests run automatically and not only on the development VPS: every testbed package, the engine package in a job of its own (P2-AUDIT-14).
 - **ARM64:** the image is built for arm64 on every commit (cross-compiled Go, `docker buildx`). Unit tests run under `qemu-user`; level 1b for arm64 comes with M28. ARM64 measurements need hardware (H1).
 - **Level 3** (hardware lab) is not available; H1 runs when hardware exists. Until then the Raspberry Pi targets in §3.10 are unvalidated, and the release notes say so.
 

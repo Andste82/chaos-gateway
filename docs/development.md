@@ -2695,11 +2695,15 @@ the functional ones passed, one run each unless said):
   for another reason: the schedule skipped two whole cycles, the toggle back up was scheduled 24 s after the one into the blackout
   instead of 4 s (every toggle was committed within 0.25 s of its time), so the flow saw one outage of 24 s. The flapper makes a
   boundary that falls into an apply right after it, in the phase the clock says (`flap.go`), so an emulated apply that takes longer
-  than a phase skips the boundaries in between; whether an apply ran then is not known (the run logged neither the events nor the
-  engine's log). The emulated branch of both flapping tests now accepts a distance between toggles that is longer by whole cycles,
+  than a phase skips the boundaries in between. The second run (38283373614), with the applies and the engine's log in the test's
+  output, showed the apply: "an identity update needs a full apply ... the number of devices changed from 6 to 8" (the gateway
+  meets more devices of the lab while the flapping runs; a new device is a full apply, P2-AUDIT-01), answered 13 s later; it held
+  one boundary 2.9 s and skipped one cycle, and the down phase whose start it held lasted 1.3 s, too short for the outage the test
+  counted. The emulated branch of both flapping tests therefore accepts a distance between toggles that is longer by whole cycles,
   and an outage longer by them, only when an apply of a later generation than the flapping's own ran (`checkFlapSchedule`); the
-  tests log the applies and the changes that start one, and the tunnel test the engine's warnings and apply messages when it
-  fails. With native execution or KVM the schedule stays exact.
+  run counts only down phases of at least half the down time between the commits of their toggles; and an outage counts from a
+  quarter of the down time (the sender falls behind as well). The tests log the applies and the changes that start one, and the
+  tunnel test the engine's warnings and apply messages when it fails. With native execution or KVM the schedule stays exact.
 - The BGP link: the session went down and the routes were withdrawn, and came back after the blackout. The write of the overlay
   took 84 s on this machine (an emulated apply of the whole lab is that slow: a write of a device fault took 1 min 44 s next to
   2 min 20 s for the tunnel fault, the larger plan), so the blackout had held for most of the hold time when the write was answered;

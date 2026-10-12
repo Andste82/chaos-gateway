@@ -413,7 +413,7 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	if testbed.Accurate() {
 		res = measure()
 	} else {
-		res = emulatedFlapRun(t, l.e, l.toClient, opts, 2, up+down)
+		res = emulatedFlapRun(t, l.e, l.toClient, opts, 2, up, down)
 	}
 	resB, err := runB.Stop()
 	if err != nil {
@@ -445,19 +445,7 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 		})
 		return
 	}
-	var whole int
-	for _, o := range outages {
-		if o.First > 0 && o.Last < res.Sent-1 {
-			whole++
-			if o.Len < down/2 || o.Len > 2*down+skipped {
-				t.Errorf("an outage of %v where %v is configured (%v of skipped cycles)", o.Len, down, skipped)
-			}
-		}
-	}
-	if whole < 2 {
-		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d; every run of losses: %v)", whole, len(outages), len(res.UpLost()), res.Sent,
-			testbed.Outages(res.UpLost(), iv, 1))
-	}
+	checkEmulatedOutages(t, res, iv, down, skipped, 2)
 }
 
 func (l *tunnelLab) putTunnelFlapping(up, down time.Duration) {

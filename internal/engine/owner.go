@@ -188,6 +188,8 @@ type inflight struct {
 	restoreGen uint64
 	// removed are the overlays this apply orphaned.
 	removed []uuid.UUID
+	// moves are the overlays the revision's merge moved, for a commit-confirm rollback to undo.
+	moves []overlay.Move
 }
 
 type owner struct {
@@ -241,6 +243,8 @@ type pendingState struct {
 	d        *desired
 	previous int64
 	deadline time.Time
+	// moves are the overlays the revision's merge moved (inflight.moves): a rollback moves them back.
+	moves []overlay.Move
 }
 
 type barrier struct {
@@ -552,7 +556,7 @@ func (o *owner) startApply(c cmdApply) {
 	// the overlays: a revision that deletes what an overlay refers to is refused, or removes the
 	// overlay (force); a merge moves the overlays of the discovered device. Both are part of the
 	// desired state this apply makes, and are taken back with it when it fails.
-	changes, err := o.revisionOverlays(cfg, c.opts.Force, o.gen+1)
+	changes, moves, err := o.revisionOverlays(cfg, c.opts.Force, o.gen+1)
 	if err != nil {
 		o.fail(c, err)
 		return
@@ -571,7 +575,7 @@ func (o *owner) startApply(c cmdApply) {
 	if len(changes) > 0 {
 		o.markOverlays(d.Generation, changes)
 	}
-	o.running = &inflight{cmd: c, d: d, started: o.now(), cfg: cfg, removed: removed}
+	o.running = &inflight{cmd: c, d: d, started: o.now(), cfg: cfg, removed: removed, moves: moves}
 	o.converge(d)
 	o.publish()
 }
@@ -718,7 +722,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 			o.fail(c, err)
 			return
 		}
-		o.pending = &pendingState{d: run.d, previous: prev, deadline: deadline}
+		o.pending = &pendingState{d: run.d, previous: prev, deadline: deadline, moves: run.moves}
 		rev := run.cmd.rev
 		o.armTimeout(rev, timeout)
 		o.event(EventConfirmPending, map[string]any{"revision": rev, "deadline": deadline})
@@ -794,7 +798,8 @@ func (o *owner) confirm(rev int64, actor model.Actor) error {
 }
 
 // rollback ends the waiting for confirmation without confirming: the revision is rolled back and
-// the previous one is applied again.
+// the previous one is applied again, and the overlays follow (rollbackOverlays): the moves of the
+// revision's merge are undone, and the overlays of objects only the revision had are orphaned.
 func (o *owner) rollback(rev int64, reason string) error {
 	if o.pending == nil || o.pending.d.Revision != rev {
 		return &store.ErrNotACandidate{ID: rev, Status: "not pending", Want: store.StatusPendingConfirm}
@@ -805,12 +810,29 @@ func (o *owner) rollback(rev int64, reason string) error {
 	if _, err := o.e.cfg.Store.Rollback(rev, o.now()); err != nil {
 		return err
 	}
+	p := o.pending
 	o.pending = nil
 	o.event(EventRolledBack, map[string]any{"revision": rev, "reason": reason})
 	if o.committed != nil {
+		changes, announced := o.rollbackOverlays(p.d.Config, o.committed.Config, p.moves, o.gen+1)
+		if len(changes) > 0 {
+			o.refreshOverlays()
+		}
 		d := o.nextDesired(o.committed.Config, o.committed.Revision)
 		d.RolledBack = true
+		if len(changes) > 0 {
+			o.markOverlays(d.Generation, changes)
+			mark := &o.ov.marks[len(o.ov.marks)-1]
+			for i, ch := range changes {
+				if announced[ch.Overlay.Id] {
+					mark.kept = append(mark.kept, mark.events[i])
+				}
+			}
+		}
 		o.converge(d)
+		// the identity was worked out with the rolled-back configuration: the devices it added or
+		// merged are discovered again
+		o.e.TriggerObserve()
 	}
 	o.publish()
 	o.startQueued()

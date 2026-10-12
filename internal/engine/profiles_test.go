@@ -376,6 +376,46 @@ func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.
 	}
 }
 
+// P2-AUDIT-05: a commit-confirm rollback cannot be refused, so an activation written in the confirmation window of
+// a revision that took the dns part out of a profile is removed when the rollback brings the part back
+// (overlay_orphaned, reason rollback): no activation runs half a profile.
+func TestARollbackThatGivesAnActivatedProfileBackItsDNSPartRemovesTheActivation(t *testing.T) {
+	h := overlaysHarness(t)
+	flaky := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
+	withDNS := flaky
+	withDNS.Parts.Dns = &model.DnsFault{Action: "delay", Delay: ptr("2s")}
+	h.mustApply(h.revision(withProfiles(map[string]model.Profile{profFlaky: withDNS})))
+	keep := h.mustPut(bob, "target: {network: Lab}\nprofile: lte")
+	rev := h.revision(func(c *model.Configuration) {
+		withProfiles(map[string]model.Profile{profFlaky: flaky})(c)
+		lockoutChange(c)
+	})
+	if a, err := h.apply(rev, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second}); err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	on := h.mustPut(alice, "target: {network: IoT}\nprofile: flaky")
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+	if err := h.e.Rollback(ctx, rev); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitRolledBack()
+	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
+		t.Fatalf("the overlays after the rollback are %v", overlayIDs(s.Overlays))
+	}
+	if fs := profileFaults(t, s, on.Overlay.Id.String()); len(fs) != 0 {
+		t.Errorf("the activation still runs: %+v", fs)
+	}
+	got := collect(ch, engine.EventOverlayOrphaned)
+	if len(got) != 1 || got[0].Data["overlay"] != on.Overlay.Id.String() || got[0].Data["reason"] != "rollback" {
+		t.Errorf("events %+v", got)
+	}
+	h.verifyKernelWithOverlays()
+}
+
 // Plan §2.1.1: a revision that deletes an object referenced by an active overlay is rejected with the
 // references; with force the orphaned overlays are removed and each announces itself. A profile is such an
 // object; the built-in ones cannot be deleted and so never orphan anything.

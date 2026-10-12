@@ -531,30 +531,30 @@ func TestARestoreAfterAFailedApplyRemovesTheTableThatApplyWrote(t *testing.T) {
 
 // P2-M8b-02: a distribution table that a previous run of the gateway left on a leaf (or that someone
 // else put there before the start) is not in the listing, and the leaf may already have the
-// configuration the new target names. The first apply of a fresh process (a new Retirer, as after a
-// restart of the engine) makes such a leaf again when the target wants it uniform with a jitter; the
-// next apply leaves it alone. The distribution is observed as in
+// configuration the new target names. A fresh process (a new Retirer, as after a restart of the
+// engine) leaves such a leaf alone, its queue with it; the first change of the leaf makes it again
+// when the target wants it uniform with a jitter, because the process does not know its table, and the
+// next change is made in place. The distribution is observed as in
 // TestADistributionSurvivesAChangeAndOnlyANewQdiscDropsIt (round trips outside delay ± jitter), the
 // re-creation by the leaf's packet counter, which starts again at zero.
-func TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft(t *testing.T) {
+func TestAfterARestartTheFirstChangeOfALeafDropsTheTableThePreviousRunLeft(t *testing.T) {
 	g := newGateway(t)
 	g.withDevices()
-	const delay, jitter = 100 * time.Millisecond, 20 * time.Millisecond
-	const slack = 2*time.Millisecond + delay/20
+	const jitter = 20 * time.Millisecond
 	o := g.overlay(`{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms, distribution: normal}}}`)
 	normal := g.compileFaults(o)
 	g.applyRetiring(normal) // the previous run of the gateway
 	f := faultOf(t, normal, o, "")
 	leaf := classOf(t, normal, f.ID, compiler.Upload).LeafHandle()
-	measure := func() float64 {
+	measure := func(delay time.Duration) float64 {
 		r := testbed.MustPing(t, g.top.A, testbed.ServerAddr, 150, 30*time.Millisecond)
 		if r.Received < 140 {
 			t.Fatalf("received %d of %d", r.Received, r.Sent)
 		}
-		return outsideShare(r, delay, jitter+slack)
+		return outsideShare(r, delay, jitter+2*time.Millisecond+delay/20)
 	}
 	testbed.Statistically(t, "the table of the previous run", func() error {
-		if s := measure(); s < 0.08 {
+		if s := measure(100 * time.Millisecond); s < 0.08 {
 			return fmt.Errorf("a normal distribution should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100)
 		}
 		return nil
@@ -563,7 +563,8 @@ func TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft(t *testing.T) {
 	// the restart: a new process knows nothing of the tables; its target is the same fault, uniform,
 	// which the listing cannot tell from the leaf as it is
 	g.ret = nil
-	uniform := g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms}}}`))
+	o = g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 100ms, jitter: 20ms}}}`)
+	uniform := g.compileFaults(o)
 	for _, d := range uniform.TC.Devs {
 		if diff := linux.DiffTC(uniform.TC.Norm(d), g.kernelTree(d)); len(diff) != 0 {
 			t.Fatalf("%s: the leaf is not already what the uniform target names, the test proves nothing: %v", d, diff)
@@ -577,29 +578,40 @@ func TestTheFirstApplyAfterARestartDropsATableThePreviousRunLeft(t *testing.T) {
 	if len(res.Mismatches) != 0 {
 		t.Fatalf("%v", res.Mismatches)
 	}
+	if after := g.leafPackets("wan0", leaf); after < before || len(res.Plan.QueuesCreated) != 0 {
+		t.Fatalf("the first apply after the restart made an unchanged leaf again (%d packets before, %d after, %v)", before, after, res.Plan.QueuesCreated)
+	}
+
+	// the first change of the leaf: to another delay, still uniform with a jitter
+	before = g.leafPackets("wan0", leaf)
+	res = g.applyRetiring(g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 110ms, jitter: 20ms}}}`)))
+	if len(res.Mismatches) != 0 {
+		t.Fatalf("%v", res.Mismatches)
+	}
 	if after := g.leafPackets("wan0", leaf); after >= before {
-		t.Fatalf("the first apply after the restart did not make the leaf again (%d packets before, %d after): the normal table stays", before, after)
+		t.Fatalf("the first change after the restart did not make the leaf again (%d packets before, %d after): the normal table stays", before, after)
 	}
 	if !strings.Contains(strings.Join(res.Plan.Summary, "\n"), "leaf "+leaf+" is made again") {
 		t.Errorf("the plan does not say that the leaf is made again:\n%s", strings.Join(res.Plan.Summary, "\n"))
 	}
-	share := measure()
+	share := measure(110 * time.Millisecond)
 	if testbed.Accurate() && share > 0 {
 		// flakiness policy of plan §4.3: repeat once, a second failure fails
-		if share = measure(); share > 0 {
-			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", share*100)
+		if share = measure(110 * time.Millisecond); share > 0 {
+			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27.5 ms", share*100)
 		}
 	} else if !testbed.Accurate() {
-		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", share*100)
+		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27.5 ms (not asserted)", share*100)
 	}
 
-	// the second apply of the same process knows the leaf is uniform: it stays, with its counters
+	// the next change of the same process knows the leaf is uniform: in place, with its counters
 	before = g.leafPackets("wan0", leaf)
-	if res := g.applyRetiring(uniform); !res.Plan.Empty() {
-		t.Errorf("the second apply after the restart plans work: %v", res.Plan.Summary)
+	res = g.applyRetiring(g.compileFaults(g.overlayChange(o, `{target: {device: dev-a}, fault: {upload: {latency: 120ms, jitter: 20ms}}}`)))
+	if len(res.Mismatches) != 0 || len(res.Plan.QueuesCreated) != 0 {
+		t.Fatalf("%v %v", res.Mismatches, res.Plan.QueuesCreated)
 	}
 	if after := g.leafPackets("wan0", leaf); after < before {
-		t.Errorf("the second apply made the leaf again (%d packets before, %d after)", before, after)
+		t.Errorf("the second change made the leaf again (%d packets before, %d after)", before, after)
 	}
 }
 

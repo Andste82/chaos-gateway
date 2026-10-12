@@ -623,19 +623,23 @@ func TestAChangeToAUniformJitterMakesTheLeafAgainOnlyWhereATableMayBe(t *testing
 	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
 		t.Fatalf("an unchanged leaf was touched:\n%s", x.tcLog())
 	}
-	// but after a restart even an unchanged uniform leaf with a jitter may hold a table (one that
-	// survived the restart, or one someone else put there): the first apply makes it again, the next
-	// one leaves it alone
+	// after a restart an unchanged leaf is left alone even where it may hold a table (one that survived
+	// the restart, or one someone else put there): re-creating every uniform leaf at every start would
+	// drop queues for nothing. The table goes at the first change of the leaf (P2-M8b-02).
 	x.k.SetTCTable("br-iot", leaf, "normal")
 	x.ret = apply.NewRetirer(x.clock)
 	change(uniform2)
+	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
+		t.Fatalf("the first apply after a restart touched an unchanged leaf:\n%s", x.tcLog())
+	}
+	change(uniform)
 	if !recreated() || x.k.TCSeed("br-iot", leaf) == seed || x.k.TCTable("br-iot", leaf) != "" {
-		t.Fatalf("the first apply after a restart kept the leaf with its table %q:\n%s", x.k.TCTable("br-iot", leaf), x.tcLog())
+		t.Fatalf("the first change after a restart kept the leaf with its table %q:\n%s", x.k.TCTable("br-iot", leaf), x.tcLog())
 	}
 	seed = x.k.TCSeed("br-iot", leaf)
 	change(uniform2)
-	if len(x.log) != 0 || x.k.TCSeed("br-iot", leaf) != seed {
-		t.Fatalf("the second apply after a restart touched an unchanged leaf:\n%s", x.tcLog())
+	if recreated() || x.k.TCSeed("br-iot", leaf) != seed {
+		t.Fatalf("the next change made the uniform leaf again:\n%s", x.tcLog())
 	}
 	// a leaf without a jitter is left alone after a restart: a table shapes nothing there
 	change(noJitter)

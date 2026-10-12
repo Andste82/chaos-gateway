@@ -130,7 +130,7 @@ Plan §4.3 asks for the measured distributions to be stored per night, so that d
 trend before it fails a test (P2-AUDIT-07, decided by the maintainer on 2026-10-12: a nightly
 artifact). Every accuracy assertion of the testbed tests checks through `testbed.Measure(t, flow)`:
 each check (`Latency`, `Unchanged`, `Spread`, `Delays`, `Loss`, `Share`, `BurstLoss`, `Flaps`, `Rate`,
-`Duration`, or `Record` for a test's own check) is the check of `internal/testbed/stats.go` and also
+`RateAtLeast`, `Duration`, or `Record` for a test's own check) is the check of `internal/testbed/stats.go` and also
 appends one JSON line (`testbed.Measurement`) to the file `CHAOS_MEASUREMENTS` names: the test, the
 assertion (the name `testbed.Statistically` gives it), the flow, the direction, the quantity and its
 unit, the kernel, `accurate`, N, the configured value, the measured value, the bounds the check
@@ -141,7 +141,11 @@ failure. An attempt of `Statistically` that recorded nothing leaves one line wit
 (`"quantity":"assertion"`); an attempt that stops the test (a helper's `t.Fatal`) still leaves the lines
 it recorded. Checks outside `Statistically` are recorded as attempt 1: the stream
 of `TestUpdatingOneFaultDoesNotDisturbTheOthers` (`Delays`), the largest lateness of the toggles of the
-flapping tests, and the withdrawal and the re-convergence of the BGP blackout test (`Duration`). Without
+flapping tests, the withdrawal and the re-convergence of the BGP blackout test and the identity-map
+convergence of P2-M7-03 (`TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond`,
+`TestANewDeviceReachesTheIdentityMapWithoutAFullApply`; `Duration`), the throughput of the device a
+rate does not name (`RateAtLeast`), the delays of the reordering test that are neither immediate nor
+delayed, and the netem delay of `TestNetemDelayIsVisible`. Without
 the variable nothing is written.
 
 Where the record is kept:

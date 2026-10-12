@@ -226,8 +226,10 @@ func TestNetemDelayIsVisible(t *testing.T) {
 	if got < ref+40*time.Millisecond {
 		t.Fatalf("netem 50 ms is not visible: %v -> %v", ref, got)
 	}
-	if testbed.Accurate() && !testbed.Within(got, ref+50*time.Millisecond, 2*time.Millisecond, 0.05) {
-		t.Fatalf("netem 50 ms off: %v -> %v, want %v ± (2 ms + 5 %%)", ref, got, ref+50*time.Millisecond)
+	if testbed.Accurate() {
+		if err := testbed.Measure(t, "A to the server").Latency("round trip", delayed.RTTs, ref+50*time.Millisecond); err != nil {
+			t.Fatalf("netem 50 ms off (baseline %v): %v", ref, err)
+		}
 	}
 
 	// isolation: a fault on the uplink must not affect traffic between the test networks. Under

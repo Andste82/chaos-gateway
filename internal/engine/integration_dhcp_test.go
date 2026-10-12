@@ -680,9 +680,10 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	// waits for the apply loop's incremental update to reach the real kernel (one executor
 	// round trip to add the new map element, one more to list the map back for verification -
 	// two real `nft` forks, not simulated ones) and for a real CI runner's own scheduling noise
-	// on top of that. See docs/open-items.md P2-M7-03.
-	if took := time.Since(start); took > 3*time.Second {
-		t.Errorf("the identity map followed after %v, the target is three seconds", took)
+	// on top of that. See docs/open-items.md P2-M7-03. The time goes into the measurement record, so
+	// that a drift towards the bound shows before it fails.
+	if err := testbed.Measure(t, "A's address change").Duration("", "identity map convergence", time.Since(start), time.Second, 0, 3*time.Second); err != nil {
+		t.Errorf("the identity map followed too late, the target is three seconds: %v", err)
 	}
 }
 
@@ -726,8 +727,10 @@ func TestANewDeviceReachesTheIdentityMapWithoutAFullApply(t *testing.T) {
 		t.Fatalf("the new device never reached the identity map: holds %v", last)
 	}
 	t.Logf("the new device reached the identity map after %v", took)
-	if testbed.Accurate() && took > 3*time.Second {
-		t.Errorf("the new device reached the identity map after %v, the bound is three seconds (P2-M7-03)", took)
+	if testbed.Accurate() {
+		if err := testbed.Measure(t, "the new device B").Duration("", "identity map convergence", took, time.Second, 0, 3*time.Second); err != nil {
+			t.Errorf("the new device reached the identity map too late, the bound is three seconds (P2-M7-03): %v", err)
+		}
 	}
 	elements, full := b.nft.take()
 	if full != 0 || elements == 0 {

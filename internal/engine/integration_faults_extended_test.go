@@ -297,9 +297,22 @@ func TestAReorderingFaultSendsTheConfiguredShareAheadOfTheDelayedOnes(t *testing
 		})
 	}
 	// every packet that was delayed was delayed by the 50 ms and by nothing else
-	for _, d := range res.Up {
-		if d > 25*time.Millisecond && d < 45*time.Millisecond && testbed.Accurate() {
-			t.Fatalf("an upload delay of %v is neither immediate nor 50 ms", d)
+	if testbed.Accurate() {
+		between := 0
+		for _, d := range res.Up {
+			if d > 25*time.Millisecond && d < 45*time.Millisecond {
+				between++
+			}
+		}
+		var err error
+		if between > 0 {
+			err = fmt.Errorf("A upload: %d delays are neither immediate nor 50 ms", between)
+		}
+		if err := testbed.Measure(t, "A").Record("upload", testbed.WithDelays(testbed.Measurement{
+			Quantity: "delays between 25 and 45 ms", Unit: "fraction", N: len(res.Up),
+			Value: float64(between) / float64(max(1, len(res.Up))), High: new(float64),
+		}, res.Up), err); err != nil {
+			t.Fatal(err)
 		}
 	}
 	quiet(t, "B", b.run(t, quietRun()))
@@ -835,8 +848,8 @@ func TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit(t *testing.
 		if testbed.Accurate() {
 			floor = 10 * rate
 		}
-		if got[2] < floor {
-			t.Errorf("%s of C, which the fault does not name: %.2f Mbit/s, want at least %.0f", dir.name, got[2]/1e6, floor/1e6)
+		if err := testbed.Measure(t, "C").RateAtLeast(dir.name, got[2], floor); err != nil {
+			t.Errorf("C, which the fault does not name: %v", err)
 		}
 		if testbed.Accurate() {
 			// ±10 % is the assertion with the least margin (1.91 of a 1.8 lower bound): one noisy transfer on a

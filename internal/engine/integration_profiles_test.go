@@ -401,8 +401,8 @@ func TestAProfileWithARateGivesEveryDeviceOfTheNetworkItsOwnRate(t *testing.T) {
 	if testbed.Accurate() {
 		floor = 10 * rate
 	}
-	if got[2] < floor {
-		t.Errorf("download of C, which the profile does not name: %.2f Mbit/s, want at least %.0f", got[2]/1e6, floor/1e6)
+	if err := testbed.Measure(t, "C").RateAtLeast("download", got[2], floor); err != nil {
+		t.Errorf("C, which the profile does not name: %v", err)
 	}
 	if testbed.Accurate() {
 		measured := got
@@ -460,8 +460,8 @@ func TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd(t *testing.T) {
 	if testbed.Accurate() {
 		floorC = 0.85 * offered
 	}
-	if got[1] < floorC {
-		t.Errorf("device C, which the profile does not name, received %.2f Mbit/s of %.0f offered, want at least %.2f", got[1]/1e6, offered/1e6, floorC/1e6)
+	if err := testbed.Measure(t, "C").RateAtLeast("download", got[1], floorC); err != nil {
+		t.Errorf("device C, which the profile does not name, received too little of %.0f Mbit/s offered: %v", offered/1e6, err)
 	}
 	if testbed.Accurate() {
 		measured := got

@@ -322,7 +322,7 @@ func CopyMeasurements(workDir, dst string) error {
 		_ = out.Close()
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
 		return err

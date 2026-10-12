@@ -210,7 +210,7 @@ func report(runs []runRecord, re *regexp.Regexp, tsv bool, w io.Writer) {
 			if !m.Pass {
 				verdict = "FAIL"
 			}
-			fmt.Fprintf(w, "  %-10s %-12s configured %-10g value %-10g ratio %-6s bounds %s to %s  position %-5s n %-5d attempt %d %s  %s\n",
+			fmt.Fprintf(w, "  %-10s %-12s configured %-10.6g value %-10.6g ratio %-6s bounds %s to %s  position %-5s n %-5d attempt %d %s  %s\n",
 				r.run.start.Format("2006-01-02"), r.run.start.Format("15:04:05Z"), m.Configured, m.Value, ratio(m), bound(m.Low), bound(m.High),
 				position(m), m.N, m.Attempt, verdict, r.run.file)
 		}
@@ -228,7 +228,7 @@ func bound(b *float64) string {
 	if b == nil {
 		return "-"
 	}
-	return fmt.Sprintf("%g", *b)
+	return fmt.Sprintf("%.6g", *b)
 }
 
 // position is where the value lies between the bounds, in percent: 0 at the lower bound, 100 at the

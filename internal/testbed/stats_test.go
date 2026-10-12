@@ -135,6 +135,8 @@ func (f *fakeReporter) Errorf(format string, args ...any) {
 }
 
 func TestAStatisticalAssertionThatFailsIsRepeatedOnceAndOnlyASecondFailureFails(t *testing.T) {
+	// the fake assertions below must not end up in the measurement record of the run (level 1 runs this package with it)
+	t.Setenv(MeasurementsEnv, "")
 	// holds at once: one attempt, nothing logged
 	var r fakeReporter
 	n := 0

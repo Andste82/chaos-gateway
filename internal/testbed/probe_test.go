@@ -54,8 +54,8 @@ func TestAProbeRunWithoutAReportFails(t *testing.T) {
 
 func TestDuplicatesReorderingAndLossesAreReadFromTheArrivals(t *testing.T) {
 	// sent 10: 3 and 6 are lost in the upload, 4 is overtaken by 5, 7 arrives twice, 9 gets no answer
-	echo := "u 7 0 1000\nu 7 1 1000\nu 7 2 1000\nu 7 5 1000\nu 7 4 1000\nu 7 7 1000\nu 7 7 1000\nu 7 8 1000\nu 7 9 1000\n"
-	sender := "d 0 100\nd 1 100\nd 2 100\nd 5 100\nd 4 100\nd 7 100\nd 7 100\nd 8 100\nsent 10\n"
+	echo := "u 7 0 1000\nu 7 1 1000\nu 7 2 1000\nu 7 5 1000\nu 7 4 1000\nu 7 7 1000\nu 7 7 3000\nu 7 8 1000\nu 7 9 1000\n"
+	sender := "d 0 100\nd 1 100\nd 2 100\nd 5 100\nd 4 100\nd 7 100\nd 7 200\nd 8 100\nsent 10\n"
 	r, err := parseProbe(sender, echo, "7")
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +65,9 @@ func TestDuplicatesReorderingAndLossesAreReadFromTheArrivals(t *testing.T) {
 	}
 	if r.UpDuplicates() != 1 || r.DownDuplicates() != 1 {
 		t.Errorf("duplicates %d %d, want 1 1", r.UpDuplicates(), r.DownDuplicates())
+	}
+	if fmt.Sprint(r.UpCopies, r.DownCopies) != "[3µs] [200ns]" || len(r.Up) != 8 || len(r.Down) != 7 {
+		t.Errorf("the delays of the copies %v %v: they are kept apart from those of the originals", r.UpCopies, r.DownCopies)
 	}
 	if r.UpReordered() != 1 || r.DownReordered() != 1 {
 		t.Errorf("reordered %d %d, want 1 1 (4 came after 5)", r.UpReordered(), r.DownReordered())

@@ -137,6 +137,10 @@ type ProbeResult struct {
 	// the echo (a duplicate is listed again) and the answers at the sender (likewise): what reordering,
 	// duplication and the pattern of losses are measured from.
 	UpArrivals, DownArrivals []int
+	// UpCopies and DownCopies are the delays of the copies: the arrivals of a sequence number that was
+	// already there, which Up and Down leave out. They tell whether a duplicate took the path (the
+	// delay) of the original.
+	UpCopies, DownCopies []time.Duration
 }
 
 // duplicates counts the arrivals of a sequence that were already there.
@@ -354,7 +358,9 @@ func parseProbe(sender, echo, run string) (ProbeResult, error) {
 			}
 			r.DownArrivals = append(r.DownArrivals, seq)
 			if downSeen[seq] {
-				continue // a copy of an answer: counted in DownDuplicates, not another reply
+				// a copy of an answer: counted in DownDuplicates, not another reply
+				r.DownCopies = append(r.DownCopies, time.Duration(ns))
+				continue
 			}
 			downSeen[seq] = true
 			r.Down = append(r.Down, time.Duration(ns))
@@ -379,12 +385,13 @@ func parseProbe(sender, echo, run string) (ProbeResult, error) {
 		if seq, err := strconv.Atoi(f[2]); err == nil {
 			r.UpArrivals = append(r.UpArrivals, seq)
 		}
-		if seen[f[2]] {
-			continue
-		}
 		ns, err := strconv.ParseInt(f[3], 10, 64)
 		if err != nil {
 			return r, fmt.Errorf("testbed: echo line %q: %w", l, err)
+		}
+		if seen[f[2]] {
+			r.UpCopies = append(r.UpCopies, time.Duration(ns))
+			continue
 		}
 		seen[f[2]] = true
 		r.Up = append(r.Up, time.Duration(ns))

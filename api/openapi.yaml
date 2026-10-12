@@ -2950,10 +2950,11 @@ components:
         An `allow` rule accepts. In the forward path it is an exception to the access matrix. In the
         input path it also opens the gateway's own ports that its protection of the test networks
         closes (everything but DHCP, DNS and ICMP echo) for the rule's selector. Two things stand in
-        front of every access rule and cannot be overridden by a rule or an overlay (`system_rules` of
-        the list): the management sources always reach SSH and the UI/API (anti-lockout), and the UI/API
-        port stays closed to every other source, so it is never reachable from a test network.
-        Decided by the maintainer on 2026-10-11.
+        front of every access rule and cannot be overridden by a rule or an overlay: the management
+        sources always reach SSH and the UI/API (anti-lockout), and the UI/API port stays closed to every
+        other source, so it is never reachable from a test network. `system_rules` of the list holds the
+        anti-lockout rule with its counter; the closure of the UI/API port is described here only, it is
+        not listed there and has no counter of its own. Decided by the maintainer on 2026-10-11.
 
         The same holds for the two-port topology (the management interface is the uplink interface, plan
         §2.16): the guard that stops devices under test from reaching the management network behind the
@@ -5088,7 +5089,10 @@ components:
       properties:
         system_rules:
           type: array
-          description: Rules that stand in front of `items` and cannot be overridden.
+          description: |
+            Rules that stand in front of `items` and cannot be overridden: the anti-lockout rule
+            (`system:anti_lockout`). The closure of the UI/API port to every other source stands in front of
+            `items` too, but is not listed (see `AccessRuleBody`).
           items: {$ref: '#/components/schemas/SystemAccessRule'}
         items:
           type: array

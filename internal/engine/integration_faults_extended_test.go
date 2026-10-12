@@ -417,6 +417,7 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 		}
 	}
 	if testbed.Accurate() {
+		recordToggles(t, "A", upload)
 		checkStat(t, "A flapping", res, measure, func(x testbed.ProbeResult) error {
 			return testbed.Measure(t, "A").Flaps("upload", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
 		})
@@ -435,6 +436,17 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	if whole < 2 {
 		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d)", whole, len(outages), len(lost), res.Sent)
 	}
+}
+
+// recordToggles writes the largest lateness of the toggles of a flapping fault into the measurement record (plan §2.10: every
+// toggle within engine.FlapTolerance of its time); the test checks each toggle itself.
+func recordToggles(t *testing.T, flow string, toggles []engine.FlapChange) {
+	t.Helper()
+	var late time.Duration
+	for _, c := range toggles {
+		late = max(late, c.Late())
+	}
+	_ = testbed.Measure(t, flow).Duration("upload", "largest toggle lateness", late, 0, 0, engine.FlapTolerance)
 }
 
 // ---- rate and queue limit (D18) --------------------------------------------------------------------

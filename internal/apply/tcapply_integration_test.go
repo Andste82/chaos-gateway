@@ -387,6 +387,17 @@ func (g *gw) overlayChange(o model.Overlay, body string) model.Overlay {
 }
 
 // outsideShare is the share of the round trips that are further than tol from want.
+// checkOutside checks the share of A's round trips outside the band of outsideShare against [lo, hi] and records it
+// in the measurement record (plan §4.3); msg is the message of a failure.
+func checkOutside(t *testing.T, share, lo, hi float64, msg string) error {
+	var err error
+	if share < lo || share > hi {
+		err = errors.New(msg)
+	}
+	return testbed.Measure(t, "A to the server").Record("round trip", testbed.Measurement{
+		Quantity: "share outside delay ± (jitter + tolerance)", Unit: "fraction", N: 150, Value: share, Low: &lo, High: &hi}, err)
+}
+
 func outsideShare(r testbed.PingResult, want, tol time.Duration) float64 {
 	if len(r.RTTs) == 0 {
 		return 0
@@ -427,10 +438,8 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 	// about 18 % of 150 round trips are outside (sigma = jitter, 1.35 sigma): 8 % is three sigma below;
 	// the flakiness policy of plan §4.3 applies all the same
 	testbed.Statistically(t, "a normal distribution", func() error {
-		if s := measure(); s < 0.08 {
-			return fmt.Errorf("a normal distribution with sigma = jitter should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100)
-		}
-		return nil
+		s := measure()
+		return checkOutside(t, s, 0.08, 1, fmt.Sprintf("a normal distribution with sigma = jitter should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100))
 	})
 
 	// the same fault, uniform: the apply has to make the leaf again, because the table survives a change
@@ -442,15 +451,14 @@ func TestTheDistributionOfAFaultFollowsAChangeBackToUniform(t *testing.T) {
 	if now := g.seeds("wan0")[leaf]; now == seed || now == 0 {
 		t.Fatalf("the leaf was not made again (seed %d, was %d)", now, seed)
 	}
-	share := measure()
-	if testbed.Accurate() && share > 0 {
-		// flakiness policy of plan §4.3: repeat once, a second failure fails
-		if share = measure(); share > 0 {
-			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", share*100)
-		}
-	} else if !testbed.Accurate() {
-		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", share*100)
+	if !testbed.Accurate() {
+		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27 ms (not asserted)", measure()*100)
+		return
 	}
+	testbed.Statistically(t, "a uniform jitter after the change", func() error {
+		s := measure()
+		return checkOutside(t, s, 0, 0, fmt.Sprintf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", s*100))
+	})
 }
 
 // failAtNft carries out the operations before the nftables transaction and then fails: an apply that
@@ -521,10 +529,8 @@ func TestARestoreAfterAFailedApplyRemovesTheTableThatApplyWrote(t *testing.T) {
 			return outsideShare(r, delay, jitter+slack)
 		}
 		testbed.Statistically(t, "a uniform jitter after the restore", func() error {
-			if s := share(); s > 0 {
-				return fmt.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", s*100)
-			}
-			return nil
+			s := share()
+			return checkOutside(t, s, 0, 0, fmt.Sprintf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27 ms", s*100))
 		})
 	}
 }
@@ -554,10 +560,8 @@ func TestAfterARestartTheFirstChangeOfALeafDropsTheTableThePreviousRunLeft(t *te
 		return outsideShare(r, delay, jitter+2*time.Millisecond+delay/20)
 	}
 	testbed.Statistically(t, "the table of the previous run", func() error {
-		if s := measure(100 * time.Millisecond); s < 0.08 {
-			return fmt.Errorf("a normal distribution should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100)
-		}
-		return nil
+		s := measure(100 * time.Millisecond)
+		return checkOutside(t, s, 0.08, 1, fmt.Sprintf("a normal distribution should put about a fifth of the round trips outside delay ± (jitter + 7 ms), %.0f%% were", s*100))
 	})
 
 	// the restart: a new process knows nothing of the tables; its target is the same fault, uniform,
@@ -594,14 +598,13 @@ func TestAfterARestartTheFirstChangeOfALeafDropsTheTableThePreviousRunLeft(t *te
 	if !strings.Contains(strings.Join(res.Plan.Summary, "\n"), "leaf "+leaf+" is made again") {
 		t.Errorf("the plan does not say that the leaf is made again:\n%s", strings.Join(res.Plan.Summary, "\n"))
 	}
-	share := measure(110 * time.Millisecond)
-	if testbed.Accurate() && share > 0 {
-		// flakiness policy of plan §4.3: repeat once, a second failure fails
-		if share = measure(110 * time.Millisecond); share > 0 {
-			t.Errorf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27.5 ms", share*100)
-		}
-	} else if !testbed.Accurate() {
-		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27.5 ms (not asserted)", share*100)
+	if testbed.Accurate() {
+		testbed.Statistically(t, "a uniform jitter after the restart", func() error {
+			s := measure(110 * time.Millisecond)
+			return checkOutside(t, s, 0, 0, fmt.Sprintf("%.0f%% of the round trips of a uniform jitter of ±20 ms are outside delay ± 27.5 ms", s*100))
+		})
+	} else {
+		t.Logf("emulated: %.0f%% of the round trips outside delay ± 27.5 ms (not asserted)", measure(110*time.Millisecond)*100)
 	}
 
 	// the next change of the same process knows the leaf is uniform: in place, with its counters

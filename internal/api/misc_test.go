@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	specpkg "github.com/Andste82/chaos-gateway/api"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
@@ -234,6 +235,17 @@ func TestSystemEndpoints(t *testing.T) {
 	// rules; the other kinds follow with their milestones
 	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu tunnel]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
+	}
+	// the limits of plan §3.3 (P2-AUDIT-15): 4095 fault ids, and the class limit of the architecture
+	limits, _ := caps["limits"].(map[string]any)
+	if limits["fault_ids"] != float64(4095) || limits["class_limit_per_interface"] != float64(compiler.DefaultClassLimit()) {
+		t.Errorf("limits %v, want 4095 ids and %d classes", caps["limits"], compiler.DefaultClassLimit())
+	}
+	// a configured class limit is the one the capabilities report
+	g6 := newGW(t, func(o *options) { o.classLimit = 6 })
+	g6.finishSetup()
+	if l, _ := g6.do("GET", "/capabilities", nil, nil, nil).json(t)["limits"].(map[string]any); l["class_limit_per_interface"] != float64(6) || l["fault_ids"] != float64(4095) {
+		t.Errorf("with a class limit of 6: %v", l)
 	}
 	info := g.do("GET", "/system/info", nil, nil, nil).json(t)
 	if info["version"] != "test" || info["boot_id"] != "boot-1" || info["api_version"] != "v1" || info["arch"] == nil {

@@ -730,6 +730,89 @@ func TestAConfiguredFaultSetThatDoesNotFitTheClassLimitIsRefusedByThePreviewWith
 	}
 }
 
+// The preview shows what a rate on a network costs before it is applied (plan §2.4, §2.14, D18; P2-AUDIT-02): one queue
+// per known device and one that the addresses no device owns share, the classes every interface then carries against
+// the limit, and the tc trees that change. The response validates against the spec (the harness checks every one).
+func TestThePreviewOfARateOnANetworkShowsItsQueuesTheClassesAndTheTCChange(t *testing.T) {
+	g := newGW(t, func(o *options) { o.classLimit = 50 })
+	g.finishSetup()
+	const n = 3
+	devs := map[string]any{}
+	for i := 0; i < n; i++ {
+		devs[fmt.Sprintf("d0000000-0000-4000-8000-%012d", i+1)] = map[string]any{"name": fmt.Sprintf("dev-%d", i), "network": iotID,
+			"identifiers": map[string]any{"ipv4": []any{fmt.Sprintf("10.10.0.%d", 20+i)}}}
+	}
+	if r := g.apply(g.mustPatch(map[string]any{"devices": devs})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.observe()
+	// a revision without faults needs no class: no capacity, no queues, no tc change
+	quiet := g.do("POST", "/revisions/"+itoa(g.mustPatch(map[string]any{"settings": map[string]any{"commit_confirm_timeout": "90s"}}))+"/preview", nil, nil, nil)
+	if quiet.Status != 200 {
+		t.Fatalf("%d %s", quiet.Status, quiet.Body)
+	}
+	if b := quiet.json(t); b["capacity"] != nil || b["queues"] != nil || b["linux"].(map[string]any)["tc"] != "" {
+		t.Errorf("a change without faults: %v", b)
+	}
+
+	const faultID = "f1000000-0000-4000-8000-000000000001"
+	id := g.mustPatch(map[string]any{"faults": map[string]any{faultID: map[string]any{"source": map[string]any{"network": "IoT"}, "rate": "2Mbit", "latency": "20ms"}}})
+	r := g.do("POST", "/revisions/"+itoa(id)+"/preview", nil, nil, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	b := r.json(t)
+	qs, _ := b["queues"].([]any)
+	if len(qs) != 1 {
+		t.Fatalf("queues %v", b["queues"])
+	}
+	q := qs[0].(map[string]any)
+	if q["fault"] != faultID || q["layer"] != "config" || q["scope"] != "network IoT" || q["queues"] != float64(n+1) {
+		t.Errorf("a 2 Mbit/s fault on a network of %d known devices has %d queues: %v", n, n+1, q)
+	}
+	// every interface carries a class per queue and direction, and the default class
+	caps, _ := b["capacity"].([]any)
+	var ifs []string
+	for _, c := range caps {
+		m := c.(map[string]any)
+		ifs = append(ifs, m["interface"].(string))
+		if m["classes"] != float64(2*(n+1)+1) || m["limit"] != float64(50) {
+			t.Errorf("capacity %v, want %d classes of 50", m, 2*(n+1)+1)
+		}
+	}
+	if strings.Join(ifs, " ") != "br-iot wan0 wg-admin wg-lab-hub wg-site-b" {
+		t.Errorf("the interfaces that carry the tree: %v", ifs)
+	}
+	// the tc change: on every interface the root and a netem leaf of 2 Mbit/s (250000 bytes/s) per class, nothing goes
+	tc := b["linux"].(map[string]any)["tc"].(string)
+	roots, leaves := map[string]int{}, map[string]int{}
+	for _, l := range strings.Split(strings.TrimSuffix(tc, "\n"), "\n") {
+		dev, obj, _ := strings.Cut(strings.TrimPrefix(l, "+"), ": ")
+		switch {
+		case !strings.HasPrefix(l, "+"):
+			t.Errorf("a new tree only adds: %q", l)
+		case obj == "qdisc 1: parent root htb default=0x1":
+			roots[dev]++
+		case strings.HasPrefix(obj, "qdisc ") && strings.Contains(obj, " netem ") && strings.Contains(obj, " delay=0.02 jitter=0 ") && strings.HasSuffix(obj, " rate=250000"):
+			leaves[dev]++
+		}
+	}
+	for _, dev := range ifs {
+		if roots[dev] != 1 || leaves[dev] != 2*(n+1) {
+			t.Errorf("%s gets %d roots and %d leaves of 2 Mbit/s, want 1 and %d:\n%s", dev, roots[dev], leaves[dev], 2*(n+1), tc)
+		}
+	}
+
+	// applied, the preview of the same revision has nothing left to change in tc, and the numbers stay
+	if r := g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	again := g.do("POST", "/revisions/"+itoa(g.mustPatch(map[string]any{"settings": map[string]any{"commit_confirm_timeout": "91s"}}))+"/preview", nil, nil, nil).json(t)
+	if again["linux"].(map[string]any)["tc"] != "" || fmt.Sprint(again["queues"]) != fmt.Sprint(b["queues"]) || fmt.Sprint(again["capacity"]) != fmt.Sprint(b["capacity"]) {
+		t.Errorf("after the apply: tc %q, queues %v, capacity %v", again["linux"].(map[string]any)["tc"], again["queues"], again["capacity"])
+	}
+}
+
 // A flapping fault's queues say where it is in its cycle: up, then a blackout, with the time the phase began
 // and the time the schedule ends it. The engine runs on the real clock here; the phase changes after a second.
 func TestTheQueuesOfAFlappingFaultShowTheirPhase(t *testing.T) {

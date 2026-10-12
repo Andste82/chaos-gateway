@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/Andste82/chaos-gateway/internal/audit"
@@ -256,7 +257,7 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	body := gin.H{
 		"revision":         p.Revision,
 		"domain":           dom,
-		"linux":            gin.H{"nftables": p.Linux.Nftables, "routes": p.Linux.Routes, "wireguard": p.Linux.WireGuard, "bird": p.Linux.Bird},
+		"linux":            gin.H{"nftables": p.Linux.Nftables, "tc": p.Linux.TC, "routes": p.Linux.Routes, "wireguard": p.Linux.WireGuard, "bird": p.Linux.Bird},
 		"requires_confirm": p.NeedsConfirmation,
 		"warnings":         warnings,
 	}
@@ -272,7 +273,34 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	if fs := previewFaults(p.Target); len(fs) > 0 {
 		body["faults"] = fs
 	}
+	if len(p.Capacity) > 0 {
+		cs := make([]gin.H, 0, len(p.Capacity))
+		for _, x := range p.Capacity {
+			cs = append(cs, gin.H{"interface": x.Dev, "classes": x.Classes, "limit": x.Limit})
+		}
+		body["capacity"] = cs
+	}
+	if qs := previewQueues(p.Queues); len(qs) > 0 {
+		body["queues"] = qs
+	}
 	c.JSON(200, body)
+}
+
+// previewQueues lists the queues of every winning fault (D18) as the preview shows them.
+func previewQueues(fq []compiler.FaultQueues) []gin.H {
+	var out []gin.H
+	for _, q := range fq {
+		id, err := uuid.Parse(q.Source)
+		if err != nil {
+			continue
+		}
+		h := gin.H{"fault": id, "layer": q.Layer, "scope": q.Scope, "queues": q.Queues}
+		if q.Profile != "" {
+			h["profile"] = q.Profile
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // problemsToError turns the errors the compiler reports for a target into a validation failure.

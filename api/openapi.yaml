@@ -3721,7 +3721,12 @@ components:
           description: Unified diffs of the normalized target state per subsystem (empty when unchanged).
           properties:
             nftables: {type: string}
-            tc: {type: string}
+            tc:
+              type: string
+              description: |
+                The tc trees per interface, one object per line led by the interface (`br-iot: qdisc 12: parent 1:12 netem …`):
+                the HTB root, the classes, the netem leaves with their parameters and the filters, and the ingress filters of
+                the tunnel faults (`wan0 ingress: …`). Seeds, counters and the values the kernel derives are left out.
             routes: {type: string}
             wireguard:
               type: string
@@ -3742,7 +3747,10 @@ components:
               path: {type: string}
         capacity:
           type: array
-          description: tc classes per interface after the change.
+          description: |
+            tc classes per interface after the change: every interface that carries a tree (the IFB device of the tunnel
+            faults included), with the default class, against the limit per interface (`class_limit_per_interface` of
+            the capabilities). Absent when no fault needs a class; a change above the limit is `capacity_exceeded`.
           items:
             type: object
             required: [interface, classes, limit]
@@ -3752,12 +3760,24 @@ components:
               limit: {type: integer}
         queues:
           type: array
-          description: Queues per scope created by per-device rate or queue limits (D18).
+          description: |
+            The queues each winning fault (or part of an activated profile) creates after the change (plan §2.4, D18): with a
+            rate, an explicit queue limit or keep order one per matched device plus one that the addresses no device owns
+            share, otherwise one. Each has a class in every direction the fault impairs. Absent when no fault needs a class.
           items:
             type: object
+            required: [fault, layer, scope, queues]
             properties:
-              fault: {type: string}
-              scope: {type: string}
+              fault:
+                allOf: [{$ref: '#/components/schemas/Uuid'}]
+                description: Overlay id or configured fault id.
+              layer:
+                type: string
+                enum: [overlay, config]
+              profile:
+                type: string
+                description: Name of the activated profile when the fault is one of its parts.
+              scope: {type: string, description: 'Where it applies, in words (`network IoT`).'}
               queues: {type: integer}
         references:
           type: array
@@ -3903,9 +3923,16 @@ components:
           items: {type: string}
         limits:
           type: object
+          description: The capacity limits of this gateway (plan §3.3); a change above one is `capacity_exceeded`.
           properties:
-            fault_ids: {type: integer, example: 4095}
-            class_limit_per_interface: {type: integer}
+            fault_ids:
+              type: integer
+              example: 4095
+              description: Fault ids in use at the same time (the mark layout).
+            class_limit_per_interface:
+              type: integer
+              example: 1000
+              description: tc classes one interface may carry, the default class included, as this gateway enforces it (by default 1000 on x86-64 and 200 on arm64).
     SystemInfo:
       type: object
       properties:

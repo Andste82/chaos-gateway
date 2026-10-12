@@ -152,6 +152,11 @@ func TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults(t *testing.T) 
 		})
 	}
 
+	// the copy meets the class of the original (plan §2.5): next to a delay every copy arrives with the
+	// delay, and the netem leaf of the class sends the originals and the copies; a copy that bypassed the
+	// leaf would arrive at once and not be counted by it
+	expectCopiesInTheClass(t, r, a, dup)
+
 	// the hook goes when the last duplicating fault does, the delay fault of B stays
 	r.deleteOverlay(dup)
 	tg = r.verifyKernel()
@@ -161,6 +166,93 @@ func TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults(t *testing.T) 
 	if got := hooks(); got != "" {
 		t.Errorf("the hook is still on %q", got)
 	}
+}
+
+// expectCopiesInTheClass replaces the duplicating fault of A by one that duplicates next to a latency,
+// then by one that duplicates next to a loss of 100 %, and asserts that the copies meet the delay and the
+// loss of the original's class (plan §2.5: "the copy meets the same class (delay, loss, rate) as the
+// original"; the rate is a parameter of the same leaf). The functional assertions always hold for a copy
+// that passes the leaf: netem never sends a packet before its delay, and a loss of 100 % lets nothing
+// through; the share and the medians are checked where they are accurate.
+func expectCopiesInTheClass(t *testing.T, r *real, a flow, dup engine.OverlayResult) {
+	t.Helper()
+	const delay = 50 * time.Millisecond
+	r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {latency: 50ms, duplicate: 10%}}")
+	r.verifyKernel()
+	fa := faultOfOverlay(t, r.e.Snapshot(), dup.Overlay)
+	queued, _, _, _ := r.queueSum(fa, compiler.Upload)
+	measure := func() testbed.ProbeResult { return a.run(t, kernelRun(600)) }
+	res := measure()
+	leaf, _, _, _ := r.queueSum(fa, compiler.Upload)
+	leaf -= queued
+	t.Logf("A, upload latency 50 ms duplicate 10 %%: %s; %d copies, their delay median %v smallest %v; the leaf sent %d packets",
+		res, len(res.UpCopies), testbed.Median(res.UpCopies), smallest(res.UpCopies), leaf)
+	if len(res.UpCopies) == 0 || res.UpLoss() != 0 {
+		t.Errorf("no datagram of A arrived twice, or one was lost (%s)", res)
+	}
+	if got := smallest(res.UpCopies); len(res.UpCopies) > 0 && got < delay-time.Millisecond {
+		t.Errorf("a copy arrived after %v, the fault delays the upload of A by %v: the copy bypassed the netem leaf", got, delay)
+	}
+	if got := smallest(res.Up); got < delay-time.Millisecond {
+		t.Errorf("a datagram arrived after %v, the fault delays the upload of A by %v", got, delay)
+	}
+	if want := int64(res.Delivered + res.UpDuplicates()); leaf < want {
+		t.Errorf("the netem leaf of the class sent %d packets, %d datagrams and %d copies arrived: the copies did not pass it",
+			leaf, res.Delivered, res.UpDuplicates())
+	}
+	if testbed.Accurate() {
+		checkStat(t, "A upload copies with a delay", res, measure, func(x testbed.ProbeResult) error {
+			return joinErrs(
+				testbed.CheckLatency("A upload copies", testbed.Median(x.UpCopies), delay),
+				// every copy, not only their median, within the latency tolerance (±2 ms + 5 %)
+				testbed.CheckDelays("A upload copies", x.UpCopies, delay-2*time.Millisecond, delay+2*time.Millisecond+delay/20),
+				testbed.CheckLatency("A upload originals", x.UpMedian(), delay),
+				testbed.CheckShare("A upload duplicates", "duplicated", x.UpDuplicates(), x.Sent, 0.10))
+		})
+	}
+
+	// a loss of 100 %: neither the originals nor the copies arrive, and the leaf drops both
+	r.mustPut(admin, "target: {device: dev-a}\nfault: {upload: {loss: 100%, duplicate: 50%}}")
+	r.verifyKernel()
+	fa = faultOfOverlay(t, r.e.Snapshot(), dup.Overlay)
+	measureLoss := func() (testbed.ProbeResult, int) {
+		_, before, _, _ := r.queueSum(fa, compiler.Upload)
+		x := a.run(t, kernelRun(0))
+		_, after, _, _ := r.queueSum(fa, compiler.Upload)
+		return x, int(after-before) - x.Sent
+	}
+	res, copies := measureLoss()
+	t.Logf("A, upload loss 100 %% duplicate 50 %%: %s; the leaf dropped %d copies next to the %d datagrams", res, copies, res.Sent)
+	if res.Delivered != 0 {
+		t.Errorf("%d datagrams of A (%d of them copies) passed a fault that loses everything: the copies bypassed the loss",
+			res.Delivered+res.UpDuplicates(), res.UpDuplicates())
+	}
+	if copies <= 0 {
+		t.Errorf("the netem leaf dropped %d packets more than the %d datagrams: no copy reached it", copies, res.Sent)
+	}
+	if testbed.Accurate() {
+		first := true
+		testbed.Statistically(t, "A upload copies with a loss", func() error {
+			x, n := res, copies
+			if !first {
+				x, n = measureLoss()
+				t.Logf("A, upload loss 100 %% duplicate 50 %%, again: %s; %d copies dropped", x, n)
+			}
+			first = false
+			return testbed.CheckShare("A upload copies dropped by the leaf", "copied", n, x.Sent, 0.50)
+		})
+	}
+}
+
+// smallest is the shortest of the delays, 0 for none.
+func smallest(ds []time.Duration) time.Duration {
+	var m time.Duration
+	for i, d := range ds {
+		if i == 0 || d < m {
+			m = d
+		}
+	}
+	return m
 }
 
 // ---- reorder -------------------------------------------------------------------------------------

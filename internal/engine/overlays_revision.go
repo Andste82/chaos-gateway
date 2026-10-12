@@ -208,12 +208,10 @@ func (o *owner) revisionOverlays(next *model.Configuration, force bool, gen uint
 // A rollback holds whatever the kernel does, unlike a revision's own changes, which a failed apply
 // takes back: the same change is made in every checkpoint the store can be taken back to
 // (Store.Amend), so a failed apply restores the overlays without the orphans and with the moves undone.
-// announced reports, per overlay, whether its earlier state was announced (it is in the last verified
-// checkpoint): when the apply fails, settleOverlays still announces these changes, and only those.
-func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.Move, gen uint64) (changes []actedChange, announced map[uuid.UUID]bool) {
-	if o.ov.store.Len() == 0 {
-		return nil, nil
-	}
+// changes are what the rollback did to the store; kept is what it did to the last verified content,
+// whose overlays were all announced: when the apply fails and the store goes back to that content, kept
+// is what is announced instead.
+func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.Move, gen uint64) (changes, kept []actedChange) {
 	back := make([]overlay.Move, len(moves))
 	for i, m := range moves {
 		back[i] = overlay.Move{ID: m.ID, From: m.To, To: m.From}
@@ -248,23 +246,18 @@ func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.
 		}
 		return out
 	}
-	cps := make([]*overlay.Checkpoint, 0, len(o.ov.marks)+1)
-	cps = append(cps, o.ov.verified)
+	changes = settle(o.ov.store)
+	o.ov.store.Amend(func(s *overlay.Store) { kept = settle(s) }, o.ov.verified)
+	cps := make([]*overlay.Checkpoint, 0, len(o.ov.marks))
 	for _, m := range o.ov.marks {
 		cps = append(cps, m.after)
 	}
-	changes = settle(o.ov.store)
-	if len(changes) == 0 {
-		return nil, nil
-	}
-	announced = map[uuid.UUID]bool{}
-	for _, ch := range changes {
-		announced[ch.Overlay.Id] = o.ov.verified.Has(ch.Overlay.Id)
-	}
 	o.ov.store.Amend(func(s *overlay.Store) { settle(s) }, cps...)
 	actor := model.Actor{Type: "system", Id: "system"}
-	for i := range changes {
-		changes[i].actor = actor
+	for _, l := range [][]actedChange{changes, kept} {
+		for i := range l {
+			l[i].actor = actor
+		}
 	}
-	return changes, announced
+	return changes, kept
 }

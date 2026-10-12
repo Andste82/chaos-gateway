@@ -1343,9 +1343,9 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   Overlays a forced revision removed and those a merge replaced (`merged`) stay removed: their removal
   was announced. Unlike a revision's own overlay changes, a rollback's are not taken back when an apply
   fails, since the revision stays rolled back whatever the kernel does: they are made in every store
-  checkpoint the owner can restore (`Store.Amend`), and when the apply fails, their events still go out
-  for the overlays that had been announced (`overlayMark.kept`); the retry applies the restore without
-  them. The rollback also triggers an observation, so the identity follows the committed configuration.
+  checkpoint the owner can restore (`Store.Amend`); when the apply fails and the store goes back to
+  the last verified content, what the rollback did to that content is announced instead
+  (`overlayMark.kept`), and the retry applies the restore without the orphans. The rollback also triggers an observation, so the identity follows the committed configuration.
   Tests: `TestARollbackOrphansTheOverlaysOfADeviceOnlyThePendingRevisionHad`,
   `TestARollbackMovesTheOverlaysOfARolledBackMergeBackToTheDiscoveredDevice`,
   `TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved` (`overlays_revision_test.go`),

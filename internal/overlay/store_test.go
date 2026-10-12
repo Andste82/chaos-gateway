@@ -550,9 +550,6 @@ func TestAmendMakesAChangeInTheCheckpointsSoThatARestoreKeepsIt(t *testing.T) {
 	before := f.store.Checkpoint()
 	b := f.put(admin, `{target: {network: IoT}, fault: {latency: 1ms}}`).Overlay
 	after := f.store.Checkpoint()
-	if !before.Has(a.Id) || before.Has(b.Id) || !after.Has(b.Id) {
-		t.Fatal("Has")
-	}
 
 	orphan := func(s *Store) { s.Orphan([]uuid.UUID{a.Id}, ReasonRollback) }
 	f.store.Amend(orphan, before, after)

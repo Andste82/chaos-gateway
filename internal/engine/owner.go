@@ -823,19 +823,17 @@ func (o *owner) rollback(rev int64, reason string) error {
 	o.pending = nil
 	o.event(EventRolledBack, map[string]any{"revision": rev, "reason": reason})
 	if o.committed != nil {
-		changes, announced := o.rollbackOverlays(p.d.Config, o.committed.Config, p.moves, o.gen+1)
+		changes, kept := o.rollbackOverlays(p.d.Config, o.committed.Config, p.moves, o.gen+1)
 		if len(changes) > 0 {
 			o.refreshOverlays()
 		}
 		d := o.nextDesired(o.committed.Config, o.committed.Revision)
 		d.RolledBack = true
-		if len(changes) > 0 {
+		if len(changes) > 0 || len(kept) > 0 {
 			o.markOverlays(d.Generation, changes)
 			mark := &o.ov.marks[len(o.ov.marks)-1]
-			for i, ch := range changes {
-				if announced[ch.Overlay.Id] {
-					mark.kept = append(mark.kept, mark.events[i])
-				}
+			for _, ch := range kept {
+				mark.kept = append(mark.kept, ch.event(d.Generation))
 			}
 		}
 		o.converge(d)

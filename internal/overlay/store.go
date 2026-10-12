@@ -619,12 +619,6 @@ func (s *Store) Restore(c *Checkpoint) {
 	}
 }
 
-// Has reports whether the checkpoint holds the overlay.
-func (c *Checkpoint) Has(id uuid.UUID) bool {
-	_, ok := c.byID[id]
-	return ok
-}
-
 // Amend makes a change in checkpoints too, so that going back to one of them (Restore) keeps it:
 // change is called once per checkpoint with a store that holds the checkpoint's content, and what
 // that store holds afterwards becomes the checkpoint's content. It is for a change that holds

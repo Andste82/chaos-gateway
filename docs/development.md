@@ -123,9 +123,11 @@ assertion (the name `testbed.Statistically` gives it), the flow, the direction, 
 unit, the kernel, `accurate`, N, the configured value, the measured value, the bounds the check
 accepts, the median, 5th and 95th percentile of the delays where the check had them, the loss where it
 counted one, the attempt (1, or 2 for the repetition of the flakiness policy) and the verdict with the
-message of a failure. An attempt of `Statistically` that recorded nothing (the round-trip shares of
-the distribution tests in `internal/apply`) leaves one line with its verdict. Without the variable
-nothing is written.
+message of a failure. An attempt of `Statistically` that recorded nothing leaves one line with its
+verdict (`"quantity":"assertion"`). Checks outside `Statistically` are recorded as attempt 1: the stream
+of `TestUpdatingOneFaultDoesNotDisturbTheOthers` (`Delays`), the largest lateness of the toggles of the
+flapping tests, and the withdrawal and the re-convergence of the BGP blackout test (`Duration`). Without
+the variable nothing is written.
 
 Where the record is kept:
 
@@ -2697,7 +2699,7 @@ Real kernel (`engine/integration_tunnel_test.go`), run in the persistent VM with
 | `TestAClientThatMovesTakesItsTunnelFaultWithIt` | the client listens on another port: the poll finds it, the filters move, the flow is impaired again |
 | `TestTheIFBAndItsFiltersAreCreatedAndRemovedWithTheTunnelFaultsAndLeftoversAreCleanedUp` | a leftover IFB, tree and filter go with the first apply and the host's filter stays; the IFB comes with the first fault and goes with the last |
 | `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` | disable (peer off the interface, offline event), key mismatch (another key on the interface), block endpoint (the counter counts); each ends with its overlay and the tunnel returns; flows outside unaffected |
-| `TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported` | the routes are withdrawn within the hold time (9 s) and the margin; the times are logged and taken from the events of the routing poll; the routes return after the blackout |
+| `TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported` | the routes are withdrawn within the hold time (9 s) and the margin; the blackout ends when both sides have dropped the session; the routes return within 15 s of the answer of the write that ends it (accurate; 90 s emulated); the times are logged, taken from the events of the routing poll and written into the measurement record |
 
 **What the persistent VM showed** (software emulation, 2 CPUs, so the accuracy assertions of §4.3 did not run and CI verifies them;
 the functional ones passed, one run each unless said):
@@ -2716,7 +2718,24 @@ the functional ones passed, one run each unless said):
   2 min 20 s for the tunnel fault, the larger plan), so the blackout had held for most of the hold time when the write was answered;
   the test therefore takes the times from the call and from the answer and from the events, and bounds the withdrawal by the
   protocol timers (6 to 9 s after the blackout began) plus the length of the write. On a native or KVM machine S15's figures are
-  the expectation: withdrawn after about 6 s, back after 2.5 s.
+  the expectation: withdrawn after about 6 s, back a few seconds after the blackout ended (S15: 2.5 s; CI: 4.0 s natively, 1.1 s
+  under KVM after the answer of the write, the session down for 5.5 and 6.0 s).
+
+**BGP re-convergence after a blackout (P2-AUDIT-12).** Before 2026-10-12 the routes came back 39 to 56 s after a tunnel blackout under
+KVM and 4 s natively, not after S15's 2.5 s. The cause was the remote side's BIRD configuration that `chaosgw wg export --bird` writes
+(`bird.RenderRemote`): it had the gateway's hold and keepalive times but BIRD's defaults for the rest, `error wait time 60, 300` and
+`connect retry time 120`. A hold timer that runs out is a protocol error in BIRD (`Hold timer expired`); the protocol starts again only
+after the error wait time and refuses incoming connections until then (state `Idle`, "Error wait: x/60"). The gateway's side had
+`connect retry time 5; error wait time 1, 30;` and tried every 5 s, and the remote side reset each connection until a minute after its own
+hold time had run out (the BIRD states of both sides, watched every 0.5 s in CI: the remote side `Passive` again at 62 s, the session up
+at 66 s). Natively the blackout usually ended right after the gateway's hold time ran out and before the remote side's did: the remote
+side then lost its old connection to a reset and started again without an error wait, which is why the native figure was 4 s; when the
+remote side's hold time ran out as well, the native run took 53 s too. `RenderRemote` now gives the remote side the gateway's reconnect
+timers (`bird.reconnectTimers`, also the active side's connect retry when the gateway is passive), and the test ends the blackout only
+when both sides have dropped the session, which is the case that took a minute, and bounds the re-convergence: the remote side is
+`Passive` 1 s after its hold time ran out, the gateway connects 5 s (BIRD's connect delay) after it started again and every 5 s while
+the tunnel is dead, and WireGuard sends a handshake every 5 s once it has had no answer for 15 s, so 15 s after the answer of the write
+that ends the blackout is the accurate bound.
 - The roaming test found the client at its new port after one apply; an apply took minutes here, and the engine made one desired
   state for it, not one per poll (`TestAPeerThatRoamsMakesOneDesiredStateWhileTheApplyForItIsOnItsWay`: before the rule, the polls made
   six).
@@ -2737,7 +2756,7 @@ A kernel other than the default is `make vm-down`, then `go run ./tools/testvm v
 1 ms difference in BIRD's "since" time). The assertions that run only with `Accurate()` are the shares of duplicates, reordered and
 corrupted packets (99.9 % binomial interval, N of `impairedRun`), the Gilbert-Elliott losses and runs, the flapping toggles
 (`FlapTolerance`) and outages (`CheckFlaps`: tolerance plus two probe intervals, at least three complete outages in a 19 s run of a
-3 s up, 2 s down cycle), the tunnel latency and loss, the rate (±10 % of 2 Mbit/s) and the BGP withdrawal bound (at most hold time
+3 s up, 2 s down cycle), the tunnel latency and loss, the rate (±10 % of 2 Mbit/s), the BGP re-convergence bound (15 s, P2-AUDIT-12) and the BGP withdrawal bound (at most hold time
 + 5 s after the answer of the write). The one with the least margin is the rate (under the flakiness policy of §4.3 like the others, a tool failure of iperf3 is repeated once as well): netem counts the frame, so TCP payload shows as
 1.91 Mbit/s and the lower bound is 1.8; the emulated VM measured 1.82 to 1.90. If CI reports a value below 1.8, read the logged
 throughputs first; the bound is the plan's and is not to be widened without an open item.

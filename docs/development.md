@@ -100,13 +100,15 @@ Things to know:
   nightly matrix), and `internal/engine` alone (`-test-timeout 200m -vm-timeout 4h30m`). The engine job is where
   the functional assertions of the engine's measurement tests (M8b to M11) run automatically: the package needs
   about 60 minutes under KVM and about 1.5 to 1.7 times that emulated on a hosted runner, which once ran into the
-  100-minute test timeout of the shared job (run 38158196621; P2-AUDIT-14). The first run of the engine job (run
-  38271140920, dispatched on the branch of P2-AUDIT-14, 2026-10-12, 1 h 40 min with the VM's boot) had 282 passed,
-  3 failed and 0 skipped: `TestAFlappingTunnelBlacksOutOnSchedule` (its first down phase lasted two cycles longer,
-  "What the persistent VM showed" below) and two of the known emulated failures listed
-  under "Fast kernel loop", `TestABurstOfNeighborChangesIsOneIdentityUpdate` (a cancelled apply, then a full one)
-  and `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (3.4 s for a bound of 3 s). A hosted runner
-  emulates faster than the VPS: the other tests of that list passed there.
+  100-minute test timeout of the shared job (run 38158196621; P2-AUDIT-14). The engine job ran three times on the
+  branch of P2-AUDIT-14 on 2026-10-12 (dispatched, 1 h 20 min to 1 h 40 min with the VM's boot, 285 tests, none
+  skipped): 38271140920 failed `TestAFlappingTunnelBlacksOutOnSchedule` and 38283373614 failed it again, both for
+  reasons of the emulated run fixed since ("What the persistent VM showed" in "Tunnel faults" below); 38294081018
+  passed it. Every other failure of the three runs is one of the known emulated failures listed under "Fast kernel
+  loop", with the reason given there: `TestABurstOfNeighborChangesIsOneIdentityUpdate` (a cancelled apply, then a
+  full one) and `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (3.4 s for a bound of 3 s) in the
+  first, `TestAReservationIsHonored` (a cancelled first apply, the device not yet reachable) in the third. A hosted
+  runner emulates faster than the VPS, so these fail there only now and then, and the rest of that list passed.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with

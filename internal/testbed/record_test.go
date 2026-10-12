@@ -90,6 +90,10 @@ func TestTheChecksOfAnAssertionWriteOneLineEachIntoTheRecord(t *testing.T) {
 	if out := got[5]; out.Assertion != "the BGP link" || out.Attempt != 1 || out.Quantity != "re-convergence" || out.Value != 3000 || !out.Pass {
 		t.Errorf("the line of a check outside Statistically: %+v", out)
 	}
+	// the fake reporter's name is the same in every test of the package, so the calls count on
+	if first.Call == 0 || got[1].Call != first.Call || got[2].Call != first.Call || got[4].Call != first.Call+1 || got[5].Call != 0 {
+		t.Errorf("the calls: %d %d %d %d %d", first.Call, got[1].Call, got[2].Call, got[4].Call, got[5].Call)
+	}
 	if got[0].Kernel == "" && runtimeHasProc() {
 		t.Error("no kernel release in the line")
 	}

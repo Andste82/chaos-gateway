@@ -13,6 +13,12 @@
 // oldest first: the measured value, its ratio to the configured one, where it lies between the
 // bounds (0 % is the lower bound, 100 % the upper one; a value that drifts towards one side shows
 // there before it fails), the attempt and the verdict. Only the last attempt of a run is shown.
+//
+// A test can make the same check more than once in a run (the phases of a profile switch, each with
+// its own configured value). Those checks stay apart: the n-th of them in a run is shown as "#n" and
+// compared with the n-th of the other runs. The repetition of a statistical assertion (attempt 2)
+// replaces its own call's attempt 1 only, as the line's call number says (testbed.Measurement.Call);
+// in a record written before lines had one, it replaces the latest attempt 1 of the same check.
 package main
 
 import (
@@ -43,11 +49,18 @@ type runRecord struct {
 	lines []testbed.Measurement
 }
 
+// key is a check: base names it, nth is its place among the checks with that name in a run (1 for
+// the first).
 type key struct {
+	base
+	nth int
+}
+
+type base struct {
 	test, assertion, flow, direction, quantity, unit, kernel string
 }
 
-func (k key) String() string {
+func (k base) String() string {
 	parts := []string{k.test, k.assertion}
 	if k.flow != "" && k.flow != k.assertion {
 		parts = append(parts, k.flow)
@@ -165,23 +178,64 @@ type row struct {
 	m   testbed.Measurement
 }
 
+// check identifies a check in one run across its attempts: the call of Statistically and the place
+// among the lines with the same name in that call and attempt (0 and the place among the attempts 1
+// outside a call, or in a record without call numbers).
+type check struct {
+	b         base
+	call, occ int
+}
+
 func report(runs []runRecord, re *regexp.Regexp, tsv bool, w io.Writer) {
 	sort.SliceStable(runs, func(i, j int) bool { return runs[i].start.Before(runs[j].start) })
 	rows := map[key][]row{}
+	several := map[base]bool{} // a check made more than once in a run
 	for i := range runs {
-		last := map[key]int{} // the index in rows[k] of this run's line of k
+		type inCall struct {
+			b             base
+			call, attempt int
+		}
+		occ := map[inCall]int{}
+		at := map[check]key{}      // the check of a line of this run
+		nth := map[base]int{}      // the checks with the name so far
+		latest := map[base]check{} // the latest attempt 1 without a call number
 		for _, m := range runs[i].lines {
-			k := key{m.Test, m.Assertion, m.Flow, m.Direction, m.Quantity, m.Unit, m.Kernel}
-			if re != nil && !re.MatchString(k.String()) {
+			b := base{m.Test, m.Assertion, m.Flow, m.Direction, m.Quantity, m.Unit, m.Kernel}
+			if re != nil && !re.MatchString(b.String()) {
 				continue
 			}
-			if j, ok := last[k]; ok {
-				if m.Attempt >= rows[k][j].m.Attempt {
-					rows[k][j].m = m
+			var id check
+			switch {
+			case m.Call > 0:
+				c := inCall{b, m.Call, m.Attempt}
+				occ[c]++
+				id = check{b, m.Call, occ[c]}
+			case m.Attempt <= 1:
+				c := inCall{b, 0, 1}
+				occ[c]++
+				id = check{b, 0, occ[c]}
+				latest[b] = id
+			default:
+				var ok bool
+				if id, ok = latest[b]; !ok {
+					c := inCall{b, 0, 1}
+					occ[c]++
+					id = check{b, 0, occ[c]}
+				}
+			}
+			if k, ok := at[id]; ok {
+				r := &rows[k][len(rows[k])-1]
+				if m.Attempt >= r.m.Attempt {
+					r.m = m
 				}
 				continue
 			}
-			last[k] = len(rows[k])
+			nth[b]++
+			if nth[b] > 1 {
+				several[b] = true
+			}
+			k := key{b, nth[b]}
+			at[id] = k
 			rows[k] = append(rows[k], row{run: &runs[i], m: m})
 		}
 	}
@@ -189,21 +243,32 @@ func report(runs []runRecord, re *regexp.Regexp, tsv bool, w io.Writer) {
 	for k := range rows {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	sort.Slice(keys, func(i, j int) bool {
+		if a, b := keys[i].base.String(), keys[j].base.String(); a != b {
+			return a < b
+		}
+		return keys[i].nth < keys[j].nth
+	})
+	name := func(k key) string {
+		if !several[k.base] {
+			return k.base.String()
+		}
+		return fmt.Sprintf("%s #%d", k.base, k.nth)
+	}
 
 	if tsv {
 		fmt.Fprintln(w, "check\trun\tstart\tconfigured\tvalue\tratio\tlow\thigh\tposition\tn\tattempt\tpass")
 		for _, k := range keys {
 			for _, r := range rows[k] {
 				m := r.m
-				fmt.Fprintf(w, "%s\t%s\t%s\t%g\t%g\t%s\t%s\t%s\t%s\t%d\t%d\t%v\n", k, r.run.file, r.run.start.Format(time.RFC3339),
+				fmt.Fprintf(w, "%s\t%s\t%s\t%g\t%g\t%s\t%s\t%s\t%s\t%d\t%d\t%v\n", name(k), r.run.file, r.run.start.Format(time.RFC3339),
 					m.Configured, m.Value, ratio(m), bound(m.Low), bound(m.High), position(m), m.N, m.Attempt, m.Pass)
 			}
 		}
 		return
 	}
 	for _, k := range keys {
-		fmt.Fprintln(w, k)
+		fmt.Fprintln(w, name(k))
 		for _, r := range rows[k] {
 			m := r.m
 			verdict := "pass"

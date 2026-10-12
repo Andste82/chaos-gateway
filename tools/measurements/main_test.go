@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,5 +62,51 @@ func TestTheNightsArePrintedOldestFirstWithTheLastAttempt(t *testing.T) {
 	write(t, empty, "")
 	if code := run([]string{empty}, &out, &errb); code != 1 {
 		t.Errorf("a record without lines: exit %d", code)
+	}
+}
+
+// checkLine is a line of TestP with a call number (0: none), an attempt, a configured and a measured
+// value.
+func checkLine(call, attempt int, configured, value, ts string) string {
+	c := ""
+	if call > 0 {
+		c = `"call":` + strconv.Itoa(call) + `,`
+	}
+	return `{"test":"TestP","assertion":"A to the server","flow":"A to the server","direction":"upload","quantity":"median delay","unit":"ms","kernel":"k","accurate":true,"n":200,` +
+		`"configured":` + configured + `,"value":` + value + `,` + c + `"attempt":` + strconv.Itoa(attempt) + `,"pass":true,"time":"` + ts + `"}` + "\n"
+}
+
+// A test that makes the same check twice in a run (two phases, two configured values) keeps both: the
+// n-th of a run is compared with the n-th of the others, and a repetition replaces only its own call's
+// first attempt, also when a later call held at once.
+func TestTheSameCheckTwiceInARunStaysApart(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "1.jsonl"),
+		checkLine(1, 1, "60", "70", "2026-10-11T02:00:00Z")+
+			checkLine(1, 2, "60", "61", "2026-10-11T02:00:01Z")+
+			checkLine(2, 1, "150", "151", "2026-10-11T02:00:02Z"))
+	write(t, filepath.Join(dir, "2.jsonl"),
+		checkLine(1, 1, "60", "60", "2026-10-12T02:00:00Z")+
+			checkLine(2, 1, "150", "152", "2026-10-12T02:00:01Z"))
+	// a record without call numbers: the attempts 1 stay apart all the same
+	write(t, filepath.Join(dir, "3.jsonl"),
+		checkLine(0, 1, "60", "62", "2026-10-13T02:00:00Z")+
+			checkLine(0, 1, "150", "153", "2026-10-13T02:00:01Z"))
+	var out, errb bytes.Buffer
+	if code := run([]string{dir}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 8 || !strings.HasSuffix(lines[0], "kernel k #1") || !strings.HasSuffix(lines[4], "kernel k #2") {
+		t.Fatalf("report:\n%s", out.String())
+	}
+	for i, want := range []string{"configured 60 ", "configured 60 ", "configured 60 ", "configured 150 ", "configured 150 ", "configured 150 "} {
+		l := lines[1+i+i/3]
+		if !strings.Contains(l, want) {
+			t.Errorf("line %q, want %s", l, want)
+		}
+	}
+	if !strings.Contains(lines[1], "value 61 ") || !strings.Contains(lines[1], "attempt 2") {
+		t.Errorf("the repetition of the first call: %s", lines[1])
 	}
 }

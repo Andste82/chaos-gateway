@@ -55,6 +55,10 @@ type Measurement struct {
 	Loss     *float64 `json:"loss,omitempty"`
 	// Extra holds figures of a check beyond the one it compares (the mean run of a burst loss).
 	Extra map[string]float64 `json:"extra,omitempty"`
+	// Call numbers the calls of Statistically in the test (1 for its first statistical assertion), so
+	// that the checks of two calls with the same name stay apart and an attempt 2 belongs to its own
+	// call's attempt 1; 0 for a check outside Statistically.
+	Call int `json:"call,omitempty"`
 	// Attempt is 1 or 2 (the repetition of plan §4.3); Pass is the check's own verdict, Error its
 	// message when it failed.
 	Attempt int       `json:"attempt"`
@@ -74,7 +78,19 @@ type attemptLines struct {
 var record struct {
 	mu     sync.Mutex
 	open   map[string]*attemptLines // the attempt that runs in a test, by the test's name
+	calls  map[string]int           // the calls of Statistically so far, by the test's name
 	failed bool                     // a write failed once; it is reported once
+}
+
+// nextCall is the number of a new call of Statistically in the test.
+func nextCall(test string) int {
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	if record.calls == nil {
+		record.calls = map[string]int{}
+	}
+	record.calls[test]++
+	return record.calls[test]
 }
 
 var kernelRelease = sync.OnceValue(func() string {

@@ -618,6 +618,77 @@ func TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced(t *testing.T
 	}
 }
 
+// P2-AUDIT-05: a commit-confirm rollback takes the overlays along. The pending revision merges a discovered
+// device into the configured one (its overlay moves there) and adds a device that an overlay is written for
+// in the confirmation window; nobody confirms: the moved overlay targets the discovered device again, the
+// other one is gone with overlay_orphaned (reason rollback).
+func TestAnUnconfirmedRevisionTakesItsOverlayChangesBackWithIt(t *testing.T) {
+	g := newGW(t, func(o *options) { o.confirm = 3 * time.Second })
+	g.finishSetup()
+	if r := g.apply(g.mustPatch(map[string]any{
+		"networks": map[string]any{iotID: map[string]any{"dhcp": map[string]any{"lease_time": "10m"}}},
+		"devices":  map[string]any{espID: map[string]any{"name": "esp32-42", "network": iotID, "identifiers": map[string]any{"macs": []any{"02:00:00:00:00:31"}}}},
+	})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.observe()
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31"), nb("10.10.0.50", "02:00:00:00:00:aa")})
+	g.observe()
+	discID := engine.DeviceID("02:00:00:00:00:aa")
+	moved := g.mustCreateOverlay(`{"target":{"device":"` + discID + `"},"fault":{"latency":"70ms"}}`)
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+
+	const sensorID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+	id := g.mustPatch(map[string]any{
+		"devices": map[string]any{
+			espID:    map[string]any{"identifiers": map[string]any{"macs": []any{"02:00:00:00:00:31", "02:00:00:00:00:aa"}}},
+			sensorID: map[string]any{"name": "sensor-2", "network": iotID, "identifiers": map[string]any{"macs": []any{"02:00:00:00:00:77"}}},
+		},
+		"management": map[string]any{"allowed_sources": []any{"192.168.56.0/24", "172.16.0.0/12"}},
+	})
+	if r := g.apply(id); r.Status != 200 || r.json(t)["status"] != "pending_confirm" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	targetOf := func(ov map[string]any) any { return ov["target"].(map[string]any)["device"] }
+	if got := targetOf(g.do("GET", "/overlays/"+moved["id"].(string), nil, nil, nil).json(t)); got != espID {
+		t.Fatalf("the merge did not move the overlay: %v", got)
+	}
+	onSensor := g.mustCreateOverlay(`{"target":{"device":"sensor-2"},"fault":{"latency":"40ms"}}`)
+
+	var orphaned map[string]any
+	deadline := time.After(15 * time.Second)
+	for orphaned == nil {
+		select {
+		case ev := <-ch:
+			if ev.Type == engine.EventOverlayOrphaned {
+				orphaned = ev.Data
+			}
+		case <-deadline:
+			t.Fatal("no overlay_orphaned after the rollback")
+		}
+	}
+	if orphaned["overlay"] != onSensor["id"] || orphaned["reason"] != "rollback" {
+		t.Errorf("event %v", orphaned)
+	}
+	if _, err := g.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["pending_confirm"] != nil || st["active_revision"] == float64(id) {
+		t.Fatalf("not rolled back: %v", st)
+	}
+	items := g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != moved["id"] {
+		t.Fatalf("overlays %v", items)
+	}
+	if got := targetOf(items[0].(map[string]any)); got != discID {
+		t.Errorf("the overlay targets %v after the rollback, want the discovered device %s", got, discID)
+	}
+	if r := g.do("GET", "/overlays/"+onSensor["id"].(string), nil, nil, nil); r.Status != 404 {
+		t.Errorf("the orphan: %d %s", r.Status, r.Body)
+	}
+}
+
 // The queues of an overlay and of a configured fault: one per interface of the tree and direction, with
 // the kernel's counters and the epoch of the leaf (M8b).
 func TestAnOverlayAndAFaultShowTheirNetemQueuesWithEpochs(t *testing.T) {

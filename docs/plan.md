@@ -149,6 +149,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
 - An active profile activation follows the new profile definition.
 - A run takes a snapshot of its scenario when it starts and records the revision id; editing the scenario does not affect a running run.
 - Only one revision can wait for confirmation (commit-confirm) at a time; a second apply gets `409 confirm_pending`. A revision that was never confirmed never becomes "last known good"; a reboot inside the confirmation window boots the previous revision.
+- A rollback of an unconfirmed revision takes the overlays along: overlays it moved by a merge go back to the discovered device, and overlays that refer to an object only the rolled-back revision had (e.g. a device it added and an overlay named in the confirmation window) are removed (event `overlay_orphaned`, reason `rollback`). A rollback needs no `force`.
 
 **Restart:** whenever the service or the machine restarts, the kernel state is recompiled from the committed revision and the observed state only. Overlays are dropped, active runs end as `aborted`, and an event records both. Tests always restart from a clean baseline. When the service is **stopped**, the executor first removes all overlays (the gateway keeps routing with the configuration only, never with a leftover fault); `chaosgw teardown` removes everything Chaos Gateway created.
 

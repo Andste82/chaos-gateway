@@ -851,7 +851,10 @@ paths:
       description: |
         Hub network: a zip with one `.conf` per client (all, or those given in `clients`).
         Link network: the remote side's wg-quick configuration (`format=conf`) or, if a
-        routing protocol uses the link, a matching BIRD snippet (`format=bird`).
+        routing protocol uses the link, a matching BIRD snippet (`format=bird`). For BGP the snippet
+        has the gateway's timers, the reconnect timers included (`connect retry time 5`,
+        `error wait time 1, 30` instead of BIRD's 120 and 60 s), so that a session a fault took down
+        comes back within seconds of its end.
       x-milestone: M5
       x-required-scope: full
       parameters:

@@ -440,6 +440,7 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 		}
 	}
 	if testbed.Accurate() {
+		recordToggles(t, "the flapping tunnel", toggles)
 		checkStat(t, "the flapping tunnel", res, measure, func(x testbed.ProbeResult) error {
 			return testbed.Measure(t, "the flapping tunnel").Flaps("upload", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
 		})
@@ -737,11 +738,14 @@ func TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIs
 	t.Logf("re-convergence: the routes were back %.1f s after the call that ended the blackout and %.1f s after its answer; the session-up event came %.1f s after the call; the session was down for %.1f s",
 		back.Sub(endCalled).Seconds(), back.Sub(ended).Seconds(), up.Time.Sub(endCalled).Seconds(), up.Time.Sub(down.Time).Seconds())
 	// The bound follows from the timers of both sides (bird.reconnectTimers): the remote side, which waits for the gateway, starts
-	// again 1 s after its hold time ran out (error wait 1 s); the gateway makes a new attempt every 5 s (connect retry time) while the
-	// tunnel is dead, the kernel sends its SYN again 1 and 3 s into an attempt, and WireGuard, which has had no answer for more than
-	// 15 s, sends a new handshake every 5 s: at most 5 s for the tunnel and 5 s for the session, plus the exchange of OPEN, KEEPALIVE
-	// and UPDATE and the route in table 100. The blackout ended before the answer of the write, so the time from the answer is the
-	// shorter one. With BIRD's defaults on the remote side (error wait 60 s) this took 39 to 56 s under KVM (P2-AUDIT-12).
+	// again 1 s after its hold time ran out (error wait 1 s, then "Passive"); the gateway starts again 1 s after its own and
+	// connects after BIRD's connect delay (5 s), and while the tunnel is dead it tries again every 5 s (connect retry time), the
+	// kernel sending its SYN again 1 and 3 s into an attempt; WireGuard, if it has had no answer for more than 15 s, sends a new
+	// handshake every 5 s: at most 5 s for the tunnel and 5 s for the session, plus the exchange of OPEN, KEEPALIVE and UPDATE and
+	// the route in table 100. The blackout ended before the answer of the write, so the time from the answer is the shorter one.
+	// Measured: 4.0 s natively, 1.1 s under KVM after the answer (the session down for 5.5 and 6.0 s). With BIRD's defaults on the
+	// remote side (error wait 60 s) the remote side refused the gateway's connections until a minute after its hold time ran out:
+	// 53 s natively and 52 s under KVM after the answer, the session down for 54.5 and 59 s (P2-AUDIT-12).
 	const reconvergence = 15 * time.Second
 	if testbed.Accurate() {
 		if err := testbed.Measure(t, "the BGP link site-b").Duration("", "re-convergence after the answer of the end of the blackout",

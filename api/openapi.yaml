@@ -537,7 +537,10 @@ paths:
         `422 validation_failed` with `references[]` if it deletes objects used by active
         overlays or runs (`force=true` removes those overlays and aborts those runs).
         Lockout-relevant changes (plan §2.14) become `pending_confirm` and are rolled back
-        unless confirmed before `confirm_deadline`.
+        unless confirmed before `confirm_deadline`. A rollback takes the overlays along: the
+        overlays the revision's merge moved go back to the discovered device, and the overlays
+        that refer to an object only the rolled-back revision had are removed (event
+        `overlay_orphaned` with `data.reason` `rollback`).
       x-milestone: M5
       x-required-scope: full
       parameters:

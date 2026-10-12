@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
@@ -257,5 +258,225 @@ func TestAMergeRevisionMovesTheOverlaysOfTheDiscoveredDeviceToTheConfiguredOne(t
 	// the owner can still delete it by the id it had
 	if _, err := h.e.DeleteOverlay(context.Background(), moved.Overlay.Id, &alice, model.Actor{}); err != nil {
 		t.Errorf("%v", err)
+	}
+}
+
+// P2-AUDIT-05: a commit-confirm rollback settles the overlays like an apply of the committed revision
+// would: the overlays of an object only the rolled-back revision had are orphaned, and the moves of its
+// merge are undone.
+
+// waitRolledBack waits until the pending revision is gone and the restore has been applied.
+func (h *harness) waitRolledBack() *engine.Snapshot {
+	h.t.Helper()
+	s := h.barrier()
+	for i := 0; i < 200 && (s.Pending != nil || s.Applied == nil || !s.Applied.RolledBack); i++ {
+		time.Sleep(10 * time.Millisecond)
+		s = h.barrier()
+	}
+	if s.Pending != nil || s.Applied == nil || !s.Applied.RolledBack {
+		h.t.Fatalf("not rolled back: pending %+v, applied %+v", s.Pending, s.Applied)
+	}
+	return s
+}
+
+func overlayIDs(l []model.Overlay) []string {
+	var out []string
+	for _, ov := range l {
+		out = append(out, ov.Id.String())
+	}
+	return out
+}
+
+func TestARollbackOrphansTheOverlaysOfADeviceOnlyThePendingRevisionHad(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(nil))
+	h.observe()
+	keep := h.mustPut(bob, "target: {network: Lab}\nfault: {latency: 10ms}")
+	// the pending revision adds the device, with a lockout-relevant change
+	r2 := h.revision(func(c *model.Configuration) { withDHCPAndDevice(c); lockoutChange(c) })
+	if a, err := h.apply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second}); err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	// in the confirmation window the device exists: it gets its address, and an overlay may name it
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	onDevice := h.mustPut(alice, deviceFault)
+	if s := h.barrier(); len(s.Faults) != 2 {
+		t.Fatalf("faults %+v", s.Faults)
+	}
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+
+	// nobody confirms
+	h.clk.Advance(31 * time.Second)
+	s := h.waitRolledBack()
+	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
+		t.Fatalf("the overlays after the rollback are %v", overlayIDs(s.Overlays))
+	}
+	if len(s.Faults) != 1 || s.Faults[0].Source != keep.Overlay.Id.String() {
+		t.Errorf("faults %+v", s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+	got := collect(ch, engine.EventOverlayOrphaned)
+	if len(got) != 1 {
+		t.Fatalf("orphaned events %+v", got)
+	}
+	d := got[0].Data
+	if d["overlay"] != onDevice.Overlay.Id.String() || d["reason"] != "rollback" || d["generation"].(uint64) != s.Applied.Generation {
+		t.Errorf("event %+v (applied %d)", d, s.Applied.Generation)
+	}
+	if objs, _ := d["objects"].([]string); len(objs) != 1 || objs[0] != "/devices/"+devID {
+		t.Errorf("objects %+v", d["objects"])
+	}
+	if a, _ := d["actor"].(model.Actor); a.Type != "system" {
+		t.Errorf("actor %+v", d["actor"])
+	}
+	if _, err := h.e.DeleteOverlay(context.Background(), onDevice.Overlay.Id, nil, model.Actor{}); !errors.Is(err, engine.ErrOverlayNotFound) {
+		t.Errorf("deleting the orphan: %v", err)
+	}
+
+	// a later revision that adds the same device does not bring the overlay back to life
+	h.mustApply(h.revision(withDHCPAndDevice))
+	if s := h.barrier(); len(s.Overlays) != 1 || len(s.Faults) != 1 {
+		t.Errorf("overlays %v, faults %+v", overlayIDs(s.Overlays), s.Faults)
+	}
+}
+
+func TestARollbackMovesTheOverlaysOfARolledBackMergeBackToTheDiscoveredDevice(t *testing.T) {
+	h := overlaysHarness(t)
+	const macRandom = "02:00:00:00:00:aa"
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg), neighbor("10.10.0.50", macRandom)})
+	h.observe()
+	discID := engine.DeviceID(macRandom)
+	moved := h.mustPut(alice, "target: {device: "+discID+"}\nfault: {latency: 70ms}")
+	onConfigured := h.mustPut(bob, deviceFault)
+
+	rev := h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		macs := []string{macCfg, macRandom}
+		d.Identifiers = &model.DeviceIdentifiers{Macs: &macs}
+		(*c.Devices)[devID] = d
+		lockoutChange(c)
+	})
+	if a, err := h.apply(rev, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second}); err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	target := func(s *engine.Snapshot, id string) string {
+		for _, ov := range s.Overlays {
+			if ov.Id.String() == id && ov.Target != nil && ov.Target.Device != nil {
+				return *ov.Target.Device
+			}
+		}
+		return ""
+	}
+	if got := target(h.barrier(), moved.Overlay.Id.String()); got != devID {
+		t.Fatalf("the merge did not move the overlay: %q", got)
+	}
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+	if err := h.e.Rollback(ctx, rev); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitRolledBack()
+	if got := target(s, moved.Overlay.Id.String()); got != discID {
+		t.Fatalf("the overlay targets %q after the rollback, want the discovered device %s", got, discID)
+	}
+	// the overlay that was written for the configured device stays there
+	if got := target(s, onConfigured.Overlay.Id.String()); got != devID {
+		t.Errorf("the configured device's overlay targets %q", got)
+	}
+	updated := collect(ch, engine.EventOverlayUpdated)
+	if len(updated) != 1 || updated[0].Data["overlay"] != moved.Overlay.Id.String() || updated[0].Data["reason"] != "moved" {
+		t.Fatalf("events %+v", updated)
+	}
+	if tg := updated[0].Data["target"].(model.Scope); tg.Device == nil || *tg.Device != discID {
+		t.Errorf("the event shows the target %+v", tg)
+	}
+	if got := collect(ch, engine.EventOverlayOrphaned); len(got) != 0 {
+		t.Errorf("a merge's rollback orphaned %+v", got)
+	}
+	// the discovered device is discovered again and its overlay impairs it, not the configured one
+	h.observe()
+	s = h.barrier()
+	if d := h.device(discID); d == nil || d.Origin != model.DeviceOriginDiscovered {
+		t.Fatalf("the device is not discovered again: %+v", d)
+	}
+	var fault *compiler.Fault
+	for i := range s.Faults {
+		if s.Faults[i].Source == moved.Overlay.Id.String() {
+			fault = &s.Faults[i]
+		}
+	}
+	if fault == nil {
+		t.Fatalf("the moved-back overlay has no fault: %+v", s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+}
+
+func TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(nil))
+	h.observe()
+	r2 := h.revision(func(c *model.Configuration) { withDHCPAndDevice(c); lockoutChange(c) })
+	if a, err := h.apply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second}); err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	onDevice := h.mustPut(alice, deviceFault)
+	s := h.barrier()
+	if len(s.Faults) != 1 {
+		t.Fatalf("faults %+v", s.Faults)
+	}
+	chain := compiler.MarkChainName(s.Faults[0].ID)
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+
+	// the transaction that removes the fault's chain fails, again and again
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "nft" && strings.Contains(stdin, "delete") && strings.Contains(stdin, chain) {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+	if err := h.e.Rollback(ctx, r2); err != nil {
+		t.Fatal(err)
+	}
+	s = h.barrier()
+	if s.LastError == "" {
+		t.Fatal("the injected failure did not fail the restore")
+	}
+	// the overlay does not come back with the failed apply: the rollback holds whatever the kernel does
+	if len(s.Overlays) != 0 {
+		t.Fatalf("the failed apply brought the orphan back: %v", overlayIDs(s.Overlays))
+	}
+	got := collect(ch, engine.EventOverlayOrphaned)
+	if len(got) != 1 || got[0].Data["overlay"] != onDevice.Overlay.Id.String() || got[0].Data["reason"] != "rollback" {
+		t.Fatalf("orphaned events %+v", got)
+	}
+
+	// the retry applies the restore without it
+	h.k.Fail = nil
+	h.clk.Advance(11 * time.Second)
+	// (the observation the rollback triggers may converge the identity once more meanwhile: wait until
+	// nothing moves any more)
+	s = h.barrier()
+	for i, last := 0, uint64(0); i < 200 && (s.LastError != "" || s.Generation != last); i++ {
+		last = s.Generation
+		time.Sleep(10 * time.Millisecond)
+		s = h.barrier()
+	}
+	if s.LastError != "" || len(s.Overlays) != 0 || len(s.Faults) != 0 {
+		t.Fatalf("after the retry: error %q, overlays %v, faults %+v", s.LastError, overlayIDs(s.Overlays), s.Faults)
+	}
+	h.verifyKernelWithOverlays()
+	if got := collect(ch, engine.EventOverlayOrphaned); len(got) != 0 {
+		t.Errorf("the orphan was announced twice: %+v", got)
 	}
 }

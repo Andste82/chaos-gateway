@@ -119,6 +119,21 @@ func newTracker() *tracker {
 	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}, traffic: map[string]trafficSample{}}
 }
 
+// discovered returns every device the registry holds, whatever configuration covers it, by id: the
+// input of domain.ResolveIdentity, which leaves out the ones a configuration covers.
+func (t *tracker) discovered() []domain.DiscoveredDevice {
+	disc := make([]domain.DiscoveredDevice, 0, len(t.registry))
+	for _, d := range t.registry {
+		cp := *d
+		sort.Strings(cp.MACs)
+		sort.Slice(cp.IPs, func(i, j int) bool { return cp.IPs[i].Less(cp.IPs[j]) })
+		sort.Strings(cp.Sources)
+		disc = append(disc, cp)
+	}
+	sort.Slice(disc, func(i, j int) bool { return disc[i].ID < disc[j].ID })
+	return disc
+}
+
 // applyTraffic fills st.FlowsActive and the byte rates from obs.Traffic, using the previous sample
 // for this device (if any) to turn cumulative counters into a rate, and records the new sample.
 func (t *tracker) applyTraffic(st *DeviceState, obs observation) {
@@ -272,15 +287,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 			delete(t.registry, id)
 		}
 	}
-	disc := make([]domain.DiscoveredDevice, 0, len(t.registry))
-	for _, d := range t.registry {
-		cp := *d
-		sort.Strings(cp.MACs)
-		sort.Slice(cp.IPs, func(i, j int) bool { return cp.IPs[i].Less(cp.IPs[j]) })
-		sort.Strings(cp.Sources)
-		disc = append(disc, cp)
-	}
-	sort.Slice(disc, func(i, j int) bool { return disc[i].ID < disc[j].ID })
+	disc := t.discovered()
 
 	peers := map[string]model.WireGuardPeerStatus{}
 	for id, p := range obs.Peers {

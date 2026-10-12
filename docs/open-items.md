@@ -382,10 +382,10 @@ the three confirmations P2-M7-02, P2-M8b-07 and P2-M11-02 and the two items tran
 `docs/development.md`, the description in `api/openapi.yaml` where the behavior is user-visible, and `docs/plan.md` where the plan said
 otherwise. Seven decisions changed behavior and were implemented with them (P2-M9-01, P2-M9-03, P2-M9-04, P2-M9-11, P2-M10-08, P2-M11-03,
 P2-M11-05); the others confirmed the interpretation the item had chosen (for P2-M9-11 the second question, the meaning of `uplink`, was
-confirmed and documented). P2-M8a-07 was resolved in M9. Five items needed no decision and were closed by work on 2026-10-11 (second
-table: P2-M8a-06, P2-M8b-02, P2-M8b-04, P2-M8b-08, P2-M10-09). The blocks of all 41 are gone from this file, like the closed items of
-Phase 1; the item ids stay as names, since the code and the documents refer to them. One item stays open (below): P2-M9-06, a hardware
-measurement for H1, which also carries the arm64 apply-cost measurement left from P2-M8b-04.
+confirmed and documented). P2-M8a-07 was resolved in M9. Five items needed no decision and were closed by work on 2026-10-11 and
+2026-10-12 (second table: P2-M8a-06, P2-M8b-02, P2-M8b-04, P2-M8b-08, P2-M10-09). The blocks of all 41 are gone from this file, like
+the closed items of Phase 1; the item ids stay as names, since the code and the documents refer to them. One item stays open (below):
+P2-M9-06, a hardware measurement for H1, which also carries the arm64 apply-cost measurement left from P2-M8b-04.
 
 ### Decisions (made 2026-10-11)
 
@@ -428,7 +428,7 @@ measurement for H1, which also carries the arm64 apply-cost measurement left fro
 | P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
 | P2-M11-05 | A revision that adds a DNS or TLS part to a custom profile that an overlay activates | **Changed:** the revision is refused with `unsupported_feature` naming the profile and the milestone (M20 for `dns`, M21 for `tls`) while the activation exists, as the write of the activation is; without the activation it is accepted |
 
-### Closed by work (2026-10-11)
+### Closed by work (2026-10-11 and 2026-10-12)
 
 | Item | Question | Outcome |
 |---|---|---|

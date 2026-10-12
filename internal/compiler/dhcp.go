@@ -177,11 +177,12 @@ func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (k
 // mapped to its numeral, in one nftables map (`ident4`) instead of the Phase 1 per-device address
 // sets M6a-07 deferred replacing (`dev_<id>`, one `nft add set` and one verified object per
 // device). Known devices are configured devices, WireGuard clients and probes from the index, and
-// discovered devices from the observed state. A device's address change is then one incremental
-// element update of the single map (executor.NftAddMapElements/NftDelMapElements), the map
-// counterpart of what the old per-device sets already did one set at a time; a full apply fills it
-// from the latest observed state, like compileKea and compileRouting already do.
-func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity) {
+// discovered devices from the observed state. The map exists even while no device is known, and a
+// device keeps its numeral from one compile to the next (Input.DeviceNums, assignDeviceNums), so
+// a device's address change, a new device and a device that went are all element updates of the
+// single map (executor.NftAddMapElements/NftDelMapElements, plan §2.3); a full apply fills it from
+// the latest observed state, like compileKea and compileRouting already do.
+func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity, prev map[string]int, high int) {
 	addrs := map[string][]string{}
 	names := map[string]bool{}
 	for did := range idx.Devices {
@@ -202,25 +203,74 @@ func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity) {
 			}
 		}
 	}
-	if len(names) == 0 {
-		return
-	}
 	var ids []string
 	for did := range names {
 		ids = append(ids, did)
 	}
+	t.DeviceNums, t.DeviceNumHigh = assignDeviceNums(ids, prev, high)
 	sort.Strings(ids)
-	t.DeviceNums = map[string]int{}
 	md := MapDef{KeyType: []string{"ipv4_addr"}, ValueType: "mark"}
-	for num, did := range ids {
-		t.DeviceNums[did] = num + 1 // 0 is reserved for "no device"
+	for _, did := range ids {
+		num := strconv.Itoa(t.DeviceNums[did])
 		el := append([]string(nil), addrs[did]...)
 		sort.Strings(el)
 		for _, a := range el {
-			md.Elements = append(md.Elements, MapElement{Key: a, Value: strconv.Itoa(num + 1)})
+			md.Elements = append(md.Elements, MapElement{Key: a, Value: num})
 		}
 	}
 	md.Name = hashMapName("ident4", md.KeyType, md.ValueType, md.Flags)
 	t.identityMap = md
 	t.IdentityMap = md.Name
+}
+
+// MaxDeviceNum is the highest device number: the identity map's values are marks (32 bits), and the
+// bound keeps them in an int on every platform.
+const MaxDeviceNum = 1<<31 - 1
+
+// assignDeviceNums numbers the devices of the identity map from 1 (0 is "no device"). A device that
+// had a number in the previous allocation keeps it. A new device takes the number above the highest
+// one ever handed out (high, carried from compile to compile as Target.DeviceNumHigh), so the number
+// of a device that went is not given to another device while this process runs: an element of the
+// kernel that may still carry it (an apply that failed half-way, a later consumer of the map that
+// copies the number into packet or connection state) never names the wrong device. Only when the
+// numbers are used up does a new device take the lowest one no device has, preferring one the
+// previous allocation did not hold either. With no previous allocation (the first compile of a
+// process) the devices are numbered in the order of their ids.
+func assignDeviceNums(ids []string, prev map[string]int, high int) (map[string]int, int) {
+	sort.Strings(ids)
+	high = min(max(high, 0), MaxDeviceNum)
+	nums := make(map[string]int, len(ids))
+	used := map[int]bool{}
+	for _, d := range ids {
+		if n, had := prev[d]; had && n >= 1 && n <= MaxDeviceNum && !used[n] {
+			nums[d], used[n] = n, true
+			high = max(high, n)
+		}
+	}
+	prevUsed := map[int]bool{}
+	for _, n := range prev {
+		prevUsed[n] = true
+	}
+	lowest := func(avoidPrev bool) int {
+		for n := 1; n <= MaxDeviceNum; n++ {
+			if !used[n] && (!avoidPrev || !prevUsed[n]) {
+				return n
+			}
+		}
+		return 0
+	}
+	for _, d := range ids {
+		if _, done := nums[d]; done {
+			continue
+		}
+		var n int
+		if high < MaxDeviceNum {
+			high++
+			n = high
+		} else if n = lowest(true); n == 0 {
+			n = lowest(false)
+		}
+		nums[d], used[n] = n, true
+	}
+	return nums, high
 }

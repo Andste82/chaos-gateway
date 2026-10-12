@@ -3,7 +3,7 @@
     "revision": 3,
     "seq": 7
   },
-  "hash": "52165b9af022c437",
+  "hash": "9665cab14f12084e",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -42,6 +42,7 @@
       "nat": false
     }
   ],
+  "identity_map": "ident4_b89cfe",
   "classify_nets": "classify_nets_8743d6",
   "classify_maps": {
     "dev": "cls_dev_14ef7f",
@@ -261,6 +262,13 @@
         "flags": [
           "interval"
         ]
+      },
+      {
+        "name": "ident4_b89cfe",
+        "key_type": [
+          "ipv4_addr"
+        ],
+        "value_type": "mark"
       }
     ],
     "counters": [

@@ -1077,9 +1077,11 @@ applying a revision does to overlays" in "Overlays in the engine and over the AP
   `Expirer` (a timer on the injected clock that calls back) let the state owner schedule it. Nothing
   removes an overlay implicitly, so a write that arrives before the expiry command is ordered
   before it. `Reset(owner)` removes one owner's overlays (`nil`: all, for `?owner=all`; the caller
-  checks the scope), `Delete`, `Orphan(ids)` and `Retarget(moves, generation)` complete it.
+  checks the scope), `Delete`, `Orphan(ids, reason)` and `Retarget(moves, generation)` complete it.
   `Retarget` moves overlays between devices after a merge revision; two overlays that then share a
-  key keep the newer one (reason `merged`).
+  key keep the newer one (reason `merged`). `Move` moves named overlays by id (a commit-confirm
+  rollback undoes a merge's moves with it), and `Amend(change, checkpoints...)` makes a change in
+  checkpoints too, so a later `Restore` keeps it.
 - **What a revision does to overlays** (`domain/orphans.go`). `OrphanedOverlays(current, next,
   overlays)` lists the overlays that refer to an object of the current configuration that the next
   one lacks, with the JSON pointers of the deleted objects for `references[]`; the engine rejects the
@@ -1278,7 +1280,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   waiting writer gets `ErrApplyFailed` (`apply_failed` over the API), and a restore desired state is
   made, which supersedes everything converged since. The events of a change (`overlay_created`,
   `overlay_updated` with reason `replaced` or `moved`, `overlay_removed` with reason `deleted` or
-  `reset`, `overlay_expired` with reason `ttl` or `lease`, `overlay_orphaned`) go out when the change
+  `reset`, `overlay_expired` with reason `ttl` or `lease`, `overlay_orphaned`, with reason `rollback`
+  after a commit-confirm rollback) go out when the change
   is verified, with the generation it made, the actor and the subject; a change that is taken back
   never announced itself. Renewing a lease moves a deadline only: no generation, no event, no apply.
 - **Expiry** is the `overlay.Expirer` on the engine's injected clock: it arms one timer for the next
@@ -1362,6 +1365,35 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   orphans. Runs are not part of this yet (`aborted_runs` follows with M15). Tests:
   `internal/engine/overlays_revision_test.go`, `TestARevisionThatDeletesAReferencedObjectIsRefusedUnlessForced`
   in `internal/api/overlays_test.go`.
+- **What a commit-confirm rollback does to overlays** (P2-AUDIT-05, `owner.rollback`,
+  `rollbackOverlays` in `internal/engine/overlays_revision.go`). In the confirmation window overlays
+  are validated against the pending revision, which the kernel runs, so they can name what only that
+  revision has. A rollback (the confirmation timeout, an expired confirm, `Engine.Rollback`) settles
+  the overlays for the way back, in the desired state that restores the committed revision: the
+  overlays the pending revision's merge moved go back to the discovered device they were written for
+  (`startApply` keeps each move, overlay id with the device it came from, in the pending state;
+  `Store.Move`, `overlay_updated` with reason `moved`; an overlay that is gone by then is left
+  alone), then the
+  overlays that refer to an object of the pending configuration the committed one lacks are removed
+  (`domain.OrphanedOverlays(pending, committed, …)`, `overlay_orphaned` with reason `rollback` and the
+  `objects`). That covers an overlay written in the window for a device, network, group or custom
+  profile the revision added, also for the configured device a merge moved overlays to when the
+  committed configuration does not have it. The discovered devices the rule spares are those the
+  tracker has seen, resolved against the committed configuration, so a device the pending revision
+  adopted is discovered again and keeps its overlays. An activation of a profile that the committed
+  configuration gives a dns or tls part is removed the same way (P2-M11-05: a rollback cannot be
+  refused). A rollback needs no force and is never refused; the actor of its events is `system`.
+  Overlays a forced revision removed and those a merge replaced (`merged`) stay removed: their removal
+  was announced. Unlike a revision's own overlay changes, a rollback's are not taken back when an apply
+  fails, since the revision stays rolled back whatever the kernel does: they are made in every store
+  checkpoint the owner can restore (`Store.Amend`), and when the apply fails, their events still go out
+  for the overlays that had been announced (`overlayMark.kept`); the retry applies the restore without
+  them. The rollback also triggers an observation, so the identity follows the committed configuration.
+  Tests: `TestARollbackOrphansTheOverlaysOfADeviceOnlyThePendingRevisionHad`,
+  `TestARollbackMovesTheOverlaysOfARolledBackMergeBackToTheDiscoveredDevice`,
+  `TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved` (`overlays_revision_test.go`),
+  `TestARollbackThatGivesAnActivatedProfileBackItsDNSPartRemovesTheActivation` (`profiles_test.go`),
+  `TestAnUnconfirmedRevisionTakesItsOverlayChangesBackWithIt` (`internal/api/overlays_test.go`).
 - **Not in M8a:** applying the tc tree to the kernel (`apply.Apply` did not apply or verify `Target.TC`; the testbed tests installed it with the executor), in-place tc updates, make-before-break when a fault's id changes, and measurement tests of the impaired traffic. M8b does them: the reader, the normalizer and the executor's tc operations are under "tc state and tc operations (M8b)", the apply under "The tc tree in the apply (M8b)".
 
 ## tc state and tc operations (M8b)

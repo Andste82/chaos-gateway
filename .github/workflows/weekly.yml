@@ -27,12 +27,9 @@ jobs:
           tags: chaos-gateway-dev
           cache-from: type=gha,scope=dev
           cache-to: type=gha,scope=dev,mode=max
-      # Every testbed package but internal/engine: its measurement tests send thousands of probes through delays of
-      # 100 to 600 ms and need about 50 minutes under KVM; emulated they take many times that, more than a job's
-      # budget. They are covered with real timing by ci.yml and nightly.yml (KVM), and the emulated branches
-      # (!testbed.Accurate()) of the other packages are what this job is for. The engine package's emulated run is
-      # the persistent VM of the developer (docs/development.md, "Fast kernel loop"). The default test timeout of 20
-      # minutes is far too short for the emulated run (the first scheduled run hit it), hence the limits of nightly.yml.
+      # Every testbed package but internal/engine, which has a job of its own below (its run alone takes longer than
+      # the 100 minutes of this one). The default test timeout of 20 minutes is far too short for the emulated run (the
+      # first scheduled run hit it), hence the limits of nightly.yml.
       # The container runs as root on a checkout owned by the runner's user, so git refuses the repository and `go list`
       # fails on the VCS stamping; its empty output once made testvm fall back to ./..., engine included. Hence
       # -buildvcs=false, and the list is checked before the run: never empty, never with the engine package.
@@ -45,3 +42,26 @@ jobs:
               echo "the package list is empty or holds internal/engine: $pkgs" >&2; exit 1
             fi
             make test-vm ARGS="-no-kvm -test-timeout 100m -vm-timeout 3h $pkgs"'
+
+  testbed-engine-no-kvm:
+    name: testbed (level 1b, emulated, engine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
+      # The emulated branches (!testbed.Accurate()) of the engine package: the functional assertions of its measurement
+      # tests (M8b to M11), whose accuracy assertions run with real timing in ci.yml and nightly.yml (KVM). The package
+      # needs about 60 minutes under KVM and about 1.7 times that emulated on a hosted runner (run 38158196621 timed out
+      # at 100 minutes with the last slow test running, P2-AUDIT-14), hence a job of its own with room to spare.
+      - name: Run the engine's testbed tests in a VM, software emulation forced
+        run: |
+          docker run --rm -e GOFLAGS=-buildvcs=false -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
+            make test-vm ARGS="-no-kvm -test-timeout 200m -vm-timeout 4h30m ./internal/engine"

@@ -95,7 +95,13 @@ Things to know:
   nightly kernel matrix, measurement tests and level 2 actually run with real timing. `-no-kvm`
   forces software emulation even where `/dev/kvm` exists, so the emulated branches
   (`!testbed.Accurate()`) can be exercised on a KVM-capable machine too, not only implicitly on
-  the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that, on every testbed package but `internal/engine` (its measurement tests need about 50 minutes under KVM and many times that emulated; KVM runs of it are `ci.yml` and the nightly matrix, which have the same `-test-timeout 100m -vm-timeout 3h`).
+  the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that, in two jobs: every
+  testbed package but `internal/engine` (`-test-timeout 100m -vm-timeout 3h`, the limits of `ci.yml` and the
+  nightly matrix), and `internal/engine` alone (`-test-timeout 200m -vm-timeout 4h30m`). The engine job is where
+  the functional assertions of the engine's measurement tests (M8b to M11) run automatically: the package needs
+  about 60 minutes under KVM and about 1.7 times that emulated on a hosted runner, which did not fit into the
+  100 minutes it once shared with the other packages (P2-AUDIT-14). A hosted runner emulates much faster than
+  the VPS: the tests listed below as failing under emulation on the VPS pass there.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with
@@ -2181,6 +2187,12 @@ table netdev chaosgw_dup, one chain per interface of the tc tree, hook egress:
   and is dropped or limited like it. The flag is cleared on the original before the clone is made, so
   neither is copied again. The original and the copy are two packets of the class; the fault's named
   counters count the packet once (they count the classification), the queue statistics count both.
+  `TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults` shows it on the real kernel (P2-AUDIT-13): with
+  `{latency: 50ms, duplicate: 10%}` every copy arrives with the delay and the netem leaf of the class sends the
+  originals and the copies (emulated: 600 datagrams, 66 copies, the leaf sent 666, the earliest copy after 56 ms);
+  with `{loss: 100%, duplicate: 50%}` nothing arrives and the leaf drops the copies next to the datagrams (emulated:
+  154 copies next to 300). The probes keep the delays of the copies apart (`ProbeResult.UpCopies`, `DownCopies`).
+  The share of the copies and the medians are checked with native execution or KVM.
 - **Mark bit 21** was one of the reserved routing bits; the layout in plan §3.3 now names it. The fw
   filters of the classes mask it out (`MarkMask` is `0x1fff0`), and `TestTheDuplicationBitIsAReservedRoutingMarkBitThatNothingElseUses`
   pins that nothing else overlaps.
@@ -2650,7 +2662,7 @@ Real kernel (`engine/integration_tunnel_test.go`), run in the persistent VM with
 | `TestATunnelFaultImpairsEverythingInTheTunnelAndNothingElse` | the flows of two devices into the client's network and the flow the client's network starts are impaired in the directions of the fault (latency, loss); a flow to the server through the same interface and a flow from the client machine to the gateway's uplink address are not; the counters of both directions, the queues of both sides, the handshake goes on. Accuracy (§4.3) with `Accurate()`, the flakiness policy |
 | `TestE10TheDeviceFaultAndTheTunnelFaultOfTheClientAddUp` | E10: 40 ms of the device and 50 ms of the tunnel are 90 ms for the device's flow into the tunnel, 50 ms for another device through it, 40 ms for the device's flow to the server |
 | `TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse` | upload alone: the requests arrive, no answer; download alone: nothing arrives; both: nothing in any flow, the tunnel's ping included; flows outside unaffected; drops and counters; the tunnel returns by itself |
-| `TestAFlappingTunnelBlacksOutOnSchedule` | the toggles of both sides within `FlapTolerance`, the outages of the flow within the tolerance (accurate), whole outages of about the down time (emulated) |
+| `TestAFlappingTunnelBlacksOutOnSchedule` | the toggles of both sides within `FlapTolerance`, the outages of the flow within the tolerance (accurate), whole outages of about the down time (emulated; the emulated run is counted in toggles, below) |
 | `TestAClientThatMovesTakesItsTunnelFaultWithIt` | the client listens on another port: the poll finds it, the filters move, the flow is impaired again |
 | `TestTheIFBAndItsFiltersAreCreatedAndRemovedWithTheTunnelFaultsAndLeftoversAreCleanedUp` | a leftover IFB, tree and filter go with the first apply and the host's filter stays; the IFB comes with the first fault and goes with the last |
 | `TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay` | disable (peer off the interface, offline event), key mismatch (another key on the interface), block endpoint (the counter counts); each ends with its overlay and the tunnel returns; flows outside unaffected |
@@ -2668,6 +2680,13 @@ the functional ones passed, one run each unless said):
   were unchanged.
 - Flapping, 6 s up and 4 s down: outages of 3.8, 3.3, 3.9 and 2.85 s (probes every 50 ms); the toggles of both sides were one `tc`
   batch each. Before the toggles were one batch per interface, a toggle was 16 s late (six runs of the tool at about 2.5 s each).
+  The emulated run of the flapping tests is counted in toggles, not in probes (`emulatedFlapRun`, P2-AUDIT-14): it goes on until
+  the engine has committed two whole down phases after the first probe arrived. A fixed run of 700 probes 50 ms apart held only one
+  whole outage on an emulated hosted runner (weekly run 38158196621: one outage of 2.9 s, 58 of 700 lost), since there the sender
+  and the toggles fall behind their schedules by seconds: in the persistent VM on 2026-10-12 the sender sent 337 probes in 27 s
+  instead of 540, and the toggles of the tunnel test were committed 1.5 to 3.8 s late (one `tc` batch on six interfaces). With the
+  toggle-counted run both flapping tests passed there (outages of 3.35 and 4.15 s through the tunnel, 3.8 and 4.4 s for a device);
+  each test logs every toggle with its lateness.
 - The BGP link: the session went down and the routes were withdrawn, and came back after the blackout. The write of the overlay
   took 84 s on this machine (an emulated apply of the whole lab is that slow: a write of a device fault took 1 min 44 s next to
   2 min 20 s for the tunnel fault, the larger plan), so the blackout had held for most of the hold time when the write was answered;

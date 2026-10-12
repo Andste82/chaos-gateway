@@ -47,7 +47,8 @@ const (
 )
 
 // Reasons of a Change. Updated: ReasonReplaced, ReasonMoved. Removed: ReasonDeleted, ReasonReset,
-// ReasonMerged. Expired: ReasonTTL, ReasonLease.
+// ReasonMerged. Expired: ReasonTTL, ReasonLease. Orphaned: none for a forced revision, ReasonRollback
+// for a commit-confirm rollback.
 const (
 	ReasonReplaced = "replaced"
 	ReasonMoved    = "moved"
@@ -56,6 +57,7 @@ const (
 	ReasonMerged   = "merged"
 	ReasonTTL      = "ttl"
 	ReasonLease    = "lease"
+	ReasonRollback = "rollback"
 )
 
 // Change is one thing that happened to one overlay. Overlay is the state after a Created or
@@ -358,9 +360,10 @@ func (s *Store) Reset(owner *model.Owner) []Change {
 	return changes
 }
 
-// Orphan removes overlays whose target no longer exists (plan §2.1.1, a revision applied with
-// `force=true`). Ids that are not active are ignored.
-func (s *Store) Orphan(ids []uuid.UUID) []Change {
+// Orphan removes overlays whose target no longer exists (plan §2.1.1: a revision applied with
+// `force=true`, or a commit-confirm rollback to a configuration without the object). reason is the
+// changes' Reason ("" or ReasonRollback). Ids that are not active are ignored.
+func (s *Store) Orphan(ids []uuid.UUID, reason string) []Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var es []*entry
@@ -371,7 +374,7 @@ func (s *Store) Orphan(ids []uuid.UUID) []Change {
 	}
 	changes := make([]Change, 0, len(es))
 	for _, e := range sortedEntries(es) {
-		changes = append(changes, s.removeLocked(e, Orphaned, ""))
+		changes = append(changes, s.removeLocked(e, Orphaned, reason))
 	}
 	return changes
 }
@@ -496,31 +499,77 @@ func (s *Store) Retarget(moves map[string]string, gen int64) []Change {
 		if s.byID[e.ov.Id] != e {
 			continue // removed as the loser of an earlier move
 		}
-		to := moves[strings.ToLower(*e.ov.Target.Device)]
-		req := domain.CloneOverlayRequest(ptr(domain.RequestOf(&e.ov)))
-		dev := to
-		req.Target = &model.Scope{Device: &dev}
-		key, err := domain.OverlayKey(e.ov.Owner, &req)
-		if err != nil {
-			continue // cannot happen for an overlay the store accepted
-		}
-		if other := s.byKey[key]; other != nil && other != e {
-			if newerEntry(other, e) {
-				changes = append(changes, s.removeLocked(e, Removed, ReasonMerged))
-				continue
-			}
-			changes = append(changes, s.removeLocked(other, Removed, ReasonMerged))
-		}
-		if s.byKey[e.key] == e {
-			delete(s.byKey, e.key)
-		}
-		e.key = key
-		s.byKey[key] = e
-		e.ov.Target = req.Target
-		e.ov.Generation = gen
-		changes = append(changes, Change{Type: Updated, Overlay: s.viewLocked(e), Reason: ReasonMoved})
+		changes = append(changes, s.moveLocked(e, moves[strings.ToLower(*e.ov.Target.Device)], gen)...)
 	}
 	return changes
+}
+
+// Move is one overlay to move from one device to another (Store.Move).
+type Move struct {
+	ID uuid.UUID
+	// From is the device the overlay targets, To the one it targets after the move (UUIDs).
+	From, To string
+}
+
+// Move moves the named overlays, each from its device From to its device To, like Retarget: the id,
+// the UpdatedAt and the deadlines stay, the generation becomes gen, and of two overlays that then
+// share a key the newer one stays. An overlay that is gone or no longer targets From is left alone.
+// A commit-confirm rollback moves the overlays of a merge back with it: the reverse of the moves the
+// merge's Retarget made.
+func (s *Store) Move(moves []Move, gen int64) []Change {
+	if len(moves) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	to := map[uuid.UUID]string{}
+	var es []*entry
+	for _, m := range moves {
+		e := s.byID[m.ID]
+		if e == nil || e.ov.Target == nil || e.ov.Target.Device == nil || !strings.EqualFold(*e.ov.Target.Device, m.From) {
+			continue
+		}
+		if _, dup := to[m.ID]; !dup {
+			es = append(es, e)
+		}
+		to[m.ID] = m.To
+	}
+	var changes []Change
+	for _, e := range sortedEntries(es) {
+		if s.byID[e.ov.Id] != e {
+			continue // removed as the loser of an earlier move
+		}
+		changes = append(changes, s.moveLocked(e, to[e.ov.Id], gen)...)
+	}
+	return changes
+}
+
+// moveLocked makes the device to the target of an entry: an Updated change with reason "moved",
+// after the removal of the overlay it then shares a key with; or only the removal of the entry itself
+// when that other overlay is the newer one.
+func (s *Store) moveLocked(e *entry, to string, gen int64) []Change {
+	req := domain.CloneOverlayRequest(ptr(domain.RequestOf(&e.ov)))
+	dev := to
+	req.Target = &model.Scope{Device: &dev}
+	key, err := domain.OverlayKey(e.ov.Owner, &req)
+	if err != nil {
+		return nil // cannot happen for an overlay the store accepted
+	}
+	var changes []Change
+	if other := s.byKey[key]; other != nil && other != e {
+		if newerEntry(other, e) {
+			return []Change{s.removeLocked(e, Removed, ReasonMerged)}
+		}
+		changes = append(changes, s.removeLocked(other, Removed, ReasonMerged))
+	}
+	if s.byKey[e.key] == e {
+		delete(s.byKey, e.key)
+	}
+	e.key = key
+	s.byKey[key] = e
+	e.ov.Target = req.Target
+	e.ov.Generation = gen
+	return append(changes, Change{Type: Updated, Overlay: s.viewLocked(e), Reason: ReasonMoved})
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -536,7 +585,8 @@ func newerEntry(a, b *entry) bool {
 
 // Checkpoint is a copy of the store's content at one moment: the state owner takes one before it
 // changes the overlays and goes back to it when the change cannot be applied to the kernel
-// (Restore). Only Store.Renew changes one (the deadline of a lease), under the store's lock.
+// (Restore). Only Store.Renew (the deadline of a lease) and Store.Amend change one, under the
+// store's lock.
 type Checkpoint struct {
 	entries []entry
 	byID    map[uuid.UUID]int
@@ -566,5 +616,27 @@ func (s *Store) Restore(c *Checkpoint) {
 		e := c.entries[i]
 		s.byID[e.ov.Id] = &e
 		s.byKey[e.key] = &e
+	}
+}
+
+// Has reports whether the checkpoint holds the overlay.
+func (c *Checkpoint) Has(id uuid.UUID) bool {
+	_, ok := c.byID[id]
+	return ok
+}
+
+// Amend makes a change in checkpoints too, so that going back to one of them (Restore) keeps it:
+// change is called once per checkpoint with a store that holds the checkpoint's content, and what
+// that store holds afterwards becomes the checkpoint's content. It is for a change that holds
+// whatever becomes of the changes made before it (a commit-confirm rollback's), the way Renew keeps a
+// renewal. change moves and removes overlays; it does not write them.
+func (s *Store) Amend(change func(*Store), checkpoints ...*Checkpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range checkpoints {
+		tmp := &Store{clk: s.clk, newID: s.newID, max: s.max, stamp: s.stamp}
+		tmp.Restore(c)
+		change(tmp)
+		*c = *tmp.Checkpoint()
 	}
 }

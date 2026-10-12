@@ -423,7 +423,7 @@ func TestOrphanRemovesTheNamedOverlaysOnly(t *testing.T) {
 	f := newFixture(t)
 	a := f.put(admin, lat100).Overlay
 	b := f.put(admin, `{target: {network: IoT}, fault: {latency: 1ms}}`).Overlay
-	got := f.store.Orphan([]uuid.UUID{a.Id, uuid.New()})
+	got := f.store.Orphan([]uuid.UUID{a.Id, uuid.New()}, "")
 	if len(got) != 1 || got[0].Overlay.Id != a.Id || got[0].Type != Orphaned || got[0].Event() != "overlay_orphaned" {
 		t.Fatalf("%+v", got)
 	}
@@ -505,6 +505,67 @@ func TestRetargetKeepsTheNewerOfTwoOverlaysThatNowCollide(t *testing.T) {
 	}
 	if _, ok := f2.store.Get(newer.Id); !ok {
 		t.Fatal("the newer overlay must stay")
+	}
+}
+
+func TestMoveTakesTheNamedOverlaysBackOnlyWhileTheyStillTargetTheDevice(t *testing.T) {
+	f := newFixture(t)
+	discovered := uuid.NewString()
+	req := f.request(lat100)
+	req.Target = &model.Scope{Device: &discovered}
+	put, err := f.store.Put(admin, req, PutOptions{Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// an overlay written for the configured device itself is not part of the move
+	own := f.put(token("t"), lat100).Overlay
+	moved := f.store.Retarget(map[string]string{discovered: idESP}, 2)
+	if len(moved) != 1 {
+		t.Fatalf("%+v", moved)
+	}
+
+	got := f.store.Move([]Move{{ID: put.Overlay.Id, From: idESP, To: discovered}, {ID: uuid.New(), From: idESP, To: discovered}}, 3)
+	if len(got) != 1 || got[0].Type != Updated || got[0].Reason != ReasonMoved || got[0].Overlay.Id != put.Overlay.Id ||
+		*got[0].Overlay.Target.Device != discovered || got[0].Overlay.Generation != 3 || !got[0].Overlay.UpdatedAt.Equal(put.Overlay.UpdatedAt) {
+		t.Fatalf("%+v", got)
+	}
+	if o, _ := f.store.Get(own.Id); *o.Target.Device != idESP {
+		t.Errorf("the overlay of the configured device moved: %+v", o.Target)
+	}
+	// the key follows the move back: the discovered device's overlay is found under its own target again
+	req2 := f.request(lat100)
+	req2.Target = &model.Scope{Device: &discovered}
+	if again, err := f.store.Put(admin, req2, PutOptions{}); err != nil || again.Type != Updated || again.Overlay.Id != put.Overlay.Id {
+		t.Fatalf("%+v %v", again, err)
+	}
+	// a second move back finds the overlay no longer on the device it names: nothing happens
+	if got := f.store.Move([]Move{{ID: put.Overlay.Id, From: idESP, To: discovered}}, 4); len(got) != 0 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestAmendMakesAChangeInTheCheckpointsSoThatARestoreKeepsIt(t *testing.T) {
+	f := newFixture(t)
+	a := f.put(admin, lat100).Overlay
+	before := f.store.Checkpoint()
+	b := f.put(admin, `{target: {network: IoT}, fault: {latency: 1ms}}`).Overlay
+	after := f.store.Checkpoint()
+	if !before.Has(a.Id) || before.Has(b.Id) || !after.Has(b.Id) {
+		t.Fatal("Has")
+	}
+
+	orphan := func(s *Store) { s.Orphan([]uuid.UUID{a.Id}, ReasonRollback) }
+	f.store.Amend(orphan, before, after)
+	if got := f.store.Orphan([]uuid.UUID{a.Id}, ReasonRollback); len(got) != 1 || got[0].Reason != ReasonRollback {
+		t.Fatalf("%+v", got)
+	}
+	f.store.Restore(before)
+	if f.store.Len() != 0 {
+		t.Fatalf("the restore brought the amended overlay back: %+v", f.store.Overlays())
+	}
+	f.store.Restore(after)
+	if _, ok := f.store.Get(b.Id); !ok || f.store.Len() != 1 {
+		t.Fatalf("after %+v", f.store.Overlays())
 	}
 }
 

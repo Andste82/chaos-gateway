@@ -305,3 +305,77 @@ func DefaultClassLimit() int {
 	}
 	return DefaultClassLimitX86
 }
+
+// EffectiveClassLimit is the class limit an Input.ClassLimit of limit stands for: limit itself, or the
+// default of the architecture when it is not positive.
+func EffectiveClassLimit(limit int) int {
+	if limit <= 0 {
+		return DefaultClassLimit()
+	}
+	return limit
+}
+
+// InterfaceClasses is the number of tc classes an interface carries: what the class limit counts (the
+// fault classes and the default one).
+type InterfaceClasses struct {
+	Dev     string
+	Classes int
+}
+
+// ClassesPerInterface lists every interface that carries a tree of the target, the IFB device of the
+// tunnel faults included, with the classes it carries, sorted by interface. Empty when no fault needs a
+// class.
+func (t *Target) ClassesPerInterface() []InterfaceClasses {
+	var out []InterfaceClasses
+	for _, tr := range t.TCTrees() {
+		for _, d := range tr.Devs {
+			out = append(out, InterfaceClasses{Dev: d, Classes: tr.ClassesPerDevice()})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Dev < out[j].Dev })
+	return out
+}
+
+// FaultQueues is how many queues a winning fault creates (plan §2.4, D18): one per fault id, and an id
+// has a class with its queue in each direction the fault impairs.
+type FaultQueues struct {
+	// Layer is "overlay" or "config"; Source the UUID of the overlay or of the configured fault.
+	Layer  string
+	Source string
+	// Profile is the name of the activated profile when the fault is one of its parts.
+	Profile string
+	Scope   string
+	// Queues are the fault's ids: for a fault with a rate, an explicit queue limit or keep order one per
+	// matched device and one that the addresses no device owns share (D18), one otherwise.
+	Queues int
+}
+
+// Queues lists the winning faults that need tc classes with the number of queues each creates, sorted
+// by layer and source.
+func (t *Target) Queues() []FaultQueues {
+	idx := map[string]int{}
+	var out []FaultQueues
+	for _, f := range t.Faults {
+		if f.Upload == nil && f.Download == nil {
+			continue
+		}
+		base := f.Key
+		if i := strings.LastIndex(base, "@"); i >= 0 {
+			base = base[:i] // the per-device ids of one fault share the key before the device (Fault.Key)
+		}
+		i, ok := idx[base]
+		if !ok {
+			i = len(out)
+			idx[base] = i
+			out = append(out, FaultQueues{Layer: f.Layer, Source: f.Source, Profile: f.Profile, Scope: f.Scope})
+		}
+		out[i].Queues++
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Layer != out[j].Layer {
+			return out[i].Layer < out[j].Layer
+		}
+		return out[i].Source < out[j].Source
+	})
+	return out
+}

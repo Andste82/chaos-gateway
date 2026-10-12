@@ -100,6 +100,20 @@ func TestATunnelFaultHasAClassOnEachSideOfTheTunnelAndIsFoundByTheEndpointOfItsP
 	if !contains(tg.Interfaces, IFBDev) {
 		t.Errorf("the IFB is not assigned: %v", tg.Interfaces)
 	}
+	// what the preview counts: one queue, two classes on the IFB and on every interface (the default class and one)
+	if q := tg.Queues(); len(q) != 1 || q[0].Source != o.Id.String() || q[0].Queues != 1 || q[0].Scope != "tunnel of client rA" {
+		t.Errorf("queues %+v", q)
+	}
+	var withIFB bool
+	for _, c := range tg.ClassesPerInterface() {
+		withIFB = withIFB || c.Dev == IFBDev
+		if c.Classes != 2 {
+			t.Errorf("%+v", c)
+		}
+	}
+	if !withIFB {
+		t.Errorf("the IFB is not counted: %+v", tg.ClassesPerInterface())
+	}
 
 	// the output hook: one base chain, one lookup by peer address and port, a chain of the fault that writes id and
 	// direction and counts; the lookup chain of the traffic inside the tunnel knows nothing of it

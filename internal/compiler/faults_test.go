@@ -814,6 +814,38 @@ func TestARateLimitedNetworkOf250DevicesNeeds500Classes(t *testing.T) {
 	}
 }
 
+// What the preview shows of a target (P2-AUDIT-02): the queues of each winning fault, one per device and one shared for
+// a rate (D18) and one for a fault without, and the classes every interface of the tree carries.
+func TestTheQueuesOfEachFaultAndTheClassesOfEachInterfaceAreCounted(t *testing.T) {
+	w := newFaultWorld(t)
+	rate := w.overlay(`{target: {network: IoT}, fault: {latency: 100ms, rate: 2Mbit}}`, 0)
+	lab := w.overlay(`{target: {network: Lab}, fault: {upload: {latency: 30ms}}}`, 0)
+	tg := w.compile(nil)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	want := []FaultQueues{
+		{Layer: "overlay", Source: rate.Id.String(), Scope: "network IoT", Queues: 3},
+		{Layer: "overlay", Source: lab.Id.String(), Scope: "network Lab", Queues: 1},
+	}
+	if got := tg.Queues(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("queues %+v, want %+v (two devices and the shared queue for the rate)", got, want)
+	}
+	// three queues in two directions, one in one direction, and the default class
+	got := tg.ClassesPerInterface()
+	if len(got) != len(tg.TC.Devs) || len(got) == 0 {
+		t.Fatalf("%+v for the interfaces %v", got, tg.TC.Devs)
+	}
+	for i, c := range got {
+		if c.Dev != tg.TC.Devs[i] || c.Classes != 3*2+1+1 {
+			t.Errorf("%+v, want 8 classes on %s", c, tg.TC.Devs[i])
+		}
+	}
+	if q := w.compile(func(in *Input) { in.Overlays = nil }); len(q.Queues()) != 0 || len(q.ClassesPerInterface()) != 0 {
+		t.Errorf("without faults: %+v %+v", q.Queues(), q.ClassesPerInterface())
+	}
+}
+
 func TestMoreThan4095FaultIDsAreRefused(t *testing.T) {
 	w := newFaultWorld(t)
 	addrs := map[string][]string{}

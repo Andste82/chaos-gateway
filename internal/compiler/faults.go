@@ -477,10 +477,7 @@ func (t *Target) compileTC(in Input) {
 	if classes == 0 {
 		return
 	}
-	limit := in.ClassLimit
-	if limit <= 0 {
-		limit = DefaultClassLimit()
-	}
+	limit := EffectiveClassLimit(in.ClassLimit)
 	// every interface carries the default class and one class per active (id, direction)
 	if classes+1 > limit {
 		byKey := map[string]*Fault{}

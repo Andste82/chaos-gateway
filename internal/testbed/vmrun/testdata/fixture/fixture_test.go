@@ -7,6 +7,8 @@ package fixture
 import (
 	"os"
 	"testing"
+
+	"github.com/Andste82/chaos-gateway/internal/testbed"
 )
 
 func TestPasses(t *testing.T) {
@@ -26,6 +28,13 @@ func TestEmulationFlag(t *testing.T) {
 		if got := os.Getenv("CHAOSGW_TESTBED_EMULATED"); got != want {
 			t.Fatalf("CHAOSGW_TESTBED_EMULATED = %q, want %q", got, want)
 		}
+	}
+}
+
+// One line of the measurement record, when the runner asks for one (testbed.MeasurementsEnv).
+func TestRecordsAMeasurement(t *testing.T) {
+	if err := testbed.Measure(t, "fixture").Rate("download", 2e6, 2e6, 0.1); err != nil {
+		t.Fatal(err)
 	}
 }
 

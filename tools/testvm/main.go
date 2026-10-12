@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/preflight"
+	"github.com/Andste82/chaos-gateway/internal/testbed"
 	"github.com/Andste82/chaos-gateway/internal/testbed/vmrun"
 )
 
@@ -85,7 +87,12 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 	keep := fs.Bool("keep", false, "also keep a created work directory after a successful run")
 	allowSkip := fs.Bool("allow-skip", false, "allow skipped tests; otherwise any skip fails the run")
 	noKVM := fs.Bool("no-kvm", false, "force software emulation in VM mode even where /dev/kvm is available")
+	measurements := measurementsFlag(fs)
 	if err := fs.Parse(args); err != nil {
+		return vmrun.Config{}, "", err
+	}
+	record, err := absOrEmpty(*measurements)
+	if err != nil {
 		return vmrun.Config{}, "", err
 	}
 	pkgs := fs.Args()
@@ -96,7 +103,7 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 		Kernel: *kernel, Memory: *mem, CPUs: *cpus,
 		Tags: strings.Split(*tags, ","), Packages: pkgs, Run: *runRE,
 		TestTimeout: *testTimeout, VMTimeout: *vmTimeout, WorkDir: *work, Keep: *keep,
-		AllowSkip: *allowSkip, NoKVM: *noKVM,
+		AllowSkip: *allowSkip, NoKVM: *noKVM, Measurements: record,
 	}
 	return c, *mode, nil
 }
@@ -176,6 +183,10 @@ func runDirect(ctx context.Context, cfg vmrun.Config, stdout, stderr io.Writer) 
 		goArgs = append(goArgs, u.ImportPath)
 	}
 	cmd := exec.CommandContext(ctx, "go", goArgs...)
+	if cfg.Measurements != "" {
+		// go test runs each binary in its package's directory: the path is absolute (parseRunFlags)
+		cmd.Env = append(os.Environ(), testbed.MeasurementsEnv+"="+cfg.Measurements)
+	}
 	var out bytes.Buffer
 	cmd.Stdout = io.MultiWriter(stdout, &out)
 	cmd.Stderr = io.MultiWriter(stderr, &out)
@@ -275,6 +286,21 @@ func anotherTestvmRunning() (bool, error) {
 
 func parsePID(s string) (int, error) {
 	return strconv.Atoi(s)
+}
+
+// measurementsFlag is the -measurements flag of "run" and "vm run": the file the measurement record
+// of the run is appended to (plan §4.3), by default the one testbed.MeasurementsEnv names.
+func measurementsFlag(fs *flag.FlagSet) *string {
+	return fs.String("measurements", os.Getenv(testbed.MeasurementsEnv),
+		"append the measurement record of the accuracy assertions (one JSON line each) to this file; default $"+testbed.MeasurementsEnv)
+}
+
+// absOrEmpty makes a path absolute; empty stays empty.
+func absOrEmpty(p string) (string, error) {
+	if p == "" {
+		return "", nil
+	}
+	return filepath.Abs(p)
 }
 
 func envOr(key, def string) string {

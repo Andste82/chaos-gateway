@@ -2388,8 +2388,8 @@ overlay or revision whose MTU faults need an eighth table is refused with `capac
 
 **Where it is weaker than it looks** (decided by the maintainer on 2026-10-11, P2-M10-04).
 
-- The black hole drops in the classify chain (prerouting), before the access rules of M9 run in the forward chain (plan §2.4 says
-  access rules are evaluated first, but the classify chain is the one place that knows the winner without a mark bit, and mark
+- The black hole drops in the classify chain (prerouting), before the access rules of M9 run in the forward chain (plan §2.4 and the
+  spec's `explain` say access rules are evaluated first and name this as the one exception; the drop sits there because the classify chain is the one place that knows the winner without a mark bit, and mark
   bits 17-19 are the index of the seven mirror tables, so they cannot also carry black-hole sizes): a packet that
   is both too long and rejected by a rule (tcp reset, icmp unreachable) is dropped silently instead of being rejected, and its drop is counted by the MTU fault;
   drop rules are not affected (both drop). The alternative, a second lookup in the forward chain after the access rules, needs a

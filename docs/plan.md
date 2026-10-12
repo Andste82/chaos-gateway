@@ -329,7 +329,7 @@ A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a c
 - Faults act on **every packet**, including packets of connections that already existed when the fault was activated. Classification is therefore evaluated per packet, not cached per connection (see §3.3). Spike S10 confirmed this: with per-packet classification the first message after a change is affected, while conntrack-mark caching left the running connection on its old fault. Exception: redirect-based families (TLS, DNS redirect) change new connections only; activating a TLS case offers "also cut existing connections", and removing it resets the connections still held by the responder.
 - **Direction "both"** means separate parameters per direction. The UI shows them as a pair, and they can be set asymmetrically (e.g. upload 2 % loss, download 0 %).
 
-**Precedence between access rules and faults:** access rules are evaluated first. A dropped packet does not reach any fault. The preview (§2.14) shows the effective result for each selector.
+**Precedence between access rules and faults:** access rules are evaluated first. A dropped packet does not reach any fault. The preview (§2.14) shows the effective result for each selector. One exception (decided 2026-10-11, P2-M10-04): the black hole of an MTU fault drops its too-long packets in the classification chain (prerouting), before the access rules run in the forward chain, so a too-long packet that a reject or reset rule would refuse is dropped silently and counted by the MTU fault; a drop rule drops it either way.
 
 ## 2.5 Network Faults (L3/L4)
 

@@ -3024,7 +3024,8 @@ type ConfigFault struct {
 	// QueueLimit Packets, per device (D18). Default computed from latency × rate (plan §2.5).
 	QueueLimit *int `json:"queue_limit,omitempty"`
 
-	// Rate Per device (D18).
+	// Rate Per device (D18). At least 8 bit/s: the kernel limits in bytes per second, so a lower rate
+	// would not limit at all and is refused with `invalid_rate`. Decided by the maintainer on 2026-10-11.
 	Rate *Bitrate `json:"rate,omitempty"`
 
 	// Reorder Example: 0.5%
@@ -3667,7 +3668,11 @@ type Explanation struct {
 
 	// Faults One entry per family (families without candidates are omitted). The faults are resolved for the
 	// traffic whatever the access verdict is: they take effect only when the verdict is `allow`, because
-	// access rules are evaluated first and a refused packet reaches no fault (plan §2.4).
+	// access rules are evaluated first and a refused packet reaches no fault (plan §2.4). One exception:
+	// the black hole of an MTU fault (`mode: blackhole`) drops its too-long packets before the access
+	// rules run, so a too-long packet that a `reject` or `reset` rule would refuse is dropped silently
+	// and counted by the MTU fault, not by the rule (a `drop` rule drops it either way). Decided by the
+	// maintainer on 2026-10-11.
 	Faults []struct {
 		Family     FaultFamily `json:"family"`
 		Overridden *[]FaultRef `json:"overridden,omitempty"`
@@ -3813,7 +3818,8 @@ type FaultBody struct {
 	// QueueLimit Packets, per device (D18). Default computed from latency × rate (plan §2.5).
 	QueueLimit *int `json:"queue_limit,omitempty"`
 
-	// Rate Per device (D18).
+	// Rate Per device (D18). At least 8 bit/s: the kernel limits in bytes per second, so a lower rate
+	// would not limit at all and is refused with `invalid_rate`. Decided by the maintainer on 2026-10-11.
 	Rate *Bitrate `json:"rate,omitempty"`
 
 	// Reorder Example: 0.5%
@@ -4170,7 +4176,8 @@ type ImpairmentParams struct {
 	// QueueLimit Packets, per device (D18). Default computed from latency × rate (plan §2.5).
 	QueueLimit *int `json:"queue_limit,omitempty"`
 
-	// Rate Per device (D18).
+	// Rate Per device (D18). At least 8 bit/s: the kernel limits in bytes per second, so a lower rate
+	// would not limit at all and is refused with `invalid_rate`. Decided by the maintainer on 2026-10-11.
 	Rate *Bitrate `json:"rate,omitempty"`
 
 	// Reorder Example: 0.5%
@@ -4384,7 +4391,8 @@ type NetemParams struct {
 	// QueueLimit Packets, per device (D18). Default computed from latency × rate (plan §2.5).
 	QueueLimit *int `json:"queue_limit,omitempty"`
 
-	// Rate Per device (D18).
+	// Rate Per device (D18). At least 8 bit/s: the kernel limits in bytes per second, so a lower rate
+	// would not limit at all and is refused with `invalid_rate`. Decided by the maintainer on 2026-10-11.
 	Rate *Bitrate `json:"rate,omitempty"`
 
 	// Reorder Example: 0.5%
@@ -4577,15 +4585,20 @@ type Overlay struct {
 
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
-	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
-	// both directions (output and input hook, before connection tracking).
+	// down"); `key_mismatch` replaces the peer's public key on the gateway by a key derived from
+	// the overlay's id and the real key (no one holds its private key, and the same overlay always
+	// gives the same key, so a re-apply leaves the interface as it is), as if a rotated key was not
+	// deployed; `block_endpoint` drops the peer's encrypted UDP in both directions (output and
+	// input hook, before connection tracking).
 	//
 	// The overlay is `effective` while it changes something: the peer is on its interface, and
-	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
-	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
-	// dropped. A peer that is disabled in the configuration is not on its interface, so the
-	// overlay has nothing to change and shows `disabled`.
+	// for `block_endpoint` the IPv4 address and port the peer is reached at are known: the peer
+	// has connected once from an IPv4 endpoint, or the link's configured endpoint is an IPv4
+	// `address:port` (a host name is not resolved for this). A `block_endpoint` overlay counts
+	// the packets it dropped. A peer that is disabled in the configuration is not on its
+	// interface, so the overlay has nothing to change and shows `disabled`, as does a
+	// `block_endpoint` whose peer has no known IPv4 endpoint. Decided by the maintainer on
+	// 2026-10-11.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -4694,15 +4707,20 @@ type OverlayRequest struct {
 
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
-	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
-	// both directions (output and input hook, before connection tracking).
+	// down"); `key_mismatch` replaces the peer's public key on the gateway by a key derived from
+	// the overlay's id and the real key (no one holds its private key, and the same overlay always
+	// gives the same key, so a re-apply leaves the interface as it is), as if a rotated key was not
+	// deployed; `block_endpoint` drops the peer's encrypted UDP in both directions (output and
+	// input hook, before connection tracking).
 	//
 	// The overlay is `effective` while it changes something: the peer is on its interface, and
-	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
-	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
-	// dropped. A peer that is disabled in the configuration is not on its interface, so the
-	// overlay has nothing to change and shows `disabled`.
+	// for `block_endpoint` the IPv4 address and port the peer is reached at are known: the peer
+	// has connected once from an IPv4 endpoint, or the link's configured endpoint is an IPv4
+	// `address:port` (a host name is not resolved for this). A `block_endpoint` overlay counts
+	// the packets it dropped. A peer that is disabled in the configuration is not on its
+	// interface, so the overlay has nothing to change and shows `disabled`, as does a
+	// `block_endpoint` whose peer has no known IPv4 endpoint. Decided by the maintainer on
+	// 2026-10-11.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -5612,15 +5630,20 @@ type Step struct {
 
 	// Wireguard WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 	// `disable` removes the peer from the interface ("peer offline", for a link "link
-	// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-	// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
-	// both directions (output and input hook, before connection tracking).
+	// down"); `key_mismatch` replaces the peer's public key on the gateway by a key derived from
+	// the overlay's id and the real key (no one holds its private key, and the same overlay always
+	// gives the same key, so a re-apply leaves the interface as it is), as if a rotated key was not
+	// deployed; `block_endpoint` drops the peer's encrypted UDP in both directions (output and
+	// input hook, before connection tracking).
 	//
 	// The overlay is `effective` while it changes something: the peer is on its interface, and
-	// for `block_endpoint` the address the peer is reached at is known (the peer has connected
-	// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
-	// dropped. A peer that is disabled in the configuration is not on its interface, so the
-	// overlay has nothing to change and shows `disabled`.
+	// for `block_endpoint` the IPv4 address and port the peer is reached at are known: the peer
+	// has connected once from an IPv4 endpoint, or the link's configured endpoint is an IPv4
+	// `address:port` (a host name is not resolved for this). A `block_endpoint` overlay counts
+	// the packets it dropped. A peer that is disabled in the configuration is not on its
+	// interface, so the overlay has nothing to change and shows `disabled`, as does a
+	// `block_endpoint` whose peer has no known IPv4 endpoint. Decided by the maintainer on
+	// 2026-10-11.
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
@@ -5844,15 +5867,20 @@ type WaitConditionFor string
 
 // WireGuardAction WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
 // `disable` removes the peer from the interface ("peer offline", for a link "link
-// down"); `key_mismatch` replaces the peer's public key on the gateway by a random one,
-// as if a rotated key was not deployed; `block_endpoint` drops the peer's encrypted UDP in
-// both directions (output and input hook, before connection tracking).
+// down"); `key_mismatch` replaces the peer's public key on the gateway by a key derived from
+// the overlay's id and the real key (no one holds its private key, and the same overlay always
+// gives the same key, so a re-apply leaves the interface as it is), as if a rotated key was not
+// deployed; `block_endpoint` drops the peer's encrypted UDP in both directions (output and
+// input hook, before connection tracking).
 //
 // The overlay is `effective` while it changes something: the peer is on its interface, and
-// for `block_endpoint` the address the peer is reached at is known (the peer has connected
-// once, or the link names an endpoint). A `block_endpoint` overlay counts the packets it
-// dropped. A peer that is disabled in the configuration is not on its interface, so the
-// overlay has nothing to change and shows `disabled`.
+// for `block_endpoint` the IPv4 address and port the peer is reached at are known: the peer
+// has connected once from an IPv4 endpoint, or the link's configured endpoint is an IPv4
+// `address:port` (a host name is not resolved for this). A `block_endpoint` overlay counts
+// the packets it dropped. A peer that is disabled in the configuration is not on its
+// interface, so the overlay has nothing to change and shows `disabled`, as does a
+// `block_endpoint` whose peer has no known IPv4 endpoint. Decided by the maintainer on
+// 2026-10-11.
 type WireGuardAction struct {
 	Action WireGuardActionAction `json:"action"`
 

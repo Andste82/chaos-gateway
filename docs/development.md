@@ -957,10 +957,13 @@ also changes two things said here: the maps are interval maps, and an element `g
   traffic — management, updates, BIRD, the WireGuard underlay — is never touched here, unless a
   tunnel fault targets it from M10 onward.
 - **The lookup chain.** Four nftables verdict maps, most specific first: device+destination+port,
-  device+destination, device+port, device — the granularities the current domain model supports
-  without groups or networks. Group- and network-level selectors (plan §3.3 levels 5-10) need the
-  access-matrix/fault-resolution machinery M8a/M9 bring; M8a added them and kept the maps keyed by
-  address (P2-M7-02, below). Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
+  device+destination, device+port, device. These are all the levels: M8a added group, network and
+  global selectors by folding them into the entries of the sources they apply to (every device, and the
+  stretches of a network's addresses no device owns), not as levels of their own (P2-M8a-01, see
+  "Classification tables" in M8a), and kept the maps keyed by address (P2-M7-02, below). A
+  protocol-only selector ("all UDP", ICMP) gets no map keyed on `meta l4proto`: it becomes a level-3
+  element (level 1 with a destination) over the full port range of its protocol, `1-65535` for tcp and
+  udp and `0-65535` for ICMP, which has no ports (`domain.portSels`, `compiler.clsKey`). Each level's key is a concatenation of conntrack-original fields (`ipv4_addr`, `ipv4_addr`,
   `inet_proto`, `inet_service`, as needed) and its value is a verdict that jumps to a per-id chain
   (`mark_<id>`) and ends; a classification map cannot combine the lookup with the bitwise mark
   write in one nft statement (confirmed against the real `nft` parser), hence the extra indirection
@@ -1071,7 +1074,7 @@ applying a revision does to overlays" in "Overlays in the engine and over the AP
   random worlds. `uplink` is the complement of the known prefixes; hostnames are not in a table
   (their addresses exist at run time only, M20) and are listed in `Table.Unresolved`. Group and
   network scopes are folded into the tables of the sources they apply to, and not given lookup levels of
-  their own as plan §3.3 can be read: the winner of a key can come from any scope, and that is what makes the
+  their own as plan §3.3 first described them (amended to the four levels, P2-AUDIT-03): the winner of a key can come from any scope, and that is what makes the
   precedence rules (D24, E1) hold with a first-match lookup (with separate levels an overlay at a less
   specific scope could never override a more specific configured fault). The price is map size (devices
   times entries instead of one entry per network); if that turns out too large, a device's entries that

@@ -1587,6 +1587,24 @@ func (e PreflightReportStatus) Valid() bool {
 	}
 }
 
+// Defines values for PreviewQueuesLayer.
+const (
+	PreviewQueuesLayerConfig  PreviewQueuesLayer = "config"
+	PreviewQueuesLayerOverlay PreviewQueuesLayer = "overlay"
+)
+
+// Valid indicates whether the value is a known member of the PreviewQueuesLayer enum.
+func (e PreviewQueuesLayer) Valid() bool {
+	switch e {
+	case PreviewQueuesLayerConfig:
+		return true
+	case PreviewQueuesLayerOverlay:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PreviewFaultLayer.
 const (
 	PreviewFaultLayerConfig  PreviewFaultLayer = "config"
@@ -2779,10 +2797,17 @@ type Capabilities struct {
 
 	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
 	Features []string `json:"features"`
-	Limits   *struct {
+
+	// Limits The capacity limits of this gateway (plan §3.3); a change above one is `capacity_exceeded`.
+	Limits *struct {
+		// ClassLimitPerInterface tc classes one interface may carry, the default class included, as this gateway enforces it (by default 1000 on x86-64 and 200 on arm64).
+		//
+		// Example: 1000
 		ClassLimitPerInterface *int `json:"class_limit_per_interface,omitempty"`
 
-		// FaultIds Example: 4095
+		// FaultIds Fault ids in use at the same time (the mark layout).
+		//
+		// Example: 4095
 		FaultIds *int `json:"fault_ids,omitempty"`
 	} `json:"limits,omitempty"`
 	OverlayKinds []OverlayKind `json:"overlay_kinds"`
@@ -4788,7 +4813,9 @@ type PreflightReportStatus string
 type Preview struct {
 	Base *int64 `json:"base,omitempty"`
 
-	// Capacity tc classes per interface after the change.
+	// Capacity tc classes per interface after the change: every interface that carries a tree (the IFB device of the tunnel
+	// faults included), with the default class, against the limit per interface (`class_limit_per_interface` of
+	// the capabilities). Absent when no fault needs a class; a change above the limit is `capacity_exceeded`.
 	Capacity *[]struct {
 		Classes   int    `json:"classes"`
 		Interface string `json:"interface"`
@@ -4809,17 +4836,30 @@ type Preview struct {
 		Nftables *string `json:"nftables,omitempty"`
 		Routes   *string `json:"routes,omitempty"`
 		Services *string `json:"services,omitempty"`
-		Tc       *string `json:"tc,omitempty"`
+
+		// Tc The tc trees per interface, one object per line led by the interface (`br-iot: qdisc 12: parent 1:12 netem …`):
+		// the HTB root, the classes, the netem leaves with their parameters and the filters, and the ingress filters of
+		// the tunnel faults (`wan0 ingress: …`). Seeds, counters and the values the kernel derives are left out.
+		Tc *string `json:"tc,omitempty"`
 
 		// Wireguard Without private keys.
 		Wireguard *string `json:"wireguard,omitempty"`
 	} `json:"linux"`
 
-	// Queues Queues per scope created by per-device rate or queue limits (D18).
+	// Queues The queues each winning fault (or part of an activated profile) creates after the change (plan §2.4, D18): with a
+	// rate, an explicit queue limit or keep order one per matched device plus one that the addresses no device owns
+	// share, otherwise one. Each has a class in every direction the fault impairs. Absent when no fault needs a class.
 	Queues *[]struct {
-		Fault  *string `json:"fault,omitempty"`
-		Queues *int    `json:"queues,omitempty"`
-		Scope  *string `json:"scope,omitempty"`
+		// Fault Overlay id or configured fault id.
+		Fault Uuid               `json:"fault"`
+		Layer PreviewQueuesLayer `json:"layer"`
+
+		// Profile Name of the activated profile when the fault is one of its parts.
+		Profile *string `json:"profile,omitempty"`
+		Queues  int     `json:"queues"`
+
+		// Scope Where it applies, in words (`network IoT`).
+		Scope string `json:"scope"`
 	} `json:"queues,omitempty"`
 
 	// References Active overlays and runs that applying would orphan (needs `force=true`).
@@ -4839,6 +4879,9 @@ type Preview struct {
 		Path    *string `json:"path,omitempty"`
 	} `json:"warnings,omitempty"`
 }
+
+// PreviewQueuesLayer defines model for Preview.Queues.Layer.
+type PreviewQueuesLayer string
 
 // PreviewFault defines model for PreviewFault.
 type PreviewFault struct {

@@ -111,7 +111,22 @@ type Preview struct {
 	// References are the active overlays the revision would orphan: applying it needs force, which
 	// removes them. The target is compiled without them.
 	References []OverlayReference
+	// Capacity are the tc classes of every interface that carries a tree after the change, against the
+	// class limit (plan §3.3); empty when no fault needs a class.
+	Capacity []InterfaceCapacity
+	// Queues are the queues each winning fault creates (plan §2.4, D18).
+	Queues []compiler.FaultQueues
 }
+
+// InterfaceCapacity is the number of tc classes an interface carries and the limit it may carry.
+type InterfaceCapacity struct {
+	compiler.InterfaceClasses
+	Limit int
+}
+
+// ClassLimit is the number of tc classes one interface may carry: the configured limit or the default of
+// the architecture (plan §3.3).
+func (e *Engine) ClassLimit() int { return compiler.EffectiveClassLimit(e.cfg.ClassLimit) }
 
 // PreviewRule is a rule of the effective list a preview shows.
 type PreviewRule struct {
@@ -173,6 +188,10 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 		p.Problems = append(append([]compiler.Problem(nil), p.Problems...), compiler.Problem{Severity: compiler.SevError, Code: compiler.CodeUnsupported, Message: err.Error()})
 	}
 	p.Rules = previewRules(tg.Access, snap.Access)
+	for _, c := range tg.ClassesPerInterface() {
+		p.Capacity = append(p.Capacity, InterfaceCapacity{InterfaceClasses: c, Limit: e.ClassLimit()})
+	}
+	p.Queues = tg.Queues()
 	if tg.HasErrors() {
 		return p, nil
 	}

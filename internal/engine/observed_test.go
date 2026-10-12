@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"sort"
@@ -271,7 +272,8 @@ func (h *harness) deviceSetElements(dev string) string {
 func (h *harness) tryDeviceSetElements(dev string) (string, bool) {
 	h.t.Helper()
 	s := h.e.Snapshot()
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity,
+		DeviceNums: s.DeviceNums, DeviceNumHigh: s.DeviceNumHigh})
 	num, ok := tg.DeviceNums[dev]
 	if !ok {
 		return "", false
@@ -390,56 +392,184 @@ func TestANewDeviceOfAPendingRevisionGetsItsAddressAtOnce(t *testing.T) {
 	}
 }
 
-// M6a-07 test: new devices appearing close together converge once, not once per appearance; the
-// second one waits for the window instead of running its own full apply immediately.
-func TestNewDevicesWithinTheWindowConvergeOnce(t *testing.T) {
+// elementOnly reports whether an nft document only adds and deletes elements of sets and maps: what
+// an identity update writes, as opposed to a full apply's transaction (tables, chains, flushes).
+func elementOnly(stdin string) bool {
+	var doc struct {
+		Nftables []map[string]map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal([]byte(stdin), &doc); err != nil || len(doc.Nftables) == 0 {
+		return false
+	}
+	for _, c := range doc.Nftables {
+		for verb, obj := range c {
+			if verb != "add" && verb != "delete" {
+				return false
+			}
+			for kind := range obj {
+				if kind != "element" {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// nftWrites splits the nft documents the kernel simulator took into element updates and the others
+// (a full apply's transaction).
+func nftWrites(rec *kernelCommands) (elements, full int) {
+	for _, c := range rec.all() {
+		if !strings.HasPrefix(c.argv, "nft -j -f") {
+			continue
+		}
+		if elementOnly(c.stdin) {
+			elements++
+		} else {
+			full++
+		}
+	}
+	return
+}
+
+// P2-AUDIT-01 test (plan §2.3, M7 scope "a new device is an element update too"): a device that
+// appears without faults of its own reaches the identity map with element operations alone, and a
+// second one right after it does too, without waiting for a window; one that leaves loses its
+// address the same way. The devices that were there keep their numbers throughout.
+func TestANewDeviceIsAnElementUpdateNotARebuild(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))
-	h.observe() // the first reading only learns, no device yet
+	cfgDev := neighbor("10.10.0.31", macCfg)
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev})
+	h.observe()
+	h.barrier()
+	numCfg := h.e.Snapshot().DeviceNums[devID]
+	if numCfg == 0 || h.deviceSetElements(devID) != "10.10.0.31" {
+		t.Fatalf("setup: %v", h.e.Snapshot().DeviceNums)
+	}
+	rec := h.recordCommands()
+	gen := h.e.Snapshot().Applied.Generation
 
 	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a2"
 	idX, idY := engine.DeviceID(macX), engine.DeviceID(macY)
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX)})
+	h.observe()
+	h.barrier()
+	if got, ok := h.tryDeviceSetElements(idX); !ok || got != "10.10.0.60" {
+		t.Fatalf("the new device is not in the identity map: %q", got)
+	}
+	numX := h.e.Snapshot().DeviceNums[idX]
+	// a second device in the same instant of the clock: no window holds it back
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	h.observe()
+	h.barrier()
+	if got, ok := h.tryDeviceSetElements(idY); !ok || got != "10.10.0.61" {
+		t.Fatalf("the second new device is not in the identity map: %q", got)
+	}
+	// X leaves: its address goes, its number stays its own
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.61", macY)})
+	h.observe()
+	h.barrier()
+	if got, ok := h.tryDeviceSetElements(idX); ok {
+		t.Errorf("the device that left still has %q in the identity map", got)
+	}
 
-	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX)})
+	s := h.e.Snapshot()
+	if s.DeviceNums[devID] != numCfg || s.DeviceNums[idX] != numX || s.DeviceNums[idY] == 0 || s.DeviceNums[idY] == numCfg || s.DeviceNums[idY] == numX {
+		t.Errorf("the numbers changed: %v (configured %d, X %d)", s.DeviceNums, numCfg, numX)
+	}
+	elements, full := nftWrites(rec)
+	if full != 0 || elements == 0 {
+		t.Errorf("the devices took %d full transactions and %d element updates, want only element updates", full, elements)
+	}
+	if s.Applied.Generation < gen+3 {
+		t.Errorf("three identity changes reached the kernel in %d generations", s.Applied.Generation-gen)
+	}
+}
+
+// M6a-07 test: new devices that take a full apply (each gets a queue of its own from a rate fault on
+// its network, D18) and appear close together converge once per window, not once per appearance:
+// the second one waits for the window instead of running its own full apply at once.
+func TestNewDevicesThatNeedAFullApplyConvergeOncePerWindow(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.mustPut(alice, "target: {network: IoT}\nfault: {rate: 2Mbit}")
+	cfgDev := neighbor("10.10.0.31", macCfg)
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev})
+	h.observe()
+	h.barrier()
+	// whatever the configured device's first address cost, the window after it has passed
+	h.clk.Advance(3 * time.Second)
+
+	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a2"
+	idX, idY := engine.DeviceID(macX), engine.DeviceID(macY)
+	rec := h.recordCommands()
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX)})
 	h.observe()
 	h.barrier()
 	if got := h.deviceSetElements(idX); got != "10.10.0.60" {
 		t.Fatalf("the first device did not converge at once: %q", got)
 	}
+	if _, full := nftWrites(rec); full != 1 {
+		t.Fatalf("the first device took %d full applies, want 1 (its own queue)", full)
+	}
 
 	// a second device appears in the same instant: it must not run its own full apply right away
-	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	rec = h.recordCommands()
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
 	h.observe()
+	time.Sleep(100 * time.Millisecond)
 	if _, ok := h.tryDeviceSetElements(idY); ok {
 		t.Fatal("the second device converged at once instead of waiting for the window")
 	}
-
-	// once the window elapses, the coalesced converge picks up the latest state, in one update
-	before := len(h.k.Commands())
-	h.clk.Advance(2 * time.Second)
-	var got string
-	for i := 0; i < 100; i++ {
-		h.barrier()
+	// once the window has passed, the held-back converge takes the latest state, in one full apply;
+	// not before: the clock moves in steps of 100 ms
+	var steps int
+	for steps = 1; steps <= 100; steps++ {
+		h.clk.Advance(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		if v, ok := h.tryDeviceSetElements(idY); ok && v == "10.10.0.61" {
-			got = v
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	if got != "10.10.0.61" {
+	h.barrier()
+	if got, _ := h.tryDeviceSetElements(idY); got != "10.10.0.61" {
 		t.Fatalf("the second device never converged: %q", got)
 	}
-	// a new device changes the set count, so this is a full apply (identityOps refuses it as
-	// non-incremental); what matters here is that it ran exactly once for both devices together,
-	// not once more on top of whatever X's own earlier appearance already did.
-	var loads int
-	for _, c := range h.k.Commands()[before:] {
-		if strings.HasPrefix(c, "nft -j -f") {
-			loads++
-		}
+	if steps < 20 {
+		t.Errorf("the second device converged after %d ms of the clock, before the window of 2 s", steps*100)
 	}
-	if loads != 1 {
-		t.Errorf("the coalesced converge loaded the ruleset %d times, want 1", loads)
+	if _, full := nftWrites(rec); full != 1 {
+		t.Errorf("the held-back converge loaded the ruleset %d times, want 1", full)
+	}
+	h.verifyKernelWithOverlays()
+}
+
+// An address change of a device that was there is never held back by the window, even while a full
+// apply for a new device waits for it: it converges at once, and the waiting device with it.
+func TestAnAddressChangeIsNotHeldBackByTheWindow(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.mustPut(alice, "target: {network: IoT}\nfault: {rate: 2Mbit}")
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.barrier()
+	h.clk.Advance(3 * time.Second)
+	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a2"
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg), neighbor("10.10.0.60", macX)})
+	h.observe()
+	h.barrier()
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg), neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	h.observe() // held back for the window
+
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.77", macCfg), neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	h.observe()
+	h.barrier() // no clock movement: this returns only if nothing waits for the window
+	if got := h.deviceSetElements(devID); got != "10.10.0.77" {
+		t.Errorf("the address change was held back: %q", got)
+	}
+	if got := h.deviceSetElements(engine.DeviceID(macY)); got != "10.10.0.61" {
+		t.Errorf("the waiting device did not converge with it: %q", got)
 	}
 }
 

@@ -1144,7 +1144,7 @@ Faults are random processes; tests use statistics, not exact values:
 
 - **Latency:** send N ≥ 200 probes, then compare the median with the configured delay (tolerance ±2 ms + 5 %) and the spread with the configured jitter.
 - **Loss:** send N ≥ 2000 packets. The measured loss must lie within the **99.9 %** binomial confidence interval of the configured rate.
-- **Flakiness policy:** a statistical assertion that fails is repeated once; only a second failure fails the test. With dozens of assertions per night, a 99 % interval alone would fail a run every few nights by chance. Measured distributions are stored per night, so drift shows up as a trend before it fails a test.
+- **Flakiness policy:** a statistical assertion that fails is repeated once; only a second failure fails the test. With dozens of assertions per night, a 99 % interval alone would fail a run every few nights by chance. Measured distributions are stored per night, so drift shows up as a trend before it fails a test: every accuracy assertion writes one JSON line per check (configured value, measured value, bounds, distribution, attempt, verdict) into the file `CHAOS_MEASUREMENTS` names, and every job of the nightly kernel matrix uploads it as the artifact `measurements-<kernel>`, kept for 90 days; `tools/measurements` compares the nights (`docs/development.md`, "The measurement record").
 - **Rate:** iperf3 throughput within ±10 % of the limit.
 - **Isolation:** every fault test also measures one unaffected device or traffic class. It must show no change.
 - **Timing:** scenario steps are timestamped by the event stream and checked against the schedule, with a tolerance.

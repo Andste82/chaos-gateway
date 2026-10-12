@@ -105,6 +105,46 @@ Things to know:
 - **Crashed direct runs.** `tools/testvm sweep` removes `tb...` namespaces a crashed `-mode
   direct` run left behind (level 1b always gets a fresh VM, so it is never affected). It refuses
   while another `testvm` or compiled test binary is running, unless `-force` is given.
+- **Measurement record.** `-measurements <file>` (of `run` in both modes and of `vm run`; default
+  `$CHAOS_MEASUREMENTS`) appends the measurement record of the run to the file: one JSON line per
+  check of every accuracy assertion (see "The measurement record" below). In VM mode the guest writes
+  it into the share and the runner appends it after the run, also after a failure or a timeout; the
+  file is created even when nothing was recorded (an emulated VM asserts no accuracy).
+
+### The measurement record
+
+Plan §4.3 asks for the measured distributions to be stored per night, so that drift shows up as a
+trend before it fails a test (P2-AUDIT-07, decided by the maintainer on 2026-10-12: a nightly
+artifact). Every accuracy assertion of the testbed tests checks through `testbed.Measure(t, flow)`:
+each check (`Latency`, `Unchanged`, `Spread`, `Delays`, `Loss`, `Share`, `BurstLoss`, `Flaps`, `Rate`,
+`Duration`, or `Record` for a test's own check) is the check of `internal/testbed/stats.go` and also
+appends one JSON line (`testbed.Measurement`) to the file `CHAOS_MEASUREMENTS` names: the test, the
+assertion (the name `testbed.Statistically` gives it), the flow, the direction, the quantity and its
+unit, the kernel, `accurate`, N, the configured value, the measured value, the bounds the check
+accepts, the median, 5th and 95th percentile of the delays where the check had them, the loss where it
+counted one, the attempt (1, or 2 for the repetition of the flakiness policy) and the verdict with the
+message of a failure. An attempt of `Statistically` that recorded nothing (the round-trip shares of
+the distribution tests in `internal/apply`) leaves one line with its verdict. Without the variable
+nothing is written.
+
+Where the record is kept:
+
+- **Nightly:** every job of the kernel matrix (`nightly.yml`, `testbed-matrix`) runs with
+  `-measurements measurements.jsonl` and uploads the file as the artifact `measurements-<kernel>`,
+  kept for 90 days; the job summary gives the number of lines and of failed checks.
+- **Every commit:** `ci.yml` uploads the record of level 1 (`measurements-level1`, native) and of
+  level 1b (`measurements-level1b`, KVM) the same way.
+- **Comparison:** `go run ./tools/measurements [-match REGEXP] [-tsv] FILE|DIR...` prints, for every
+  check, one line per run, oldest first: the value, its ratio to the configured value and where it
+  lies between the bounds (0 % the lower, 100 % the upper bound), with the last attempt and the
+  verdict. A directory stands for the `*.jsonl` files below it, so the artifacts of several nights
+  can be downloaded side by side and compared at once:
+
+```
+gh run list --workflow nightly.yml -L 10        # the nights
+gh run download <run id> -D nights/<date>       # each night into its own directory
+go run ./tools/measurements -match 'median delay' nights
+```
 
 ### Fast kernel loop (persistent VM)
 
@@ -129,7 +169,7 @@ make vm-down                                # power off; `-now` kills at once
 
 The same as `go run ./tools/testvm vm up|run|exec|status|down`. `vm up` takes `-kernel`, `-mem`,
 `-cpus` and `-no-kvm` (KVM is used where `/dev/kvm` exists); `vm run` takes the flags of `run`
-that make sense for a booted VM (`-run`, `-tags`, `-test-timeout`, `-keep`, `-allow-skip`).
+that make sense for a booted VM (`-run`, `-tags`, `-test-timeout`, `-keep`, `-allow-skip`, `-measurements`).
 `vm exec` takes `-timeout` and `-C <dir>` (default: the current directory; the guest sees the
 host's files at the same paths), and one argument is a shell command line, several are an
 argument vector.
@@ -1679,7 +1719,10 @@ overlay writes (`PutOverlay`), so the apply loop, the verify and the retirer are
   few percent, and the point is to tell a jitter from none and from a wrong one). An unaffected flow is "unchanged" when
   its median in each direction is within ±2 ms + 5 % of what the same flow measured before the fault and it lost
   nothing (plan §4.3 gives tolerances for the median, the loss and the rate only). Decided by the maintainer on 2026-10-11
-  (P2-M8b-06); the spread bounds can be tightened if nightly measurements on KVM show they are never near their limits.
+  (P2-M8b-06); the spread bounds can be tightened if nightly measurements on KVM show they are never near their limits:
+  the nightly artifacts `measurements-<kernel>` hold every spread with its bounds (`"quantity":"delay spread p5-p95"`,
+  "The measurement record" above; `go run ./tools/measurements -match spread <downloaded nights>` shows the position
+  of each between its bounds).
   `Statistically` is the flakiness policy: an attempt that
   fails is run once more (the attempt measures anew), only a second failure fails the test, and the
   message carries both measurements.

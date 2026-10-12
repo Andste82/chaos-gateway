@@ -393,6 +393,19 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 		up, down, iv, count = 6*time.Second, 4*time.Second, 50*time.Millisecond, 700
 	}
 	l.putTunnelFlapping(up, down)
+	gen := l.e.Snapshot().Generation
+	logFrom := len(l.logs.String())
+	defer func() {
+		// what held the engine, for a failure: its warnings and what made it apply, during the flapping
+		if !t.Failed() {
+			return
+		}
+		for _, line := range strings.Split(l.logs.String()[logFrom:], "\n") {
+			if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR") || strings.Contains(line, "apply") || strings.Contains(line, "toggl") {
+				t.Log(line)
+			}
+		}
+	}()
 	opts := testbed.ProbeOptions{Count: count, Interval: iv, Settle: settle()}
 	runB := l.bToServer.echo.Begin(l.bToServer.from, opts)
 	measure := func() testbed.ProbeResult { return l.toClient.run(t, opts) }
@@ -420,25 +433,8 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	if len(toggles) < 4 {
 		t.Fatalf("%d toggles in a run of %v: %+v", len(toggles), time.Duration(count)*iv, toggles)
 	}
+	skipped := checkFlapSchedule(t, toggles, up, down, appliesAfter(t, l.e, gen))
 	for i, c := range toggles {
-		if c.Down != (i%2 == 0) {
-			t.Errorf("toggle %d goes %v, the first one is the start of a blackout", i, c.Down)
-		}
-		if i > 0 {
-			want := down
-			if c.Down {
-				want = up
-			}
-			if got := c.Scheduled - toggles[i-1].Scheduled; got != want {
-				t.Errorf("toggle %d is scheduled %v after the previous one, want %v", i, got, want)
-			}
-		}
-		if c.Late() < 0 {
-			t.Errorf("toggle %d committed %v before its time", i, -c.Late())
-		}
-		if testbed.Accurate() && c.Late() > engine.FlapTolerance {
-			t.Errorf("toggle %d committed %v after its time, the tolerance is %v", i, c.Late(), engine.FlapTolerance)
-		}
 		if c.Devices < 2 {
 			t.Errorf("toggle %d changed the leaves on %d interfaces: the IFB or the tree was left out", i, c.Devices)
 		}
@@ -453,8 +449,8 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	for _, o := range outages {
 		if o.First > 0 && o.Last < res.Sent-1 {
 			whole++
-			if o.Len < down/2 || o.Len > 2*down {
-				t.Errorf("an outage of %v where %v is configured", o.Len, down)
+			if o.Len < down/2 || o.Len > 2*down+skipped {
+				t.Errorf("an outage of %v where %v is configured (%v of skipped cycles)", o.Len, down, skipped)
 			}
 		}
 	}

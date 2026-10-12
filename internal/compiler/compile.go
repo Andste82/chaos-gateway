@@ -58,6 +58,13 @@ type Input struct {
 	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
 	// stable while the winning fault stays the same"). Nil allocates from scratch.
 	FaultIDs map[string]int
+	// DeviceNums is the allocation of device numbers of the previous compile (Target.DeviceNums) and
+	// DeviceNumHigh the highest number handed out so far (Target.DeviceNumHigh): a device that is
+	// still known keeps its number, and a new one takes a number no device had, so a device that
+	// appears or goes changes only elements of the identity map (plan §2.3). Nil and 0 number the
+	// devices from scratch.
+	DeviceNums    map[string]int
+	DeviceNumHigh int
 	// PMTUTables is the allocation of mirror table indices of the previous compile (Target.PMTUTables):
 	// a size that is still in force keeps its table and the mark of its traffic.
 	PMTUTables map[int]int
@@ -187,13 +194,16 @@ type Target struct {
 	Kea *KeaTarget `json:"kea,omitempty"`
 	// IdentityMap is the nftables map that holds every known device's current addresses mapped to
 	// its numeral (plan §3.3): the single structure that replaces the Phase 1 per-device address
-	// sets (M6a-07), so a device's address change is one map-element update instead of a full apply.
+	// sets (M6a-07), so a device's address change, a new device and a device that went are
+	// map-element updates instead of a full apply. It exists also while no device is known.
 	IdentityMap string `json:"identity_map,omitempty"`
-	// DeviceNums maps a device (configured or discovered) to the small integer IdentityMap uses as
-	// its value for that device's addresses. Stable only within one Target: a device added or
-	// removed renumbers them, which is why a changed device set still needs a full apply.
-	DeviceNums  map[string]int `json:"device_nums,omitempty"`
-	identityMap MapDef
+	// DeviceNums maps a device (configured or discovered) to the integer IdentityMap uses as its
+	// value for that device's addresses: feed it back as Input.DeviceNums, so a device keeps its
+	// number while it is known. DeviceNumHigh is the highest number handed out so far (feed it back
+	// as Input.DeviceNumHigh); it is not part of the content (Hash).
+	DeviceNums    map[string]int `json:"device_nums,omitempty"`
+	DeviceNumHigh int            `json:"-"`
+	identityMap   MapDef
 	// FaultIDs is the allocation of fault ids by Fault.Key: feed it back as Input.FaultIDs.
 	FaultIDs map[string]int `json:"fault_ids,omitempty"`
 	// Faults are the fault ids in use, sorted by id: the winners of the impairment family with the
@@ -367,7 +377,7 @@ func Compile(in Input) *Target {
 	t.compileRouting(cfg, idx)
 	t.compileBird(cfg, idx)
 	t.compileKea(cfg, idx)
-	t.compileIdentity(idx, in.Identity)
+	t.compileIdentity(idx, in.Identity, in.DeviceNums, in.DeviceNumHigh)
 	t.compileFaults(in, idx)
 	t.compileAccess(in, idx)
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)

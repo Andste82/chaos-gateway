@@ -234,3 +234,109 @@ func TestAnAddressIsInTheIdentityMapOnce(t *testing.T) {
 		t.Errorf("the discovered device's sighting should not add its own entry (it lost to devA): %v", pairs)
 	}
 }
+
+// P2-AUDIT-01: a device keeps its number from one compile to the next when the previous allocation is
+// fed back (Input.DeviceNums, DeviceNumHigh), so a new device, even one whose id sorts before every
+// other, and a device that went change nothing but elements of the identity map: the map's name, the
+// other devices' numbers and every other part of the nft layout stay. A number that was handed out is
+// not given to another device in the same line of compiles.
+func TestADeviceKeepsItsNumberWhenAnotherOneAppearsOrGoes(t *testing.T) {
+	mac := []string{"02:00:00:00:00:31"}
+	cfg := loadConfig(t, "gateway.yaml")
+	addDevice(cfg, devA, model.Device{Name: "esp32-42", Identifiers: &model.DeviceIdentifiers{Macs: &mac}})
+	disc := func(id, ip string) domain.DiscoveredDevice {
+		return domain.DiscoveredDevice{ID: id, IPs: []netip.Addr{netip.MustParseAddr(ip)}}
+	}
+	identity := func(ds ...domain.DiscoveredDevice) *domain.Identity {
+		id := &domain.Identity{Addresses: map[string][]netip.Addr{devA: {netip.MustParseAddr("10.10.0.31")}}, Discovered: ds}
+		for _, d := range ds {
+			id.Addresses[d.ID] = d.IPs
+		}
+		return id
+	}
+	// ids around devA's in sort order: the first new one sorts before it, which renumbered devA before
+	early, late := "00000000-0000-4000-8000-000000000001", "ffffffff-0000-4000-8000-000000000001"
+	compile := func(prev *Target, id *domain.Identity) *Target {
+		in := Input{Config: cfg, Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}, Identity: id}
+		if prev != nil {
+			in.DeviceNums, in.DeviceNumHigh = prev.DeviceNums, prev.DeviceNumHigh
+		}
+		tg := Compile(in)
+		if tg.HasErrors() {
+			t.Fatalf("%+v", tg.Problems)
+		}
+		return tg
+	}
+	layout := func(tg *Target) string {
+		n := tg.Nft
+		n.Generation = ""
+		n.Maps = append([]MapDef(nil), n.Maps...)
+		for i := range n.Maps {
+			n.Maps[i].Elements = nil
+		}
+		b, _ := json.Marshal(n)
+		return string(b)
+	}
+
+	t1 := compile(nil, identity(disc(late, "10.10.0.60")))
+	if t1.DeviceNums[devA] != 1 || t1.DeviceNums[late] != 2 || t1.DeviceNumHigh != 2 {
+		t.Fatalf("the first compile numbers in the order of the ids: %v, high %d", t1.DeviceNums, t1.DeviceNumHigh)
+	}
+	t2 := compile(t1, identity(disc(late, "10.10.0.60"), disc(early, "10.10.0.70")))
+	if t2.DeviceNums[devA] != 1 || t2.DeviceNums[late] != 2 || t2.DeviceNums[early] != 3 || t2.DeviceNumHigh != 3 {
+		t.Fatalf("a new device renumbered the others: %v, high %d", t2.DeviceNums, t2.DeviceNumHigh)
+	}
+	if layout(t2) != layout(t1) {
+		t.Errorf("a new device changed more than map elements:\n%s\n%s", layout(t1), layout(t2))
+	}
+	if p := identityPairs(t2); len(p) != 3 || p["10.10.0.70"] != "3" || p["10.10.0.31"] != "1" || p["10.10.0.60"] != "2" {
+		t.Errorf("%v", p)
+	}
+	// late goes, and a third device appears: it does not take late's number
+	other := "cccccccc-0000-4000-8000-000000000001"
+	t3 := compile(t2, identity(disc(early, "10.10.0.70"), disc(other, "10.10.0.80")))
+	if _, still := t3.DeviceNums[late]; still || t3.DeviceNums[devA] != 1 || t3.DeviceNums[early] != 3 || t3.DeviceNums[other] != 4 {
+		t.Fatalf("%v", t3.DeviceNums)
+	}
+	if layout(t3) != layout(t1) {
+		t.Errorf("a device that went changed more than map elements")
+	}
+	// the highest number is carried even when the device that had it went
+	t4 := compile(t3, identity(disc(early, "10.10.0.70")))
+	t5 := compile(t4, identity(disc(early, "10.10.0.70"), disc(late, "10.10.0.60")))
+	if t4.DeviceNumHigh != 4 || t5.DeviceNums[late] != 5 {
+		t.Errorf("high %d, the returning device got %d", t4.DeviceNumHigh, t5.DeviceNums[late])
+	}
+	// no device at all: the map is there, empty, under the same name
+	t6 := Compile(Input{Config: loadConfig(t, "gateway.yaml"), Host: testbedHost(), Generation: Generation{Revision: 1, Seq: 1}})
+	if t6.IdentityMap != t1.IdentityMap || len(identityPairs(t6)) != 0 || !hasMap(t6, t6.IdentityMap) {
+		t.Errorf("without devices: map %q, pairs %v", t6.IdentityMap, identityPairs(t6))
+	}
+}
+
+func hasMap(tg *Target, name string) bool {
+	for _, m := range tg.Nft.Maps {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Once the numbers are used up, a new device takes the lowest free one, one the previous allocation
+// did not hold if there is any; a number out of range in the previous allocation is not kept.
+func TestDeviceNumbersAreReusedOnlyWhenNoneIsLeftAbove(t *testing.T) {
+	nums, high := assignDeviceNums([]string{"a", "b", "c"}, map[string]int{"a": MaxDeviceNum, "b": 1, "gone": 2}, MaxDeviceNum)
+	if nums["a"] != MaxDeviceNum || nums["b"] != 1 || nums["c"] != 3 || high != MaxDeviceNum {
+		t.Errorf("%v, high %d", nums, high)
+	}
+	nums, high = assignDeviceNums([]string{"a", "b"}, map[string]int{"a": -4, "b": MaxDeviceNum + 1}, 0)
+	if nums["a"] != 1 || nums["b"] != 2 || high != 2 {
+		t.Errorf("%v, high %d", nums, high)
+	}
+	// two devices that claim the same number: the first id keeps it
+	nums, _ = assignDeviceNums([]string{"b", "a"}, map[string]int{"a": 7, "b": 7}, 7)
+	if nums["a"] != 7 || nums["b"] != 8 {
+		t.Errorf("%v", nums)
+	}
+}

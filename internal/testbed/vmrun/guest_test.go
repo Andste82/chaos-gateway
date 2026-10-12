@@ -96,6 +96,15 @@ func TestGuestScriptMarksEmulation(t *testing.T) {
 	}
 }
 
+func TestGuestScriptAsksForTheMeasurementRecordOnRequest(t *testing.T) {
+	if s := GuestScript(GuestOptions{WorkDir: "/w", Measurements: true}, units()); !strings.Contains(s, "export CHAOS_MEASUREMENTS='/w/results/measurements.jsonl'\n") {
+		t.Errorf("the record is not asked for:\n%s", s)
+	}
+	if s := GuestScript(GuestOptions{WorkDir: "/w"}, units()); strings.Contains(s, "CHAOS_MEASUREMENTS") {
+		t.Errorf("a run without a record asks for one:\n%s", s)
+	}
+}
+
 func TestGuestScriptRunFilterIsQuoted(t *testing.T) {
 	s := GuestScript(GuestOptions{WorkDir: "/w", Run: "TestA|Test'B"}, units())
 	if !strings.Contains(s, `-test.run='TestA|Test'\''B'`) {

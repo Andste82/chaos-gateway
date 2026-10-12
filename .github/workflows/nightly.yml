@@ -120,4 +120,24 @@ jobs:
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
-            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h"
+            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl"
+      # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
+      # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the nights.
+      - name: Summarize the measurement record
+        if: always()
+        run: |
+          f=measurements.jsonl
+          if [ -f "$f" ]; then
+            echo "measurement record ($ARTIFACT): $(wc -l < "$f") lines, $(grep -c '"pass":false' "$f" || true) failed checks" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=No measurement record::$f is missing"
+          fi
+        env:
+          ARTIFACT: measurements-${{ matrix.kernel }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: measurements-${{ matrix.kernel }}
+          path: measurements.jsonl
+          retention-days: 90
+          if-no-files-found: warn

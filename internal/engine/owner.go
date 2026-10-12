@@ -820,11 +820,20 @@ func (o *owner) rollback(rev int64, reason string) error {
 		}
 		d := o.nextDesired(o.committed.Config, o.committed.Revision)
 		d.RolledBack = true
-		if len(changes) > 0 || len(kept) > 0 {
+		anyKept := false
+		for _, l := range kept {
+			anyKept = anyKept || len(l) > 0
+		}
+		if len(changes) > 0 || anyKept {
 			o.markOverlays(d.Generation, changes)
 			mark := &o.ov.marks[len(o.ov.marks)-1]
-			for _, ch := range kept {
-				mark.kept = append(mark.kept, ch.event(d.Generation))
+			mark.kept = make(map[*overlay.Checkpoint][]overlayEvent, len(kept))
+			for cp, l := range kept {
+				evs := make([]overlayEvent, 0, len(l))
+				for _, ch := range l {
+					evs = append(evs, ch.event(d.Generation))
+				}
+				mark.kept[cp] = evs
 			}
 		}
 		o.converge(d)

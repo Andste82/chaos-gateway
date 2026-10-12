@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
@@ -478,5 +483,145 @@ func TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved(t *testing.T) {
 	h.verifyKernelWithOverlays()
 	if got := collect(ch, engine.EventOverlayOrphaned); len(got) != 0 {
 		t.Errorf("the orphan was announced twice: %+v", got)
+	}
+}
+
+// holdThenFailExec holds the first nft write it sees once armed until resume is closed, lets it
+// through, and from then on the kernel refuses every nft write (failing, for the kernel's Fail hook).
+type holdThenFailExec struct {
+	inner           apply.Exec
+	entered, resume chan struct{}
+	armed, failing  atomic.Bool
+	once            sync.Once
+}
+
+func (b *holdThenFailExec) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	held := false
+	if b.armed.Load() {
+		for _, op := range ops {
+			if _, ok := op.(*executor.NftApply); ok {
+				b.once.Do(func() { held = true; close(b.entered); <-b.resume })
+				break
+			}
+		}
+	}
+	out, err := b.inner.Do(ctx, ops...)
+	if held {
+		b.failing.Store(true)
+	}
+	return out, err
+}
+
+// rollbackDuringAnOverlayWrite runs an overlay write (write, after the setup before) whose apply is
+// held when the pending revision, which adds the configured device, is rolled back; the write's apply
+// then succeeds and the rollback's fails. It returns the overlay events from the write on, in order,
+// and the snapshot after the failure.
+func rollbackDuringAnOverlayWrite(t *testing.T, before func(h *harness), write func(h *harness) error) ([]engine.Event, *engine.Snapshot) {
+	t.Helper()
+	h := newHarness(t)
+	be := &holdThenFailExec{inner: apply.Local{E: h.ex}, entered: make(chan struct{}), resume: make(chan struct{})}
+	e, err := engine.New(engine.Config{Store: h.st, Exec: be, Clock: h.clk, DHCP: &fakeDHCP{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e
+	t.Cleanup(e.Close)
+	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+		if be.failing.Load() && argv[0] == "nft" && stdin != "" {
+			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
+		}
+		return nil
+	}
+	h.mustApply(h.revision(nil))
+	h.observe()
+	r2 := h.revision(func(c *model.Configuration) { withDHCPAndDevice(c); lockoutChange(c) })
+	if a, err := h.apply(r2, engine.ApplyOptions{ConfirmTimeout: 30 * time.Second}); err != nil || a.Status != "pending_confirm" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	before(h)
+	h.barrier()
+	ch, cancel := h.e.Subscribe()
+	t.Cleanup(cancel)
+
+	be.armed.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- write(h) }()
+	<-be.entered
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+	if err := h.e.Rollback(ctx, r2); err != nil {
+		t.Fatal(err)
+	}
+	close(be.resume)
+	if err := <-done; err != nil {
+		t.Fatalf("the overlay write: %v", err)
+	}
+	s := h.barrier()
+	if s.LastError == "" {
+		t.Fatal("the rollback's apply did not fail")
+	}
+	var evs []engine.Event
+	for {
+		select {
+		case ev := <-ch:
+			if strings.HasPrefix(ev.Type, "overlay_") {
+				evs = append(evs, ev)
+			}
+		default:
+			return evs, s
+		}
+	}
+}
+
+func eventsOf(evs []engine.Event, id uuid.UUID) (out []string) {
+	for _, ev := range evs {
+		if ev.Data["overlay"] == id.String() {
+			r, _ := ev.Data["reason"].(string)
+			out = append(out, ev.Type+"/"+r)
+		}
+	}
+	return out
+}
+
+// A removal that was in flight when the rollback came and is verified before the rollback's apply
+// fails is announced once: the rollback's own removal of the overlay (it targets the device only the
+// rolled-back revision has) was made to a content that the verified removal replaced.
+func TestARemovalVerifiedBeforeAFailedRollbackIsAnnouncedOnce(t *testing.T) {
+	var x engine.OverlayResult
+	evs, s := rollbackDuringAnOverlayWrite(t,
+		func(h *harness) { x = h.mustPut(alice, deviceFault) },
+		func(h *harness) error {
+			_, err := h.e.DeleteOverlay(context.Background(), x.Overlay.Id, nil, model.Actor{})
+			return err
+		})
+	if got := eventsOf(evs, x.Overlay.Id); len(got) != 1 || got[0] != engine.EventOverlayRemoved+"/deleted" {
+		t.Errorf("the removal of the overlay was announced as %v, want once as deleted", got)
+	}
+	if len(s.Overlays) != 0 {
+		t.Errorf("overlays %v", overlayIDs(s.Overlays))
+	}
+}
+
+// An overlay written while the rollback came in and verified before the rollback's apply fails is
+// announced, and so is its removal by the rollback: the store goes back to the content with the
+// rollback made to it, which no longer has the overlay.
+func TestAWriteVerifiedBeforeAFailedRollbackHasItsRemovalAnnounced(t *testing.T) {
+	var w engine.OverlayResult
+	evs, s := rollbackDuringAnOverlayWrite(t, func(*harness) {},
+		func(h *harness) error {
+			var err error
+			w, err = h.put(alice, deviceFault)
+			return err
+		})
+	if got := eventsOf(evs, w.Overlay.Id); len(got) != 2 || got[0] != engine.EventOverlayCreated+"/" || got[1] != engine.EventOverlayOrphaned+"/rollback" {
+		t.Errorf("the overlay was announced as %v, want created, then orphaned by the rollback", got)
+	}
+	if len(s.Overlays) != 0 {
+		t.Errorf("overlays %v", overlayIDs(s.Overlays))
 	}
 }

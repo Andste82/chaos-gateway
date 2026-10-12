@@ -242,6 +242,10 @@ func TestReplacingARuleOverlayKeepsItsIdItsPlaceInTheKeyAndItsCounter(t *testing
 	h := startedWithRevision(t)
 	first := h.mustPut(alice, ruleIoT53)
 	r0 := h.e.Snapshot().Access.Rules[0]
+	e0 := h.e.Snapshot().RuleEpochs[r0.Key]
+	if e0 == 0 {
+		t.Fatalf("the new rule has no epoch: %v", h.e.Snapshot().RuleEpochs)
+	}
 	h.k.BumpCounter(r0.Counter, 41)
 	h.clk.Advance(time.Second)
 	second := h.mustPut(alice, "target: {network: IoT}\nrule: {protocol: udp, ports: [53], action: reject}")
@@ -255,9 +259,10 @@ func TestReplacingARuleOverlayKeepsItsIdItsPlaceInTheKeyAndItsCounter(t *testing
 	if v, _ := h.k.Counter(r0.Counter); v != 41 {
 		t.Errorf("the counter is %d: it must survive a replacement", v)
 	}
-	// the epoch of the counter did not change either
-	if s.RuleEpochs[r0.Key] != h.e.Snapshot().RuleEpochs[r0.Key] || s.RuleEpochs[r0.Key] == 0 {
-		t.Errorf("epochs %v", s.RuleEpochs)
+	// the epoch of the counter did not change either, although the replacement is a later generation
+	if s.Generation <= uint64(e0) || s.RuleEpochs[r0.Key] != e0 {
+		t.Errorf("the epoch is %d after the replacement in generation %d, %d before it: %v",
+			s.RuleEpochs[r0.Key], s.Generation, e0, s.RuleEpochs)
 	}
 	// a new body that selects other traffic is another overlay
 	other := h.mustPut(alice, "target: {network: IoT}\nrule: {protocol: udp, ports: [123], action: drop}")

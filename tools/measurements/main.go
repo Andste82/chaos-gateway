@@ -139,7 +139,7 @@ func read(path string) (runRecord, error) {
 	if err != nil {
 		return runRecord{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r := runRecord{file: path}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -461,7 +461,12 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	opts := testbed.ProbeOptions{Count: count, Interval: iv, Settle: settle()}
 	runB := b.echo.Begin(b.from, opts)
 	measure := func() testbed.ProbeResult { return a.run(t, opts) }
-	res := measure()
+	var res testbed.ProbeResult
+	if testbed.Accurate() {
+		res = measure()
+	} else {
+		res = emulatedFlapRun(t, r.e, a, opts, 2, up+down)
+	}
 	resB, err := runB.Stop()
 	if err != nil {
 		t.Fatal(err)
@@ -477,12 +482,8 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 		t.Fatalf("nothing got through in the up phases: %s", res)
 	}
 	// the engine's schedule: toggles of the upload and the download at start + up, + up + down, ...
-	var upload []engine.FlapChange
-	for _, c := range r.e.FlapLog() {
-		if strings.HasSuffix(c.Key, "|upload") {
-			upload = append(upload, c)
-		}
-	}
+	upload := uploadToggles(r.e)
+	logToggles(t, upload)
 	if len(upload) < 4 {
 		t.Fatalf("%d toggles of the upload in a run of %v: %+v", len(upload), time.Duration(count)*iv, upload)
 	}
@@ -525,7 +526,74 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 		}
 	}
 	if whole < 2 {
-		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d)", whole, len(outages), len(lost), res.Sent)
+		t.Errorf("%d complete outages in the run (%d outages, %d lost of %d; every run of losses: %v)", whole, len(outages), len(lost), res.Sent,
+			testbed.Outages(lost, iv, 1))
+	}
+}
+
+// uploadToggles are the toggles of the upload of the flapping faults, oldest first.
+func uploadToggles(e *engine.Engine) []engine.FlapChange {
+	var out []engine.FlapChange
+	for _, c := range e.FlapLog() {
+		if strings.HasSuffix(c.Key, "|upload") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// emulatedFlapRun is the probe run of a flapping test under emulation, counted in toggles rather than in
+// probes: it goes on until the engine has committed `downs` whole down phases (the toggle into the blackout
+// and the one out of it) after the first probe arrived, and one more probe has arrived after the last of
+// them, so that the run holds that many whole outages however far the sender and the toggles fall behind
+// their schedules. A run of a fixed number of probes did not: on an emulated hosted runner the 700 probes of
+// the tunnel test held one whole outage (P2-AUDIT-14). o.Count is ignored. The toggles are logged.
+func emulatedFlapRun(t *testing.T, e *engine.Engine, f flow, o testbed.ProbeOptions, downs int, cycle time.Duration) testbed.ProbeResult {
+	t.Helper()
+	o.Count, o.Src = 0, f.src
+	run := f.echo.Begin(f.from, o)
+	stop := func() testbed.ProbeResult {
+		res, err := run.Stop()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	wait := func(what string, limit time.Duration, done func() bool) {
+		deadline := time.Now().Add(limit)
+		for !done() {
+			if time.Now().After(deadline) {
+				res := stop()
+				t.Fatalf("%s: not within %v (%s; toggles %+v)", what, limit, res, uploadToggles(e))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	wait("the first probe of "+f.name, 2*time.Minute+2*cycle, func() bool { return run.Delivered() > 0 })
+	from := len(uploadToggles(e))
+	var whole int
+	wait(fmt.Sprintf("%d down phases during the run", downs), time.Duration(downs+2)*cycle*3, func() bool {
+		whole = 0
+		ts := uploadToggles(e)
+		for i := from + 1; i < len(ts); i++ {
+			if ts[i-1].Down && !ts[i].Down {
+				whole++
+			}
+		}
+		return whole >= downs
+	})
+	n := run.Delivered()
+	wait("a probe after the last down phase", 2*cycle, func() bool { return run.Delivered() > n })
+	res := stop()
+	t.Logf("%s, a run of %v for %d down phases: %s", f.name, run.Elapsed(), whole, res)
+	return res
+}
+
+// logToggles logs the toggles of the upload with how late each was committed, for a failure under emulation.
+func logToggles(t *testing.T, toggles []engine.FlapChange) {
+	t.Helper()
+	for i, c := range toggles {
+		t.Logf("toggle %d: down %v, scheduled at %v, committed %v late on %d interfaces", i, c.Down, c.Scheduled, c.Late(), c.Devices)
 	}
 }
 

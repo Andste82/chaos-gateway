@@ -377,7 +377,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `ports_require_protocol` | `ports`/`port_ranges` are set without `protocol` being `tcp` or `udp`. |
 | `invalid_port_range` | A port range's end comes before its start. |
 | `reset_requires_tcp` | An access rule's action `reset` is used with a protocol other than `tcp`. |
-| `cut_existing_requires_tcp` | `cut_existing` is set on a rule whose protocol is not `tcp`. |
+| `cut_existing_requires_tcp` | `cut_existing` is set on a rule whose protocol is neither `tcp` nor `any`. |
 | `duplicate_public_key` | A WireGuard public key (provided or generated) is already used by another peer. |
 | `invalid_key_settings` | A key setting needs generated keys (`export_once`, `generation`) but the mode is `provided`. |
 | `missing_field` | A field that a particular case, action or kind requires is absent. |

@@ -103,6 +103,7 @@ func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {
 	if !testbed.Accurate() {
 		burst = 4
 	}
+	// stream starts a sender; stop ends it and may be called more than once
 	stream := func(ns *testbed.Namespace, src, dst string) (stop func()) {
 		pc, err := testbed.ListenPacketIn(ns.Name, "udp4", src+":0")
 		if err != nil {
@@ -124,7 +125,12 @@ func TestAFlowKeepsItsClassificationWhileOtherFaultsAreWritten(t *testing.T) {
 				<-tick.C
 			}
 		}()
-		return func() { quit.Store(true); wg.Wait(); _ = pc.Close() }
+		var once sync.Once
+		stop = func() { once.Do(func() { quit.Store(true); wg.Wait(); _ = pc.Close() }) }
+		// a phase that fails half-way does not reach its stops: the sender and its socket (which
+		// holds the namespace) go before the bed is taken down
+		t.Cleanup(stop)
+		return stop
 	}
 	// phase runs the streams for d, and at least for minTx transactions, while churn (if not nil)
 	// switches the table, and returns what the counters counted in the phase and how many

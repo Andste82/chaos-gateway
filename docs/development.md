@@ -99,9 +99,14 @@ Things to know:
   testbed package but `internal/engine` (`-test-timeout 100m -vm-timeout 3h`, the limits of `ci.yml` and the
   nightly matrix), and `internal/engine` alone (`-test-timeout 200m -vm-timeout 4h30m`). The engine job is where
   the functional assertions of the engine's measurement tests (M8b to M11) run automatically: the package needs
-  about 60 minutes under KVM and about 1.7 times that emulated on a hosted runner, which did not fit into the
-  100 minutes it once shared with the other packages (P2-AUDIT-14). A hosted runner emulates much faster than
-  the VPS: the tests listed below as failing under emulation on the VPS pass there.
+  about 60 minutes under KVM and about 1.5 to 1.7 times that emulated on a hosted runner, which once ran into the
+  100-minute test timeout of the shared job (run 38158196621; P2-AUDIT-14). The first run of the engine job (run
+  38271140920, dispatched on the branch of P2-AUDIT-14, 2026-10-12, 1 h 40 min with the VM's boot) had 282 passed,
+  3 failed and 0 skipped: `TestAFlappingTunnelBlacksOutOnSchedule` (its first down phase lasted two cycles longer,
+  "What the persistent VM showed" below) and two of the known emulated failures listed
+  under "Fast kernel loop", `TestABurstOfNeighborChangesIsOneIdentityUpdate` (a cancelled apply, then a full one)
+  and `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (3.4 s for a bound of 3 s). A hosted runner
+  emulates faster than the VPS: the other tests of that list passed there.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with
@@ -2686,7 +2691,15 @@ the functional ones passed, one run each unless said):
   and the toggles fall behind their schedules by seconds: in the persistent VM on 2026-10-12 the sender sent 337 probes in 27 s
   instead of 540, and the toggles of the tunnel test were committed 1.5 to 3.8 s late (one `tc` batch on six interfaces). With the
   toggle-counted run both flapping tests passed there (outages of 3.35 and 4.15 s through the tunnel, 3.8 and 4.4 s for a device);
-  each test logs every toggle with its lateness.
+  each test logs every toggle with its lateness. The first weekly run of the engine job (38271140920) then failed the tunnel test
+  for another reason: the schedule skipped two whole cycles, the toggle back up was scheduled 24 s after the one into the blackout
+  instead of 4 s (every toggle was committed within 0.25 s of its time), so the flow saw one outage of 24 s. The flapper makes a
+  boundary that falls into an apply right after it, in the phase the clock says (`flap.go`), so an emulated apply that takes longer
+  than a phase skips the boundaries in between; whether an apply ran then is not known (the run logged neither the events nor the
+  engine's log). The emulated branch of both flapping tests now accepts a distance between toggles that is longer by whole cycles,
+  and an outage longer by them, only when an apply of a later generation than the flapping's own ran (`checkFlapSchedule`); the
+  tests log the applies and the changes that start one, and the tunnel test the engine's warnings and apply messages when it
+  fails. With native execution or KVM the schedule stays exact.
 - The BGP link: the session went down and the routes were withdrawn, and came back after the blackout. The write of the overlay
   took 84 s on this machine (an emulated apply of the whole lab is that slow: a write of a device fault took 1 min 44 s next to
   2 min 20 s for the tunnel fault, the larger plan), so the blackout had held for most of the hold time when the write was answered;

@@ -344,6 +344,18 @@ func (r Recorder) Rate(dir string, got, want, tolerance float64) error {
 	}, err)
 }
 
+// RateAtLeast checks that a throughput in bit/s is at least floor: a flow a rate limit must not hold.
+func (r Recorder) RateAtLeast(dir string, got, floor float64) error {
+	var err error
+	if got < floor {
+		err = fmt.Errorf("%s: %.2f Mbit/s, want at least %.2f Mbit/s", r.what(dir), got/1e6, floor/1e6)
+	}
+	return r.Record(dir, Measurement{
+		Quantity: "rate floor", Unit: "bit/s", N: 1,
+		Configured: floor, Value: got, Low: ptr(floor),
+	}, err)
+}
+
 // Duration checks that a time a test measured once (a convergence) lies within [lo, hi]; want is
 // the expected time.
 func (r Recorder) Duration(dir, quantity string, got, want, lo, hi time.Duration) error {

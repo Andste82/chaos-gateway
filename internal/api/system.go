@@ -125,14 +125,20 @@ func (s *Server) lastKnownGood() int64 {
 
 // GetCapabilities implements GET /capabilities.
 func (s *Server) GetCapabilities(c *gin.Context) {
-	c.JSON(200, model.Capabilities{
+	caps := model.Capabilities{
 		Version:       s.cfg.Version,
 		Features:      Features,
 		OverlayKinds:  engine.SupportedOverlayKinds,
 		FaultFamilies: engine.SupportedFaultFamilies,
 		StepTypes:     []string{},
 		CheckTypes:    []string{},
-	})
+	}
+	// the limits of plan §3.3: the ids the mark layout has, the classes the compiler accepts per interface
+	caps.Limits = &struct {
+		ClassLimitPerInterface *int `json:"class_limit_per_interface,omitempty"`
+		FaultIds               *int `json:"fault_ids,omitempty"`
+	}{ClassLimitPerInterface: ptr(s.cfg.Engine.ClassLimit()), FaultIds: ptr(compiler.MarkIDMax)}
+	c.JSON(200, caps)
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to

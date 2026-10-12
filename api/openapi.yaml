@@ -2832,7 +2832,11 @@ components:
           type: integer
           minimum: 10
           maximum: 8190
-          description: Default 1000 on x86-64, 200 on ARM64 (plan §3.3).
+          description: |
+            tc classes one interface may carry, the default class included (plan §3.3). Without it the limit is the
+            gateway's default, 1000 on x86-64 and 200 on ARM64. Faults beyond it are refused with
+            `capacity_exceeded`; the preview of a revision counts against the revision's own setting, and
+            `limits.class_limit_per_interface` of the capabilities reports the limit of the applied configuration.
         counter_poll_interval:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 1s

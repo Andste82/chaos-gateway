@@ -53,7 +53,8 @@ type Config struct {
 	// gateway's input rules let the management network and the services reach exactly this port.
 	DefaultUIPort int
 	// ClassLimit is the number of tc classes one interface may carry; 0 uses the compiler's default
-	// for the architecture (plan §3.3).
+	// for the architecture (plan §3.3). The configuration's setting class_limit_per_interface takes
+	// its place where it is set.
 	ClassLimit int
 	// RuleLimit is the number of access rules, overlay rules included, one compile accepts; 0 uses the
 	// compiler's default (plan §2.4, compiler.DefaultRuleLimit).

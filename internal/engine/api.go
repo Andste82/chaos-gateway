@@ -124,9 +124,22 @@ type InterfaceCapacity struct {
 	Limit int
 }
 
-// ClassLimit is the number of tc classes one interface may carry: the configured limit or the default of
-// the architecture (plan §3.3).
-func (e *Engine) ClassLimit() int { return compiler.EffectiveClassLimit(e.cfg.ClassLimit) }
+// ClassLimit is the number of tc classes one interface may carry under the applied configuration: its
+// setting class_limit_per_interface, else the engine's configured limit, else the default of the
+// architecture (plan §3.3).
+func (e *Engine) ClassLimit() int {
+	return compiler.EffectiveClassLimit(e.classLimitOf(e.Snapshot().Config))
+}
+
+// classLimitOf is the class limit a compile of cfg is given: the configuration's setting
+// class_limit_per_interface when it has one, else the engine's configured limit (0 for the default of the
+// architecture).
+func (e *Engine) classLimitOf(cfg *model.Configuration) int {
+	if cfg != nil && cfg.Settings != nil && cfg.Settings.ClassLimitPerInterface != nil && *cfg.Settings.ClassLimitPerInterface > 0 {
+		return *cfg.Settings.ClassLimitPerInterface
+	}
+	return e.cfg.ClassLimit
+}
 
 // PreviewRule is a rule of the effective list a preview shows.
 type PreviewRule struct {
@@ -189,7 +202,7 @@ func (e *Engine) Preview(ctx context.Context, rev int64) (*Preview, error) {
 	}
 	p.Rules = previewRules(tg.Access, snap.Access)
 	for _, c := range tg.ClassesPerInterface() {
-		p.Capacity = append(p.Capacity, InterfaceCapacity{InterfaceClasses: c, Limit: e.ClassLimit()})
+		p.Capacity = append(p.Capacity, InterfaceCapacity{InterfaceClasses: c, Limit: compiler.EffectiveClassLimit(e.classLimitOf(cfg))})
 	}
 	p.Queues = tg.Queues()
 	if tg.HasErrors() {

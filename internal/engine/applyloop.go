@@ -235,7 +235,7 @@ func allocationOf(s *Snapshot) allocation {
 func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, prev allocation, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
 		Overlays: overlays, FaultIDs: prev.faultIDs, PMTUTables: prev.pmtu, DeviceNums: prev.deviceNums, DeviceNumHigh: prev.deviceHigh,
-		RetiringIDs: retiring, ClassLimit: e.cfg.ClassLimit, RuleLimit: e.cfg.RuleLimit, FlapPhase: e.flap.phase}
+		RetiringIDs: retiring, ClassLimit: e.classLimitOf(cfg), RuleLimit: e.cfg.RuleLimit, FlapPhase: e.flap.phase}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()
 		// a holder WatchService last found dead, as opposed to merely not attached yet (M6b-02), is

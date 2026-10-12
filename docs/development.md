@@ -1378,10 +1378,13 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   `TestCoverageTellsAFaultThatWinsAllSomeOrNoneOfItsTraffic` in the compiler).
   `GET /capabilities` lists the overlay kinds and fault families of the build (see the milestone sections),
   and its `limits` the two capacity limits of plan §3.3: `fault_ids` (4095, the mark layout) and
-  `class_limit_per_interface` (`Engine.ClassLimit`: the engine's configured limit or the default of the
-  architecture, 1000 on x86-64 and 200 on arm64). `TestSystemEndpoints` checks both, also with a configured
-  limit (P2-AUDIT-15). The setting `settings.class_limit_per_interface` of the configuration is not read
-  by the engine: the limit is the engine's.
+  `class_limit_per_interface` (`Engine.ClassLimit`: the setting `settings.class_limit_per_interface` of the
+  applied configuration, else the engine's configured limit, else the default of the architecture, 1000 on
+  x86-64 and 200 on arm64). `TestSystemEndpoints` checks both, also with a configured limit (P2-AUDIT-15).
+  Every compile takes the setting of the configuration it compiles (`Engine.classLimitOf`), so a preview
+  counts a candidate's classes against the candidate's own limit; `engine.Config.ClassLimit` has no
+  production flag and is the tests' default (`TestTheClassLimitOfTheConfigurationIsTheOneEnforced`,
+  P2-AUDIT-17).
 - **`explain`** (`Engine.Explain`, `GET /explain`). It resolves one traffic tuple over the snapshot of
   the moment: the source (a device by name or UUID, configured or discovered, or an address that the
   identity maps to a device), the access verdict (`domain.World.AccessDecision` since M9: the

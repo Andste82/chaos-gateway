@@ -270,8 +270,8 @@ type overlayMark struct {
 	// events are published when the generation is verified: an event announces a state that holds.
 	events []overlayEvent
 	// kept are the events of a change that a failed apply does not take back (a commit-confirm
-	// rollback's, rollbackOverlays) about overlays that were announced: they are published when the
-	// apply fails too, since the state they announce holds either way.
+	// rollback's, rollbackOverlays), as made to the last verified content: they are published when
+	// the apply fails and the store goes back to that content, since the state they announce holds.
 	kept []overlayEvent
 }
 
@@ -655,14 +655,19 @@ func (o *owner) overlayChanged(changes []actedChange) {
 func (o *owner) markOverlays(gen uint64, changes []actedChange) {
 	mark := overlayMark{gen: gen, after: o.ov.store.Checkpoint()}
 	for _, ch := range changes {
-		data := overlayEventData(ch.Change, gen, ch.actor)
-		if len(ch.objects) > 0 {
-			data["objects"] = ch.objects
-		}
-		mark.events = append(mark.events, overlayEvent{typ: ch.Event(), data: data})
+		mark.events = append(mark.events, ch.event(gen))
 	}
 	o.ov.marks = append(o.ov.marks, mark)
 	o.ov.expirer.Rearm()
+}
+
+// event is the event that announces a change made in generation gen.
+func (ch actedChange) event(gen uint64) overlayEvent {
+	data := overlayEventData(ch.Change, gen, ch.actor)
+	if len(ch.objects) > 0 {
+		data["objects"] = ch.objects
+	}
+	return overlayEvent{typ: ch.Event(), data: data}
 }
 
 func overlayEventData(ch overlay.Change, gen uint64, actor model.Actor) map[string]any {

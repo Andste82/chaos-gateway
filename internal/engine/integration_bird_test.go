@@ -177,8 +177,12 @@ func (g *bgpGW) publicKeys() map[string]string {
 // establishedNow reports whether a dynamic routing session (BGP, OSPF or Babel) is up; the other
 // protocols BIRD lists (Kernel, Static, Device) are always "up" from the moment they start, which
 // is not the readiness this checks.
-func (g *bgpGW) establishedNow() bool {
-	ps, err := bird.ParseProtocols(birdc(g.t, g.gwSock, "show", "protocols", "all"))
+func (g *bgpGW) establishedNow() bool { return g.establishedAt(g.gwSock) }
+
+// establishedAt is establishedNow for the BIRD of the control socket sock (the gateway's or the
+// remote site's).
+func (g *bgpGW) establishedAt(sock string) bool {
+	ps, err := bird.ParseProtocols(birdc(g.t, sock, "show", "protocols", "all"))
 	if err != nil {
 		return false
 	}

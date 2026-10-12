@@ -19,9 +19,19 @@ func RemoteLinkLocal(v4 string) (string, bool) {
 	return netip.PrefixFrom(ll, 64).String(), true
 }
 
+// reconnectTimers are the timers of a BGP session after it failed, on both ends of a link. BIRD's
+// defaults are made for the internet, not for a link whose faults end: "error wait time 60, 300"
+// keeps a protocol whose hold timer expired from starting again, and from accepting the other
+// side's connection, for a minute (doubling with every further error), and "connect retry time 120"
+// lets an active side wait two minutes between attempts. A tunnel blackout longer than the hold time
+// ended with a session that stayed down for about a minute after the tunnel was back (P2-AUDIT-12);
+// with these the session is back within seconds of the end of the blackout.
+const reconnectTimers = "  connect retry time 5;\n  error wait time 1, 30;\n"
+
 // RenderRemote renders the BIRD configuration for the other end of a link: the gateway's roles
-// swapped, the same protocol and timers, and a place to announce the remote side's own prefixes.
-// remoteIface is the name of the tunnel interface on the remote machine.
+// swapped, the same protocol and timers (the reconnect timers included), and a place to announce
+// the remote side's own prefixes. remoteIface is the name of the tunnel interface on the remote
+// machine.
 func RenderRemote(c Config, p Protocol, remoteIface string) (string, error) {
 	if err := c.Check(); err != nil {
 		return "", err
@@ -43,7 +53,7 @@ func RenderRemote(c Config, p Protocol, remoteIface string) (string, error) {
 		if !p.BGP.Passive {
 			w("  passive on;\n")
 		}
-		w("  hold time %d;\n  keepalive time %d;\n  ipv4 { import all; export where proto = \"announce\"; };\n}\n", p.BGP.HoldTime, p.BGP.KeepaliveTime)
+		w("  hold time %d;\n  keepalive time %d;\n%s  ipv4 { import all; export where proto = \"announce\"; };\n}\n", p.BGP.HoldTime, p.BGP.KeepaliveTime, reconnectTimers)
 	case "ospf":
 		w("protocol kernel { ipv4 { import none; export where source ~ [ RTS_OSPF, RTS_OSPF_IA, RTS_OSPF_EXT1, RTS_OSPF_EXT2 ]; }; }\n\n")
 		w("protocol ospf v2 gateway {\n  ipv4 { import all; export where proto = \"announce\"; };\n  area %s {\n    interface %q { type ptp; hello %d; dead %d; };\n  };\n}\n", p.OSPF.Area, remoteIface, p.OSPF.HelloInterval, p.OSPF.DeadInterval)

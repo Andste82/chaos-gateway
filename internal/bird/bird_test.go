@@ -312,7 +312,10 @@ func TestRenderRemote(t *testing.T) {
 		}
 	}
 	bgp, _ := RenderRemote(c, c.Protocols[0], "wg0")
-	for _, want := range []string{"local 10.255.0.1 as 65002;", "neighbor 10.255.0.0 as 65001;", "passive on;", "hold time 9;"} {
+	// the reconnect timers of the gateway's side too: with BIRD's defaults the remote side refuses the gateway for a
+	// minute after a blackout longer than the hold time (P2-AUDIT-12)
+	for _, want := range []string{"local 10.255.0.1 as 65002;", "neighbor 10.255.0.0 as 65001;", "passive on;", "hold time 9;",
+		"connect retry time 5;", "error wait time 1, 30;"} {
 		if !strings.Contains(bgp, want) {
 			t.Errorf("the BGP side lacks %q:\n%s", want, bgp)
 		}

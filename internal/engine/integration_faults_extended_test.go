@@ -202,12 +202,13 @@ func expectCopiesInTheClass(t *testing.T, r *real, a flow, dup engine.OverlayRes
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A upload copies with a delay", res, measure, func(x testbed.ProbeResult) error {
+			orig, copies := testbed.Measure(t, "A"), testbed.Measure(t, "A copies")
 			return joinErrs(
-				testbed.CheckLatency("A upload copies", testbed.Median(x.UpCopies), delay),
+				copies.Latency("upload", x.UpCopies, delay),
 				// every copy, not only their median, within the latency tolerance (±2 ms + 5 %)
-				testbed.CheckDelays("A upload copies", x.UpCopies, delay-2*time.Millisecond, delay+2*time.Millisecond+delay/20),
-				testbed.CheckLatency("A upload originals", x.UpMedian(), delay),
-				testbed.CheckShare("A upload duplicates", "duplicated", x.UpDuplicates(), x.Sent, 0.10))
+				copies.Delays("upload", x.UpCopies, delay-2*time.Millisecond, delay+2*time.Millisecond+delay/20),
+				orig.Latency("upload", x.Up, delay),
+				orig.Share("upload", "duplicated", x.UpDuplicates(), x.Sent, 0.10))
 		})
 	}
 
@@ -239,7 +240,7 @@ func expectCopiesInTheClass(t *testing.T, r *real, a flow, dup engine.OverlayRes
 				t.Logf("A, upload loss 100 %% duplicate 50 %%, again: %s; %d copies dropped", x, n)
 			}
 			first = false
-			return testbed.CheckShare("A upload copies dropped by the leaf", "copied", n, x.Sent, 0.50)
+			return testbed.Measure(t, "A copies").Share("upload", "dropped by the leaf", n, x.Sent, 0.50)
 		})
 	}
 }

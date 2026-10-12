@@ -239,18 +239,24 @@ func (r Recorder) Spread(dir string, ds []time.Duration, jitter time.Duration) e
 	}, ds), CheckSpread(r.what(dir), ds, jitter))
 }
 
-// Delays is CheckDelays: Value is the share of ds outside [lo, hi], High the share allowed.
+// Delays is CheckDelays: Value is the share of ds outside [lo, hi], High the share allowed (1 %
+// rounded up to whole packets, as CheckDelays counts it). The hard limit and the number of delays
+// beyond it are in Extra.
 func (r Recorder) Delays(dir string, ds []time.Duration, lo, hi time.Duration) error {
-	out := 0
+	out, far := 0, 0
 	for _, d := range ds {
 		if d < lo || d > hi {
 			out++
 		}
+		if d < lo-DelayOutlierHard || d > hi+DelayOutlierHard {
+			far++
+		}
 	}
+	allowed := int(math.Ceil(DelayOutlierShare * float64(len(ds))))
 	m := WithDelays(Measurement{
 		Quantity: "delays outside bounds", Unit: "fraction", N: len(ds),
-		Value: frac(out, len(ds)), Low: ptr(0), High: ptr(DelayOutlierShare),
-		Extra: map[string]float64{"low_ms": ms(lo), "high_ms": ms(hi)},
+		Value: frac(out, len(ds)), Low: ptr(0), High: ptr(frac(allowed, len(ds))),
+		Extra: map[string]float64{"low_ms": ms(lo), "high_ms": ms(hi), "hard_limit_ms": ms(DelayOutlierHard), "beyond_hard_limit": float64(far)},
 	}, ds)
 	return r.Record(dir, m, CheckDelays(r.what(dir), ds, lo, hi))
 }

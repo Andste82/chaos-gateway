@@ -1,6 +1,7 @@
 package testbed
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -94,18 +95,27 @@ type reporter interface {
 // attempt's verdict when it recorded none.
 func Statistically(t reporter, what string, attempt func() error) bool {
 	t.Helper()
-	run := func(n int) error {
+	run := func(n int) (err error) {
 		a := &attemptLines{}
 		prev := openAttempt(t.Name(), a)
-		err := attempt()
-		closeAttempt(t.Name(), prev)
-		if len(a.lines) == 0 {
-			a.lines = append(a.lines, assertionLine(t, what, err))
-		}
-		for _, m := range a.lines {
-			m.Assertion, m.Attempt = what, n
-			writeMeasurement(t, m)
-		}
+		returned := false
+		// deferred, so that an attempt that stops the test (a helper's t.Fatal) still closes and
+		// leaves its lines: they are the lines of the failing run
+		defer func() {
+			closeAttempt(t.Name(), prev)
+			if !returned {
+				err = errors.New("the attempt stopped the test")
+			}
+			if len(a.lines) == 0 {
+				a.lines = append(a.lines, assertionLine(t, what, err))
+			}
+			for _, m := range a.lines {
+				m.Assertion, m.Attempt = what, n
+				writeMeasurement(t, m)
+			}
+		}()
+		err = attempt()
+		returned = true
 		return err
 	}
 	first := run(1)

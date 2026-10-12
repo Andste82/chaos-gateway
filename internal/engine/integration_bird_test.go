@@ -465,6 +465,17 @@ func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *test
 		return ""
 	}
 	before := since()
+	// BIRD keeps the time of the last state change on its monotonic clock and converts it to the wall
+	// clock at every "show protocols", so the same time can print 1 ms apart (seen on level 1b with KVM and
+	// in the emulated VM); a session that restarted shows a later time by far more than that
+	same := func(a, b string) bool {
+		ta, errA := time.Parse("15:04:05.000", a)
+		tb, errB := time.Parse("15:04:05.000", b)
+		if errA != nil || errB != nil {
+			return a == b
+		}
+		return ta.Sub(tb).Abs() <= 10*time.Millisecond
+	}
 	// changing the announce list and the import filter (not the protocol's own neighbor, AS or
 	// timers) reconfigures BIRD without ending the session
 	g.apply(func(c *model.Configuration) {
@@ -475,7 +486,7 @@ func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *test
 		p.Import = &model.ImportFilter{MaxPrefixes: &maxp, AllowedPrefixes: &[]model.PrefixFilterEntry{{Prefix: "10.60.0.0/22", MaxLength: &max24}}}
 		(*c.Routing.Protocols)[birdProtoID] = p
 	})
-	if got := since(); got != before {
+	if got := since(); !same(got, before) {
 		t.Errorf("the session restarted: since %s, was %s", got, before)
 	}
 	if !g.established(30 * time.Second) {
@@ -496,7 +507,7 @@ func TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused(t *test
 	if msg == "" || !strings.Contains(msg, "syntax error") {
 		t.Fatalf("the preview does not show BIRD's own syntax error message: %+v", p.Problems)
 	}
-	if got := since(); got != before {
+	if got := since(); !same(got, before) {
 		t.Errorf("the preview changed the running instance: %s", got)
 	}
 }

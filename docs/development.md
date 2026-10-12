@@ -2890,7 +2890,8 @@ A kernel other than the default is `make vm-down`, then `go run ./tools/testvm v
 **Accuracy assertions of M10, reviewed by hand before CI** (the persistent VM, 6.8.0-142, emulated: the 24 M10 tests of
 `internal/engine`, the gates and the other packages with testbed tests pass; the 55 other testbed tests of the engine package pass except
 `TestAConfigurationChangeKeepsTheSessionAndAnInvalidSnippetIsRefused`, which fails on `main` in the same VM with the same line, a
-1 ms difference in BIRD's "since" time). The assertions that run only with `Accurate()` are the shares of duplicates, reordered and
+1 ms difference in BIRD's "since" time; it showed once on level 1b with KVM too, and since 2026-10-12 the test takes two
+times within 10 ms as the same, since BIRD converts its monotonic time to the wall clock at every listing). The assertions that run only with `Accurate()` are the shares of duplicates, reordered and
 corrupted packets (99.9 % binomial interval, N of `impairedRun`), the Gilbert-Elliott losses and runs, the flapping toggles
 (`FlapTolerance`) and outages (`CheckFlaps`: tolerance plus two probe intervals, at least three complete outages in a 19 s run of a
 3 s up, 2 s down cycle), the tunnel latency and loss, the rate (±10 % of 2 Mbit/s), the BGP re-convergence bound (15 s, P2-AUDIT-12) and the BGP withdrawal bound (at most hold time

@@ -661,8 +661,12 @@ func TestWireGuardActionsCutTheTunnelAndEndWithTheirOverlay(t *testing.T) {
 // A blackout of the tunnel of a BGP link takes the learned routes away and brings them back, and the time it takes is reported
 // (plan §2.2.1, S15: "a tunnel blackout withdrew the routes after 6 s (hold time 9 s); after restore they were back in 2.5 s").
 // The session goes down after the hold time (9 s) has run out at the one side and the other, the route is withdrawn from the table
-// of the gateway, and the events of the routing poll carry the times. The figures are logged; the assertions are the bounds the
-// protocol timers give, wide for an emulated kernel.
+// of the gateway, and the events of the routing poll carry the times. The figures are logged and go into the measurement record;
+// the assertions are the bounds the protocol timers give, wide for an emulated kernel.
+//
+// The blackout ends only when the remote side has dropped the session too: that is the case in which BIRD's default error wait
+// (60 s, doubling) kept the remote side from accepting the gateway for a minute after the tunnel was back (P2-AUDIT-12: 39 to 56 s
+// under KVM). Both sides have the reconnect timers of bird.reconnectTimers, so the session is back within the bound below.
 func TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIsReported(t *testing.T) {
 	g := newBGP(t, 10, "10.60.0.0/24")
 	ch, cancel := g.e.Subscribe()
@@ -707,13 +711,28 @@ func TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIs
 	if max := answered.Sub(called) + limit; withdrawn.Sub(called) > max {
 		t.Errorf("withdrawn %v after the call, the write took %v and the hold time is %v", withdrawn.Sub(called), answered.Sub(called), hold)
 	}
-	if accurate := testbed.Accurate(); accurate && withdrawn.Sub(answered) > hold+5*time.Second {
-		t.Errorf("withdrawn %v after the answer of the write, the hold time is %v", withdrawn.Sub(answered), hold)
+	if testbed.Accurate() {
+		// within the hold time and a margin of the answer; S15's figure is about 6 s after the blackout began, which was before
+		// the answer
+		if err := testbed.Measure(t, "the BGP link site-b").Duration("", "withdrawal after the answer of the blackout",
+			withdrawn.Sub(answered), hold*2/3, 0, hold+5*time.Second); err != nil {
+			t.Error(err)
+		}
 	}
 	// the learned prefix is not reachable
 	if pingOK(g.top.A, "", testbed.SiteNetHost) {
 		t.Error("A reaches the site's network through a dead tunnel")
 	}
+	// the remote side's hold time runs out as well (its last keepalive from the gateway may have come up to a keepalive interval
+	// later than the gateway's last one from it)
+	deadline := time.Now().Add(limit)
+	for g.establishedAt(g.siteSock) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the remote side still has the session %v after the blackout was written\n%s", time.Since(called), birdc(t, g.siteSock, "show", "protocols", "all"))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Logf("the remote side dropped the session %.1f s after the call of the write", time.Since(called).Seconds())
 
 	// the end of the blackout: the session and the route come back; the time is the re-convergence
 	endCalled := time.Now()
@@ -731,7 +750,19 @@ func TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIs
 	}
 	t.Logf("re-convergence: the routes were back %.1f s after the call that ended the blackout and %.1f s after its answer; the session-up event came %.1f s after the call; the session was down for %.1f s",
 		back.Sub(endCalled).Seconds(), back.Sub(ended).Seconds(), up.Time.Sub(endCalled).Seconds(), up.Time.Sub(down.Time).Seconds())
-	if back.Sub(ended) > 90*time.Second {
+	// The bound follows from the timers of both sides (bird.reconnectTimers): the remote side, which waits for the gateway, starts
+	// again 1 s after its hold time ran out (error wait 1 s); the gateway makes a new attempt every 5 s (connect retry time) while the
+	// tunnel is dead, the kernel sends its SYN again 1 and 3 s into an attempt, and WireGuard, which has had no answer for more than
+	// 15 s, sends a new handshake every 5 s: at most 5 s for the tunnel and 5 s for the session, plus the exchange of OPEN, KEEPALIVE
+	// and UPDATE and the route in table 100. The blackout ended before the answer of the write, so the time from the answer is the
+	// shorter one. With BIRD's defaults on the remote side (error wait 60 s) this took 39 to 56 s under KVM (P2-AUDIT-12).
+	const reconvergence = 15 * time.Second
+	if testbed.Accurate() {
+		if err := testbed.Measure(t, "the BGP link site-b").Duration("", "re-convergence after the answer of the end of the blackout",
+			back.Sub(ended), 2500*time.Millisecond, 0, reconvergence); err != nil {
+			t.Errorf("%v\n%s", err, birdc(t, g.siteSock, "show", "protocols", "all"))
+		}
+	} else if back.Sub(ended) > 90*time.Second {
 		t.Errorf("re-convergence took %v after the blackout ended", back.Sub(ended))
 	}
 	if !pingOK(g.top.A, "", testbed.SiteNetHost) {

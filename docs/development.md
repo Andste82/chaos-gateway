@@ -248,8 +248,10 @@ forwarding before the apply returned, the ARP request never reaching `lan1`, and
 The measurement tests therefore wait for nothing before they measure. What `startFaultLab` still does
 first (`meetDevices`, `settleIdentity`) is for the identity, not for timing: the gateway meets every
 test device once, so that the engine has discovered them and applied the new identity map before a test
-compiles the snapshot and compares it with the kernel (a host the gateway meets for the first time takes
-a numeral in the identity map, which shifts the numerals of the others).
+compiles the snapshot and compares it with the kernel (a host the gateway meets for the first time adds
+its elements to the identity map; before P2-AUDIT-01 it also shifted the numerals of the others). A test
+that compiles the snapshot passes the snapshot's numbering along (`Snapshot.DeviceNums`,
+`DeviceNumHigh`), as the engine does with the last applied target.
 
 ## The executor
 
@@ -972,14 +974,42 @@ also changes two things said here: the maps are interval maps, and an element `g
 - **Identity map.** The Phase 1 per-device address sets (`dev_<id>`, M6a-07) are replaced by one
   nftables map, `ident4` (address → device number), built by `compileIdentity` from the same known
   devices (configured, WireGuard clients, probes, and discovered devices from the observed state) the
-  old per-device sets used. `DeviceNums` assigns each device a small stable number (0 reserved for
+  old per-device sets used. `DeviceNums` assigns each device a number (0 reserved for
   "no device"); the classification maps above are meant to be keyed on device number once group
   resolution needs it, but M7's own four maps still key on address directly, since without faults to
-  resolve there is nothing yet that must look a device number back up. A device's address change is
+  resolve there is nothing yet that must look a device number back up (P2-M7-02). A device's address change is
   now one incremental element update of this single map, the same way `applyloop.go`'s `identityOps`
   already diffed per-device sets one at a time in M6a: a changed key is deleted and re-added in the
   same incremental request (a map add refuses an existing key), a full apply still fills the map from
-  the latest observed state. `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
+  the latest observed state.
+  **Stable device numbers (P2-AUDIT-01, decided 2026-10-12 as option (a)).** M7 first numbered the
+  devices by their position in the sorted id list, so a new device renumbered the others and took a
+  full apply, throttled to one per two seconds. Now the apply loop hands the numbering of the last
+  applied target back to the compiler (`Input.DeviceNums`, like `Input.FaultIDs` for fault ids): a
+  device keeps its number while it is known, a new one takes the number above the highest one handed
+  out in this process (`Input.DeviceNumHigh`, carried across failed applies too), and a device that
+  goes frees its number without anyone taking it over. The reuse policy: a number is not handed to
+  another device while the process runs, so an element that may still carry it (an apply that failed
+  half-way; later, a consumer that copies the number into packet or connection state) never names the
+  wrong device; only when the 2^31 − 1 numbers are used up does a new device take the lowest free
+  one. The numbering is not persisted: nothing outside the identity map holds a device number today
+  (no rule reads the map's values, no mark or conntrack label carries one), so after a restart the
+  first full apply numbers the devices afresh in id order and replaces the map's elements by their
+  difference with the kernel, which is correct whatever the previous process had numbered. A
+  consumer that writes the number into state that outlives the process must persist the allocation
+  (or flush that state at start). The identity map exists also while no device is known, so the first
+  device and the last one that goes are element updates as well. `identityOps` therefore accepts a
+  device that came or went as long as every other device keeps its number and the fault structure is
+  unchanged: the new device's `ident4` elements, and its classification elements where a fault of its
+  group or network covers it, go in by element operations (no nft transaction but the element
+  transaction, `TestANewDeviceIsAnElementUpdateNotARebuild`, and on the real kernel within the 3 s of
+  P2-M7-03, `TestANewDeviceReachesTheIdentityMapWithoutAFullApply`). A new device still takes a full
+  apply when it changes the tc tree: a rate, queue limit or "keep order" on its group or network gives
+  it a queue of its own (D18). The window of M6a-07 (`identityConvergeWindow`, 2 s) now holds back only
+  that case: the owner converges every identity change at once, and the apply loop delays a full apply
+  that devices which came or went need until two seconds after the last one, taking the newest desired
+  state then (`TestNewDevicesThatNeedAFullApplyConvergeOncePerWindow`); an address change of a known
+  device is never held back (`TestAnAddressChangeIsNotHeldBackByTheWindow`). `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
   a full apply, since P2-M10-09 changed by their difference like a set, with the same object-cleanup handling `nft.go`'s `Transaction` already had for sets,
   and a latent bug fixed there: a removed map was deleted with `delete set`, not `delete map`);
   `kernelsim` simulates map objects (add/flush/delete, element add/delete, jump-target and
@@ -1007,9 +1037,14 @@ also changes two things said here: the maps are interval maps, and an element `g
   loosened, and no extra throttling is on the path), and within the plan's one second on dedicated hardware
   (H1), which is the target. Decided by the maintainer on 2026-10-11 (P2-M7-03); what the test asserts functionally,
   that the map reaches the new address and not a stale one, is unchanged. In the persistent VM (software
-  emulation) the test says nothing, because the first full apply outlasts its wait. `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` (over the
-  simulated kernel, a `blockingNftExec` wrapper above the kernel's own lock) proves a full apply
-  racing an incremental identity update does not win with the stale address.
+  emulation) the test says nothing, because the first full apply outlasts its wait. Two tests over the
+  simulated kernel (a `blockingNftExec` wrapper above the kernel's own lock holds a full apply's nft
+  write) show that a full apply compiled with an old address does not win with it:
+  `TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress` lets the address change while the write
+  is held and observes it after the apply returned, and `TestAnObservationDuringAFullApplyIsAppliedAfterIt`
+  (P2-AUDIT-04) delivers the observation into the owner while the write is held: once the full apply
+  has landed, the loop diffs the identity update against what that apply wrote and moves the element
+  with an element update, without a further observation.
 - **Not in M7:** real fault ids (M8a onward), group- and network-level selectors (M8a/M9; the access
   rules of M9 expand their scopes into address sets, not into this lookup chain), the output
   hook and IFB for tunnel faults (M10), writing the service-selection mark bit from real traffic

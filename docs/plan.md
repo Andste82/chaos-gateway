@@ -1659,7 +1659,7 @@ None currently. Q1 was decided as D33 (§7.1). New questions are added here with
 | **HTML run report and run comparison** | one file for a bug ticket; firmware A vs. B with measured values | medium | after V1 (review 2) |
 | **Seeds and repeated runs** | reproducible random faults (netem seed on newer kernels), pass rate over N runs | small | after V1 (review 2) |
 | **Time faults beyond the NTP offset** | redirect hardcoded NTP, kiss-of-death, stratum 16, NTP unreachable at boot, 2038 preset | small | with M34 |
-| **Small fault additions** | drop IP fragments, "first DNS address dead", ICMP type for reject, server FIN instead of RST | small | after V1 (review 2) |
+| **Small fault additions** | drop IP fragments, "first DNS address dead", server FIN instead of RST | small | after V1 (review 2) |
 | **Trace replay** | replay recorded latency/loss/rate time series (handover, tunnels) | medium | after V1 (review 2) |
 | **Faults for local and multicast traffic** | mDNS, Matter commissioning; needs one port per device or VLANs | large | after M31 |
 | **Flight recorder** | rolling per-device buffer of pcap, DNS, flows and events; snapshot after the bug happened | medium | after V1 (review 2) |

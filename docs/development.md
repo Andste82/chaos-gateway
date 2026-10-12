@@ -2846,7 +2846,8 @@ the functional ones passed, one run each unless said):
   boundary that falls into an apply right after it, in the phase the clock says (`flap.go`), so an emulated apply that takes longer
   than a phase skips the boundaries in between. The second run (38283373614), with the applies and the engine's log in the test's
   output, showed the apply: "an identity update needs a full apply ... the number of devices changed from 6 to 8" (the gateway
-  meets more devices of the lab while the flapping runs; a new device is a full apply, P2-AUDIT-01), answered 13 s later; it held
+  meets more devices of the lab while the flapping runs; on that branch a new device was still a full apply, which P2-AUDIT-01 has
+  since made an element update unless the device needs a queue of its own), answered 13 s later; it held
   one boundary 2.9 s and skipped one cycle, and the down phase whose start it held lasted 1.3 s, too short for the outage the test
   counted. The emulated branch of both flapping tests therefore accepts a distance between toggles that is longer by whole cycles,
   and an outage longer by them, only when an apply of a later generation than the flapping's own ran (`checkFlapSchedule`); the

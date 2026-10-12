@@ -270,9 +270,12 @@ type overlayMark struct {
 	// events are published when the generation is verified: an event announces a state that holds.
 	events []overlayEvent
 	// kept are the events of a change that a failed apply does not take back (a commit-confirm
-	// rollback's, rollbackOverlays), as made to the last verified content: they are published when
-	// the apply fails and the store goes back to that content, since the state they announce holds.
-	kept []overlayEvent
+	// rollback's, rollbackOverlays), as made to each checkpoint the store could go back to when the
+	// change was made (the verified content then and the content after each earlier unconfirmed
+	// change). When the apply fails and the store goes back to the content verified by then, the
+	// events made to that checkpoint are published, since the state they announce holds; the ones made
+	// to a checkpoint verified in the meantime describe the difference to what its own events announced.
+	kept map[*overlay.Checkpoint][]overlayEvent
 }
 
 type overlayEvent struct {
@@ -728,7 +731,7 @@ func (o *owner) settleOverlays(r applyResult) (reverted bool) {
 	}
 	ov.store.Restore(ov.verified)
 	for _, m := range ov.marks {
-		for _, ev := range m.kept {
+		for _, ev := range m.kept[ov.verified] {
 			o.event(ev.typ, ev.data)
 		}
 	}

@@ -208,10 +208,12 @@ func (o *owner) revisionOverlays(next *model.Configuration, force bool, gen uint
 // A rollback holds whatever the kernel does, unlike a revision's own changes, which a failed apply
 // takes back: the same change is made in every checkpoint the store can be taken back to
 // (Store.Amend), so a failed apply restores the overlays without the orphans and with the moves undone.
-// changes are what the rollback did to the store; kept is what it did to the last verified content,
-// whose overlays were all announced: when the apply fails and the store goes back to that content, kept
-// is what is announced instead.
-func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.Move, gen uint64) (changes, kept []actedChange) {
+// changes are what the rollback did to the store. kept is what it did to each checkpoint the store
+// can go back to (the last verified content and the content after each unconfirmed change), by
+// checkpoint: when the apply fails, the store goes back to the content verified by then, whose
+// overlays were all announced (an unconfirmed change before the rollback may have been verified in
+// the meantime), and what the rollback did to that checkpoint is what is announced instead.
+func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.Move, gen uint64) (changes []actedChange, kept map[*overlay.Checkpoint][]actedChange) {
 	back := make([]overlay.Move, len(moves))
 	for i, m := range moves {
 		back[i] = overlay.Move{ID: m.ID, From: m.To, To: m.From}
@@ -247,14 +249,21 @@ func (o *owner) rollbackOverlays(from, to *model.Configuration, moves []overlay.
 		return out
 	}
 	changes = settle(o.ov.store)
-	o.ov.store.Amend(func(s *overlay.Store) { kept = settle(s) }, o.ov.verified)
-	cps := make([]*overlay.Checkpoint, 0, len(o.ov.marks))
+	cps := make([]*overlay.Checkpoint, 0, len(o.ov.marks)+1)
+	cps = append(cps, o.ov.verified)
 	for _, m := range o.ov.marks {
 		cps = append(cps, m.after)
 	}
-	o.ov.store.Amend(func(s *overlay.Store) { settle(s) }, cps...)
+	// Amend changes a checkpoint in place: the pointers stay what the bookkeeping holds
+	kept = make(map[*overlay.Checkpoint][]actedChange, len(cps))
+	for _, cp := range cps {
+		o.ov.store.Amend(func(s *overlay.Store) { kept[cp] = settle(s) }, cp)
+	}
 	actor := model.Actor{Type: "system", Id: "system"}
-	for _, l := range [][]actedChange{changes, kept} {
+	for i := range changes {
+		changes[i].actor = actor
+	}
+	for _, l := range kept {
 		for i := range l {
 			l[i].actor = actor
 		}

@@ -1459,10 +1459,17 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   fails, since the revision stays rolled back whatever the kernel does: they are made in every store
   checkpoint the owner can restore (`Store.Amend`); when the apply fails and the store goes back to
   the last verified content, what the rollback did to that content is announced instead
-  (`overlayMark.kept`), and the retry applies the restore without the orphans. The rollback also triggers an observation, so the identity follows the committed configuration.
+  (`overlayMark.kept`), and the retry applies the restore without the orphans. What the rollback did is
+  kept per checkpoint (the verified content and the content after each unconfirmed overlay change): an
+  overlay write that was in flight when the rollback came can be verified before the rollback's apply
+  fails, its events announce its own content, and what the rollback did to that content is what is
+  announced then (a removal is not announced twice, an overlay written then and removed by the
+  rollback has its removal announced). The rollback also triggers an observation, so the identity follows the committed configuration.
   Tests: `TestARollbackOrphansTheOverlaysOfADeviceOnlyThePendingRevisionHad`,
   `TestARollbackMovesTheOverlaysOfARolledBackMergeBackToTheDiscoveredDevice`,
-  `TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved` (`overlays_revision_test.go`),
+  `TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved`,
+  `TestARemovalVerifiedBeforeAFailedRollbackIsAnnouncedOnce`,
+  `TestAWriteVerifiedBeforeAFailedRollbackHasItsRemovalAnnounced` (`overlays_revision_test.go`),
   `TestARollbackThatGivesAnActivatedProfileBackItsDNSPartRemovesTheActivation` (`profiles_test.go`),
   `TestAnUnconfirmedRevisionTakesItsOverlayChangesBackWithIt` (`internal/api/overlays_test.go`).
 - **Not in M8a:** applying the tc tree to the kernel (`apply.Apply` did not apply or verify `Target.TC`; the testbed tests installed it with the executor), in-place tc updates, make-before-break when a fault's id changes, and measurement tests of the impaired traffic. M8b does them: the reader, the normalizer and the executor's tc operations are under "tc state and tc operations (M8b)", the apply under "The tc tree in the apply (M8b)".

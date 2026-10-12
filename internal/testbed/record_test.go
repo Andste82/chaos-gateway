@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -91,6 +92,72 @@ func TestTheChecksOfAnAssertionWriteOneLineEachIntoTheRecord(t *testing.T) {
 	}
 	if got[0].Kernel == "" && runtimeHasProc() {
 		t.Error("no kernel release in the line")
+	}
+}
+
+// An attempt that stops the test (a helper's t.Fatal, which ends the goroutine) still leaves the lines
+// it recorded, and a check of the same test after it is not taken into the dead attempt.
+func TestAnAttemptThatStopsTheTestLeavesItsLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.jsonl")
+	t.Setenv(MeasurementsEnv, path)
+	var r fakeReporter
+	// as t.Fatal does: the goroutine of the test ends
+	inGoroutine := func(f func()) {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f()
+		}()
+		<-done
+	}
+	inGoroutine(func() {
+		Statistically(&r, "A to the server", func() error {
+			_ = Measure(&r, "A to the server").Latency("upload", delaysAround(100*time.Millisecond, 201), 100*time.Millisecond)
+			runtime.Goexit()
+			return nil
+		})
+	})
+	inGoroutine(func() {
+		Statistically(&r, "nothing recorded", func() error {
+			runtime.Goexit()
+			return nil
+		})
+	})
+	_ = Measure(&r, "the BGP link").Duration("", "re-convergence", 3*time.Second, 3*time.Second, 0, 10*time.Second)
+
+	got := readRecord(t, path)
+	if len(got) != 3 {
+		t.Fatalf("%d lines, want the stopped attempt's, the verdict of the empty one and the check after them: %+v", len(got), got)
+	}
+	if got[0].Assertion != "A to the server" || got[0].Attempt != 1 || got[0].Quantity != "median delay" {
+		t.Errorf("the line of the stopped attempt: %+v", got[0])
+	}
+	if got[1].Assertion != "nothing recorded" || got[1].Quantity != "assertion" || got[1].Pass {
+		t.Errorf("the verdict of the stopped attempt that recorded nothing: %+v", got[1])
+	}
+	if got[2].Assertion != "the BGP link" || got[2].Attempt != 1 {
+		t.Errorf("the check after the stopped attempts: %+v", got[2])
+	}
+}
+
+// The bounds of a line of CheckDelays are the ones it checks: 1 % of the delays rounded up to whole
+// packets, so a pass lies within them; the hard limit is in Extra.
+func TestTheDelaysLineHasTheBoundsTheCheckUses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.jsonl")
+	t.Setenv(MeasurementsEnv, path)
+	var r fakeReporter
+	ds := delaysAround(100*time.Millisecond, 60)
+	ds[7] = 112 * time.Millisecond // one of 60 outside [90 ms, 110 ms], within the hard limit
+	if err := Measure(&r, "copies").Delays("", ds, 90*time.Millisecond, 110*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	got := readRecord(t, path)
+	if len(got) != 1 {
+		t.Fatalf("%d lines", len(got))
+	}
+	m := got[0]
+	if !m.Pass || m.High == nil || m.Value > *m.High || *m.High != 1.0/60 || m.Extra["hard_limit_ms"] != 10 || m.Extra["beyond_hard_limit"] != 0 {
+		t.Errorf("the line: %+v", m)
 	}
 }
 

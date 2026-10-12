@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,43 @@ type dhcpBed struct {
 	base *model.Configuration
 	kc   *kea.Client
 	dir  string
+	// nft counts the nft documents the engine writes (nftRecorder)
+	nft *nftRecorder
+}
+
+// nftRecorder is the engine's executor that counts the nft documents it writes: element updates
+// (elementOnly) and the others, the transactions of full applies. Watch is the executor's own.
+type nftRecorder struct {
+	apply.Local
+	mu             sync.Mutex
+	elements, full int
+}
+
+func (r *nftRecorder) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	r.mu.Lock()
+	for _, op := range ops {
+		switch o := op.(type) {
+		case *executor.NftApply:
+			if elementOnly(string(o.Ruleset)) {
+				r.elements++
+			} else {
+				r.full++
+			}
+		case *executor.NftAddMapElements, *executor.NftDelMapElements, *executor.NftAddElements, *executor.NftDelElements:
+			r.elements++
+		}
+	}
+	r.mu.Unlock()
+	return r.Local.Do(ctx, ops...)
+}
+
+// take returns the counts since the last call and starts new ones.
+func (r *nftRecorder) take() (elements, full int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	elements, full = r.elements, r.full
+	r.elements, r.full = 0, 0
+	return
 }
 
 func newDHCPBed(t *testing.T) *dhcpBed {
@@ -124,7 +162,8 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 			t.Logf("engine log:\n%s", engineLog.String())
 		}
 	})
-	e, err := engine.New(engine.Config{Store: st, Exec: apply.Local{E: ex}, Namespace: top.GW.Name, Clock: &clock.Real{},
+	rec := &nftRecorder{Local: apply.Local{E: ex}}
+	e, err := engine.New(engine.Config{Store: st, Exec: rec, Namespace: top.GW.Name, Clock: &clock.Real{},
 		Log:  slog.New(slog.NewTextHandler(engineLog, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		DHCP: &engine.KeaDHCP{Client: kc, Base: base}})
 	if err != nil {
@@ -134,7 +173,7 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	b := &dhcpBed{t: t, top: top, st: st, e: e, ex: ex, base: cfg, kc: kc, dir: dir}
+	b := &dhcpBed{t: t, top: top, st: st, e: e, ex: ex, base: cfg, kc: kc, dir: dir, nft: rec}
 	return b
 }
 
@@ -400,27 +439,27 @@ func TestABurstOfNeighborChangesIsOneIdentityUpdate(t *testing.T) {
 		fmt.Fprintf(&create, "neigh replace 10.10.0.%d lladdr %s dev br-iot nud permanent\n", 100+i, mac(i))
 	}
 	b.top.GW.MustStdin(create.String(), "ip", "-batch", "-")
-	// 40 new devices change the set count, so this is a full apply (identityOps refuses it as
-	// non-incremental): wait for it to actually land in the kernel, not only for the snapshot (which
+	// 40 new devices without faults are elements of the identity map like an address change
+	// (P2-AUDIT-01): wait for them to actually land in the kernel, not only for the snapshot (which
 	// updates before the apply loop has caught up) to show the devices.
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
+	inMap := func() int {
 		n := 0
-		for _, d := range b.e.Snapshot().Devices {
-			if d.Origin == model.DeviceOriginDiscovered && len(d.Addresses) > 0 && strings.HasPrefix(d.MACs[0], "02:aa:00:00:00:") {
+		for k := range b.identityMapPairs() {
+			if a, err := netip.ParseAddr(k); err == nil && a.Is4() && a.As4()[3] >= 100 && a.As4()[3] < 140 {
 				n++
 			}
 		}
-		if n == 40 && b.generationMarker() != baseline {
-			break
-		}
+		return n
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && inMap() < 40 {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if n := len(b.e.Snapshot().Devices); n < 40 {
-		t.Fatalf("the 40 devices never appeared: %d devices", n)
+	if n := inMap(); n != 40 {
+		t.Fatalf("the identity map holds %d of the 40 devices", n)
 	}
-	if got := b.generationMarker(); got == baseline {
-		t.Fatalf("the devices' own full apply never landed in the kernel: marker still %q", got)
+	if got := b.generationMarker(); got != baseline {
+		t.Errorf("the generation marker changed from %q to %q: the new devices took a full apply", baseline, got)
 	}
 
 	gen := b.e.Snapshot().Generation
@@ -541,6 +580,24 @@ func TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll(t *testing.T) {
 	}
 }
 
+// identityMapPairs returns the real kernel's identity map, address to device number.
+func (b *dhcpBed) identityMapPairs() map[string]string {
+	b.t.Helper()
+	st, err := apply.ReadState(context.Background(), apply.Local{E: b.ex}, b.top.GW.Name, apply.Want{})
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, o := range st.Nft.Objects {
+		if o.Map != nil && strings.HasPrefix(o.Map.Name, "ident4_") {
+			for k, v := range o.Map.Pairs() {
+				out[k] = v
+			}
+		}
+	}
+	return out
+}
+
 // identityMapAddresses returns the addresses the real kernel's identity map holds for dev's device
 // number (plan §3.3's single identity map, M7), sorted; none when the device has no entry yet. A
 // device can hold two for a while: the gateway's neighbor entry for an address a host has just left
@@ -548,7 +605,8 @@ func TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll(t *testing.T) {
 func (b *dhcpBed) identityMapAddresses(dev string) []string {
 	b.t.Helper()
 	s := b.e.Snapshot()
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity})
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: s.Host, Generation: compiler.Generation{Revision: s.Revision, Seq: s.Generation}, Identity: &s.Identity,
+		DeviceNums: s.DeviceNums, DeviceNumHigh: s.DeviceNumHigh})
 	num, known := tg.DeviceNums[dev]
 	if !known {
 		return nil
@@ -583,8 +641,9 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
 	dev := engine.DeviceID(testbed.ClientAMAC)
 	b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return len(d.Addresses) > 0 && d.Online })
-	// a device that has just appeared reaches the kernel through the throttled full apply
-	// (identityConvergeWindow), not an element update, so the map may need a moment
+	// a device that has just appeared reaches the kernel through an element update like the
+	// address change below (P2-AUDIT-01, TestANewDeviceReachesTheIdentityMapWithoutAFullApply);
+	// the deadline is generous because this is only the setup
 	setupDeadline := time.Now().Add(15 * time.Second)
 	for {
 		addrs := b.identityMapAddresses(dev)
@@ -624,5 +683,63 @@ func TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond(t *testing.
 	// on top of that. See docs/open-items.md P2-M7-03.
 	if took := time.Since(start); took > 3*time.Second {
 		t.Errorf("the identity map followed after %v, the target is three seconds", took)
+	}
+}
+
+// P2-AUDIT-01 test (plan §2.3, M7 scope "a new device is an element update too"): a device without
+// faults of its own that appears next to a known one reaches the real kernel's identity map with
+// element operations alone (no nft transaction beyond the element updates, the generation marker of
+// the last full apply unchanged), within the bound of P2-M7-03 (3 s on the CI runners; asserted where
+// the testbed measures, not under software emulation), and the known device keeps its number.
+func TestANewDeviceReachesTheIdentityMapWithoutAFullApply(t *testing.T) {
+	b := newDHCPBed(t)
+	b.apply(dhcpOn)
+	b.follow()
+	devA, devB := engine.DeviceID(testbed.ClientAMAC), engine.DeviceID(testbed.ClientBMAC)
+	b.top.A.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+	setupDeadline := time.Now().Add(15 * time.Second)
+	for !contains(b.identityMapAddresses(devA), testbed.ClientAAddr) {
+		if time.Now().After(setupDeadline) {
+			t.Fatalf("setup: the identity map holds %v for A", b.identityMapAddresses(devA))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	numA := b.e.Snapshot().DeviceNums[devA]
+	if _, known := b.e.Snapshot().DeviceNums[devB]; known {
+		t.Fatalf("setup: B is known before it sent anything: %v", b.e.Snapshot().DeviceNums)
+	}
+	marker := b.generationMarker()
+	b.nft.take()
+
+	start := time.Now()
+	b.top.B.Must("ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+	deadline := time.Now().Add(10 * time.Second)
+	var last []string
+	for time.Now().Before(deadline) {
+		if last = b.identityMapAddresses(devB); contains(last, testbed.ClientBAddr) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	took := time.Since(start)
+	if !contains(last, testbed.ClientBAddr) {
+		t.Fatalf("the new device never reached the identity map: holds %v", last)
+	}
+	t.Logf("the new device reached the identity map after %v", took)
+	if testbed.Accurate() && took > 3*time.Second {
+		t.Errorf("the new device reached the identity map after %v, the bound is three seconds (P2-M7-03)", took)
+	}
+	elements, full := b.nft.take()
+	if full != 0 || elements == 0 {
+		t.Errorf("the new device took %d full transactions and %d element updates, want element updates only", full, elements)
+	}
+	if got := b.generationMarker(); got != marker {
+		t.Errorf("the generation marker changed from %q to %q: a full apply ran", marker, got)
+	}
+	if s := b.e.Snapshot(); s.DeviceNums[devA] != numA {
+		t.Errorf("A was renumbered from %d to %d", numA, s.DeviceNums[devA])
+	}
+	if !contains(b.identityMapAddresses(devA), testbed.ClientAAddr) {
+		t.Errorf("A lost its entry: %v", b.identityMapAddresses(devA))
 	}
 }

@@ -114,11 +114,12 @@ func startFaultLab(t *testing.T, mod func(*model.Configuration)) *real {
 // meetDevices sends a few pings from every test device to the server, so that the gateway has met every
 // host of the lab before a test starts. The gateway meets a host when the host first sends: its neighbor
 // entry appears, the engine discovers the host at its next observation, the discovered device takes a
-// numeral in the identity map and the engine applies the new map. A test whose own traffic made that
+// numeral in the identity map and the engine adds its elements. A test whose own traffic made that
 // happen between its compile of the snapshot and its reading of the kernel (verifyKernel) would see the
 // two differ: without it, TestForceDeletingAnActivatedProfileTakesItOffTheWire (native and KVM) and
 // TestARuleActsBeforeAFaultOnTheSameDeviceOnTheRealKernel (KVM) found the numerals of A, B and C shifted
-// by one in the kernel against the compile. It is not about timing
+// by one in the kernel against the compile. (Since P2-AUDIT-01 a device keeps its numeral when another
+// one appears, so a late device adds its own elements instead of shifting the others'.) It is not about timing
 // any more (P2-M8b-08): the slowest ping of each device is logged, and on a native kernel it is well
 // below a millisecond.
 func meetDevices(t *testing.T, top *testbed.Topology) {

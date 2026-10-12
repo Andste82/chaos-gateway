@@ -131,7 +131,7 @@ func (h *harness) verifyKernelWithOverlays() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables,
+	tg := compiler.Compile(compiler.Input{Config: s.Config, Host: st.Host(), Overlays: s.Overlays, FaultIDs: s.FaultIDs, PMTUTables: s.PMTUTables, DeviceNums: s.DeviceNums, DeviceNumHigh: s.DeviceNumHigh,
 		Identity: &s.Identity, Generation: compiler.Generation{Revision: s.Applied.Revision, Seq: s.Applied.Generation}, ClassLimit: h.classLimit,
 		FlapPhase: h.e.FlapPhase})
 	st, err = apply.ReadState(ctx, apply.Local{E: h.ex}, "", apply.Want{Sysctls: tg.Sysctls, Offloads: tg.Offloads})

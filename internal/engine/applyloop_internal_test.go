@@ -9,19 +9,51 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
-// TestAnIdentityUpdateWithNoDevicesIsNothingToDo: the identity map is only compiled once a device
-// is known, so before the first one an identity-only change (the observer saw something that is
-// not a device) has no map to update. It must be an incremental no-op, not a full apply: a full
-// apply rewrites the whole ruleset and moves the generation marker (TestABurstOfNeighborChangesIs-
-// OneIdentityUpdate waits on that marker for the first real device).
+// TestAnIdentityUpdateWithNoDevicesIsNothingToDo: two targets without an identity map (the compiler
+// builds one for every target it finishes, P2-AUDIT-01) have no map to update. It must be an
+// incremental no-op, not a full apply: a full apply rewrites the whole ruleset and moves the
+// generation marker.
 func TestAnIdentityUpdateWithNoDevicesIsNothingToDo(t *testing.T) {
 	ops, err := identityOps("ns", &compiler.Target{}, &compiler.Target{})
 	if err != nil || len(ops) != 0 {
 		t.Fatalf("ops %v, err %v", ops, err)
 	}
-	// the first device needs a map that does not exist yet: that is a full apply
+	// a map that does not exist yet is not an element update
 	if _, err := identityOps("ns", &compiler.Target{}, &compiler.Target{IdentityMap: "ident4_x", DeviceNums: map[string]int{"d": 1}}); !errors.Is(err, errNotIncremental) {
 		t.Fatalf("err %v, want errNotIncremental", err)
+	}
+}
+
+// P2-AUDIT-01: a device that came or went is an element update of the identity map while the others
+// keep their numbers; a device that has another number than before is not.
+func TestANewDeviceIsAnElementUpdateWhileTheOthersKeepTheirNumbers(t *testing.T) {
+	target := func(nums map[string]int, els ...compiler.MapElement) *compiler.Target {
+		tg := &compiler.Target{IdentityMap: "ident4_x", DeviceNums: nums}
+		tg.Nft.Maps = []compiler.MapDef{{Name: "ident4_x", KeyType: []string{"ipv4_addr"}, ValueType: "mark", Elements: els}}
+		return tg
+	}
+	one := target(map[string]int{"a": 1}, compiler.MapElement{Key: "10.10.0.5", Value: "1"})
+	two := target(map[string]int{"a": 1, "b": 2}, compiler.MapElement{Key: "10.10.0.5", Value: "1"}, compiler.MapElement{Key: "10.10.0.6", Value: "2"})
+	ops, err := identityOps("ns", one, two)
+	if err != nil || len(ops) != 1 {
+		t.Fatalf("a new device: %v, %v", ops, err)
+	}
+	if add, ok := ops[0].(*executor.NftAddMapElements); !ok || len(add.Elements) != 1 || add.Elements[0] != (executor.NftMapElement{Key: "10.10.0.6", Value: "2"}) {
+		t.Errorf("a new device: %+v", ops[0])
+	}
+	ops, err = identityOps("ns", two, one)
+	if err != nil || len(ops) != 1 {
+		t.Fatalf("a device that went: %v, %v", ops, err)
+	}
+	if del, ok := ops[0].(*executor.NftDelMapElements); !ok || len(del.Keys) != 1 || del.Keys[0] != "10.10.0.6" {
+		t.Errorf("a device that went: %+v", ops[0])
+	}
+	renumbered := target(map[string]int{"a": 2, "b": 1}, compiler.MapElement{Key: "10.10.0.5", Value: "2"}, compiler.MapElement{Key: "10.10.0.6", Value: "1"})
+	if _, err := identityOps("ns", one, renumbered); !errors.Is(err, errNotIncremental) {
+		t.Errorf("a renumbered device: %v", err)
+	}
+	if why := identityStructuralChange(one, renumbered); !strings.Contains(why, "renumbered from 1 to 2") {
+		t.Errorf("%s", why)
 	}
 }
 

@@ -5,6 +5,7 @@ package engine_test
 import (
 	"context"
 	"fmt"
+	osexec "os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -684,6 +685,40 @@ func TestATunnelBlackoutOnABGPLinkWithdrawsTheLearnedRoutesAndTheReconvergenceIs
 	// session is dropped when the hold time (9 s) has run since the last keepalive (every 3 s), so between 6 and 9 s after the
 	// blackout began, which was after the call and before the answer.
 	hold := 9 * time.Second
+	diagStop := make(chan struct{})
+	diagDone := make(chan struct{})
+	go func() {
+		defer close(diagDone)
+		t0 := time.Now()
+		last := map[string]string{}
+		for {
+			for name, sock := range map[string]string{"gw": g.gwSock, "site": g.siteSock} {
+				out, _ := osexec.Command("birdc", "-s", sock, "show", "protocols", "all").CombinedOutput()
+				var keep []string
+				for _, l := range strings.Split(string(out), "\n") {
+					for _, k := range []string{"BGP state", "Error wait", "Connect delay", "Last error", "Neighbor address", "Hold timer", "Keepalive timer", " BGP ", "Start delay"} {
+						if strings.Contains(l, k) {
+							keep = append(keep, strings.TrimSpace(l))
+						}
+					}
+					if strings.HasPrefix(l, "gateway ") || strings.HasPrefix(l, "site_b") || strings.Contains(l, " BGP ") {
+						keep = append(keep, strings.TrimSpace(l))
+					}
+				}
+				cur := strings.Join(keep, " | ")
+				if cur != last[name] {
+					t.Logf("DIAG %6.1f s %s: %s", time.Since(t0).Seconds(), name, cur)
+					last[name] = cur
+				}
+			}
+			select {
+			case <-diagStop:
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}()
+	defer func() { close(diagStop); <-diagDone }()
 	called := time.Now()
 	black := putFault(t, g.e, "fault: {family: tunnel, tunnel: {link: site-b}, blackout: true}")
 	answered := time.Now()

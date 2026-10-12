@@ -314,14 +314,15 @@ func expectImpaired(t *testing.T, f flow, want shape) {
 			cur = &again
 		}
 		fresh = nil
+		m := testbed.Measure(t, f.name)
 		errs := []error{
-			testbed.CheckLatency(f.name+" upload", cur.UpMedian(), want.up),
-			testbed.CheckLatency(f.name+" download", cur.DownMedian(), want.down),
-			testbed.CheckLoss(f.name+" upload", cur.Sent-cur.Delivered, cur.Sent, want.upLoss),
-			testbed.CheckLoss(f.name+" download", cur.Delivered-cur.Replied, cur.Delivered, want.downLoss),
+			m.Latency("upload", cur.Up, want.up),
+			m.Latency("download", cur.Down, want.down),
+			m.Loss("upload", cur.Sent-cur.Delivered, cur.Sent, want.upLoss),
+			m.Loss("download", cur.Delivered-cur.Replied, cur.Delivered, want.downLoss),
 		}
 		if want.upJitter > 0 {
-			errs = append(errs, testbed.CheckSpread(f.name+" upload", cur.Up, want.upJitter))
+			errs = append(errs, m.Spread("upload", cur.Up, want.upJitter))
 		}
 		return joinErrs(errs...)
 	})
@@ -365,17 +366,14 @@ func expectUnaffected(t *testing.T, f flow, before testbed.ProbeResult) {
 			cur = &again
 		}
 		fresh = nil
-		var errs []error
-		if !testbed.Within(cur.UpMedian(), before.UpMedian(), 2*time.Millisecond, 0.05) {
-			errs = append(errs, fmt.Errorf("%s upload median %v, before the fault %v", f.name, cur.UpMedian(), before.UpMedian()))
-		}
-		if !testbed.Within(cur.DownMedian(), before.DownMedian(), 2*time.Millisecond, 0.05) {
-			errs = append(errs, fmt.Errorf("%s download median %v, before the fault %v", f.name, cur.DownMedian(), before.DownMedian()))
-		}
-		if cur.UpLoss() != 0 || cur.DownLoss() != 0 {
-			errs = append(errs, fmt.Errorf("%s lost packets: %s", f.name, cur))
-		}
-		return joinErrs(errs...)
+		// the median within the latency tolerance of what it was before the fault, and no loss (the
+		// interval of a rate of 0 is no packet)
+		m := testbed.Measure(t, f.name)
+		return joinErrs(
+			m.Unchanged("upload", cur.Up, before.UpMedian()),
+			m.Unchanged("download", cur.Down, before.DownMedian()),
+			m.Loss("upload", cur.Sent-cur.Delivered, cur.Sent, 0),
+			m.Loss("download", cur.Delivered-cur.Replied, cur.Delivered, 0))
 	})
 }
 
@@ -440,7 +438,7 @@ func TestADeviceFaultImpairsThatDeviceAsConfiguredAndNoOther(t *testing.T) {
 		testbed.Statistically(t, "ping of A", func() error {
 			res := testbed.MustPing(t, r.top.A, testbed.ServerAddr, n, gap)
 			t.Logf("ping of A: median %v", res.Median())
-			return testbed.CheckLatency("ping of A", res.Median(), standard.up+standard.down)
+			return testbed.Measure(t, "ping of A").Latency("round trip", res.RTTs, standard.up+standard.down)
 		})
 	}
 }

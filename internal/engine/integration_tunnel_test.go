@@ -441,7 +441,7 @@ func TestAFlappingTunnelBlacksOutOnSchedule(t *testing.T) {
 	}
 	if testbed.Accurate() {
 		checkStat(t, "the flapping tunnel", res, measure, func(x testbed.ProbeResult) error {
-			return testbed.CheckFlaps("the flapping tunnel", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
+			return testbed.Measure(t, "the flapping tunnel").Flaps("upload", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
 		})
 		return
 	}

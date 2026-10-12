@@ -121,9 +121,10 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 		// (testbed.CheckDelays: at most 1 % outside them, none more than 10 ms outside), so a change
 		// somewhere else that delayed C's packets fails here.
 		const slack = 2 * time.Millisecond
+		m := testbed.Measure(t, "C during the changes")
 		if err := joinErrs(
-			testbed.CheckDelays("C upload during the changes", res.Up, cShape.up-cShape.upJitter-slack, cShape.up+cShape.upJitter+slack),
-			testbed.CheckDelays("C download during the changes", res.Down, cShape.down-slack, cShape.down+slack)); err != nil {
+			m.Delays("upload", res.Up, cShape.up-cShape.upJitter-slack, cShape.up+cShape.upJitter+slack),
+			m.Delays("download", res.Down, cShape.down-slack, cShape.down+slack)); err != nil {
 			t.Errorf("C's flow was disturbed while other faults changed: %v", err)
 			t.Logf("the stream sent a probe every %v; the steps, from the moment before the first one: %s", interval, strings.Join(steps, ", "))
 			for _, d := range []struct {
@@ -166,10 +167,11 @@ func TestUpdatingOneFaultDoesNotDisturbTheOthers(t *testing.T) {
 				cur = &again
 			}
 			fresh = nil
+			m := testbed.Measure(t, "C")
 			return joinErrs(
-				testbed.CheckLatency("C upload", cur.UpMedian(), cShape.up),
-				testbed.CheckLatency("C download", cur.DownMedian(), cShape.down),
-				testbed.CheckSpread("C upload", cur.Up, cShape.upJitter))
+				m.Latency("upload", cur.Up, cShape.up),
+				m.Latency("download", cur.Down, cShape.down),
+				m.Spread("upload", cur.Up, cShape.upJitter))
 		})
 	}
 }
@@ -225,13 +227,14 @@ func TestChangingAFaultOf600msThroughTheEngineUnderLoadLosesNoQueuedPacket(t *te
 		// was long enough for the interval (N >= 2000, plan §4.3), otherwise every attempt is a fresh run
 		first := res.Sent >= 2000
 		testbed.Statistically(t, "loss of the 600 ms fault", func() error {
+			m := testbed.Measure(t, "A through the changes")
 			if first {
 				first = false
-				return testbed.CheckLoss("upload", int(drops), res.Sent, 0.05)
+				return m.Loss("upload", int(drops), res.Sent, 0.05)
 			}
 			again := a.run(t, impairedRun())
 			t.Logf("A measured again: %s", again)
-			return testbed.CheckLoss("upload", again.Sent-again.Delivered, again.Sent, 0.05)
+			return m.Loss("upload", again.Sent-again.Delivered, again.Sent, 0.05)
 		})
 	}
 }

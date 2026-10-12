@@ -76,6 +76,7 @@ func Spread(ds []time.Duration) time.Duration { return Percentile(ds, 95) - Perc
 // reporter is the part of testing.TB that Statistically needs.
 type reporter interface {
 	Helper()
+	Name() string
 	Logf(format string, args ...any)
 	Errorf(format string, args ...any)
 }
@@ -87,20 +88,43 @@ type reporter interface {
 //
 // It does not check testbed.Accurate: a test that asserts accuracy calls it only where the
 // measurement is meaningful.
+//
+// Each attempt goes into the measurement record (record.go): the lines its checks recorded through
+// a Recorder, named after the assertion and numbered with the attempt, or one line with the
+// attempt's verdict when it recorded none.
 func Statistically(t reporter, what string, attempt func() error) bool {
 	t.Helper()
-	first := attempt()
+	run := func(n int) error {
+		a := &attemptLines{}
+		prev := openAttempt(t.Name(), a)
+		err := attempt()
+		closeAttempt(t.Name(), prev)
+		if len(a.lines) == 0 {
+			a.lines = append(a.lines, assertionLine(t, what, err))
+		}
+		for _, m := range a.lines {
+			m.Assertion, m.Attempt = what, n
+			writeMeasurement(t, m)
+		}
+		return err
+	}
+	first := run(1)
 	if first == nil {
 		return true
 	}
 	t.Logf("%s: the first attempt failed, repeating once (plan §4.3): %v", what, first)
-	second := attempt()
+	second := run(2)
 	if second == nil {
 		t.Logf("%s: the second attempt held", what)
 		return true
 	}
 	t.Errorf("%s: failed twice\nfirst:  %v\nsecond: %v", what, first, second)
 	return false
+}
+
+// latencyTolerance is the plan's latency tolerance around want: ±2 ms + 5 % (§4.3), as Within takes it.
+func latencyTolerance(want time.Duration) time.Duration {
+	return 2*time.Millisecond + time.Duration(0.05*float64(want))
 }
 
 // CheckLatency returns an error when got is not within the plan's tolerance of want (±2 ms + 5 %).
@@ -167,10 +191,16 @@ func CheckLoss(what string, lost, sent int, rate float64) error {
 // latency tolerance of 2 ms.
 func CheckSpread(what string, ds []time.Duration, jitter time.Duration) error {
 	got, want := Spread(ds), SpreadOfUniform(jitter)
-	if got >= want/2-2*time.Millisecond && got <= want*3/2+2*time.Millisecond {
+	if lo, hi := spreadBounds(jitter); got >= lo && got <= hi {
 		return nil
 	}
 	return fmt.Errorf("%s: 5th to 95th percentile spread %v, expected about %v for a jitter of %v", what, got, want, jitter)
+}
+
+// spreadBounds are the bounds of CheckSpread for a jitter.
+func spreadBounds(jitter time.Duration) (lo, hi time.Duration) {
+	want := SpreadOfUniform(jitter)
+	return want/2 - 2*time.Millisecond, want*3/2 + 2*time.Millisecond
 }
 
 // ---- shares, bursts and outages (M10) ------------------------------------------------------------

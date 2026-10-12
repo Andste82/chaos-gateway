@@ -125,7 +125,7 @@ func TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults(t *testing.T) 
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A upload duplicates", res, measure, func(x testbed.ProbeResult) error {
-			return testbed.CheckShare("A upload duplicates", "duplicated", x.UpDuplicates(), x.Sent, 0.10)
+			return testbed.Measure(t, "A").Share("upload", "duplicated", x.UpDuplicates(), x.Sent, 0.10)
 		})
 	}
 
@@ -148,7 +148,7 @@ func TestADuplicatingFaultDuplicatesAsConfiguredNextToOtherFaults(t *testing.T) 
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A download duplicates", res, measureDown, func(x testbed.ProbeResult) error {
-			return testbed.CheckShare("A download duplicates", "duplicated", x.DownDuplicates(), x.Delivered, 0.20)
+			return testbed.Measure(t, "A").Share("download", "duplicated", x.DownDuplicates(), x.Delivered, 0.20)
 		})
 	}
 
@@ -200,7 +200,7 @@ func TestAReorderingFaultSendsTheConfiguredShareAheadOfTheDelayedOnes(t *testing
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A reordering", res, measure, func(x testbed.ProbeResult) error {
-			return testbed.CheckShare("A reordering", "sent at once", immediate(x), x.Delivered, 0.25)
+			return testbed.Measure(t, "A").Share("upload", "sent at once", immediate(x), x.Delivered, 0.25)
 		})
 	}
 	// every packet that was delayed was delayed by the 50 ms and by nothing else
@@ -262,7 +262,7 @@ func TestACorruptingFaultCorruptsAsConfiguredAndTheReceiverCountsTheChecksumErro
 			// six bytes of the frame's source address, 6 of the 72 bytes of a probe (and the one at
 			// random in the frame that the address check does not look at); the interval of the plan is
 			// the one for the share that is lost, widened below by that figure
-			return testbed.CheckShare("A corruption", "lost", x.Sent-x.Delivered, x.Sent, 0.10*(1-6.0/72))
+			return testbed.Measure(t, "A").Share("upload", "lost", x.Sent-x.Delivered, x.Sent, 0.10*(1-6.0/72))
 		})
 	}
 	quiet(t, "B", b.run(t, quietRun()))
@@ -297,7 +297,7 @@ func TestABurstLossFaultLosesInBurstsAsTheModelSays(t *testing.T) {
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A burst loss", res, measure, func(x testbed.ProbeResult) error {
-			return testbed.CheckBurstLoss("A burst loss", x.UpLost(), x.Sent, 0.05, 0.25, 1, 0)
+			return testbed.Measure(t, "A").BurstLoss("upload", x.UpLost(), x.Sent, 0.05, 0.25, 1, 0)
 		})
 	}
 	quiet(t, "B", b.run(t, quietRun()))
@@ -418,7 +418,7 @@ func TestAFlappingFaultBlacksOutOnSchedule(t *testing.T) {
 	}
 	if testbed.Accurate() {
 		checkStat(t, "A flapping", res, measure, func(x testbed.ProbeResult) error {
-			return testbed.CheckFlaps("A flapping", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
+			return testbed.Measure(t, "A").Flaps("upload", testbed.Outages(x.UpLost(), iv, int(down/iv)/2), x.Sent, up, down, iv, engine.FlapTolerance, 3)
 		})
 		return
 	}
@@ -621,21 +621,18 @@ func TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit(t *testing.
 					time.Sleep(15 * time.Second) // the queues of the first round drain
 					g = measure()
 				}
-				for i, name := range []string{"A", "B"} {
-					if !within10(g[i], rate) {
-						return fmt.Errorf("%s of %s: %.3f Mbit/s, not within ±10 %% of 2 Mbit/s (plan §4.3)", dir.name, name, g[i]/1e6)
-					}
-				}
-				return nil
+				return joinErrs(
+					testbed.Measure(t, "A").Rate(dir.name, g[0], rate, rateTolerance),
+					testbed.Measure(t, "B").Rate(dir.name, g[1], rate, rateTolerance))
 			})
 		}
 	}
 }
 
-// within10 is the plan's rate tolerance: ±10 % of the limit. The throughput iperf3 reports is the TCP
+// rateTolerance is the plan's rate tolerance: ±10 % of the limit (§4.3). The throughput iperf3 reports is the TCP
 // payload; netem's rate counts the IP packet, so a 2 Mbit/s limit shows as 1.93 Mbit/s of payload
 // (1448 of 1500 bytes), which is inside the tolerance.
-func within10(got, want float64) bool { return got >= 0.9*want && got <= 1.1*want }
+const rateTolerance = 0.1
 
 // burstScript sends n datagrams of 1000 bytes back to back: more than any queue of 20 packets holds and
 // fewer than the default one of 1000, at a rate the machine cannot affect (a paced flood is only as steady
@@ -696,13 +693,12 @@ func TestAnExplicitQueueLimitBoundsTheDelayAndDropsTheRest(t *testing.T) {
 				cur = &again
 			}
 			fresh = nil
-			if !testbed.Within(cur.UpMedian(), beforeB.UpMedian(), 2*time.Millisecond, 0.05) || !testbed.Within(cur.DownMedian(), beforeB.DownMedian(), 2*time.Millisecond, 0.05) {
-				return fmt.Errorf("B's medians %v up, %v down; before the burst %v, %v", cur.UpMedian(), cur.DownMedian(), beforeB.UpMedian(), beforeB.DownMedian())
-			}
-			if cur.UpLoss() != 0 || cur.DownLoss() != 0 {
-				return fmt.Errorf("B lost packets: %s", cur)
-			}
-			return nil
+			m := testbed.Measure(t, "B")
+			return joinErrs(
+				m.Unchanged("upload", cur.Up, beforeB.UpMedian()),
+				m.Unchanged("download", cur.Down, beforeB.DownMedian()),
+				m.Loss("upload", cur.Sent-cur.Delivered, cur.Sent, 0),
+				m.Loss("download", cur.Delivered-cur.Replied, cur.Delivered, 0))
 		})
 	}
 

@@ -109,6 +109,11 @@ Things to know:
   full one) and `TestTheIdentityMapEntryFollowsAForcedAddressChangeWithinASecond` (3.4 s for a bound of 3 s) in the
   first, `TestAReservationIsHonored` (a cancelled first apply, the device not yet reachable) in the third. A hosted
   runner emulates faster than the VPS, so these fail there only now and then, and the rest of that list passed.
+  So that the job is not red for failures already accepted, it judges its own result: the known emulated failures
+  of `internal/engine` (the list under "Fast kernel loop", the `KNOWN` variable of the step) still run, but a run
+  whose only failures are on that list passes with a warning and names them in the job summary; any other failure,
+  a skip, or a run that ended without the package's summary line (a timeout, a panic) fails the job. Against the
+  logs of the three runs the judgement fails the first two (the flapping tunnel) and passes the third.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with

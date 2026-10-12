@@ -33,7 +33,15 @@ jobs:
       # (!testbed.Accurate()) of the other packages are what this job is for. The engine package's emulated run is
       # the persistent VM of the developer (docs/development.md, "Fast kernel loop"). The default test timeout of 20
       # minutes is far too short for the emulated run (the first scheduled run hit it), hence the limits of nightly.yml.
+      # The container runs as root on a checkout owned by the runner's user, so git refuses the repository and `go list`
+      # fails on the VCS stamping; its empty output once made testvm fall back to ./..., engine included. Hence
+      # -buildvcs=false, and the list is checked before the run: never empty, never with the engine package.
       - name: Run the testbed tests in a VM, software emulation forced
         run: |
-          docker run --rm -v "$PWD:/workspace" -w /workspace chaos-gateway-dev sh -c \
-            'make test-vm ARGS="-no-kvm -test-timeout 100m -vm-timeout 3h $(go list ./... | grep -v "/internal/engine$" | tr "\n" " ")"'
+          docker run --rm -e GOFLAGS=-buildvcs=false -v "$PWD:/workspace" -w /workspace chaos-gateway-dev sh -ec '
+            all=$(go list ./...)
+            pkgs=$(printf "%s\n" "$all" | grep -v "/internal/engine$" | tr "\n" " ")
+            if [ -z "$pkgs" ] || printf "%s\n" $pkgs | grep -q "/internal/engine$"; then
+              echo "the package list is empty or holds internal/engine: $pkgs" >&2; exit 1
+            fi
+            make test-vm ARGS="-no-kvm -test-timeout 100m -vm-timeout 3h $pkgs"'

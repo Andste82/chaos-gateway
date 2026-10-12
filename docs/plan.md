@@ -1395,8 +1395,8 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 **H1 — Hardware validation** (S, **when hardware is available**; not required for the V1 release)
 - **Status:** dropped from scope for now — no target hardware available; revisit once hardware exists. Not a milestone this pipeline works towards until then.
-- Scope: run the measurement suite and the S8 performance scripts on a Raspberry Pi 4/5 and an x86 mini PC with real NICs: throughput with 50 and 250 faults (500 HTB classes), cost of disabled offloads, loss accuracy on a real NIC, DNS proxy queries per second, fault accuracy; after M15 also scenario step timing on ARM64.
-- Tests: results recorded; §3.10 targets and the ARM64 timing tolerance confirmed or adjusted. Until H1 has run, the Raspberry Pi targets are published as unvalidated.
+- Scope: run the measurement suite and the S8 performance scripts on a Raspberry Pi 4/5 and an x86 mini PC with real NICs: throughput with 50 and 250 faults (500 HTB classes), cost of disabled offloads, loss accuracy on a real NIC, DNS proxy queries per second, fault accuracy, new connections per second through 1000 access rules (P2-M9-06), the time of an apply with ten assigned interfaces and the tree on three (P2-M9-06, left from P2-M8b-04); after M15 also scenario step timing on ARM64.
+- Tests: results recorded; §3.10 targets and the ARM64 timing tolerance confirmed or adjusted; the access rule limit (1000) confirmed or lowered for ARM64; the apply with ten assigned interfaces within the overlay apply latency of §3.10 (≤ 200 ms on a Pi), or the tc reads of an apply reduced further. Until H1 has run, the Raspberry Pi targets are published as unvalidated.
 - Depends on: M11 (step timing: M15); hardware.
 
 *After Phase 2: the core product via API — faults, rules, profiles — measured on x86 (accuracy measurements run on hosted GitHub runners with `/dev/kvm`, D33).*

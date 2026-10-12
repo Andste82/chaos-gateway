@@ -454,7 +454,7 @@ func TestANewDeviceIsAnElementUpdateNotARebuild(t *testing.T) {
 	// ids at every compile (M7) would renumber both of them when Y appears.
 	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a0"
 	idX, idY := engine.DeviceID(macX), engine.DeviceID(macY)
-	if !(idY < devID && devID < idX) {
+	if idY >= devID || devID >= idX {
 		t.Fatalf("setup: the ids do not sort as Y < configured < X: %s %s %s", idY, devID, idX)
 	}
 	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX)})

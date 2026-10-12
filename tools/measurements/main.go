@@ -244,16 +244,16 @@ func report(runs []runRecord, re *regexp.Regexp, tsv bool, w io.Writer) {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if a, b := keys[i].base.String(), keys[j].base.String(); a != b {
+		if a, b := keys[i].String(), keys[j].String(); a != b {
 			return a < b
 		}
 		return keys[i].nth < keys[j].nth
 	})
 	name := func(k key) string {
 		if !several[k.base] {
-			return k.base.String()
+			return k.String()
 		}
-		return fmt.Sprintf("%s #%d", k.base, k.nth)
+		return fmt.Sprintf("%s #%d", k.String(), k.nth)
 	}
 
 	if tsv {

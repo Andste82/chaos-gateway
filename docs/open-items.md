@@ -442,7 +442,7 @@ measurement for H1, which also carries the arm64 apply-cost measurement left fro
 
 ### P2-M9-06 The limits of the access rules and the cost of an apply are not measured on small hardware
 
-- Status: new (extended on 2026-10-11 with the arm64 measurement left from P2-M8b-04)
+- Status: new (extended on 2026-10-11 with the arm64 measurement left from P2-M8b-04; both measurements are in the Scope and Tests of plan H1)
 - Severity: low
 - Reason: env-limit (H1). The compiler refuses more than 1000 rules (overlays included) and more than
   65536 source addresses in all rule sets with `capacity_exceeded`, on every architecture. Rules are
@@ -457,9 +457,9 @@ measurement for H1, which also carries the arm64 apply-cost measurement left fro
 - Task: chosen interpretation — one limit for all architectures (the class limit has two because tc
   classes cost memory and CPU per packet; rules cost per connection). H1 measures new connections per
   second with 1000 rules on the target hardware and sets an ARM64 default if needed, and times an apply
-  with ten assigned interfaces (the tree on three) on the arm64 runner against the budget of plan §3.11.
+  with ten assigned interfaces (the tree on three) on the arm64 runner against the overlay apply latency of plan §3.10 (≤ 200 ms on a Raspberry Pi 4/5).
 - Acceptance: the H1 measurements exist; the rule limit is confirmed or lowered for ARM64, and the apply
-  with ten assigned interfaces stays within the budget of plan §3.11 (or the reads are reduced further,
+  with ten assigned interfaces stays within the overlay apply latency of plan §3.10 (or the reads are reduced further,
   for example by keeping which interfaces carried a tree at the last apply).
 - Needs maintainer: no
 - Effort: S

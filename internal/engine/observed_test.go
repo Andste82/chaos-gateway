@@ -899,6 +899,75 @@ func TestAConcurrentFullApplyDoesNotRestoreAStaleDeviceAddress(t *testing.T) {
 	}
 }
 
+// P2-AUDIT-04, the race itself: the observation of the new address reaches the owner while the full
+// apply, compiled with the old one, is still in flight. The owner makes the identity update then;
+// once the full apply has landed (with the stale address), the loop applies the update against what
+// that apply wrote, not against the desired state the update was made from, and the identity map
+// holds the new address without any further observation. A loop that took the update as already
+// applied, or diffed it against the newer desired state, would leave the stale address behind.
+func TestAnObservationDuringAFullApplyIsAppliedAfterIt(t *testing.T) {
+	h := newHarness(t)
+	be := &blockingNftExec{inner: apply.Local{E: h.ex}, entered: make(chan struct{}), resume: make(chan struct{})}
+	e, err := engine.New(engine.Config{Store: h.st, Exec: be, Clock: h.clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e
+	t.Cleanup(e.Close)
+
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.observe()
+	h.barrier()
+	if got := h.deviceSetElements(devID); got != "10.10.0.31" {
+		t.Fatalf("setup: the identity map holds %q", got)
+	}
+
+	r2 := h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		c.Uplink.Gateway = ptr("203.0.113.20")
+	})
+	be.armed = true
+	done := make(chan error, 1)
+	go func() { _, err := h.apply(r2); done <- err }()
+	<-be.entered
+
+	// the device moves, and the owner learns it, while the full apply's write is held
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.77", macCfg)})
+	h.observe()
+	if d := h.device(devID); d == nil || len(d.Addresses) != 1 || d.Addresses[0].String() != "10.10.0.77" {
+		t.Fatalf("the owner did not take the observation during the apply: %+v", d)
+	}
+	rec := h.recordCommands()
+	close(be.resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	h.barrier()
+	if got := h.deviceSetElements(devID); got != "10.10.0.77" {
+		t.Errorf("the identity map holds %q after the apply, want the address observed during it", got)
+	}
+	// the full apply (compiled with the old address, which it left in the map) landed first, and an
+	// element update after it moved the element
+	var full, movedAfter bool
+	for _, c := range rec.all() {
+		if !strings.HasPrefix(c.argv, "nft -j -f") {
+			continue
+		}
+		if !elementOnly(c.stdin) {
+			full = true
+		} else if full && strings.Contains(c.stdin, "10.10.0.77") {
+			movedAfter = true
+		}
+	}
+	if !full || !movedAfter {
+		t.Errorf("the full apply landed: %v; an element update moved the address after it: %v", full, movedAfter)
+	}
+}
+
 // A window of a cut that stayed open is closed again by the next apply even when that one is an
 // incremental identity update, which does not flush the cut chains by itself.
 func TestAnIncrementalIdentityUpdateClosesACutWindowThatStayedOpen(t *testing.T) {

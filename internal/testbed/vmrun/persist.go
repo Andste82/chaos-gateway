@@ -690,7 +690,7 @@ func RunInVM(ctx context.Context, dir VMDir, c Config) (Summary, error) {
 		return Summary{}, err
 	}
 	script := GuestScript(GuestOptions{
-		WorkDir: runDir, Emulated: st.Meta.Emulated(), Run: c.Run, TestTimeout: c.TestTimeout.String(),
+		WorkDir: runDir, Emulated: st.Meta.Emulated(), Run: c.Run, TestTimeout: c.TestTimeout.String(), Measurements: c.Measurements != "",
 	}, units)
 	guest := filepath.Join(runDir, "guest.sh")
 	if err := os.WriteFile(guest, []byte(script), 0o755); err != nil {
@@ -703,6 +703,9 @@ func RunInVM(ctx context.Context, dir VMDir, c Config) (Summary, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, c.VMTimeout)
 	defer cancel()
 	_, waitErr := WaitJob(waitCtx, clk, dir.Queue(), id, c.Stdout, 200*time.Millisecond)
+	if err := CopyMeasurements(runDir, c.Measurements); err != nil {
+		fmt.Fprintf(c.Stderr, "vmrun: the measurement record: %v\n", err)
+	}
 	summary, err := Collect(os.DirFS(runDir), units)
 	summary.AllowSkip = c.AllowSkip
 	if err != nil {

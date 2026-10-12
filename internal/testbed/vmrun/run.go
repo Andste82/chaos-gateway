@@ -50,6 +50,11 @@ type Config struct {
 	// NoKVM forces software emulation even where /dev/kvm is available (M1-03: a weekly check
 	// that the emulated branches, which the development VPS always runs, still work elsewhere).
 	NoKVM bool
+	// Measurements is a file on the host that the measurement record of the run (plan §4.3,
+	// testbed.MeasurementsEnv) is appended to; empty records nothing. The guest writes the record
+	// into the share and the runner appends it after the run, also after a failure or a timeout.
+	// The file is created even when the run recorded nothing (an emulated VM asserts no accuracy).
+	Measurements string
 	// Stdout receives the guest's console and the summary; Stderr the host-side progress.
 	Stdout, Stderr io.Writer
 	// Clock is the time source of the persistent VM's waits; nil means the real clock.
@@ -261,7 +266,7 @@ func run(ctx context.Context, c Config) (Summary, error) {
 
 	kvm := HasKVM() && !c.NoKVM
 	script := GuestScript(GuestOptions{
-		WorkDir: c.WorkDir, Emulated: !kvm, Run: c.Run, TestTimeout: c.TestTimeout.String(),
+		WorkDir: c.WorkDir, Emulated: !kvm, Run: c.Run, TestTimeout: c.TestTimeout.String(), Measurements: c.Measurements != "",
 	}, units)
 	if err := os.WriteFile(filepath.Join(c.WorkDir, "guest.sh"), []byte(script), 0o755); err != nil {
 		return Summary{}, err
@@ -282,6 +287,9 @@ func run(ctx context.Context, c Config) (Summary, error) {
 	cmd.WaitDelay = 10 * time.Second
 	runErr := cmd.Run()
 
+	if err := CopyMeasurements(c.WorkDir, c.Measurements); err != nil {
+		fmt.Fprintf(c.Stderr, "vmrun: the measurement record: %v\n", err)
+	}
 	summary, err := Collect(os.DirFS(c.WorkDir), units)
 	summary.AllowSkip = c.AllowSkip
 	if err != nil {
@@ -294,6 +302,32 @@ func run(ctx context.Context, c Config) (Summary, error) {
 		return summary, fmt.Errorf("cancelled: %w", ctx.Err())
 	}
 	return summary, nil
+}
+
+// CopyMeasurements appends the measurement record the guest wrote in workDir to dst, creating dst
+// when the guest wrote none. An empty dst does nothing.
+func CopyMeasurements(workDir, dst string) error {
+	if dst == "" {
+		return nil
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	in, err := os.Open(filepath.Join(workDir, "results", measurementsFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return out.Close()
+	}
+	if err != nil {
+		_ = out.Close()
+		return err
+	}
+	defer in.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // descendants returns the pids of all processes below pid, deepest last.

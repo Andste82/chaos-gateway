@@ -62,13 +62,17 @@ type GuestOptions struct {
 	Run string
 	// TestTimeout is the per-package -test.timeout.
 	TestTimeout string
+	// Measurements makes the tests write the measurement record (testbed.MeasurementsEnv) into
+	// WorkDir/results, where Run and RunInVM pick it up.
+	Measurements bool
 }
 
-// Result files of one unit, inside WorkDir/results.
+// Result files of one unit, inside WorkDir/results, and the measurement record of the run.
 const (
-	exitSuffix = ".exit"
-	outSuffix  = ".out"
-	doneMarker = "done"
+	exitSuffix       = ".exit"
+	outSuffix        = ".out"
+	doneMarker       = "done"
+	measurementsFile = "measurements.jsonl"
 )
 
 // GuestScript returns the shell script that the guest runs. It loads the kernel modules, runs
@@ -81,6 +85,9 @@ func GuestScript(o GuestOptions, units []Unit) string {
 	b.WriteString("set -u\n")
 	if o.Emulated {
 		fmt.Fprintf(&b, "export %s=1\n", testbed.EmulatedEnv)
+	}
+	if o.Measurements {
+		fmt.Fprintf(&b, "export %s=%s\n", testbed.MeasurementsEnv, ShellQuote(filepath.Join(results, measurementsFile)))
 	}
 	b.WriteString("export PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 	// the same module list as the preflight; a module that cannot load is reported by the

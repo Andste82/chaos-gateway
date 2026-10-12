@@ -140,6 +140,46 @@ func TestRunWithFakeVMAllPass(t *testing.T) {
 	}
 }
 
+// P2-AUDIT-07: the guest writes the measurement record into the share and the runner appends it to the
+// file the caller named, after the run, so that the nightly job can upload it.
+func TestRunAppendsTheMeasurementRecordOfTheGuestToTheFileItWasGiven(t *testing.T) {
+	fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
+	c, out := fixtureConfig(t)
+	c.Measurements = filepath.Join(t.TempDir(), "measurements.jsonl")
+	if err := os.WriteFile(c.Measurements, []byte("{\"test\":\"an earlier run\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Run(context.Background(), c); err != nil || !s.OK() {
+		t.Fatalf("run: %v %v\n%s", err, s.Problems(), out)
+	}
+	b, err := os.ReadFile(c.Measurements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "an earlier run") ||
+		!strings.Contains(lines[1], `"test":"TestRecordsAMeasurement"`) || !strings.Contains(lines[1], `"quantity":"rate"`) {
+		t.Fatalf("the record holds:\n%s", b)
+	}
+
+	// without a file nothing is recorded, and a run that recorded nothing still leaves the file
+	c.Measurements = ""
+	c.Run = "TestPasses"
+	if s, err := Run(context.Background(), c); err != nil || !s.OK() {
+		t.Fatalf("run: %v %v", err, s.Problems())
+	}
+	if _, err := os.Stat(filepath.Join(c.WorkDir, "results", measurementsFile)); !os.IsNotExist(err) {
+		t.Errorf("a run without a record file wrote one: %v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := CopyMeasurements(c.WorkDir, empty); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(empty); err != nil || fi.Size() != 0 {
+		t.Errorf("the record of a run that recorded nothing: %v %v", fi, err)
+	}
+}
+
 func TestRunRemovesAWorkDirectoryItCreatedAfterSuccess(t *testing.T) {
 	fakeVNG(t, "sh -c \"$cmd\"\nexit $?\n")
 	tmp := t.TempDir()

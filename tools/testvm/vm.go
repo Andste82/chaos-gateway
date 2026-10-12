@@ -114,7 +114,13 @@ func vmRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	vmTimeout := fs.Duration("vm-timeout", 60*time.Minute, "timeout of the whole run")
 	keep := fs.Bool("keep", false, "keep the run directory after a passing run")
 	allowSkip := fs.Bool("allow-skip", false, "allow skipped tests; otherwise any skip fails the run")
+	measurements := measurementsFlag(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	record, err := absOrEmpty(*measurements)
+	if err != nil {
+		fmt.Fprintln(stderr, "testvm:", err)
 		return 2
 	}
 	pkgs := fs.Args()
@@ -124,7 +130,7 @@ func vmRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cfg := vmrun.Config{
 		Tags: strings.Split(*tags, ","), Packages: pkgs, Run: *runRE,
 		TestTimeout: *testTimeout, VMTimeout: *vmTimeout, Keep: *keep, AllowSkip: *allowSkip,
-		Stdout: stdout, Stderr: stderr,
+		Measurements: record, Stdout: stdout, Stderr: stderr,
 	}
 	summary, err := vmrun.RunInVM(ctx, vmrun.VMDir(*dir), cfg)
 	if len(summary.Packages) > 0 {

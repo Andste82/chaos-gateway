@@ -57,14 +57,20 @@ test('a configured fault through preview and apply, a conflict with an API chang
   await drawer.getByRole('button', { name: 'Show Linux changes' }).click();
   await expect(drawer.getByTestId('preview-linux')).toContainText('netem');
   await drawer.getByRole('button', { name: /^Apply revision/ }).click();
-  await expect(page.locator('[data-kind]').filter({ hasText: /^Revision \d+ applied and verified/ })).toBeVisible({ timeout: applyTimeout });
+  // the drawer closes when the gateway answered the apply (a failure stays in it); the toast is gone after 6 s,
+  // which an emulated apply can outlast before the assertion looks, so the lasting state is asserted
+  await expect(drawer).toBeHidden({ timeout: applyTimeout });
   await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+  const network = page.getByTestId('fault-row').filter({ hasText: 'iot-delay' });
+  await expect(network).not.toContainText('NEW');
+  await expect(network).not.toContainText('not applied yet');
 
   // 4. a fault on device A, from its page; a validation error first
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Devices' }).click();
   const row = page.getByTestId('device-row').filter({ hasText: deviceMAC });
   await expect(row).toBeVisible({ timeout: 5 * 60_000 });
   await row.getByRole('link').click();
+  await expect(page.getByTestId('device-identity')).toContainText(deviceMAC);
   const name = (await page.getByRole('heading', { level: 1 }).textContent())?.trim() ?? '';
   await page.getByRole('button', { name: 'Add fault' }).click();
   const add = page.getByRole('dialog', { name: 'Add fault' });
@@ -78,17 +84,16 @@ test('a configured fault through preview and apply, a conflict with an API chang
   await add.getByLabel('Duration').selectOption({ label: '1 hour' });
   await expect(add.getByTestId('fault-preview')).toContainText(`${name} · All traffic · upload & download → ↑↓ 100 ms · expires after 1 hour`);
   await add.getByRole('button', { name: 'Apply fault' }).click();
-  await expect(page.locator('[data-kind]').filter({ hasText: `Fault active on ${name}` })).toBeVisible({ timeout: applyTimeout });
+  await expect(add).toBeHidden({ timeout: applyTimeout });
   const fault = page.getByTestId('active-fault').filter({ hasText: '↑↓ 100 ms' });
   await expect(fault).toBeVisible();
-  await expect(fault.getByTestId('fault-expiry')).toHaveText(/^(1:00:00|59:\d\d)$/);
+  await expect(fault.getByTestId('fault-expiry')).toHaveText(/^(1:00:00|[45]\d:\d\d)$/); // the apply under emulation takes minutes of the hour
 
   // 5. the faults screen: the network's fault is overridden by A's for A
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Faults' }).click();
-  const network = page.getByTestId('fault-row').filter({ hasText: 'iot-delay' });
   await expect(network.getByTestId('fault-layer')).toHaveText('CONFIGURATION');
   await expect(network.getByTestId('overridden-by')).toContainText(`overridden by ${name} ↑↓ 100 ms (overlay)`, { timeout: 60_000 });
   await expect(network.getByTestId('fault-state')).toHaveText(/overridden/);
-  const own = page.getByTestId('fault-row').filter({ hasText: name }).filter({ hasText: 'OVERLAY' });
+  const own = page.getByTestId('fault-row').filter({ hasText: name }).filter({ hasNotText: 'iot-delay' });
   await expect(own.getByTestId('fault-state')).toHaveText('effective');
 });

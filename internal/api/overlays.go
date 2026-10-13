@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -55,6 +56,11 @@ type overlayContext struct {
 	queues map[string]linux.NormStats
 	// flaps are the flapping faults by compiler.FlapKey
 	flaps map[string]engine.FlapState
+	// world resolves the precedence of the snapshot (who overrides a fault); nil without an active revision
+	world *domain.World
+	// matched notes a reading of a rule's counter and returns when it was last seen growing (nil: not
+	// since the gateway started); nil when no counters were read
+	matched func(counter string, packets, epoch int64) *time.Time
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -65,6 +71,9 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	for _, f := range s.cfg.Engine.Flaps() {
 		oc.flaps[f.Key] = f
 	}
+	if oc.snap.Config != nil {
+		oc.world, _ = domain.NewWorld(oc.snap.Config, oc.snap.Overlays)
+	}
 	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
@@ -72,6 +81,8 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 			return oc
 		}
 		oc.counters = cs
+		now := s.clk.Now()
+		oc.matched = func(counter string, packets, epoch int64) *time.Time { return s.matches.observe(counter, packets, epoch, now) }
 		if len(oc.snap.TCDevs) > 0 {
 			qs, err := s.cfg.Engine.ReadQueues(ctx)
 			if err != nil {
@@ -233,6 +244,10 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
 		}
+		if overridden(st) && ov.Fault != nil {
+			f := ov.Fault
+			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, f.Destination, f.Protocol, f.Ports, map[string]bool{fam: true}))
+		}
 	}
 	if ov.Kind == model.OverlayKindProfile {
 		// the parts of the profile are faults of the overlay's id: their counters and queues add up
@@ -241,6 +256,11 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		ov.Counters = oc.counterOf("overlay", ov.Id.String())
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
+		}
+		if overridden(st) {
+			// every family a part of the profile can compete in: a family without a part has no candidate of the overlay
+			fams := map[string]bool{domain.FamilyImpairment: true, domain.FamilyMTU: true, domain.FamilyDNS: true, domain.FamilyTLS: true}
+			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, fams))
 		}
 	}
 	if ov.Kind == model.OverlayKindRule {
@@ -510,10 +530,6 @@ func (s *Server) faultViews(ctx context.Context, v view) []faultView {
 	if v.active {
 		oc = s.readOverlayContext(ctx, true)
 	}
-	var world *domain.World
-	if v.active && oc.snap.Config != nil {
-		world, _ = domain.NewWorld(oc.snap.Config, oc.snap.Overlays)
-	}
 	var out []faultView
 	for id, f := range deref(v.cfg.Faults) {
 		fv := faultView{ID: id, Config: f, State: model.EffectStateEffective}
@@ -524,8 +540,8 @@ func (s *Server) faultViews(ctx context.Context, v view) []faultView {
 			fv.State = oc.effectOf("config", id, faultFamilyOf(f))
 			fv.Counters = oc.counterOf("config", id)
 			fv.Queues = oc.queuesOf("config", id)
-			if fv.State != model.EffectStateEffective && world != nil {
-				fv.OverriddenBy = s.overriddenBy(oc.snap, world, id, f)
+			if overridden(fv.State) {
+				fv.OverriddenBy = oc.overriddenBy(domain.LayerConfig, id, f.Source, f.Destination, f.Protocol, f.Ports, map[string]bool{faultFamilyOf(f): true})
 			}
 		}
 		out = append(out, fv)
@@ -544,40 +560,53 @@ func deref[T any](p *T) T {
 	return z
 }
 
-// overriddenBy names the faults that beat a configured fault: for the traffic of every device in
-// its scope, the winner of the family at a destination and port the fault selects.
-func (s *Server) overriddenBy(snap *engine.Snapshot, w *domain.World, id string, f model.ConfigFault) []model.FaultRef {
-	if f.Source == nil {
+// overridden reports whether another fault takes some or all of the traffic of a fault.
+func overridden(st model.EffectState) bool {
+	return st == model.EffectStateOverridden || st == model.EffectStatePartiallyOverridden
+}
+
+func refsOrNil(r []model.FaultRef) *[]model.FaultRef {
+	if len(r) == 0 {
+		return nil
+	}
+	return &r
+}
+
+// overriddenBy names the faults that beat a fault (a configured one, a fault overlay or the parts of a
+// profile activation): for the traffic of every device in its scope, the winner of each of its
+// families at a destination and port the fault selects.
+func (oc overlayContext) overriddenBy(layer domain.Layer, id string, scope *model.Scope, dest *model.Destination, proto *model.Protocol, ports *[]int, families map[string]bool) []model.FaultRef {
+	if scope == nil || oc.world == nil {
 		return nil
 	}
 	q := domain.Query{}
-	if f.Destination != nil && f.Destination.Cidr != nil {
-		if pfx, err := netip.ParsePrefix(*f.Destination.Cidr); err == nil {
+	if dest != nil && dest.Cidr != nil {
+		if pfx, err := netip.ParsePrefix(*dest.Cidr); err == nil {
 			q.DestIP = pfx.Addr()
-		} else if a, err := netip.ParseAddr(*f.Destination.Cidr); err == nil {
+		} else if a, err := netip.ParseAddr(*dest.Cidr); err == nil {
 			q.DestIP = a
 		}
 	}
-	if f.Protocol != nil {
-		q.Protocol = string(*f.Protocol)
+	if proto != nil {
+		q.Protocol = string(*proto)
 	}
-	if f.Ports != nil && len(*f.Ports) > 0 {
-		q.Port = (*f.Ports)[0]
+	if ports != nil && len(*ports) > 0 {
+		q.Port = (*ports)[0]
 	}
 	seen := map[string]bool{}
 	var out []model.FaultRef
-	for _, src := range w.Sources(snap.Identity) {
-		if !w.ScopeContains(*f.Source, src.Subject) {
+	for _, src := range oc.world.Sources(oc.snap.Identity) {
+		if !oc.world.ScopeContains(*scope, src.Subject) {
 			continue
 		}
 		q.Source = src.Subject
-		for _, r := range w.Resolve(q) {
-			if r.Winner == nil || r.Family != faultFamilyOf(f) {
+		for _, r := range oc.world.Resolve(q) {
+			if r.Winner == nil || !families[r.Family] {
 				continue
 			}
 			for _, o := range r.Overridden {
-				if strings.EqualFold(o.ID, id) && o.Layer == domain.LayerConfig && !seen[r.Winner.ID] {
-					seen[r.Winner.ID] = true
+				if strings.EqualFold(o.ID, id) && o.Layer == layer && !seen[r.Winner.ID+"/"+r.Family] {
+					seen[r.Winner.ID+"/"+r.Family] = true
 					out = append(out, r.Winner.Ref(""))
 				}
 			}

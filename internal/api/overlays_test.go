@@ -492,11 +492,30 @@ func TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden(t *testing.T) 
 	if st := state("/overlays/" + net["id"].(string)); st != "partially_overridden" {
 		t.Errorf("the network overlay: %v", st)
 	}
+	// an overlay names what beats it, like a configured fault (M13: the faults screen's "overridden by")
+	byIDs := func(path string) []any {
+		t.Helper()
+		var ids []any
+		by, _ := g.do("GET", path, nil, nil, nil).json(t)["overridden_by"].([]any)
+		for _, b := range by {
+			ids = append(ids, b.(map[string]any)["id"])
+		}
+		return ids
+	}
+	if ids := byIDs("/overlays/" + net["id"].(string)); len(ids) != 1 || ids[0] != dev["id"] {
+		t.Errorf("the network overlay is overridden by %v, want the device fault %v", ids, dev["id"])
+	}
+	if ids := byIDs("/overlays/" + dev["id"].(string)); len(ids) != 0 {
+		t.Errorf("an effective overlay is overridden by %v", ids)
+	}
 	if st := state("/faults/slow-iot"); st != "overridden" {
 		t.Errorf("the configured network fault below the overlays: %v", st)
 	}
 	if st := state("/overlays/" + group["id"].(string)); st != "overridden" {
 		t.Errorf("the group overlay: %v", st)
+	}
+	if ids := byIDs("/overlays/" + group["id"].(string)); len(ids) != 1 || ids[0] != dev["id"] {
+		t.Errorf("the group overlay (its one member has a fault of its own) is overridden by %v", ids)
 	}
 	listed := map[any]any{}
 	for _, it := range g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any) {
@@ -515,6 +534,9 @@ func TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden(t *testing.T) 
 	prof := g.mustCreateOverlay(`{"target":{"network":"IoT"},"profile":"lte"}`)
 	if st := state("/overlays/" + prof["id"].(string)); st != "partially_overridden" {
 		t.Errorf("the activation: %v", st)
+	}
+	if ids := byIDs("/overlays/" + prof["id"].(string)); len(ids) != 1 || ids[0] != dev["id"] {
+		t.Errorf("the activation is overridden by %v, want the device fault", ids)
 	}
 	card := g.do("GET", "/profiles/lte", nil, nil, nil).json(t)
 	if acts, _ := card["activations"].([]any); len(acts) != 1 || acts[0].(map[string]any)["state"] != "partially_overridden" {

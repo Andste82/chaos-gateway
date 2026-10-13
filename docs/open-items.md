@@ -644,13 +644,16 @@ stayed open".
 
 ## Phase 3 open items
 
-Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12 and M13; each records the option that was
+Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12, M13 and M14; each records the option that was
 implemented so the work was not blocked, and what the maintainer may want to decide. The reasons are the ones of "Why items
 stayed open".
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 
-- Status: new
+- Status: closed (2026-10-13, M14): option (a) — `POST /revisions/{id}/rollback` (only for the revision that is
+  `pending_confirm`, the rollback the deadline runs, event `revision_rolled_back` with `reason` `requested` and, for every
+  rollback, `restored`), and the banner's Roll back now (`TestARevisionWaitingForConfirmationIsRolledBackOnRequest`,
+  `networks.spec.ts` "commit-confirm: Roll back now ends the waiting at once")
 - Severity: low
 - Reason: needs-decision. Plan §2.17 ("Commit-confirm") asks for an orange banner with a live countdown and the actions
   Confirm and Roll back now. The API has `POST /revisions/{id}/confirm`, but nothing that ends a `pending_confirm` revision
@@ -888,4 +891,75 @@ stayed open".
   (and a CIDR field) in the selectors, with M14's WireGuard views; (b) keep them API-only. Recommendation: (a) in M14.
 - Acceptance: with (a), a Playwright test creates a fault on a client's networks and the request carries the scope.
 - Needs maintainer: yes
+- Effort: S
+
+### P3-M14-01 Networks, clients after they were added and the routing configuration are not edited in the UI
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. M14 Scope lists "network cards and detail", "WireGuard networks with client list, client status,
+  add-client dialog", "routing view" and "access matrix editing". Plan §2.2.1 also names creating, editing and deleting
+  WireGuard networks, enabling/disabling clients, rotating their keys and deleting them; the prototype has "Add network";
+  §2.2.2 configures the routing protocols in the model.
+- Evidence: `web/src/views/NetworksView.vue`, `web/src/components/networks/`; plan §2.2.1 "Managing networks and clients",
+  §2.17 "Networks".
+- Task: implemented — the networks view shows every network, adds WireGuard clients and edits the access matrix through the
+  draft; networks, the settings of existing clients and the routing are changed through the API or the configuration import.
+  Options: (a) forms for a network (LAN: subnet, ports, DHCP, DNS; WireGuard: kind, role, endpoint), client actions (disable,
+  rotate keys, delete) and the routing protocols, each through the draft, in a milestone of their own; (b) keep them API-only
+  in V1. Recommendation: (a) for the client actions (small, the draft supports clients already), (b) for the rest until users
+  ask.
+- Acceptance: the milestone that takes them lists them; a Playwright test edits each through the drawer.
+- Needs maintainer: yes
+- Effort: S (client actions), M (network and routing forms)
+
+### P3-M14-02 An access matrix change never waits for confirmation
+
+- Status: new
+- Severity: low
+- Reason: plan-error (small contradiction). M14 Scope says "access matrix editing with commit-confirm"; plan §2.17
+  ("Networks") says "commit-confirm only if it is lockout-relevant", and the gateway's `LockoutRelevant` counts the
+  management settings, the uplink in the two-port topology and management-role WireGuard networks, not the matrix: the
+  control plane is protected by gateway protection and the anti-lockout rule, which the matrix cannot change.
+- Evidence: `internal/engine/lockout.go`; `web/src/components/networks/AccessMatrix.vue`; `web/e2e/networks.spec.ts`.
+- Task: implemented — the matrix goes through the draft, the preview and the apply, and the apply waits for confirmation
+  when the gateway says so; the UI's commit-confirm is shown with the change of the networks view that is lockout-relevant, a
+  client of a management hub (mocked API and testbed flow). Options: (a) keep it; (b) count matrix entries that touch the
+  management network or a management-role WireGuard network as lockout-relevant. Recommendation: (a); reword M14's Scope to
+  "access matrix editing (commit-confirm where lockout-relevant)".
+- Acceptance: the decision is recorded here and the plan's two sentences say the same.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M14-03 The technical view shows the kernel state per network and as a whole, not per device, rule or fault
+
+- Status: new
+- Severity: low
+- Reason: deferred. Plan §2.17 "Technical view": "Per object, the compiled configuration next to the domain view …
+  Reached from 'Show Linux view' / 'Show Linux changes' links". M14 Scope names the "compiled-state view (nftables, tc,
+  routes, WireGuard)". The gateway renders the `nft -j` listing in nft syntax itself (`linux.RenderNft`); an expression the
+  renderer does not know is shown as its JSON.
+- Evidence: `internal/api/system.go` (`GetLinuxState`), `internal/apply/render.go`, `internal/linux/nftrender.go`,
+  `web/src/views/LinuxStateView.vue`, `web/src/lib/linuxView.ts`.
+- Task: implemented — `GET /state/linux` and the Linux view with its four parts and a word filter; "Show Linux view" on a
+  network (its interface and subnet) and on the access matrix (the forward chain); the preview keeps its "Show Linux
+  changes". Options: (a) "Show Linux view" on a device (its identity map elements and classification), a rule (its rule
+  and counter) and a fault (its classes and netem queues), by the keys the compiler gives them; (b) keep the network and
+  global views. Recommendation: (a) after V1, when users ask.
+- Acceptance: with (a), a Playwright test opens the Linux view of a rule and of a fault.
+- Needs maintainer: yes
+- Effort: M
+
+### P3-M14-04 The browser flow of M14 in the testbed
+
+- Status: new
+- Severity: low
+- Reason: env-limit. `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` needs network namespaces; here it runs only
+  in the QEMU VM under software emulation (level 1b) and in CI (job `testbed-ui`, `-run InTheBrowser`).
+- Evidence: `internal/api/e2e_ui_test.go`, `web/e2e-testbed/wireguard.spec.ts`, `docs/development.md` "Web UI: networks,
+  WireGuard, routing and the technical view".
+- Task: the local VM run passed (2026-10-13, 18 minutes, recorded in docs/development.md); check the first CI run
+  of the job with the M14 flow.
+- Acceptance: the job `testbed-ui` passes with the three browser flows.
+- Needs maintainer: no
 - Effort: S

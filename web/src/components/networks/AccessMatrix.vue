@@ -4,18 +4,22 @@
 // Blocked, and whether that is the default (a local test network may reach the uplink, everything else
 // is blocked) or an entry of the configuration. A click changes the cell in the configuration draft: the
 // unapplied-changes bar counts it, and it goes through the preview and the apply like any other change;
-// the apply waits for confirmation only when the gateway says the change could lock the admin out.
+// the apply waits for confirmation only when the gateway says the change could lock the admin out. Its
+// entries come from the active revision: until it is loaded the matrix says so instead of showing the
+// defaults as if they were the policy.
 import { computed, ref } from 'vue';
 import type { NetworkView, WireGuardNetwork } from '../../api/generated/model';
-import { useNames } from '../../composables/gateway';
+import { firstError, useActiveConfig, useNames } from '../../composables/gateway';
 import { cellOf, describeEndpoint, entryKey } from '../../lib/networks';
 import { useDraftStore } from '../../stores/draft';
+import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
 import LinuxExcerpt from './LinuxExcerpt.vue';
 
 const props = defineProps<{ networks: NetworkView[] }>();
 const draft = useDraftStore();
 const { names } = useNames();
+const active = useActiveConfig();
 
 const rows = computed(() => props.networks.map((n) => ({ key: `network:${n.id}`, name: (n.config as { name: string }).name })));
 const cols = computed(() => [{ key: 'uplink', name: 'Internet' }, ...rows.value, { key: 'management', name: 'Management' }]);
@@ -57,7 +61,10 @@ const linux = ref(false);
 <template>
   <SectionCard title="Access between networks">
     <template #actions><span class="text-xs text-text-3">Click a cell to change it · applies through preview</span></template>
+    <LoadError v-if="!ready && firstError(active)" :error="firstError(active)" what="The access matrix is not loaded" :retry="active.refetch" />
+    <p v-else-if="!ready" class="m-0 text-sm text-text-2" role="status">Loading the access matrix…</p>
     <div
+      v-else
       class="grid items-center gap-2"
       :style="{ gridTemplateColumns: `150px repeat(${cols.length}, minmax(0, 1fr))` }"
       role="group"
@@ -80,7 +87,6 @@ const linux = ref(false);
             ]"
             :aria-pressed="cell(r.key, c.key).policy === 'allow'"
             :aria-label="label(r, c, cell(r.key, c.key))"
-            :disabled="!ready"
             :data-cell="`${r.name}>${c.name}`"
             @click="draft.toggleMatrix(r.key, c.key)"
           >

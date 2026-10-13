@@ -179,6 +179,33 @@ export function clientFromForm(f: ClientForm): WireGuardClient {
   return c;
 }
 
+/** The form of a client of the draft, to edit it again (the reverse of `clientFromForm`). */
+export function formFromClient(c: WireGuardClient): ClientForm {
+  return {
+    name: c.name,
+    address: c.address,
+    clientNetworks: (c.client_networks ?? []).join(', '),
+    reachable: (c.reachable ?? []).map(endpointKey),
+    dns: c.dns?.mode === 'none' ? 'none' : c.dns?.mode === 'custom' ? 'custom' : 'gateway',
+    dnsServers: (c.dns?.servers ?? []).join(', '),
+    keepalive: c.keepalive ?? '25s',
+    keyMode: c.key?.mode === 'provided' ? 'provided' : 'generated',
+    publicKey: c.key?.public_key ?? '',
+    presharedKey: !!c.key?.preshared_key,
+    exportOnce: !!c.key?.export_once,
+  };
+}
+
+/**
+ * The field of the add-client form a message of the gateway belongs to, by the first part of its
+ * pointer below the client (`address`, `client_networks`, …); undefined for one about the client as a
+ * whole or a part the form does not have.
+ */
+export function clientFieldOf(pointer: string): ClientField | undefined {
+  const fields: Record<string, ClientField> = { name: 'name', address: 'address', client_networks: 'clientNetworks', dns: 'dnsServers', keepalive: 'keepalive', key: 'publicKey' };
+  return fields[pointer];
+}
+
 // ---- the access matrix -------------------------------------------------------------------------
 
 /** A matrix endpoint as a key: `uplink`, `management`, `network:<id>`, `client:<id>`. */

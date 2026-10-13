@@ -8,6 +8,7 @@
 // view and the technical view are pages of their own.
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { errorMessage } from '../api/fetcher';
 import { useGetUplink } from '../api/generated/hooks/config/config';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -128,7 +129,11 @@ const hub = computed(() => {
         <span class="flex items-center gap-2 text-base font-semibold">
           Management <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">OS</span>
         </span>
-        <span class="mono text-xs text-text-2">
+        <span v-if="active.isLoading.value" class="text-xs text-text-2">Loading…</span>
+        <span v-else-if="firstError(active)" class="text-xs text-block-text" data-testid="management-error">
+          Not loaded: {{ errorMessage(firstError(active)) }}
+        </span>
+        <span v-else class="mono text-xs text-text-2">
           {{ management?.interface.name ?? management?.interface.mac ?? '—' }}<template v-if="management?.allowed_sources?.length">
             · {{ management.allowed_sources.join(', ') }}</template
           >
@@ -139,12 +144,19 @@ const hub = computed(() => {
         <span class="flex items-center gap-2 text-base font-semibold">
           Uplink <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">OS</span>
         </span>
-        <span class="mono text-xs text-text-2">{{ up?.status.address ?? 'no address' }} · {{ up?.status.interface ?? up?.config.interface.name ?? '—' }}</span>
-        <span class="text-[13px] text-text-2">
-          <template v-if="up?.status.gateway">via {{ up.status.gateway }} · </template>masquerade<template v-if="up && up.status.link_up === false">
-            · link down</template
-          >
-        </span>
+        <span v-if="uplink.isLoading.value" class="text-xs text-text-2">Loading…</span>
+        <template v-else-if="firstError(uplink)">
+          <span class="text-xs text-block-text" role="alert" data-testid="uplink-error">Not loaded: {{ errorMessage(firstError(uplink)) }}</span>
+          <button type="button" class="btn btn-sm" @click="uplink.refetch()">Try again</button>
+        </template>
+        <template v-else>
+          <span class="mono text-xs text-text-2">{{ up?.status.address ?? 'no address' }} · {{ up?.status.interface ?? up?.config.interface.name ?? '—' }}</span>
+          <span class="text-[13px] text-text-2">
+            <template v-if="up?.status.gateway">via {{ up.status.gateway }} · </template>masquerade<template v-if="up && up.status.link_up === false">
+              · link down</template
+            >
+          </span>
+        </template>
       </div>
     </nav>
 

@@ -5,18 +5,36 @@
 // field and "Preview & apply" waits until the form is valid (plan §2.17 "Validation"). The client goes
 // into the configuration draft and the preview-and-apply drawer opens, like every configuration change;
 // a hub with the role management makes the change lockout-relevant, so the apply waits for confirmation.
+// A client of the draft the gateway refused opens again in this dialog (`fix`): its fields as they were,
+// the gateway's messages under the fields they are about until the form is changed.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import type { NetworkView, WireGuardClientView, WireGuardNetwork } from '../../api/generated/model';
 import { useDevices, useGatewayState } from '../../composables/gateway';
 import { newId } from '../../lib/ids';
-import { clientFormErrors, clientFromForm, emptyClientForm, nextFreeAddress, subnetText, type ClientField, type ClientForm } from '../../lib/networks';
+import {
+  clientFieldOf,
+  clientFormErrors,
+  clientFromForm,
+  emptyClientForm,
+  formFromClient,
+  nextFreeAddress,
+  subnetText,
+  type ClientField,
+  type ClientForm,
+} from '../../lib/networks';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 
-const props = defineProps<{ hub: NetworkView; networks: NetworkView[]; clients: WireGuardClientView[] }>();
+const props = defineProps<{
+  hub: NetworkView;
+  networks: NetworkView[];
+  clients: WireGuardClientView[];
+  /** A client of the draft the gateway refused, to fix. */
+  fix?: string;
+}>();
 const open = defineModel<boolean>('open', { required: true });
 
 const draft = useDraftStore();
@@ -32,14 +50,26 @@ const tried = ref(false);
 const error = ref('');
 const busy = ref(false);
 
-/** The tunnel addresses taken: the hub's clients as the gateway has them and as the draft has them. */
-const used = computed(() => [...props.clients.map((c) => c.config.address), ...Object.values(draft.effectiveClients(props.hub.id)).map((c) => c.address)]);
+/** The tunnel addresses taken: the hub's clients as the gateway has them and as the draft has them (but the one being fixed). */
+const used = computed(() => [
+  ...props.clients.filter((c) => c.id !== props.fix).map((c) => c.config.address),
+  ...Object.entries(draft.effectiveClients(props.hub.id))
+    .filter(([id]) => id !== props.fix)
+    .map(([, c]) => c.address),
+]);
+
+/** What the gateway refused of the client being fixed, by the pointer below the client, and the form it refused. */
+const refused = ref<Record<string, string>>({});
+let refusedForm = '';
 
 watch(open, (o) => {
   if (!o) return;
-  form.value = emptyClientForm(nextFreeAddress(wg.value.address, used.value) ?? '');
-  advanced.value = false;
-  tried.value = false;
+  const fixing = props.fix ? draft.effectiveClients(props.hub.id)[props.fix] : undefined;
+  form.value = fixing ? formFromClient(fixing) : emptyClientForm(nextFreeAddress(wg.value.address, used.value) ?? '');
+  refused.value = (props.fix && draft.serverErrors[props.fix]) || {};
+  refusedForm = JSON.stringify(form.value);
+  advanced.value = !!fixing && Object.keys(refused.value).some((k) => !['name', 'address', 'client'].includes(k));
+  tried.value = !!fixing;
   error.value = '';
 });
 
@@ -47,13 +77,28 @@ const takenNames = computed(() => {
   const out = (devices.data.value ?? []).map((d) => d.name.toLowerCase());
   for (const n of props.networks) {
     if (n.config.type !== 'wireguard') continue;
-    for (const c of Object.values(draft.effectiveClients(n.id))) out.push(c.name.toLowerCase());
+    for (const [id, c] of Object.entries(draft.effectiveClients(n.id))) if (id !== props.fix) out.push(c.name.toLowerCase());
   }
-  for (const c of props.clients) out.push(c.config.name.toLowerCase());
+  for (const c of props.clients) if (c.id !== props.fix) out.push(c.config.name.toLowerCase());
   return out;
 });
-const errors = computed(() => clientFormErrors(form.value, { hubAddress: wg.value.address, usedAddresses: used.value, takenNames: takenNames.value }));
-const valid = computed(() => Object.keys(errors.value).length === 0);
+const formErrors = computed(() => clientFormErrors(form.value, { hubAddress: wg.value.address, usedAddresses: used.value, takenNames: takenNames.value }));
+/** The gateway's messages while the form is the one it refused: by field, and those no field shows. */
+const server = computed(() => {
+  const byField: Partial<Record<ClientField, string>> = {};
+  const general: string[] = [];
+  if (JSON.stringify(form.value) !== refusedForm) return { byField, general };
+  for (const [pointer, message] of Object.entries(refused.value)) {
+    const f = clientFieldOf(pointer);
+    const shownField = f && (f !== 'dnsServers' || form.value.dns === 'custom') && (f !== 'publicKey' || form.value.keyMode === 'provided');
+    if (shownField) byField[f] = message;
+    else general.push(message);
+  }
+  return { byField, general };
+});
+const errors = computed(() => ({ ...server.value.byField, ...formErrors.value }));
+// the form the gateway refused is not sent again unchanged; a change of it may be the fix, and the gateway checks again
+const valid = computed(() => Object.keys(formErrors.value).length === 0 && Object.keys(server.value.byField).length + server.value.general.length === 0);
 // the messages appear once Preview & apply was pressed, then follow every change; the address is
 // checked from the start, since it was proposed and a change of it should say at once what is wrong
 function shown(f: ClientField): string | undefined {
@@ -80,7 +125,7 @@ watch(
               method: 'POST',
               path: '/revisions',
               headers: { 'Content-Type': 'application/merge-patch+json', 'If-Match': `"${draft.base ?? state.data.value?.active_revision}"` },
-              body: { networks: { [props.hub.id]: { clients: { '<new uuid>': clientFromForm(form.value) } } } },
+              body: { networks: { [props.hub.id]: { clients: { [props.fix ?? '<new uuid>']: clientFromForm(form.value) } } } },
               note: 'the candidate; then …/preview and …/apply',
             },
           ],
@@ -97,7 +142,7 @@ async function submit() {
   error.value = '';
   try {
     if (!draft.dirty) draft.track(await getActiveRevision());
-    draft.setClient(props.hub.id, newId(), clientFromForm(form.value));
+    draft.setClient(props.hub.id, props.fix ?? newId(), clientFromForm(form.value));
     open.value = false;
     draft.drawerOpen = true;
   } catch (e) {
@@ -114,7 +159,7 @@ function toggleReach(key: string, on: boolean) {
 </script>
 
 <template>
-  <ModalDialog v-model:open="open" :title="`Add client to ${wg.name}`" :description="`A WireGuard peer of the hub, with a tunnel address in ${subnetText(wg.address)}.`" width="600px">
+  <ModalDialog v-model:open="open" :title="fix ? `Fix client of ${wg.name}` : `Add client to ${wg.name}`" :description="`A WireGuard peer of the hub, with a tunnel address in ${subnetText(wg.address)}.`" width="600px">
     <form class="flex flex-col gap-4" novalidate data-testid="add-client" @submit.prevent="submit">
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -132,7 +177,7 @@ function toggleReach(key: string, on: boolean) {
             :aria-describedby="shown('address') ? `${uid}-address-error` : `${uid}-address-hint`"
           />
           <p v-if="shown('address')" :id="`${uid}-address-error`" class="field-error">{{ shown('address') }}</p>
-          <p v-else :id="`${uid}-address-hint`" class="mt-1.5 mb-0 text-xs text-text-3">The next free address of the hub.</p>
+          <p v-else :id="`${uid}-address-hint`" class="mt-1.5 mb-0 text-xs text-text-3">{{ fix ? 'An address of the hub no other client has.' : 'The next free address of the hub.' }}</p>
         </div>
       </div>
 
@@ -221,6 +266,7 @@ function toggleReach(key: string, on: boolean) {
         its configuration and QR code are in the client list.
         <span v-if="management" class="mt-1 block text-fault-text">{{ wg.name }} is a management network: the apply waits for your confirmation, and the client is listed once it is confirmed.</span>
       </div>
+      <p v-if="server.general.length" class="field-error" role="alert" data-testid="add-client-refused">The gateway refused the client: {{ server.general.join(' ') }}</p>
       <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text">Another revision waits for confirmation; add the client after it is resolved.</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
       <div class="flex justify-end gap-2">

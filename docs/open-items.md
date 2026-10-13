@@ -819,7 +819,8 @@ stayed open".
 
 ### P3-M13-05 The browser flow of M13 in the testbed
 
-- Status: new
+- Status: closed (2026-10-13): CI run 38411177290 on PR #56, job `testbed UI flow`, ran
+  `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` and it passed
 - Severity: low
 - Reason: env-limit. `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` needs network namespaces; here it runs only in the
   QEMU VM under software emulation (level 1b) and in CI (job `testbed-ui`).

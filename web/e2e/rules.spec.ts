@@ -141,7 +141,10 @@ test('add, move and delete rules: new rows, the order in the patch, a deleted ru
   await expect(rows(page).nth(4)).toContainText('rule-4');
   await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
   await page.getByRole('button', { name: 'Delete' }).click();
-  await expect(rows(page)).toHaveCount(5);
+  // the deleted rule stays at its place, struck through, until the draft is applied
+  await expect(rows(page)).toHaveCount(6);
+  await expect(rows(page).nth(3).getByTestId('rule-deleted')).toBeVisible();
+  await expect(rows(page).nth(3)).toContainText('no-dns');
   await expect(bar(page)).toHaveText(/2 changes in 2 rules/);
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
@@ -150,6 +153,35 @@ test('add, move and delete rules: new rows, the order in the patch, a deleted ru
   const added = Object.keys(body.access_rules).find((k) => k !== RULE_DNS)!;
   expect(body.access_rules[added]).toEqual({ name: 'rule-4', source: { network: IOT }, destination: { uplink: true }, protocol: 'any', action: 'drop', enabled: true });
   expect(body.access_rule_order).toEqual([RULE_DOT, added, RULE_WEB]);
+});
+
+test('a deleted rule is shown struck through at its place, and Undo brings it back there', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(2).getByRole('button', { name: 'Edit rule no-dot' }).click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await expect(rows(page)).toHaveCount(5);
+  await expect(rows(page).nth(2).getByTestId('rule-deleted')).toBeVisible();
+  await expect(rows(page).nth(2)).toContainText('no-dot');
+  await expect(rows(page).nth(2)).toContainText('removed when applied');
+  await expect(rows(page).nth(2).getByRole('switch')).toHaveCount(0);
+  // the rules behind it move up one position
+  await expect(rows(page).nth(3)).toContainText('1no-dns');
+  await expect(bar(page)).toHaveText(/1 change in 1 rule/);
+  await rows(page).nth(2).getByRole('button', { name: 'Undo the deletion of rule no-dot' }).click();
+  await expect(page.getByTestId('rule-deleted')).toHaveCount(0);
+  await expect(rows(page).nth(2)).toContainText('1no-dot');
+  await expect(rows(page).nth(3)).toContainText('2no-dns');
+  await expect(bar(page)).toBeHidden();
+
+  // applied: the deleted rule is gone from the list
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('dialog', { name: 'Preview revision 43' }).getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  await expect(page.getByTestId('rule-deleted')).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(4);
+  expect((gw.requestsTo('POST', '/revisions')[0]!.body as { access_rules: Record<string, unknown> }).access_rules[RULE_DNS]).toBeNull();
 });
 
 test('validation: the message stands under the field and Preview & apply waits until the rule is valid', async ({ page }) => {

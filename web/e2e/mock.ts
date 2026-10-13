@@ -233,6 +233,8 @@ const preflightWarn: PreflightReport = {
 export interface Recorded {
   method: string;
   path: string;
+  /** The query parameters. */
+  query: Record<string, string>;
   headers: Record<string, string>;
   body: unknown;
 }
@@ -288,6 +290,8 @@ export class MockGateway {
   systemRuleCounters = { packets: 4812, bytes: 38_000_000, epoch: 1, last_match: new Date().toISOString() };
   /** The next POST /revisions is refused with 422 and these errors. */
   rejectRevision?: ValidationError[];
+  /** POST /revisions answers only after this settles (a candidate that takes its time). */
+  revisionGate?: Promise<void>;
   /** The next apply fails at this step (`apply` or `verify`). */
   failApply?: 'apply' | 'verify';
   /** The next POST /overlays is refused with 422 and these errors. */
@@ -397,7 +401,7 @@ export class MockGateway {
     } catch {
       body = request.postData();
     }
-    this.requests.push({ method, path, headers: request.headers(), body });
+    this.requests.push({ method, path, query: Object.fromEntries(url.searchParams), headers: request.headers(), body });
     const headers: Record<string, string> = this.clockSkewMs ? { Date: new Date(this.now()).toUTCString() } : {};
     const json = (status: number, data: unknown) =>
       route.fulfill({ status, headers, contentType: status >= 400 ? 'application/problem+json' : 'application/json', body: JSON.stringify(data) });
@@ -486,6 +490,7 @@ export class MockGateway {
       return route.fulfill({ status: 204 });
     }
     if (path === '/revisions' && method === 'POST') {
+      await this.revisionGate;
       const base = /"(\d+)"/.exec(request.headers()['if-match'] ?? '')?.[1];
       if (this.conflictOnce || Number(base) !== this.state.active_revision) {
         this.conflictOnce = false;

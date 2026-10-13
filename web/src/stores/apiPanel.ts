@@ -17,8 +17,8 @@ export interface ApiCall {
 /**
  * The `</> API` panel (plan §2.17: every UI action has an API equivalent, and the UI can show it).
  * A screen says what it reads (`context`), an open dialog what it would send, and every action
- * records the requests it made (`last`); the panel shows the last action, else the dialog's or the
- * screen's requests, as HTTP and as curl.
+ * records the requests it made (`last`); the panel shows the open dialog's requests, else the last
+ * action, else the screen's requests, as HTTP and as curl.
  */
 export const useApiPanelStore = defineStore('apiPanel', () => {
   const open = ref(false);

@@ -2,7 +2,7 @@
 // case (latency, jitter, loss) and the advanced ones, the presets to start from, the checks under
 // the fields, the live preview sentence, and the request it becomes — an overlay
 // (`POST /overlays`) or a configured fault in a candidate revision.
-import type { ConfigFault, FaultBody, NetemParams, Overlay, OverlayRequest, Protocol, Scope } from '../api/generated/model';
+import type { ConfigFault, FaultBody, NetemParams, OverlayRequest, Protocol, Scope } from '../api/generated/model';
 import {
   createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp,
 } from '../api/generated/zod/overlays/overlays';
@@ -159,6 +159,10 @@ export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'ove
     else if ((p.ports || p.port_ranges) && f.protocol !== 'tcp' && f.protocol !== 'udp') e.ports = 'Ports need the protocol TCP or UDP.';
     if (f.destination.trim() && !cidrRegExp.test(f.destination.trim())) e.destination = 'An IPv4 address or a prefix like 203.0.113.0/24.';
   }
+  // the gateway refuses a fault that changes nothing ("the fault sets no parameter"); keeping the
+  // packet order alone changes nothing either
+  const { keep_order: _keep, ...params } = netem(f);
+  if (!e.latency && Object.keys(params).length === 0) e.latency = 'Set at least one parameter: latency, loss, a rate, …';
   if (layer === 'config' && f.name && !nameRegExp.test(f.name)) e.name = 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.';
   if (!f.target) e.target = 'Choose a target.';
   return e;
@@ -305,10 +309,30 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
 }
 
 /**
- * The key of a fault overlay without its owner (plan §2.1.1): target, family and selector. Writing an
- * overlay with the same key replaces it; with another key it is a new overlay.
+ * The form's field of a problem the gateway reported, by its JSON pointer: "/fault/jitter",
+ * "/fault/upload/latency", "/target", "/faults/<id>/source/device"; undefined for the fault as a whole.
  */
-export function overlayKey(o: Pick<Overlay, 'target' | 'fault'>): string {
-  const f = o.fault ?? {};
-  return JSON.stringify([o.target ?? {}, f.family ?? 'impairment', f.destination ?? {}, f.protocol ?? 'any', f.ports ?? [], f.port_ranges ?? []]);
+export function fieldOf(path: string | undefined): FaultField | undefined {
+  // the last name in the pointer, past the index of a list ("/ports/0")
+  const last = (path ?? '').split('/').filter((s) => s && !/^\d+$/.test(s)).at(-1) ?? '';
+  const map: Record<string, FaultField> = {
+    latency: 'latency',
+    jitter: 'jitter',
+    loss: 'loss',
+    rate: 'rate',
+    reorder: 'reorder',
+    duplicate: 'duplicate',
+    corrupt: 'corrupt',
+    ports: 'ports',
+    port_ranges: 'ports',
+    destination: 'destination',
+    cidr: 'destination',
+    name: 'name',
+    target: 'target',
+    source: 'target',
+    device: 'target',
+    network: 'target',
+    group: 'target',
+  };
+  return map[last];
 }

@@ -830,3 +830,25 @@ stayed open".
 - Acceptance: the job `testbed-ui` passes with both browser flows.
 - Needs maintainer: no
 - Effort: S
+
+### P3-M13-06 Editing an overlay of another owner replaces it with the admin's
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.1.1 keys an overlay by *(owner, kind, target, selector)*, and a UI action's owner is the
+  admin user (§2.15). Writing an edited overlay of an API token or a scenario run from the browser therefore creates a
+  second overlay instead of replacing it. The plan does not say how the UI treats other owners' overlays.
+- Evidence: `web/src/components/faults/FaultDialog.vue` (`submit`, the owner note), `web/e2e/faults.spec.ts` "edit a fault
+  overlay of an API token: the admin's fault replaces it, and the dialog says so".
+- Task: implemented — option (a), closest to what "Edit" promises: the dialog names the owner ("Set by the token
+  ci-runner. Applying removes it and puts a fault of yours in its place."), writes the admin's overlay and removes the old
+  one whenever the gateway answers with another id. Options: (a) take it over, as now; (b) show other owners' overlays
+  read-only with their owner (remove only), as the overlay rules are. A run whose overlay was taken over keeps running and
+  may write its step's overlay again. Second question: an edit sends the overlay's TTL again, so the countdown starts over
+  (a 5-minute fault with 1 minute left gets 5 minutes), and a TTL the dialog does not list (e.g. `30m` from the API) becomes
+  15 minutes. Options: (c) start a new TTL, as now; (d) keep the remaining time (send it as the TTL, or a `keep_ttl` field
+  in the API). Recommendation: (a) and (c), with the dialog listing the overlay's own TTL when it is not one of its choices.
+- Acceptance: the decision is recorded here; with (b), a Playwright test shows another owner's overlay without Edit; with
+  (d), a test edits a fault and keeps its expiry.
+- Needs maintainer: yes
+- Effort: S

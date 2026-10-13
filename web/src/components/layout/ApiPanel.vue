@@ -1,15 +1,15 @@
 <script setup lang="ts">
 // The `</> API` panel (plan §2.17: "every UI action has an API equivalent, and the UI can show it"):
-// the requests of the last action on this screen ("the same action from a test"), else what the
-// open dialog would send, else what the screen reads, as HTTP or as curl with an API token.
+// what the open dialog would send, else the requests of the last action on this screen ("the same
+// action from a test"), else what the screen reads, as HTTP or as curl with an API token.
 import { computed, ref } from 'vue';
 import { curlOf, httpOf, useApiPanelStore } from '../../stores/apiPanel';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 
 const store = useApiPanelStore();
 const format = ref('http');
-const shown = computed(() => store.last ?? store.draft ?? store.context);
-const heading = computed(() => (store.last ? 'Last action' : store.draft ? 'This dialog' : 'This screen'));
+const shown = computed(() => store.draft ?? store.last ?? store.context);
+const heading = computed(() => (store.draft ? 'This dialog' : store.last ? 'Last action' : 'This screen'));
 </script>
 
 <template>

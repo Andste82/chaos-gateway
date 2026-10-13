@@ -8,7 +8,7 @@ defineProps<{ label: string }>();
   <div
     role="region"
     :aria-label="label"
-    class="sticky bottom-0 z-30 flex items-center justify-between gap-4 border-t border-accent-strong bg-surface-2 px-6 py-3"
+    class="sticky bottom-0 z-30 mt-auto flex items-center justify-between gap-4 border-t border-accent-strong bg-surface-2 px-6 py-3"
   >
     <div class="text-sm"><slot /></div>
     <div class="flex gap-2"><slot name="actions" /></div>

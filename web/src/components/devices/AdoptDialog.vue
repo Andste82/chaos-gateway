@@ -2,7 +2,8 @@
 // Adopt a discovered device (plan §2.3, §2.17): it becomes a configured device under the same UUID,
 // with a name and its MAC, through a candidate revision that is applied and verified. The dialog
 // says what will change before anything does. A configuration changed by someone else meanwhile is
-// refused by the gateway (409 revision_conflict); the full conflict dialog comes with M13.
+// refused by the gateway (409 revision_conflict): the concurrent-change dialog says who changed what
+// and adopts the device again on the new revision, or drops the adoption.
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
@@ -11,6 +12,7 @@ import type { DeviceView } from '../../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../../api/generated/zod/system/system';
 import { useGatewayState } from '../../composables/gateway';
 import { useToastStore } from '../../stores/toasts';
+import ConflictDialog from '../apply/ConflictDialog.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
 const props = defineProps<{ device: DeviceView | undefined; networkName?: string }>();
@@ -21,6 +23,14 @@ const queryClient = useQueryClient();
 const toasts = useToastStore();
 
 const name = ref('');
+/** The base the gateway refused: the concurrent-change dialog is open. */
+const conflictBase = ref<number>();
+const conflictOpen = computed({
+  get: () => conflictBase.value !== undefined,
+  set: (v) => {
+    if (!v) conflictBase.value = undefined;
+  },
+});
 const error = ref('');
 const busy = ref(false);
 
@@ -39,6 +49,17 @@ watch(open, (o) => {
 const nameError = computed(() =>
   nameRegExp.test(name.value) ? '' : 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.',
 );
+
+async function reapply() {
+  conflictBase.value = undefined;
+  await queryClient.refetchQueries({ queryKey: ['state'] });
+  await adopt();
+}
+
+function dropAdoption() {
+  conflictBase.value = undefined;
+  open.value = false;
+}
 
 async function adopt() {
   const d = props.device;
@@ -67,7 +88,7 @@ async function adopt() {
     await queryClient.invalidateQueries({ queryKey: ['state'] });
   } catch (e) {
     if (e instanceof ApiError && e.code === 'revision_conflict') {
-      error.value = 'The configuration was changed meanwhile. Close the dialog and adopt the device again.';
+      conflictBase.value = base.value;
       await queryClient.invalidateQueries({ queryKey: ['state'] });
     } else if (e instanceof ApiError && e.code === 'name_taken') {
       error.value = 'Another device has this name.';
@@ -107,4 +128,12 @@ async function adopt() {
       </div>
     </form>
   </ModalDialog>
+  <ConflictDialog
+    v-if="conflictBase !== undefined"
+    v-model:open="conflictOpen"
+    :base="conflictBase"
+    :yours="[`Adopt ${name} as a configured device`]"
+    @reapply="reapply"
+    @discard="dropAdoption"
+  />
 </template>

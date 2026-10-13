@@ -3,9 +3,15 @@
 // the browser's EventSource with one the test drives (`emit`), so live updates are deterministic.
 // The data use the generated types, so a change of the spec breaks the fixtures at compile time.
 import type { Page, Request, Route } from '@playwright/test';
+import { applyMergePatch } from '../src/lib/mergePatch';
 import type {
+  AccessRuleView,
+  Actor,
   ApplyResult,
   AuditEntry,
+  Configuration,
+  DomainChange,
+  Explanation,
   DeviceView,
   Event as GatewayEvent,
   FaultView,
@@ -15,7 +21,10 @@ import type {
   HostInterface,
   NetworkView,
   Overlay,
+  OverlayRequest,
   PreflightReport,
+  Preview,
+  ValidationError,
   ProfileView,
   Revision,
   Session,
@@ -143,6 +152,47 @@ export function sampleLab(now = Date.now()) {
   return { devices, networks, overlays, faults };
 }
 
+export const RULE_DNS = 'a1000000-0000-4000-8000-000000000001';
+export const RULE_DOT = 'a1000000-0000-4000-8000-000000000002';
+export const RULE_WEB = 'a1000000-0000-4000-8000-000000000003';
+export const RULE_OVERLAY = 'f0000000-0000-4000-8000-0000000000a1';
+
+/** Access rules of the sample lab: three configured rules and one overlay rule in front of them. */
+export function withRules(m: MockGateway, now = Date.now()): MockGateway {
+  m.config = {
+    ...m.config,
+    access_rules: {
+      [RULE_DNS]: { name: 'no-dns', source: { network: IOT }, protocol: 'udp', ports: [53], action: 'drop' },
+      [RULE_DOT]: { name: 'no-dot', source: { network: IOT }, protocol: 'tcp', ports: [853], action: 'reject', cut_existing: true },
+      [RULE_WEB]: { name: 'test-web', source: { network: TEST }, destination: { uplink: true }, protocol: 'tcp', ports: [80, 443], action: 'allow' },
+    },
+    access_rule_order: [RULE_DOT, RULE_DNS, RULE_WEB],
+  };
+  m.ruleViews = {
+    [RULE_DNS]: { counters: { packets: 311, bytes: 24_000, epoch: 1, last_match: new Date(now - 180_000).toISOString() } },
+    [RULE_DOT]: { counters: { packets: 18342, bytes: 12_400_000, epoch: 1, last_match: new Date(now - 2_000).toISOString() } },
+    [RULE_WEB]: { counters: { packets: 90211, bytes: 310_000_000, epoch: 1 } },
+  };
+  m.overlays = [
+    ...m.overlays,
+    {
+      id: RULE_OVERLAY,
+      kind: 'rule',
+      owner: { type: 'token', id: 't1', name: 'ci-runner' },
+      target: { network: IOT },
+      rule: { protocol: 'tcp', ports: [8883], action: 'reset' },
+      ttl: '10m',
+      expires_at: new Date(now + 9 * 60_000).toISOString(),
+      created_at: new Date(now - 60_000).toISOString(),
+      updated_at: new Date(now - 60_000).toISOString(),
+      generation: 42,
+      counters: { packets: 57, bytes: 4_000, epoch: 1 },
+      state: 'effective',
+    },
+  ];
+  return m;
+}
+
 export function manyDevices(n: number): DeviceView[] {
   return Array.from({ length: n }, (_, i) => {
     const hex = i.toString(16).padStart(4, '0');
@@ -226,10 +276,34 @@ export class MockGateway {
   /** The next POST /revisions is refused with 409 revision_conflict (someone else applied one). */
   conflictOnce = false;
   private nextRevision = 43;
+  /** The configuration of the active revision (rules, faults, groups, …). */
+  config: Configuration = { schema_version: 1, uplink: { interface: { name: 'eth0' } }, management: { interface: { name: 'eth1' } } };
+  /** Who made the active revision. */
+  activeBy: Actor = { type: 'user', id: 'admin', name: 'admin' };
+  /** The domain diff of a revision against an earlier one (GET /revisions/{id}/diff), by revision. */
+  diffs = new Map<number, DomainChange[]>();
+  /** Counters, state and what overrides a configured rule or fault, by id. */
+  ruleViews: Record<string, Partial<AccessRuleView>> = {};
+  faultViews: Record<string, Partial<FaultView>> = {};
+  systemRuleCounters = { packets: 4812, bytes: 38_000_000, epoch: 1, last_match: new Date().toISOString() };
+  /** The next POST /revisions is refused with 422 and these errors. */
+  rejectRevision?: ValidationError[];
+  /** The next apply fails at this step (`apply` or `verify`). */
+  failApply?: 'apply' | 'verify';
+  /** The next POST /overlays is refused with 422 and these errors. */
+  rejectOverlay?: ValidationError[];
+  /** The answer of GET /explain. */
+  explanation?: Explanation;
+  /** The Linux part of every preview. */
+  previewLinux: Preview['linux'] = { nftables: '+ rule inet chaosgw access_rules ip saddr @net_iot udp dport 53 counter drop' };
 
   static sample(): MockGateway {
     const m = new MockGateway();
     Object.assign(m, sampleLab());
+    // the configured faults are the active revision's; /faults adds their state and counters
+    m.config = { ...m.config, faults: Object.fromEntries(m.faults.map((f) => [f.id, f.config])) };
+    m.faultViews = Object.fromEntries(m.faults.map((f) => [f.id, { state: f.state, counters: f.counters }]));
+    m.faults = [];
     m.audit = [
       { id: '1', time: new Date(Date.now() - 60_000).toISOString(), actor: { type: 'user', id: 'admin', name: 'admin' }, via: 'ui', action: 'revision.apply', revision: 42 },
     ];
@@ -374,8 +448,28 @@ export class MockGateway {
     }
     if (path === '/networks') return json(200, this.page(this.networks, url));
     if (path === '/groups') return json(200, this.page(this.groups, url));
-    if (path === '/profiles') return json(200, this.page(this.profiles, url));
-    if (path === '/faults') return json(200, this.page(this.faults, url));
+    if (path === '/profiles') return json(200, this.page(this.profileViews(), url));
+    if (path === '/faults') return json(200, this.page(this.faultList(), url));
+    if (path === '/rules') return json(200, { system_rules: [this.systemRule()], ...this.page(this.ruleList(), url) });
+    if (path === '/explain') return this.explanation ? json(200, this.explanation) : problem(404, 'not_found', 'no such device');
+    if (path === '/revisions/active') return json(200, this.activeRevision());
+    const diff = /^\/revisions\/(\d+)\/diff$/.exec(path);
+    if (diff) return json(200, this.diffs.get(Number(diff[1])) ?? []);
+    const preview = /^\/revisions\/(\d+)\/preview$/.exec(path);
+    if (preview) {
+      const c = this.candidates.get(Number(preview[1]));
+      if (!c) return problem(404, 'not_found', 'no such revision');
+      return json(200, this.previewOf(Number(preview[1]), c));
+    }
+    if (path === '/overlays' && method === 'POST') {
+      if (this.rejectOverlay) {
+        const errors = this.rejectOverlay;
+        this.rejectOverlay = undefined;
+        return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: 'the overlay is not valid', errors });
+      }
+      const { overlay, created } = this.putOverlay(body as OverlayRequest);
+      return json(created ? 201 : 200, overlay);
+    }
     if (path === '/audit') return json(200, this.page(this.audit, url));
     if (path === '/overlays' && method === 'GET') {
       const devId = url.searchParams.get('device');
@@ -397,6 +491,11 @@ export class MockGateway {
         this.conflictOnce = false;
         return problem(409, 'revision_conflict', `revision ${base} is not the active revision any more`);
       }
+      if (this.rejectRevision) {
+        const errors = this.rejectRevision;
+        this.rejectRevision = undefined;
+        return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: `the configuration is not valid (${errors.length} problems)`, errors });
+      }
       const rev: Revision = {
         id: this.nextRevision++,
         status: 'candidate',
@@ -406,12 +505,21 @@ export class MockGateway {
         created_by: { type: 'user', id: 'admin' },
       };
       this.candidates.set(rev.id, body);
+      this.candidateBases.set(rev.id, this.state.active_revision);
       return json(201, rev);
     }
     const apply = /^\/revisions\/(\d+)\/apply$/.exec(path);
     if (apply) {
       const id = Number(apply[1]);
+      if (this.failApply) {
+        const step = this.failApply;
+        this.failApply = undefined;
+        return problem(500, step === 'verify' ? 'verify_failed' : 'apply_failed', `apply of revision ${id} failed: ${step === 'verify' ? 'verify: the nftables state differs from the target' : 'tc: RTNETLINK answers: Invalid argument'}`);
+      }
+      if (this.revisionBase(id) !== this.state.active_revision) return problem(409, 'revision_conflict', `the candidate's base is not the active revision`);
       const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
+      this.config = applyMergePatch(this.config, patch);
+      this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
       for (const [devId, cfg] of Object.entries(patch?.devices ?? {})) {
         this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
       }
@@ -431,6 +539,118 @@ export class MockGateway {
   }
 
   private candidates = new Map<number, unknown>();
+  private candidateBases = new Map<number, number>();
+
+  private revisionBase(id: number): number | undefined {
+    return this.candidateBases.get(id);
+  }
+
+  /** Someone else applies a revision through the API (a test with a token): it is active at once. */
+  applyFromApi(patch: Record<string, unknown>, by: Actor, changes: DomainChange[]): number {
+    const id = this.nextRevision++;
+    this.diffs.set(id, changes);
+    this.config = applyMergePatch(this.config, patch);
+    this.activeBy = by;
+    this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
+    return id;
+  }
+
+  activeRevision() {
+    return {
+      id: this.state.active_revision,
+      status: 'active' as const,
+      schema_version: 1,
+      created_at: new Date().toISOString(),
+      created_by: this.activeBy,
+      configuration: this.config,
+    };
+  }
+
+  ruleList(): AccessRuleView[] {
+    const rules = this.config.access_rules ?? {};
+    return (this.config.access_rule_order ?? Object.keys(rules)).map((id, position) => ({
+      id,
+      position,
+      config: rules[id]!,
+      state: rules[id]!.enabled === false ? ('disabled' as const) : ('effective' as const),
+      ...(rules[id]!.enabled === false ? {} : { counters: { packets: 0, bytes: 0, epoch: 1 } }),
+      ...this.ruleViews[id],
+    }));
+  }
+
+  systemRule() {
+    return {
+      key: 'system:anti_lockout',
+      name: 'Control plane access',
+      description: 'The management sources always reach SSH and the UI/API.',
+      counters: this.systemRuleCounters,
+    };
+  }
+
+  faultList(): FaultView[] {
+    const configured = Object.entries(this.config.faults ?? {}).map(([id, f]) => ({
+      id,
+      config: f,
+      state: f.enabled === false ? ('disabled' as const) : ('effective' as const),
+      ...this.faultViews[id],
+    }));
+    return [...this.faults, ...configured];
+  }
+
+  profileViews(): ProfileView[] {
+    return this.profiles.map((p) => ({
+      ...p,
+      activations: this.overlays
+        .filter((o) => o.kind === 'profile' && (o.profile === p.id || o.profile === p.config.name))
+        .map((o) => ({ overlay: o.id, target: o.target!, owner: o.owner, expires_at: o.expires_at, state: o.state })),
+    }));
+  }
+
+  previewOf(id: number, patch: unknown): Preview {
+    const p = patch as { access_rules?: Record<string, Record<string, unknown> | null>; faults?: Record<string, Record<string, unknown> | null>; access_rule_order?: string[] };
+    const domain: DomainChange[] = [];
+    for (const [key, v] of Object.entries(p.access_rules ?? {})) {
+      const before = this.config.access_rules?.[key] as Record<string, unknown> | undefined;
+      const name = String(before?.['name'] ?? v?.['name'] ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      const fields = v && before ? Object.entries(v).map(([f, nv]) => ({ path: f, old: before[f], new: nv })) : undefined;
+      domain.push({ op, kind: 'access_rule', id: key, name, path: `/access_rules/${key}`, summary: `access rule ${name} ${op}`, ...(fields ? { fields } : {}) });
+    }
+    if (p.access_rule_order) domain.push({ op: 'changed', kind: 'access_rule', path: '/access_rule_order', summary: 'order of the access rules changed' });
+    for (const [key, v] of Object.entries(p.faults ?? {})) {
+      const before = this.config.faults?.[key];
+      const name = String(before?.name ?? v?.['name'] ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'fault', id: key, name, path: `/faults/${key}`, summary: `fault ${name} ${op}` });
+    }
+    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: false };
+  }
+
+  /** POST /overlays: a new overlay, or the one with the same key replaced (it keeps its id). */
+  putOverlay(req: OverlayRequest): { overlay: Overlay; created: boolean } {
+    const kind = req.profile ? 'profile' : req.rule ? 'rule' : 'fault';
+    const sel = (o: OverlayRequest) => (kind === 'profile' ? '' : JSON.stringify([o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]));
+    const key = (o: OverlayRequest) => JSON.stringify([o.target ?? {}, sel(o)]);
+    const old = this.overlays.find((o) => o.kind === kind && o.owner.id === 'admin' && key(o) === key(req));
+    const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };
+    const m = req.ttl ? /^(\d+)(s|m|h)$/.exec(req.ttl) : null;
+    const ttlMs = m ? Number(m[1]) * unit[m[2]!]! : 0;
+    const overlay: Overlay = {
+      ...req,
+      id: old?.id ?? `f0000000-0000-4000-8000-${String(this.nextOverlay++).padStart(12, '0')}`,
+      kind,
+      owner: { type: 'user', id: 'admin', name: 'admin' },
+      created_at: old?.created_at ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      generation: ++this.state.generation,
+      state: 'effective',
+      counters: { packets: 0, bytes: 0, epoch: 1 },
+      ...(ttlMs ? { expires_at: new Date(this.now() + ttlMs).toISOString() } : {}),
+    };
+    this.overlays = old ? this.overlays.map((o) => (o.id === old.id ? overlay : o)) : [...this.overlays, overlay];
+    return { overlay, created: !old };
+  }
+  private nextOverlay = 100;
 
   /** The time on the gateway's clock. */
   now(): number {

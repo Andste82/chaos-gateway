@@ -12,6 +12,7 @@ import { useGatewayState } from '../../composables/gateway';
 import { formatClock } from '../../lib/format';
 import { useConnectionStore } from '../../stores/connection';
 import { useToastStore } from '../../stores/toasts';
+import DraftChanges from '../apply/DraftChanges.vue';
 import AppBanner from '../ui/AppBanner.vue';
 import CountdownBanner from '../ui/CountdownBanner.vue';
 import SidebarNav from './SidebarNav.vue';
@@ -81,6 +82,7 @@ function expired() {
         data-testid="page"
       >
         <RouterView />
+        <DraftChanges />
       </main>
     </div>
   </div>

@@ -214,3 +214,109 @@ func TestAFaultCreatedInTheBrowserTakesEffectOnTheWire(t *testing.T) {
 		t.Errorf("device B's round trip grew by %v, want about 60 ms (2 × 30 ms of the network's fault)", d)
 	}
 }
+
+// M14 test (plan §5): create a WireGuard client in the UI, scan its QR in the test (decoded content
+// equals the download) and bring the tunnel up in the testbed — and, on the way, commit-confirm: an
+// unconfirmed change is rolled back after the timeout and the UI shows it. The gateway runs on the real
+// executor with the testbed's configuration (the hubs lab-hub and admin, the latter with the role
+// management) and serves the built web app. In web/e2e-testbed/wireguard.spec.ts Chromium adds the client
+// rC to lab-hub (the next free address 10.99.0.3 proposed), applies it, decodes the QR code of its
+// configuration, checks it against the download and saves the file; this test brings the tunnel up from
+// that file in the remote client's namespace and pings through it, and the browser waits until the client
+// list shows rC online. Then it adds a client to admin, applies (the revision waits for confirmation) and
+// waits until the gateway rolls back at the deadline and the UI says so. Back in Go: rC is in the active
+// revision and its tunnel carries traffic, the management hub's client is gone, nothing waits.
+func TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel(t *testing.T) {
+	web, browsers := webDir(t)
+	g, top := newBedGW(t, func(o *options) {
+		o.ui = os.DirFS(filepath.Join(web, "dist"))
+		// long enough for the browser to see the countdown, short enough to wait for its end
+		o.confirm = 90 * time.Second
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	if err := g.e.PollWireGuard(ctx, time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	// once the browser saved the configuration, bring the tunnel up from it in the remote client's
+	// namespace and keep traffic in it, so the gateway sees the handshake
+	conf := filepath.Join(t.TempDir(), "wgrc.conf")
+	up := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			if _, err := os.Stat(conf); err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		if err := os.Chmod(conf, 0o600); err != nil {
+			up <- err
+			return
+		}
+		_, err := top.RC.Run(ctx, "wg-quick", "up", conf)
+		up <- err
+		if err != nil {
+			return
+		}
+		for ctx.Err() == nil {
+			_, _ = top.RC.Run(ctx, "ping", "-c", "1", "-W", "1", "-n", "10.99.0.1")
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	runBrowser(ctx, t, web, browsers, "wireguard.spec.ts", map[string]string{
+		"CHAOSGW_URL":            g.ts.URL,
+		"CHAOSGW_ADMIN_PASSWORD": adminPassword,
+		"CHAOSGW_CONF_OUT":       conf,
+	}, func() string {
+		return "wireguard of the gateway:\n" + top.GW.Must("wg", "show") + "\nclients of lab-hub:\n" + string(g.do("GET", "/networks/lab-hub/clients", nil, nil, nil).Body)
+	})
+	select {
+	case err := <-up:
+		if err != nil {
+			t.Fatalf("wg-quick up with the configuration the browser saved: %v", err)
+		}
+	default:
+		t.Fatal("the browser flow ended without the tunnel brought up from the saved configuration")
+	}
+
+	// the configuration the browser saved is the client's: its tunnel carries traffic
+	b, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(b); !strings.Contains(s, "Address = 10.99.0.3/32") || !strings.Contains(s, "PrivateKey = ") || strings.Contains(s, "<PRIVATE_KEY>") {
+		t.Errorf("the saved configuration:\n%s", b)
+	}
+	if !pingOK(top.RC, "", "10.99.0.1") {
+		t.Errorf("no traffic through the tunnel of the saved configuration\n%s\n%s", top.GW.Must("wg", "show"), top.RC.Must("wg", "show"))
+	}
+	g.mintToken("read")
+	c := g.do("GET", "/networks/lab-hub/clients/rC", nil, nil, nil)
+	if c.Status != 200 {
+		t.Fatalf("client rC in the API: %d %s", c.Status, c.Body)
+	}
+	if v := c.json(t); v["config"].(map[string]any)["address"] != "10.99.0.3" || v["status"].(map[string]any)["online"] != true {
+		t.Errorf("client rC in the API: %s", c.Body)
+	}
+	// the change nobody confirmed is gone, and nothing waits any more
+	if r := g.do("GET", "/networks/admin/clients/adm2", nil, nil, nil); r.Status != 404 {
+		t.Errorf("the rolled back client adm2: %d %s", r.Status, r.Body)
+	}
+	st := g.do("GET", "/state", nil, nil, nil).json(t)
+	if st["pending_confirm"] != nil {
+		t.Errorf("state after the rollback: %v", st)
+	}
+}

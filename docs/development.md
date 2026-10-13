@@ -3086,7 +3086,7 @@ the printed distribution before touching a tolerance (a tolerance below the §4.
 Plan §2.17, §3.7 and M12: the shell of the web app with its visual system and shared components, login and the first-start
 setup wizard, the overview, the device list and the device detail, live updates over the event stream, and the empty,
 offline and safe-mode states. The screens of M13 (faults, rules, profiles, the preview-and-apply drawer, the `</> API`
-panel) follow in their own section below; M14's (networks, technical view) are in the navigation but not yet links; panels
+panel) and of M14 (networks, routing, technical view) follow in their own sections below; panels
 whose backend comes later (running scenario, captures, diagnostics, DHCP and TLS test actions, the flow view of M26) are
 left out.
 
@@ -3259,8 +3259,8 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 Plan §2.17, §2.4, §2.9 and M13: the add/edit fault dialog with its live preview, the access-rules screen (ordered list,
 rule editor IF / THEN, counters), the faults screen (by family and scope, "overridden by", explain), the unapplied-changes
 bar, the preview-and-apply drawer, the concurrent-change dialog (reload and reapply), the profile cards, the TTL display
-and the `</> API` panel. M14's screens (networks, WireGuard, routing, access matrix, compiled state) are still listed in
-the navigation without a link; "Measure with probe" on the profile cards comes with the probes (M25).
+and the `</> API` panel. M14's screens (networks, WireGuard, routing, access matrix, compiled state) follow in the next
+section; "Measure with probe" on the profile cards comes with the probes (M25).
 
 ### How it works
 
@@ -3442,6 +3442,161 @@ branch with the M13 flow yet.
 | Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, M12's `device-detail.spec.ts` |
 | Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` (also an apostrophe in a body or header, quoted for the shell) |
 
+## Web UI: networks, WireGuard, routing and the technical view (M14)
+
+Plan §2.17 ("Networks", "Technical view", "Commit-confirm"), §2.2, §2.2.1, §2.2.2, §2.7 and M14: the network cards and the
+detail of a network, the DHCP pool and leases, the WireGuard networks with their client list and the clients' status, the
+add-client dialog with the next free tunnel address proposed in the browser, the QR dialog and the download of a client's
+configuration, the routing view, the access matrix edited through the draft (with commit-confirm where the gateway asks for
+it) and the compiled-state view. Editing networks themselves (a new network, its subnet, DHCP or DNS settings), clients
+after they were added (disable, rotate keys, delete) and the routing configuration stays with the API and the configuration
+import for now (P3-M14-01).
+
+### How it works
+
+- **Networks** (`src/views/NetworksView.vue`, `/networks` and `/networks/:id`). A card per test network and WireGuard
+  network (name, kind, subnet, devices or clients online, DHCP, "degraded" when a port is missing), the management network
+  and the uplink (both owned by the OS, not selectable); a card is a link, so the selected network has its own URL (the
+  overview's topology links there too). The selected network's settings (`NetworkSettings.vue`) in the user's words: for a
+  local network the subnet, the gateway address, the attachment (its ports with presence and link), DHCP (on or off, lease
+  time, active leases, the pool — the configured one, or the spec's default, the second half of the subnet, computed by
+  `effectivePools` — with the free addresses the gateway reports, router and DNS options), DNS (the proxy, redirected
+  resolvers, DoT blocked, static entries), masquerade, downstream routes and "IPv6 blocked"; for a WireGuard network its
+  kind and role, tunnel subnet and gateway address, endpoint (the uplink address by default), MTU, public key and the clients
+  online; for a link the remote side's address and endpoint, its online state with the last handshake and bytes, and the
+  static and learned routes with a link to the routing view. The Linux names (bridges, WireGuard interfaces) appear only in
+  the Linux view (D14). The leases of a local network (`LeasesCard.vue`, `GET /networks/{id}/leases`): address, MAC, host
+  name, the device it belongs to (a link) and the remaining time on the gateway's clock.
+- **WireGuard clients** (`ClientsCard.vue`, `GET /networks/{id}/clients`, polled every 5 s and refreshed by the
+  `wireguard_peer_*` events): name, tunnel address, client networks, Online/Offline with a label (a handshake younger than
+  3 min, plan §2.2.1) and the last handshake, the endpoint the gateway sees it at and its bytes. A client of the draft is
+  marked NEW ("not applied yet", without its configuration until it is applied); a refused one NEEDS FIXING.
+- **Add client** (`AddClientDialog.vue`, logic in `src/lib/networks.ts`). The tunnel address is proposed in the browser
+  (`nextFreeAddress`): the lowest host address of the hub's subnet that is not the gateway's own, not the network or broadcast
+  address and not taken by a client of the gateway or of the draft. Name and address are the common case; Advanced has the
+  client networks, what the client may reach (networks, the Internet as a full tunnel), its DNS server (the gateway, none,
+  other servers), the keepalive and the keys (generated by the gateway, or the client's own public key; a preshared key;
+  "export once"). The checks of the spec stand under their fields (`clientFormErrors`: the name pattern and the device
+  namespace, an address inside the hub's subnet that is free, client networks as prefixes outside the hub's subnet, DNS
+  servers, a duration, a WireGuard public key), from the first Preview & apply on; the address from the start, since it
+  was proposed. "Preview & apply" puts the client into the configuration draft (`setClient`: a merge patch below its hub,
+  `networks.<hub>.clients.<new uuid>`) and opens the preview-and-apply drawer, like adopting a device; the `</> API` panel
+  shows the candidate while the dialog is open. A hub with the role management makes the change lockout-relevant, and the
+  dialog says that the apply will wait for confirmation.
+- **QR code and download** (`ClientConfigDialog.vue`, `src/lib/qr.ts`). The dialog exports the configuration once
+  (`GET /networks/{id}/clients/{client}/export?format=conf`, audited by the gateway) and makes both the QR code (in the
+  browser, with `qrcode-generator`: byte mode, error correction M, drawn as an SVG path with a quiet zone) and the `.conf`
+  download (a Blob) from that one text. So the code and the file are always the same, and a client with "export once" is
+  exported once only: the gateway deletes its key after the first export, which a second request for the PNG or SVG would
+  count as. The dialog warns that the configuration holds the client's private key (or says that it has the placeholder
+  `<PRIVATE_KEY>` when the gateway holds none), and shows the text on request.
+- **Access matrix** (`AccessMatrix.vue`, logic in `src/lib/networks.ts`). Rows are the test and WireGuard networks, columns
+  the Internet (uplink), the networks and the management network; a cell is Allowed or Blocked with a text label, "default"
+  when no entry exists (the spec's default: a local test network reaches the uplink, everything else is blocked), and a
+  button with `aria-pressed` and a label that says the pair, the state and whether it is the default or changed. A click
+  changes the draft (`toggleMatrix`): the policy flips, and an entry that would only say what the default says is removed
+  instead, so the configuration keeps the entries that matter; an entry may name a network by its name or UUID. The bar
+  counts the changed pairs ("2 changes in the access matrix"), the drawer previews them, and the merge patch carries the
+  whole `access_matrix.entries` array (a merge patch replaces arrays). Reapplying after a concurrent change keeps their
+  entries and puts the pairs the user changed on top (`rebase`, pair by pair). Entries of a single WireGuard client and the
+  implicit allows of a client's `reachable` list are named below the matrix, not edited there. "Show Linux view" shows the
+  compiled forward chain.
+- **Commit-confirm** (plan §2.17 "Commit-confirm only if it is lockout-relevant"). The gateway decides (`LockoutRelevant`:
+  the management settings, the uplink in the two-port topology, WireGuard networks with the role management); the preview
+  says so, the apply answers `pending_confirm`, and the orange banner counts down with **Confirm** and, since M14, **Roll
+  back now** (P3-M12-01): `POST /revisions/{id}/rollback` runs the rollback the deadline would run. The rollback event now
+  carries `data.restored`, the revision that is active again, and its toast says "It was not confirmed in time. Rolled back
+  to revision 42." (or "Rolled back on request. …"). The resource views (`/networks`, its clients, …) show the active
+  revision, and while a revision waits for confirmation the active one is still the one before (the gateway's store), so a
+  client of a management hub is listed once it is confirmed; the dialog says so. A confirmation (the button or the event
+  `revision_confirmed`) therefore refreshes the views of the configuration, not only the state.
+  An access matrix change is not lockout-relevant in the backend (the control plane is gateway protection, not the matrix),
+  so it is applied at once; a client of a management hub is the change of the networks view that waits for confirmation.
+- **Routing** (`src/views/RoutingView.vue`, `/networks/routing`): the BIRD instance (running, version, router id, ASN, last
+  configuration, last error, external mode), a card per session (`GET /routing/status`, every 5 s; BGP, OSPF, Babel) with
+  its link, its state with BIRD's detail ("up · Established") and since when, imported, filtered and exported routes, the
+  import limit when it is hit, the announced and the received prefixes, and "unmanaged snippet" for a protocol with a custom
+  snippet; then the routes of Chaos Gateway's tables (`GET /routing/routes`) with filter chips by origin (connected, static,
+  client, learned, external). The `routing_*` events refresh it.
+- **Technical view** (`src/views/LinuxStateView.vue`, `/linux`, and `LinuxExcerpt.vue` behind "Show Linux view" on a
+  network and on the matrix). Backend: `GET /state/linux` (`internal/api/system.go`, `engine.LinuxView`) reads the kernel
+  state of the applied target through the executor (read operations only, `apply.ReadState` with the target's tc
+  interfaces) and renders it as text (`apply.Render`): the table `inet chaosgw` in nft syntax with the counters of its rules
+  and named counters (`linux.RenderNft`, from the `nft -j` listing: matches, verdicts, counters, sets and maps with their
+  elements, vmaps, mangle, reject, NAT; an expression it does not know is shown as its JSON, so nothing is hidden; a set
+  shows at most 256 elements and how many more; the generation chain is left out), the tc trees with the counters of every
+  qdisc, class and filter, the bridges with their addresses and ports, the policy rules and routes of Chaos Gateway's tables,
+  and the WireGuard interfaces with their peers (public keys, allowed IPs, endpoint, handshake, bytes; never a private or
+  preshared key). The page shows the four parts (or one), filtered by a word, and reads again every 5 s; the excerpt of a
+  network keeps the lines that name its interface, its subnet or its gateway address (whole words), with the table and the
+  chain, set or interface around them (`src/lib/linuxView.ts`).
+- **Navigation.** Networks is a link now; Routing and the Linux view are reached from the Networks page (plan §2.17: the
+  technical view is "never needed for normal use").
+
+### Tests
+
+| What | Where |
+|---|---|
+| IPv4 of the networks, the default DHCP pool, the next free tunnel address, the add-client checks and the client it builds (checked against the generated Zod schema), the matrix: defaults, entries by name, a toggle that keeps entries minimal, changes in words | `src/lib/networks.test.ts` |
+| The QR code decodes (jsQR) to the configuration it was made from; the SVG path | `src/lib/qr.test.ts` |
+| The Linux excerpt: whole words, nftables lines with their table and chain, a chain kept whole, groups of routes and tc | `src/lib/linuxView.test.ts` |
+| Draft: a client as a change, a merge patch below its hub and the gateway's errors for it; a matrix cell flipped and back, the entries replaced whole; reapplying both on their revision | `src/stores/draft.test.ts` |
+| The rollback toast names the restored revision, at the deadline and on request | `src/composables/eventStream.test.ts` |
+| Routes of the networks, routing and Linux views | `src/router.test.ts` |
+| `POST /revisions/{id}/rollback`: rolled back at once, the event with `reason` and `restored`, refused afterwards, audited | `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` (`internal/api/revisions_test.go`) |
+| `GET /state/linux`: the table in nft syntax with counters, the matrix rule, a netem queue with counters, bridges and routes, WireGuard peers, no key | `TestTheLinuxStateShowsTheKernelWithItsCounters` (`internal/api/linux_test.go`) |
+| The nft renderer: the recorded `nft -j` listing, named counters, maps, cut sets, the expressions of the compiler, an unknown one as JSON | `internal/linux/nftrender_test.go` |
+| Screens against the mocked API (Playwright) | `web/e2e/networks.spec.ts` |
+| The browser flow against the real stack | `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/wireguard.spec.ts` |
+
+**The mocked API** (`web/e2e/mock.ts`) grew the networks of the testbed's configuration (`withNetworks`: IoT and Test, the
+hub lab-hub with the client rA, the management hub admin, the link site-b with a BGP session), network views whose
+configuration follows the active revision (a client an apply added is listed), the clients with their status
+(`clientStatus`), leases, a client export (a made-up configuration, the placeholder after an "export once"), the routing
+status and routes, the Linux state, commit-confirm as the gateway decides it (a change of the management settings or of a
+management hub answers `pending_confirm` with a deadline `confirmWindowMs` away and blocks other applies), `POST
+/revisions/{id}/rollback`, and `rollBackPending`, which rolls the waiting revision back and returns the event the gateway
+would send. The preview names added clients and the matrix change and says whether the change needs a confirmation.
+
+**The browser flow in the testbed.** `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` builds the testbed with the
+configuration of `testbed_wg.yaml`, polls the WireGuard state every second and gives commit-confirm a window of 90 s. In
+Chromium: log in; on the hub lab-hub add the client rC (the proposed address 10.99.0.3), preview it (the Linux changes
+have its peer), apply; open its configuration, decode the QR code from a screenshot of it (jsQR) and compare it with the
+downloaded file, save the file where the Go test waits for it. The Go test brings the tunnel up from that file in the
+remote client's namespace (`wg-quick up`) and pings the hub through it; the browser waits until the client list shows rC
+online. Then on the management hub admin add a client (proposed 10.98.0.3): the preview says that the change can cut the
+admin off, the apply waits for confirmation, the banner counts down with Roll back now and Confirm; nobody confirms, and
+the client is not listed while the revision waits (the views show the active revision), the toast "Revision N rolled back ·
+It was not confirmed in time. Rolled back to revision …" appears and the banner goes. Back in Go: the saved configuration has rC's address and a private key, the tunnel
+carries traffic, the API has rC online, the management hub's client does not exist, and nothing waits for confirmation.
+CI runs it with the other browser flows in the job `testbed-ui` (`-run InTheBrowser`). Locally: `make build-web && make
+test-vm ARGS='-tags testbed,browser -run TestAWireGuardClientCreatedInTheBrowser -mem 3G -cpus 4 -test-timeout 80m
+-vm-timeout 120m ./internal/api'`.
+
+**What the VM showed** (kernel 6.8.0-142, emulated, 4 CPUs, 3 GB): the M14 flow passed in 18 minutes, 9 of them in the
+browser (`make test-vm ARGS='-tags testbed,browser -run TestAWireGuardClientCreatedInTheBrowser -mem 3G -cpus 4
+-test-timeout 80m -vm-timeout 120m ./internal/api'`): the QR code decoded from the screenshot equalled the download, the
+tunnel came up from the saved file and rC showed online. Its first run found a real gap: the spec expected the management
+hub's client in the list while its revision waited for confirmation, but the views show the active revision, which is
+still the one before; the dialog now says that the client is listed once confirmed, a confirmation refreshes the views,
+and the mocked API keeps the active revision while one waits, as the gateway does. The privileged-container job of CI has
+not run on this branch with the M14 flow yet.
+
+### Acceptance map (plan M14 "Tests")
+
+| Plan M14 Tests | Test |
+|---|---|
+| Playwright | `networks.spec.ts` (all tests below), against the mocked API; the flow against the real stack in the last row |
+| commit-confirm — an unconfirmed change is rolled back after the timeout and the UI shows it | `networks.spec.ts` "commit-confirm: a client of the management hub waits for confirmation; unconfirmed, it is rolled back after the timeout and the UI shows it", "commit-confirm: Confirm makes the client of the management hub active", "commit-confirm: Roll back now ends the waiting at once"; `states.spec.ts` "commit-confirm timeout: the rollback is announced"; in the testbed flow on the real gateway; backend `TestAnUnconfirmedRevisionIsRolledBack`, `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` |
+| create a WireGuard client in the UI, scan its QR in the test (decoded content equals the download) and bring the tunnel up in the testbed | `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` + `web/e2e-testbed/wireguard.spec.ts` (CI job `testbed-ui`); against the mocked API `networks.spec.ts` "add a client: the next free address is proposed, …", "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …"; `src/lib/qr.test.ts` |
+| Scope: network cards and detail, DHCP pool/leases | `networks.spec.ts` "network cards and the detail of a test network: subnet, gateway, attachment, DHCP pool and leases, DNS, IPv6", "empty and failed: …"; `src/lib/networks.test.ts` (the default pool) |
+| Scope: WireGuard networks with client list, client status | `networks.spec.ts` "a WireGuard hub lists its clients with their status; a link shows its peer and its routes", "a client that goes offline is shown offline after the next poll", "backing out of the drawer keeps the new client in the draft, marked NEW, …" |
+| Scope: add-client dialog (proposes the next free tunnel address of the hub, computed client-side) | `networks.spec.ts` "add a client: …" (the proposal, the checks under the fields, the request, the next proposal after the apply); `src/lib/networks.test.ts` "the next free tunnel address of a hub (plan M14, computed client-side)", "the add-client form" |
+| Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …"; the testbed flow |
+| Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so" |
+| Scope: access matrix editing with commit-confirm | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
+| Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -3460,7 +3615,7 @@ Python clients and checks that they compile and import. CI runs all three.
 
 `.github/workflows/ci.yml`: level 0 with the generated-code checks, the Playwright tests, the
 testbed tests in a VM and in a privileged container, the browser flows of the web app against the real stack
-(`testbed-ui`, a privileged container that builds the app and installs Chromium first), and the arm64 job (multi-arch image build,
+(`testbed-ui`, a privileged container that builds the app and installs Chromium first; the flows of M12, M13 and M14), and the arm64 job (multi-arch image build,
 unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
 it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners (plan D33).
 

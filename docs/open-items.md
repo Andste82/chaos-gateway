@@ -644,8 +644,9 @@ stayed open".
 
 ## Phase 3 open items
 
-Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12, M13 and M14; each records the option that was
-implemented so the work was not blocked, and what the maintainer may want to decide. The reasons are the ones of "Why items
+Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below were found while implementing M12, M13
+and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
+decide. The reasons are the ones of "Why items
 stayed open".
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
@@ -954,14 +955,14 @@ stayed open".
 
 ### P3-M14-04 The browser flow of M14 in the testbed
 
-- Status: new
+- Status: closed (2026-10-13)
 - Severity: low
 - Reason: env-limit. `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` needs network namespaces; here it runs only
   in the QEMU VM under software emulation (level 1b) and in CI (job `testbed-ui`, `-run InTheBrowser`).
 - Evidence: `internal/api/e2e_ui_test.go`, `web/e2e-testbed/wireguard.spec.ts`, `docs/development.md` "Web UI: networks,
   WireGuard, routing and the technical view".
-- Task: the local VM run passed (2026-10-13, 18 minutes, recorded in docs/development.md); check the first CI run
-  of the job with the M14 flow.
+- Task: the local VM run passed (2026-10-13, 18 minutes, recorded in docs/development.md); CI run 38447039664 (`5397d3b`)
+  passed the job `testbed-ui` with the three browser flows.
 - Acceptance: the job `testbed-ui` passes with the three browser flows.
 - Needs maintainer: no
 - Effort: S

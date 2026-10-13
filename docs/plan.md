@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 in progress: M12 and M13 complete (branch `phase-3-web-ui`, draft PR #56) · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete on the branch: M12, M13 and M14 complete (branch `phase-3-web-ui`, draft PR #56, to be merged to `main` as one PR) · October 2026
 
 ---
 
@@ -1419,6 +1419,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M12.
 
 **M14 — Networks view and technical view** (M)
+- **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `5397d3b`, CI run 38447039664 green, the testbed browser flow `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` included); Phase 3 merges to `main` as one PR. Open questions: `docs/open-items.md`, Phase 3 (P3-M14-01 to P3-M14-03 need a maintainer decision, among them the wording of "access matrix editing with commit-confirm", P3-M14-02).
 - Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog (proposes the next free tunnel address of the hub, computed client-side), QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
 - Tests: Playwright; commit-confirm — an unconfirmed change is rolled back after the timeout and the UI shows it; create a WireGuard client in the UI, scan its QR in the test (decoded content equals the download) and bring the tunnel up in the testbed.
 - Depends on: M13.

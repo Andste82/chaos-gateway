@@ -40,7 +40,7 @@ const steps = ['Setup token', 'Interfaces', 'Test networks', 'Admin password', '
 const step = ref(0);
 
 const token = ref('');
-const draft = reactive({ uplink: '', management: '', tests: [] as string[], password: '', repeat: '' });
+const draft = reactive({ uplink: '', gateway: '', management: '', tests: [] as string[], password: '', repeat: '' });
 const networks = ref<NetworkDraft[]>([]);
 const errors = ref<Record<string, string>>({});
 const submitError = ref('');
@@ -85,6 +85,8 @@ watch(
 );
 
 const byName = (name: string) => interfaces.value.find((i) => i.name === name);
+// the host's default route leaves through the proposed uplink; another one needs its router named
+const uplinkHasDefault = computed(() => draft.uplink === setup.data.value?.suggested_uplink?.name);
 const takenPrefixes = computed(() =>
   [byName(draft.uplink), byName(draft.management)].flatMap((i) => i?.addresses ?? []),
 );
@@ -93,7 +95,13 @@ const hints = computed(() => draft.tests.map((t) => netplanHint(byName(t))).filt
 function validate(s: number): boolean {
   let e: Record<string, string> = {};
   if (s === 0 && !token.value.trim()) e.token = 'Enter the setup token from the container log.';
-  if (s === 1) e = validateInterfaces({ uplink: draft.uplink, management: draft.management, networks: networks.value });
+  if (s === 1) {
+    e = validateInterfaces(
+      { uplink: draft.uplink, gateway: draft.gateway, management: draft.management, networks: networks.value },
+      setup.data.value?.suggested_uplink?.name,
+      byName(draft.uplink)?.addresses ?? [],
+    );
+  }
   if (s === 2) e = validateNetworks(networks.value, takenPrefixes.value);
   if (s === 3) e = validatePassword(draft.password, draft.repeat);
   errors.value = e;
@@ -121,7 +129,14 @@ async function apply() {
   busy.value = true;
   try {
     const body = buildSetupRequest(
-      { uplink: draft.uplink, management: draft.management, networks: networks.value, password: draft.password, repeat: draft.repeat },
+      {
+        uplink: draft.uplink,
+        gateway: draft.gateway,
+        management: draft.management,
+        networks: networks.value,
+        password: draft.password,
+        repeat: draft.repeat,
+      },
       interfaces.value,
     );
     result.value = await completeSetup(body, { headers: { 'X-Setup-Token': token.value.trim() } });
@@ -274,6 +289,15 @@ const ifaceLabel = (i: HostInterface) =>
                   <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ ifaceLabel(i) }}</option>
                 </select>
                 <p v-if="errors.uplink" class="field-error" role="alert">{{ errors.uplink }}</p>
+                <label class="label mt-3" for="gateway">Router on the uplink{{ uplinkHasDefault ? ' (optional)' : '' }}</label>
+                <input
+                  id="gateway"
+                  v-model="draft.gateway"
+                  class="input mono"
+                  :placeholder="uplinkHasDefault ? 'the default route of the host' : 'e.g. 192.168.1.1'"
+                  :aria-invalid="!!errors.gateway"
+                />
+                <p v-if="errors.gateway" class="field-error" role="alert">{{ errors.gateway }}</p>
               </div>
               <div>
                 <label class="label" for="management">Management (where you reach the UI)</label>
@@ -349,7 +373,7 @@ const ifaceLabel = (i: HostInterface) =>
           <template v-if="step === 4">
             <dl class="m-0 grid grid-cols-[180px_1fr] gap-x-4 gap-y-2 text-sm" data-testid="setup-review">
               <dt class="text-text-2">Uplink</dt>
-              <dd class="mono m-0">{{ draft.uplink }}</dd>
+              <dd class="mono m-0">{{ draft.uplink }} · router {{ draft.gateway.trim() || 'from the default route' }}</dd>
               <dt class="text-text-2">Management</dt>
               <dd class="mono m-0">{{ draft.management }}</dd>
               <template v-for="n in networks" :key="n.iface">

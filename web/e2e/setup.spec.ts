@@ -22,6 +22,18 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   // step 2: uplink suggested from the default route, management an addressed other interface
   await expect(page.getByLabel('Uplink (towards the Internet)')).toHaveValue('eth0');
   await expect(page.getByLabel('Management (where you reach the UI)')).toHaveValue('eth1');
+  // an uplink without the host's default route needs its router, in its network
+  await page.getByLabel('Uplink (towards the Internet)').selectOption('eth3');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('The default route of this host does not leave through eth3')).toBeVisible();
+  await page.getByLabel('Uplink (towards the Internet)').selectOption('eth1');
+  await page.getByLabel('Management (where you reach the UI)').selectOption('eth1');
+  await page.getByLabel(/Router on the uplink/).fill('10.0.0.1');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText("The router must be in the uplink's network (192.168.56.10/24).")).toBeVisible();
+  await page.getByLabel('Uplink (towards the Internet)').selectOption('eth0');
+  await page.getByLabel('Management (where you reach the UI)').selectOption('eth1');
+  await page.getByLabel(/Router on the uplink/).fill('');
   await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('Assign at least one interface to a test network.')).toBeVisible();
   await page.getByRole('checkbox', { name: /eth2/ }).check();

@@ -2,7 +2,7 @@ import { createRouter, createWebHistory, type Router } from 'vue-router';
 import { useSessionStore } from './stores/session';
 
 /**
- * The routes of M12 and M13. Every page but the setup wizard and the login lives in the shell. Before the
+ * The routes of M12, M13 and M14. Every page but the setup wizard and the login lives in the shell. Before the
  * first page the router asks the gateway where the browser stands: an open setup leads to the
  * wizard, no session to the login (and back to the page asked for afterwards).
  */
@@ -22,6 +22,10 @@ export function createAppRouter(): Router {
           { path: 'rules', name: 'rules', component: () => import('./views/RulesView.vue') },
           { path: 'faults', name: 'faults', component: () => import('./views/FaultsView.vue') },
           { path: 'profiles', name: 'profiles', component: () => import('./views/ProfilesView.vue') },
+          { path: 'networks', name: 'networks', component: () => import('./views/NetworksView.vue') },
+          { path: 'networks/routing', name: 'routing', component: () => import('./views/RoutingView.vue') },
+          { path: 'networks/:id', name: 'network', component: () => import('./views/NetworksView.vue'), props: true },
+          { path: 'linux', name: 'linux', component: () => import('./views/LinuxStateView.vue') },
           { path: ':rest(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },
         ],
       },

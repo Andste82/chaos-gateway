@@ -10,6 +10,7 @@ import type {
   ApplyResult,
   AuditEntry,
   Configuration,
+  DhcpLease,
   DomainChange,
   Explanation,
   DeviceView,
@@ -19,6 +20,7 @@ import type {
   GroupView,
   Health,
   HostInterface,
+  LinuxState,
   NetworkView,
   Overlay,
   OverlayRequest,
@@ -27,10 +29,17 @@ import type {
   ValidationError,
   ProfileView,
   Revision,
+  RouteEntry,
+  Routing,
+  RoutingStatus,
   Session,
   SetupStatus,
   SystemInfo,
   UplinkView,
+  WireGuardClient,
+  WireGuardClientView,
+  WireGuardNetwork,
+  WireGuardPeerStatus,
 } from '../src/api/generated/model';
 
 export const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
@@ -193,6 +202,109 @@ export function withRules(m: MockGateway, now = Date.now()): MockGateway {
   return m;
 }
 
+export const HUB = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';
+export const ADMIN_HUB = '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+export const LINK = 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f';
+export const CLIENT_RA = '9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+export const BGP = 'b9000000-0000-4000-8000-000000000001';
+
+/**
+ * The networks of the sample lab as the testbed has them (plan §4.2): IoT and Test, the test hub lab-hub
+ * with the client rA (online) and the network behind it, the management hub admin, the link site-b with
+ * a BGP session; an access matrix entry, DHCP leases of IoT, routes, and the kernel state of the Linux view.
+ */
+export function withNetworks(m: MockGateway, now = Date.now()): MockGateway {
+  const lan = (id: string) => m.networks.find((n) => n.id === id)!.config;
+  m.config = {
+    ...m.config,
+    networks: {
+      [IOT]: lan(IOT),
+      [TEST]: lan(TEST),
+      [HUB]: {
+        type: 'wireguard',
+        kind: 'hub',
+        name: 'lab-hub',
+        role: 'test',
+        address: '10.99.0.1/24',
+        listen_port: 51820,
+        clients: { [CLIENT_RA]: { name: 'rA', address: '10.99.0.2', client_networks: ['10.50.0.0/24'], keepalive: '1s', key: { mode: 'generated', preshared_key: true } } },
+      },
+      [ADMIN_HUB]: { type: 'wireguard', kind: 'hub', name: 'admin', role: 'management', address: '10.98.0.1/24', listen_port: 51822 },
+      [LINK]: {
+        type: 'wireguard',
+        kind: 'link',
+        name: 'site-b',
+        address: '10.255.0.0/31',
+        listen_port: 51821,
+        routes: ['10.60.0.0/24'],
+        peer: { address: '10.255.0.1', endpoint: '203.0.113.40:51821', key: { mode: 'generated' } },
+      },
+    },
+    access_matrix: { entries: [{ from: { network: 'IoT' }, to: { network: 'lab-hub' }, policy: 'allow' }] },
+    routing: { asn: 65001, protocols: { [BGP]: { name: 'site-b-bgp', type: 'bgp', link: LINK, bgp: { neighbor_asn: 65002 }, announce: [{ network: IOT }] } } },
+  };
+  m.networks = [
+    {
+      ...m.networks.find((n) => n.id === IOT)!,
+      status: {
+        state: 'ok',
+        interface: 'br-iot',
+        ports: [{ name: 'eth1', present: true, link_up: true }],
+        dhcp: { enabled: true, leases_active: 2, pool_free: 125 },
+      },
+    },
+    m.networks.find((n) => n.id === TEST)!,
+    { id: HUB, config: m.config.networks![HUB]!, status: { state: 'ok', interface: 'wg-lab-hub', public_key: 'qU1BFDFDgsH5I7uGhzuhQjkMSw6bP8nXN6CN4AKxEF8=' } },
+    { id: ADMIN_HUB, config: m.config.networks![ADMIN_HUB]!, status: { state: 'ok', interface: 'wg-admin' } },
+    {
+      id: LINK,
+      config: m.config.networks![LINK]!,
+      status: {
+        state: 'ok',
+        interface: 'wg-site-b',
+        link_peer: { online: true, last_handshake: new Date(now - 20_000).toISOString(), endpoint: '203.0.113.40:51821', rx_bytes: 52_000, tx_bytes: 48_000, learned_routes: ['10.70.0.0/24'] },
+      },
+    },
+  ];
+  m.clientStatus = {
+    [CLIENT_RA]: { online: true, last_handshake: new Date(now - 12_000).toISOString(), endpoint: '198.51.100.7:40312', rx_bytes: 1_800_000, tx_bytes: 240_000 },
+  };
+  m.leases = {
+    [IOT]: [
+      { ip: '10.10.0.42', mac: '02:00:00:00:00:2a', hostname: 'esp32-42', network: IOT, device: 'a1b2c3d4-0000-4000-8000-000000000042', expires_at: new Date(now + 58 * 60_000).toISOString(), state: 'active' },
+      { ip: '10.10.0.133', mac: '3a:f1:9c:22:07:b4', network: IOT, expires_at: new Date(now + 5 * 60_000).toISOString(), state: 'active' },
+    ],
+  };
+  m.routingStatus = {
+    bird: { running: true, version: '2.15.1', router_id: '10.10.0.1', last_reconfigure: new Date(now - 300_000).toISOString() },
+    protocols: [
+      {
+        id: BGP,
+        name: 'site-b-bgp',
+        type: 'bgp',
+        state: 'up',
+        info: 'Established',
+        since: new Date(now - 240_000).toISOString(),
+        routes: { imported: 1, filtered: 1, exported: 1 },
+        announced: ['10.10.0.0/24'],
+        received: ['10.70.0.0/24', '0.0.0.0/0'],
+      },
+    ],
+  };
+  m.routing = m.config.routing!;
+  m.routes = [
+    { destination: '10.10.0.0/24', table: 100, origin: 'connected', network: IOT },
+    { destination: '10.50.0.0/24', table: 100, origin: 'client', network: HUB },
+    { destination: '10.60.0.0/24', table: 100, origin: 'static', network: LINK },
+    { destination: '10.70.0.0/24', gateway: '10.255.0.1', table: 100, origin: 'learned', network: LINK, protocol: { id: BGP, name: 'site-b-bgp' } },
+  ];
+  m.linux = {
+    ...m.linux,
+    wireguard: 'wireguard wg-lab-hub up public key qU1BFDFDgsH5I7uGhzuhQjkMSw6bP8nXN6CN4AKxEF8=\n  address 10.99.0.1/24 mtu 1420 port 51820\n  peer FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo= allowed 10.50.0.0/24,10.99.0.2/32 preshared handshake 2026-10-13T12:00:00Z rx 1800000 tx 240000\n',
+  };
+  return m;
+}
+
 export function manyDevices(n: number): DeviceView[] {
   return Array.from({ length: n }, (_, i) => {
     const hex = i.toString(16).padStart(4, '0');
@@ -300,6 +412,30 @@ export class MockGateway {
   rejectOverlay?: ValidationError[];
   /** The answer of GET /explain. */
   explanation?: Explanation;
+  /** DHCP leases by network id (GET /networks/{id}/leases). */
+  leases: Record<string, DhcpLease[]> = {};
+  /** The status of WireGuard clients by client id; a client without one is offline, never seen. */
+  clientStatus: Record<string, WireGuardPeerStatus> = {};
+  /** Clients whose private key the gateway does not hold (any more): their export has a placeholder. */
+  keyGone = new Set<string>();
+  /** GET /routing, /routing/status and /routing/routes. */
+  routing: Routing = {};
+  routingStatus: RoutingStatus = { bird: { running: false }, protocols: [] };
+  routes: RouteEntry[] = [];
+  /** GET /state/linux. */
+  linux: LinuxState = {
+    revision: 42,
+    generation: 42,
+    read_at: new Date().toISOString(),
+    nftables: 'table inet chaosgw {\n  chain forward {\n    type filter hook forward priority 0; policy drop;\n    ct state { established, related } accept\n    iifname "br-iot" oifname "eth0" counter packets 12 bytes 840 accept\n    iifname "br-test" oifname "eth0" counter packets 3 bytes 180 accept\n  }\n}\n',
+    tc: 'br-iot: qdisc 1: parent root htb default=0x1\nbr-iot:   sent 840 bytes 12 pkt (dropped 0, overlimits 0, requeues 0) backlog 0b 0p\n',
+    routes: 'bridge br-iot up\n  address 10.10.0.1/24\n  port eth1\nbridge br-test up\n  address 10.20.0.1/24\n  port eth2\nroute table 100 10.10.0.0/24 dev br-iot\nroute table 100 10.20.0.0/24 dev br-test\n',
+    wireguard: '',
+  };
+  /** How long a lockout-relevant apply waits for confirmation. */
+  confirmWindowMs = 60_000;
+  /** The configuration and revision a revision that waits for confirmation would roll back to. */
+  private beforePending?: { config: Configuration; revision: number };
   /** The Linux part of every preview. */
   previewLinux: Preview['linux'] = { nftables: '+ rule inet chaosgw access_rules ip saddr @net_iot udp dport 53 counter drop' };
 
@@ -452,7 +588,28 @@ export class MockGateway {
       const d = this.devices.find((x) => x.id === dev[1] || x.name === decodeURIComponent(dev[1]!));
       return d ? json(200, d) : problem(404, 'not_found', 'no such device');
     }
-    if (path === '/networks') return json(200, this.page(this.networks, url));
+    if (path === '/networks') return json(200, this.page(this.networkViews(), url));
+    const net = /^\/networks\/([^/]+)$/.exec(path);
+    if (net) {
+      const n = this.networkViews().find((x) => x.id === net[1]);
+      return n ? json(200, n) : problem(404, 'not_found', 'no such network');
+    }
+    const leases = /^\/networks\/([^/]+)\/leases$/.exec(path);
+    if (leases) return json(200, this.page(this.leases[leases[1]!] ?? [], url));
+    const clients = /^\/networks\/([^/]+)\/clients$/.exec(path);
+    if (clients) return json(200, this.page(this.clientViews(clients[1]!), url));
+    const exp = /^\/networks\/([^/]+)\/clients\/([^/]+)\/export$/.exec(path);
+    if (exp) {
+      const c = this.clientViews(exp[1]!).find((x) => x.id === exp[2] || x.config.name === exp[2]);
+      if (!c) return problem(404, 'not_found', 'no such client');
+      const conf = this.confOf(exp[1]!, c);
+      if (c.config.key?.export_once) this.keyGone.add(c.id);
+      return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${c.config.name}.conf"` }, contentType: 'text/plain; charset=utf-8', body: conf });
+    }
+    if (path === '/routing') return json(200, this.routing);
+    if (path === '/routing/status') return json(200, this.routingStatus);
+    if (path === '/routing/routes') return json(200, this.page(this.routes, url));
+    if (path === '/state/linux') return json(200, this.linux);
     if (path === '/groups') return json(200, this.page(this.groups, url));
     if (path === '/profiles') return json(200, this.page(this.profileViews(), url));
     if (path === '/faults') return json(200, this.page(this.faultList(), url));
@@ -525,7 +682,10 @@ export class MockGateway {
         return problem(500, step === 'verify' ? 'verify_failed' : 'apply_failed', `apply of revision ${id} failed: ${step === 'verify' ? 'verify: the nftables state differs from the target' : 'tc: RTNETLINK answers: Invalid argument'}`);
       }
       if (this.revisionBase(id) !== this.state.active_revision) return problem(409, 'revision_conflict', `the candidate's base is not the active revision`);
+      if (this.state.pending_confirm) return problem(409, 'confirm_pending', `revision ${this.state.pending_confirm.revision} waits for confirmation`);
       const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
+      const confirm = this.requiresConfirm(patch);
+      if (confirm) this.beforePending = { config: this.config, revision: this.state.active_revision };
       this.config = applyMergePatch(this.config, patch);
       this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
       this.noteApplied(id, this.activeBy);
@@ -533,13 +693,26 @@ export class MockGateway {
         this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
       }
       this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
+      if (confirm) {
+        const deadline = new Date(this.now() + this.confirmWindowMs).toISOString();
+        this.state = { ...this.state, pending_confirm: { revision: id, deadline } };
+        return json(200, { revision: id, status: 'pending_confirm', generation: this.state.generation, confirm_deadline: deadline, duration_ms: 87 } satisfies ApplyResult);
+      }
       const res: ApplyResult = { revision: id, status: 'active', generation: this.state.generation, duration_ms: 87 };
       return json(200, res);
     }
     const discard = /^\/revisions\/(\d+)$/.exec(path);
     if (discard && method === 'DELETE') return route.fulfill({ status: 204 });
+    const rollback = /^\/revisions\/(\d+)\/rollback$/.exec(path);
+    if (rollback) {
+      if (this.state.pending_confirm?.revision !== Number(rollback[1])) return problem(409, 'not_a_candidate', `revision ${rollback[1]} does not wait for confirmation`);
+      this.rollBackPending();
+      return json(200, { id: Number(rollback[1]), status: 'rolled_back', schema_version: 1, created_at: new Date().toISOString(), created_by: { type: 'user', id: 'admin' } });
+    }
     const confirm = /^\/revisions\/(\d+)\/confirm$/.exec(path);
     if (confirm) {
+      if (this.state.pending_confirm?.revision !== Number(confirm[1]) && this.beforePending) return problem(409, 'not_a_candidate', `revision ${confirm[1]} does not wait for confirmation`);
+      this.beforePending = undefined;
       const { pending_confirm: _done, ...rest } = this.state;
       this.state = { ...rest, last_known_good: Number(confirm[1]) };
       return json(200, { id: Number(confirm[1]), status: 'active', schema_version: 1, created_at: new Date().toISOString(), created_by: { type: 'user', id: 'admin' } });
@@ -643,7 +816,92 @@ export class MockGateway {
       const name = String(v?.name ?? key);
       domain.push({ op: v === null ? 'removed' : 'added', kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${v === null ? 'removed' : 'added'}` });
     }
-    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: false };
+    const nets = (patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> }> }).networks ?? {};
+    for (const [netId, n] of Object.entries(nets)) {
+      for (const [key, c] of Object.entries(n.clients ?? {})) {
+        const before = (this.config.networks?.[netId] as WireGuardNetwork | undefined)?.clients?.[key];
+        const name = String(c?.name ?? before?.name ?? key);
+        const op = c === null ? 'removed' : before ? 'changed' : 'added';
+        domain.push({ op, kind: 'client', id: key, name, path: `/networks/${netId}/clients/${key}`, summary: `WireGuard client ${name} ${op}${c?.address ? ` (${c.address})` : ''}` });
+      }
+    }
+    if ((patch as { access_matrix?: unknown }).access_matrix) {
+      domain.push({ op: 'changed', kind: 'access_matrix', path: '/access_matrix', summary: 'access between networks changed' });
+    }
+    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: this.requiresConfirm(patch) };
+  }
+
+  /** The network views, their configuration as the active revision has it (a client added by an apply is there). */
+  networkViews(): NetworkView[] {
+    return this.networks.map((n) => {
+      const cfg = this.config.networks?.[n.id];
+      if (!cfg) return n;
+      const clients = cfg.type === 'wireguard' ? Object.keys((cfg as WireGuardNetwork).clients ?? {}) : [];
+      const status = cfg.type === 'wireguard' && (cfg as WireGuardNetwork).kind === 'hub'
+        ? { ...n.status, peers_total: clients.length, peers_online: clients.filter((id) => this.clientStatus[id]?.online).length }
+        : n.status;
+      return { ...n, config: cfg, status };
+    });
+  }
+
+  /** The clients of a hub of the active configuration, with their status. */
+  clientViews(network: string): WireGuardClientView[] {
+    const n = this.config.networks?.[network];
+    if (n?.type !== 'wireguard') return [];
+    return Object.entries((n as WireGuardNetwork).clients ?? {}).map(([id, c]) => ({
+      id,
+      network,
+      config: c,
+      status: this.clientStatus[id] ?? { online: false },
+      private_key_stored: (c.key?.mode ?? 'generated') === 'generated' && !this.keyGone.has(id),
+    }));
+  }
+
+  /** The wg-quick configuration the gateway would export for a client (keys made up, stable per client). */
+  confOf(network: string, c: WireGuardClientView): string {
+    const hub = this.config.networks?.[network] as WireGuardNetwork;
+    const key = (seed: string) => btoa(seed.padEnd(32, '#').slice(0, 32));
+    const priv = c.private_key_stored ? key(`private ${c.id}`) : '<PRIVATE_KEY>';
+    const allowed = [hub.address.replace(/\.\d+\//, '.0/'), ...(c.config.reachable ?? []).map((r: NonNullable<WireGuardClient['reachable']>[number]) => (r.uplink ? '0.0.0.0/0' : (this.config.networks?.[r.network ?? ''] as { address?: string } | undefined)?.address?.replace(/\.\d+\//, '.0/') ?? ''))];
+    return [
+      '[Interface]',
+      `PrivateKey = ${priv}`,
+      `Address = ${c.config.address}/32`,
+      `DNS = ${hub.address.split('/')[0]}`,
+      '',
+      '[Peer]',
+      `PublicKey = ${key(`hub ${network}`)}`,
+      `AllowedIPs = ${allowed.filter(Boolean).join(', ')}`,
+      `Endpoint = 192.168.1.57:${hub.listen_port}`,
+      `PersistentKeepalive = 25`,
+      '',
+    ].join('\n');
+  }
+
+  /** Like the gateway (LockoutRelevant): the management settings or a WireGuard network with the role management changed. */
+  requiresConfirm(patch: unknown): boolean {
+    const p = patch as { management?: unknown; networks?: Record<string, unknown> } | undefined;
+    if (p?.management) return true;
+    return Object.keys(p?.networks ?? {}).some((id) => {
+      const before = this.config.networks?.[id] as { role?: string } | undefined;
+      const after = (p!.networks![id] ?? {}) as { role?: string };
+      return before?.role === 'management' || after.role === 'management';
+    });
+  }
+
+  /**
+   * The revision that waits for confirmation is rolled back (at its deadline, or on request): the configuration
+   * before it is active again. Returns the event the gateway would send.
+   */
+  rollBackPending(reason = 'requested'): Omit<GatewayEvent, 'id' | 'time'> {
+    const rev = this.state.pending_confirm?.revision ?? this.state.active_revision;
+    const before = this.beforePending;
+    if (before) this.config = before.config;
+    this.beforePending = undefined;
+    const { pending_confirm: _gone, ...rest } = this.state;
+    this.state = { ...rest, active_revision: before?.revision ?? rev - 1, generation: this.state.generation + 1 };
+    this.applied = this.applied.map((r) => (r.id === rev ? { ...r, status: 'rolled_back' } : r));
+    return { type: 'revision_rolled_back', message: `revision ${rev} rolled back`, data: { revision: rev, reason, restored: this.state.active_revision } };
   }
 
   /** POST /overlays: a new overlay, or the one with the same key replaced (it keeps its id). */

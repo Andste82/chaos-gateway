@@ -250,6 +250,76 @@ describe('the configuration draft', () => {
   });
 });
 
+describe('WireGuard clients and the access matrix in the draft (M14)', () => {
+  const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
+  const HUB = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';
+  const RA = '9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const RC = 'c1000000-0000-4000-8000-000000000003';
+  const networks = (): RevisionWithConfiguration['configuration']['networks'] => ({
+    [IOT]: { type: 'lan', name: 'IoT', interfaces: [{ name: 'eth1' }], address: '10.10.0.1/24' },
+    [HUB]: { type: 'wireguard', kind: 'hub', name: 'lab-hub', address: '10.99.0.1/24', listen_port: 51820, clients: { [RA]: { name: 'rA', address: '10.99.0.2' } } },
+  });
+
+  it('a new client is a change in words and a merge patch below its hub', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { networks: networks() }));
+    d.setClient(HUB, RC, { name: 'rC', address: '10.99.0.3', key: { mode: 'generated' } });
+    expect(d.dirty).toBe(true);
+    expect(d.changes()).toEqual([{ kind: 'client', id: RC, name: 'rC', field: 'client', from: '—', to: 'added (10.99.0.3 in lab-hub)' }]);
+    expect(d.summary()).toBe('1 change in 1 WireGuard client');
+    expect(d.patch()).toEqual({ networks: { [HUB]: { clients: { [RC]: { name: 'rC', address: '10.99.0.3', key: { mode: 'generated' } } } } } });
+    expect(Object.keys(d.effectiveClients(HUB))).toEqual([RA, RC]);
+    // the gateway's refusal of the client is kept for its row
+    d.setServerErrors([{ path: `/networks/${HUB}/clients/${RC}/address`, message: 'address taken' }]);
+    expect(d.serverErrors[RC]).toEqual({ address: 'address taken' });
+    d.setClient(HUB, RC, null);
+    expect(d.dirty).toBe(false);
+  });
+
+  it('a matrix cell flipped is a change; flipped back it is none; the patch replaces the entries', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { networks: networks(), access_matrix: { entries: [{ from: { network: 'IoT' }, to: { network: 'lab-hub' }, policy: 'allow' }] } }));
+    d.toggleMatrix(`network:${IOT}`, 'uplink');
+    expect(d.changes()).toEqual([{ kind: 'matrix', id: 'IoT → Internet', name: 'Access between networks', field: 'IoT → Internet', from: 'allowed', to: 'blocked' }]);
+    expect(d.summary()).toBe('1 change in the access matrix');
+    expect(d.patch()).toEqual({
+      access_matrix: {
+        entries: [
+          { from: { network: 'IoT' }, to: { network: 'lab-hub' }, policy: 'allow' },
+          { from: { network: IOT }, to: { uplink: true }, policy: 'deny' },
+        ],
+      },
+    });
+    d.toggleMatrix(`network:${IOT}`, 'uplink');
+    expect(d.dirty).toBe(false);
+    expect(d.matrix).toBeUndefined();
+  });
+
+  it('reapplies a client and a matrix cell on their revision, keeping their entries and clients', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { networks: networks() }));
+    d.setClient(HUB, RC, { name: 'rC', address: '10.99.0.3' });
+    d.toggleMatrix(`network:${IOT}`, 'uplink');
+    // their revision: another client on the hub and an entry of their own
+    const theirs = networks()!;
+    (theirs[HUB] as { clients: Record<string, unknown> }).clients['d1000000-0000-4000-8000-000000000004'] = { name: 'rD', address: '10.99.0.4' };
+    d.rebase(revision(43, { networks: theirs, access_matrix: { entries: [{ from: { network: IOT }, to: { network: HUB }, policy: 'allow' }] } }));
+    expect(d.base).toBe(43);
+    expect(Object.values(d.effectiveClients(HUB)).map((c) => c.name)).toEqual(['rA', 'rD', 'rC']);
+    expect(d.effectiveMatrix).toEqual([
+      { from: { network: IOT }, to: { network: HUB }, policy: 'allow' },
+      { from: { network: IOT }, to: { uplink: true }, policy: 'deny' },
+    ]);
+    // their revision already blocks IoT → Internet: nothing of mine is left for the matrix
+    d.discard();
+    d.track(revision(44, { networks: networks() }));
+    d.toggleMatrix(`network:${IOT}`, 'uplink');
+    d.rebase(revision(45, { networks: networks(), access_matrix: { entries: [{ from: { network: IOT }, to: { uplink: true }, policy: 'deny' }] } }));
+    expect(d.matrix).toBeUndefined();
+    expect(d.dirty).toBe(false);
+  });
+});
+
 describe('the API panel', () => {
   it('shows a request as HTTP and as curl with a token', () => {
     const call = { method: 'POST' as const, path: '/overlays', body: { profile: 'lte' }, headers: { 'If-Match': '"42"' } };

@@ -41,6 +41,8 @@ describe('selectors in words', () => {
     expect(describeScope({ group: 'g' }, names)).toBe('Group Sensors');
     expect(describeScope({ global: true }, names)).toBe('Everything');
     expect(describeScope(undefined)).toBe('Everything');
+    expect(describeScope({ remote_network: { cidr: '10.9.0.0/24' } })).toBe('Remote network 10.9.0.0/24');
+    expect(describeScope({ remote_network: { link: 'n1' } }, names)).toBe('Remote networks of link IoT');
   });
 
   it('names the destination, protocol and ports', () => {

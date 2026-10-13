@@ -101,6 +101,8 @@ async function prepare() {
     phase.value = 'ready';
   } catch (e) {
     if (stale(gen)) return;
+    // a refused candidate or dry run is an action too: the panel shows the calls that were sent
+    apiPanel.record(`Preview & apply (refused: ${errorMessage(e)})`, calls);
     if (e instanceof ApiError && e.code === 'revision_conflict' && base !== undefined) {
       if (candidate.value !== undefined) await discardRevision(candidate.value).catch(() => undefined);
       candidate.value = undefined;
@@ -140,12 +142,10 @@ async function apply() {
   phase.value = 'applying';
   error.value = '';
   const params = force.value ? { force: true } : undefined;
+  const applyCall: ApiCall = { method: 'POST', path: `/revisions/${id}/apply${force.value ? '?force=true' : ''}`, note: 'apply: validate → apply → verify' };
   try {
     const res = await applyRevision(id, params);
-    apiPanel.record(`Preview & apply revision ${res.revision}`, [
-      ...calls,
-      { method: 'POST', path: `/revisions/${id}/apply${force.value ? '?force=true' : ''}`, note: 'apply: validate → apply → verify' },
-    ]);
+    apiPanel.record(`Preview & apply revision ${res.revision}`, [...calls, applyCall]);
     toasts.push(
       'success',
       appliedTitle(res),
@@ -156,6 +156,7 @@ async function apply() {
     draft.drawerOpen = false;
     await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {
+    apiPanel.record(`Preview & apply revision ${id} (refused: ${errorMessage(e)})`, [...calls, applyCall]);
     if (e instanceof ApiError && e.code === 'revision_conflict' && draft.base !== undefined) {
       await discardRevision(id).catch(() => undefined);
       candidate.value = undefined;

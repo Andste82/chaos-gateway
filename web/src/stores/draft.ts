@@ -288,6 +288,8 @@ export const useDraftStore = defineStore('draft', () => {
     const theirDevices = rev.configuration.devices ?? {};
     const mine = order.value;
     const old = baseConfig.value;
+    // the revision just fetched is the newest seen: a draft this leaves clean stays on it
+    if (!latest || latest.id < rev.id) latest = rev;
     function reapply<T>(edits: Record<string, T | null>, before: Record<string, T>, theirs: Record<string, T>): Record<string, T | null> {
       const out: Record<string, T | null> = {};
       for (const [id, m] of Object.entries(edits)) {

@@ -869,3 +869,22 @@ stayed open".
 - Acceptance: the decision is recorded here; with (b), a Playwright test shows a field both changed in the dialog.
 - Needs maintainer: yes
 - Effort: S
+
+### P3-M13-08 The scope selectors do not offer remote networks as a choice
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. A fault, an overlay and an access rule can act on a `remote_network` (the client networks of a
+  WireGuard client, the prefixes of a link, or a CIDR inside them; plan §2.4 puts it on the network level). The scope
+  selector of plan §2.17 lists only everything, network, group and device, and so do the fault dialog, the profile scope and
+  the rule editor's From.
+- Evidence: `web/src/lib/faultForm.ts` (`targetOf`, `scopeOf`), `web/src/components/faults/FaultDialog.vue`,
+  `web/src/views/ProfilesView.vue`, `web/src/components/rules/RuleEditor.vue`; `src/lib/faultForm.test.ts` "keeps a remote
+  network target when a fault is read back and sent again unchanged".
+- Task: implemented — an existing remote-network scope is kept as it is (shown as "Remote network 10.9.0.0/24", "Remote
+  networks of link …", "Client networks of …" and sent back unchanged; before the M13 review it was read as "Everything"),
+  but it cannot be picked for a new fault, profile activation or rule. Options: (a) offer the WireGuard clients and links
+  (and a CIDR field) in the selectors, with M14's WireGuard views; (b) keep them API-only. Recommendation: (a) in M14.
+- Acceptance: with (a), a Playwright test creates a fault on a client's networks and the request carries the scope.
+- Needs maintainer: yes
+- Effort: S

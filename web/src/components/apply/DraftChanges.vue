@@ -9,11 +9,13 @@ import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions
 import { useGatewayState, useNames } from '../../composables/gateway';
 import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore } from '../../stores/draft';
+import { useToastStore } from '../../stores/toasts';
 import StickyActionBar from '../ui/StickyActionBar.vue';
 import ConflictDialog from './ConflictDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 
 const draft = useDraftStore();
+const toasts = useToastStore();
 const state = useGatewayState();
 const connection = useConnectionStore();
 const { names } = useNames();
@@ -36,9 +38,15 @@ async function reapply() {
   reloading.value = true;
   reloadError.value = '';
   try {
-    draft.rebase(await getActiveRevision());
+    const rev = await getActiveRevision();
+    draft.rebase(rev);
     draft.conflict = undefined;
-    draft.drawerOpen = true;
+    // their revision may already hold everything I changed: then there is nothing to apply
+    if (draft.dirty) draft.drawerOpen = true;
+    else {
+      draft.drawerOpen = false;
+      toasts.push('info', `Your changes are already in revision ${rev.id}`);
+    }
   } catch (e) {
     reloadError.value = errorMessage(e);
   } finally {

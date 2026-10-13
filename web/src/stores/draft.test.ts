@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { nextTick } from 'vue';
 import type { RevisionWithConfiguration } from '../api/generated/model';
 import { curlOf, httpOf, useApiPanelStore } from './apiPanel';
 import { useDraftStore } from './draft';
@@ -223,6 +224,18 @@ describe('the configuration draft', () => {
     );
     expect(d.rules[A]).toBeUndefined();
     expect(d.patch().access_rules).toEqual({ [B]: { name: 'b', source: { global: true }, protocol: 'tcp', ports: [81], action: 'allow' } });
+  });
+
+  it('reapplying onto a revision that holds all my edits leaves a clean draft on that revision', async () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setRule(A, { name: 'a', source: { global: true }, action: 'reject' });
+    // revision 44 was fetched for the reapply; the active-revision query has not seen it yet
+    d.rebase(revision(44, { access_rules: { ...revision(42).configuration.access_rules, [A]: { name: 'a', source: { global: true }, action: 'reject' } } }));
+    await nextTick();
+    expect(d.dirty).toBe(false);
+    expect(d.base).toBe(44);
+    expect(d.effectiveRules[A]?.action).toBe('reject');
   });
 
   it('reapplies a renamed device on theirs: the identifiers they added stay', () => {

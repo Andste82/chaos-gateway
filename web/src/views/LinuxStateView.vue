@@ -6,7 +6,7 @@
 // nothing here is needed for normal use. The counters are live: the page reads again every 5 s.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
-import { getGetLinuxStateQueryKey, getLinuxState } from '../api/generated/hooks/system/system';
+import { getLinuxState } from '../api/generated/hooks/system/system';
 import PageHeader from '../components/layout/PageHeader.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SegmentedControl from '../components/ui/SegmentedControl.vue';
@@ -14,7 +14,7 @@ import { formatClock } from '../lib/format';
 import { groupExcerpt, nftExcerpt, sectionLabels, sectionsOf, type SectionName } from '../lib/linuxView';
 import { useApiScreen } from '../stores/apiPanel';
 
-const linux = useQuery({ queryKey: getGetLinuxStateQueryKey(), queryFn: ({ signal }) => getLinuxState({ signal }), refetchInterval: 5_000 });
+const linux = useQuery({ queryKey: ['linux-state'], queryFn: ({ signal }) => getLinuxState({ signal }), refetchInterval: 5_000 });
 const uid = useId();
 
 useApiScreen('the Linux view', () => [{ method: 'GET', path: '/state/linux', note: 'the kernel state, read back and rendered as text' }]);

@@ -1,3 +1,14 @@
+<script lang="ts">
+// A client with "export once" loses its private key on the gateway with its first export, so the text
+// of that export is the only copy. It must not be lost to a dialog closed before the answer came: while
+// such an export is in flight, a new opening for the same client waits for it instead of exporting again
+// (which would only get the placeholder), and an answer no opening showed is kept for the next one.
+// Both live outside the component, so a dialog unmounted meanwhile loses nothing either.
+const inFlight = new Map<string, Promise<string>>();
+const unseen = new Map<string, string>();
+const shown = new WeakSet<Promise<string>>();
+</script>
+
 <script setup lang="ts">
 // The configuration of a WireGuard client (plan §2.2.1 "Keys and export", M14 "QR dialog and config
 // download"): the dialog downloads the wg-quick configuration once (`GET …/clients/{id}/export`, audited
@@ -23,8 +34,15 @@ const showText = ref(false);
 
 // Each opening counts: an export that answers after the dialog was closed, or reopened for another
 // client, belongs to an opening that is over and is dropped, so the dialog never shows another
-// client's code or file under this client's name.
+// client's code or file under this client's name (an export-once text is kept, see above).
 let opening = 0;
+
+function show(c: WireGuardClientView, text: string) {
+  conf.value = text;
+  apiPanel.record(`Configuration of ${c.config.name}`, [
+    { method: 'GET', path: `/networks/${props.network}/clients/${c.id}/export?format=conf`, note: 'the wg-quick configuration (secret; png and svg give the QR code)' },
+  ]);
+}
 
 watch(open, async (o) => {
   const mine = ++opening;
@@ -34,16 +52,34 @@ watch(open, async (o) => {
   loading.value = false;
   const c = props.client;
   if (!o || !c) return;
+  const key = `${props.network}/${c.id}`;
+  const kept = unseen.get(key);
+  if (kept !== undefined) {
+    unseen.delete(key);
+    show(c, kept);
+    return;
+  }
   loading.value = true;
   const current = () => mine === opening && open.value && props.client?.id === c.id;
+  const once = !!c.config.key?.export_once;
+  let p = inFlight.get(key);
+  if (!p) {
+    p = exportWireGuardClient(props.network, c.id, { format: 'conf' }).then((body) => (typeof body === 'string' ? body : body.text()));
+    if (once) {
+      inFlight.set(key, p);
+      const done = () => inFlight.delete(key);
+      p.then(done, done);
+    }
+  }
   try {
-    const body = await exportWireGuardClient(props.network, c.id, { format: 'conf' });
-    const text = typeof body === 'string' ? body : await body.text();
-    if (!current()) return;
-    conf.value = text;
-    apiPanel.record(`Configuration of ${c.config.name}`, [
-      { method: 'GET', path: `/networks/${props.network}/clients/${c.id}/export?format=conf`, note: 'the wg-quick configuration (secret; png and svg give the QR code)' },
-    ]);
+    const text = await p;
+    if (!current()) {
+      if (once && !shown.has(p) && !text.includes('<PRIVATE_KEY>')) unseen.set(key, text);
+      return;
+    }
+    shown.add(p);
+    unseen.delete(key);
+    show(c, text);
   } catch (e) {
     if (current()) error.value = errorMessage(e);
   } finally {

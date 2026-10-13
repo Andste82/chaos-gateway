@@ -27,6 +27,7 @@ test('the device detail shows identity, lease, faults and counters', async ({ pa
   await expect(faults.nth(1)).toContainText('via Network IoT');
   await expect(faults.nth(1)).toContainText('profile lte');
 
+  await expect(page.getByTestId('device-lease').getByRole('link', { name: 'IoT' })).toHaveAttribute('href', '/networks/0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21');
   await expect(page.getByTestId('device-lease')).toContainText('10.10.0.42 · active');
   await expect(page.getByTestId('device-lease')).toContainText(/5\d:\d\d left/);
   await expect(page.getByTestId('device-lease')).toContainText('host name esp32-42');

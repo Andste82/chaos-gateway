@@ -40,6 +40,7 @@ jobs:
       - run: make check-clients
       - run: make lint
       - run: go vet -tags appliance ./internal/appliance
+      - run: go vet -tags testbed,browser ./internal/api
       - run: make test
       # 5 minutes of fuzzing on the executor's decoder (plan M3); the nightly run goes longer
       - run: make fuzz
@@ -147,6 +148,29 @@ jobs:
           path: measurements.jsonl
           retention-days: 90
           if-no-files-found: warn
+
+  # The browser flow of M12 against the real stack (plan §5 M12 Tests): the gateway runs on the
+  # real executor in the namespace testbed and serves the built web app, and Chromium walks through
+  # the setup wizard until the device list shows a discovered device. Level 1 (a privileged
+  # container) like the job above; the tag browser keeps the test out of the other testbed jobs,
+  # which have no web build and no browser.
+  testbed-ui:
+    name: testbed UI flow (level 1, privileged container)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .devcontainer
+          load: true
+          tags: chaos-gateway-dev
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,scope=dev,mode=max
+      - run: >-
+          docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev
+          bash -c 'cd web && npm ci && npx playwright install chromium && npm run build && cd ..
+          && make test-privileged ARGS="-tags testbed,browser -run TestFirstStartInTheBrowser -test-timeout 30m ./internal/api"'
 
   # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).

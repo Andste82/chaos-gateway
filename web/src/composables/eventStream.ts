@@ -71,7 +71,12 @@ function toast(ev: GatewayEvent, toasts: ReturnType<typeof useToastStore>) {
       toasts.push(
         'error',
         rev !== undefined ? `Revision ${String(rev)} rolled back` : 'Revision rolled back',
-        typeof reason === 'string' && reason.startsWith('confirmation') ? 'It was not confirmed in time; the previous revision is active again.' : ev.message,
+        typeof reason === 'string' && reason.startsWith('confirmation')
+          ? // revision 1 is the first-start setup: there is no earlier one, the setup opens again
+            rev === 1
+            ? 'It was not confirmed in time; the setup is open again.'
+            : 'It was not confirmed in time; the previous revision is active again.'
+          : ev.message,
       );
       break;
     }

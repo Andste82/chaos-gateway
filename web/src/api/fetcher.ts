@@ -40,6 +40,7 @@ type Listener = () => void;
 const reachableListeners = new Set<Listener>();
 const unreachableListeners = new Set<Listener>();
 const unauthorizedListeners = new Set<Listener>();
+const unavailableListeners = new Set<Listener>();
 
 function subscribe(set: Set<Listener>, fn: Listener): () => void {
   set.add(fn);
@@ -52,6 +53,11 @@ export const onReachable = (fn: Listener) => subscribe(reachableListeners, fn);
 export const onUnreachable = (fn: Listener) => subscribe(unreachableListeners, fn);
 /** fn runs when a request that needed a session was refused with 401: the session is gone. */
 export const onUnauthorized = (fn: Listener) => subscribe(unauthorizedListeners, fn);
+/**
+ * fn runs when the gateway refused a request with 503 `unavailable`: its executor is not
+ * connected, it is in safe mode, or the first-start setup is open (again, after a rollback).
+ */
+export const onUnavailable = (fn: Listener) => subscribe(unavailableListeners, fn);
 
 let csrfToken: string | undefined;
 
@@ -110,6 +116,7 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
     if (response.status === 401 && !credentialPaths.some((p) => full.startsWith(API_BASE + p))) {
       emit(unauthorizedListeners);
     }
+    if (response.status === 503 && problem?.code === 'unavailable') emit(unavailableListeners);
     throw new ApiError(response.status, problem);
   }
   return body as T;

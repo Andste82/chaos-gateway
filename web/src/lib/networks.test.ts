@@ -3,10 +3,12 @@ import type { NetworkView } from '../api/generated/model';
 import { CompleteSetupBody } from '../api/generated/zod/system/system';
 import {
   cellOf,
+  clientFieldOf,
   clientFormErrors,
   clientFromForm,
   effectivePools,
   emptyClientForm,
+  formFromClient,
   matrixChanges,
   nextFreeAddress,
   parseSubnet,
@@ -109,6 +111,33 @@ describe('the add-client form', () => {
     expect(clientFromForm({ ...emptyClientForm('10.99.0.3'), name: 'phone' })).toEqual({ name: 'phone', address: '10.99.0.3', key: { mode: 'generated' } });
     const configuration = { schema_version: 1, uplink: { interface: { name: 'eth0' } }, management: { interface: { name: 'eth1' } }, networks: { [HUB]: { ...networks[2]!.config, clients: { 'c1000000-0000-4000-8000-000000000001': c } } } };
     expect(CompleteSetupBody.safeParse({ admin_password: 'correct horse battery', configuration }).error).toBeUndefined();
+  });
+
+  it('opens a client of the draft again as the form that made it', () => {
+    const forms = [
+      { ...emptyClientForm('10.99.0.3'), name: 'phone' },
+      {
+        ...emptyClientForm('10.99.0.4'),
+        name: 'laptop',
+        clientNetworks: '10.50.0.0/24, 10.51.0.0/24',
+        reachable: [`network:${IOT}`, 'uplink'],
+        dns: 'custom' as const,
+        dnsServers: '1.1.1.1, 9.9.9.9',
+        keepalive: '10s',
+        presharedKey: true,
+        exportOnce: true,
+      },
+      { ...emptyClientForm('10.99.0.5'), name: 'own-key', dns: 'none' as const, keyMode: 'provided' as const, publicKey: 'kso2jlxO7Hjdde1KFPmTsqV7PJV47Pqi3agv3NqKxiY=' },
+    ];
+    for (const f of forms) expect(formFromClient(clientFromForm(f))).toEqual(f);
+  });
+
+  it("puts the gateway's messages under the field they are about", () => {
+    expect(clientFieldOf('address')).toBe('address');
+    expect(clientFieldOf('client_networks')).toBe('clientNetworks');
+    expect(clientFieldOf('key')).toBe('publicKey');
+    expect(clientFieldOf('client')).toBeUndefined();
+    expect(clientFieldOf('reachable')).toBeUndefined();
   });
 });
 

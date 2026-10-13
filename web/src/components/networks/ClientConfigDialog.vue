@@ -21,24 +21,33 @@ const error = ref('');
 const loading = ref(false);
 const showText = ref(false);
 
+// Each opening counts: an export that answers after the dialog was closed, or reopened for another
+// client, belongs to an opening that is over and is dropped, so the dialog never shows another
+// client's code or file under this client's name.
+let opening = 0;
+
 watch(open, async (o) => {
+  const mine = ++opening;
   conf.value = undefined;
   error.value = '';
   showText.value = false;
+  loading.value = false;
   const c = props.client;
   if (!o || !c) return;
   loading.value = true;
+  const current = () => mine === opening && open.value && props.client?.id === c.id;
   try {
     const body = await exportWireGuardClient(props.network, c.id, { format: 'conf' });
-    if (!open.value) return;
-    conf.value = typeof body === 'string' ? body : await body.text();
+    const text = typeof body === 'string' ? body : await body.text();
+    if (!current()) return;
+    conf.value = text;
     apiPanel.record(`Configuration of ${c.config.name}`, [
       { method: 'GET', path: `/networks/${props.network}/clients/${c.id}/export?format=conf`, note: 'the wg-quick configuration (secret; png and svg give the QR code)' },
     ]);
   } catch (e) {
-    error.value = errorMessage(e);
+    if (current()) error.value = errorMessage(e);
   } finally {
-    loading.value = false;
+    if (mine === opening) loading.value = false;
   }
 });
 

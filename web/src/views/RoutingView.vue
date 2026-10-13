@@ -2,7 +2,9 @@
 // Routing (plan §2.2.2 "Observability", M14 "routing view"): the managed BIRD instance, its sessions
 // (BGP, OSPF, Babel on the WireGuard links) with their state, the prefixes each announces and receives
 // and how many it imported, filtered and exported; and the routes in Chaos Gateway's routing tables by
-// origin. Sessions and counts are polled, route changes also arrive as events.
+// origin. Sessions and counts are polled, route changes also arrive as events. What the status does
+// not say (ASN, the link of a session, the external mode) comes from the routing configuration; when
+// that is not loaded, the BIRD card says so.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
 import { getGetRoutingStatusQueryKey, getRouting, getRoutingStatus, listRoutes } from '../api/generated/hooks/routing/routing';
@@ -109,6 +111,12 @@ const external = computed(() => config.data.value?.external);
         <dd class="m-0">routes another daemon writes into kernel table <span class="mono">{{ external.table }}</span>, with the import filters</dd>
       </template>
     </dl>
+    <LoadError
+      v-if="firstError(config)"
+      :error="firstError(config)"
+      what="The routing configuration is not loaded (ASN, links and external mode are missing)"
+      :retry="config.refetch"
+    />
   </SectionCard>
 
   <SectionCard title="Sessions">

@@ -402,8 +402,8 @@ export class MockGateway {
   ruleViews: Record<string, Partial<AccessRuleView>> = {};
   faultViews: Record<string, Partial<FaultView>> = {};
   systemRuleCounters = { packets: 4812, bytes: 38_000_000, epoch: 1, last_match: new Date().toISOString() };
-  /** The next POST /revisions is refused with 422 and these errors. */
-  rejectRevision?: ValidationError[];
+  /** The next POST /revisions is refused with 422 and these errors (or those made from its merge patch). */
+  rejectRevision?: ValidationError[] | ((patch: unknown) => ValidationError[]);
   /** POST /revisions answers only after this settles (a candidate that takes its time). */
   revisionGate?: Promise<void>;
   /** The next apply fails at this step (`apply` or `verify`). */
@@ -416,6 +416,8 @@ export class MockGateway {
   leases: Record<string, DhcpLease[]> = {};
   /** The status of WireGuard clients by client id; a client without one is offline, never seen. */
   clientStatus: Record<string, WireGuardPeerStatus> = {};
+  /** The next client export answers only after this settles (a slow export). */
+  exportGate?: Promise<void>;
   /** Clients whose private key the gateway does not hold (any more): their export has a placeholder. */
   keyGone = new Set<string>();
   /** GET /routing, /routing/status and /routing/routes. */
@@ -607,6 +609,9 @@ export class MockGateway {
       if (!c) return problem(404, 'not_found', 'no such client');
       const conf = this.confOf(exp[1]!, c);
       if (c.config.key?.export_once) this.keyGone.add(c.id);
+      const gate = this.exportGate;
+      this.exportGate = undefined;
+      if (gate) await gate;
       return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${c.config.name}.conf"` }, contentType: 'text/plain; charset=utf-8', body: conf });
     }
     if (path === '/routing') return json(200, this.routing);
@@ -660,7 +665,7 @@ export class MockGateway {
         return problem(409, 'revision_conflict', `revision ${base} is not the active revision any more`);
       }
       if (this.rejectRevision) {
-        const errors = this.rejectRevision;
+        const errors = typeof this.rejectRevision === 'function' ? this.rejectRevision(body) : this.rejectRevision;
         this.rejectRevision = undefined;
         return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: `the configuration is not valid (${errors.length} problems)`, errors });
       }

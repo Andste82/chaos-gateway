@@ -189,6 +189,55 @@ test('backing out of the drawer keeps the new client in the draft, marked NEW, u
   await expect(clientRows(page)).toHaveCount(1);
 });
 
+test("a new client the gateway refuses says why in its row; Fix opens it again with the message under its field", async ({ page }) => {
+  const gw = await open(page, `/networks/${HUB}`);
+  let refusedId = '';
+  gw.rejectRevision = (patch) => {
+    refusedId = Object.keys((patch as { networks: Record<string, { clients: Record<string, unknown> }> }).networks[HUB]!.clients)[0]!;
+    return [
+      { path: `/networks/${HUB}/clients/${refusedId}/address`, code: 'conflict', message: 'the address 10.99.0.3 is used by the probe p1.' },
+      { path: `/networks/${HUB}/clients/${refusedId}`, code: 'invalid', message: 'the hub has no room for another peer.' },
+    ];
+  };
+  await page.getByRole('button', { name: 'Add client' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add client to lab-hub' });
+  await dialog.getByLabel('Name').fill('rC');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  const drawer = page.getByTestId('preview-drawer');
+  await expect(drawer.getByTestId('preview-invalid')).toContainText('the address 10.99.0.3 is used by the probe p1.');
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+
+  // the row says it as text, not only in a tooltip
+  const row = clientRows(page).nth(1);
+  await expect(row).toContainText('NEEDS FIXING');
+  await expect(row.getByTestId('client-refused')).toHaveText('The gateway refused it: the address 10.99.0.3 is used by the probe p1. the hub has no room for another peer.');
+  await row.getByRole('button', { name: 'Fix rC' }).click();
+
+  // the dialog has the client as it was, the message under the address, the one about the client as a whole below
+  const fix = page.getByRole('dialog', { name: 'Fix client of lab-hub' });
+  await expect(fix.getByLabel('Name')).toHaveValue('rC');
+  await expect(fix.getByLabel('Tunnel address')).toHaveValue('10.99.0.3');
+  await expect(fix.getByLabel('Tunnel address')).toHaveAttribute('aria-invalid', 'true');
+  await expect(fix.getByText('the address 10.99.0.3 is used by the probe p1.')).toBeVisible();
+  await expect(fix.getByTestId('add-client-refused')).toHaveText('The gateway refused the client: the hub has no room for another peer.');
+  await expect(fix.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await fix.getByLabel('Tunnel address').fill('10.99.0.4');
+  await expect(fix.getByText('the address 10.99.0.3 is used by the probe p1.')).toHaveCount(0);
+  await expect(fix.getByTestId('add-client-refused')).toHaveCount(0);
+  await fix.getByRole('button', { name: 'Preview & apply' }).click();
+
+  // the same client, with the new address, goes into the next candidate
+  await expect(drawer).toContainText('WireGuard client rC added (10.99.0.4)');
+  const created = gw.requestsTo('POST', '/revisions').at(-1)!;
+  const patch = created.body as { networks: Record<string, { clients: Record<string, { address: string }> }> };
+  expect(Object.keys(patch.networks[HUB]!.clients)).toEqual([refusedId]);
+  expect(patch.networks[HUB]!.clients[refusedId]!.address).toBe('10.99.0.4');
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified')).toBeVisible();
+  await expect(clientRows(page).nth(1)).toContainText('10.99.0.4');
+  await expect(clientRows(page).nth(1)).not.toContainText('NEEDS FIXING');
+});
+
 test('the QR code of a client decodes to the configuration the download saves, from one export', async ({ page }) => {
   const gw = await open(page, `/networks/${HUB}`);
   await clientRows(page).nth(0).getByRole('button', { name: 'Configuration and QR code of rA' }).click();
@@ -226,6 +275,36 @@ test('a client exported once: the dialog says the key goes, the next export has 
   await clientRows(page).nth(0).getByRole('button', { name: 'Configuration and QR code of rA' }).click();
   await expect(dialog).toContainText('the configuration has the placeholder <PRIVATE_KEY>');
   await expect.poll(() => scanQr(page)).toContain('PrivateKey = <PRIVATE_KEY>');
+});
+
+test("a slow export of one client never shows up in the dialog of another", async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  const hub = gw.config.networks![HUB] as { clients: Record<string, object> };
+  const RB = '9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4e';
+  hub.clients[RB] = { name: 'rB', address: '10.99.0.3', key: { mode: 'generated' } };
+  let release = () => {};
+  gw.exportGate = new Promise((r) => (release = r));
+  await open(page, `/networks/${HUB}`, gw);
+
+  // rA's export hangs; the dialog is closed and opened for rB, whose export answers at once
+  await page.getByRole('button', { name: 'Configuration and QR code of rA' }).click();
+  await expect(page.getByRole('dialog', { name: 'Configuration of rA' })).toContainText('Exporting the configuration…');
+  await page.getByRole('dialog', { name: 'Configuration of rA' }).getByRole('button', { name: 'Close' }).first().click();
+  await page.getByRole('button', { name: 'Configuration and QR code of rB' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Configuration of rB' });
+  await expect.poll(() => scanQr(page)).toContain('Address = 10.99.0.3/32');
+
+  // rA's answer arrives late: it is dropped
+  const late = page.waitForResponse((r) => r.url().includes(`/clients/${CLIENT_RA}/export`));
+  release();
+  await late;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  expect(await scanQr(page)).toContain('Address = 10.99.0.3/32');
+  await dialog.getByRole('button', { name: 'Show the configuration text' }).click();
+  await expect(dialog.getByTestId('client-conf-text')).toContainText('Address = 10.99.0.3/32');
+  await expect(dialog.getByTestId('client-conf-text')).not.toContainText('10.99.0.2');
+  const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'Download rB.conf' }).click()]);
+  expect(readFileSync((await download.path())!, 'utf8')).toContain('Address = 10.99.0.3/32');
 });
 
 test('the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply', async ({ page }) => {
@@ -418,4 +497,36 @@ test('empty and failed: no network yet, networks or leases the gateway did not d
   await page.goto(`/networks/${IOT}`);
   await expect(page.getByTestId('load-error')).toContainText('The leases are not loaded');
   await expect(page.getByText('No device has a lease yet.')).toHaveCount(0);
+});
+
+test('failed: an access matrix, an uplink or a routing configuration the gateway did not deliver says so instead of showing defaults', async ({ page }) => {
+  // the active revision holds the matrix: without it no cell is shown, least of all a default
+  const gw = withNetworks(MockGateway.sample());
+  gw.failing['/revisions/active'] = 500;
+  gw.failing['/uplink'] = 500;
+  await open(page, '/networks', gw);
+  const matrix = page.getByRole('region', { name: 'Access between networks' });
+  await expect(matrix.getByTestId('load-error')).toContainText('The access matrix is not loaded');
+  await expect(page.getByTestId('access-matrix')).toHaveCount(0);
+  await expect(page.getByText(/Blocked\s*default/)).toHaveCount(0);
+  await expect(page.getByTestId('management-card')).toContainText('Not loaded');
+  await expect(page.getByTestId('uplink-error')).toContainText('Not loaded');
+  await expect(page.getByTestId('uplink-card')).not.toContainText('no address');
+
+  // Try again, once the gateway answers: the matrix with the configured entry, the uplink
+  delete gw.failing['/revisions/active'];
+  delete gw.failing['/uplink'];
+  await matrix.getByTestId('load-error').getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('access-matrix').locator('[data-cell="IoT>lab-hub"]')).toHaveText('Allowed');
+  await page.getByTestId('uplink-card').getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('uplink-card')).toContainText('192.168.1.57/24 · eth0');
+
+  // the routing view: the status is there, the configuration (ASN, links) is not, and the BIRD card says so
+  const routing = withNetworks(MockGateway.sample());
+  routing.failing['/routing'] = 500;
+  await page.unroute('**/api/v1/**');
+  await open(page, '/networks/routing', routing, 'Routing');
+  await expect(page.getByTestId('bird')).toContainText('Running');
+  await expect(page.getByTestId('load-error')).toContainText('The routing configuration is not loaded');
+  await expect(page.getByTestId('bird')).not.toContainText('ASN');
 });

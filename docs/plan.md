@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 next · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 in progress: M12 complete (branch `phase-3-web-ui`, draft PR #56) · October 2026
 
 ---
 
@@ -1407,6 +1407,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 ## Phase 3 — Web UI
 
 **M12 — UI shell, overview, devices** (L)
+- **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `d230371`, CI run 38369081090 green, the testbed browser flow included); Phase 3 merges to `main` as one PR after M14. Open questions: `docs/open-items.md`, Phase 3.
 - Scope: visual system and shared components (§2.17), login and first-start setup wizard (select uplink and management, assign test interfaces, admin password, netplan hints from the preflight), layout, overview, device list and device detail with the data available after Phase 2 (identity, lease, active faults, counters); live updates via SSE; empty, offline and safe-mode states. Panels whose backend arrives later (captures, diagnostics, DHCP actions, TLS tests) appear with those milestones.
 - Tests: Playwright against a mocked API for every state (empty, many devices, offline, safe mode); an E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device.
 - Depends on: M11.

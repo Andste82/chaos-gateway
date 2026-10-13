@@ -3,6 +3,9 @@ package wireguard
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
 	"image/png"
 	"io"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/makiuchi-d/gozxing"
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -224,36 +228,85 @@ func tryDecodeQR(pngBytes []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	res, err := zqr.NewQRCodeReader().Decode(bmp, nil)
+	// a generated code and nothing else around it (see TestEveryQRCodeDecodes)
+	res, err := zqr.NewQRCodeReader().Decode(bmp, map[gozxing.DecodeHintType]interface{}{gozxing.DecodeHintType_PURE_BARCODE: true})
 	if err != nil {
 		return "", err
 	}
 	return res.GetText(), nil
 }
 
-func TestTheQRCodeDecodesToTheFile(t *testing.T) {
-	// gozxing, the decoder of this test, fails on about one in a hundred perfectly good codes
-	// (checksum or finder pattern errors on dense random content): a failed decode is tried again with
-	// another configuration, a decode to the wrong text is an error at once
-	var e Export
-	var decoded string
-	for attempt := 0; attempt < 5; attempt++ {
-		in, hubID, cid, _, _ := exportSetup(t)
-		var err error
-		if e, err = ClientConfig(in, hubID, cid); err != nil {
-			t.Fatal(err)
-		}
-		pngBytes, err := QRPNG(e.Conf, 512)
+func TestEveryQRCodeDecodes(t *testing.T) {
+	// configurations with random keys, as the export makes them. Scaled by rounding, as go-qrcode
+	// does it, a module was 6 or 7 pixels wide and about one dense code in a hundred did not decode
+	// ("NotFoundException: dimension"); each module is a whole number of pixels now, and the decode
+	// of the tests is told that the image is the code alone (gozxing's finder-pattern detection still
+	// misses about one code in a hundred that jsQR and phones read)
+	for i := range 100 {
+		conf := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.99.0.%d/32\nDNS = 10.99.0.1\n\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = 10.99.0.0/24, 10.10.0.0/24\nEndpoint = 203.0.113.1:51820\nPersistentKeepalive = 25\n",
+			randomKey(), i+2, randomKey(), randomKey())
+		pngBytes, err := QRPNG(conf, 512)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if decoded, err = tryDecodeQR(pngBytes); err == nil {
-			break
+		if got, err := tryDecodeQR(pngBytes); err != nil || got != conf {
+			t.Fatalf("code %d does not decode to its configuration: %v\n%s", i, err, conf)
 		}
-		t.Logf("attempt %d: the decoder fails on this code: %v", attempt+1, err)
+		if i%10 == 0 {
+			wholePixelModules(t, conf, pngBytes)
+		}
 	}
-	if decoded != e.Conf {
-		t.Fatalf("the QR code does not decode to the file:\n%q\n%q", decoded, e.Conf)
+}
+
+// wholePixelModules checks that the image is 512 × 512 and every module of the code is a square of
+// whole pixels of one color.
+func wholePixelModules(t *testing.T, conf string, pngBytes []byte) {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := img.Bounds(); b.Dx() != 512 || b.Dy() != 512 {
+		t.Fatalf("the image is %v", b)
+	}
+	q, err := qrcode.New(conf, qrcode.Low)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm := q.Bitmap()
+	scale := 512 / len(bm)
+	off := (512 - len(bm)*scale) / 2
+	for y := range 512 {
+		for x := range 512 {
+			r, _, _, _ := img.At(x, y).RGBA()
+			dark := r == 0
+			mx, my := (x-off)/scale, (y-off)/scale
+			want := x >= off && y >= off && mx < len(bm) && my < len(bm) && bm[my][mx]
+			if dark != want {
+				t.Fatalf("pixel (%d, %d) is dark=%v, its module (%d, %d) dark=%v", x, y, dark, mx, my, want)
+			}
+		}
+	}
+}
+
+func randomKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func TestTheQRCodeDecodesToTheFile(t *testing.T) {
+	in, hubID, cid, _, _ := exportSetup(t)
+	e, err := ClientConfig(in, hubID, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngBytes, err := QRPNG(e.Conf, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := tryDecodeQR(pngBytes); err != nil || decoded != e.Conf {
+		t.Fatalf("the QR code does not decode to the file: %v\n%q\n%q", err, decoded, e.Conf)
 	}
 	svg, err := QRSVG(e.Conf)
 	if err != nil || !strings.HasPrefix(svg, "<svg") || !strings.Contains(svg, "<path") || strings.Contains(svg, e.Conf[:20]) {

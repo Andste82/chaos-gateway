@@ -170,7 +170,7 @@ jobs:
       - run: >-
           docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev
           bash -c 'cd web && npm ci && npx playwright install chromium && npm run build && cd ..
-          && make test-privileged ARGS="-tags testbed,browser -run TestFirstStartInTheBrowser -test-timeout 30m ./internal/api"'
+          && make test-privileged ARGS="-tags testbed,browser -run InTheBrowser -test-timeout 45m ./internal/api"'
 
   # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).

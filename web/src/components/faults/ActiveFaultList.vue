@@ -8,6 +8,7 @@ import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
+import type { Overlay } from '../../api/generated/model';
 import type { ActiveFault } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
 import { formatCount, formatRemaining } from '../../lib/format';
@@ -16,7 +17,8 @@ import AppIcon from '../ui/AppIcon.vue';
 import FaultChip from '../ui/FaultChip.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
-const props = defineProps<{ items: ActiveFault[]; showTarget?: boolean; removable?: boolean; removeDisabled?: boolean }>();
+const props = defineProps<{ items: ActiveFault[]; showTarget?: boolean; removable?: boolean; editable?: boolean; removeDisabled?: boolean }>();
+const emit = defineEmits<{ edit: [overlay: Overlay] }>();
 
 const now = useNow();
 const queryClient = useQueryClient();
@@ -33,6 +35,12 @@ const askOpen = computed({
 function expiry(f: ActiveFault): string {
   if (!f.expiresAt) return f.layer === 'config' ? 'configured' : 'no TTL';
   return formatRemaining(new Date(f.expiresAt).getTime() - now.value.getTime());
+}
+
+/** The device's own impairment overlays can be edited where they are (a wider scope's on the faults screen). */
+function canEdit(f: ActiveFault): boolean {
+  const o = f.overlay;
+  return !!props.editable && !f.widerScope && o?.kind === 'fault' && (o.fault?.family ?? 'impairment') === 'impairment';
 }
 
 function requestRemove(f: ActiveFault) {
@@ -62,7 +70,9 @@ async function remove(f: ActiveFault) {
 
 const cols = props.showTarget
   ? 'grid-cols-[minmax(160px,230px)_minmax(0,1fr)_110px_90px_32px]'
-  : 'grid-cols-[minmax(0,1fr)_110px_90px_32px]';
+  : props.editable
+    ? 'grid-cols-[minmax(0,1fr)_110px_90px_80px]'
+    : 'grid-cols-[minmax(0,1fr)_110px_90px_32px]';
 </script>
 
 <template>
@@ -88,7 +98,10 @@ const cols = props.showTarget
       </span>
       <span role="cell" class="mono text-[13px] text-text-2">{{ f.packets !== undefined ? `${formatCount(f.packets)} pkts` : '—' }}</span>
       <span role="cell" class="mono text-[13px]" :class="f.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{ expiry(f) }}</span>
-      <span role="cell">
+      <span role="cell" class="flex justify-end gap-1.5">
+        <button v-if="canEdit(f)" type="button" class="btn btn-sm px-2" :aria-label="`Edit ${f.chips.join(', ')}`" :disabled="removeDisabled" @click="emit('edit', f.overlay!)">
+          Edit
+        </button>
         <button
           v-if="removable && f.layer === 'overlay'"
           type="button"

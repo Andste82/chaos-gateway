@@ -12,8 +12,15 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import { firstError, useActiveFaults } from '../composables/gateway';
+import { useApiScreen } from '../stores/apiPanel';
 
 const faults = useActiveFaults();
+useApiScreen('the overview', () => [
+  { method: 'GET', path: '/state', note: 'revision, pending confirmation, safe mode' },
+  { method: 'GET', path: '/overlays', note: 'the active overlays with counters and TTL' },
+  { method: 'GET', path: '/faults', note: 'the configured faults' },
+  { method: 'GET', path: '/events', note: 'the live events (Server-Sent Events)' },
+]);
 
 const deviceCounts = computed(() => {
   const m = new Map<string, number>();

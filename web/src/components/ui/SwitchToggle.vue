@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// Switch (plan §2.17): role="switch" with aria-checked (Reka UI), labelled by its text.
+// Switch (plan §2.17): role="switch" with aria-checked (Reka UI), labelled by its text. In a table
+// row the text can stay for screen readers only (`hideLabel`).
 import { SwitchRoot, SwitchThumb } from 'reka-ui';
 
-defineProps<{ label: string; disabled?: boolean }>();
+defineProps<{ label: string; disabled?: boolean; hideLabel?: boolean }>();
 const model = defineModel<boolean>({ required: true });
 </script>
 
@@ -18,6 +19,6 @@ const model = defineModel<boolean>({ required: true });
         class="block h-3.5 w-3.5 translate-x-0.5 rounded-full bg-text-2 transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-text"
       />
     </SwitchRoot>
-    <span aria-hidden="true">{{ label }}</span>
+    <span v-if="!hideLabel" aria-hidden="true">{{ label }}</span>
   </label>
 </template>

@@ -3,13 +3,15 @@
 // so a lab with many devices shows all of them. The keys start like the generated hooks' keys, so
 // the invalidation by event type (eventStream.ts) reaches them.
 import { useQuery } from '@tanstack/vue-query';
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { listDevices } from '../api/generated/hooks/devices/devices';
-import { listFaults, listGroups, listNetworks, listProfiles } from '../api/generated/hooks/config/config';
+import { listAccessRules, listFaults, listGroups, listNetworks, listProfiles } from '../api/generated/hooks/config/config';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
+import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { DeviceView, FaultView, GroupView, NetworkView, Overlay, ProfileView } from '../api/generated/model';
+import type { AccessRuleView, DeviceView, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule } from '../api/generated/model';
 import { describeMatch, describeScope, faultChips, overlayChips, type Names } from '../lib/faults';
+import { useDraftStore } from '../stores/draft';
 
 interface PageOf<T> {
   items: T[];
@@ -77,6 +79,39 @@ export function useConfigFaults() {
   return useQuery({
     queryKey: ['faults', 'all'],
     queryFn: ({ signal }) => fetchAll<FaultView>((cursor) => listFaults({ limit: 500, cursor }, { signal }), signal),
+    refetchInterval: 5_000,
+  });
+}
+
+/**
+ * The active revision with its configuration: the base of the configuration draft (rules, faults).
+ * The draft takes it as its base while it has no edits of its own.
+ */
+export function useActiveConfig() {
+  const draft = useDraftStore();
+  const q = useQuery({ queryKey: getGetActiveRevisionQueryKey(), queryFn: ({ signal }) => getActiveRevision({ signal }) });
+  watch(
+    () => q.data.value,
+    (rev) => rev && draft.track(rev),
+    { immediate: true },
+  );
+  return q;
+}
+
+/** The configured access rules with their counters, and the system rules in front of them. */
+export function useAccessRules() {
+  return useQuery({
+    queryKey: ['rules', 'all'],
+    queryFn: async ({ signal }) => {
+      let system: SystemAccessRule[] = [];
+      const items = await fetchAll<AccessRuleView>(async (cursor) => {
+        const p = await listAccessRules({ limit: 500, cursor }, { signal });
+        if (!cursor) system = p.system_rules ?? [];
+        return p;
+      }, signal);
+      return { items, system };
+    },
+    // the hit counters grow without an event
     refetchInterval: 5_000,
   });
 }

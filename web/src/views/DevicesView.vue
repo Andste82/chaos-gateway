@@ -15,12 +15,14 @@ import StatusDot from '../components/ui/StatusDot.vue';
 import { firstError, useGatewayState, useNames } from '../composables/gateway';
 import { compareDevices, deviceFaults, deviceStatus, isAdopted, matchesFilter, matchesSearch, type DeviceFilter } from '../lib/devices';
 import { formatByteRate } from '../lib/format';
+import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 
 const { names, devices } = useNames();
 const state = useGatewayState();
 const connection = useConnectionStore();
 const router = useRouter();
+useApiScreen('the devices', () => [{ method: 'GET', path: '/devices?limit=500', note: 'every device, page by page (next_cursor)' }]);
 
 const search = ref('');
 const filter = ref<DeviceFilter>('all');

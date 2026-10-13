@@ -81,7 +81,8 @@ test('a device without faults says its traffic is unimpaired', async ({ page }) 
   gw.overlays = [];
   await gw.install(page);
   await page.goto('/devices/a1b2c3d4-0000-4000-8000-000000000015');
-  await expect(page.getByTestId('empty-state')).toHaveText("No active faults: this device's traffic passes unimpaired.");
+  await expect(page.getByTestId('empty-state')).toContainText("No active faults: this device's traffic passes unimpaired.");
+  await expect(page.getByTestId('empty-state').getByRole('button', { name: 'Add a fault' })).toBeVisible();
   await expect(page.getByTestId('device-lease')).toContainText('no DHCP lease');
 });
 

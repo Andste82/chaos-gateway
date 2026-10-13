@@ -1,18 +1,21 @@
 <script setup lang="ts">
 // The header of every page (plan §2.17, Navigation): title, context line (revision, sync state),
-// health, the active-faults counter and the page's primary action. The `</> API` panel arrives
-// with M13.
+// health, the active-faults counter, the `</> API` toggle and the page's primary action. The API
+// panel opens below the header.
 import { computed } from 'vue';
 import { useActiveFaults, useGatewayState, useHealth } from '../../composables/gateway';
 import { errorMessage } from '../../api/fetcher';
 import { formatHM } from '../../lib/format';
+import { useApiPanelStore } from '../../stores/apiPanel';
 import StatusDot, { type DotTone } from '../ui/StatusDot.vue';
+import ApiPanel from './ApiPanel.vue';
 
 const props = defineProps<{ title: string; context?: string }>();
 
 const state = useGatewayState();
 const health = useHealth();
 const faults = useActiveFaults();
+const apiPanel = useApiPanelStore();
 
 /** "Revision 42 · applied 12:40 · kernel state in sync" */
 const contextLine = computed(() => {
@@ -74,7 +77,18 @@ const faultsUnknown = computed(() => !!faults.error.value || faults.isLoading.va
         data-testid="faults-counter"
         >No faults active</span
       >
+      <button
+        type="button"
+        class="btn mono text-[13px]"
+        :aria-pressed="apiPanel.open"
+        aria-controls="api-panel"
+        :class="{ '!border-accent-strong !bg-accent-tint': apiPanel.open }"
+        @click="apiPanel.open = !apiPanel.open"
+      >
+        &lt;/&gt; API
+      </button>
       <slot name="actions" />
     </div>
   </header>
+  <div id="api-panel" class="contents"><ApiPanel /></div>
 </template>

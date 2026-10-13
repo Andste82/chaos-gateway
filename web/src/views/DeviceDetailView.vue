@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // Device detail (plan §2.17) with the data of Phase 2: identity, DHCP lease, active faults with
-// their parameters, affected packets and remaining TTL, and the counters. Adding a fault, applying
-// a profile and the panels whose backend comes later (flows view, DNS, captures, DHCP and TLS test
-// actions, diagnostics) arrive with their milestones.
+// their parameters, affected packets and remaining TTL, and the counters. "Add fault" starts where
+// the device is (the fault dialog with the device as its fixed target), a fault of the device can
+// be edited, "Apply profile" leads to the profiles with the device as the scope. The panels whose
+// backend comes later (flows view, DNS, captures, DHCP and TLS test actions, diagnostics) arrive
+// with their milestones.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
 import { ApiError } from '../api/fetcher';
@@ -11,6 +13,7 @@ import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import type { Overlay } from '../api/generated/model';
 import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
+import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
@@ -21,6 +24,7 @@ import { useNow } from '../composables/useNow';
 import { deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, overlayChips } from '../lib/faults';
 import { formatAgo, formatByteRate, formatClock, formatRemaining, subnetOf } from '../lib/format';
+import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 
 const props = defineProps<{ id: string }>();
@@ -87,6 +91,22 @@ const lease = computed(() => d.value?.observed.lease);
 const leaseLeft = computed(() => (lease.value ? new Date(lease.value.expires_at).getTime() - now.value.getTime() : 0));
 
 const adoptOpen = ref(false);
+const faultOpen = ref(false);
+const editing = ref<Overlay>();
+function addFault() {
+  editing.value = undefined;
+  faultOpen.value = true;
+}
+function editFault(o: Overlay) {
+  editing.value = o;
+  faultOpen.value = true;
+}
+const changeBlocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
+
+useApiScreen('this device', () => [
+  { method: 'GET', path: `/devices/${props.id}`, note: 'identity, lease, winning faults, counters' },
+  { method: 'GET', path: `/overlays?device=${props.id}`, note: "the overlays that act on the device, its network's and groups' included" },
+]);
 </script>
 
 <template>
@@ -106,11 +126,13 @@ const adoptOpen = ref(false);
         <nav aria-label="Breadcrumb" class="mb-1 text-[13px] text-text-2"><RouterLink to="/devices">Devices</RouterLink> / {{ d.name }}</nav>
       </template>
       <template #actions>
+        <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add fault</button>
+        <RouterLink class="btn" :to="{ path: '/profiles', query: { scope: `device:${d.id}` } }">Apply profile</RouterLink>
         <button
           v-if="!isAdopted(d)"
           type="button"
-          class="btn btn-primary"
-          :disabled="!!state.data.value?.pending_confirm || connection.offline"
+          class="btn"
+          :disabled="changeBlocked"
           @click="adoptOpen = true"
         >
           Adopt
@@ -132,13 +154,10 @@ const adoptOpen = ref(false);
             what="The active faults are not loaded"
             :retry="overlays.refetch"
           />
-          <EmptyState v-else-if="faults.length === 0" text="No active faults: this device's traffic passes unimpaired." />
-          <ActiveFaultList
-            v-else
-            :items="faults"
-            removable
-            :remove-disabled="!!state.data.value?.pending_confirm || connection.offline"
-          />
+          <EmptyState v-else-if="faults.length === 0" text="No active faults: this device's traffic passes unimpaired.">
+            <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add a fault</button>
+          </EmptyState>
+          <ActiveFaultList v-else :items="faults" removable editable :remove-disabled="changeBlocked" @edit="editFault" />
         </SectionCard>
 
         <SectionCard title="Traffic">
@@ -214,5 +233,6 @@ const adoptOpen = ref(false);
     </div>
 
     <AdoptDialog v-model:open="adoptOpen" :device="d" :network-name="networkConfig?.name" />
+    <FaultDialog v-model:open="faultOpen" :fixed-target="`device:${d.id}`" :overlay="editing" />
   </template>
 </template>

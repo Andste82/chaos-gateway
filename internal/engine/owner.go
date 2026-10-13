@@ -36,6 +36,12 @@ type desired struct {
 	// IdentityOnly marks a desired state that differs from the one before only in the identity: the
 	// apply loop then changes set elements instead of rebuilding the ruleset.
 	IdentityOnly bool
+	// Changed is the generation of the newest desired state up to this one that changed more than
+	// the identity (this one's own generation unless it is IdentityOnly). The apply loop may skip
+	// desired states, so IdentityOnly alone does not tell it whether the state carries a change that
+	// is no identity change compared with what it applied last: one whose Changed is newer than that
+	// does, and is never held back for the window of devices that came or went.
+	Changed uint64
 	// Overlays are the active overlays of this generation (never part of a revision): the compiler
 	// resolves them over the configuration.
 	Overlays []model.Overlay
@@ -195,6 +201,9 @@ type inflight struct {
 type owner struct {
 	e   *Engine
 	gen uint64
+	// changed is the generation of the newest desired state that changed more than the identity
+	// (desired.Changed).
+	changed uint64
 	// fresh are the addresses of the WireGuard peers the last write of a tunnel fault or a blocked endpoint read from the
 	// interfaces: what the check of the next write compiles with, next to what the polls saw.
 	fresh map[string]netip.AddrPort
@@ -261,7 +270,8 @@ func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 	o.genReserved = init.genReserved
 	if init.config != nil {
 		o.bumpGen()
-		o.committed = &desired{Config: init.config, Revision: init.revision, Host: init.host, Generation: o.gen}
+		o.changed = o.gen
+		o.committed = &desired{Config: init.config, Revision: init.revision, Host: init.host, Generation: o.gen, Changed: o.gen}
 		o.current = o.committed
 		o.snap.Revision, o.snap.Config, o.snap.Generation = init.revision, init.config, o.gen
 		e.desired.Store(o.committed)
@@ -430,7 +440,8 @@ func (o *owner) converge(d *desired) {
 // nextDesired returns a desired state with a fresh generation for the given configuration.
 func (o *owner) nextDesired(cfg *model.Configuration, rev int64) *desired {
 	o.bumpGen()
-	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity, Overlays: o.ov.list}
+	o.changed = o.gen
+	return &desired{Config: cfg, Revision: rev, Host: o.host, Generation: o.gen, Identity: o.identity, Overlays: o.ov.list, Changed: o.gen}
 }
 
 // bumpGen advances the generation counter and persists a new reservation block once it runs past
@@ -901,8 +912,11 @@ func (o *owner) observed(obs observation) {
 	// kernel either.
 	var d *desired
 	if changed && o.current != nil {
+		carried := o.changed
 		d = o.nextDesired(o.current.Config, o.current.Revision)
 		d.IdentityOnly = true
+		// only the identity changed: the change before it is still the newest one that is more
+		d.Changed, o.changed = carried, carried
 	}
 	for _, ev := range events {
 		if ev.Type == EventDeviceIdentityChanged && d != nil {
@@ -923,7 +937,8 @@ func (o *owner) observed(obs observation) {
 // MACs, or any other churn that keeps adding devices across several polls, coalesces into at most one
 // full apply per window instead of one per poll (M6a-07). It holds back only what is no element
 // update (a new device that gets a queue of its own from a rate fault on its network, D18): a device
-// that only adds elements of the maps, and an address change, converge at once.
+// that only adds elements of the maps, an address change, and a desired state that also carries
+// another change the kernel does not have yet (desired.Changed) converge at once.
 const identityConvergeWindow = 2 * time.Second
 
 // sameIdentity compares what the compiler uses: the addresses of every device.

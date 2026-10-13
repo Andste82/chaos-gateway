@@ -124,12 +124,14 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			incremental := false
 			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) {
 				ops, ierr := identityOps(e.cfg.Namespace, last.target, target)
-				if ierr != nil && onlyDevicesCameOrWent(last.d.Identity, d.Identity) {
+				if ierr != nil && d.Changed <= last.d.Generation && onlyDevicesCameOrWent(last.d.Identity, d.Identity) {
 					// devices that came or went need a full apply this time: a burst of them (a host
 					// that rotates its MAC address, a scan of the network) takes one full apply per
 					// window, not one per observation (M6a-07). An address change of a device that was
 					// there before is never held back, and neither is a new device that only adds
-					// elements (the identityOps above succeeded).
+					// elements (the identityOps above succeeded), nor a desired state that also
+					// carries a change that is more than the identity since last (an overlay written
+					// while the loop was busy, whose own desired state the loop skipped).
 					if wait := identityFull + identityConvergeWindow - start; identityFullSet && wait > 0 {
 						e.cfg.Log.Debug("an identity update needs a full apply: it waits for the window", "generation", d.Generation,
 							"reason", identityStructuralChange(last.target, target), "wait", wait)

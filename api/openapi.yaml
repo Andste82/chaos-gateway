@@ -178,6 +178,27 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/GatewayState'}
         default: {$ref: '#/components/responses/Problem'}
+  /state/linux:
+    get:
+      tags: [system]
+      operationId: getLinuxState
+      summary: The kernel state Chaos Gateway owns, as text, with its live counters (technical view)
+      description: |
+        What the executor reads back from the kernel for the applied target, rendered as text
+        (plan §2.17 "Technical view"): the table `inet chaosgw` in nft syntax with the counters of
+        its rules and named counters, the tc trees of Chaos Gateway's interfaces with the counters of
+        their queues, the bridges, policy rules and routes of Chaos Gateway's tables, and the
+        WireGuard interfaces with their peers (public keys, endpoints, handshakes and bytes; never a
+        private or preshared key). Linux names appear only here and in the preview's Linux changes.
+      x-milestone: M14
+      x-required-scope: read
+      responses:
+        '200':
+          description: The kernel state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LinuxState'}
+        default: {$ref: '#/components/responses/Problem'}
   /capabilities:
     get:
       tags: [system]
@@ -569,6 +590,28 @@ paths:
       responses:
         '200':
           description: Confirmed; it is now last-known-good
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Revision'}
+        default: {$ref: '#/components/responses/Problem'}
+  /revisions/{revisionId}/rollback:
+    post:
+      tags: [revisions]
+      operationId: rollbackRevision
+      summary: Roll back a revision waiting for commit-confirm now, without waiting for its deadline
+      description: |
+        Only for the revision that is `pending_confirm` (`409 not_a_candidate` otherwise, as for `confirmRevision`). It is the
+        rollback the deadline would run: the previous revision is applied again and the overlays
+        follow (see `applyRevision`); the event `revision_rolled_back` has `data.reason` `requested`
+        and `data.restored`, the revision that is active again. Returns before the previous
+        revision is verified again, like the rollback at the deadline.
+      x-milestone: M14
+      x-required-scope: full
+      parameters:
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: Rolled back
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Revision'}
@@ -3924,6 +3967,31 @@ components:
         boot_id: {type: string}
         overlays_active: {type: integer}
         runs_active: {type: integer}
+    LinuxState:
+      type: object
+      required: [revision, generation, read_at, nftables, tc, routes, wireguard]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          description: The active revision.
+        generation:
+          type: integer
+          format: int64
+          description: The generation of the desired state when the kernel was read.
+        read_at: {type: string, format: date-time}
+        nftables:
+          type: string
+          description: The table `inet chaosgw` in nft syntax, rules with `counter packets N bytes M` (the generation chain left out).
+        tc:
+          type: string
+          description: 'One line per qdisc, class and filter, led by the interface (`br-iot: qdisc 12: parent 1:12 netem …`), each netem queue followed by its counters.'
+        routes:
+          type: string
+          description: Bridges with their addresses and ports, the policy rules and the routes of Chaos Gateway's tables.
+        wireguard:
+          type: string
+          description: The WireGuard interfaces with address, MTU, port and peers (public key, allowed IPs, endpoint, last handshake, bytes); without keys.
     Capabilities:
       type: object
       required: [version, features, overlay_kinds, fault_families, step_types, check_types]

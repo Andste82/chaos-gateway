@@ -4314,6 +4314,28 @@ type LanNetwork struct {
 // LanNetworkType defines model for LanNetwork.Type.
 type LanNetworkType string
 
+// LinuxState defines model for LinuxState.
+type LinuxState struct {
+	// Generation The generation of the desired state when the kernel was read.
+	Generation int64 `json:"generation"`
+
+	// Nftables The table `inet chaosgw` in nft syntax, rules with `counter packets N bytes M` (the generation chain left out).
+	Nftables string    `json:"nftables"`
+	ReadAt   time.Time `json:"read_at"`
+
+	// Revision The active revision.
+	Revision int64 `json:"revision"`
+
+	// Routes Bridges with their addresses and ports, the policy rules and the routes of Chaos Gateway's tables.
+	Routes string `json:"routes"`
+
+	// Tc One line per qdisc, class and filter, led by the interface (`br-iot: qdisc 12: parent 1:12 netem …`), each netem queue followed by its counters.
+	Tc string `json:"tc"`
+
+	// Wireguard The WireGuard interfaces with address, MTU, port and peers (public key, allowed IPs, endpoint, last handshake, bytes); without keys.
+	Wireguard string `json:"wireguard"`
+}
+
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
 	Password string                `json:"password"`

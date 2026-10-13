@@ -207,6 +207,9 @@ type ServerInterface interface {
 	// PreviewRevision Dry run against the active revision, overlays and observed state
 	// (POST /revisions/{revisionId}/preview)
 	PreviewRevision(c *gin.Context, revisionId RevisionId)
+	// RollbackRevision Roll back a revision waiting for commit-confirm now, without waiting for its deadline
+	// (POST /revisions/{revisionId}/rollback)
+	RollbackRevision(c *gin.Context, revisionId RevisionId)
 	// GetRouting Routing configuration
 	// (GET /routing)
 	GetRouting(c *gin.Context, params GetRoutingParams)
@@ -264,6 +267,9 @@ type ServerInterface interface {
 	// GetState Current generation, active revision, pending confirmation, last apply
 	// (GET /state)
 	GetState(c *gin.Context)
+	// GetLinuxState The kernel state Chaos Gateway owns, as text, with its live counters (technical view)
+	// (GET /state/linux)
+	GetLinuxState(c *gin.Context)
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(c *gin.Context)
@@ -2399,6 +2405,31 @@ func (siw *ServerInterfaceWrapper) PreviewRevision(c *gin.Context) {
 	siw.Handler.PreviewRevision(c, revisionId)
 }
 
+// RollbackRevision operation middleware
+func (siw *ServerInterfaceWrapper) RollbackRevision(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "revisionId" -------------
+	var revisionId RevisionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "revisionId", c.Param("revisionId"), &revisionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter revisionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RollbackRevision(c, revisionId)
+}
+
 // GetRouting operation middleware
 func (siw *ServerInterfaceWrapper) GetRouting(c *gin.Context) {
 
@@ -2993,6 +3024,19 @@ func (siw *ServerInterfaceWrapper) GetState(c *gin.Context) {
 	siw.Handler.GetState(c)
 }
 
+// GetLinuxState operation middleware
+func (siw *ServerInterfaceWrapper) GetLinuxState(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetLinuxState(c)
+}
+
 // GetBusy operation middleware
 func (siw *ServerInterfaceWrapper) GetBusy(c *gin.Context) {
 
@@ -3189,6 +3233,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/setup", wrapper.GetSetup)
 	router.POST(options.BaseURL+"/setup", wrapper.CompleteSetup)
 	router.GET(options.BaseURL+"/state", wrapper.GetState)
+	router.GET(options.BaseURL+"/state/linux", wrapper.GetLinuxState)
 	router.GET(options.BaseURL+"/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/system/info", wrapper.GetSystemInfo)
 	router.GET(options.BaseURL+"/system/health", wrapper.GetHealth)
@@ -3211,6 +3256,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/revisions/:revisionId/preview", wrapper.PreviewRevision)
 	router.POST(options.BaseURL+"/revisions/:revisionId/apply", wrapper.ApplyRevision)
 	router.POST(options.BaseURL+"/revisions/:revisionId/confirm", wrapper.ConfirmRevision)
+	router.POST(options.BaseURL+"/revisions/:revisionId/rollback", wrapper.RollbackRevision)
 	router.POST(options.BaseURL+"/revisions/:revisionId/clone", wrapper.CloneRevision)
 	router.GET(options.BaseURL+"/revisions/:revisionId/diff", wrapper.DiffRevision)
 	router.GET(options.BaseURL+"/revisions/:revisionId/export", wrapper.ExportRevision)
@@ -5970,6 +6016,45 @@ func (response PreviewRevisiondefaultApplicationProblemPlusJSONResponse) VisitPr
 	return err
 }
 
+type RollbackRevisionRequestObject struct {
+	RevisionId RevisionId `json:"revisionId"`
+}
+
+type RollbackRevisionResponseObject interface {
+	VisitRollbackRevisionResponse(w http.ResponseWriter) error
+}
+
+type RollbackRevision200JSONResponse Revision
+
+func (response RollbackRevision200JSONResponse) VisitRollbackRevisionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackRevisiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RollbackRevisiondefaultApplicationProblemPlusJSONResponse) VisitRollbackRevisionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetRoutingRequestObject struct {
 	Params GetRoutingParams
 }
@@ -6818,6 +6903,44 @@ func (response GetStatedefaultApplicationProblemPlusJSONResponse) VisitGetStateR
 	return err
 }
 
+type GetLinuxStateRequestObject struct {
+}
+
+type GetLinuxStateResponseObject interface {
+	VisitGetLinuxStateResponse(w http.ResponseWriter) error
+}
+
+type GetLinuxState200JSONResponse LinuxState
+
+func (response GetLinuxState200JSONResponse) VisitGetLinuxStateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLinuxStatedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetLinuxStatedefaultApplicationProblemPlusJSONResponse) VisitGetLinuxStateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetBusyRequestObject struct {
 }
 
@@ -7408,6 +7531,9 @@ type StrictServerInterface interface {
 	// PreviewRevision Dry run against the active revision, overlays and observed state
 	// (POST /revisions/{revisionId}/preview)
 	PreviewRevision(ctx context.Context, request PreviewRevisionRequestObject) (PreviewRevisionResponseObject, error)
+	// RollbackRevision Roll back a revision waiting for commit-confirm now, without waiting for its deadline
+	// (POST /revisions/{revisionId}/rollback)
+	RollbackRevision(ctx context.Context, request RollbackRevisionRequestObject) (RollbackRevisionResponseObject, error)
 	// GetRouting Routing configuration
 	// (GET /routing)
 	GetRouting(ctx context.Context, request GetRoutingRequestObject) (GetRoutingResponseObject, error)
@@ -7465,6 +7591,9 @@ type StrictServerInterface interface {
 	// GetState Current generation, active revision, pending confirmation, last apply
 	// (GET /state)
 	GetState(ctx context.Context, request GetStateRequestObject) (GetStateResponseObject, error)
+	// GetLinuxState The kernel state Chaos Gateway owns, as text, with its live counters (technical view)
+	// (GET /state/linux)
+	GetLinuxState(ctx context.Context, request GetLinuxStateRequestObject) (GetLinuxStateResponseObject, error)
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(ctx context.Context, request GetBusyRequestObject) (GetBusyResponseObject, error)
@@ -9255,6 +9384,32 @@ func (sh *strictHandler) PreviewRevision(ctx *gin.Context, revisionId RevisionId
 	}
 }
 
+// RollbackRevision operation middleware
+func (sh *strictHandler) RollbackRevision(ctx *gin.Context, revisionId RevisionId) {
+	var request RollbackRevisionRequestObject
+
+	request.RevisionId = revisionId
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.RollbackRevision(ctx, request.(RollbackRevisionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RollbackRevision")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(RollbackRevisionResponseObject); ok {
+		if err := validResponse.VisitRollbackRevisionResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetRouting operation middleware
 func (sh *strictHandler) GetRouting(ctx *gin.Context, params GetRoutingParams) {
 	var request GetRoutingRequestObject
@@ -9761,6 +9916,30 @@ func (sh *strictHandler) GetState(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(GetStateResponseObject); ok {
 		if err := validResponse.VisitGetStateResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetLinuxState operation middleware
+func (sh *strictHandler) GetLinuxState(ctx *gin.Context) {
+	var request GetLinuxStateRequestObject
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLinuxState(ctx, request.(GetLinuxStateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLinuxState")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetLinuxStateResponseObject); ok {
+		if err := validResponse.VisitGetLinuxStateResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

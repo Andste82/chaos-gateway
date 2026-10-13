@@ -123,6 +123,25 @@ func (s *Server) lastKnownGood() int64 {
 	return r.Id
 }
 
+// GetLinuxState implements GET /state/linux: the technical view's kernel state (plan §2.17), read
+// back through the executor and rendered as text. It holds no key: WireGuard shows public keys only.
+func (s *Server) GetLinuxState(c *gin.Context) {
+	v, err := s.cfg.Engine.LinuxView(contextOf(c))
+	if err != nil {
+		s.fail(c, err)
+		return
+	}
+	c.JSON(200, model.LinuxState{
+		Revision:   v.Revision,
+		Generation: int64(v.Generation),
+		ReadAt:     v.At.UTC(),
+		Nftables:   v.Nftables,
+		Tc:         v.TC,
+		Routes:     v.Routes,
+		Wireguard:  v.WireGuard,
+	})
+}
+
 // GetCapabilities implements GET /capabilities.
 func (s *Server) GetCapabilities(c *gin.Context) {
 	caps := model.Capabilities{

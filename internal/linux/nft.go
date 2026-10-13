@@ -63,13 +63,15 @@ type NftRule struct {
 
 // NftSet is a set or a map. Elements are raw: they are strings, numbers, prefixes or elem objects.
 type NftSet struct {
-	Family string            `json:"family"`
-	Table  string            `json:"table"`
-	Name   string            `json:"name"`
-	Handle int               `json:"handle"`
-	Type   json.RawMessage   `json:"type"`
-	Flags  []string          `json:"flags"`
-	Elem   []json.RawMessage `json:"elem"`
+	Family string          `json:"family"`
+	Table  string          `json:"table"`
+	Name   string          `json:"name"`
+	Handle int             `json:"handle"`
+	Type   json.RawMessage `json:"type"`
+	// Data is the value type of a map ("mark", "verdict"); empty for a set.
+	Data  json.RawMessage   `json:"map,omitempty"`
+	Flags []string          `json:"flags"`
+	Elem  []json.RawMessage `json:"elem"`
 }
 
 // Ruleset is the content of one `nft -j list ...` call.

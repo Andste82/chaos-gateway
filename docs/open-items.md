@@ -723,7 +723,9 @@ stayed open".
 
 ### P3-M12-06 The image build with the web app was not run locally
 
-- Status: new
+- Status: closed (2026-10-13): CI run 38369081090 on PR #56 built the image for `linux/amd64` and `linux/arm64`
+  with the web stage (job `arm64`), and the job `testbed UI flow` ran the first-start flow in the browser against the
+  app served by `chaosgw` (`TestFirstStartInTheBrowserUntilADiscoveredDevice` passed)
 - Severity: low
 - Reason: env-limit. The devcontainer has no Docker daemon. `deploy/Dockerfile` builds the app in a Node stage and embeds
   it (`-tags webui`); `.dockerignore` lets the web sources in.

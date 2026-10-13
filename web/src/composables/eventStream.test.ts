@@ -96,6 +96,16 @@ describe('the event stream', () => {
     expect(t[1]?.detail).toMatch(/not confirmed in time/);
   });
 
+  it('names the revision a rollback restored, at the deadline and on request', () => {
+    const { es } = setup();
+    es.send('revision_rolled_back', { data: { revision: 43, reason: 'confirmation timeout', restored: 42 } });
+    es.send('revision_rolled_back', { data: { revision: 44, reason: 'requested', restored: 42 } });
+    expect(useToastStore().toasts.map((x) => x.detail)).toEqual([
+      'It was not confirmed in time. Rolled back to revision 42.',
+      'Rolled back on request. Rolled back to revision 42.',
+    ]);
+  });
+
   it('says the setup is open again when revision 1, the setup, was rolled back', () => {
     const { es } = setup();
     es.send('revision_rolled_back', { data: { revision: 1, reason: 'confirmation timeout' } });

@@ -60,6 +60,12 @@ function objectName(kind: string, id: string): string {
 }
 
 function where(path: string | undefined): string {
+  const c = /^\/networks\/([^/]+)\/clients\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (c) {
+    const name = draft.clients[c[2]!]?.client?.name ?? draft.clientName(c[2]!) ?? c[2];
+    return `WireGuard client ${name}${c[3] ? ` · ${c[3].replace(/\//g, ' ')}` : ''}`;
+  }
+  if (path?.startsWith('/access_matrix')) return 'Access between networks';
   const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (!m) return path || 'configuration';
   return `${objectName(m[1]!, m[2]!)}${m[3] ? ` · ${m[3].replace(/\//g, ' ')}` : ''}`;
@@ -154,7 +160,7 @@ async function apply() {
     candidate.value = undefined;
     draft.discard();
     draft.drawerOpen = false;
-    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
+    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {
     apiPanel.record(`Preview & apply revision ${id} (refused: ${errorMessage(e)})`, [...calls, applyCall]);
     if (e instanceof ApiError && e.code === 'revision_conflict' && draft.base !== undefined) {

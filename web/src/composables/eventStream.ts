@@ -15,13 +15,13 @@ import { useToastStore } from '../stores/toasts';
 
 /** The cached data each event type changes (query key prefixes of the generated hooks). */
 export const invalidates: Partial<Record<EventType, string[][]>> = {
-  applied: [['state'], ['devices'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles']],
+  applied: [['state'], ['devices'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles'], ['routing']],
   apply_failed: [['state']],
   confirm_pending: [['state']],
   revision_created: [['revisions']],
-  revision_applied: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit']],
+  revision_applied: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing']],
   revision_confirmed: [['state'], ['revisions'], ['audit']],
-  revision_rolled_back: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit']],
+  revision_rolled_back: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing']],
   overlay_created: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
   overlay_updated: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
   overlay_removed: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
@@ -38,6 +38,8 @@ export const invalidates: Partial<Record<EventType, string[][]>> = {
   network_restored: [['networks'], ['state']],
   wireguard_peer_online: [['devices'], ['networks']],
   wireguard_peer_offline: [['devices'], ['networks']],
+  routing_session_changed: [['routing']],
+  routing_routes_changed: [['routing']],
   safe_mode: [['state']],
   counter_epoch: [['state'], ['overlays'], ['faults']],
 };
@@ -68,6 +70,9 @@ function toast(ev: GatewayEvent, toasts: ReturnType<typeof useToastStore>) {
     case 'revision_rolled_back': {
       const rev = ev.data?.['revision'];
       const reason = ev.data?.['reason'];
+      const restored = ev.data?.['restored'];
+      // plan §2.17 "Commit-confirm": on timeout a notice "rolled back to revision N-1"
+      const back = restored !== undefined ? `Rolled back to revision ${String(restored)}` : 'The previous revision is active again';
       toasts.push(
         'error',
         rev !== undefined ? `Revision ${String(rev)} rolled back` : 'Revision rolled back',
@@ -75,8 +80,10 @@ function toast(ev: GatewayEvent, toasts: ReturnType<typeof useToastStore>) {
           ? // revision 1 is the first-start setup: there is no earlier one, the setup opens again
             rev === 1
             ? 'It was not confirmed in time; the setup is open again.'
-            : 'It was not confirmed in time; the previous revision is active again.'
-          : ev.message,
+            : `It was not confirmed in time. ${back}.`
+          : reason === 'requested'
+            ? `Rolled back on request. ${back}.`
+            : ev.message,
       );
       break;
     }

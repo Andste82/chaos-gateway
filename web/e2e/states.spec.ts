@@ -112,8 +112,8 @@ test('commit-confirm timeout: the rollback is announced', async ({ page }) => {
   await gw.install(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
-  await gw.emit(page, { type: 'revision_rolled_back', data: { revision: 43, reason: 'confirmation timeout' }, message: 'revision 43 rolled back' });
-  await expect(toast(page, 'Revision 43 rolled back')).toContainText('It was not confirmed in time; the previous revision is active again.');
+  await gw.emit(page, { type: 'revision_rolled_back', data: { revision: 43, reason: 'confirmation timeout', restored: 42 }, message: 'revision 43 rolled back' });
+  await expect(toast(page, 'Revision 43 rolled back')).toContainText('It was not confirmed in time. Rolled back to revision 42.');
 });
 
 test('live updates: a discovered device appears without a reload', async ({ page }) => {

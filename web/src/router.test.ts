@@ -57,6 +57,15 @@ describe('the router', () => {
     expect(r.currentRoute.value.name).toBe('device');
     expect(r.currentRoute.value.params.id).toBe('esp32-42');
     await r.push('/networks');
+    expect(r.currentRoute.value.name).toBe('networks');
+    await r.push('/networks/routing');
+    expect(r.currentRoute.value.name).toBe('routing');
+    await r.push('/networks/IoT');
+    expect(r.currentRoute.value.name).toBe('network');
+    expect(r.currentRoute.value.params.id).toBe('IoT');
+    await r.push('/linux');
+    expect(r.currentRoute.value.name).toBe('linux');
+    await r.push('/scenarios');
     expect(r.currentRoute.value.name).toBe('not-found');
   });
 

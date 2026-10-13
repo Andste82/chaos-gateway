@@ -1,12 +1,12 @@
 <script setup lang="ts">
 // The layout of a logged-in page (plan §2.17): navigation, the page, and the states every screen
 // must handle above it — safe mode (red, full width), offline (live data greyed out with the time
-// it was last updated) and commit-confirm (orange countdown). The event stream lives as long as
-// the shell.
+// it was last updated) and commit-confirm (orange countdown with Confirm and Roll back now). The
+// event stream lives as long as the shell.
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { errorMessage } from '../../api/fetcher';
-import { confirmRevision } from '../../api/generated/hooks/revisions/revisions';
+import { confirmRevision, rollbackRevision } from '../../api/generated/hooks/revisions/revisions';
 import { startEventStream } from '../../composables/eventStream';
 import { useGatewayState } from '../../composables/gateway';
 import { formatClock } from '../../lib/format';
@@ -44,6 +44,24 @@ async function confirm() {
   }
 }
 
+const rollingBack = ref(false);
+
+/** "Roll back now" (plan §2.17 "Commit-confirm"): the rollback the deadline would run, at once. */
+async function rollBack() {
+  const rev = pending.value?.revision;
+  if (rev === undefined) return;
+  rollingBack.value = true;
+  try {
+    await rollbackRevision(rev);
+    // the event's toast says which revision is active again
+    await queryClient.invalidateQueries({ queryKey: ['state'] });
+  } catch (e) {
+    toasts.push('error', `Revision ${rev} could not be rolled back`, errorMessage(e));
+  } finally {
+    rollingBack.value = false;
+  }
+}
+
 function expired() {
   // the gateway rolls back at the deadline; the event says so, the state shows the result
   void queryClient.invalidateQueries({ queryKey: ['state'] });
@@ -71,7 +89,10 @@ function expired() {
         :text="`Revision ${pending.revision} is applied and waits for confirmation; without it the gateway rolls back.`"
         @expired="expired"
       >
-        <button type="button" class="btn btn-primary btn-sm" :disabled="confirming || connection.offline" @click="confirm">
+        <button type="button" class="btn btn-sm" :disabled="confirming || rollingBack || connection.offline" @click="rollBack">
+          {{ rollingBack ? 'Rolling back…' : 'Roll back now' }}
+        </button>
+        <button type="button" class="btn btn-primary btn-sm" :disabled="confirming || rollingBack || connection.offline" @click="confirm">
           {{ confirming ? 'Confirming…' : 'Confirm' }}
         </button>
       </CountdownBanner>

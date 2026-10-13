@@ -22,7 +22,7 @@ const { names } = useNames();
 
 const invalidCount = computed(() => Object.keys(draft.invalid).length);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
-const kinds = { rule: 'Rule', fault: 'Fault', device: 'Device' };
+const kinds = { rule: 'Rule', fault: 'Fault', device: 'Device', client: 'WireGuard client', matrix: 'Access' };
 const yours = computed(() => draft.changes(names.value).map((c) => `${kinds[c.kind]} ${c.name} ${c.field}: ${c.from} → ${c.to}`));
 
 const conflictOpen = computed({

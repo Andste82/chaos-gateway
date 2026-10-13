@@ -1,13 +1,25 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
-import type { AccessRule, ConfigFault, Configuration, ConfigurationPatch, Device, RevisionWithConfiguration } from '../api/generated/model';
+import type {
+  AccessRule,
+  ConfigFault,
+  Configuration,
+  ConfigurationPatch,
+  Device,
+  MatrixEntry,
+  NetworkView,
+  RevisionWithConfiguration,
+  WireGuardClient,
+  WireGuardNetwork,
+} from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
 import { applyMergePatch, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
+import { cellOf, entryKey, matrixChanges, toggleCell } from '../lib/networks';
 import { ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device';
+  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -15,8 +27,8 @@ export interface DraftChange extends FieldChange {
 
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
- * access rules, their order, configured faults and adopted devices, edited against the revision that was active
- * when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
+ * access rules, their order, configured faults, adopted devices, WireGuard clients and the access matrix, edited
+ * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
  * The draft lives across the screens of the shell, so a rule and a fault can go into one revision.
@@ -33,11 +45,21 @@ export const useDraftStore = defineStore('draft', () => {
   const faults = ref<Record<string, ConfigFault | null>>({});
   /** Devices added to the configuration (adopted), by id. */
   const devices = ref<Record<string, Device | null>>({});
+  /** WireGuard clients added, changed or deleted (`client: null`), by client id with their hub. */
+  const clients = ref<Record<string, { network: string; client: WireGuardClient | null }>>({});
+  /** The entries of the access matrix, when they were edited. */
+  const matrix = ref<MatrixEntry[]>();
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
   const dirty = computed(
-    () => Object.keys(rules.value).length > 0 || order.value !== undefined || Object.keys(faults.value).length > 0 || Object.keys(devices.value).length > 0,
+    () =>
+      Object.keys(rules.value).length > 0 ||
+      order.value !== undefined ||
+      Object.keys(faults.value).length > 0 ||
+      Object.keys(devices.value).length > 0 ||
+      Object.keys(clients.value).length > 0 ||
+      matrix.value !== undefined,
   );
 
   /** Takes the active revision as the base, unless the draft has edits on another one. */
@@ -172,6 +194,56 @@ export const useDraftStore = defineStore('draft', () => {
     }
   }
 
+  /** The networks of the base as the matrix functions take them (they read the type and the name). */
+  const baseNetworks = computed<NetworkView[]>(() =>
+    Object.entries(baseConfig.value?.networks ?? {}).map(([id, config]) => ({ id, config, status: { state: 'ok' as const } })),
+  );
+  const baseMatrix = computed<MatrixEntry[]>(() => baseConfig.value?.access_matrix?.entries ?? []);
+  /** The access matrix as the draft has it. */
+  const effectiveMatrix = computed<MatrixEntry[]>(() => matrix.value ?? baseMatrix.value);
+
+  function clientsIn(cfg: Configuration | undefined, network: string): Record<string, WireGuardClient> {
+    const n = cfg?.networks?.[network];
+    return n?.type === 'wireguard' ? ((n as WireGuardNetwork).clients ?? {}) : {};
+  }
+
+  /** The clients of a hub as the draft has them: the base's with the edits. */
+  function effectiveClients(network: string): Record<string, WireGuardClient> {
+    const out: Record<string, WireGuardClient> = { ...clientsIn(baseConfig.value, network) };
+    for (const [id, e] of Object.entries(clients.value)) {
+      if (e.network !== network) continue;
+      if (e.client === null) delete out[id];
+      else out[id] = e.client;
+    }
+    return out;
+  }
+
+  function setClient(network: string, id: string, client: WireGuardClient | null) {
+    clearServerErrors(id);
+    const before = clientsIn(baseConfig.value, network)[id];
+    if ((client === null && before === undefined) || (client !== null && before !== undefined && jsonEqual(before, client))) {
+      const { [id]: _drop, ...rest } = clients.value;
+      clients.value = rest;
+    } else {
+      clients.value = { ...clients.value, [id]: { network, client: client === null ? null : cloneJSON(client) } };
+    }
+  }
+
+  /** Flips the policy of one pair of the matrix (`toggleCell`); a matrix back at its base is no change. */
+  function toggleMatrix(from: string, to: string) {
+    const next = toggleCell(effectiveMatrix.value, from, to, baseNetworks.value);
+    matrix.value = matrixChanges(baseMatrix.value, next, baseNetworks.value).length === 0 ? undefined : next;
+  }
+
+  /** The name of a client of the base, wherever its hub is. */
+  function clientName(id: string): string | undefined {
+    for (const net of Object.keys(baseConfig.value?.networks ?? {})) {
+      const c = clientsIn(baseConfig.value, net)[id];
+      if (c) return c.name;
+    }
+    return undefined;
+  }
+
   function setPortsText(id: string, text: string | undefined) {
     const { [id]: _drop, ...rest } = portsText.value;
     portsText.value = text === undefined ? rest : { ...rest, [id]: text };
@@ -220,6 +292,27 @@ export const useDraftStore = defineStore('draft', () => {
         out.push({ kind: 'device', id, name, field: 'device', from: 'discovered', to: `configured${ids ? ` (${ids})` : ''}` });
       } else if (before.name !== dv.name) out.push({ kind: 'device', id, name, field: 'name', from: before.name, to: dv.name });
     }
+    const netName = (id: string) => names.network?.(id) ?? (baseConfig.value?.networks?.[id] as { name?: string } | undefined)?.name;
+    for (const [id, { network, client }] of Object.entries(clients.value)) {
+      const before = clientsIn(baseConfig.value, network)[id];
+      const name = client?.name ?? before?.name ?? id;
+      if (client === null) out.push({ kind: 'client', id, name, field: 'client', from: 'present', to: 'deleted' });
+      else if (!before) out.push({ kind: 'client', id, name, field: 'client', from: '—', to: `added (${client.address} in ${netName(network) ?? network})` });
+      else {
+        const add = (field: string, a: string, b: string) => a !== b && out.push({ kind: 'client', id, name, field, from: a || '—', to: b || '—' });
+        add('name', before.name, client.name);
+        add('address', before.address, client.address);
+        add('client networks', (before.client_networks ?? []).join(', '), (client.client_networks ?? []).join(', '));
+        add('enabled', before.enabled === false ? 'no' : 'yes', client.enabled === false ? 'no' : 'yes');
+        const rest = (c: WireGuardClient) => ({ ...c, name: '', address: '', client_networks: [], enabled: true });
+        if (!jsonEqual(rest(before), rest(client))) out.push({ kind: 'client', id, name, field: 'settings', from: 'as before', to: 'changed' });
+      }
+    }
+    if (matrix.value) {
+      for (const c of matrixChanges(baseMatrix.value, matrix.value, baseNetworks.value, { network: netName, client: clientName })) {
+        out.push({ kind: 'matrix', id: c.field, name: 'Access between networks', ...c });
+      }
+    }
     return out;
   }
 
@@ -229,10 +322,13 @@ export const useDraftStore = defineStore('draft', () => {
     const ruleIds = new Set(cs.filter((c) => c.kind === 'rule').map((c) => c.id));
     const faultIds = new Set(cs.filter((c) => c.kind === 'fault').map((c) => c.id));
     const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
+    const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
       deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
+      clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
+      cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
     ].filter(Boolean);
     const list = objects.length > 1 ? `${objects.slice(0, -1).join(', ')} and ${objects.at(-1)}` : (objects[0] ?? '');
     return `${cs.length} ${cs.length === 1 ? 'change' : 'changes'} in ${list}`;
@@ -271,6 +367,14 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) dp[id] = p;
     }
     if (Object.keys(dp).length) out.devices = dp;
+    const np: Record<string, { clients: Record<string, unknown> }> = {};
+    for (const [id, { network, client }] of Object.entries(clients.value)) {
+      const p = createMergePatch(clientsIn(baseConfig.value, network)[id], client);
+      if (p !== undefined) (np[network] ??= { clients: {} }).clients[id] = p;
+    }
+    if (Object.keys(np).length) out.networks = np;
+    // the entries are an array: the merge patch replaces it whole
+    if (matrix.value && !jsonEqual(matrix.value, baseMatrix.value)) out.access_matrix = { entries: cloneJSON(matrix.value) };
     return out;
   }
 
@@ -288,6 +392,10 @@ export const useDraftStore = defineStore('draft', () => {
     const theirDevices = rev.configuration.devices ?? {};
     const mine = order.value;
     const old = baseConfig.value;
+    const oldNetworks = baseNetworks.value;
+    const oldMatrix = baseMatrix.value;
+    const myMatrix = matrix.value;
+    const myClients = clients.value;
     // the revision just fetched is the newest seen: a draft this leaves clean stays on it
     if (!latest || latest.id < rev.id) latest = rev;
     function reapply<T>(edits: Record<string, T | null>, before: Record<string, T>, theirs: Record<string, T>): Record<string, T | null> {
@@ -315,6 +423,33 @@ export const useDraftStore = defineStore('draft', () => {
     rules.value = reapply(rules.value, old?.access_rules ?? {}, theirRules);
     faults.value = reapply(faults.value, old?.faults ?? {}, theirFaults);
     devices.value = reapply(devices.value, old?.devices ?? {}, theirDevices);
+    // clients hub by hub, like the other objects
+    const nextClients: typeof clients.value = {};
+    for (const net of new Set(Object.values(myClients).map((c) => c.network))) {
+      const edits = Object.fromEntries(
+        Object.entries(myClients)
+          .filter(([, c]) => c.network === net)
+          .map(([id, c]) => [id, c.client]),
+      );
+      for (const [id, c] of Object.entries(reapply(edits, clientsIn(old, net), clientsIn(rev.configuration, net)))) nextClients[id] = { network: net, client: c };
+    }
+    clients.value = nextClients;
+    // the matrix pair by pair: each pair I changed gets my policy on their entries, the others stay theirs
+    if (myMatrix) {
+      let next = rev.configuration.access_matrix?.entries ?? [];
+      const pairs = new Map<string, [string, string]>();
+      for (const e of [...oldMatrix, ...myMatrix]) {
+        const f = entryKey(e.from, oldNetworks);
+        const t = entryKey(e.to, oldNetworks);
+        pairs.set(`${f}|${t}`, [f, t]);
+      }
+      for (const [f, t] of pairs.values()) {
+        const want = cellOf(myMatrix, f, t, oldNetworks).policy;
+        if (want === cellOf(oldMatrix, f, t, oldNetworks).policy) continue;
+        if (cellOf(next, f, t, baseNetworks.value).policy !== want) next = toggleCell(next, f, t, baseNetworks.value);
+      }
+      matrix.value = matrixChanges(baseMatrix.value, next, baseNetworks.value).length ? next : undefined;
+    }
     if (mine) {
       const ids = mine.filter((id) => id in effectiveRules.value);
       theirOrder.forEach((id, i) => {
@@ -329,6 +464,8 @@ export const useDraftStore = defineStore('draft', () => {
     order.value = undefined;
     faults.value = {};
     devices.value = {};
+    clients.value = {};
+    matrix.value = undefined;
     portsText.value = {};
     serverErrors.value = {};
     // a clean draft is based on the newest active revision seen
@@ -345,6 +482,11 @@ export const useDraftStore = defineStore('draft', () => {
   function setServerErrors(errors: { path?: string; message?: string }[]) {
     const out: Record<string, Record<string, string>> = {};
     for (const e of errors) {
+      const c = /^\/networks\/[^/]+\/clients\/([^/]+)(?:\/([^/]+))?/.exec(e.path ?? '');
+      if (c) {
+        (out[c[1]!] ??= {})[c[2] ?? 'client'] = e.message ?? 'not valid';
+        continue;
+      }
       const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/(.+))?/.exec(e.path ?? '');
       if (!m) continue;
       // a fault keeps the rest of the pointer ("upload/latency", `fault` for the fault as a whole),
@@ -368,11 +510,15 @@ export const useDraftStore = defineStore('draft', () => {
     order,
     faults,
     devices,
+    clients,
+    matrix,
     portsText,
     dirty,
     effectiveRules,
     effectiveOrder,
     effectiveFaults,
+    effectiveMatrix,
+    effectiveClients,
     invalid,
     track,
     setRule,
@@ -382,6 +528,9 @@ export const useDraftStore = defineStore('draft', () => {
     restoreRule,
     restoreFault,
     setDevice,
+    setClient,
+    toggleMatrix,
+    clientName,
     setPortsText,
     changes,
     summary,

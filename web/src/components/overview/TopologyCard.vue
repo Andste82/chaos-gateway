@@ -58,7 +58,7 @@ const up = computed(() => uplink.data.value?.status);
     <div class="flex items-center" data-testid="topology">
       <div class="flex flex-col gap-2.5">
         <div v-for="b in boxes" :key="b.id" class="w-[210px] rounded-lg border border-[#2a323d] bg-surface-2 px-3.5 py-3" data-testid="topology-network">
-          <div class="text-[15px] font-semibold">{{ b.name }}</div>
+          <RouterLink :to="`/networks/${b.id}`" class="block text-[15px] font-semibold text-text no-underline hover:underline">{{ b.name }}</RouterLink>
           <div class="mono mt-0.5 text-xs text-text-2">{{ b.detail }}</div>
           <div class="mt-1.5 text-[13px] text-text-2">{{ b.meta }}</div>
           <StatusDot v-if="b.degraded" class="mt-1" tone="block" label="degraded: a port is missing" />

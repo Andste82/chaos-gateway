@@ -4,12 +4,13 @@
 // the invalidation by event type (eventStream.ts) reaches them.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
-import { listDevices } from '../api/generated/hooks/devices/devices';
+import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
+import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
 import { listAccessRules, listFaults, listGroups, listNetworks, listProfiles } from '../api/generated/hooks/config/config';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, DeviceView, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule } from '../api/generated/model';
+import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, faultChips, overlayChips, type Names } from '../lib/faults';
 import { useDraftStore } from '../stores/draft';
 
@@ -48,6 +49,28 @@ export function useNetworks() {
   return useQuery({
     queryKey: ['networks', 'all'],
     queryFn: ({ signal }) => fetchAll<NetworkView>((cursor) => listNetworks({ limit: 500, cursor }, { signal }), signal),
+  });
+}
+
+/** The DHCP leases of a local network (plan §2.7: shown in the network view). */
+export function useLeases(network: () => string | undefined) {
+  return useQuery({
+    queryKey: computed(() => ['networks', network(), 'leases', 'all']),
+    queryFn: ({ signal }) => fetchAll<DhcpLease>((cursor) => listLeases(network()!, { limit: 500, cursor }, { signal }), signal),
+    enabled: computed(() => !!network()),
+    // a lease's remaining time runs down and renewals come without an event of their own
+    refetchInterval: 10_000,
+  });
+}
+
+/** The clients of a WireGuard hub with their status (last handshake, endpoint, bytes). */
+export function useWireGuardClients(network: () => string | undefined) {
+  return useQuery({
+    queryKey: computed(() => ['networks', network(), 'clients', 'all']),
+    queryFn: ({ signal }) => fetchAll<WireGuardClientView>((cursor) => listWireGuardClients(network()!, { limit: 500, cursor }, { signal }), signal),
+    enabled: computed(() => !!network()),
+    // the handshakes and the bytes change without an event
+    refetchInterval: 5_000,
   });
 }
 

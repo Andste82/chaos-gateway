@@ -20,7 +20,8 @@ const { names } = useNames();
 
 const invalidCount = computed(() => Object.keys(draft.invalid).length);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
-const yours = computed(() => draft.changes(names.value).map((c) => `${c.kind === 'rule' ? 'Rule' : 'Fault'} ${c.name} ${c.field}: ${c.from} → ${c.to}`));
+const kinds = { rule: 'Rule', fault: 'Fault', device: 'Device' };
+const yours = computed(() => draft.changes(names.value).map((c) => `${kinds[c.kind]} ${c.name} ${c.field}: ${c.from} → ${c.to}`));
 
 const conflictOpen = computed({
   get: () => !!draft.conflict,

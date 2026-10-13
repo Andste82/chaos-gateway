@@ -1,42 +1,33 @@
 <script setup lang="ts">
 // Adopt a discovered device (plan §2.3, §2.17): it becomes a configured device under the same UUID,
-// with a name and its MAC, through a candidate revision that is applied and verified. The dialog
-// says what will change before anything does. A configuration changed by someone else meanwhile is
-// refused by the gateway (409 revision_conflict): the concurrent-change dialog says who changed what
-// and adopts the device again on the new revision, or drops the adoption.
-import { useQueryClient } from '@tanstack/vue-query';
+// with a name and its MAC (or addresses) and its network. The dialog asks for the name and says in
+// words what will change; "Preview & apply" puts the device into the configuration draft and opens
+// the preview-and-apply drawer, like every configuration change: the dry run, then the apply with
+// the verified toast. A configuration changed by someone else meanwhile leads to the
+// concurrent-change dialog (reload and reapply). Backing out of the drawer keeps the adoption in the
+// unapplied-changes bar.
 import { computed, ref, watch } from 'vue';
-import { ApiError, errorMessage } from '../../api/fetcher';
-import { applyRevision, createRevision, discardRevision } from '../../api/generated/hooks/revisions/revisions';
+import { errorMessage } from '../../api/fetcher';
+import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import type { DeviceView } from '../../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../../api/generated/zod/system/system';
 import { useGatewayState } from '../../composables/gateway';
-import { useToastStore } from '../../stores/toasts';
-import ConflictDialog from '../apply/ConflictDialog.vue';
+import { useDraftStore } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 
 const props = defineProps<{ device: DeviceView | undefined; networkName?: string }>();
 const open = defineModel<boolean>('open', { required: true });
 
 const state = useGatewayState();
-const queryClient = useQueryClient();
-const toasts = useToastStore();
+const draft = useDraftStore();
 
 const name = ref('');
-/** The base the gateway refused: the concurrent-change dialog is open. */
-const conflictBase = ref<number>();
-const conflictOpen = computed({
-  get: () => conflictBase.value !== undefined,
-  set: (v) => {
-    if (!v) conflictBase.value = undefined;
-  },
-});
 const error = ref('');
 const busy = ref(false);
 
 const macs = computed(() => props.device?.observed.macs ?? []);
 const ips = computed(() => props.device?.observed.addresses ?? []);
-const base = computed(() => state.data.value?.active_revision);
+const base = computed(() => draft.base ?? state.data.value?.active_revision);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
 
 watch(open, (o) => {
@@ -50,53 +41,20 @@ const nameError = computed(() =>
   nameRegExp.test(name.value) ? '' : 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.',
 );
 
-async function reapply() {
-  conflictBase.value = undefined;
-  await queryClient.refetchQueries({ queryKey: ['state'] });
-  await adopt();
-}
-
-function dropAdoption() {
-  conflictBase.value = undefined;
-  open.value = false;
-}
-
 async function adopt() {
   const d = props.device;
-  if (!d || nameError.value || base.value === undefined) return;
+  if (!d || nameError.value) return;
   busy.value = true;
   error.value = '';
-  let candidate: number | undefined;
   try {
+    // the draft's base: the active revision now, unless the draft already has edits on another one
+    if (!draft.dirty) draft.track(await getActiveRevision());
     const identifiers = macs.value.length ? { macs: macs.value } : { ipv4: ips.value };
-    const patch = { devices: { [d.id]: { name: name.value, identifiers, ...(d.network ? { network: d.network } : {}) } } };
-    const rev = await createRevision(
-      patch,
-      { message: `adopt ${name.value}` },
-      { headers: { 'Content-Type': 'application/merge-patch+json', 'If-Match': `"${base.value}"` } },
-    );
-    candidate = rev.id;
-    const res = await applyRevision(rev.id);
-    candidate = undefined;
-    toasts.push(
-      'success',
-      `Revision ${res.revision} applied and verified${res.duration_ms !== undefined ? ` in ${res.duration_ms} ms` : ''}`,
-      `${name.value} is a configured device now.`,
-    );
+    draft.setDevice(d.id, { name: name.value, identifiers, ...(d.network ? { network: d.network } : {}) });
     open.value = false;
-    await queryClient.invalidateQueries({ queryKey: ['devices'] });
-    await queryClient.invalidateQueries({ queryKey: ['state'] });
+    draft.drawerOpen = true;
   } catch (e) {
-    if (e instanceof ApiError && e.code === 'revision_conflict') {
-      conflictBase.value = base.value;
-      await queryClient.invalidateQueries({ queryKey: ['state'] });
-    } else if (e instanceof ApiError && e.code === 'name_taken') {
-      error.value = 'Another device has this name.';
-    } else {
-      error.value = errorMessage(e);
-    }
-    // a candidate the apply refused is of no use
-    if (candidate !== undefined) await discardRevision(candidate).catch(() => undefined);
+    error.value = errorMessage(e);
   } finally {
     busy.value = false;
   }
@@ -122,18 +80,8 @@ async function adopt() {
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
       <div class="flex justify-end gap-2">
         <button type="button" class="btn" @click="open = false">Cancel</button>
-        <button type="submit" class="btn btn-primary" :disabled="busy || !!nameError || pendingConfirm">
-          {{ busy ? 'Applying…' : 'Adopt and apply' }}
-        </button>
+        <button type="submit" class="btn btn-primary" :disabled="busy || !!nameError || pendingConfirm">Preview &amp; apply</button>
       </div>
     </form>
   </ModalDialog>
-  <ConflictDialog
-    v-if="conflictBase !== undefined"
-    v-model:open="conflictOpen"
-    :base="conflictBase"
-    :yours="[`Adopt ${name} as a configured device`]"
-    @reapply="reapply"
-    @discard="dropAdoption"
-  />
 </template>

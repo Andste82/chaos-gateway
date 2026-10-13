@@ -623,6 +623,10 @@ export class MockGateway {
       const op = v === null ? 'removed' : before ? 'changed' : 'added';
       domain.push({ op, kind: 'fault', id: key, name, path: `/faults/${key}`, summary: `fault ${name} ${op}` });
     }
+    for (const [key, v] of Object.entries((patch as { devices?: Record<string, { name?: string } | null> }).devices ?? {})) {
+      const name = String(v?.name ?? key);
+      domain.push({ op: v === null ? 'removed' : 'added', kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${v === null ? 'removed' : 'added'}` });
+    }
     return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: false };
   }
 

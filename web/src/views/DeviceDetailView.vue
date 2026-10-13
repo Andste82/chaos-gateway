@@ -71,6 +71,7 @@ const faults = computed<ActiveFault[]>(() => {
       expiresAt: o.expires_at,
       state: o.state,
       overlay: o,
+      widerScope: own ? undefined : describeScope(o.target, n),
     });
   }
   // configured faults that win for this device (the overlays are listed above already)
@@ -121,7 +122,12 @@ const adoptOpen = ref(false);
         <SectionCard title="Active faults">
           <p v-if="overlays.isLoading.value" class="m-0 text-sm text-text-2">Loading…</p>
           <EmptyState v-else-if="faults.length === 0" text="No active faults: this device's traffic passes unimpaired." />
-          <ActiveFaultList v-else :items="faults" removable />
+          <ActiveFaultList
+            v-else
+            :items="faults"
+            removable
+            :remove-disabled="!!state.data.value?.pending_confirm || connection.offline"
+          />
         </SectionCard>
 
         <SectionCard title="Traffic">

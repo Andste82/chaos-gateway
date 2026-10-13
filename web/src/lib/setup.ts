@@ -39,6 +39,21 @@ export function suggestName(i: number): string {
   return i === 0 ? 'test' : `test-${i + 1}`;
 }
 
+/**
+ * The network proposed for a newly chosen test interface: the first proposal whose name and
+ * prefix no other network of the draft uses, and whose prefix does not overlap `taken` (the uplink
+ * and the management network), so the wizard never proposes what its own checks refuse.
+ */
+export function proposeNetwork(iface: string, others: NetworkDraft[], taken: string[] = []): NetworkDraft {
+  for (let i = 0; ; i++) {
+    const name = suggestName(i);
+    const address = suggestAddress(i);
+    const clash =
+      others.some((n) => n.name.trim().toLowerCase() === name || overlaps(n.address, address)) || taken.some((t) => overlaps(t, address));
+    if (!clash || i >= 255) return { iface, name, address, dhcp: true };
+  }
+}
+
 function ipValue(ip: string): number | undefined {
   const o = ip.split('.').map(Number);
   if (o.length !== 4 || o.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return undefined;
@@ -140,15 +155,16 @@ export function validatePassword(password: string, repeat: string): Record<strin
 
 /**
  * The hint for an interface that the OS configures (netplan or NetworkManager): a test interface
- * must belong to Chaos Gateway alone (plan §3.4, §3.8: the host-setup script prints the netplan
- * change), else both would configure it.
+ * must belong to Chaos Gateway alone (plan §3.4: it "simply has no entry there"; §3.8: the
+ * host-setup script prints the netplan change), else both would configure it. An entry that only
+ * turns the addressing off would still leave the port to systemd-networkd, so the only fix is to
+ * remove the entry.
  */
 export function netplanHint(i: HostInterface | undefined): string | undefined {
   if (!i?.os_managed) return undefined;
   return (
-    `${i.name} is configured by the operating system. Remove it from the netplan configuration ` +
-    `(/etc/netplan/*.yaml: delete its entry under "ethernets", or set "${i.name}: {dhcp4: false, dhcp6: false, ` +
-    `link-local: []}") and run "sudo netplan apply" before the setup applies.`
+    `${i.name} is configured by the operating system. Delete its entry "${i.name}:" under "ethernets" ` +
+    `in /etc/netplan/*.yaml (or its NetworkManager connection) and run "sudo netplan apply" before the setup applies.`
   );
 }
 

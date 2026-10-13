@@ -50,7 +50,7 @@ async function submit() {
           type="password"
           autocomplete="current-password"
           :aria-invalid="!!error"
-          aria-describedby="login-error"
+          :aria-describedby="error ? 'login-error' : undefined"
           autofocus
         />
         <p v-if="error" id="login-error" class="field-error" role="alert">{{ error }}</p>

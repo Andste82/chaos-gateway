@@ -42,6 +42,40 @@ test('the device detail shows identity, lease, faults and counters', async ({ pa
   expect(gw.requestsTo('DELETE', '/overlays/f0000000-0000-4000-8000-000000000001')).toHaveLength(1);
 });
 
+test("removing a network's fault from a device's page asks first, since it lifts it for every device", async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const faults = page.getByTestId('active-fault');
+  await expect(faults.nth(1)).toContainText('via Network IoT');
+  await faults.nth(1).getByRole('button', { name: /^Remove / }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove the fault for everyone?' });
+  await expect(dialog).toContainText('It acts on Network IoT, not only on this device.');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+  expect(gw.requestsTo('DELETE', '/overlays/f0000000-0000-4000-8000-000000000002')).toHaveLength(0);
+  await faults.nth(1).getByRole('button', { name: /^Remove / }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove for everyone' }).click();
+  await expect(toast(page, 'Fault removed')).toBeVisible();
+  expect(gw.requestsTo('DELETE', '/overlays/f0000000-0000-4000-8000-000000000002')).toHaveLength(1);
+});
+
+test('faults cannot be removed while a revision waits for confirmation or the gateway is offline', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.state = { ...gw.state, pending_confirm: { revision: 42, deadline: new Date(Date.now() + 45_000).toISOString() } };
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const remove = page.getByTestId('active-fault').nth(0).getByRole('button', { name: /^Remove / });
+  await expect(remove).toBeDisabled();
+  // confirmed: removing works again, until the gateway stops answering
+  await page.getByTestId('countdown-banner').getByRole('button', { name: 'Confirm' }).click();
+  await expect(remove).toBeEnabled();
+  gw.unreachable = true;
+  await page.evaluate(() => (window as unknown as { __sse: { fail: () => void } }).__sse.fail());
+  await expect(page.getByTestId('banner-offline')).toBeVisible();
+  await expect(remove).toBeDisabled();
+});
+
 test('a device without faults says its traffic is unimpaired', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.overlays = [];

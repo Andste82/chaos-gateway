@@ -4,7 +4,7 @@
 // with its hints. The gateway applies revision 1 with commit-confirm; the wizard logs in with the
 // new password and asks for the confirmation, so a choice that cuts the browser off rolls back.
 import { useQuery } from '@tanstack/vue-query';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ApiError, UnreachableError, errorMessage } from '../api/fetcher';
 import { confirmRevision } from '../api/generated/hooks/revisions/revisions';
@@ -18,8 +18,7 @@ import {
   managementURL,
   minPassword,
   netplanHint,
-  suggestAddress,
-  suggestName,
+  proposeNetwork,
   validateInterfaces,
   validateNetworks,
   validatePassword,
@@ -49,6 +48,9 @@ const busy = ref(false);
 const result = ref<ApplyResult>();
 const confirmState = ref<'login' | 'ready' | 'unreachable' | 'confirming' | 'expired'>('login');
 const confirmError = ref('');
+// the countdown ran out on this page; the gateway decides by its own clock whether it rolled back
+const countdownOver = ref(false);
+let rollbackPoll: ReturnType<typeof setInterval> | undefined;
 
 // defaults from what the gateway saw: its default route's interface as uplink, an addressed other
 // interface (or the uplink, the two-port case) as management
@@ -71,10 +73,7 @@ watch(
   (tests) => {
     const kept = networks.value.filter((n) => tests.includes(n.iface));
     for (const iface of tests) {
-      if (!kept.some((n) => n.iface === iface)) {
-        const i = kept.length;
-        kept.push({ iface, name: suggestName(i), address: suggestAddress(i), dhcp: true });
-      }
+      if (!kept.some((n) => n.iface === iface)) kept.push(proposeNetwork(iface, kept, takenPrefixes.value));
     }
     networks.value = tests.map((t) => kept.find((n) => n.iface === t)!);
   },
@@ -177,13 +176,44 @@ async function confirm() {
   confirmState.value = 'confirming';
   try {
     await confirmRevision(rev);
+    stopRollbackPoll();
     toasts.push('success', 'Setup complete', `Revision ${rev} is confirmed and active.`);
     await router.replace('/');
   } catch (e) {
+    if (e instanceof ApiError && (await rolledBack())) return;
     confirmState.value = 'ready';
     confirmError.value = errorMessage(e);
   }
 }
+
+/**
+ * Whether the gateway rolled the setup back: the setup is open again. Only the gateway knows; a
+ * countdown that ran out here does not prove it (the clocks, the network), so Confirm stays until
+ * the gateway says so.
+ */
+async function rolledBack(): Promise<boolean> {
+  try {
+    if ((await getSetup()).completed) return false;
+  } catch {
+    return false;
+  }
+  stopRollbackPoll();
+  confirmState.value = 'expired';
+  confirmError.value = '';
+  return true;
+}
+
+function countdownEnded() {
+  countdownOver.value = true;
+  void rolledBack();
+  rollbackPoll ??= setInterval(() => void rolledBack(), 2000);
+}
+
+function stopRollbackPoll() {
+  clearInterval(rollbackPoll);
+  rollbackPoll = undefined;
+}
+onBeforeUnmount(stopRollbackPoll);
 
 const mgmtURL = computed(() => managementURL(byName(draft.management), window.location));
 const ifaceLabel = (i: HostInterface) =>
@@ -205,7 +235,7 @@ const ifaceLabel = (i: HostInterface) =>
           v-if="result.confirm_deadline && confirmState !== 'expired'"
           :deadline="result.confirm_deadline"
           text="Confirm that you can still reach the gateway, or it rolls the setup back."
-          @expired="confirmState = 'expired'"
+          @expired="countdownEnded"
         >
           <button
             v-if="confirmState === 'ready' || confirmState === 'confirming'"
@@ -218,6 +248,9 @@ const ifaceLabel = (i: HostInterface) =>
           </button>
           <button v-else-if="confirmState === 'login'" type="button" class="btn btn-sm" @click="afterSetup">Log in again</button>
         </CountdownBanner>
+        <p v-if="countdownOver && confirmState !== 'expired'" class="m-0 text-sm" role="status" data-testid="countdown-over">
+          The countdown has run out here. The gateway rolls back by its own clock; until it has, Confirm still works.
+        </p>
         <p v-if="confirmState === 'unreachable'" class="m-0 text-sm" role="alert">
           The gateway now answers only on its management network.
           <template v-if="mgmtURL">Open <a :href="mgmtURL">{{ mgmtURL }}</a>, log in with the new password and confirm the revision</template
@@ -257,7 +290,7 @@ const ifaceLabel = (i: HostInterface) =>
                 autocomplete="off"
                 spellcheck="false"
                 :aria-invalid="!!errors.token"
-                aria-describedby="token-help token-error"
+                :aria-describedby="errors.token ? 'token-help token-error' : 'token-help'"
               />
               <p id="token-help" class="mt-1.5 mb-0 text-[13px] text-text-3">
                 Printed to the log of the API container at first start: <span class="mono">docker compose logs api</span>
@@ -285,10 +318,16 @@ const ifaceLabel = (i: HostInterface) =>
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label class="label" for="uplink">Uplink (towards the Internet)</label>
-                <select id="uplink" v-model="draft.uplink" class="input" :aria-invalid="!!errors.uplink">
+                <select
+                  id="uplink"
+                  v-model="draft.uplink"
+                  class="input"
+                  :aria-invalid="!!errors.uplink"
+                  :aria-describedby="errors.uplink ? 'uplink-error' : undefined"
+                >
                   <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ ifaceLabel(i) }}</option>
                 </select>
-                <p v-if="errors.uplink" class="field-error" role="alert">{{ errors.uplink }}</p>
+                <p v-if="errors.uplink" id="uplink-error" class="field-error" role="alert">{{ errors.uplink }}</p>
                 <label class="label mt-3" for="gateway">Router on the uplink{{ uplinkHasDefault ? ' (optional)' : '' }}</label>
                 <input
                   id="gateway"
@@ -296,18 +335,25 @@ const ifaceLabel = (i: HostInterface) =>
                   class="input mono"
                   :placeholder="uplinkHasDefault ? 'the default route of the host' : 'e.g. 192.168.1.1'"
                   :aria-invalid="!!errors.gateway"
+                  :aria-describedby="errors.gateway ? 'gateway-error' : undefined"
                 />
-                <p v-if="errors.gateway" class="field-error" role="alert">{{ errors.gateway }}</p>
+                <p v-if="errors.gateway" id="gateway-error" class="field-error" role="alert">{{ errors.gateway }}</p>
               </div>
               <div>
                 <label class="label" for="management">Management (where you reach the UI)</label>
-                <select id="management" v-model="draft.management" class="input" :aria-invalid="!!errors.management">
+                <select
+                  id="management"
+                  v-model="draft.management"
+                  class="input"
+                  :aria-invalid="!!errors.management"
+                  :aria-describedby="errors.management ? 'management-error' : undefined"
+                >
                   <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ ifaceLabel(i) }}</option>
                 </select>
-                <p v-if="errors.management" class="field-error" role="alert">{{ errors.management }}</p>
+                <p v-if="errors.management" id="management-error" class="field-error" role="alert">{{ errors.management }}</p>
               </div>
             </div>
-            <fieldset class="m-0 border-0 p-0">
+            <fieldset class="m-0 border-0 p-0" :aria-describedby="errors.tests ? 'tests-error' : undefined">
               <legend class="label">Test interfaces (each becomes a test network)</legend>
               <p v-if="candidates.length === 0" class="m-0 text-sm text-text-2">No other interface is left for a test network.</p>
               <label
@@ -322,7 +368,7 @@ const ifaceLabel = (i: HostInterface) =>
                 <StatusDot :tone="i.link_up === false ? 'offline' : 'normal'" :label="i.link_up === false ? 'no link' : 'link'" />
                 <span v-if="i.os_managed" class="text-fault-text">configured by the OS</span>
               </label>
-              <p v-if="errors.tests" class="field-error" role="alert">{{ errors.tests }}</p>
+              <p v-if="errors.tests" id="tests-error" class="field-error" role="alert">{{ errors.tests }}</p>
             </fieldset>
             <div v-if="hints.length" class="rounded-md border border-fault-border bg-fault-tint p-3 text-sm text-fault-text" data-testid="netplan-hints">
               <p v-for="h in hints" :key="h" class="m-0">{{ h }}</p>
@@ -335,13 +381,25 @@ const ifaceLabel = (i: HostInterface) =>
               <div class="pt-8 text-sm"><span class="mono">{{ n.iface }}</span></div>
               <div>
                 <label class="label" :for="`net-name-${i}`">Network name</label>
-                <input :id="`net-name-${i}`" v-model="n.name" class="input" :aria-invalid="!!errors[`${i}.name`]" />
-                <p v-if="errors[`${i}.name`]" class="field-error" role="alert">{{ errors[`${i}.name`] }}</p>
+                <input
+                  :id="`net-name-${i}`"
+                  v-model="n.name"
+                  class="input"
+                  :aria-invalid="!!errors[`${i}.name`]"
+                  :aria-describedby="errors[`${i}.name`] ? `net-name-${i}-error` : undefined"
+                />
+                <p v-if="errors[`${i}.name`]" :id="`net-name-${i}-error`" class="field-error" role="alert">{{ errors[`${i}.name`] }}</p>
               </div>
               <div>
                 <label class="label" :for="`net-addr-${i}`">Gateway address</label>
-                <input :id="`net-addr-${i}`" v-model="n.address" class="input mono" :aria-invalid="!!errors[`${i}.address`]" />
-                <p v-if="errors[`${i}.address`]" class="field-error" role="alert">{{ errors[`${i}.address`] }}</p>
+                <input
+                  :id="`net-addr-${i}`"
+                  v-model="n.address"
+                  class="input mono"
+                  :aria-invalid="!!errors[`${i}.address`]"
+                  :aria-describedby="errors[`${i}.address`] ? `net-addr-${i}-error` : undefined"
+                />
+                <p v-if="errors[`${i}.address`]" :id="`net-addr-${i}-error`" class="field-error" role="alert">{{ errors[`${i}.address`] }}</p>
               </div>
               <div class="pt-8"><SwitchToggle v-model="n.dhcp" :label="`DHCP on ${n.iface}`" /></div>
             </div>
@@ -358,14 +416,23 @@ const ifaceLabel = (i: HostInterface) =>
                 type="password"
                 autocomplete="new-password"
                 :aria-invalid="!!errors.password"
+                :aria-describedby="errors.password ? 'password-help password-error' : 'password-help'"
               />
-              <p class="mt-1.5 mb-0 text-[13px] text-text-3">At least {{ minPassword }} characters. User name: <span class="mono">admin</span>.</p>
-              <p v-if="errors.password" class="field-error" role="alert">{{ errors.password }}</p>
+              <p id="password-help" class="mt-1.5 mb-0 text-[13px] text-text-3">At least {{ minPassword }} characters. User name: <span class="mono">admin</span>.</p>
+              <p v-if="errors.password" id="password-error" class="field-error" role="alert">{{ errors.password }}</p>
             </div>
             <div>
               <label class="label" for="repeat">Repeat the password</label>
-              <input id="repeat" v-model="draft.repeat" class="input" type="password" autocomplete="new-password" :aria-invalid="!!errors.repeat" />
-              <p v-if="errors.repeat" class="field-error" role="alert">{{ errors.repeat }}</p>
+              <input
+                id="repeat"
+                v-model="draft.repeat"
+                class="input"
+                type="password"
+                autocomplete="new-password"
+                :aria-invalid="!!errors.repeat"
+                :aria-describedby="errors.repeat ? 'repeat-error' : undefined"
+              />
+              <p v-if="errors.repeat" id="repeat-error" class="field-error" role="alert">{{ errors.repeat }}</p>
             </div>
           </template>
 

@@ -122,6 +122,11 @@ export interface ActiveFault {
   expiresAt?: string;
   state?: string;
   overlay?: Overlay;
+  /**
+   * On a device's page: the wider scope (network, group) of an overlay that acts on more devices
+   * than this one; removing it asks first.
+   */
+  widerScope?: string;
 }
 
 // overlay kinds that impair traffic; access rules are not faults (plan §2.4, D25)

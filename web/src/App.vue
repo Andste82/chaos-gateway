@@ -16,7 +16,12 @@ async function retry() {
   retrying.value = true;
   try {
     await session.bootstrap(true);
-    await router.replace(router.currentRoute.value.fullPath);
+    // The guard let the first navigation through while the gateway did not answer, so the route is
+    // already the one asked for; force runs the guard again, which now sends an open setup to the
+    // wizard and a missing session to the login. This page stays until then, so the page of the old
+    // route does not mount and ask the gateway for what it does not give yet.
+    const { path, query, hash } = router.currentRoute.value;
+    await router.replace({ path, query, hash, force: true });
   } catch {
     // still unreachable
   } finally {
@@ -26,7 +31,7 @@ async function retry() {
 </script>
 
 <template>
-  <div v-if="session.status === 'unknown' && connection.offline" class="flex min-h-screen items-center justify-center p-8">
+  <div v-if="(session.status === 'unknown' && connection.offline) || retrying" class="flex min-h-screen items-center justify-center p-8">
     <div class="card max-w-md text-center" role="alert" data-testid="unreachable">
       <h1 class="m-0 text-xl font-semibold">Chaos Gateway</h1>
       <p class="text-text-2">The gateway does not answer. Check that it runs and that this address is on its management network.</p>

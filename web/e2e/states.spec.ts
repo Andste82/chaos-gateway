@@ -39,6 +39,33 @@ test('offline from the start: the page says so and tries again', async ({ page }
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
 });
 
+test('offline from the start, then the setup is open: Try again leads to the wizard', async ({ page }) => {
+  // the browser was opened before the gateway was ready at first start
+  const gw = MockGateway.firstStart();
+  gw.unreachable = true;
+  await gw.install(page);
+  await page.goto('/');
+  await expect(page.getByTestId('unreachable')).toBeVisible();
+  gw.unreachable = false;
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page).toHaveURL(/\/setup$/);
+  await expect(page.getByTestId('unreachable')).toBeHidden();
+  expect(gw.requestsTo('GET', '/state')).toHaveLength(0);
+});
+
+test('offline from the start, then no session: Try again leads to the login and back to the page', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.loggedIn = false;
+  gw.unreachable = true;
+  await gw.install(page);
+  await page.goto('/devices?q=esp');
+  await expect(page.getByTestId('unreachable')).toBeVisible();
+  gw.unreachable = false;
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page).toHaveURL(/\/login\?next=/);
+  expect(new URL(page.url()).searchParams.get('next')).toBe('/devices?q=esp');
+});
+
 test('safe mode: a full-width red banner with the reason and the way to recovery', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.state = { ...gw.state, safe_mode: true, safe_mode_reason: 'revision 42 and the last known good revision 41 failed to apply' };
@@ -67,7 +94,9 @@ test('commit-confirm: an orange countdown, Confirm resolves it, changes wait unt
   const first = await banner.getByRole('timer').textContent();
   expect(first).toMatch(/^0:4\d left$/);
   await expect(banner.getByRole('timer')).not.toHaveText(first!, { timeout: 3_000 });
-  await expect(banner.getByRole('timer')).toHaveAttribute('aria-live', 'polite');
+  // screen readers hear the milestones from a live region, not the timer every second
+  await expect(banner.getByRole('timer')).toHaveAttribute('aria-live', 'off');
+  await expect(banner.getByTestId('countdown-announcement')).toHaveAttribute('aria-live', 'polite');
   await expect(page.getByTestId('context-line')).toContainText('revision 42 waits for confirmation');
   // a control that would change more is disabled until the confirmation is resolved
   await expect(page.getByRole('button', { name: 'Adopt dev-3a-f1-9c-22-07-b4' })).toBeDisabled();

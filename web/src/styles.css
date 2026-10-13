@@ -57,7 +57,7 @@
 
   /* the focus ring of plan §2.17 (accessibility): accent, 2 px, on every focusable control */
   :where(button, a, input, select, textarea, [tabindex], [role='switch']):focus-visible {
-    outline: 2px solid var(--color-accent-text);
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
   }
 }

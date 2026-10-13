@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
+import { noteGatewayDate, resetGatewayClock } from '../../lib/clock';
 import { useToastStore } from '../../stores/toasts';
 import AccessChip from './AccessChip.vue';
 import AppBanner from './AppBanner.vue';
@@ -22,6 +23,7 @@ import ToastHost from './ToastHost.vue';
 beforeEach(() => setActivePinia(createPinia()));
 afterEach(() => {
   vi.useRealTimers();
+  resetGatewayClock();
   document.body.innerHTML = '';
 });
 
@@ -132,13 +134,12 @@ describe('containers', () => {
 });
 
 describe('countdown banner', () => {
-  it('counts down for screen readers too and says when the time is up', async () => {
+  it('counts down and says when the time is up', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
     const deadline = new Date(2026, 0, 1, 12, 0, 3).toISOString();
     const w = mount(CountdownBanner, { props: { deadline, text: 'Revision 7 waits' }, slots: { default: '<button>Confirm</button>' } });
     const timer = w.get('[role="timer"]');
-    expect(timer.attributes('aria-live')).toBe('polite');
     expect(timer.text()).toBe('0:03 left');
     expect(w.emitted('expired')).toBeUndefined();
     vi.advanceTimersByTime(1000);
@@ -148,7 +149,47 @@ describe('countdown banner', () => {
     await nextTick();
     expect(w.get('[role="timer"]').text()).toBe('0:00 left');
     expect(w.emitted('expired')).toHaveLength(1);
+    expect(w.get('[data-testid="countdown-announcement"]').text()).toBe('The time to confirm is up.');
     expect(w.text()).toContain('Revision 7 waits');
+    w.unmount();
+  });
+
+  it('screen readers hear the milestones, not every second', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
+    const deadline = new Date(2026, 0, 1, 12, 0, 45).toISOString();
+    const w = mount(CountdownBanner, { props: { deadline, text: 'Revision 7 waits' } });
+    expect(w.get('[role="timer"]').attributes('aria-live')).toBe('off');
+    const live = w.get('[data-testid="countdown-announcement"]');
+    expect(live.attributes('aria-live')).toBe('polite');
+    expect(live.text()).toBe('');
+    vi.advanceTimersByTime(10_000);
+    await nextTick();
+    expect(live.text()).toBe('');
+    vi.advanceTimersByTime(5_000);
+    await nextTick();
+    expect(live.text()).toBe('30 seconds left to confirm.');
+    vi.advanceTimersByTime(10_000);
+    await nextTick();
+    expect(live.text()).toBe('30 seconds left to confirm.');
+    vi.advanceTimersByTime(10_000);
+    await nextTick();
+    expect(live.text()).toBe('10 seconds left to confirm.');
+    w.unmount();
+  });
+
+  it("runs on the gateway's clock, not the browser's", async () => {
+    vi.useFakeTimers();
+    // the browser is 90 s ahead of the gateway; the gateway gives 60 s to confirm
+    vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 12, 1, 30)));
+    noteGatewayDate('Thu, 01 Jan 2026 12:00:00 GMT', Date.now(), Date.now());
+    const deadline = new Date(Date.UTC(2026, 0, 1, 12, 1, 0)).toISOString();
+    const w = mount(CountdownBanner, { props: { deadline, text: 'Revision 1 waits' } });
+    expect(w.emitted('expired')).toBeUndefined();
+    expect(w.get('[role="timer"]').text()).toMatch(/^(0:59|1:00) left$/);
+    vi.advanceTimersByTime(61_000);
+    await nextTick();
+    expect(w.emitted('expired')).toHaveLength(1);
     w.unmount();
   });
 });

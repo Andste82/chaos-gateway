@@ -825,7 +825,8 @@ stayed open".
   QEMU VM under software emulation (level 1b) and in CI (job `testbed-ui`).
 - Evidence: `internal/api/e2e_ui_test.go`, `web/e2e-testbed/faults.spec.ts`, `docs/development.md` "Web UI: faults, rules
   and profiles".
-- Task: check the result of the local VM run (recorded in docs/development.md) and the first CI run of the job.
+- Task: the local VM run passed (2026-10-13, recorded in docs/development.md: A 2.5 → 210.5 ms, B 6.8 → 68.6 ms); check
+  the first CI run of the job.
 - Acceptance: the job `testbed-ui` passes with both browser flows.
 - Needs maintainer: no
 - Effort: S

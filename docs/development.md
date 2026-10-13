@@ -3390,13 +3390,23 @@ knows them, measures their round trip to the server, creates a token `ci-runner`
 in; on the faults screen add a configured fault of 30 ms on the network IoT (the bar says "1 change in 1 fault"); meanwhile
 the spec applies a revision with the token (`POST /revisions` with a new group, then apply); Preview & apply meets the
 conflict dialog with the token's name and its change, Reload and reapply mine opens the preview on the new base (Linux
-changes with the netem leaf), Apply gives the verified toast; on device A's page Add fault shows the jitter error and keeps
+changes with the netem leaf), Apply closes the drawer and the fault is no longer NEW (the spec asserts the lasting state:
+the toast is gone after 6 s, which an emulated apply can outlast); on device A's page Add fault shows the jitter error and keeps
 Apply disabled, then 100 ms for an hour is applied and appears with its TTL; the faults screen shows the network's fault
 overridden by A's. Back in Go: the configured fault, A's overlay and the token's group are in the gateway, A's round trip
 grew by 2 × 100 ms and B's by 2 × 30 ms (180–400 ms and 50–150 ms, functional bounds that hold under emulation). Both browser
 flows share `runBrowser`, which runs one spec and logs the page's accessibility tree on a failure. CI runs both in the job
 `testbed-ui` (`-run InTheBrowser`). Locally: `make build-web && make test-vm ARGS='-tags testbed,browser -run InTheBrowser
 -mem 3G -cpus 4 -test-timeout 100m -vm-timeout 150m ./internal/api'`.
+
+**What the VM showed** (kernel 6.8.0-142, emulated, 4 CPUs, 3 GB): both browser flows ran with `-run InTheBrowser`; the
+first-start flow passed again after its move onto `runBrowser` (13 minutes). The M13 flow passed in 20 minutes, 10 of them
+in the browser (`make test-vm ARGS='-tags testbed,browser -run TestAFaultCreatedInTheBrowser -mem 3G -cpus 4 -test-timeout 80m
+-vm-timeout 120m ./internal/api'`): A's median round trip to the server went from 2.5 ms to 210.5 ms, B's from 6.8 ms to
+68.6 ms. Its earlier runs found three faults of the spec itself, not of the UI: the TTL expected right after the apply had
+lost minutes to the emulated apply, the device's name was read before its page had loaded, and the verified toast had
+closed before the assertion looked; each was fixed in the spec. The privileged-container job of CI has not run on this
+branch with the M13 flow yet.
 
 ### Acceptance map (plan M13 "Tests")
 

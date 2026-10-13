@@ -226,6 +226,24 @@ test('the session store follows a rollback: the app sends the browser to the set
   await expect(page).toHaveURL(/\/setup$/);
 });
 
+test('a setup rolled back while the browser is in the shell sends it to the wizard', async ({ page }) => {
+  // the wizard sent the browser to the management address; the login there opened the shell
+  const gw = MockGateway.firstStart();
+  gw.setup = { completed: true };
+  gw.loggedIn = true;
+  gw.state = { generation: 1, active_revision: 1, safe_mode: false, pending_confirm: { revision: 1, deadline: new Date(Date.now() + 30_000).toISOString() } };
+  await gw.install(page);
+  await page.goto('/');
+  await expect(page.getByTestId('countdown-banner')).toContainText('Revision 1');
+
+  gw.rollBackSetup();
+  await gw.emit(page, { type: 'revision_rolled_back', message: 'rolled back', data: { revision: 1, reason: 'confirmation timeout' } });
+  await expect(page).toHaveURL(/\/setup$/);
+  await expect(page.getByRole('heading', { name: 'Set up Chaos Gateway' })).toBeVisible();
+  await expect(page.getByTestId('countdown-banner')).toHaveCount(0);
+  await expect(toast(page, 'The setup was rolled back')).toBeVisible();
+});
+
 test('the wizard proposes a free name and prefix for each test network', async ({ page }) => {
   const gw = MockGateway.firstStart();
   gw.setup = {

@@ -3162,6 +3162,12 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
   was rolled back, puts the session store back to "setup" (the session of the login after the apply and its CSRF token
   belong to a setup that is gone) and offers Start again: step 1 with the token and the password cleared (the gateway
   printed a new token) and the interface and network choices kept, since the rollback is often about one of them.
+  A rollback while the browser is already in the shell (the login on the management address opened it) is noticed app-wide:
+  the gateway then answers the API with 503 `unavailable`, which the fetch wrapper reports (`onUnavailable`); since safe
+  mode and a missing executor answer the same, the app asks `GET /setup`, and if the setup is open again it puts the
+  session store back to "setup", clears the cached data and sends the browser to the wizard with a toast that a new setup
+  token is in the container log. The rollback toast of revision 1 says that the setup is open again, not that a previous
+  revision is active.
 - **Overview.** Topology (test networks → gateway → uplink, devices per network, the fault badge on the path while faults
   are active, profiles and where they are active), the active faults (impairing overlays and enabled configured faults:
   target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
@@ -3191,12 +3197,12 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
 
 | What | Where |
 |---|---|
-| Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, reachability, ended session | `src/api/fetcher.test.ts` |
+| Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, reachability, ended session, 503 `unavailable` | `src/api/fetcher.test.ts` |
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
 | Setup wizard rules, free proposals, the netplan hint and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
 | Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
-| Event stream: listeners, invalidation per type, `events_lost`, toasts, reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
+| Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
 | Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
 | Serving the app: deep links, assets and their caching, CSP, 404s, nothing under `/api/` is the page, before the setup | `TestTheWebAppIsServedNextToTheAPI`, `TestWithoutAWebAppEveryOtherPathIsNotFound`, `TestCheckUIWantsAnIndexPage` (`internal/api/ui_test.go`), `TestWebUIComesFromTheDirectoryOrTheBinary` (`cmd/chaosgw`) |
@@ -3244,7 +3250,7 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 | … data that did not load | `states.spec.ts` "a list the gateway did not deliver says so and does not claim to be empty", "devices and a device the gateway did not deliver: an error, not an empty list or a blank page" |
 | … offline | `states.spec.ts` "offline: a banner, live data greyed out with the time it was last updated, and back", "offline from the start: the page says so and tries again", "offline from the start, then the setup is open: Try again leads to the wizard", "offline from the start, then no session: Try again leads to the login and back to the page"; `device-detail.spec.ts` "faults cannot be removed while a revision waits for confirmation or the gateway is offline" |
 | … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
-| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
+| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
 | An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
 
 ## Generated code

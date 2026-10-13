@@ -96,6 +96,12 @@ describe('the event stream', () => {
     expect(t[1]?.detail).toMatch(/not confirmed in time/);
   });
 
+  it('says the setup is open again when revision 1, the setup, was rolled back', () => {
+    const { es } = setup();
+    es.send('revision_rolled_back', { data: { revision: 1, reason: 'confirmation timeout' } });
+    expect(useToastStore().toasts[0]?.detail).toBe('It was not confirmed in time; the setup is open again.');
+  });
+
   it('tells the connection store about the stream, and asks the gateway when it breaks', () => {
     const { es, refetch, invalidate } = setup();
     const c = useConnectionStore();

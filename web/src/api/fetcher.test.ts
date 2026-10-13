@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, UnreachableError, customFetch, onReachable, onUnauthorized, onUnreachable, setCsrfToken } from './fetcher';
+import { ApiError, UnreachableError, customFetch, onReachable, onUnauthorized, onUnavailable, onUnreachable, setCsrfToken } from './fetcher';
 
 function respond(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
@@ -90,6 +90,18 @@ describe('customFetch', () => {
     expect(unauthorized).not.toHaveBeenCalled();
     await expect(customFetch('/devices', {})).rejects.toBeInstanceOf(ApiError);
     expect(unauthorized).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it('tells about a 503 unavailable (setup open, safe mode), not about other 503s', async () => {
+    const unavailable = vi.fn();
+    const off = onUnavailable(unavailable);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(respond(503, '{"code":"too_many_streams"}'))));
+    await expect(customFetch('/state', {})).rejects.toBeInstanceOf(ApiError);
+    expect(unavailable).not.toHaveBeenCalled();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(respond(503, '{"code":"unavailable"}'))));
+    await expect(customFetch('/state', {})).rejects.toBeInstanceOf(ApiError);
+    expect(unavailable).toHaveBeenCalledTimes(1);
     off();
   });
 

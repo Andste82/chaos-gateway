@@ -35,7 +35,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
-| `web/` | Vue 3 app (Vite, Tailwind 4, TanStack Query, Pinia, Reka UI) |
+| `web/` | the web app (M12): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
+| `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed) |
 | `deploy/` | the container image (multi-arch); `compose.executor.yaml`, the executor's hardening profile |
 
@@ -58,6 +59,7 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |
 | – | `make test-e2e` | Playwright tests of the web app | `npx playwright install chromium` once |
+| 1/1b | `make test-vm ARGS='-tags testbed,browser -run TestFirstStartInTheBrowser ./internal/api'` | the browser flow of the web app against the real stack in the testbed (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
 
 **Which level where.** The devcontainer is unprivileged on purpose: network tests must not be able
 to touch the host's interfaces or other containers. There the testbed runs only as level 1b. In
@@ -3079,6 +3081,139 @@ targets on the first run. A final run of all nine profile tests together with th
 assertions (medians, loss intervals, jitter spread, the rate) are written from plan §4.3 and run in CI; if one fails there, read
 the printed distribution before touching a tolerance (a tolerance below the §4.3 definition needs an open item).
 
+## Web UI (M12)
+
+Plan §2.17, §3.7 and M12: the shell of the web app with its visual system and shared components, login and the first-start
+setup wizard, the overview, the device list and the device detail, live updates over the event stream, and the empty,
+offline and safe-mode states. The screens of M13 (faults, rules, profiles, the preview-and-apply drawer, the `</> API`
+panel) and M14 (networks, technical view) are in the navigation but not yet links; panels whose backend comes later
+(running scenario, captures, diagnostics, DHCP and TLS test actions, the flow view of M26) are left out.
+
+### How it works
+
+- **Served by the binary.** `internal/api` serves the build of the app for every `GET` or `HEAD` outside `/api/`
+  (`api.Config.UI`, `ui.go`): a file of the build as it is, any other path `index.html`, so a reload of a deep link works.
+  Hashed files under `assets/` are cached for good, `index.html` never (`no-store`) and carries the content security policy
+  (`default-src 'self'`, inline style attributes only, `frame-ancestors 'none'`). A missing build file is a 404 problem, not
+  the page; nothing under `/api/` is ever the page; the page loads before the setup is finished (the wizard is part of it).
+  `make build` builds the app and `chaosgw` with the tag `webui`, which embeds `web/dist` (`web/embed.go`; without the tag,
+  `web/noembed.go` embeds nothing, so `go build ./...` and the unit tests work without a web build). `chaosgw api --web-dir
+  <dir>` serves a build from disk instead. The image builds the app in a Node stage and embeds it.
+- **Data.** Server data lives in the TanStack Query cache, loaded with the functions Orval generates from the spec
+  (`npm run generate`, run before every build, type check and unit test run by npm's `pre` scripts). The fetch wrapper
+  (`src/api/fetcher.ts`) puts the paths under `/api/v1`, sends the session's CSRF token on unsafe methods, turns
+  problem+json into `ApiError`, and reports every request: answered (online), not answered (`UnreachableError`, also for a
+  proxy's 502/504) or refused with 401 outside the login (the session ended: back to the login with `next`). Lists follow
+  `next_cursor` to the end (`fetchAll`), so a lab with more than 500 devices shows all of them. Pinia holds UI state only:
+  the session, the connection, toasts, the events seen, the uplink's rate history.
+- **Live updates.** `startEventStream` (`src/composables/eventStream.ts`) opens `GET /api/v1/events` with the session cookie,
+  listens to every `EventType` (the stream sends named events) and invalidates the queries the event changes (table
+  `invalidates`: a device event the devices and networks, an overlay event the overlays, faults and devices, …).
+  `events_lost` and every reconnect refetch everything; the browser's own reconnect sends `Last-Event-ID`, so the gateway
+  replays what was missed. An expired overlay, a rollback, an apply failure and safe mode also raise a toast. Counters
+  that grow without an event (traffic rates, affected packets) are polled every 5 s.
+- **Shell and states** (`AppShell.vue`). Above every page: the red safe-mode banner (`GatewayState.safe_mode`, with the
+  reason and a link to recovery), the offline banner (from the first request that did not reach the gateway until the next
+  one that did; the page keeps its last data, greyed out, with "Last updated" and the time) and the orange commit-confirm
+  banner while a revision is `pending_confirm` (live countdown in an `aria-live` timer, Confirm; controls that would change
+  more, such as Adopt, are disabled until it is resolved; the rollback at the deadline is announced by the event's toast).
+  A gateway that does not answer the very first question (setup? session?) gets a page of its own with Try again. The page
+  header shows the context line (revision, time of the last apply, sync state), health, the active-faults counter and the
+  page's action.
+- **Login and setup.** The router asks the gateway first (`GET /setup`, then `GET /auth/session`): an open setup sends
+  every page to the wizard, no session to the login. The wizard (`SetupWizard.vue`, logic in `src/lib/setup.ts`) asks for
+  the setup token and shows the preflight with its fixes; then uplink (proposed: the interface of the default route) with
+  its router (optional for the interface of the default route, required for any other, since the gateway refuses an uplink
+  without a default route and without a gateway; it must lie in the uplink's network) and management (proposed: another
+  interface with an address, or the uplink in the two-port case); then the test
+  interfaces, each becoming a LAN test network with a proposed name and gateway address (10.10.0.1/24, 10.20.0.1/24, …)
+  and DHCP; then the admin password. An interface the OS configures (`os_managed`) gets the netplan hint. Each step is
+  validated under its fields before the next (name pattern of the spec, address with prefix length, no network or
+  broadcast address, no overlap with another test network or with the uplink's and management's prefixes, password of 12
+  characters typed twice); the request is checked against the generated Zod schema of `POST /setup` before it is sent.
+  The gateway applies revision 1 with commit-confirm; the wizard logs in with the new password and offers Confirm with the
+  countdown. When the address the browser used is not served any more (the UI moves to the management network), it says
+  where to confirm instead.
+- **Overview.** Topology (test networks → gateway → uplink, devices per network, the fault badge on the path while faults
+  are active, profiles and where they are active), the active faults (impairing overlays and enabled configured faults:
+  target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
+  "configured"), the uplink traffic of the last ten minutes (uPlot; rates from two readings of the uplink's byte counters,
+  which `GET /uplink` reports since M12 as `status.rx_bytes`/`tx_bytes` from `/sys/class/net/<if>/statistics`) and the
+  recent events (the stream's, before that the audit log's last entries).
+- **Devices.** All devices with name, IP, MAC, network, traffic rates, the winning faults as chips (a `normal` profile is
+  not one) and status with a label; search over name, addresses, MACs and the lease's host name (every word must match);
+  the filter chips All / Online / With faults / Not adopted with their counts, as buttons with `aria-pressed`. A discovered
+  device is adopted in a dialog: a name (proposed from the lease's host name), what changes in words, then a merge-patch
+  candidate under the same UUID with the device's MACs (or addresses) and network, `If-Match` the active revision, applied
+  and verified; the toast says "Revision N applied and verified in X ms". A refused base (`revision_conflict`) is said in
+  the dialog and the candidate is discarded; the full conflict dialog and the preview drawer are M13's.
+- **Device detail.** Identity (status, addresses, MACs, network, groups, origin, where it was seen, fixed IP, test CA),
+  the DHCP lease with its remaining time, the active faults (the device's overlays and those of its network or group with
+  "via …", the winning configured faults), with parameters, affected packets and remaining TTL; an overlay can be removed.
+  The traffic counters: rates, active connections, last seen.
+- **Visual system** (`src/styles.css`, `src/components/ui/`). The tokens of §2.17 as Tailwind theme variables; IBM Plex
+  Sans and Mono are bundled (`@fontsource`), nothing is loaded from outside. Shared components: `FaultChip`,
+  `AccessChip`, `StatusDot` (always with its label), `SegmentedControl` (also the filter chips), `SwitchToggle`
+  (`role="switch"`), `SectionCard`, `EmptyState`, table rows (`.data-row`), `ToastHost`, `StickyActionBar`, `SideDrawer`,
+  `ModalDialog` (Reka UI dialogs: focus trap, Escape, labelled by the title), `CountdownBanner`, `AppBanner`, `AppIcon`
+  (16 px stroke icons). The focus ring is the accent at 2 px on every control.
+
+### Tests
+
+| What | Where |
+|---|---|
+| Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, reachability, ended session | `src/api/fetcher.test.ts` |
+| Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
+| Setup wizard rules and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
+| Stores: session (setup, login, logout with CSRF, one round trip), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
+| Event stream: listeners, invalidation per type, `events_lost`, toasts, reconnect | `src/composables/eventStream.test.ts` |
+| Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, `aria-live` countdown, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
+| Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
+| Serving the app: deep links, assets and their caching, CSP, 404s, nothing under `/api/` is the page, before the setup | `TestTheWebAppIsServedNextToTheAPI`, `TestWithoutAWebAppEveryOtherPathIsNotFound`, `TestCheckUIWantsAnIndexPage` (`internal/api/ui_test.go`), `TestWebUIComesFromTheDirectoryOrTheBinary` (`cmd/chaosgw`) |
+| The uplink's byte counters | `TestTheUplinkReportsItsByteCounters` |
+| Screens against a mocked API (Playwright, `make test-e2e`) | `web/e2e/*.spec.ts` (table below) |
+| The browser flow against the real stack | `TestFirstStartInTheBrowserUntilADiscoveredDevice` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/first-start.spec.ts` |
+
+**The mocked API** (`web/e2e/mock.ts`): `MockGateway` answers `/api/v1` through Playwright's request routing from data typed
+with the generated model (a change of the spec breaks the fixtures at compile time; `npm run typecheck` checks the e2e code
+too), records every request with its headers and body, paginates like the gateway (so the device list must follow the
+cursor), refuses unsafe requests without the CSRF token, and can be made unreachable (every request aborted). The browser's
+`EventSource` is replaced by a fake the test drives (`gw.emit`, `__sse.fail`, `__sse.reopen`), so a live update is
+asserted deterministically instead of by a poll.
+
+**The browser flow in the testbed.** `TestFirstStartInTheBrowserUntilADiscoveredDevice` builds the default topology, starts
+the gateway on the real executor in the gateway's namespace with the built app (`web/dist`) and an open setup, lets device
+A ping its gateway address every second, and runs `playwright test --config playwright.testbed.config.ts` with the
+gateway's address, the setup token and device A's MAC and address in the environment. Chromium opens a page, is sent to the
+wizard, enters the token, assigns wan0 (uplink, with the server 203.0.113.10 as its router, since the gateway's default route
+leaves through mgmt0), mgmt0 (management) and lan0 (test network IoT, 10.10.0.1/24), sets the
+password, applies (minutes under emulation), confirms, and waits in the device list until device A appears as discovered,
+then opens it. The Go test then asserts what the browser saw: revision 1 active and confirmed, A a discovered device. It
+needs the build, `web/node_modules` and Playwright's Chromium and fails with the command to run when one is missing; it is
+never skipped. The tag `browser` keeps it out of the other testbed runs (which have neither); CI runs it in the job
+`testbed-ui` (level 1, privileged container, which installs the three first). Locally:
+`make build-web && make test-vm ARGS='-tags testbed,browser -run TestFirstStartInTheBrowser ./internal/api'` (the VM boots
+from the devcontainer's file system, so it finds the browser in `~/.cache/ms-playwright`; everything Playwright writes
+goes to the test's temporary directory).
+
+**What the VM showed** (kernel 6.8.0-142, emulated, 4 CPUs, 3 GB): the browser flow passed in 11 minutes, 3.9 of them in
+the browser (`make test-vm ARGS='-tags testbed,browser -run TestFirstStartInTheBrowser -mem 3G -cpus 4 -test-timeout 60m
+-vm-timeout 90m ./internal/api'`). Its first run found a real gap: the testbed's gateway has its default route through
+mgmt0, and the gateway refuses an uplink without a default route and without a gateway; the wizard had no field for the
+router, and showed the refusal in its review step. It now asks for the uplink's router when the default route does not
+leave through the chosen uplink. The privileged-container job of CI has not run on this branch yet.
+
+### Acceptance map (plan M12 "Tests")
+
+| Plan M12 Tests | Test |
+|---|---|
+| Playwright against a mocked API for every state: empty | `overview.spec.ts` "empty: no faults, no devices, no networks", `devices.spec.ts` "empty: no devices yet", `device-detail.spec.ts` "a device without faults says its traffic is unimpaired" |
+| … many devices | `devices.spec.ts` "many devices: all pages are listed, search and filter chips narrow them" (620 devices, two pages) |
+| … offline | `states.spec.ts` "offline: a banner, live data greyed out with the time it was last updated, and back", "offline from the start: the page says so and tries again" |
+| … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
+| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation, the request, the confirmation), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` |
+| An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -3096,7 +3231,8 @@ Python clients and checks that they compile and import. CI runs all three.
 ## CI
 
 `.github/workflows/ci.yml`: level 0 with the generated-code checks, the Playwright tests, the
-testbed tests in a VM and in a privileged container, and the arm64 job (multi-arch image build,
+testbed tests in a VM and in a privileged container, the browser flow of the web app against the real stack
+(`testbed-ui`, a privileged container that builds the app and installs Chromium first), and the arm64 job (multi-arch image build,
 unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
 it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners (plan D33).
 

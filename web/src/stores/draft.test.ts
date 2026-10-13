@@ -80,6 +80,20 @@ describe('the configuration draft', () => {
     expect(d.changes().filter((c) => c.field === 'position')).toEqual([]);
   });
 
+  it('an adopted device is a change of its own, with the rules and faults in one revision', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setDevice('d1', { name: 'thermostat', identifiers: { macs: ['02:00:00:00:00:01'] }, network: 'n1' });
+    expect(d.summary()).toBe('1 change in 1 device');
+    expect(d.changes()[0]).toMatchObject({ kind: 'device', from: 'discovered', to: 'configured (02:00:00:00:00:01)' });
+    d.setRule(A, { name: 'a', source: { global: true }, action: 'reject' });
+    d.setFault('f1', null);
+    expect(d.summary()).toBe('3 changes in 1 rule, 1 fault and 1 device');
+    expect(d.patch().devices).toEqual({ d1: { name: 'thermostat', identifiers: { macs: ['02:00:00:00:00:01'] }, network: 'n1' } });
+    d.setServerErrors([{ path: '/devices/d1/name', message: 'taken' }]);
+    expect(d.serverErrors).toEqual({ d1: { name: 'taken' } });
+  });
+
   it('a move of base rules is a change of their positions', () => {
     const d = useDraftStore();
     d.track(revision(42));

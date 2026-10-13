@@ -54,12 +54,13 @@ watch(
 );
 
 function objectName(kind: string, id: string): string {
+  if (kind === 'devices') return `Device ${draft.devices[id]?.name ?? draft.baseConfig?.devices?.[id]?.name ?? id}`;
   const r = kind === 'access_rules' ? (draft.effectiveRules[id] ?? draft.baseConfig?.access_rules?.[id]) : (draft.effectiveFaults[id] ?? draft.baseConfig?.faults?.[id]);
   return `${kind === 'access_rules' ? 'Rule' : 'Fault'} ${r?.name ?? id}`;
 }
 
 function where(path: string | undefined): string {
-  const m = /^\/(access_rules|faults)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (!m) return path || 'configuration';
   return `${objectName(m[1]!, m[2]!)}${m[3] ? ` · ${m[3].replace(/\//g, ' ')}` : ''}`;
 }

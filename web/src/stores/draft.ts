@@ -1,13 +1,13 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import type { AccessRule, ConfigFault, Configuration, ConfigurationPatch, RevisionWithConfiguration } from '../api/generated/model';
+import type { AccessRule, ConfigFault, Configuration, ConfigurationPatch, Device, RevisionWithConfiguration } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
 import { cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
 import { ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault';
+  kind: 'rule' | 'fault' | 'device';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -15,7 +15,7 @@ export interface DraftChange extends FieldChange {
 
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
- * access rules, their order and configured faults, edited against the revision that was active
+ * access rules, their order, configured faults and adopted devices, edited against the revision that was active
  * when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -31,10 +31,14 @@ export const useDraftStore = defineStore('draft', () => {
   const order = ref<string[]>();
   /** Edited configured faults by id, `null` for a deleted one. */
   const faults = ref<Record<string, ConfigFault | null>>({});
+  /** Devices added to the configuration (adopted), by id. */
+  const devices = ref<Record<string, Device | null>>({});
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
-  const dirty = computed(() => Object.keys(rules.value).length > 0 || order.value !== undefined || Object.keys(faults.value).length > 0);
+  const dirty = computed(
+    () => Object.keys(rules.value).length > 0 || order.value !== undefined || Object.keys(faults.value).length > 0 || Object.keys(devices.value).length > 0,
+  );
 
   /** Takes the active revision as the base, unless the draft has edits on another one. */
   function track(rev: RevisionWithConfiguration) {
@@ -124,6 +128,17 @@ export const useDraftStore = defineStore('draft', () => {
     }
   }
 
+  function setDevice(id: string, device: Device | null) {
+    clearServerErrors(id);
+    const before = baseConfig.value?.devices?.[id];
+    if ((device === null && before === undefined) || (device !== null && before !== undefined && jsonEqual(before, device))) {
+      const { [id]: _drop, ...rest } = devices.value;
+      devices.value = rest;
+    } else {
+      devices.value = { ...devices.value, [id]: device === null ? null : cloneJSON(device) };
+    }
+  }
+
   function setPortsText(id: string, text: string | undefined) {
     const { [id]: _drop, ...rest } = portsText.value;
     portsText.value = text === undefined ? rest : { ...rest, [id]: text };
@@ -163,6 +178,15 @@ export const useDraftStore = defineStore('draft', () => {
         add('enabled', before.enabled === false ? 'no' : 'yes', f.enabled === false ? 'no' : 'yes');
       }
     }
+    for (const [id, dv] of Object.entries(devices.value)) {
+      const before = baseConfig.value?.devices?.[id];
+      const name = dv?.name ?? before?.name ?? id;
+      if (dv === null) out.push({ kind: 'device', id, name, field: 'device', from: 'configured', to: 'deleted' });
+      else if (!before) {
+        const ids = [...(dv.identifiers?.macs ?? []), ...(dv.identifiers?.ipv4 ?? [])].join(', ');
+        out.push({ kind: 'device', id, name, field: 'device', from: 'discovered', to: `configured${ids ? ` (${ids})` : ''}` });
+      } else if (before.name !== dv.name) out.push({ kind: 'device', id, name, field: 'name', from: before.name, to: dv.name });
+    }
     return out;
   }
 
@@ -171,11 +195,14 @@ export const useDraftStore = defineStore('draft', () => {
     const cs = changes(names);
     const ruleIds = new Set(cs.filter((c) => c.kind === 'rule').map((c) => c.id));
     const faultIds = new Set(cs.filter((c) => c.kind === 'fault').map((c) => c.id));
+    const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
+      deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
     ].filter(Boolean);
-    return `${cs.length} ${cs.length === 1 ? 'change' : 'changes'} in ${objects.join(' and ')}`;
+    const list = objects.length > 1 ? `${objects.slice(0, -1).join(', ')} and ${objects.at(-1)}` : (objects[0] ?? '');
+    return `${cs.length} ${cs.length === 1 ? 'change' : 'changes'} in ${list}`;
   }
 
   /** The rules of the draft that cannot be applied as they are, with their problems. */
@@ -205,6 +232,12 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) fp[id] = p;
     }
     if (Object.keys(fp).length) out.faults = fp;
+    const dp: Record<string, unknown> = {};
+    for (const [id, dv] of Object.entries(devices.value)) {
+      const p = createMergePatch(baseConfig.value?.devices?.[id], dv);
+      if (p !== undefined) dp[id] = p;
+    }
+    if (Object.keys(dp).length) out.devices = dp;
     return out;
   }
 
@@ -221,6 +254,7 @@ export const useDraftStore = defineStore('draft', () => {
     baseConfig.value = rev.configuration;
     rules.value = Object.fromEntries(Object.entries(rules.value).filter(([id, r]) => r !== null || id in theirRules));
     faults.value = Object.fromEntries(Object.entries(faults.value).filter(([id, f]) => f !== null || id in (rev.configuration.faults ?? {})));
+    devices.value = Object.fromEntries(Object.entries(devices.value).filter(([id, dv]) => dv !== null || id in (rev.configuration.devices ?? {})));
     if (mine) {
       const ids = mine.filter((id) => id in effectiveRules.value);
       theirOrder.forEach((id, i) => {
@@ -234,6 +268,7 @@ export const useDraftStore = defineStore('draft', () => {
     rules.value = {};
     order.value = undefined;
     faults.value = {};
+    devices.value = {};
     portsText.value = {};
     serverErrors.value = {};
     // a clean draft is based on the newest active revision seen
@@ -252,7 +287,7 @@ export const useDraftStore = defineStore('draft', () => {
   function setServerErrors(errors: { path?: string; message?: string }[]) {
     const out: Record<string, Record<string, string>> = {};
     for (const e of errors) {
-      const m = /^\/(access_rules|faults)\/([^/]+)(?:\/([^/]+))?/.exec(e.path ?? '');
+      const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/([^/]+))?/.exec(e.path ?? '');
       if (!m) continue;
       const field = m[3] === 'port_ranges' ? 'ports' : (m[3] ?? 'rule');
       (out[m[2]!] ??= {})[field] = e.message ?? 'not valid';
@@ -271,6 +306,7 @@ export const useDraftStore = defineStore('draft', () => {
     rules,
     order,
     faults,
+    devices,
     portsText,
     dirty,
     effectiveRules,
@@ -282,6 +318,7 @@ export const useDraftStore = defineStore('draft', () => {
     setOrder,
     move,
     setFault,
+    setDevice,
     setPortsText,
     changes,
     summary,

@@ -1,7 +1,10 @@
 // Shared fetch wrapper for the generated Vue Query hooks: same-origin API under /api/v1,
 // session cookie for authentication with the CSRF header on unsafe methods, RFC 9457
 // problem+json errors. It also tells the app whether the backend answers at all (offline state,
-// plan §2.17) and when a session ended (back to the login page).
+// plan §2.17) and when a session ended (back to the login page), and learns the gateway's clock
+// from the Date header of every answer.
+
+import { noteGatewayDate } from '../lib/clock';
 
 export const API_BASE = '/api/v1';
 
@@ -78,6 +81,7 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
     init.headers = headers;
   }
   let response: Response;
+  const sentAt = Date.now();
   try {
     response = await fetch(full, init);
   } catch (e) {
@@ -91,6 +95,7 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
     throw new UnreachableError(`HTTP ${response.status}`);
   }
   emit(reachableListeners);
+  noteGatewayDate(response.headers.get('Date'), sentAt, Date.now());
   const text = await response.text();
   let body: unknown;
   if (text) {

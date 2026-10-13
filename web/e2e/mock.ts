@@ -216,6 +216,11 @@ export class MockGateway {
   /** Bytes the uplink counters grow by per reading. */
   uplinkStep = { rx: 750_000, tx: 125_000 };
   requests: Recorded[] = [];
+  /**
+   * How far the gateway's clock is ahead of the browser's (negative: behind). The answers carry the
+   * gateway's time in their Date header, and its deadlines are on its clock.
+   */
+  clockSkewMs = 0;
   /** The next POST /revisions is refused with 409 revision_conflict (someone else applied one). */
   conflictOnce = false;
   private nextRevision = 43;
@@ -317,8 +322,9 @@ export class MockGateway {
       body = request.postData();
     }
     this.requests.push({ method, path, headers: request.headers(), body });
+    const headers: Record<string, string> = this.clockSkewMs ? { Date: new Date(this.now()).toUTCString() } : {};
     const json = (status: number, data: unknown) =>
-      route.fulfill({ status, contentType: status >= 400 ? 'application/problem+json' : 'application/json', body: JSON.stringify(data) });
+      route.fulfill({ status, headers, contentType: status >= 400 ? 'application/problem+json' : 'application/json', body: JSON.stringify(data) });
     const problem = (status: number, code: string, detail: string) => json(status, { type: 'about:blank', title: code, status, code, detail });
 
     if (path === '/setup' && method === 'GET') return json(200, this.setup);
@@ -327,7 +333,7 @@ export class MockGateway {
       if (request.headers()['x-setup-token'] !== this.setupToken) return problem(401, 'unauthorized', 'a valid setup token is required');
       this.setup = { completed: true };
       this.password = (body as { admin_password: string }).admin_password;
-      const deadline = new Date(Date.now() + 60_000).toISOString();
+      const deadline = new Date(this.now() + 60_000).toISOString();
       this.state = { ...this.state, active_revision: 1, generation: 1, pending_confirm: { revision: 1, deadline } };
       const res: ApplyResult = { revision: 1, status: 'pending_confirm', generation: 1, confirm_deadline: deadline, duration_ms: 312 };
       return json(200, res);
@@ -421,4 +427,17 @@ export class MockGateway {
   }
 
   private candidates = new Map<number, unknown>();
+
+  /** The time on the gateway's clock. */
+  now(): number {
+    return Date.now() + this.clockSkewMs;
+  }
+
+  /** The commit-confirm deadline of the setup passed on the gateway: it rolled back, the setup is open again. */
+  rollBackSetup(): void {
+    const open = MockGateway.firstStart();
+    this.setup = open.setup;
+    this.state = open.state;
+    this.loggedIn = false;
+  }
 }

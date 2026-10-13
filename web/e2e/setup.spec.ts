@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { MockGateway, toast } from './mock';
 
 // M12: the first-start setup wizard against a mocked gateway: token, interfaces with the netplan
@@ -41,6 +41,9 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   // eth3 is configured by netplan: the hint says how to free it
   await expect(page.getByTestId('netplan-hints')).toContainText('eth3 is configured by the operating system');
   await expect(page.getByTestId('netplan-hints')).toContainText('sudo netplan apply');
+  // plan §3.4: a test interface has no entry there at all
+  await expect(page.getByTestId('netplan-hints')).toContainText('Delete its entry "eth3:"');
+  await expect(page.getByTestId('netplan-hints')).not.toContainText('dhcp4');
   await page.getByRole('checkbox', { name: /eth3/ }).uncheck();
   await expect(page.getByTestId('netplan-hints')).toHaveCount(0);
   await page.getByRole('button', { name: 'Next' }).click();
@@ -104,4 +107,120 @@ test('after the setup the wizard is not reachable any more', async ({ page }) =>
   await gw.install(page);
   await page.goto('/setup');
   await expect(page).toHaveURL(/\/$/);
+});
+
+/** Runs the wizard with its proposals up to the commit-confirm of revision 1. */
+async function applySetup(page: Page, gw: MockGateway) {
+  await page.goto('/setup');
+  await page.getByLabel('Setup token').fill(gw.setupToken);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('checkbox', { name: /eth2/ }).check();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByLabel('Admin password').fill(gw.password);
+  await page.getByLabel('Repeat the password').fill(gw.password);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Apply setup' }).click();
+  await expect(page.getByTestId('setup-confirm')).toBeVisible();
+}
+
+test("the countdown runs on the gateway's clock: a browser clock 90 s ahead does not end it", async ({ page }) => {
+  // a Raspberry Pi without a real-time clock, before NTP: the gateway is 90 s behind the browser
+  const gw = MockGateway.firstStart();
+  gw.clockSkewMs = -90_000;
+  await gw.install(page);
+  await applySetup(page, gw);
+  await expect(page.getByTestId('countdown-banner').getByRole('timer')).toHaveText(/^(0:5\d|1:00) left$/);
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions/1/confirm')).toHaveLength(1);
+});
+
+test('a countdown that ran out in the browser keeps Confirm until the gateway rolled back', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await page.clock.install();
+  await gw.install(page);
+  await applySetup(page, gw);
+  // the browser's countdown ends, the gateway (which sends no Date header here) has not rolled back
+  await page.clock.fastForward('01:05');
+  await expect(page.getByTestId('countdown-over')).toContainText('The countdown has run out here.');
+  await expect(page.getByTestId('countdown-banner').getByRole('timer')).toHaveText('0:00 left');
+  await expect(page.getByRole('button', { name: 'Confirm setup' })).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+});
+
+test('the wizard says the setup was rolled back once the gateway reopened it', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await page.clock.install();
+  await gw.install(page);
+  await applySetup(page, gw);
+  await page.clock.fastForward('01:05');
+  await expect(page.getByRole('button', { name: 'Confirm setup' })).toBeVisible();
+  // the gateway rolls back; the wizard asks it every 2 s
+  gw.rollBackSetup();
+  await page.clock.fastForward('00:03');
+  await expect(page.getByText('The setup was not confirmed in time and was rolled back.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirm setup' })).toHaveCount(0);
+  await expect(page.getByTestId('countdown-banner')).toHaveCount(0);
+});
+
+test('a Confirm that comes too late learns from the gateway that it rolled back', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await gw.install(page);
+  await applySetup(page, gw);
+  // the gateway rolled back before the browser's countdown ended (its clock or the network)
+  gw.rollBackSetup();
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await expect(page.getByText('The setup was not confirmed in time and was rolled back.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirm setup' })).toHaveCount(0);
+});
+
+test('the wizard proposes a free name and prefix for each test network', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  gw.setup = {
+    ...gw.setup,
+    interfaces: [
+      ...(gw.setup.interfaces ?? []),
+      { name: 'lan0', mac: '52:54:00:00:01:00', link_up: true, os_managed: false },
+      { name: 'lan1', mac: '52:54:00:00:01:01', link_up: true, os_managed: false },
+      { name: 'lan2', mac: '52:54:00:00:01:02', link_up: true, os_managed: false },
+    ],
+  };
+  await gw.install(page);
+  await page.goto('/setup');
+  await page.getByLabel('Setup token').fill(gw.setupToken);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('checkbox', { name: /lan0/ }).check();
+  await page.getByRole('checkbox', { name: /lan1/ }).check();
+  await page.getByRole('checkbox', { name: /lan0/ }).uncheck();
+  await page.getByRole('checkbox', { name: /lan2/ }).check();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByLabel('Network name').nth(0)).toHaveValue('test-2');
+  await expect(page.getByLabel('Gateway address').nth(0)).toHaveValue('10.20.0.1/24');
+  await expect(page.getByLabel('Network name').nth(1)).toHaveValue('test');
+  await expect(page.getByLabel('Gateway address').nth(1)).toHaveValue('10.10.0.1/24');
+  // the proposal passes the wizard's own checks
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByLabel('Admin password')).toBeVisible();
+});
+
+test('a field error is tied to its field for screen readers, only while it is shown', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await gw.install(page);
+  await page.goto('/setup');
+  const token = page.getByLabel('Setup token');
+  await expect(token).toHaveAttribute('aria-describedby', 'token-help');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(token).toHaveAttribute('aria-describedby', 'token-help token-error');
+  await expect(token).toHaveAccessibleDescription(/Enter the setup token from the container log./);
+  await token.fill(gw.setupToken);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('checkbox', { name: /eth2/ }).check();
+  await page.getByRole('button', { name: 'Next' }).click();
+  const name = page.getByLabel('Network name');
+  await expect(name).not.toHaveAttribute('aria-describedby');
+  await name.fill('-bad');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(name).toHaveAccessibleDescription(/Letters, digits, dot, dash and underscore/);
 });

@@ -5,6 +5,7 @@ import {
   managementURL,
   netplanHint,
   prefixRange,
+  proposeNetwork,
   suggestAddress,
   validateInterfaces,
   validateNetworks,
@@ -22,6 +23,17 @@ describe('setup wizard', () => {
     expect(suggestAddress(0)).toBe('10.10.0.1/24');
     expect(suggestAddress(1)).toBe('10.20.0.1/24');
     expect(prefixRange('10.10.0.1/24')).toEqual([168427520, 168427775]);
+  });
+
+  it('proposes a network that no kept network uses yet', () => {
+    // lan0 and lan1 chosen, lan0 unchecked again, lan2 chosen: lan1 keeps test-2 and 10.20.0.1/24
+    const lan1 = { iface: 'lan1', name: 'test-2', address: '10.20.0.1/24', dhcp: true };
+    const lan2 = proposeNetwork('lan2', [lan1]);
+    expect(lan2).toEqual({ iface: 'lan2', name: 'test', address: '10.10.0.1/24', dhcp: true });
+    expect(validateNetworks([lan1, lan2], [])).toEqual({});
+    // a name or prefix typed by the user counts too, and so do the uplink and management networks
+    const typed = { iface: 'lan0', name: 'TEST', address: '10.30.0.1/16', dhcp: true };
+    expect(proposeNetwork('lan3', [typed, lan1], ['10.40.0.5/24'])).toMatchObject({ name: 'test-5', address: '10.50.0.1/24' });
   });
 
   it('needs an uplink, a management interface and a test interface that is neither', () => {
@@ -67,7 +79,10 @@ describe('setup wizard', () => {
   });
 
   it('hints at netplan for an interface the OS configures', () => {
-    expect(netplanHint({ name: 'eth3', mac: '52:54:00:00:00:04', os_managed: true })).toMatch(/eth3 is configured by the operating system.*netplan apply/);
+    const hint = netplanHint({ name: 'eth3', mac: '52:54:00:00:00:04', os_managed: true });
+    expect(hint).toMatch(/eth3 is configured by the operating system. Delete its entry "eth3:".*sudo netplan apply/);
+    // plan §3.4: a test interface has no entry at all; one that only turns DHCP off is not enough
+    expect(hint).not.toMatch(/dhcp4/);
     expect(netplanHint({ name: 'eth2', mac: '52:54:00:00:00:03', os_managed: false })).toBeUndefined();
   });
 

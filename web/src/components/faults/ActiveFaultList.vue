@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // The active faults with target, effect, affected packets and expiry (plan §2.17: Overview and
 // Device detail). An overlay counts down to its expiry; a configured fault is permanent. On the
-// device detail an overlay can be removed.
+// device detail an overlay can be removed: not while the gateway is offline or a revision waits
+// for confirmation (plan §2.17: controls that would change more are disabled until it is
+// resolved), and only after a question when it acts on a whole network or group.
 import { useQueryClient } from '@tanstack/vue-query';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
 import type { ActiveFault } from '../../composables/gateway';
@@ -12,17 +14,36 @@ import { formatCount, formatRemaining } from '../../lib/format';
 import { useToastStore } from '../../stores/toasts';
 import AppIcon from '../ui/AppIcon.vue';
 import FaultChip from '../ui/FaultChip.vue';
+import ModalDialog from '../ui/ModalDialog.vue';
 
-const props = defineProps<{ items: ActiveFault[]; showTarget?: boolean; removable?: boolean }>();
+const props = defineProps<{ items: ActiveFault[]; showTarget?: boolean; removable?: boolean; removeDisabled?: boolean }>();
 
 const now = useNow();
 const queryClient = useQueryClient();
 const toasts = useToastStore();
 const removing = ref<string>();
+const asking = ref<ActiveFault>();
+const askOpen = computed({
+  get: () => !!asking.value,
+  set: (v) => {
+    if (!v) asking.value = undefined;
+  },
+});
 
 function expiry(f: ActiveFault): string {
   if (!f.expiresAt) return f.layer === 'config' ? 'configured' : 'no TTL';
   return formatRemaining(new Date(f.expiresAt).getTime() - now.value.getTime());
+}
+
+function requestRemove(f: ActiveFault) {
+  if (f.widerScope) asking.value = f;
+  else void remove(f);
+}
+
+async function confirmRemove() {
+  const f = asking.value;
+  asking.value = undefined;
+  if (f) await remove(f);
 }
 
 async function remove(f: ActiveFault) {
@@ -73,12 +94,25 @@ const cols = props.showTarget
           type="button"
           class="btn btn-sm px-2"
           :aria-label="`Remove ${f.chips.join(', ')}`"
-          :disabled="removing === f.id"
-          @click="remove(f)"
+          :disabled="removeDisabled || removing === f.id"
+          @click="requestRemove(f)"
         >
           <AppIcon name="close" />
         </button>
       </span>
     </div>
   </div>
+  <ModalDialog
+    v-model:open="askOpen"
+    title="Remove the fault for everyone?"
+    :description="asking ? `It acts on ${asking.widerScope}, not only on this device.` : undefined"
+  >
+    <p v-if="asking" class="m-0 text-sm">
+      Removing {{ asking.chips.join(', ') }} lifts it for every device of {{ asking.widerScope }}.
+    </p>
+    <template #footer>
+      <button type="button" class="btn" @click="asking = undefined">Cancel</button>
+      <button type="button" class="btn btn-primary" :disabled="removeDisabled" @click="confirmRemove">Remove for everyone</button>
+    </template>
+  </ModalDialog>
 </template>

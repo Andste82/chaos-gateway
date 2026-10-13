@@ -1,8 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-// End-to-end tests run against the built app (`vite preview`). Flows against the real stack in
-// the testbed follow with M12. Chromium runs without its sandbox: the devcontainer is
-// unprivileged and runs as root.
+// End-to-end tests run against the built app (`vite preview`) and a mocked API (e2e/mock.ts). The
+// flows against the real stack in the testbed have their own config, playwright.testbed.config.ts,
+// started by TestFirstStartInTheBrowserUntilADiscoveredDevice. Chromium runs without its sandbox:
+// the devcontainer is unprivileged and runs as root.
 export default defineConfig({
   testDir: 'e2e',
   webServer: {

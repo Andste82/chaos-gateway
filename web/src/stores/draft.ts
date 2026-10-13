@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
 import type { AccessRule, ConfigFault, Configuration, ConfigurationPatch, Device, RevisionWithConfiguration } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
-import { cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
+import { applyMergePatch, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
 import { ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
@@ -276,18 +276,43 @@ export const useDraftStore = defineStore('draft', () => {
 
   /**
    * Reapplies the draft on another revision (the concurrent-change dialog's "reload and reapply"):
-   * the edited objects as the draft has them, deletions of what is still there, and the order the
-   * draft had with the rules the other revision added kept where it put them.
+   * my change of an object (a merge patch against the old base) on their version of it, so a field
+   * only they changed keeps their value and a field both changed takes mine; an object they removed
+   * comes back as I have it; deletions of what is still there; and the order the draft had with the
+   * rules the other revision added kept where it put them.
    */
   function rebase(rev: RevisionWithConfiguration) {
     const theirOrder = rev.configuration.access_rule_order ?? [];
     const theirRules = rev.configuration.access_rules ?? {};
+    const theirFaults = rev.configuration.faults ?? {};
+    const theirDevices = rev.configuration.devices ?? {};
     const mine = order.value;
+    const old = baseConfig.value;
+    function reapply<T>(edits: Record<string, T | null>, before: Record<string, T>, theirs: Record<string, T>): Record<string, T | null> {
+      const out: Record<string, T | null> = {};
+      for (const [id, m] of Object.entries(edits)) {
+        if (m === null) {
+          // a deletion of what is gone already drops out
+          if (id in theirs) out[id] = null;
+          continue;
+        }
+        const was = before[id];
+        const now = theirs[id];
+        if (was === undefined || now === undefined) {
+          // new on my side, or removed on theirs: mine as a whole
+          out[id] = m;
+          continue;
+        }
+        const merged = applyMergePatch(now, createMergePatch(was, m));
+        if (!jsonEqual(merged, now)) out[id] = merged;
+      }
+      return out;
+    }
     base.value = rev.id;
     baseConfig.value = rev.configuration;
-    rules.value = Object.fromEntries(Object.entries(rules.value).filter(([id, r]) => r !== null || id in theirRules));
-    faults.value = Object.fromEntries(Object.entries(faults.value).filter(([id, f]) => f !== null || id in (rev.configuration.faults ?? {})));
-    devices.value = Object.fromEntries(Object.entries(devices.value).filter(([id, dv]) => dv !== null || id in (rev.configuration.devices ?? {})));
+    rules.value = reapply(rules.value, old?.access_rules ?? {}, theirRules);
+    faults.value = reapply(faults.value, old?.faults ?? {}, theirFaults);
+    devices.value = reapply(devices.value, old?.devices ?? {}, theirDevices);
     if (mine) {
       const ids = mine.filter((id) => id in effectiveRules.value);
       theirOrder.forEach((id, i) => {

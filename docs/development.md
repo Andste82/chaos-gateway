@@ -3297,10 +3297,14 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
   is active again ("Revision 42 restored; nothing of revision 43 is active"), and the draft stays for another try.
 - **Concurrent-change dialog** (`ConflictDialog.vue`, "Concurrent change"): a base that is not the active revision any more
   (409 `revision_conflict`, at the candidate or at the apply) opens it: "Revision 43 was applied by token ci-runner while you
-  were editing (your change is based on revision 42)", their change (`GET /revisions/{active}/diff?base=42`) and the user's
-  (the draft's changes in words). "Reload and reapply mine" puts the draft on the active revision (`rebase`: the edited
-  objects as the draft has them — where both changed the same object, the user's wins —, a deletion of what is gone drops
-  out, rules they added keep their place in the order) and opens the drawer again, so the user sees the preview of the
+  were editing (your change is based on revision 42)" — when several revisions were applied since the base, all of them with
+  their authors ("Revisions 43 and 44 were applied by token ci-runner and admin", from `GET /revisions`), since the diff
+  covers them all —, their change (`GET /revisions/{active}/diff?base=42`) and the user's
+  (the draft's changes in words). "Reload and reapply mine" puts the draft on the active revision (`rebase`: the user's
+  change of each object, a merge patch against the old base, applied to their version of it, so a field only they changed
+  keeps their value and a field both changed takes the user's; an object they removed comes back as the user has it, an edit
+  they made already drops out, a deletion of what is gone drops out, rules they added keep their place in the order) and
+  opens the drawer again, so the user sees the preview of the
   combined result before anything is applied; "Discard mine" drops the draft. There is no "overwrite theirs" (plan §2.17:
   the prototype's three-way dialog is superseded).
 - **Access rules** (`src/views/RulesView.vue`, `src/components/rules/RuleEditor.vue`, `src/lib/rules.ts`). The list in
@@ -3320,8 +3324,12 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
 - **Last match** (backend, `internal/api/matches.go`). The kernel keeps no time of a rule's last match, so the API notes
   every reading of the rules' counters and gives `Counter.last_match`: the time of the first read that found the counter
   higher than the read before (a counter that started over and counts again also). The time lies between two reads; the
-  rules screen reads every 5 s. Absent until a read saw the counter grow since the gateway started. Test:
-  `TestARulesCounterSaysWhenItLastMatched` (configured, system and overlay rules).
+  rules screen reads every 5 s. Absent until a read saw the counter grow since the gateway started. Concurrent requests
+  may note their readings in any order: a reading older than the newest one noted changes nothing, and within an epoch
+  the highest reading stays, so a late one never makes the counter seem to grow again. Each read forgets the counters it
+  does not have any more (removed rules and overlays). Tests: `TestARulesCounterSaysWhenItLastMatched` (configured, system
+  and overlay rules), `TestMatchTrackerIgnoresAReadingOlderThanTheNewest`, `TestMatchTrackerKeepsTheHighestReadingOfAnEpoch`,
+  `TestMatchTrackerForgetsTheCountersThatAreGone`.
 - **Faults** (`src/views/FaultsView.vue`). Every fault grouped by family (impairment, MTU, tunnel, profiles, DNS, TLS, DHCP,
   WireGuard actions) and sorted by scope (device → group → network → remote network → everything → tunnel; at the same
   scope the overlay first), each marked OVERLAY or CONFIGURATION (with its name), with its selector, parameters as fault
@@ -3425,14 +3433,14 @@ branch with the M13 flow yet.
 |---|---|
 | Playwright — create a fault in the UI, then verify the measured effect in the testbed | `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` + `web/e2e-testbed/faults.spec.ts` (CI job `testbed-ui`); against the mocked API `faults.spec.ts` "add a fault on the device: presets, the live preview, Apply → the fault with its TTL, a toast and the API panel", "a configured fault goes through the unapplied-changes bar, the preview and the apply" |
 | validation errors are shown | `faults.spec.ts` "validation errors are shown under the fields, and Apply waits until the form is valid" (also the gateway's 422 under the field and a fault without any parameter), "a configured fault the gateway refused in a candidate is marked, and its dialog shows why", `rules.spec.ts` "validation: the message stands under the field and Preview & apply waits until the rule is valid", "the gateway's refusal of a candidate is shown in the drawer and under the field"; in the testbed flow the jitter error |
-| a conflicting change made through the API triggers the conflict dialog | `rules.spec.ts` "a conflicting change made through the API opens the conflict dialog; reload and reapply mine", "the concurrent-change dialog can discard the draft instead"; `devices.spec.ts` "adopting while the draft is based on an older revision opens the conflict dialog: reload and reapply"; in the testbed flow with a real token |
+| a conflicting change made through the API triggers the conflict dialog | `rules.spec.ts` "a conflicting change made through the API opens the conflict dialog; reload and reapply mine", "reload and reapply where both changed the same rule: their field stays, mine is added" (two revisions named with their authors), "the concurrent-change dialog can discard the draft instead"; `src/stores/draft.test.ts` "reapplies field by field where both changed the same object: …", "reapplying drops an edit that their revision made already, …", "reapplies a renamed device on theirs: …"; `devices.spec.ts` "adopting while the draft is based on an older revision opens the conflict dialog: reload and reapply"; in the testbed flow with a real token |
 | the faults screen marks an overridden fault | `faults.spec.ts` "the faults screen groups by family, sorts by scope, marks overlays and configuration, and marks an overridden fault"; in the testbed flow on the real gateway; backend `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` |
-| Scope: access-rules screen (ordered list, editor IF/THEN, counters) | `rules.spec.ts` "the ordered list: …", "editing a rule marks it CHANGED …", "add, move and delete rules …", "a deleted rule is shown struck through at its place, and Undo brings it back there", "empty: no rules yet …" |
+| Scope: access-rules screen (ordered list, editor IF/THEN, counters) | `rules.spec.ts` "the ordered list: …", "when the selected overlay rule is gone, the first rule is selected", "editing a rule marks it CHANGED …", "add, move and delete rules …", "a deleted rule is shown struck through at its place, and Undo brings it back there", "empty: no rules yet …" |
 | Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a deleted rule is shown struck through …", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation"; `faults.spec.ts` "closing the drawer while the candidate is created discards it when it arrives"; `src/stores/draft.test.ts` "edits undone by hand leave a clean draft on the newest active revision" |
-| Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
+| Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
 | Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, M12's `device-detail.spec.ts` |
-| Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` |
+| Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` (also an apostrophe in a body or header, quoted for the shell) |
 
 ## Generated code
 

@@ -6,7 +6,8 @@
 // "overwrite theirs" (plan §2.17: the prototype's three-way dialog is superseded).
 import { useQuery } from '@tanstack/vue-query';
 import { computed } from 'vue';
-import { diffRevision, getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
+import type { Actor } from '../../api/generated/model';
+import { diffRevision, getActiveRevision, listRevisions } from '../../api/generated/hooks/revisions/revisions';
 import LoadError from '../ui/LoadError.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
@@ -34,12 +35,41 @@ const theirs = useQuery({
   staleTime: 0,
 });
 
-const who = computed(() => {
-  const by = active.data.value?.created_by;
+function actor(by: Actor | undefined): string {
   if (!by) return 'someone else';
   if (by.type === 'token') return `token ${by.name ?? by.id}`;
   if (by.type === 'user') return by.name ?? by.id;
   return by.name ?? by.type;
+}
+const who = computed(() => actor(active.data.value?.created_by));
+
+/** More than one revision may have come after the base: the diff covers them all, so all are named. */
+const several = computed(() => !!active.data.value && active.data.value.id - props.base > 1);
+const between = useQuery({
+  queryKey: ['revisions', 'conflict-between', computed(() => props.base), computed(() => active.data.value?.id)],
+  queryFn: ({ signal }) => listRevisions({ limit: 100 }, { signal }),
+  enabled: computed(() => open.value && several.value),
+  staleTime: 0,
+});
+
+function list(xs: string[]): string {
+  return xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : (xs[0] ?? '');
+}
+
+const description = computed(() => {
+  const rev = active.data.value;
+  const based = `your change is based on revision ${props.base}`;
+  if (!rev) return `Another revision was applied while you were editing (${based}).`;
+  if (!several.value) return `Revision ${rev.id} was applied by ${who.value} while you were editing (${based}).`;
+  // the revisions applied after the base up to the active one (candidates that were never applied have ids too)
+  const applied = (between.data.value?.items ?? []).filter((r) => r.id > props.base && r.id <= rev.id && r.applied_at).sort((a, b) => a.id - b.id);
+  if (applied.length > 1) {
+    const ids = list(applied.map((r) => String(r.id)));
+    const authors = list([...new Set(applied.map((r) => actor(r.created_by)))]);
+    return `Revisions ${ids} were applied by ${authors} while you were editing (${based}); their change below covers them all.`;
+  }
+  if (applied.length === 1 && applied[0]!.id === rev.id) return `Revision ${rev.id} was applied by ${who.value} while you were editing (${based}).`;
+  return `Revisions up to ${rev.id} were applied while you were editing, the last by ${who.value} (${based}); their change below covers them all.`;
 });
 </script>
 
@@ -47,11 +77,7 @@ const who = computed(() => {
   <ModalDialog
     v-model:open="open"
     title="The configuration was changed"
-    :description="
-      active.data.value
-        ? `Revision ${active.data.value.id} was applied by ${who} while you were editing (your change is based on revision ${base}).`
-        : `Another revision was applied while you were editing (your change is based on revision ${base}).`
-    "
+    :description="description"
     width="600px"
   >
     <div data-testid="conflict-theirs">
@@ -72,8 +98,8 @@ const who = computed(() => {
       </ul>
     </div>
     <p class="m-0 text-[13px] text-text-2">
-      Reapplying puts your change on top of revision {{ active.data.value?.id ?? 'the new revision' }}; where both changed the same object, yours
-      wins. You see the preview before anything is applied.
+      Reapplying puts your change on top of revision {{ active.data.value?.id ?? 'the new revision' }}: what only they changed stays as they made
+      it, and where both changed the same field of an object, yours wins. You see the preview before anything is applied.
     </p>
     <p v-if="error" class="field-error" role="alert">{{ error }}</p>
     <template #footer>

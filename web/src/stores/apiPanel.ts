@@ -40,13 +40,18 @@ export const useApiPanelStore = defineStore('apiPanel', () => {
   return { open, context, draft, last, record, screen };
 });
 
+/** A word in single quotes for a POSIX shell: an apostrophe in it ends the quote, is escaped and reopens it. */
+function shellQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 /** The request as curl, with an API token from the environment. */
 export function curlOf(c: ApiCall, origin = typeof location !== 'undefined' ? location.origin : 'https://gateway'): string {
-  const parts = [`curl -X ${c.method} '${origin}${API_BASE}${c.path}'`, `-H "Authorization: Bearer $CHAOSGW_TOKEN"`];
-  for (const [k, v] of Object.entries(c.headers ?? {})) parts.push(`-H '${k}: ${v}'`);
+  const parts = [`curl -X ${c.method} ${shellQuote(origin + API_BASE + c.path)}`, `-H "Authorization: Bearer $CHAOSGW_TOKEN"`];
+  for (const [k, v] of Object.entries(c.headers ?? {})) parts.push(`-H ${shellQuote(`${k}: ${v}`)}`);
   if (c.body !== undefined) {
     if (!c.headers?.['Content-Type']) parts.push(`-H 'Content-Type: application/json'`);
-    parts.push(`-d '${JSON.stringify(c.body)}'`);
+    parts.push(`-d ${shellQuote(JSON.stringify(c.body))}`);
   }
   return parts.join(' \\\n  ');
 }

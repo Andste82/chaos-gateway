@@ -778,8 +778,8 @@ stayed open".
 - Severity: low
 - Reason: plan-error (small contradiction). M13 Scope and the introduction of plan §2.17 name "reload and reapply"; the
   states table of §2.17 lists "reload and reapply mine · discard mine". The dialog offers both and never "overwrite theirs".
-  Reapplying keeps the user's version of an object both changed and shows the combined result in the preview before
-  anything is applied.
+  Reapplying keeps the other side's fields and the user's where both changed the same field (P3-M13-07), and shows the
+  combined result in the preview before anything is applied.
 - Evidence: `web/src/components/apply/ConflictDialog.vue`, `web/src/stores/draft.ts` (`rebase`).
 - Task: implemented — both buttons. Confirm, or drop "Discard mine" (the bar's Discard does the same afterwards).
 - Acceptance: the decision is recorded here; the plan's two sentences say the same.
@@ -850,5 +850,22 @@ stayed open".
   in the API). Recommendation: (a) and (c), with the dialog listing the overlay's own TTL when it is not one of its choices.
 - Acceptance: the decision is recorded here; with (b), a Playwright test shows another owner's overlay without Edit; with
   (d), a test edits a fault and keeps its expiry.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M13-07 "Reload and reapply mine" takes the user's value of a field both sides changed
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.17 says only "reload and reapply mine". Reapplying merges field by field: the user's
+  change of an object (a merge patch against the old base) is applied to the other side's version, so their fields stay and
+  a field both changed takes the user's value. The dialog shows both changes and the preview shows the combined result, but
+  it does not name the fields both sides changed.
+- Evidence: `web/src/stores/draft.ts` (`rebase`), `web/src/components/apply/ConflictDialog.vue`, `src/stores/draft.test.ts`
+  "reapplies field by field where both changed the same object: …", `rules.spec.ts` "reload and reapply where both changed
+  the same rule: their field stays, mine is added".
+- Task: implemented — the user's value wins per field. Options: (a) keep it; (b) the dialog names the fields both sides
+  changed (their value → mine) before reapplying. Recommendation: (a), with (b) when users report surprises.
+- Acceptance: the decision is recorded here; with (b), a Playwright test shows a field both changed in the dialog.
 - Needs maintainer: yes
 - Effort: S

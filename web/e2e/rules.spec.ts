@@ -53,6 +53,19 @@ test('the ordered list: the system rule locked at the top, overlay rules before 
   await expect(page.getByRole('button', { name: 'Remove overlay rule' })).toBeVisible();
 });
 
+test('when the selected overlay rule is gone, the first rule is selected', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(1).getByRole('button').first().click();
+  await expect(page.getByText('Set by the token ci-runner for Network IoT')).toBeVisible();
+  // it expires
+  const gone = gw.overlays.find((o) => o.kind === 'rule')!;
+  gw.overlays = gw.overlays.filter((o) => o.id !== gone.id);
+  await gw.emit(page, { type: 'overlay_expired', subject: { kind: 'overlay', id: gone.id, name: 'rule' } });
+  await expect(rows(page)).toHaveCount(4);
+  await expect(page.getByTestId('rule-matches')).toContainText('18 342 hits');
+  await expect(page.getByText('Select a rule to see it here.')).toHaveCount(0);
+});
+
 test('editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back', async ({ page }) => {
   const gw = await open(page);
   await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
@@ -280,6 +293,35 @@ test('a conflicting change made through the API opens the conflict dialog; reloa
   expect(gw.config.access_rules?.[RULE_WEB]?.enabled).toBe(false);
   expect(gw.config.access_rules?.[RULE_DNS]?.action).toBe('reject');
   await expect(rows(page).nth(4)).toContainText('disabled');
+});
+
+test('reload and reapply where both changed the same rule: their field stays, mine is added', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  await page.getByTestId('rule-editor').getByRole('group', { name: 'Access' }).getByRole('button', { name: 'Reject' }).click();
+  await expect(bar(page)).toHaveText(/1 change in 1 rule/);
+
+  // meanwhile two revisions through the API: a token disables the same rule, then admin changes nothing
+  gw.applyFromApi({ access_rules: { [RULE_DNS]: { enabled: false } } }, { type: 'token', id: 't1', name: 'ci-runner' }, []);
+  gw.applyFromApi({}, { type: 'user', id: 'admin', name: 'admin' }, [
+    { op: 'changed', kind: 'access_rule', id: RULE_DNS, name: 'no-dns', path: `/access_rules/${RULE_DNS}`, summary: 'access rule no-dns: enabled true → false' },
+  ]);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  // the diff covers both revisions, so both are named with their authors
+  await expect(conflict).toContainText(
+    'Revisions 43 and 44 were applied by token ci-runner and admin while you were editing (your change is based on revision 42); their change below covers them all.',
+  );
+  await expect(conflict).toContainText('what only they changed stays as they made it, and where both changed the same field of an object, yours wins');
+  await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 45' });
+  await expect(drawer).toContainText('Based on revision 44.');
+  // only my field: their enabled:false is not set back
+  const posts = gw.requestsTo('POST', '/revisions');
+  expect(posts[1]!.body).toEqual({ access_rules: { [RULE_DNS]: { action: 'reject' } } });
+  await drawer.getByRole('button', { name: 'Apply revision 45' }).click();
+  await expect(toast(page, 'Revision 45 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.config.access_rules?.[RULE_DNS]).toMatchObject({ action: 'reject', enabled: false });
 });
 
 test('the concurrent-change dialog can discard the draft instead', async ({ page }) => {

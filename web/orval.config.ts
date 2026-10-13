@@ -14,7 +14,11 @@ export default defineConfig({
       target: 'src/api/generated/hooks',
       schemas: 'src/api/generated/model',
       client: 'vue-query',
-      override: { mutator: { path: 'src/api/fetcher.ts', name: 'customFetch' } },
+      override: {
+        mutator: { path: 'src/api/fetcher.ts', name: 'customFetch' },
+        // the hooks return the body; errors are thrown as ApiError by the fetcher
+        fetch: { includeHttpResponseReturnType: false },
+      },
     },
   },
   apiZod: {

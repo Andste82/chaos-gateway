@@ -5,18 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "generate": "orval --config orval.config.ts",
+    "prebuild": "npm run generate",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit",
+    "pretypecheck": "npm run generate",
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.node.json",
+    "pretest": "npm run generate",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "generate": "orval --config orval.config.ts"
+    "test:e2e:testbed": "playwright test --config playwright.testbed.config.ts"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
     "@tanstack/vue-query": "5.104.1",
     "pinia": "4.0.3",
     "reka-ui": "2.10.5",
+    "uplot": "1.6.32",
     "vue": "3.5.43",
+    "vue-router": "5.4.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

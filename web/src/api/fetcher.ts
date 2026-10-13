@@ -1,21 +1,118 @@
 // Shared fetch wrapper for the generated Vue Query hooks: same-origin API under /api/v1,
-// session cookie for authentication, RFC 9457 problem+json errors.
+// session cookie for authentication with the CSRF header on unsafe methods, RFC 9457
+// problem+json errors. It also tells the app whether the backend answers at all (offline state,
+// plan §2.17) and when a session ended (back to the login page).
+
+export const API_BASE = '/api/v1';
+
+export interface Problem {
+  code?: string;
+  title?: string;
+  detail?: string;
+  status?: number;
+  errors?: { path?: string; code?: string; message?: string }[];
+}
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    readonly problem: { code?: string; title?: string; detail?: string } | undefined,
+    readonly problem: Problem | undefined,
   ) {
     super(problem?.detail ?? problem?.title ?? `HTTP ${status}`);
   }
+
+  get code(): string | undefined {
+    return this.problem?.code;
+  }
 }
 
-export const customFetch = async <T>(url: string, options: RequestInit): Promise<T> => {
-  const response = await fetch(url, { credentials: 'same-origin', ...options });
+/** The request did not reach the gateway (network down, gateway stopped, proxy without backend). */
+export class UnreachableError extends Error {
+  constructor(cause?: unknown) {
+    super('the gateway does not answer', { cause });
+  }
+}
+
+type Listener = () => void;
+const reachableListeners = new Set<Listener>();
+const unreachableListeners = new Set<Listener>();
+const unauthorizedListeners = new Set<Listener>();
+
+function subscribe(set: Set<Listener>, fn: Listener): () => void {
+  set.add(fn);
+  return () => set.delete(fn);
+}
+
+/** fn runs after every request the gateway answered. */
+export const onReachable = (fn: Listener) => subscribe(reachableListeners, fn);
+/** fn runs after every request that did not reach the gateway. */
+export const onUnreachable = (fn: Listener) => subscribe(unreachableListeners, fn);
+/** fn runs when a request that needed a session was refused with 401: the session is gone. */
+export const onUnauthorized = (fn: Listener) => subscribe(unauthorizedListeners, fn);
+
+let csrfToken: string | undefined;
+
+/** The CSRF token of the session (GET /auth/session); sent as X-CSRF-Token on unsafe methods. */
+export function setCsrfToken(token: string | undefined): void {
+  csrfToken = token;
+}
+
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+// the endpoints where a 401 is an answer about the credentials sent, not an ended session
+const credentialPaths = ['/auth/login', '/auth/session', '/setup'];
+
+function emit(set: Set<Listener>): void {
+  for (const fn of set) fn();
+}
+
+export const customFetch = async <T>(url: string, options: RequestInit = {}): Promise<T> => {
+  const full = url.startsWith(API_BASE + '/') ? url : API_BASE + url;
+  const method = (options.method ?? 'GET').toUpperCase();
+  const init: RequestInit = { credentials: 'same-origin', ...options };
+  const needsType = typeof options.body === 'string' && !new Headers(options.headers).has('Content-Type');
+  if ((!safeMethods.has(method) && csrfToken) || needsType) {
+    // a generated call with two request types (createRevision) sets none: JSON unless told otherwise
+    const headers = new Headers(options.headers);
+    if (needsType) headers.set('Content-Type', 'application/json');
+    if (!safeMethods.has(method) && csrfToken) headers.set('X-CSRF-Token', csrfToken);
+    init.headers = headers;
+  }
+  let response: Response;
+  try {
+    response = await fetch(full, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    emit(unreachableListeners);
+    throw new UnreachableError(e);
+  }
+  // a gateway (proxy) error without the API behind it is no answer of the API
+  if (response.status === 502 || response.status === 504) {
+    emit(unreachableListeners);
+    throw new UnreachableError(`HTTP ${response.status}`);
+  }
+  emit(reachableListeners);
   const text = await response.text();
-  const body = text ? JSON.parse(text) : undefined;
+  let body: unknown;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text;
+    }
+  }
   if (!response.ok) {
-    throw new ApiError(response.status, body);
+    const problem = typeof body === 'object' && body !== null ? (body as Problem) : undefined;
+    if (response.status === 401 && !credentialPaths.some((p) => full.startsWith(API_BASE + p))) {
+      emit(unauthorizedListeners);
+    }
+    throw new ApiError(response.status, problem);
   }
   return body as T;
 };
+
+/** The message to show for an error of a request. */
+export function errorMessage(e: unknown): string {
+  if (e instanceof ApiError || e instanceof UnreachableError) return e.message;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}

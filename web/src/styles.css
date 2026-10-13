@@ -1,4 +1,10 @@
 @import 'tailwindcss';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import 'uplot/dist/uPlot.min.css';
 
 /* Visual tokens of plan §2.17. Blue = as configured, orange = impaired, red = blocked or failed. */
 @theme {
@@ -22,12 +28,140 @@
   --color-block-border: #6b2e2e;
   --color-block-tint: #2b1717;
   --color-block-text: #ffb3b3;
+  /* status dots that are neither normal, impaired nor failed */
+  --color-offline: #4a5461;
+  --color-unknown: #d9dee5;
+  --color-probe: #c9a6ff;
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --radius-card: 10px;
+  --radius-control: 6px;
 }
 
-body {
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-sans);
+/* in the base layer, so that a component's utilities (a nav link's colour) win over these */
+@layer base {
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+  }
+
+  a {
+    color: var(--color-accent-text);
+  }
+  a:hover {
+    color: #b8dbff;
+  }
+
+  /* the focus ring of plan §2.17 (accessibility): accent, 2 px, on every focusable control */
+  :where(button, a, input, select, textarea, [tabindex], [role='switch']):focus-visible {
+    outline: 2px solid var(--color-accent-text);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* card: 10 px radius, surface, border */
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+    padding: 18px 20px;
+  }
+  .card-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-2);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  /* controls: 6 px radius, 34-38 px high */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none;
+  }
+  .btn:hover:not(:disabled) {
+    background: #1f2630;
+    color: var(--color-text);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    border: 0;
+    background: var(--color-accent);
+    color: #0b0d11;
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: #8cc4ff;
+    color: #0b0d11;
+  }
+  .btn-sm {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  .input {
+    height: 36px;
+    width: 100%;
+    padding: 0 12px;
+    box-sizing: border-box;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 14px;
+  }
+  .input[aria-invalid='true'] {
+    border-color: var(--color-block-border);
+  }
+  .label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--color-text-2);
+  }
+  .field-error {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--color-block-text);
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
+  /* table row: 48-50 px, hover raises it */
+  .data-head {
+    font-size: 12px;
+    color: var(--color-text-3);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .data-row {
+    border-bottom: 1px solid #1e252e;
+    min-height: 48px;
+  }
+  .data-row:hover {
+    background: var(--color-surface-2);
+  }
+  /* live data of a page whose backend is unreachable (plan §2.17, offline state) */
+  .stale {
+    opacity: 0.45;
+    filter: grayscale(0.6);
+  }
 }

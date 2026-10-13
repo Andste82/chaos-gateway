@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 )
@@ -265,5 +266,60 @@ func TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes(t *testing.T)
 	} else if _, ok := r.json(t)["rules"]; !ok {
 		// the overlay's rule remains: it is not a rule of the revision
 		t.Errorf("the overlay's rule is missing: %s", r.Body)
+	}
+}
+
+// M13 (the rule editor's matches box): a rule's counter says when it was last seen growing. The first
+// read knows nothing of the time before it; a read that finds the counter higher gives the time.
+func TestARulesCounterSaysWhenItLastMatched(t *testing.T) {
+	g := ready(t)
+	if r := g.apply(g.mustPatch(rulesPatch())); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	counters := func() (rule, system map[string]any) {
+		t.Helper()
+		body := g.do("GET", "/rules", nil, nil, nil).json(t)
+		rule = body["items"].([]any)[0].(map[string]any)["counters"].(map[string]any)
+		system = body["system_rules"].([]any)[0].(map[string]any)["counters"].(map[string]any)
+		return rule, system
+	}
+	if c, sys := counters(); c["last_match"] != nil || sys["last_match"] != nil {
+		t.Fatalf("a counter that was not seen growing has a last match: %v %v", c, sys)
+	}
+	if c, _ := counters(); c["last_match"] != nil {
+		t.Fatalf("a counter that did not grow has a last match: %v", c)
+	}
+	before := time.Now().Add(-time.Second)
+	cr, ok := g.e.Snapshot().Access.Rule("config:" + ruleB)
+	if !ok {
+		t.Fatal("the rule is not compiled")
+	}
+	g.k.BumpCounter(cr.Counter, 3)
+	g.k.BumpCounter(compiler.AntiLockoutRule.Counter, 2)
+	c, sys := counters()
+	at, err := time.Parse(time.RFC3339Nano, fmt.Sprint(c["last_match"]))
+	if err != nil || at.Before(before) || at.After(time.Now()) || c["packets"] != float64(3) {
+		t.Errorf("after a match: %v (%v)", c, err)
+	}
+	if sys["last_match"] == nil {
+		t.Errorf("the system rule's counter grew: %v", sys)
+	}
+	// it stays when the counter does not grow, and the overlay rules' counters have it too
+	if again, _ := counters(); again["last_match"] != c["last_match"] {
+		t.Errorf("the last match moved without a match: %v, before %v", again["last_match"], c["last_match"])
+	}
+	g.mintToken("overlays")
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"rule":{"protocol":"udp","ports":[5353],"action":"drop"}}`)
+	or, ok := g.e.Snapshot().Access.Rule("overlay:" + ov["id"].(string))
+	if !ok {
+		t.Fatal("the overlay rule is not compiled")
+	}
+	path := "/overlays/" + ov["id"].(string)
+	if got := g.do("GET", path, nil, nil, nil).json(t)["counters"].(map[string]any); got["last_match"] != nil {
+		t.Errorf("a new overlay rule: %v", got)
+	}
+	g.k.BumpCounter(or.Counter, 1)
+	if got := g.do("GET", path, nil, nil, nil).json(t)["counters"].(map[string]any); got["last_match"] == nil {
+		t.Errorf("an overlay rule that matched: %v", got)
 	}
 }

@@ -25,7 +25,11 @@ func (oc overlayContext) ruleCounter(r compiler.AccessRule) *model.Counter {
 	if !ok {
 		return nil
 	}
-	return &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.RuleEpochs[r.Key]}
+	c := &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.RuleEpochs[r.Key]}
+	if oc.matched != nil {
+		c.LastMatch = oc.matched(r.Counter, c.Packets, c.Epoch)
+	}
+	return c
 }
 
 // systemRules are the rules the gateway adds that no rule or overlay can override, with their counters.
@@ -34,6 +38,9 @@ func (oc overlayContext) systemRules() []model.SystemAccessRule {
 	sr := model.SystemAccessRule{Key: r.Key, Name: r.Name, Description: r.Description}
 	if v, ok := oc.counters[r.Counter]; ok && oc.counters != nil {
 		sr.Counters = &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.CounterEpoch}
+		if oc.matched != nil {
+			sr.Counters.LastMatch = oc.matched(r.Counter, v.Packets, oc.snap.CounterEpoch)
+		}
 	}
 	return []model.SystemAccessRule{sr}
 }

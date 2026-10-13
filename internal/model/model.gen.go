@@ -3137,8 +3137,15 @@ type Counter struct {
 	Bytes int64 `json:"bytes"`
 
 	// Epoch Changes when counters restart (reboot, recreated object).
-	Epoch   int64 `json:"epoch"`
-	Packets int64 `json:"packets"`
+	Epoch int64 `json:"epoch"`
+
+	// LastMatch Access rules only (configured, overlay and system rules): when the gateway first read the
+	// counter higher than at the read before. The kernel keeps no time of the last match, so
+	// the time lies between two reads of the counter (every list or view of the rules reads it;
+	// the UI does so every 5 s while the rules are shown). Absent until a read has seen the
+	// counter grow since the gateway started.
+	LastMatch *time.Time `json:"last_match,omitempty"`
+	Packets   int64      `json:"packets"`
 }
 
 // DelayDistribution defines model for DelayDistribution.
@@ -4537,6 +4544,12 @@ type Overlay struct {
 	// Lease The owner must renew the overlay within this interval (`POST /overlays/{id}/renew`).
 	Lease          *Duration  `json:"lease,omitempty"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+
+	// OverriddenBy For a fault or profile overlay that is `overridden` or `partially_overridden`, the faults
+	// that beat it (the winners over the devices of its target at a destination and port it
+	// selects), as `FaultView.overridden_by` gives them for a configured fault. A profile is
+	// counted per part: the winners of the families its parts compete in.
+	OverriddenBy *[]FaultRef `json:"overridden_by,omitempty"`
 
 	// Owner Owner of an overlay - `user`, `token` or `run`.
 	Owner Owner `json:"owner"`

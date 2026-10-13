@@ -1,8 +1,11 @@
 // Live updates (plan §2.17, §3.7): the gateway's Server-Sent Events invalidate the cached server
 // data, so every screen refetches what an event changed. The stream sends named events (`event:
-// <type>`), so each type gets its own listener. The browser reconnects by itself and sends
-// Last-Event-ID, so the gateway replays what was missed; `events_lost` says it cannot, and then
-// everything is refetched.
+// <type>`), so each type gets its own listener. After a network error the browser reconnects by
+// itself and sends Last-Event-ID, so the gateway replays what was missed; `events_lost` says it
+// cannot, and then everything is refetched. An answer that is not a stream (a 503 "too many event
+// streams", a 502 of a proxy while the gateway restarts) ends the EventSource for good: then a new
+// one is opened after a growing pause, and since it sends no Last-Event-ID, everything is
+// refetched once it is open.
 import type { QueryClient } from '@tanstack/vue-query';
 import { API_BASE } from '../api/fetcher';
 import { EventType, type Event as GatewayEvent } from '../api/generated/model';
@@ -43,8 +46,14 @@ export interface EventSourceLike {
   addEventListener(type: string, listener: (e: MessageEvent) => void): void;
   onopen: ((this: EventSource, ev: Event) => unknown) | null;
   onerror: ((this: EventSource, ev: Event) => unknown) | null;
+  /** 0 connecting, 1 open, 2 closed (the browser gave up: no reconnect of its own follows). */
+  readonly readyState: number;
   close(): void;
 }
+
+const CLOSED = 2;
+/** The pause before a new stream after the browser gave one up: doubling from the first to the last. */
+export const reopenDelayMs = { first: 2_000, max: 30_000 };
 
 function subjectName(ev: GatewayEvent): string {
   return ev.subject?.name ?? ev.subject?.id ?? '';
@@ -86,8 +95,11 @@ export function startEventStream(
   const connection = useConnectionStore();
   const events = useEventStore();
   const toasts = useToastStore();
-  const es = open(`${API_BASE}/events`);
+  let es: EventSourceLike | undefined;
   let opened = false;
+  let stopped = false;
+  let delay = reopenDelayMs.first;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   const handle = (msg: MessageEvent) => {
     let ev: GatewayEvent;
@@ -107,23 +119,38 @@ export function startEventStream(
     }
     toast(ev, toasts);
   };
-  for (const type of Object.values(EventType)) {
-    es.addEventListener(type, handle);
-  }
-  es.onopen = () => {
-    connection.streamOpen = true;
-    connection.answered();
-    // after a reconnect the replay covers the gap, but data fetched while offline may be stale
-    if (opened) void queryClient.invalidateQueries();
-    opened = true;
+  const connect = () => {
+    timer = undefined;
+    const source = open(`${API_BASE}/events`);
+    es = source;
+    for (const type of Object.values(EventType)) {
+      source.addEventListener(type, handle);
+    }
+    source.onopen = () => {
+      connection.streamOpen = true;
+      connection.answered();
+      delay = reopenDelayMs.first;
+      // after a reconnect the replay covers the gap, but data fetched while offline may be stale;
+      // a new stream after one the browser gave up replays nothing
+      if (opened) void queryClient.invalidateQueries();
+      opened = true;
+    };
+    source.onerror = () => {
+      connection.streamOpen = false;
+      // the stream ending is not proof the gateway is gone: ask it (the fetch reports either way)
+      void queryClient.refetchQueries({ queryKey: ['state'] });
+      if (source.readyState === CLOSED && !stopped && timer === undefined) {
+        source.close();
+        timer = setTimeout(connect, delay);
+        delay = Math.min(delay * 2, reopenDelayMs.max);
+      }
+    };
   };
-  es.onerror = () => {
-    connection.streamOpen = false;
-    // the stream ending is not proof the gateway is gone: ask it (the fetch reports either way)
-    void queryClient.refetchQueries({ queryKey: ['state'] });
-  };
+  connect();
   return () => {
-    es.close();
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+    es?.close();
     connection.streamOpen = false;
   };
 }

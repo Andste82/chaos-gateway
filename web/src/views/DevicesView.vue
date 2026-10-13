@@ -9,9 +9,10 @@ import PageHeader from '../components/layout/PageHeader.vue';
 import AppIcon from '../components/ui/AppIcon.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
+import LoadError from '../components/ui/LoadError.vue';
 import SegmentedControl from '../components/ui/SegmentedControl.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { useGatewayState, useNames } from '../composables/gateway';
+import { firstError, useGatewayState, useNames } from '../composables/gateway';
 import { compareDevices, deviceFaults, deviceStatus, isAdopted, matchesFilter, matchesSearch, type DeviceFilter } from '../lib/devices';
 import { formatByteRate } from '../lib/format';
 import { useConnectionStore } from '../stores/connection';
@@ -24,6 +25,7 @@ const router = useRouter();
 const search = ref('');
 const filter = ref<DeviceFilter>('all');
 
+const devicesError = computed(() => firstError(devices));
 const all = computed(() => [...(devices.data.value ?? [])].sort(compareDevices));
 const filters: { value: DeviceFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -66,6 +68,9 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
 
   <section aria-label="Device list" class="card min-h-0 flex-1 overflow-hidden p-0" data-testid="device-list">
     <p v-if="devices.isLoading.value" class="m-0 p-4 text-sm text-text-2">Loading devices…</p>
+    <div v-else-if="devicesError" class="p-4">
+      <LoadError :error="devicesError" what="The devices are not loaded" :retry="devices.refetch" />
+    </div>
     <div v-else-if="all.length === 0" class="p-4">
       <EmptyState text="No devices yet. A device appears here as soon as it gets a DHCP lease or sends traffic through the gateway.">
         <RouterLink to="/" class="btn">Back to the overview</RouterLink>

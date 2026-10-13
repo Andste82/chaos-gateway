@@ -5,11 +5,20 @@ import { computed } from 'vue';
 import { useGetUplink } from '../../api/generated/hooks/config/config';
 import type { NetworkView } from '../../api/generated/model';
 import type { ActiveFault } from '../../composables/gateway';
+import { errorMessage } from '../../api/fetcher';
 import { subnetOf } from '../../lib/format';
 import SectionCard from '../ui/SectionCard.vue';
 import StatusDot from '../ui/StatusDot.vue';
 
-const props = defineProps<{ networks: NetworkView[]; deviceCounts: Map<string, number>; faults: ActiveFault[] }>();
+const props = defineProps<{
+  networks: NetworkView[];
+  /** The networks could not be loaded: the card must not say there are none. */
+  networksError?: unknown;
+  deviceCounts: Map<string, number>;
+  faults: ActiveFault[];
+  /** The faults could not be loaded: their count is unknown. */
+  faultsError?: unknown;
+}>();
 
 const uplink = useGetUplink();
 
@@ -54,13 +63,26 @@ const up = computed(() => uplink.data.value?.status);
           <div class="mt-1.5 text-[13px] text-text-2">{{ b.meta }}</div>
           <StatusDot v-if="b.degraded" class="mt-1" tone="block" label="degraded: a port is missing" />
         </div>
-        <div v-if="boxes.length === 0" class="w-[210px] rounded-lg border border-dashed border-border-strong px-3.5 py-3 text-[13px] text-text-2">
+        <div
+          v-if="boxes.length === 0 && networksError"
+          class="w-[210px] rounded-lg border border-dashed border-block-border px-3.5 py-3 text-[13px] text-block-text"
+          data-testid="topology-networks-error"
+        >
+          Networks not loaded: {{ errorMessage(networksError) }}
+        </div>
+        <div v-else-if="boxes.length === 0" class="w-[210px] rounded-lg border border-dashed border-border-strong px-3.5 py-3 text-[13px] text-text-2">
           No test network
         </div>
       </div>
       <div class="relative mx-3 h-0.5 flex-1 bg-border-strong">
         <span
-          v-if="faultCount > 0"
+          v-if="faultsError"
+          class="absolute -top-3.5 left-1/2 h-[26px] -translate-x-1/2 rounded-full border border-border-strong bg-surface-2 px-2.5 text-xs leading-[26px] whitespace-nowrap text-text-2"
+          data-testid="path-fault-badge"
+          >faults unknown</span
+        >
+        <span
+          v-else-if="faultCount > 0"
           class="absolute -top-3.5 left-1/2 h-[26px] -translate-x-1/2 rounded-full border border-fault-border bg-fault-tint px-2.5 text-xs leading-[26px] whitespace-nowrap text-fault-text"
           data-testid="path-fault-badge"
           >↑↓ {{ faultCount }} {{ faultCount === 1 ? 'fault' : 'faults' }} on the path</span
@@ -69,8 +91,11 @@ const up = computed(() => uplink.data.value?.status);
       <div class="w-[250px] rounded-lg border border-[#3a4552] bg-surface-2 px-4 py-3.5">
         <div class="text-[15px] font-semibold">Chaos Gateway</div>
         <div class="mt-1.5 text-[13px] leading-relaxed text-text-2">
-          {{ networks.length }} {{ networks.length === 1 ? 'network' : 'networks' }} · {{ faultCount }}
-          {{ faultCount === 1 ? 'fault' : 'faults' }}
+          <template v-if="networksError && !networks.length">networks unknown</template>
+          <template v-else>{{ networks.length }} {{ networks.length === 1 ? 'network' : 'networks' }}</template>
+          ·
+          <template v-if="faultsError">faults unknown</template>
+          <template v-else>{{ faultCount }} {{ faultCount === 1 ? 'fault' : 'faults' }}</template>
           <template v-for="p in profiles" :key="p.id"><br />{{ p.chips[0] }} on {{ p.target }}</template>
         </div>
       </div>

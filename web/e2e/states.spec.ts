@@ -152,3 +152,39 @@ test('expiring overlays: the fault leaves the list and a toast says so', async (
   await expect(page.getByTestId('active-fault')).toHaveCount(2, { timeout: 2_000 });
   await expect(page.getByTestId('faults-counter')).toHaveText('2 faults active');
 });
+
+test('a list the gateway did not deliver says so and does not claim to be empty', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.failing = { '/overlays': 500, '/networks': 500 };
+  await gw.install(page);
+  await page.goto('/');
+  const card = page.locator('#active-faults');
+  await expect(card.getByTestId('load-error')).toContainText('The active faults are not loaded: the gateway failed to read /overlays.');
+  await expect(page.getByText(/unimpaired/)).toHaveCount(0);
+  await expect(card.getByTestId('empty-state')).toHaveCount(0);
+  await expect(page.getByTestId('faults-counter')).toHaveText('Faults unknown');
+  await expect(page.getByTestId('path-fault-badge')).toHaveText('faults unknown');
+  await expect(page.getByTestId('topology-networks-error')).toContainText('Networks not loaded');
+
+  // the gateway answers again: Try again loads the list
+  gw.failing = {};
+  await card.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('active-fault')).toHaveCount(3);
+  await expect(page.getByTestId('faults-counter')).toHaveText('3 faults active');
+});
+
+test('devices and a device the gateway did not deliver: an error, not an empty list or a blank page', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.failing = { '/devices': 500, '/devices/a1b2c3d4-0000-4000-8000-000000000042': 500 };
+  await gw.install(page);
+  await page.goto('/devices');
+  const list = page.getByTestId('device-list');
+  await expect(list.getByTestId('load-error')).toContainText('The devices are not loaded: the gateway failed to read /devices.');
+  await expect(list.getByTestId('empty-state')).toHaveCount(0);
+
+  await page.goto('/devices/a1b2c3d4-0000-4000-8000-000000000042');
+  await expect(page.getByTestId('load-error')).toContainText('The device is not loaded');
+  gw.failing = {};
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('heading', { name: 'ESP32-42' })).toBeVisible();
+});

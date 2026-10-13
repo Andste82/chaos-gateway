@@ -11,13 +11,17 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await expect(page).toHaveURL(/\/setup$/);
   await expect(page.getByRole('heading', { name: 'Set up Chaos Gateway' })).toBeVisible();
 
-  // step 1: the token is required; the preflight shows its warning with the fix
-  await page.getByRole('button', { name: 'Next' }).click();
+  // step 1: the token is required; the preflight shows its warning with the fix. Validation (plan
+  // §2.17): the message under the field, the button disabled until the step is valid
+  const next = page.getByRole('button', { name: 'Next' });
+  await next.click();
   await expect(page.getByText('Enter the setup token from the container log.')).toBeVisible();
+  await expect(next).toBeDisabled();
   await expect(page.getByTestId('preflight')).toContainText('sch_netem is not loaded yet');
   await expect(page.getByTestId('preflight')).toContainText('modules-load.d');
   await page.getByLabel('Setup token').fill('wrong-token');
-  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('Enter the setup token from the container log.')).toHaveCount(0);
+  await next.click();
 
   // step 2: uplink suggested from the default route, management an addressed other interface
   await expect(page.getByLabel('Uplink (towards the Internet)')).toHaveValue('eth0');
@@ -29,13 +33,14 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await page.getByLabel('Uplink (towards the Internet)').selectOption('eth1');
   await page.getByLabel('Management (where you reach the UI)').selectOption('eth1');
   await page.getByLabel(/Router on the uplink/).fill('10.0.0.1');
-  await page.getByRole('button', { name: 'Next' }).click();
+  // once the step's button was pressed, the messages follow every change
   await expect(page.getByText("The router must be in the uplink's network (192.168.56.10/24).")).toBeVisible();
+  await expect(next).toBeDisabled();
   await page.getByLabel('Uplink (towards the Internet)').selectOption('eth0');
   await page.getByLabel('Management (where you reach the UI)').selectOption('eth1');
   await page.getByLabel(/Router on the uplink/).fill('');
-  await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('Assign at least one interface to a test network.')).toBeVisible();
+  await expect(next).toBeDisabled();
   await page.getByRole('checkbox', { name: /eth2/ }).check();
   await page.getByRole('checkbox', { name: /eth3/ }).check();
   // eth3 is configured by netplan: the hint says how to free it
@@ -54,10 +59,12 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('Letters, digits, dot, dash and underscore')).toBeVisible();
   await expect(page.getByText('This prefix overlaps the uplink or the management network.')).toBeVisible();
+  await expect(next).toBeDisabled();
   await page.getByLabel('Network name').fill('IoT');
   await page.getByLabel('Gateway address').fill('10.10.0.0/24');
-  await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('This is the network or broadcast address')).toBeVisible();
+  await expect(page.getByText('Letters, digits, dot, dash and underscore')).toHaveCount(0);
+  await expect(next).toBeDisabled();
   await page.getByLabel('Gateway address').fill('10.10.0.1/24');
   await expect(page.getByRole('switch', { name: 'DHCP on eth2' })).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: 'Next' }).click();
@@ -68,8 +75,8 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await expect(page.getByRole('alert').filter({ hasText: 'At least 12 characters.' })).toBeVisible();
   await page.getByLabel('Admin password').fill(gw.password);
   await page.getByLabel('Repeat the password').fill(gw.password + 'x');
-  await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('The passwords differ.')).toBeVisible();
+  await expect(next).toBeDisabled();
   await page.getByLabel('Repeat the password').fill(gw.password);
   await page.getByRole('button', { name: 'Next' }).click();
 
@@ -77,7 +84,9 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await expect(page.getByTestId('setup-review')).toContainText('eth2 · 10.10.0.1/24 · DHCP on');
   await page.getByRole('button', { name: 'Apply setup' }).click();
   await expect(page.getByText('The setup token is not valid.')).toBeVisible();
+  await expect(next).toBeDisabled();
   await page.getByLabel('Setup token').fill(gw.setupToken);
+  await expect(page.getByText('The setup token is not valid.')).toHaveCount(0);
   for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next' }).click();
   await page.getByRole('button', { name: 'Apply setup' }).click();
 
@@ -174,6 +183,47 @@ test('a Confirm that comes too late learns from the gateway that it rolled back'
   await page.getByRole('button', { name: 'Confirm setup' }).click();
   await expect(page.getByText('The setup was not confirmed in time and was rolled back.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Confirm setup' })).toHaveCount(0);
+});
+
+test('after a rollback, Start again runs the wizard once more with a new token, and the choices kept', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await gw.install(page);
+  await applySetup(page, gw);
+  gw.rollBackSetup();
+  gw.setupToken = 'setup-token-5678';
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await page.getByRole('button', { name: 'Start again' }).click();
+
+  // step 1 again, the old token gone; the interface choice stays
+  await expect(page.getByRole('listitem').filter({ hasText: 'Setup token' })).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByLabel('Setup token')).toHaveValue('');
+  await page.getByLabel('Setup token').fill(gw.setupToken);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('checkbox', { name: /eth2/ })).toBeChecked();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
+  // the password is asked again
+  await expect(page.getByLabel('Admin password')).toHaveValue('');
+  await page.getByLabel('Admin password').fill(gw.password);
+  await page.getByLabel('Repeat the password').fill(gw.password);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Apply setup' }).click();
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/setup').at(-1)!.headers['x-setup-token']).toBe('setup-token-5678');
+});
+
+test('the session store follows a rollback: the app sends the browser to the setup', async ({ page }) => {
+  const gw = MockGateway.firstStart();
+  await gw.install(page);
+  await applySetup(page, gw);
+  gw.rollBackSetup();
+  await page.getByRole('button', { name: 'Confirm setup' }).click();
+  await expect(page.getByRole('button', { name: 'Start again' })).toBeVisible();
+  // a route the session would have opened goes to the setup instead
+  await page.evaluate(() => window.history.pushState({}, '', '/devices'));
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
+  await expect(page).toHaveURL(/\/setup$/);
 });
 
 test('the wizard proposes a free name and prefix for each test network', async ({ page }) => {

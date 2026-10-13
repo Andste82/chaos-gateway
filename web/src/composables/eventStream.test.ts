@@ -4,13 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConnectionStore } from '../stores/connection';
 import { useEventStore } from '../stores/events';
 import { useToastStore } from '../stores/toasts';
-import { invalidates, startEventStream, type EventSourceLike } from './eventStream';
+import { invalidates, reopenDelayMs, startEventStream, type EventSourceLike } from './eventStream';
 
 class FakeSource implements EventSourceLike {
   listeners = new Map<string, ((e: MessageEvent) => void)[]>();
   onopen: EventSourceLike['onopen'] = null;
   onerror: EventSourceLike['onerror'] = null;
   closed = false;
+  readyState = 0;
   constructor(readonly url: string) {}
   addEventListener(type: string, fn: (e: MessageEvent) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
@@ -22,9 +23,17 @@ class FakeSource implements EventSourceLike {
     for (const fn of this.listeners.get(type) ?? []) fn(new MessageEvent(type, { data: JSON.stringify({ id: '1', time: '', type, ...ev }) }));
   }
   open() {
+    this.readyState = 1;
     this.onopen?.call(this as unknown as EventSource, new Event('open'));
   }
+  /** A network error: the browser reconnects by itself. */
   fail() {
+    this.readyState = 0;
+    this.onerror?.call(this as unknown as EventSource, new Event('error'));
+  }
+  /** An answer that is not a stream (503, 502): the browser gives the stream up for good. */
+  refuse() {
+    this.readyState = 2;
     this.onerror?.call(this as unknown as EventSource, new Event('error'));
   }
 }
@@ -33,9 +42,13 @@ function setup() {
   const qc = new QueryClient();
   const invalidate = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue();
   const refetch = vi.spyOn(qc, 'refetchQueries').mockResolvedValue();
-  let es!: FakeSource;
-  const stop = startEventStream(qc, (url) => (es = new FakeSource(url)));
-  return { qc, invalidate, refetch, es, stop };
+  const all: FakeSource[] = [];
+  const stop = startEventStream(qc, (url) => {
+    const s = new FakeSource(url);
+    all.push(s);
+    return s;
+  });
+  return { qc, invalidate, refetch, es: all[0]!, all, stop };
 }
 
 beforeEach(() => setActivePinia(createPinia()));
@@ -94,6 +107,72 @@ describe('the event stream', () => {
     expect(refetch).toHaveBeenCalledWith({ queryKey: ['state'] });
     es.open(); // a reconnect: data fetched meanwhile may be stale
     expect(invalidate).toHaveBeenCalledWith();
+  });
+
+  it('opens a new stream with a growing pause when the browser gave one up, and refetches everything', () => {
+    vi.useFakeTimers();
+    try {
+      const { es, all, invalidate, stop } = setup();
+      const c = useConnectionStore();
+      es.open();
+      es.fail(); // a network error: the browser reconnects, no new stream
+      vi.advanceTimersByTime(60_000);
+      expect(all).toHaveLength(1);
+
+      es.refuse(); // e.g. 503 too many event streams
+      expect(es.closed).toBe(true);
+      expect(c.streamOpen).toBe(false);
+      vi.advanceTimersByTime(reopenDelayMs.first - 1);
+      expect(all).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(all).toHaveLength(2);
+      expect(all[1]!.url).toBe('/api/v1/events');
+
+      // refused again: the pause doubles
+      all[1]!.refuse();
+      vi.advanceTimersByTime(reopenDelayMs.first * 2 - 1);
+      expect(all).toHaveLength(2);
+      vi.advanceTimersByTime(1);
+      expect(all).toHaveLength(3);
+
+      // the new stream replays nothing: everything is refetched, and the pause starts over
+      invalidate.mockClear();
+      all[2]!.open();
+      expect(c.streamOpen).toBe(true);
+      expect(invalidate).toHaveBeenCalledWith();
+      all[2]!.send('device_online', {});
+      expect(keys(invalidate)).toContainEqual(['devices']);
+      all[2]!.refuse();
+      vi.advanceTimersByTime(reopenDelayMs.first);
+      expect(all).toHaveLength(4);
+
+      // stopping cancels a pending reopen
+      all[3]!.refuse();
+      stop();
+      vi.advanceTimersByTime(reopenDelayMs.max);
+      expect(all).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps the pause before a new stream', () => {
+    vi.useFakeTimers();
+    try {
+      const { all } = setup();
+      for (let i = 0; i < 8; i++) {
+        all[all.length - 1]!.refuse();
+        vi.advanceTimersByTime(reopenDelayMs.max);
+      }
+      expect(all).toHaveLength(9);
+      all[all.length - 1]!.refuse();
+      vi.advanceTimersByTime(reopenDelayMs.max - 1);
+      expect(all).toHaveLength(9);
+      vi.advanceTimersByTime(1);
+      expect(all).toHaveLength(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignores a message that is not JSON', () => {

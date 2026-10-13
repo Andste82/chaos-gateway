@@ -41,7 +41,8 @@ const step = ref(0);
 const token = ref('');
 const draft = reactive({ uplink: '', gateway: '', management: '', tests: [] as string[], password: '', repeat: '' });
 const networks = ref<NetworkDraft[]>([]);
-const errors = ref<Record<string, string>>({});
+// what the gateway said about a field (the token it refused)
+const serverErrors = ref<Record<string, string>>({});
 const submitError = ref('');
 const submitErrors = ref<string[]>([]);
 const busy = ref(false);
@@ -91,20 +92,38 @@ const takenPrefixes = computed(() =>
 );
 const hints = computed(() => draft.tests.map((t) => netplanHint(byName(t))).filter((h): h is string => !!h));
 
-function validate(s: number): boolean {
-  let e: Record<string, string> = {};
-  if (s === 0 && !token.value.trim()) e.token = 'Enter the setup token from the container log.';
+/** The problems of a step's fields, by field. */
+function problems(s: number): Record<string, string> {
+  if (s === 0) return token.value.trim() ? {} : { token: 'Enter the setup token from the container log.' };
   if (s === 1) {
-    e = validateInterfaces(
+    return validateInterfaces(
       { uplink: draft.uplink, gateway: draft.gateway, management: draft.management, networks: networks.value },
       setup.data.value?.suggested_uplink?.name,
       byName(draft.uplink)?.addresses ?? [],
     );
   }
-  if (s === 2) e = validateNetworks(networks.value, takenPrefixes.value);
-  if (s === 3) e = validatePassword(draft.password, draft.repeat);
-  errors.value = e;
-  return Object.keys(e).length === 0;
+  if (s === 2) return validateNetworks(networks.value, takenPrefixes.value);
+  if (s === 3) return validatePassword(draft.password, draft.repeat);
+  return {};
+}
+
+// Validation (plan §2.17): the message under the field, the button disabled until the step is
+// valid. A step's messages appear once its button was pressed (not while the first field is still
+// being typed) and then follow every change.
+const attempted = reactive<boolean[]>([false, false, false, false, false]);
+const errors = computed<Record<string, string>>(() => ({
+  ...(attempted[step.value] ? problems(step.value) : {}),
+  ...serverErrors.value,
+}));
+const stepInvalid = computed(() =>
+  step.value < 4 ? Object.keys(errors.value).length > 0 : [0, 1, 2, 3].some((s) => Object.keys(problems(s)).length > 0),
+);
+// the gateway refused the token: the message stays until the token changes
+watch(token, () => (serverErrors.value = {}));
+
+function validate(s: number): boolean {
+  attempted[s] = true;
+  return Object.keys(problems(s)).length === 0 && Object.keys(serverErrors.value).length === 0;
 }
 
 function next() {
@@ -112,7 +131,6 @@ function next() {
 }
 
 function back() {
-  errors.value = {};
   step.value--;
 }
 
@@ -143,7 +161,7 @@ async function apply() {
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
       step.value = 0;
-      errors.value = { token: 'The setup token is not valid. Copy it again from the container log.' };
+      serverErrors.value = { token: 'The setup token is not valid. Copy it again from the container log.' };
     } else if (e instanceof ApiError && e.code === 'setup_completed') {
       submitError.value = 'The setup was finished meanwhile. Log in instead.';
     } else {
@@ -200,7 +218,28 @@ async function rolledBack(): Promise<boolean> {
   stopRollbackPoll();
   confirmState.value = 'expired';
   confirmError.value = '';
+  // the session of the login after the apply belongs to a setup that is gone
+  session.setupReopened();
   return true;
+}
+
+/**
+ * After a rollback: the wizard again, with a new token from the log and the interface and network
+ * choices kept (the rollback is often about one of them, which can then be changed).
+ */
+function startAgain() {
+  result.value = undefined;
+  confirmState.value = 'login';
+  confirmError.value = '';
+  countdownOver.value = false;
+  token.value = '';
+  draft.password = '';
+  draft.repeat = '';
+  serverErrors.value = {};
+  attempted.fill(false);
+  step.value = 0;
+  // the preflight and the interfaces may have changed meanwhile
+  void setup.refetch();
 }
 
 function countdownEnded() {
@@ -259,6 +298,9 @@ const ifaceLabel = (i: HostInterface) =>
         <p v-if="confirmState === 'expired'" class="m-0 text-sm text-block-text" role="alert">
           The setup was not confirmed in time and was rolled back. The setup is open again with a new token in the container log.
         </p>
+        <div v-if="confirmState === 'expired'">
+          <button type="button" class="btn btn-primary" @click="startAgain">Start again</button>
+        </div>
         <p v-if="confirmError && confirmState !== 'unreachable'" class="field-error" role="alert">{{ confirmError }}</p>
       </section>
 
@@ -463,7 +505,7 @@ const ifaceLabel = (i: HostInterface) =>
           <div class="flex justify-between gap-2 border-t border-border pt-4">
             <button v-if="step > 0" type="button" class="btn" :disabled="busy" @click="back">Back</button>
             <span v-else />
-            <button type="submit" class="btn btn-primary" :disabled="busy">
+            <button type="submit" class="btn btn-primary" :disabled="busy || stepInvalid">
               {{ step < 4 ? 'Next' : busy ? 'Applying…' : 'Apply setup' }}
             </button>
           </div>

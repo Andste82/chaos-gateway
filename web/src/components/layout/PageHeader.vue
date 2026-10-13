@@ -4,6 +4,7 @@
 // with M13.
 import { computed } from 'vue';
 import { useActiveFaults, useGatewayState, useHealth } from '../../composables/gateway';
+import { errorMessage } from '../../api/fetcher';
 import { formatHM } from '../../lib/format';
 import StatusDot, { type DotTone } from '../ui/StatusDot.vue';
 
@@ -38,6 +39,8 @@ const healthDot = computed<{ tone: DotTone; label: string }>(() => {
 });
 
 const faultCount = computed(() => faults.items.value.length);
+// "No faults active" is an answer of the gateway: until it gave one, the counter does not say so
+const faultsUnknown = computed(() => !!faults.error.value || faults.isLoading.value);
 </script>
 
 <template>
@@ -51,8 +54,15 @@ const faultCount = computed(() => faults.items.value.length);
       <span class="inline-flex h-8 items-center rounded-full border border-[#262e39] px-3" data-testid="health">
         <StatusDot :tone="healthDot.tone" :label="healthDot.label" />
       </span>
+      <span
+        v-if="faultsUnknown"
+        class="inline-flex h-8 items-center rounded-full border border-[#262e39] px-3 text-[13px] text-text-2"
+        data-testid="faults-counter"
+        :title="faults.error.value ? errorMessage(faults.error.value) : undefined"
+        >{{ faults.error.value ? 'Faults unknown' : 'Loading faults…' }}</span
+      >
       <RouterLink
-        v-if="faultCount > 0"
+        v-else-if="faultCount > 0"
         :to="{ path: '/', hash: '#active-faults' }"
         class="inline-flex h-8 items-center rounded-full border border-fault-border bg-fault-tint px-3 text-[13px] text-fault-text no-underline"
         data-testid="faults-counter"

@@ -82,6 +82,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 		}
 		oc.counters = cs
 		now := s.clk.Now()
+		s.matches.prune(func(name string) bool { _, ok := cs[name]; return ok }, now)
 		oc.matched = func(counter string, packets, epoch int64) *time.Time {
 			return s.matches.observe(counter, packets, epoch, now)
 		}

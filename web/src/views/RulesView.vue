@@ -79,7 +79,7 @@ const listRows = computed<ListRow[]>(() => {
 
 const selected = ref<string>();
 watch(
-  [configRules, system],
+  [configRules, overlayRules, system],
   () => {
     const ok =
       selected.value &&

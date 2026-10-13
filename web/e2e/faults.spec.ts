@@ -304,6 +304,49 @@ test("edit a fault overlay of an API token: the admin's fault replaces it, and t
   await expect(d.getByTestId('fault-owner')).toHaveCount(0);
 });
 
+test('an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left', async ({ page }) => {
+  const gw = lab();
+  const sensor = gw.devices[1]!;
+  const TOKEN_FAULT = 'f0000000-0000-4000-8000-0000000000b2';
+  gw.overlays = [
+    ...gw.overlays,
+    {
+      id: TOKEN_FAULT,
+      kind: 'fault',
+      owner: { type: 'token', id: 't1', name: 'ci-runner' },
+      target: { device: sensor.id },
+      fault: { loss: '2%' },
+      ttl: '1h',
+      expires_at: new Date(Date.now() + 50 * 60_000).toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      generation: 42,
+      state: 'effective',
+    },
+  ];
+  await gw.install(page);
+  // the removal of the token's overlay fails (the gateway is busy)
+  await page.route(`**/api/v1/overlays/${TOKEN_FAULT}`, (route, request) =>
+    request.method() === 'DELETE'
+      ? route.fulfill({ status: 503, contentType: 'application/problem+json', body: JSON.stringify({ type: 'about:blank', title: 'busy', status: 503, code: 'busy', detail: 'the engine is busy' }) })
+      : route.fallback(),
+  );
+  await page.goto('/faults');
+  await page.getByTestId('fault-row').filter({ hasText: '2 % loss' }).getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  await d.getByLabel('Loss (%)').fill('4');
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  // the dialog closes: applying again would write a third overlay
+  await expect(d).toBeHidden();
+  const t = toast(page, 'The fault before the edit is still active');
+  await expect(t).toContainText(`The edited fault is active on ${sensor.name}, but removing the old one failed`);
+  await expect(t).toContainText('Remove it on the faults screen.');
+  expect(gw.requestsTo('POST', '/overlays')).toHaveLength(1);
+  // both are listed, so the old one can be removed from here
+  await expect(page.getByTestId('fault-row').filter({ hasText: '4 % loss' })).toHaveCount(1);
+  await expect(page.getByTestId('fault-row').filter({ hasText: '2 % loss' })).toHaveCount(1);
+});
+
 test("a configured fault the gateway refused in a candidate is marked, and its dialog shows why", async ({ page }) => {
   const gw = lab();
   await gw.install(page);

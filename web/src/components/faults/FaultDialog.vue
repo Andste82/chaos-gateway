@@ -188,16 +188,27 @@ async function submit() {
     const old = props.overlay;
     // another key (target, traffic, or the owner: one of a token or a run is written as the
     // admin's) is another overlay: the edit replaces the old one
+    // the new overlay is active from here on: a failed removal of the old one must not offer to
+    // write it again (a third overlay), so the dialog closes and says what is left to remove
+    let leftOver = '';
     if (old && old.id !== ov.id) {
+      calls.push({ method: 'DELETE', path: `/overlays/${old.id}`, note: owner.value ? `the fault of ${owner.value} before the edit` : 'the fault before the edit' });
       // one that expired meanwhile is gone already
       await deleteOverlay(old.id).catch((e: unknown) => {
-        if (!(e instanceof ApiError && e.status === 404)) throw e;
+        if (!(e instanceof ApiError && e.status === 404)) leftOver = errorMessage(e);
       });
-      calls.push({ method: 'DELETE', path: `/overlays/${old.id}`, note: owner.value ? `the fault of ${owner.value} before the edit` : 'the fault before the edit' });
     }
     apiPanel.record(editing.value ? 'Edit fault' : 'Add fault', calls);
     const d = durations.find((x) => x.value === form.value.duration);
-    toasts.push('success', `Fault active on ${targetName.value}`, d?.ttl ? `Expires after ${d.label}.` : 'Until removed.');
+    if (leftOver) {
+      toasts.push(
+        'error',
+        'The fault before the edit is still active',
+        `The edited fault is active on ${targetName.value}, but removing the old one failed (${leftOver}). Remove it on the faults screen.`,
+      );
+    } else {
+      toasts.push('success', `Fault active on ${targetName.value}`, d?.ttl ? `Expires after ${d.label}.` : 'Until removed.');
+    }
     open.value = false;
     await Promise.all(['overlays', 'devices', 'faults', 'profiles', 'state'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {

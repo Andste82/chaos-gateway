@@ -282,6 +282,8 @@ export class MockGateway {
   config: Configuration = { schema_version: 1, uplink: { interface: { name: 'eth0' } }, management: { interface: { name: 'eth1' } } };
   /** Who made the active revision. */
   activeBy: Actor = { type: 'user', id: 'admin', name: 'admin' };
+  /** The revisions applied since the mock started (GET /revisions lists them, newest first). */
+  applied: Revision[] = [];
   /** The domain diff of a revision against an earlier one (GET /revisions/{id}/diff), by revision. */
   diffs = new Map<number, DomainChange[]>();
   /** Counters, state and what overrides a configured rule or fault, by id. */
@@ -457,6 +459,7 @@ export class MockGateway {
     if (path === '/rules') return json(200, { system_rules: [this.systemRule()], ...this.page(this.ruleList(), url) });
     if (path === '/explain') return this.explanation ? json(200, this.explanation) : problem(404, 'not_found', 'no such device');
     if (path === '/revisions/active') return json(200, this.activeRevision());
+    if (path === '/revisions' && method === 'GET') return json(200, this.page([...this.applied].reverse(), url));
     const diff = /^\/revisions\/(\d+)\/diff$/.exec(path);
     if (diff) return json(200, this.diffs.get(Number(diff[1])) ?? []);
     const preview = /^\/revisions\/(\d+)\/preview$/.exec(path);
@@ -525,6 +528,7 @@ export class MockGateway {
       const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
       this.config = applyMergePatch(this.config, patch);
       this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
+      this.noteApplied(id, this.activeBy);
       for (const [devId, cfg] of Object.entries(patch?.devices ?? {})) {
         this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
       }
@@ -556,8 +560,15 @@ export class MockGateway {
     this.diffs.set(id, changes);
     this.config = applyMergePatch(this.config, patch);
     this.activeBy = by;
+    this.noteApplied(id, by);
     this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
     return id;
+  }
+
+  private noteApplied(id: number, by: Actor) {
+    const now = new Date().toISOString();
+    this.applied = this.applied.map((r) => (r.status === 'active' ? { ...r, status: 'superseded' } : r));
+    this.applied.push({ id, status: 'active', base: this.state.active_revision, schema_version: 1, created_at: now, created_by: by, applied_at: now });
   }
 
   activeRevision() {

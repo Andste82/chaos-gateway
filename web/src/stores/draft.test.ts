@@ -183,6 +183,58 @@ describe('the configuration draft', () => {
       access_rule_order: [D, A, B, C],
     });
   });
+
+  it('reapplies field by field where both changed the same object: their fields stay, a field both changed takes mine', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    // mine: rule A rejects and is renamed, fault f1 gets 50ms, rule B goes
+    d.setRule(A, { name: 'a2', source: { global: true }, action: 'reject' });
+    d.setRule(B, null);
+    d.setFault('f1', { name: 'slow', source: { global: true }, latency: '50ms' });
+    // theirs: rule A disabled and renamed too, fault f1 disabled with loss, rule B's port changed
+    const theirs = revision(43, {
+      access_rules: {
+        [A]: { name: 'theirs', source: { global: true }, action: 'drop', enabled: false },
+        [B]: { name: 'b', source: { global: true }, protocol: 'tcp', ports: [8080], action: 'allow' },
+      },
+      faults: { f1: { name: 'slow', source: { global: true }, latency: '10ms', loss: '1%', enabled: false } },
+    });
+    d.rebase(theirs);
+    expect(d.effectiveRules[A]).toEqual({ name: 'a2', source: { global: true }, action: 'reject', enabled: false });
+    expect(d.effectiveFaults.f1).toEqual({ name: 'slow', source: { global: true }, latency: '50ms', loss: '1%', enabled: false });
+    // the candidate sends only my fields: their enabled:false is not set back
+    expect(d.patch()).toEqual({
+      access_rules: { [A]: { name: 'a2', action: 'reject' }, [B]: null },
+      access_rule_order: [A],
+      faults: { f1: { latency: '50ms' } },
+    });
+  });
+
+  it('reapplying drops an edit that their revision made already, and keeps a rule they removed as mine', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setRule(A, { name: 'a', source: { global: true }, action: 'reject' });
+    d.setRule(B, { name: 'b', source: { global: true }, protocol: 'tcp', ports: [81], action: 'allow' });
+    d.rebase(
+      revision(43, {
+        access_rules: { [A]: { name: 'a', source: { global: true }, action: 'reject' } },
+        access_rule_order: [A],
+      }),
+    );
+    expect(d.rules[A]).toBeUndefined();
+    expect(d.patch().access_rules).toEqual({ [B]: { name: 'b', source: { global: true }, protocol: 'tcp', ports: [81], action: 'allow' } });
+  });
+
+  it('reapplies a renamed device on theirs: the identifiers they added stay', () => {
+    const d = useDraftStore();
+    const dev = { name: 'esp', network: 'iot', identifiers: { macs: ['aa:bb:cc:dd:ee:01'] } };
+    d.track(revision(42, { devices: { d1: dev } }));
+    d.setDevice('d1', { ...dev, name: 'esp-kitchen' });
+    const theirs = { ...dev, identifiers: { macs: ['aa:bb:cc:dd:ee:01'], ipv4: ['10.0.0.9'] } };
+    d.rebase(revision(43, { devices: { d1: theirs } }));
+    expect(d.patch()).toEqual({ devices: { d1: { name: 'esp-kitchen' } } });
+    expect(d.devices.d1).toEqual({ ...theirs, name: 'esp-kitchen' });
+  });
 });
 
 describe('the API panel', () => {
@@ -191,6 +243,13 @@ describe('the API panel', () => {
     expect(httpOf(call)).toBe('POST /api/v1/overlays\nIf-Match: "42"\n\n{\n  "profile": "lte"\n}');
     expect(curlOf(call, 'https://gw')).toBe(
       `curl -X POST 'https://gw/api/v1/overlays' \\\n  -H "Authorization: Bearer $CHAOSGW_TOKEN" \\\n  -H 'If-Match: "42"' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"profile":"lte"}'`,
+    );
+  });
+
+  it('quotes a body and a header with an apostrophe for the shell', () => {
+    const call = { method: 'POST' as const, path: '/overlays', body: { description: "Bob's phone" }, headers: { 'X-Note': "it's" } };
+    expect(curlOf(call, 'https://gw')).toBe(
+      `curl -X POST 'https://gw/api/v1/overlays' \\\n  -H "Authorization: Bearer $CHAOSGW_TOKEN" \\\n  -H 'X-Note: it'\\''s' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"description":"Bob'\\''s phone"}'`,
     );
   });
 

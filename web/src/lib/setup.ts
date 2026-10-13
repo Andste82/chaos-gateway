@@ -19,6 +19,8 @@ export interface NetworkDraft {
 
 export interface SetupDraft {
   uplink: string;
+  /** The router on the uplink; empty takes the OS default route on the uplink interface. */
+  gateway?: string;
   management: string;
   networks: NetworkDraft[];
   password: string;
@@ -54,16 +56,40 @@ export function prefixRange(cidr: string): [number, number] | undefined {
   return [first, first + size - 1];
 }
 
+function inPrefix(v: number, cidr: string): boolean {
+  const r = prefixRange(cidr);
+  return !!r && v >= r[0] && v <= r[1];
+}
+
 function overlaps(a: string, b: string): boolean {
   const ra = prefixRange(a);
   const rb = prefixRange(b);
   return !!ra && !!rb && ra[0] <= rb[1] && rb[0] <= ra[1];
 }
 
-/** Problems of the interface choice; an empty object means it is complete. */
-export function validateInterfaces(d: Pick<SetupDraft, 'uplink' | 'management' | 'networks'>): Record<string, string> {
+/**
+ * Problems of the interface choice; an empty object means it is complete. `defaultRoute` is the
+ * interface the host's default route leaves through (`suggested_uplink`): another uplink has no
+ * default route the gateway could take, so it needs the router named. `uplinkAddresses` are the
+ * addresses of the chosen uplink, whose prefix the router must lie in.
+ */
+export function validateInterfaces(
+  d: Pick<SetupDraft, 'uplink' | 'management' | 'networks' | 'gateway'>,
+  defaultRoute?: string,
+  uplinkAddresses: string[] = [],
+): Record<string, string> {
   const e: Record<string, string> = {};
   if (!d.uplink) e.uplink = 'Choose the interface towards the Internet.';
+  const gw = d.gateway?.trim() ?? '';
+  if (gw) {
+    const v = ipValue(gw);
+    if (v === undefined) e.gateway = 'An IPv4 address, e.g. 192.168.1.1.';
+    else if (uplinkAddresses.length && !uplinkAddresses.some((a) => inPrefix(v, a))) {
+      e.gateway = `The router must be in the uplink's network (${uplinkAddresses.join(', ')}).`;
+    }
+  } else if (d.uplink && d.uplink !== defaultRoute) {
+    e.gateway = `The default route of this host does not leave through ${d.uplink}: name the router on the uplink.`;
+  }
   if (!d.management) e.management = 'Choose the interface you reach the gateway on.';
   if (d.networks.length === 0) e.tests = 'Assign at least one interface to a test network.';
   if (d.networks.some((n) => n.iface === d.uplink || n.iface === d.management)) {
@@ -157,7 +183,7 @@ export function buildSetupRequest(d: SetupDraft, interfaces: HostInterface[], ne
     admin_password: d.password,
     configuration: {
       schema_version: 1,
-      uplink: { interface: ref(interfaces, d.uplink) },
+      uplink: { interface: ref(interfaces, d.uplink), ...(d.gateway?.trim() ? { gateway: d.gateway.trim() } : {}) },
       management: { interface: ref(interfaces, d.management) },
       networks,
     },

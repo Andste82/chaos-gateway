@@ -24,7 +24,7 @@ import { useNow } from '../composables/useNow';
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
 import { formatCount, formatRemaining } from '../lib/format';
 import { profileTitle } from '../lib/profiles';
-import { useApiScreen } from '../stores/apiPanel';
+import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
@@ -199,6 +199,7 @@ function edit(r: Row) {
 const editable = (r: Row) =>
   (r.overlay?.kind === 'fault' && (r.overlay.fault?.family ?? 'impairment') === 'impairment') || (r.config && (r.config.fault.family ?? 'impairment') === 'impairment');
 
+const apiPanel = useApiPanelStore();
 const removing = ref<string>();
 async function remove(r: Row) {
   if (r.config) {
@@ -208,6 +209,7 @@ async function remove(r: Row) {
   removing.value = r.id;
   try {
     await deleteOverlay(r.id);
+    apiPanel.record('Remove fault', [{ method: 'DELETE', path: `/overlays/${r.id}` }]);
     toasts.push('success', 'Fault removed', `${r.chips.join(', ')} on ${r.target}`);
     await Promise.all(['overlays', 'devices', 'faults', 'profiles'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {

@@ -12,6 +12,7 @@ import type { Overlay } from '../../api/generated/model';
 import type { ActiveFault } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
 import { formatCount, formatRemaining } from '../../lib/format';
+import { useApiPanelStore } from '../../stores/apiPanel';
 import { useToastStore } from '../../stores/toasts';
 import AppIcon from '../ui/AppIcon.vue';
 import FaultChip from '../ui/FaultChip.vue';
@@ -54,10 +55,12 @@ async function confirmRemove() {
   if (f) await remove(f);
 }
 
+const apiPanel = useApiPanelStore();
 async function remove(f: ActiveFault) {
   removing.value = f.id;
   try {
     await deleteOverlay(f.id);
+    apiPanel.record('Remove fault', [{ method: 'DELETE', path: `/overlays/${f.id}` }]);
     toasts.push('success', 'Fault removed', `${f.chips.join(', ')} on ${f.target}`);
     await queryClient.invalidateQueries({ queryKey: ['overlays'] });
     await queryClient.invalidateQueries({ queryKey: ['devices'] });

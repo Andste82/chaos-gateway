@@ -90,7 +90,13 @@ export function describeScope(s: Scope | undefined, names: Names = {}): string {
   if (s.device) return names.device?.(s.device) ?? s.device;
   if (s.group) return `Group ${names.group?.(s.group) ?? s.group}`;
   if (s.network) return `Network ${names.network?.(s.network) ?? s.network}`;
-  if (s.remote_network) return 'Remote network';
+  if (s.remote_network) {
+    const r = s.remote_network;
+    if (r.cidr) return `Remote network ${r.cidr}`;
+    if (r.link) return `Remote networks of link ${names.network?.(r.link) ?? r.link}`;
+    if (r.client) return `Client networks of ${r.client}`;
+    return 'Remote network';
+  }
   if (s.global) return 'Everything';
   return 'Everything';
 }

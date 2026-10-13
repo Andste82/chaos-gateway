@@ -24,7 +24,7 @@ import { describeOwner, describeScope } from '../lib/faults';
 import { formatAgo, formatBytes, formatCount, formatRemaining } from '../lib/format';
 import { newId } from '../lib/ids';
 import { newRule, ruleEffectInWords, ruleSummary } from '../lib/rules';
-import { useApiScreen } from '../stores/apiPanel';
+import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
@@ -124,11 +124,13 @@ function removeRule(id: string) {
   selected.value = next ? `config:${next.id}` : undefined;
 }
 
+const apiPanel = useApiPanelStore();
 const removing = ref(false);
 async function removeOverlayRule(o: Overlay) {
   removing.value = true;
   try {
     await deleteOverlay(o.id);
+    apiPanel.record('Remove overlay rule', [{ method: 'DELETE', path: `/overlays/${o.id}` }]);
     toasts.push('success', 'Overlay rule removed', ruleSummary({ ...o.rule!, source: o.target }, names.value));
     await queryClient.invalidateQueries({ queryKey: ['overlays'] });
   } catch (e) {

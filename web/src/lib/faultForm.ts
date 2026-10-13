@@ -14,7 +14,7 @@ import { formatPorts, parsePorts } from './rules';
 export type Direction = 'both' | 'upload' | 'download';
 
 export interface FaultForm {
-  /** `device:<id>`, `group:<id>`, `network:<id>` or `global` */
+  /** `device:<id>`, `group:<id>`, `network:<id>`, `remote_network:<client|link|cidr>:<value>` or `global` */
   target: string;
   /** a key of `trafficPresets`, or `custom` */
   traffic: string;
@@ -91,8 +91,15 @@ export function emptyForm(target = 'global'): FaultForm {
 
 export function scopeOf(target: string): Scope {
   if (target === 'global' || !target) return { global: true };
-  const [kind, id] = target.split(':', 2) as [string, string];
-  return { [kind]: id } as Scope;
+  const i = target.indexOf(':');
+  const kind = target.slice(0, i);
+  const rest = target.slice(i + 1);
+  if (kind === 'remote_network') {
+    // `remote_network:client:<id>`, `remote_network:link:<id>` or `remote_network:cidr:<prefix>`
+    const j = rest.indexOf(':');
+    return { remote_network: { [rest.slice(0, j)]: rest.slice(j + 1) } } as Scope;
+  }
+  return { [kind]: rest } as Scope;
 }
 
 export function targetOf(s: Scope | undefined): string {
@@ -100,6 +107,10 @@ export function targetOf(s: Scope | undefined): string {
   if (s.device) return `device:${s.device}`;
   if (s.group) return `group:${s.group}`;
   if (s.network) return `network:${s.network}`;
+  const r = s.remote_network;
+  if (r?.client) return `remote_network:client:${r.client}`;
+  if (r?.link) return `remote_network:link:${r.link}`;
+  if (r?.cidr) return `remote_network:cidr:${r.cidr}`;
   return 'global';
 }
 

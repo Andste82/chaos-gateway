@@ -105,6 +105,13 @@ const enabled = computed({
 });
 
 const errors = computed(() => ({ ...(draft.serverErrors[props.id] ?? {}), ...ruleErrors(props.rule, draft.portsText[props.id]) }) as Record<string, string | undefined>);
+/** The fields the editor shows a message under; a message of any other field shows above them. */
+const shownFields = ['name', 'rule', 'source', 'destination', 'protocol', 'ports', 'action', 'reject_with', 'cut_existing'];
+const otherErrors = computed(() =>
+  Object.entries(errors.value)
+    .filter(([k, v]) => v && !shownFields.includes(k))
+    .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`),
+);
 const accessOptions = (['allow', 'drop', 'reject', 'reset'] as const).map((a) => ({ value: a, label: accessLabels[a] }));
 const blocking = computed(() => props.rule.action !== 'allow');
 const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol === 'tcp' || props.rule.protocol === 'any');
@@ -128,6 +135,7 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
     </div>
     <p v-if="errors.name" :id="eid('name')" class="field-error -mt-2">{{ errors.name }}</p>
     <p v-if="errors.rule" class="field-error -mt-1" role="alert">{{ errors.rule }}</p>
+    <p v-for="m in otherErrors" :key="m" class="field-error -mt-1" role="alert" data-testid="rule-other-error">{{ m }}</p>
 
     <div class="text-xs font-semibold tracking-[0.06em] text-text-2">IF TRAFFIC</div>
     <div class="grid grid-cols-2 gap-3">
@@ -174,12 +182,19 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
       </div>
       <div>
         <label class="label" :for="fid('proto')">Protocol</label>
-        <select :id="fid('proto')" v-model="protocol" class="input">
+        <select
+          :id="fid('proto')"
+          v-model="protocol"
+          class="input"
+          :aria-invalid="!!errors.protocol"
+          :aria-describedby="errors.protocol ? eid('proto') : undefined"
+        >
           <option value="any">Any</option>
           <option value="tcp">TCP</option>
           <option value="udp">UDP</option>
           <option value="icmp">ICMP</option>
         </select>
+        <p v-if="errors.protocol" :id="eid('proto')" class="field-error">{{ errors.protocol }}</p>
       </div>
       <div>
         <label class="label" :for="fid('ports')">Ports</label>
@@ -205,16 +220,20 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
       label="Access"
       :options="accessOptions"
     />
+    <p v-if="errors.action" class="field-error -mt-1" role="alert">{{ errors.action }}</p>
     <div v-if="rule.action === 'reject'">
       <label class="label" :for="fid('reject')">Answer with ICMP</label>
       <select
         :id="fid('reject')"
         class="input"
+        :aria-invalid="!!errors.reject_with"
+        :aria-describedby="errors.reject_with ? eid('reject') : undefined"
         :value="rule.reject_with ?? 'port_unreachable'"
         @change="update({ reject_with: (($event.target as HTMLSelectElement).value as RejectType) === 'port_unreachable' ? undefined : (($event.target as HTMLSelectElement).value as RejectType) })"
       >
         <option v-for="(label, k) in rejectLabels" :key="k" :value="k">{{ label }}</option>
       </select>
+      <p v-if="errors.reject_with" :id="eid('reject')" class="field-error">{{ errors.reject_with }}</p>
     </div>
     <div v-if="blocking">
       <label class="flex items-center gap-2 text-[13px]">

@@ -11,12 +11,27 @@ import {
   parseRate,
   presets,
   previewSentence,
+  scopeOf,
+  targetOf,
   type FaultForm,
 } from './faultForm';
 
 const form = (over: Partial<FaultForm>): FaultForm => ({ ...emptyForm('device:d1'), ...over });
 
 describe('the fault dialog', () => {
+  it('keeps a remote network target when a fault is read back and sent again unchanged', () => {
+    for (const target of [{ remote_network: { client: 'c1' } }, { remote_network: { link: 'l1' } }, { remote_network: { cidr: '10.9.0.0/24' } }]) {
+      expect(scopeOf(targetOf(target))).toEqual(target);
+      const f = faultToForm({ latency: '100ms' }, target, { ttl: '5m' });
+      expect(f.target).not.toBe('global');
+      const req = formToOverlay(f);
+      expect(req.target).toEqual(target);
+      expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+      expect(formToConfigFault(f).source).toEqual(target);
+    }
+    expect(targetOf({ remote_network: { cidr: '10.9.0.0/24' } })).not.toBe(targetOf({ global: true }));
+  });
+
   it('turns the form into the overlay request, checked against the spec', () => {
     const f = form({ traffic: 'mqtts', latency: '200', jitter: '50', loss: '5', duration: '5m' });
     const req = formToOverlay(f);

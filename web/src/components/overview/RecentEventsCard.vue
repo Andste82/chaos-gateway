@@ -5,6 +5,7 @@ import { computed } from 'vue';
 import { useListAudit } from '../../api/generated/hooks/observability/observability';
 import { formatClock } from '../../lib/format';
 import { useEventStore } from '../../stores/events';
+import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
 
 const events = useEventStore();
@@ -48,6 +49,7 @@ const lines = computed<Line[]>(() => {
         <span class="ml-2" :class="{ 'text-fault-text': l.tone === 'fault', 'text-block-text': l.tone === 'block' }">{{ l.text }}</span>
       </li>
     </ol>
+    <LoadError v-else-if="audit.error.value" :error="audit.error.value" what="The past events are not loaded" />
     <p v-else class="m-0 text-sm text-text-2">Nothing happened yet.</p>
   </SectionCard>
 </template>

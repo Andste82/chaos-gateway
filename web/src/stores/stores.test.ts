@@ -58,6 +58,23 @@ describe('session store', () => {
     expect(s.session?.csrf_token).toBe('tok2');
   });
 
+  it('a setup the gateway rolled back is open again and ends the session of its login', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(respond(200, { kind: 'session', scope: 'full', csrf_token: 'tok3' }))
+      .mockResolvedValueOnce(respond(204, undefined));
+    vi.stubGlobal('fetch', fetchMock);
+    const s = useSessionStore();
+    await s.login('pw');
+    expect(s.status).toBe('authenticated');
+    s.setupReopened();
+    expect(s.status).toBe('setup');
+    expect(s.session).toBeUndefined();
+    // the CSRF token of the gone session is not sent any more
+    await s.logout();
+    expect(new Headers(fetchMock.mock.calls[1]?.[1].headers).get('X-CSRF-Token')).toBeNull();
+  });
+
   it('passes other failures on, so the app can say the gateway does not answer', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     const s = useSessionStore();

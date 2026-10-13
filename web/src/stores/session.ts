@@ -54,6 +54,13 @@ export const useSessionStore = defineStore('session', () => {
     return loading;
   }
 
+  /** The gateway rolled the first-start setup back: it is open again, and no session belongs to it. */
+  function setupReopened() {
+    session.value = undefined;
+    setCsrfToken(undefined);
+    status.value = 'setup';
+  }
+
   async function login(password: string): Promise<void> {
     adopt(await apiLogin({ username: 'admin', password }));
   }
@@ -66,5 +73,5 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  return { status, session, bootstrap, login, logout, ended: drop };
+  return { status, session, bootstrap, login, logout, ended: drop, setupReopened };
 });

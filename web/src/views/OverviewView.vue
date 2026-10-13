@@ -9,8 +9,9 @@ import RecentEventsCard from '../components/overview/RecentEventsCard.vue';
 import TopologyCard from '../components/overview/TopologyCard.vue';
 import UplinkTrafficCard from '../components/overview/UplinkTrafficCard.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
+import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
-import { useActiveFaults } from '../composables/gateway';
+import { firstError, useActiveFaults } from '../composables/gateway';
 
 const faults = useActiveFaults();
 
@@ -25,11 +26,18 @@ const deviceCounts = computed(() => {
 
 <template>
   <PageHeader title="Overview" />
-  <TopologyCard :networks="faults.networks.data.value ?? []" :device-counts="deviceCounts" :faults="faults.items.value" />
+  <TopologyCard
+    :networks="faults.networks.data.value ?? []"
+    :networks-error="firstError(faults.networks)"
+    :device-counts="deviceCounts"
+    :faults="faults.items.value"
+    :faults-error="faults.error.value"
+  />
   <div id="active-faults" class="scroll-mt-4">
     <SectionCard title="Active faults">
       <template #actions><RouterLink to="/devices">Devices</RouterLink></template>
       <p v-if="faults.isLoading.value" class="m-0 text-sm text-text-2">Loading…</p>
+      <LoadError v-else-if="faults.error.value" :error="faults.error.value" what="The active faults are not loaded" :retry="faults.refetch" />
       <EmptyState v-else-if="faults.items.value.length === 0" text="No active faults: all traffic passes unimpaired.">
         <RouterLink to="/devices" class="btn btn-primary">Choose a device</RouterLink>
       </EmptyState>

@@ -3109,8 +3109,11 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
 - **Live updates.** `startEventStream` (`src/composables/eventStream.ts`) opens `GET /api/v1/events` with the session cookie,
   listens to every `EventType` (the stream sends named events) and invalidates the queries the event changes (table
   `invalidates`: a device event the devices and networks, an overlay event the overlays, faults and devices, …).
-  `events_lost` and every reconnect refetch everything; the browser's own reconnect sends `Last-Event-ID`, so the gateway
-  replays what was missed. An expired overlay, a rollback, an apply failure and safe mode also raise a toast. Counters
+  `events_lost` and every reconnect refetch everything; the browser's own reconnect (after a network error) sends
+  `Last-Event-ID`, so the gateway replays what was missed. An answer that is not a stream (a 503 when too many streams are
+  open, a proxy's 502 while the gateway restarts) makes the browser give the `EventSource` up for good (`readyState`
+  `CLOSED`); the app then opens a new one after a pause that doubles from 2 s to at most 30 s and starts over once one is
+  open (it sends no `Last-Event-ID`, so its open refetches everything). An expired overlay, a rollback, an apply failure and safe mode also raise a toast. Counters
   that grow without an event (traffic rates, affected packets) are polled every 5 s.
 - **Shell and states** (`AppShell.vue`). Above every page: the red safe-mode banner (`GatewayState.safe_mode`, with the
   reason and a link to recovery), the offline banner (from the first request that did not reach the gateway until the next
@@ -3123,6 +3126,14 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
   setup leads to the wizard and a missing session to the login; the page stays until that navigation is done. The page
   header shows the context line (revision, time of the last apply, sync state), health, the active-faults counter and the
   page's action.
+- **Data that did not load.** A list or card whose query failed before it delivered anything says so with the gateway's
+  answer and Try again (`LoadError.vue`, `firstError` in `src/composables/gateway.ts`) instead of falling through to its
+  empty state: an empty state is an answer of the gateway, and "no active faults: all traffic passes unimpaired" while the
+  faults are unknown would be wrong data. This covers the overview's active faults (overlays or configured faults), its
+  topology (networks; the path badge and the fault count say "faults unknown"), its recent events (the audit log), the
+  device list, the device detail (any error but 404, which says the device does not exist) and its faults; the header's
+  counter says "Faults unknown" (and "Loading faults…" before the first answer), never "No faults active". A query that
+  fails on a refetch keeps its last data (the offline state greys it out).
 - **The gateway's clock.** Deadlines, TTLs, lease ends and "last seen" are times on the gateway's clock, and a Raspberry Pi
   without a real-time clock may be minutes off before NTP. Every countdown therefore runs on the gateway's clock as the
   browser estimates it (`src/lib/clock.ts`, used by `useNow`): each answer's `Date` header bounds the offset between the two
@@ -3140,12 +3151,17 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
   (plan §3.4: a test interface has none). Each step is
   validated under its fields (each error tied to its field with `aria-describedby` while it is shown) before the next (name pattern of the spec, address with prefix length, no network or
   broadcast address, no overlap with another test network or with the uplink's and management's prefixes, password of 12
-  characters typed twice); the request is checked against the generated Zod schema of `POST /setup` before it is sent.
+  characters typed twice). Plan §2.17 "Validation": the messages appear once the step's Next was pressed (not while the
+  first field is still being typed) and then follow every change, and Next stays disabled until the step is valid; Apply
+  setup is disabled while any step is invalid; a token the gateway refused keeps Next disabled until the token changes. The
+  request is checked against the generated Zod schema of `POST /setup` before it is sent.
   The gateway applies revision 1 with commit-confirm; the wizard logs in with the new password and offers Confirm with the
   countdown. When the address the browser used is not served any more (the UI moves to the management network), it says
   where to confirm instead. Only the gateway knows whether it rolled back: when the countdown ends in the browser, Confirm
   stays and the wizard asks `GET /setup` every 2 s; an open setup (or a Confirm refused after it reopened) says the setup
-  was rolled back.
+  was rolled back, puts the session store back to "setup" (the session of the login after the apply and its CSRF token
+  belong to a setup that is gone) and offers Start again: step 1 with the token and the password cleared (the gateway
+  printed a new token) and the interface and network choices kept, since the rollback is often about one of them.
 - **Overview.** Topology (test networks → gateway → uplink, devices per network, the fault badge on the path while faults
   are active, profiles and where they are active), the active faults (impairing overlays and enabled configured faults:
   target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
@@ -3179,8 +3195,8 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
 | Setup wizard rules, free proposals, the netplan hint and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
-| Stores: session (setup, login, logout with CSRF, one round trip), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
-| Event stream: listeners, invalidation per type, `events_lost`, toasts, reconnect | `src/composables/eventStream.test.ts` |
+| Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
+| Event stream: listeners, invalidation per type, `events_lost`, toasts, reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
 | Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
 | Serving the app: deep links, assets and their caching, CSP, 404s, nothing under `/api/` is the page, before the setup | `TestTheWebAppIsServedNextToTheAPI`, `TestWithoutAWebAppEveryOtherPathIsNotFound`, `TestCheckUIWantsAnIndexPage` (`internal/api/ui_test.go`), `TestWebUIComesFromTheDirectoryOrTheBinary` (`cmd/chaosgw`) |
@@ -3191,7 +3207,8 @@ panel) and M14 (networks, technical view) are in the navigation but not yet link
 **The mocked API** (`web/e2e/mock.ts`): `MockGateway` answers `/api/v1` through Playwright's request routing from data typed
 with the generated model (a change of the spec breaks the fixtures at compile time; `npm run typecheck` checks the e2e code
 too), records every request with its headers and body, paginates like the gateway (so the device list must follow the
-cursor), refuses unsafe requests without the CSRF token, can be made unreachable (every request aborted), can run its clock
+cursor), refuses unsafe requests without the CSRF token, can be made unreachable (every request aborted) or answer a path
+with an error (`failing`), can run its clock
 off the browser's (`clockSkewMs`: a `Date` header and deadlines on that clock) and can roll the setup back (`rollBackSetup`). The browser's
 `EventSource` is replaced by a fake the test drives (`gw.emit`, `__sse.fail`, `__sse.reopen`), so a live update is
 asserted deterministically instead of by a poll.
@@ -3224,9 +3241,10 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 |---|---|
 | Playwright against a mocked API for every state: empty | `overview.spec.ts` "empty: no faults, no devices, no networks", `devices.spec.ts` "empty: no devices yet", `device-detail.spec.ts` "a device without faults says its traffic is unimpaired" |
 | … many devices | `devices.spec.ts` "many devices: all pages are listed, search and filter chips narrow them" (620 devices, two pages) |
+| … data that did not load | `states.spec.ts` "a list the gateway did not deliver says so and does not claim to be empty", "devices and a device the gateway did not deliver: an error, not an empty list or a blank page" |
 | … offline | `states.spec.ts` "offline: a banner, live data greyed out with the time it was last updated, and back", "offline from the start: the page says so and tries again", "offline from the start, then the setup is open: Try again leads to the wizard", "offline from the start, then no session: Try again leads to the login and back to the page"; `device-detail.spec.ts` "faults cannot be removed while a revision waits for confirmation or the gateway is offline" |
 | … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
-| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
+| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
 | An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
 
 ## Generated code

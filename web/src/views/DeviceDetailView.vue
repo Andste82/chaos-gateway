@@ -13,9 +13,10 @@ import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
+import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { fetchAll, useGatewayState, useNames, type ActiveFault } from '../composables/gateway';
+import { fetchAll, firstError, useGatewayState, useNames, type ActiveFault } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, overlayChips } from '../lib/faults';
@@ -95,6 +96,10 @@ const adoptOpen = ref(false);
     <p class="text-text-2">The gateway knows no device “{{ id }}”. A discovered device that left may be gone.</p>
     <RouterLink to="/devices">All devices</RouterLink>
   </div>
+  <div v-else-if="!d && device.error.value" class="flex flex-col gap-4">
+    <nav aria-label="Breadcrumb" class="text-[13px] text-text-2"><RouterLink to="/devices">Devices</RouterLink> / {{ id }}</nav>
+    <LoadError :error="device.error.value" what="The device is not loaded" :retry="device.refetch" />
+  </div>
   <template v-else-if="d">
     <PageHeader :title="d.name">
       <template #breadcrumb>
@@ -121,6 +126,12 @@ const adoptOpen = ref(false);
       <div class="flex min-w-0 flex-col gap-5">
         <SectionCard title="Active faults">
           <p v-if="overlays.isLoading.value" class="m-0 text-sm text-text-2">Loading…</p>
+          <LoadError
+            v-else-if="firstError(overlays)"
+            :error="firstError(overlays)"
+            what="The active faults are not loaded"
+            :retry="overlays.refetch"
+          />
           <EmptyState v-else-if="faults.length === 0" text="No active faults: this device's traffic passes unimpaired." />
           <ActiveFaultList
             v-else

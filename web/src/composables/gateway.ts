@@ -108,6 +108,17 @@ export function useNames() {
   return { names, devices, networks };
 }
 
+interface QueryLike {
+  data: { value: unknown };
+  error: { value: unknown };
+}
+
+/** The error of the first query that failed without data to show, or null. */
+export function firstError(...queries: QueryLike[]): unknown {
+  for (const q of queries) if (q.data.value === undefined && q.error.value) return q.error.value;
+  return null;
+}
+
 /** One active fault of the overview and the device detail: an overlay or a configured fault. */
 export interface ActiveFault {
   id: string;
@@ -175,6 +186,12 @@ export function useActiveFaults() {
   return {
     items,
     isLoading: computed(() => overlays.isLoading.value || faults.isLoading.value),
+    /**
+     * Why the list is not known: a source failed before it delivered anything. The list then must
+     * not say "no faults"; a source that failed on a refetch keeps its last data.
+     */
+    error: computed(() => firstError(overlays, faults)),
+    refetch: () => Promise.all([overlays.refetch(), faults.refetch()]),
     devices,
     networks,
   };

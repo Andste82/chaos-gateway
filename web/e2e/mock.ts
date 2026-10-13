@@ -221,6 +221,8 @@ export class MockGateway {
    * gateway's time in their Date header, and its deadlines are on its clock.
    */
   clockSkewMs = 0;
+  /** GET paths (without /api/v1) the gateway answers with this error status instead of the data. */
+  failing: Record<string, number> = {};
   /** The next POST /revisions is refused with 409 revision_conflict (someone else applied one). */
   conflictOnce = false;
   private nextRevision = 43;
@@ -326,6 +328,8 @@ export class MockGateway {
     const json = (status: number, data: unknown) =>
       route.fulfill({ status, headers, contentType: status >= 400 ? 'application/problem+json' : 'application/json', body: JSON.stringify(data) });
     const problem = (status: number, code: string, detail: string) => json(status, { type: 'about:blank', title: code, status, code, detail });
+    const failure = method === 'GET' ? this.failing[path] : undefined;
+    if (failure) return problem(failure, 'internal', `the gateway failed to read ${path}`);
 
     if (path === '/setup' && method === 'GET') return json(200, this.setup);
     if (path === '/setup' && method === 'POST') {

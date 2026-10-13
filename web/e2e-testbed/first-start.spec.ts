@@ -57,7 +57,7 @@ test('first start with the setup token, assign the interfaces, see a discovered 
   await expect(row).toBeVisible();
 
   // and its detail page shows where the gateway saw it
-  await row.getByRole('link').click();
+  await row.getByRole('link').first().click(); // the device's name; the second link is its network
   await expect(page.getByTestId('device-identity')).toContainText(deviceIP);
   await expect(page.getByText('discovered, not adopted')).toBeVisible();
 });

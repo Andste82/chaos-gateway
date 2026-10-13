@@ -69,7 +69,7 @@ test('a configured fault through preview and apply, a conflict with an API chang
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Devices' }).click();
   const row = page.getByTestId('device-row').filter({ hasText: deviceMAC });
   await expect(row).toBeVisible({ timeout: 5 * 60_000 });
-  await row.getByRole('link').click();
+  await row.getByRole('link').first().click(); // the device's name; the second link is its network
   await expect(page.getByTestId('device-identity')).toContainText(deviceMAC);
   const name = (await page.getByRole('heading', { level: 1 }).textContent())?.trim() ?? '';
   await page.getByRole('button', { name: 'Add fault' }).click();

@@ -644,7 +644,7 @@ stayed open".
 
 ## Phase 3 open items
 
-Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12; each records the option that was
+Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12 and M13; each records the option that was
 implemented so the work was not blocked, and what the maintainer may want to decide. The reasons are the ones of "Why items
 stayed open".
 
@@ -682,7 +682,10 @@ stayed open".
 
 ### P3-M12-03 Adopting a device applies directly instead of through the preview-and-apply drawer
 
-- Status: new
+- Status: closed (2026-10-13, M13): the adopt dialog puts the device into the configuration draft and opens the
+  preview-and-apply drawer; a conflict opens the concurrent-change dialog (`devices.spec.ts` "adopting a discovered device:
+  the name, what changes, then the preview drawer and the apply", "adopting while the draft is based on an older revision
+  opens the conflict dialog: reload and reapply")
 - Severity: low
 - Reason: deferred. Plan §2.17 lists "adopt discovered devices" on the Devices screen and the principle "nothing changes the
   network without the user seeing what will change (preview)"; the preview-and-apply drawer and the concurrent-change dialog
@@ -750,4 +753,79 @@ stayed open".
   M28's host-setup script; (b) keep the client-side hint. Recommendation: (a) with M28.
 - Acceptance: with (a), the preflight reports the entry with a test, and the wizard shows the preflight's text in a Playwright test.
 - Needs maintainer: yes
+- Effort: S
+
+### P3-M13-01 The last match of an access rule is the time the gateway first read the counter higher
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.17 asks for "hits, bytes, last match" in the rule editor. nftables counters keep no
+  time; the API now gives `Counter.last_match`, the time of the first read that found a rule's counter higher than the read
+  before (`internal/api/matches.go`). It is exact to the interval between two reads (5 s while the rules screen is open),
+  and unknown after a restart until a read sees the counter grow; a counter read rarely gives a late time.
+- Evidence: `api/openapi.yaml` (`Counter.last_match`), `internal/api/matches.go`, `TestARulesCounterSaysWhenItLastMatched`.
+- Task: implemented — the read-based time. Options: (a) keep it; (b) the nftables `last` statement on every rule's counter
+  (kernel 5.17+, `last used <ms>` in the ruleset listing), compiled with the rule and checked by the kernel gates; (c) the
+  engine reads the rule counters on its own every few seconds, so the time does not depend on a reader. Recommendation: (a)
+  until a user needs it to the second, then (b).
+- Acceptance: with (b) or (c), a kernel or engine test asserts the time.
+- Needs maintainer: yes
+- Effort: S (c), M (b)
+
+### P3-M13-02 The concurrent-change dialog offers "Discard mine" next to "Reload and reapply mine"
+
+- Status: new
+- Severity: low
+- Reason: plan-error (small contradiction). M13 Scope and the introduction of plan §2.17 name "reload and reapply"; the
+  states table of §2.17 lists "reload and reapply mine · discard mine". The dialog offers both and never "overwrite theirs".
+  Reapplying keeps the user's version of an object both changed and shows the combined result in the preview before
+  anything is applied.
+- Evidence: `web/src/components/apply/ConflictDialog.vue`, `web/src/stores/draft.ts` (`rebase`).
+- Task: implemented — both buttons. Confirm, or drop "Discard mine" (the bar's Discard does the same afterwards).
+- Acceptance: the decision is recorded here; the plan's two sentences say the same.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M13-03 Custom profiles are not created or edited in the UI
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. M13 Scope lists "profile cards"; the prototype has a "New profile" button, plan §2.17's Profiles
+  row does not. Custom profiles are objects of the configuration (P2-M11-02), so an editor would be a form over the draft
+  like the fault dialog (parts per family). "Measure with probe" waits for the probes (M25).
+- Evidence: `web/src/views/ProfilesView.vue`; plan §2.17 "Profiles", §5 M13, M25.
+- Task: implemented — the cards show built-in and custom profiles, activate and deactivate; custom profiles are made through
+  the API. Options: (a) a profile editor (impairment and MTU parts) over the draft in M14 or later; (b) leave it to the API and
+  the configuration import. Recommendation: (a), small, after M14.
+- Acceptance: with (a), a Playwright test creates a profile through the drawer and activates it.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M13-04 The fault dialog edits impairment faults only
+
+- Status: new
+- Severity: low
+- Reason: deferred. Plan §2.17 specifies the dialog with the impairment parameters (target, traffic, direction, presets,
+  latency, jitter, loss, duration; rate, reorder, duplicate, corrupt, keep order). MTU and tunnel faults (M10) and burst
+  loss, flapping, distributions and different parameters per direction are faults the API makes; the faults screen lists
+  them, removes them and explains them, but offers no Edit for them, and the dialog names such parameters before saving
+  would replace them.
+- Evidence: `web/src/components/faults/FaultDialog.vue`, `web/src/lib/faultForm.ts` (`hiddenParameters`).
+- Task: implemented as described. Decide whether MTU and tunnel faults (and the advanced impairment parameters) get fields
+  in the dialog, and in which milestone.
+- Acceptance: the milestone that takes them lists them; a Playwright test edits one.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M13-05 The browser flow of M13 in the testbed
+
+- Status: new
+- Severity: low
+- Reason: env-limit. `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` needs network namespaces; here it runs only in the
+  QEMU VM under software emulation (level 1b) and in CI (job `testbed-ui`).
+- Evidence: `internal/api/e2e_ui_test.go`, `web/e2e-testbed/faults.spec.ts`, `docs/development.md` "Web UI: faults, rules
+  and profiles".
+- Task: check the result of the local VM run (recorded in docs/development.md) and the first CI run of the job.
+- Acceptance: the job `testbed-ui` passes with both browser flows.
+- Needs maintainer: no
 - Effort: S

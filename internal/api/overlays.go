@@ -82,7 +82,9 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 		}
 		oc.counters = cs
 		now := s.clk.Now()
-		oc.matched = func(counter string, packets, epoch int64) *time.Time { return s.matches.observe(counter, packets, epoch, now) }
+		oc.matched = func(counter string, packets, epoch int64) *time.Time {
+			return s.matches.observe(counter, packets, epoch, now)
+		}
 		if len(oc.snap.TCDevs) > 0 {
 			qs, err := s.cfg.Engine.ReadQueues(ctx)
 			if err != nil {

@@ -55,6 +55,8 @@ test('the ordered list: the system rule locked at the top, overlay rules before 
 
 test('when the selected overlay rule is gone, the first rule is selected', async ({ page }) => {
   const gw = await open(page);
+  // the overlay rules arrive with their own request: wait for the row before selecting it
+  await expect(rows(page).nth(1)).toContainText('OVERLAY');
   await rows(page).nth(1).getByRole('button').first().click();
   await expect(page.getByText('Set by the token ci-runner for Network IoT')).toBeVisible();
   // it expires

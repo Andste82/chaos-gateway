@@ -138,8 +138,9 @@ test-e2e: $(WEBDEPS) ## Playwright end-to-end tests (needs `npx playwright insta
 
 # ---- build ------------------------------------------------------------------------------------
 
-build: build-web ## build chaosgw and chaosctl into bin/ and the web app into web/dist
-	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
+# The tag webui embeds web/dist into chaosgw (package web); without it the binary serves the API only.
+build: build-web ## build the web app into web/dist and chaosgw (with the app embedded) and chaosctl into bin/
+	CGO_ENABLED=0 $(GO) build -tags webui -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
 
 build-web: $(WEBDEPS)
 	cd web && npm run build

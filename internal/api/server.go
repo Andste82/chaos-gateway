@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -48,6 +49,8 @@ type Config struct {
 	Preflight func() *PreflightReport
 	// ConfirmTimeout overrides the commit-confirm window (tests use seconds).
 	ConfirmTimeout time.Duration
+	// UI is the build of the web app (web/dist), served for every GET outside /api/; nil serves none.
+	UI fs.FS
 	// Resolvers returns the host's upstream resolvers for the DNS proxy when the uplink names none;
 	// nil reads the host's resolver files.
 	Resolvers func() []netip.Addr
@@ -126,7 +129,7 @@ func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 	}
 }
 
-// Handler returns the HTTP handler: the API under /api/v1.
+// Handler returns the HTTP handler: the API under /api/v1 and, with Config.UI, the web app.
 func (s *Server) Handler() http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -135,7 +138,12 @@ func (s *Server) Handler() http.Handler {
 	r.RedirectTrailingSlash = false
 	r.RedirectFixedPath = false
 	r.Use(s.recovery(), s.headers(), s.guard(), s.idempotent())
-	r.NoRoute(func(c *gin.Context) { s.write(c, newProblem(model.ErrorCodeNotFound, "no such resource")) })
+	r.NoRoute(func(c *gin.Context) {
+		if s.serveUI(c) {
+			return
+		}
+		s.write(c, newProblem(model.ErrorCodeNotFound, "no such resource"))
+	})
 	r.NoMethod(func(c *gin.Context) {
 		s.write(c, newProblem(model.ErrorCodeMethodNotAllowed, "method not allowed").withHeader("Allow", strings.Join(s.allowedMethods(c.Request.URL.Path), ", ")))
 	})

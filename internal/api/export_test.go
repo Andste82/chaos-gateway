@@ -17,3 +17,11 @@ func SetDNSPoll(wait, tick time.Duration) (restore func()) {
 	dnsPoll.wait, dnsPoll.tick = wait, tick
 	return func() { dnsPoll = old }
 }
+
+// SetSysClassNet points the reads of interface state and counters at dir and returns a function
+// that restores them.
+func SetSysClassNet(dir string) (restore func()) {
+	old := sysClassNet
+	sysClassNet = dir
+	return func() { sysClassNet = old }
+}

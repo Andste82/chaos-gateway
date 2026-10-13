@@ -395,6 +395,22 @@ func (s *Server) ConfirmRevision(c *gin.Context, revisionId model.RevisionId) {
 	c.JSON(200, r)
 }
 
+// RollbackRevision implements POST /revisions/{revisionId}/rollback: the commit-confirm banner's "Roll
+// back now" (plan §2.17). It runs the rollback the deadline would run.
+func (s *Server) RollbackRevision(c *gin.Context, revisionId model.RevisionId) {
+	if err := s.cfg.Engine.Rollback(contextOf(c), revisionId); err != nil {
+		s.fail(c, err)
+		return
+	}
+	r, _, err := s.cfg.Store.Get(revisionId)
+	if err != nil {
+		s.fail(c, err)
+		return
+	}
+	s.record(c, "revision.rollback", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, "")
+	c.JSON(200, r)
+}
+
 // DiffRevision implements GET /revisions/{revisionId}/diff.
 func (s *Server) DiffRevision(c *gin.Context, revisionId model.RevisionId, params model.DiffRevisionParams) {
 	base := s.cfg.Store.ActiveID()

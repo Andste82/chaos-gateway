@@ -570,8 +570,8 @@ edit → validate → preview → apply → verify → commit
 - SSE for events and live data.
 - Main resources:
   - `uplink`, `networks` (incl. WireGuard networks, clients and `…/export` as `.conf`, QR PNG/SVG, zip), `routing` (static routes, BIRD protocols, `…/status`), `devices`, `groups`, `rules`, `profiles`, `scenarios` (read the active revision)
-  - `revisions` (candidates, `…/preview`, `…/apply`, `…/confirm` for commit-confirm, `…/diff?base=`)
-  - `explain` (`GET /api/v1/explain?device=…&dst=…&port=…`: access verdict, winning fault per family, overridden faults, kernel ids), `state` (current generation, last apply), `capabilities` (features available in this build)
+  - `revisions` (candidates, `…/preview`, `…/apply`, `…/confirm` and `…/rollback` for commit-confirm, `…/diff?base=`)
+  - `explain` (`GET /api/v1/explain?device=…&dst=…&port=…`: access verdict, winning fault per family, overridden faults, kernel ids), `state` (current generation, last apply; `…/linux`: the kernel state of the technical view), `capabilities` (features available in this build)
   - `overlays` (all kinds of §2.1.1, with owner, TTL and lease; `…/renew`)
   - `runs` (`POST /api/v1/runs` with a scenario name or an inline scenario; `…/abort`, `…/renew`, `…/report.json`, `…/report.xml`), `captures`, `diagnostics`, `probes`
   - `reset`, `metrics`, `events`, `audit`, `dns/queries` (query log), `tls/ca` (test CA download), `auth` (sessions, tokens), `setup` (first start), `system` (`…/busy` for update scripts: are runs active?, `…/certificate`, preflight, interfaces, health)

@@ -823,7 +823,12 @@ func (o *owner) rollback(rev int64, reason string) error {
 	}
 	p := o.pending
 	o.pending = nil
-	o.event(EventRolledBack, map[string]any{"revision": rev, "reason": reason})
+	data := map[string]any{"revision": rev, "reason": reason}
+	if o.committed != nil {
+		// the revision that is active again, so a client can say "rolled back to revision N"
+		data["restored"] = o.committed.Revision
+	}
+	o.event(EventRolledBack, data)
 	if o.committed != nil {
 		changes, kept := o.rollbackOverlays(p.d.Config, o.committed.Config, p.moves, o.gen+1)
 		if len(changes) > 0 {

@@ -434,3 +434,57 @@ func (g *gw) finishSetupWith(body map[string]any) {
 		}
 	}
 }
+
+// Plan §2.17 "Commit-confirm": the banner's "Roll back now" (P3-M12-01) ends the waiting at once with the
+// rollback the deadline would run; the event names the revision that is active again.
+func TestARevisionWaitingForConfirmationIsRolledBackOnRequest(t *testing.T) {
+	g := ready(t)
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	id := g.mustPatch(map[string]any{"management": map[string]any{"allowed_sources": []any{"192.168.56.0/24", "172.16.0.0/12"}}})
+	if r := g.apply(id); r.json(t)["status"] != "pending_confirm" {
+		t.Fatalf("%s", r.Body)
+	}
+	r := g.do("POST", "/revisions/"+itoa(id)+"/rollback", nil, nil, nil)
+	if r.Status != 200 || r.json(t)["status"] != "rolled_back" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	var data map[string]any
+	deadline := time.After(10 * time.Second)
+	for data == nil {
+		select {
+		case ev := <-ch:
+			if ev.Type == "revision_rolled_back" {
+				data = ev.Data
+			}
+		case <-deadline:
+			t.Fatal("no rollback event")
+		}
+	}
+	if data["reason"] != "requested" || data["restored"] != int64(1) || data["revision"] != id {
+		t.Errorf("event data %v", data)
+	}
+	if _, err := g.e.Barrier(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := g.do("GET", "/state", nil, nil, nil).json(t)
+	if st["active_revision"] != float64(1) || st["pending_confirm"] != nil {
+		t.Errorf("%v", st)
+	}
+	// nothing waits any more: a second rollback and a confirm are refused
+	for _, op := range []string{"rollback", "confirm"} {
+		if r := g.do("POST", "/revisions/"+itoa(id)+"/"+op, nil, nil, nil); r.Status != 409 || r.code(t) != "not_a_candidate" {
+			t.Errorf("%s after the rollback: %d %s", op, r.Status, r.Body)
+		}
+	}
+	// the request is in the audit log with the admin as its actor
+	found := false
+	for _, i := range g.do("GET", "/audit", nil, nil, nil).json(t)["items"].([]any) {
+		if e := i.(map[string]any); e["action"] == "revision.rollback" && int64(e["revision"].(float64)) == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no audit entry for the requested rollback")
+	}
+}

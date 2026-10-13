@@ -20,7 +20,8 @@ export const invalidates: Partial<Record<EventType, string[][]>> = {
   confirm_pending: [['state']],
   revision_created: [['revisions']],
   revision_applied: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing']],
-  revision_confirmed: [['state'], ['revisions'], ['audit']],
+  // a confirmed revision becomes the active one: the views of the configuration change with it
+  revision_confirmed: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing']],
   revision_rolled_back: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing']],
   overlay_created: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
   overlay_updated: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],

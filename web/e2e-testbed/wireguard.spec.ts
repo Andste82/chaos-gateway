@@ -79,8 +79,9 @@ test('a WireGuard client from the UI: QR code and download, its tunnel comes up;
   await expect(banner.getByRole('button', { name: 'Roll back now' })).toBeVisible();
   const pending = (await banner.textContent())?.match(/Revision (\d+) is applied/)?.[1];
   expect(pending).toBeDefined();
-  await expect(rows.filter({ hasText: 'adm2' })).toBeVisible();
-  // the deadline passes: the gateway rolls back, the UI says so and the client is gone
+  // the views show the active revision: the client would be listed once confirmed
+  await expect(rows.filter({ hasText: 'adm2' })).toHaveCount(0);
+  // the deadline passes: the gateway rolls back, the UI says so, and nothing of the change is left
   await expect(page.locator('[data-kind]').filter({ hasText: `Revision ${pending} rolled back` })).toContainText('It was not confirmed in time. Rolled back to revision', {
     timeout: applyTimeout,
   });

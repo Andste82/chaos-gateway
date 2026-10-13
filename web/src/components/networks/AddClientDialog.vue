@@ -219,7 +219,7 @@ function toggleReach(key: string, on: boolean) {
         Client <strong>{{ form.name || '…' }}</strong> is added to {{ wg.name }} with the tunnel address
         <span class="mono">{{ form.address || '…' }}</span> in a new revision based on revision {{ draft.base ?? state.data.value?.active_revision }}. After the apply,
         its configuration and QR code are in the client list.
-        <span v-if="management" class="mt-1 block text-fault-text">{{ wg.name }} is a management network: the apply waits for your confirmation.</span>
+        <span v-if="management" class="mt-1 block text-fault-text">{{ wg.name }} is a management network: the apply waits for your confirmation, and the client is listed once it is confirmed.</span>
       </div>
       <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text">Another revision waits for confirmation; add the client after it is resolved.</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>

@@ -434,8 +434,11 @@ export class MockGateway {
   };
   /** How long a lockout-relevant apply waits for confirmation. */
   confirmWindowMs = 60_000;
-  /** The configuration and revision a revision that waits for confirmation would roll back to. */
-  private beforePending?: { config: Configuration; revision: number };
+  /**
+   * The revision that waits for confirmation with its configuration: like the gateway's store, the active revision
+   * (and with it every resource view) stays the one before until it is confirmed.
+   */
+  private pending?: { config: Configuration; revision: number };
   /** The Linux part of every preview. */
   previewLinux: Preview['linux'] = { nftables: '+ rule inet chaosgw access_rules ip saddr @net_iot udp dport 53 counter drop' };
 
@@ -684,8 +687,12 @@ export class MockGateway {
       if (this.revisionBase(id) !== this.state.active_revision) return problem(409, 'revision_conflict', `the candidate's base is not the active revision`);
       if (this.state.pending_confirm) return problem(409, 'confirm_pending', `revision ${this.state.pending_confirm.revision} waits for confirmation`);
       const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
-      const confirm = this.requiresConfirm(patch);
-      if (confirm) this.beforePending = { config: this.config, revision: this.state.active_revision };
+      if (this.requiresConfirm(patch)) {
+        this.pending = { config: applyMergePatch(this.config, patch), revision: id };
+        const deadline = new Date(this.now() + this.confirmWindowMs).toISOString();
+        this.state = { ...this.state, generation: this.state.generation + 1, pending_confirm: { revision: id, deadline } };
+        return json(200, { revision: id, status: 'pending_confirm', generation: this.state.generation, confirm_deadline: deadline, duration_ms: 87 } satisfies ApplyResult);
+      }
       this.config = applyMergePatch(this.config, patch);
       this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
       this.noteApplied(id, this.activeBy);
@@ -693,11 +700,6 @@ export class MockGateway {
         this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
       }
       this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
-      if (confirm) {
-        const deadline = new Date(this.now() + this.confirmWindowMs).toISOString();
-        this.state = { ...this.state, pending_confirm: { revision: id, deadline } };
-        return json(200, { revision: id, status: 'pending_confirm', generation: this.state.generation, confirm_deadline: deadline, duration_ms: 87 } satisfies ApplyResult);
-      }
       const res: ApplyResult = { revision: id, status: 'active', generation: this.state.generation, duration_ms: 87 };
       return json(200, res);
     }
@@ -711,10 +713,16 @@ export class MockGateway {
     }
     const confirm = /^\/revisions\/(\d+)\/confirm$/.exec(path);
     if (confirm) {
-      if (this.state.pending_confirm?.revision !== Number(confirm[1]) && this.beforePending) return problem(409, 'not_a_candidate', `revision ${confirm[1]} does not wait for confirmation`);
-      this.beforePending = undefined;
+      if (this.state.pending_confirm?.revision !== Number(confirm[1])) return problem(409, 'not_a_candidate', `revision ${confirm[1]} does not wait for confirmation`);
       const { pending_confirm: _done, ...rest } = this.state;
       this.state = { ...rest, last_known_good: Number(confirm[1]) };
+      if (this.pending) {
+        this.config = this.pending.config;
+        this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
+        this.noteApplied(this.pending.revision, this.activeBy);
+        this.state = { ...this.state, active_revision: this.pending.revision, generation: this.state.generation + 1 };
+        this.pending = undefined;
+      }
       return json(200, { id: Number(confirm[1]), status: 'active', schema_version: 1, created_at: new Date().toISOString(), created_by: { type: 'user', id: 'admin' } });
     }
     return problem(404, 'not_found', `the mock has no ${method} ${path}`);
@@ -890,17 +898,14 @@ export class MockGateway {
   }
 
   /**
-   * The revision that waits for confirmation is rolled back (at its deadline, or on request): the configuration
-   * before it is active again. Returns the event the gateway would send.
+   * The revision that waits for confirmation is rolled back (at its deadline, or on request): the active revision
+   * stays what it was. Returns the event the gateway would send.
    */
   rollBackPending(reason = 'requested'): Omit<GatewayEvent, 'id' | 'time'> {
-    const rev = this.state.pending_confirm?.revision ?? this.state.active_revision;
-    const before = this.beforePending;
-    if (before) this.config = before.config;
-    this.beforePending = undefined;
+    const rev = this.state.pending_confirm?.revision ?? this.pending?.revision ?? this.state.active_revision;
+    this.pending = undefined;
     const { pending_confirm: _gone, ...rest } = this.state;
-    this.state = { ...rest, active_revision: before?.revision ?? rev - 1, generation: this.state.generation + 1 };
-    this.applied = this.applied.map((r) => (r.id === rev ? { ...r, status: 'rolled_back' } : r));
+    this.state = { ...rest, generation: this.state.generation + 1 };
     return { type: 'revision_rolled_back', message: `revision ${rev} rolled back`, data: { revision: rev, reason, restored: this.state.active_revision } };
   }
 

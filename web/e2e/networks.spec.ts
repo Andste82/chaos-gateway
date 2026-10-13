@@ -281,7 +281,7 @@ test('commit-confirm: a client of the management hub waits for confirmation; unc
   await page.getByRole('button', { name: 'Add client' }).first().click();
   const dialog = page.getByRole('dialog', { name: 'Add client to admin' });
   await expect(dialog.getByLabel('Tunnel address')).toHaveValue('10.98.0.2');
-  await expect(dialog.getByTestId('add-client-preview')).toContainText('admin is a management network: the apply waits for your confirmation.');
+  await expect(dialog.getByTestId('add-client-preview')).toContainText('admin is a management network: the apply waits for your confirmation, and the client is listed once it is confirmed.');
   await dialog.getByLabel('Name').fill('admin-laptop');
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
   const drawer = page.getByTestId('preview-drawer');
@@ -289,13 +289,13 @@ test('commit-confirm: a client of the management hub waits for confirmation; unc
   await page.getByRole('button', { name: 'Apply revision 43' }).click();
   await expect(toast(page, 'Revision 43 applied, waiting for confirmation')).toBeVisible();
 
-  // the countdown runs; the client is there while the revision waits
+  // the countdown runs; the views show the active revision, the client is listed once it is confirmed
   const banner = page.getByTestId('countdown-banner');
   await expect(banner).toContainText('Revision 43 is applied and waits for confirmation');
   await expect(banner.getByRole('button', { name: 'Roll back now' })).toBeVisible();
   await expect(banner.getByRole('button', { name: 'Confirm' })).toBeVisible();
-  await expect(clientRows(page)).toHaveCount(1);
-  await expect(clientRows(page).nth(0)).toContainText('admin-laptop');
+  await expect(page.getByTestId('context-line')).toContainText('revision 43 waits for confirmation');
+  await expect(page.getByText('No client yet')).toBeVisible();
   // nothing else can be applied meanwhile
   await page.getByTestId('access-matrix').locator('[data-cell="IoT>Internet"]').click();
   await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
@@ -309,6 +309,23 @@ test('commit-confirm: a client of the management hub waits for confirmation; unc
   await expect(clientRows(page)).toHaveCount(0);
   await expect(page.getByText('No client yet')).toBeVisible();
   await expect(page.getByTestId('context-line')).toContainText('Revision 42');
+});
+
+test('commit-confirm: Confirm makes the client of the management hub active', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  await open(page, `/networks/${ADMIN_HUB}`, gw);
+  await page.getByRole('button', { name: 'Add client' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add client to admin' });
+  await dialog.getByLabel('Name').fill('admin-laptop');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  const banner = page.getByTestId('countdown-banner');
+  await banner.getByRole('button', { name: 'Confirm' }).click();
+  await expect(toast(page, 'Revision 43 confirmed')).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(clientRows(page)).toHaveCount(1);
+  await expect(clientRows(page).nth(0)).toContainText('admin-laptop');
+  await expect(clientRows(page).nth(0)).toContainText('10.98.0.2');
 });
 
 test('commit-confirm: Roll back now ends the waiting at once', async ({ page }) => {

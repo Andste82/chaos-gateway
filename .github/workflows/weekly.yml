@@ -63,8 +63,10 @@ jobs:
       # at 100 minutes with the last slow test running, P2-AUDIT-14), hence a job of its own with room to spare.
       # Some tests of the package fail under emulation now and then for reasons documented in docs/development.md ("Tests
       # that fail under emulation on main as well", KNOWN below). They still run, so that a fix shows, but a run whose
-      # only failures are on that list passes with a warning; any other failure, or a run that did not finish (no
-      # package summary, or fewer names than failures), fails the job.
+      # only failures are on that list passes with a warning; any other failure fails the job, and so does a run that
+      # did not finish as a test run: testvm prints the package summary also after a timeout or a panic, so the job
+      # also requires the package's verdict FAIL with the test binary's exit code 1 (a timeout and a panic exit with
+      # 2, and a timeout names no failed test), no other problem line, no panic and no timeout in the log.
       - name: Run the engine's testbed tests in a VM, software emulation forced
         shell: bash
         env:
@@ -83,14 +85,21 @@ jobs:
           code=${PIPESTATUS[0]}
           set -e
           [ "$code" -eq 0 ] && exit 0
-          summary=$(grep -oE 'internal/engine[[:space:]]+[0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' engine.log | tail -n 1 || true)
-          failed=$(grep -oE -- '--- FAIL: Test[A-Za-z0-9_]+' engine.log | awk '{print $3}' | sort -u)
+          tr -d '\r' < engine.log > engine.txt
+          summary=$(grep -oE '^FAIL +[^ ]*/internal/engine +[0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' engine.txt | tail -n 1 || true)
+          failed=$(grep -oE -- '--- FAIL: Test[A-Za-z0-9_]+' engine.txt | awk '{print $3}' | sort -u)
           count=$(printf '%s\n' "$summary" | sed -nE 's/.* ([0-9]+) failed, ([0-9]+) skipped/\1/p')
           skipped=$(printf '%s\n' "$summary" | sed -nE 's/.* ([0-9]+) skipped/\1/p')
           names=$(printf '%s\n' "$failed" | grep -c . || true)
           list=$(tr '\n' ' ' <<<"$failed")
-          if [ -z "$summary" ] || [ "$skipped" != 0 ] || [ "$count" != "$names" ] || [ "$names" -eq 0 ]; then
-            echo "the run did not finish as a test run (exit $code, summary '$summary', $names failed tests named)" >&2
+          # the only problem testvm may report is the failed tests' exit code 1: a timeout or a panic of the test
+          # binary is exit code 2, a VM that ended early leaves no completion marker
+          problems=$(grep -E '^problem: ' engine.txt || true)
+          others=$(grep -vE '^problem: [^ ]*/internal/engine: exit code 1$' <<<"$problems" | grep . || true)
+          if [ -z "$summary" ] || [ "$skipped" != 0 ] || [ "$count" != "$names" ] || [ "$names" -eq 0 ] ||
+            [ -z "$problems" ] || [ -n "$others" ] || grep -qE '^panic: |test timed out after' engine.txt; then
+            echo "the run did not finish as a test run (exit $code, summary '$summary', $names failed tests named," \
+              "problems: $(tr '\n' ';' <<<"$problems"))" >&2
             exit 1
           fi
           unknown=$(for f in $failed; do case " $KNOWN " in *" $f "*) ;; *) echo "$f" ;; esac; done)

@@ -112,8 +112,14 @@ Things to know:
   So that the job is not red for failures already accepted, it judges its own result: the known emulated failures
   of `internal/engine` (the list under "Fast kernel loop", the `KNOWN` variable of the step) still run, but a run
   whose only failures are on that list passes with a warning and names them in the job summary; any other failure,
-  a skip, or a run that ended without the package's summary line (a timeout, a panic) fails the job. Against the
-  logs of the three runs the judgement fails the first two (the flapping tunnel) and passes the third.
+  a skip, or a run that did not finish as a test run fails the job. testvm prints the package's summary line also
+  after a timeout or a panic of the test binary (run 38158196621: `panic: test timed out after 1h40m0s`, then
+  `FAIL ... internal/engine 182 passed, 1 failed`, and a timeout names no failed test for the test that hung), so the
+  step does not rely on it: it also requires testvm's only problem line to be the test binary's exit code 1 (a timeout
+  and a panic exit with 2, a VM that ended early leaves no completion marker) and finds no `panic:` and no `test timed
+  out` in the log. Against the logs of the three runs the judgement fails the first two (the flapping tunnel) and
+  passes the third; the log of 38158196621 with its one failure renamed to a known one fails it, as does a known
+  failure followed by a panic.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with

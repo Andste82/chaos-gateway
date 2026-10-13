@@ -5871,7 +5871,13 @@ type UplinkView struct {
 		Gateway    *Ipv4          `json:"gateway,omitempty"`
 		Interface  *string        `json:"interface,omitempty"`
 		LinkUp     *bool          `json:"link_up,omitempty"`
-		SpeedMbps  *int           `json:"speed_mbps,omitempty"`
+
+		// RxBytes Bytes the uplink interface received since it came up (the kernel's interface counter); the UI's traffic chart is the difference of two readings.
+		RxBytes   *int64 `json:"rx_bytes,omitempty"`
+		SpeedMbps *int   `json:"speed_mbps,omitempty"`
+
+		// TxBytes Bytes the uplink interface sent since it came up.
+		TxBytes *int64 `json:"tx_bytes,omitempty"`
 	} `json:"status"`
 }
 

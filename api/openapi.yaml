@@ -4146,6 +4146,14 @@ components:
               type: array
               items: {$ref: '#/components/schemas/Ipv4'}
             speed_mbps: {type: integer}
+            rx_bytes:
+              type: integer
+              format: int64
+              description: Bytes the uplink interface received since it came up (the kernel's interface counter); the UI's traffic chart is the difference of two readings.
+            tx_bytes:
+              type: integer
+              format: int64
+              description: Bytes the uplink interface sent since it came up.
     NetworkView:
       type: object
       required: [id, config, status]

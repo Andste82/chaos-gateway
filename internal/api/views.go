@@ -88,6 +88,9 @@ func (s *Server) GetUplink(c *gin.Context, params model.GetUplinkParams) {
 		if hi.SpeedMbps > 0 {
 			status["speed_mbps"] = hi.SpeedMbps
 		}
+		if rx, tx, ok := linkBytes(name); ok {
+			status["rx_bytes"], status["tx_bytes"] = rx, tx
+		}
 	}
 	if v.cfg.Uplink.DnsUpstream != nil && len(*v.cfg.Uplink.DnsUpstream) > 0 {
 		status["dns_servers"] = *v.cfg.Uplink.DnsUpstream

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -98,6 +99,8 @@ type options struct {
 	holderPID func() int
 	// classLimit overrides the number of tc classes one interface may carry (0: the default)
 	classLimit int
+	// ui is the web app the server serves outside /api/ (nil: none)
+	ui fs.FS
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -170,7 +173,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(e.Close)
 	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm,
+		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers

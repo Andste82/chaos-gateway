@@ -1,4 +1,4 @@
-# the image build needs the Go sources and the host-setup script
+# the image build needs the Go sources, the web app's sources and the host-setup script
 *
 !go.mod
 !go.sum
@@ -6,6 +6,12 @@
 !internal/
 !api/embed.go
 !api/openapi.yaml
+!web/
+web/node_modules/
+web/dist/
+web/src/api/generated/
+web/test-results/
+web/playwright-report/
 !deploy/host-setup.sh
 !deploy/chaosgw-kea-hook
 !deploy/kea-start.sh

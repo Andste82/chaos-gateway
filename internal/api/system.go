@@ -402,9 +402,13 @@ func assignment(cfg *model.Configuration, l compiler.HostLink) *hostAssignment {
 	return nil
 }
 
+// sysClassNet is where the kernel lists the interfaces of the API's network namespace (the host's in
+// production, where the API runs with the host network).
+var sysClassNet = "/sys/class/net"
+
 // sysfs adds what only the kernel's file system knows: link state, speed, driver and bus.
 func sysfs(hi *hostInterface) {
-	base := filepath.Join("/sys/class/net", hi.Name)
+	base := filepath.Join(sysClassNet, hi.Name)
 	if b, err := os.ReadFile(filepath.Join(base, "carrier")); err == nil {
 		up := strings.TrimSpace(string(b)) == "1"
 		hi.LinkUp = &up
@@ -428,6 +432,21 @@ func sysfs(hi *hostInterface) {
 	} else if _, err := os.Stat(base); err != nil {
 		hi.Bus = "unknown"
 	}
+}
+
+// linkBytes returns the received and sent bytes of an interface from its kernel counters.
+func linkBytes(name string) (rx, tx int64, ok bool) {
+	read := func(f string) (int64, bool) {
+		b, err := os.ReadFile(filepath.Join(sysClassNet, name, "statistics", f))
+		if err != nil {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		return n, err == nil
+	}
+	rx, okr := read("rx_bytes")
+	tx, okt := read("tx_bytes")
+	return rx, tx, okr && okt
 }
 
 // ListHostInterfaces implements GET /system/interfaces.

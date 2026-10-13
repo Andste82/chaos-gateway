@@ -6,6 +6,15 @@
 #
 #   docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .   (make image)
 
+# the web app (plan §3.7): built once on the build platform, embedded into chaosgw below
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY api ../api
+COPY web ./
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM golang:1.27.1 AS build
 ARG TARGETOS
 ARG TARGETARCH
@@ -18,9 +27,11 @@ RUN go mod download
 COPY api ./api
 COPY cmd ./cmd
 COPY internal ./internal
+COPY web/*.go ./web/
+COPY --from=web /src/web/dist ./web/dist
 # cross-compiled on the build platform: no emulation needed for the Go build
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath \
+    go build -trimpath -tags webui \
       -ldflags "-s -w -X github.com/Andste82/chaos-gateway/internal/version.Version=${VERSION} -X github.com/Andste82/chaos-gateway/internal/version.Commit=${COMMIT} -X github.com/Andste82/chaos-gateway/internal/version.Date=${DATE}" \
       -o /out/ ./cmd/...
 

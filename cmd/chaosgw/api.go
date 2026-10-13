@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/version"
+	"github.com/Andste82/chaos-gateway/web"
 )
 
 // defaultPort is the port of the UI and the API until the configuration names another.
@@ -52,6 +54,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	dataDir := fs.String("data-dir", "/var/lib/chaosgw/api", "directory of the audit log and the idempotency keys")
 	port := fs.Int("port", defaultPort, "port of the UI and the API when the configuration names none")
 	listen := fs.String("listen", "", "listen on exactly this address instead of the management network (development, tests)")
+	webDir := fs.String("web-dir", "", "serve the web app from this directory (a build of web/, `make build-web`) instead of the one embedded in the binary")
 	poll := fs.Duration("poll-interval", 5*time.Second, "how often WireGuard and routing state are read")
 	keaSocket := fs.String("kea-socket", kea.ControlSocket, "Kea's control socket; empty runs without DHCP")
 	serviceNS := fs.String("service-ns", "", "name of the service namespace of the gateway services (the DNS proxy); empty runs without one")
@@ -75,7 +78,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
-		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -94,6 +97,7 @@ type apiOptions struct {
 	listen          string
 	poll            time.Duration
 	confirm         time.Duration
+	webDir          string
 	keaSocket       string
 	keaEventsSocket string
 	serviceToken    string
@@ -172,11 +176,19 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		}
 	}
 
+	ui, err := webUI(o.webDir)
+	if err != nil {
+		return err
+	}
+	if ui == nil {
+		log.Warn("this binary has no web app (built without the tag webui) and none was given with --web-dir: only the API is served")
+	}
+
 	var report atomic.Pointer[api.PreflightReport]
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
-		Preflight: report.Load, ConfirmTimeout: o.confirm})
+		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui})
 	if err != nil {
 		return err
 	}
@@ -226,6 +238,19 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	}
 	<-done
 	return nil
+}
+
+// webUI is the web app to serve: the directory given, else the build embedded in the binary (nil
+// when it was built without one).
+func webUI(dir string) (fs.FS, error) {
+	if dir == "" {
+		return web.Dist(), nil
+	}
+	ui := os.DirFS(dir)
+	if err := api.CheckUI(ui); err != nil {
+		return nil, fmt.Errorf("--web-dir %s: %w", dir, err)
+	}
+	return ui, nil
 }
 
 // uiPort is the port the configuration names (management.ui_port), else the flag's.

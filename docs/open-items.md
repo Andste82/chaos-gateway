@@ -1,6 +1,6 @@
-# Phase 1 and Phase 2 audits and open items
+# Audits and open items
 
-This file holds the audits of two phases of `docs/plan.md` §5 and what they left open:
+This file holds the audits of two phases of `docs/plan.md` §5, what they left open, and the open items of the phase in progress:
 
 - **Phase 1** (M1–M6b): audited on 2026-10-04, closed on 2026-10-05. The result, the decisions and the
   per-milestone verdicts follow directly below.
@@ -9,6 +9,8 @@ This file holds the audits of two phases of `docs/plan.md` §5 and what they lef
   found, P2-AUDIT-01 to P2-AUDIT-16, and P2-AUDIT-17, which the work on them found, are closed (table
   "Closed after the audit (2026-10-12)" under [Phase 2 open items](#phase-2-open-items)). One Phase 2 item
   stays open: P2-M9-06, a hardware measurement for H1.
+- **Phase 3** (M12–M14): in progress. What the implementation of a milestone could not settle is under
+  [Phase 3 open items](#phase-3-open-items), at the end of the file.
 
 ## Phase 1 audit result
 
@@ -637,5 +639,96 @@ stayed open".
 - Acceptance: the H1 measurements exist; the rule limit is confirmed or lowered for ARM64, and the apply
   with ten assigned interfaces stays within the overlay apply latency of plan §3.10 (or the reads are reduced further,
   for example by keeping which interfaces carried a tree at the last apply).
+- Needs maintainer: no
+- Effort: S
+
+## Phase 3 open items
+
+Phase 3 (M12 to M14) is in progress. The items below were found while implementing M12; each records the option that was
+implemented so the work was not blocked, and what the maintainer may want to decide. The reasons are the ones of "Why items
+stayed open".
+
+### P3-M12-01 The commit-confirm banner has no "Roll back now"
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. Plan §2.17 ("Commit-confirm") asks for an orange banner with a live countdown and the actions
+  Confirm and Roll back now. The API has `POST /revisions/{id}/confirm`, but nothing that ends a `pending_confirm` revision
+  at once; it is rolled back only at its deadline (or at a restart).
+- Evidence: `api/openapi.yaml` (`/revisions/{revisionId}/confirm`, no rollback operation); `web/src/components/layout/AppShell.vue`.
+- Task: implemented — the banner offers Confirm only and announces the rollback at the deadline. Options: (a) add
+  `POST /revisions/{id}/rollback` (only for `pending_confirm`, the same rollback the timeout runs, event `revision_rolled_back`
+  with reason `manual`) and the button with it, in M14, where the access matrix is the first lockout-relevant edit of the UI;
+  (b) leave it to the timeout. Recommendation: (a).
+- Acceptance: with (a), the endpoint exists with a test, and the banner's Roll back now restores the previous revision in a Playwright test.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M12-02 The device detail's flows and recent DNS are not shown yet
+
+- Status: new
+- Severity: low
+- Reason: deferred. Plan §2.17 lists flows, recent DNS, captures, the DHCP lease and test actions, TLS test and diagnose on
+  the device detail. M12 scopes the detail to "the data available after Phase 2 (identity, lease, active faults,
+  counters)"; M26 has the "flow view in the UI (flow data from M6a)". `GET /flows?device=` and `GET /dns/queries?device=`
+  exist since M6a/M6b.
+- Evidence: plan §5 M12 Scope, M26 Scope; `web/src/views/DeviceDetailView.vue`.
+- Task: implemented — the detail shows identity, lease, active faults (removable overlays) and the counters (rates, active
+  connections, last seen). Decide whether the device's flows and its recent DNS queries belong to M13 (with the device's
+  faults) or stay with M26.
+- Acceptance: the milestone that takes them lists them in its Scope and Tests.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M12-03 Adopting a device applies directly instead of through the preview-and-apply drawer
+
+- Status: new
+- Severity: low
+- Reason: deferred. Plan §2.17 lists "adopt discovered devices" on the Devices screen and the principle "nothing changes the
+  network without the user seeing what will change (preview)"; the preview-and-apply drawer and the concurrent-change dialog
+  are M13's.
+- Evidence: `web/src/components/devices/AdoptDialog.vue`.
+- Task: implemented — the dialog says in words what changes (the device, its MAC or address, its network, the base
+  revision, "traffic is not changed"), then creates the merge-patch candidate with `If-Match`, applies it and shows the
+  verified toast; a `revision_conflict` is reported in the dialog and the candidate discarded. M13 moves adopt onto the drawer and
+  the conflict dialog.
+- Acceptance: M13's Playwright tests cover adopt through the drawer and a conflict on it.
+- Needs maintainer: no
+- Effort: S
+
+### P3-M12-04 The setup wizard makes one test network per test interface
+
+- Status: new
+- Severity: low
+- Reason: plan-error (underspecified). M12 says "assign test interfaces"; a LAN network can have several ports (plan §2.2).
+- Evidence: `web/src/lib/setup.ts` (`buildSetupRequest`).
+- Task: implemented — each chosen test interface becomes a LAN network of its own with a proposed name, gateway address
+  and DHCP switch; more ports, WireGuard networks and the access matrix are edited afterwards (M14's networks view).
+  Confirm, or ask for grouping several ports into one network in the wizard.
+- Acceptance: the decision is recorded here; a change gets a Playwright test.
+- Needs maintainer: yes
+- Effort: S
+
+### P3-M12-05 The safe-mode banner links to the plan, not to recovery instructions
+
+- Status: new
+- Severity: low
+- Reason: deferred. Safe mode itself comes with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
+  shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery".
+- Evidence: `web/src/components/layout/AppShell.vue`.
+- Task: when M27/M30 write the recovery instructions, point the link at them (served with the app or in the docs).
+- Acceptance: the link leads to the recovery instructions.
+- Needs maintainer: no
+- Effort: S
+
+### P3-M12-06 The image build with the web app was not run locally
+
+- Status: new
+- Severity: low
+- Reason: env-limit. The devcontainer has no Docker daemon. `deploy/Dockerfile` builds the app in a Node stage and embeds
+  it (`-tags webui`); `.dockerignore` lets the web sources in.
+- Evidence: `deploy/Dockerfile`, `.dockerignore`.
+- Task: the `arm64` CI job builds the image for both architectures; check its first run on this branch.
+- Acceptance: the image builds in CI and `chaosgw api` in it serves the app.
 - Needs maintainer: no
 - Effort: S

@@ -578,6 +578,73 @@ func TestAnAddressChangeIsNotHeldBackByTheWindow(t *testing.T) {
 	}
 }
 
+// An overlay written while an apply runs, followed by a new device before the loop comes back, is
+// not held back by the window: the loop skips the overlay's own desired state for the newer one the
+// device made, which differs from the one before it only in the identity, but carries the overlay
+// the kernel does not have yet. The write returns once that state is applied, without any clock
+// movement, and the new device converges with it.
+func TestAnOverlayChangeThatCoalescedWithANewDeviceIsNotHeldBack(t *testing.T) {
+	h := newHarness(t)
+	be := &blockingNftExec{inner: apply.Local{E: h.ex}, entered: make(chan struct{}), resume: make(chan struct{})}
+	e, err := engine.New(engine.Config{Store: h.st, Exec: be, Clock: h.clk, DHCP: &fakeDHCP{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.e = e
+	t.Cleanup(e.Close)
+
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.mustPut(alice, "target: {network: IoT}\nfault: {rate: 2Mbit}")
+	cfgDev := neighbor("10.10.0.31", macCfg)
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev})
+	h.observe()
+	h.barrier()
+	h.clk.Advance(3 * time.Second)
+	// X takes a full apply (a queue of its own under alice's rate): the window starts
+	macX, macY := "02:00:00:00:00:a1", "02:00:00:00:00:a2"
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX)})
+	h.observe()
+	h.barrier()
+
+	// bob's write is held in its nft apply, so the loop is busy while admin writes and Y appears
+	be.armed = true
+	bobDone := make(chan error, 1)
+	go func() { _, err := h.put(bob, iotLatency); bobDone <- err }()
+	<-be.entered
+	adminDone := make(chan error, 1)
+	go func() { _, err := h.put(admin, "target: {network: IoT}\nfault: {loss: 5%}"); adminDone <- err }()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(h.e.Snapshot().Overlays) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("admin's overlay never reached the desired state: %d overlays", len(h.e.Snapshot().Overlays))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	h.k.SetNeighbors([]linux.Neighbor{cfgDev, neighbor("10.10.0.60", macX), neighbor("10.10.0.61", macY)})
+	h.observe()
+	close(be.resume)
+
+	if err := <-bobDone; err != nil {
+		t.Fatal(err)
+	}
+	// the clock stands still: a write held back for the window would not return
+	select {
+	case err := <-adminDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("admin's write waits for the window of the device that appeared after it")
+	}
+	if got := h.deviceSetElements(engine.DeviceID(macY)); got != "10.10.0.61" {
+		t.Errorf("the device did not converge with the overlay: %q", got)
+	}
+	h.verifyKernelWithOverlays()
+}
+
 func TestABurstOfTriggersIsOneReading(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))

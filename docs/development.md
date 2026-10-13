@@ -1080,7 +1080,10 @@ also changes two things said here: the maps are interval maps, and an element `g
   that case: the owner converges every identity change at once, and the apply loop delays a full apply
   that devices which came or went need until two seconds after the last one, taking the newest desired
   state then (`TestNewDevicesThatNeedAFullApplyConvergeOncePerWindow`); an address change of a known
-  device is never held back (`TestAnAddressChangeIsNotHeldBackByTheWindow`). `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
+  device is never held back (`TestAnAddressChangeIsNotHeldBackByTheWindow`), and neither is a desired
+  state that also carries another change since the last applied one, such as an overlay written while
+  an apply ran whose own desired state the loop skipped for the newer one a device made (`desired.Changed`,
+  `TestAnOverlayChangeThatCoalescedWithANewDeviceIsNotHeldBack`). `Nft` gained `Maps` alongside `Sets` (flushed and refilled like a set at
   a full apply, since P2-M10-09 changed by their difference like a set, with the same object-cleanup handling `nft.go`'s `Transaction` already had for sets,
   and a latent bug fixed there: a removed map was deleted with `delete set`, not `delete map`);
   `kernelsim` simulates map objects (add/flush/delete, element add/delete, jump-target and

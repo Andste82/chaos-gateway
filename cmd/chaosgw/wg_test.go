@@ -129,7 +129,9 @@ func TestWGExportQRDecodesToTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	bmp, _ := gozxing.NewBinaryBitmapFromImage(img)
-	res, err := zqr.NewQRCodeReader().Decode(bmp, nil)
+	// the image is the code alone: without the hint, gozxing misjudges the dimension of about one
+	// dense code in a hundred (see TestEveryQRCodeDecodes in internal/wireguard)
+	res, err := zqr.NewQRCodeReader().Decode(bmp, map[gozxing.DecodeHintType]interface{}{gozxing.DecodeHintType_PURE_BARCODE: true})
 	if err != nil || res.GetText() != conf {
 		t.Fatalf("the QR code does not decode to the file: %v", err)
 	}

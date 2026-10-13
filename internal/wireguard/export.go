@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -371,12 +374,39 @@ func ConsumePrivateKey(in ExportInput, networkID, clientID string) (bool, error)
 // MaxQRBytes is what fits into a QR code at the error correction level used.
 const MaxQRBytes = 2331
 
-// QRPNG renders a configuration as a QR code, for phones and tablets.
+// QRPNG renders a configuration as a QR code of size × size pixels, for phones and tablets. Each
+// module is a whole number of pixels and the rest of the image is white margin: go-qrcode scales a
+// code to an arbitrary size by rounding, which makes modules of unequal width that scanners misread.
 func QRPNG(conf string, size int) ([]byte, error) {
 	if len(conf) > MaxQRBytes {
 		return nil, fmt.Errorf("the configuration (%d bytes) is too large for a QR code (%d): reduce the networks the client reaches", len(conf), MaxQRBytes)
 	}
-	return qrcode.Encode(conf, qrcode.Low, size)
+	q, err := qrcode.New(conf, qrcode.Low)
+	if err != nil {
+		return nil, err
+	}
+	bm := q.Bitmap() // with the quiet zone
+	n := len(bm)
+	scale := max(1, size/n)
+	size = max(size, n)
+	img := image.NewPaletted(image.Rect(0, 0, size, size), color.Palette{color.White, color.Black})
+	off := (size - n*scale) / 2
+	for y, row := range bm {
+		for x, dark := range row {
+			if dark {
+				for dy := range scale {
+					for dx := range scale {
+						img.SetColorIndex(off+x*scale+dx, off+y*scale+dy, 1)
+					}
+				}
+			}
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
 }
 
 // QRSVG renders a configuration as an SVG QR code.

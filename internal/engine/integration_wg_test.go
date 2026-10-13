@@ -238,7 +238,9 @@ func TestLocalDeviceReachesAClientNetworkWithoutNATAndTheReverseNeedsTheMatrix(t
 		t.Fatal(err)
 	}
 	bmp, _ := gozxing.NewBinaryBitmapFromImage(img)
-	if res, err := zqr.NewQRCodeReader().Decode(bmp, nil); err != nil || res.GetText() != conf.Conf {
+	// the image is the code alone (see TestEveryQRCodeDecodes in internal/wireguard)
+	pure := map[gozxing.DecodeHintType]interface{}{gozxing.DecodeHintType_PURE_BARCODE: true}
+	if res, err := zqr.NewQRCodeReader().Decode(bmp, pure); err != nil || res.GetText() != conf.Conf {
 		t.Fatalf("the QR code does not decode to the file: %v", err)
 	}
 

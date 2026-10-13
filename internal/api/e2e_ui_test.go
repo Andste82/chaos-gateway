@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/auth"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/testbed"
 )
@@ -87,36 +88,14 @@ func TestFirstStartInTheBrowserUntilADiscoveredDevice(t *testing.T) {
 		}
 	}()
 
-	out := t.TempDir()
-	cmd := exec.CommandContext(ctx, filepath.Join(web, "node_modules", ".bin", "playwright"), "test", "--config", "playwright.testbed.config.ts")
-	cmd.Dir = web
-	cmd.Env = append(os.Environ(),
-		"CHAOSGW_URL="+g.ts.URL,
-		"CHAOSGW_SETUP_TOKEN="+g.setup,
-		"CHAOSGW_LAN_ADDRESS="+testbed.LAN0Gateway+"/24",
-		"CHAOSGW_UPLINK_GATEWAY="+testbed.ServerAddr,
-		"CHAOSGW_DEVICE_MAC="+testbed.ClientAMAC,
-		"CHAOSGW_DEVICE_IP="+testbed.ClientAAddr,
-		"PLAYWRIGHT_BROWSERS_PATH="+browsers,
-		"PLAYWRIGHT_OUTPUT_DIR="+filepath.Join(out, "results"),
-		// the checkout may be read-only (the VM of level 1b): everything written goes to the test's directory
-		"HOME="+out,
-		"TMPDIR="+out,
-		"CI=1",
-	)
-	res, err := cmd.CombinedOutput()
-	t.Logf("playwright:\n%s", res)
-	if err != nil {
-		// the page as the browser had it when the step failed (its accessibility tree: every
-		// message the UI showed, e.g. the gateway's error after the apply)
-		pages, _ := filepath.Glob(filepath.Join(out, "results", "*", "error-context.md"))
-		for _, p := range pages {
-			if b, rerr := os.ReadFile(p); rerr == nil {
-				t.Logf("%s:\n%s", filepath.Base(filepath.Dir(p)), b)
-			}
-		}
-		t.Fatalf("the browser flow failed: %v\nneighbors of the gateway:\n%s", err, top.GW.Must("ip", "neigh"))
-	}
+	runBrowser(ctx, t, web, browsers, "first-start.spec.ts", map[string]string{
+		"CHAOSGW_URL":            g.ts.URL,
+		"CHAOSGW_SETUP_TOKEN":    g.setup,
+		"CHAOSGW_LAN_ADDRESS":    testbed.LAN0Gateway + "/24",
+		"CHAOSGW_UPLINK_GATEWAY": testbed.ServerAddr,
+		"CHAOSGW_DEVICE_MAC":     testbed.ClientAMAC,
+		"CHAOSGW_DEVICE_IP":      testbed.ClientAAddr,
+	}, func() string { return "neighbors of the gateway:\n" + top.GW.Must("ip", "neigh") })
 
 	// what the browser saw is what the gateway holds: the setup is done, revision 1 confirmed, A known
 	g.mintToken("read")
@@ -127,5 +106,111 @@ func TestFirstStartInTheBrowserUntilADiscoveredDevice(t *testing.T) {
 	devs := g.do("GET", "/devices?origin=discovered", nil, nil, nil)
 	if !strings.Contains(string(devs.Body), testbed.ClientAMAC) {
 		t.Errorf("device A is not a discovered device in the API: %s", devs.Body)
+	}
+}
+
+// runBrowser runs one spec of web/e2e-testbed with Playwright against the gateway; env names the
+// gateway and what the spec needs. On a failure it logs the page as the browser had it (its
+// accessibility tree: every message the UI showed) and what `more` says about the testbed.
+func runBrowser(ctx context.Context, t *testing.T, web, browsers, spec string, env map[string]string, more func() string) {
+	t.Helper()
+	out := t.TempDir()
+	cmd := exec.CommandContext(ctx, filepath.Join(web, "node_modules", ".bin", "playwright"), "test", "--config", "playwright.testbed.config.ts", spec)
+	cmd.Dir = web
+	cmd.Env = append(os.Environ(),
+		"PLAYWRIGHT_BROWSERS_PATH="+browsers,
+		"PLAYWRIGHT_OUTPUT_DIR="+filepath.Join(out, "results"),
+		// the checkout may be read-only (the VM of level 1b): everything written goes to the test's directory
+		"HOME="+out,
+		"TMPDIR="+out,
+		"CI=1",
+	)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	res, err := cmd.CombinedOutput()
+	t.Logf("playwright %s:\n%s", spec, res)
+	if err != nil {
+		pages, _ := filepath.Glob(filepath.Join(out, "results", "*", "error-context.md"))
+		for _, p := range pages {
+			if b, rerr := os.ReadFile(p); rerr == nil {
+				t.Logf("%s:\n%s", filepath.Base(filepath.Dir(p)), b)
+			}
+		}
+		t.Fatalf("the browser flow %s failed: %v\n%s", spec, err, more())
+	}
+}
+
+// M13 test (plan §5): create a fault in the UI, then verify the measured effect in the testbed — and,
+// on the way, the other three: validation errors are shown, a conflicting change made through the API
+// triggers the conflict dialog, the faults screen marks an overridden fault. The gateway runs on the
+// real executor with the testbed's configuration and serves the built web app; devices A and B of the
+// network IoT send traffic, so the gateway knows them. In web/e2e-testbed/faults.spec.ts Chromium logs
+// in, adds a configured fault of 30 ms on the network IoT (the unapplied-changes bar, the preview), meets
+// the revision a token applied meanwhile (the conflict dialog: reload and reapply), applies, adds a
+// fault of 100 ms on device A (after a validation error), and finds the network's fault overridden by
+// it on the faults screen. Then the Go test measures: A's round trip carries 2 × 100 ms, B's 2 × 30 ms.
+func TestAFaultCreatedInTheBrowserTakesEffectOnTheWire(t *testing.T) {
+	web, browsers := webDir(t)
+	g, top := newBedGW(t, func(o *options) { o.ui = os.DirFS(filepath.Join(web, "dist")) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	if err := g.e.PollObserved(ctx, 500*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	// A and B talk to their gateway address, so the gateway knows them as devices
+	for _, ns := range []*testbed.Namespace{top.A, top.B} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_, _ = ns.Run(ctx, "ping", "-c", "1", "-W", "1", "-n", testbed.LAN0Gateway)
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Second):
+				}
+			}
+		}()
+	}
+	baseA := testbed.MustPing(t, top.A, testbed.ServerAddr, 10, 200*time.Millisecond).Median()
+	baseB := testbed.MustPing(t, top.B, testbed.ServerAddr, 10, 200*time.Millisecond).Median()
+
+	// the token of "someone else": a test that changes the configuration through the API meanwhile
+	_, token, err := g.au.CreateToken("ci-runner", auth.ScopeFull, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runBrowser(ctx, t, web, browsers, "faults.spec.ts", map[string]string{
+		"CHAOSGW_URL":            g.ts.URL,
+		"CHAOSGW_ADMIN_PASSWORD": adminPassword,
+		"CHAOSGW_TOKEN":          token,
+		"CHAOSGW_DEVICE_MAC":     testbed.ClientAMAC,
+	}, func() string { return "overlays:\n" + string(g.do("GET", "/overlays", nil, nil, nil).Body) })
+
+	// what the browser did is in the gateway: the configured fault of the network, the overlay of A
+	g.mintToken("read")
+	faults := string(g.do("GET", "/faults", nil, nil, nil).Body)
+	if !strings.Contains(faults, `"iot-delay"`) || !strings.Contains(faults, `"30ms"`) {
+		t.Errorf("the configured fault is not in the active revision: %s", faults)
+	}
+	ovs := g.do("GET", "/overlays?kind=fault", nil, nil, nil).json(t)["items"].([]any)
+	if len(ovs) != 1 || ovs[0].(map[string]any)["fault"].(map[string]any)["latency"] != "100ms" {
+		t.Fatalf("the overlay of device A: %v", ovs)
+	}
+	if groups := string(g.do("GET", "/groups", nil, nil, nil).Body); !strings.Contains(groups, "api-made") {
+		t.Errorf("the change the token made meanwhile is lost: %s", groups)
+	}
+
+	// the measured effect: 100 ms each way for A (its own fault wins), 30 ms each way for B (the network's)
+	a := testbed.MustPing(t, top.A, testbed.ServerAddr, 20, 200*time.Millisecond)
+	b := testbed.MustPing(t, top.B, testbed.ServerAddr, 20, 200*time.Millisecond)
+	t.Logf("median round trip: A %v (before %v), B %v (before %v)", a.Median(), baseA, b.Median(), baseB)
+	if d := a.Median() - baseA; d < 180*time.Millisecond || d > 400*time.Millisecond {
+		t.Errorf("device A's round trip grew by %v, want about 200 ms (2 × 100 ms)", d)
+	}
+	if d := b.Median() - baseB; d < 50*time.Millisecond || d > 150*time.Millisecond {
+		t.Errorf("device B's round trip grew by %v, want about 60 ms (2 × 30 ms of the network's fault)", d)
 	}
 }

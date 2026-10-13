@@ -732,3 +732,20 @@ stayed open".
 - Acceptance: the image builds in CI and `chaosgw api` in it serves the app.
 - Needs maintainer: no
 - Effort: S
+
+### P3-M12-07 The netplan hints of the wizard are not taken from the preflight
+
+- Status: new
+- Severity: low
+- Reason: needs-decision. M12 Scope says "netplan hints from the preflight", and plan §3.4 says the preflight checks that the
+  test interfaces carry no OS configuration. The preflight (`internal/preflight`) has no per-interface netplan check yet;
+  the wizard builds the hint itself from `HostInterface.os_managed` (`netplanHint` in `web/src/lib/setup.ts`). Since the
+  M12 review it only says to delete the interface's entry, as §3.4 wants, and no longer offers an entry that turns the
+  addressing off.
+- Evidence: `web/src/lib/setup.ts` (`netplanHint`), `internal/preflight`.
+- Task: implemented — the client-side hint. Options: (a) a preflight check per assigned or candidate interface that names
+  the netplan file and entry (or the NetworkManager connection) to remove, shown by the wizard and the CLI alike, with
+  M28's host-setup script; (b) keep the client-side hint. Recommendation: (a) with M28.
+- Acceptance: with (a), the preflight reports the entry with a test, and the wizard shows the preflight's text in a Playwright test.
+- Needs maintainer: yes
+- Effort: S

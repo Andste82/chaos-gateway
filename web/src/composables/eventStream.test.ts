@@ -78,6 +78,21 @@ describe('the event stream', () => {
     expect(keys(invalidate)).not.toContainEqual(['networks']);
   });
 
+  it('reads the kernel state again only for events that change what the gateway applied', () => {
+    const { es, invalidate } = setup();
+    for (const t of ['counter_epoch', 'confirm_pending', 'network_degraded', 'safe_mode']) {
+      es.send(t, {});
+      expect(keys(invalidate)).toContainEqual(['state']);
+      expect(keys(invalidate)).not.toContainEqual(['linux-state']);
+      invalidate.mockClear();
+    }
+    for (const t of ['applied', 'revision_rolled_back', 'overlay_created']) {
+      es.send(t, {});
+      expect(keys(invalidate)).toContainEqual(['linux-state']);
+      invalidate.mockClear();
+    }
+  });
+
   it('refetches everything when the gateway cannot replay what was missed', () => {
     const { es, invalidate } = setup();
     es.send('events_lost', { data: { reason: 'restart' } });

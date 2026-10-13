@@ -44,14 +44,14 @@ test('the rows show identity, traffic, faults and status, and open the device', 
   const esp = page.getByTestId('device-row').filter({ hasText: 'ESP32-42' });
   await expect(esp).toContainText('10.10.0.42');
   await expect(esp).toContainText('02:00:00:00:00:2a');
-  await expect(esp).toContainText('IoT');
+  await expect(esp.getByRole('link', { name: 'IoT' })).toHaveAttribute('href', '/networks/0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21');
   await expect(esp).toContainText('3.1 KB/s / 2.4 KB/s');
   await expect(esp).toContainText('upload 200 ms ± 50 ms');
   await expect(esp).toContainText('Online');
   await expect(page.getByTestId('device-row').filter({ hasText: 'Sensor-09' })).toContainText('Offline');
   await expect(page.getByTestId('device-row').filter({ hasText: 'Test-Phone' })).toContainText('Test');
 
-  await esp.click();
+  await esp.getByText('02:00:00:00:00:2a').click();
   await expect(page).toHaveURL(/\/devices\/a1b2c3d4-0000-4000-8000-000000000042$/);
   await expect(page.getByRole('heading', { name: 'ESP32-42' })).toBeVisible();
 });

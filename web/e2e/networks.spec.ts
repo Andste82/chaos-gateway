@@ -307,6 +307,49 @@ test("a slow export of one client never shows up in the dialog of another", asyn
   expect(readFileSync((await download.path())!, 'utf8')).toContain('Address = 10.99.0.3/32');
 });
 
+test('an export-once key is never lost: a dialog reopened while the export hangs waits for it', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  const hub = gw.config.networks![HUB] as { clients: Record<string, { key?: object }> };
+  hub.clients[CLIENT_RA]!.key = { mode: 'generated', export_once: true };
+  let release = () => {};
+  gw.exportGate = new Promise((r) => (release = r));
+  await open(page, `/networks/${HUB}`, gw);
+  const openRA = () => clientRows(page).nth(0).getByRole('button', { name: 'Configuration and QR code of rA' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Configuration of rA' });
+
+  // closed and reopened while the export hangs: the new opening waits for it instead of exporting again
+  await openRA();
+  await expect(dialog).toContainText('Exporting the configuration…');
+  await dialog.getByRole('button', { name: 'Close' }).first().click();
+  await openRA();
+  await expect(dialog).toContainText('Exporting the configuration…');
+  release();
+  await expect.poll(() => scanQr(page)).toContain('PrivateKey = cHJpdmF0ZS');
+  expect(gw.requestsTo('GET', `/networks/${HUB}/clients/${CLIENT_RA}/export`)).toHaveLength(1);
+});
+
+test('an export-once answer that arrives while no dialog is open is shown by the next opening', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  const hub = gw.config.networks![HUB] as { clients: Record<string, { key?: object }> };
+  hub.clients[CLIENT_RA]!.key = { mode: 'generated', export_once: true };
+  let release = () => {};
+  gw.exportGate = new Promise((r) => (release = r));
+  await open(page, `/networks/${HUB}`, gw);
+  const openRA = () => clientRows(page).nth(0).getByRole('button', { name: 'Configuration and QR code of rA' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Configuration of rA' });
+  await openRA();
+  await expect(dialog).toContainText('Exporting the configuration…');
+  await dialog.getByRole('button', { name: 'Close' }).first().click();
+  const late = page.waitForResponse((r) => r.url().includes(`/clients/${CLIENT_RA}/export`));
+  release();
+  await late;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  await openRA();
+  await expect(dialog).toContainText('The gateway deletes the key after this export: save the file now.');
+  await expect.poll(() => scanQr(page)).toContain('PrivateKey = cHJpdmF0ZS');
+  expect(gw.requestsTo('GET', `/networks/${HUB}/clients/${CLIENT_RA}/export`)).toHaveLength(1);
+});
+
 test('the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply', async ({ page }) => {
   const gw = await open(page);
   const matrix = page.getByTestId('access-matrix');

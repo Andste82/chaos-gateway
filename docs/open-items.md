@@ -888,7 +888,9 @@ stayed open".
 - Task: implemented — an existing remote-network scope is kept as it is (shown as "Remote network 10.9.0.0/24", "Remote
   networks of link …", "Client networks of …" and sent back unchanged; before the M13 review it was read as "Everything"),
   but it cannot be picked for a new fault, profile activation or rule. Options: (a) offer the WireGuard clients and links
-  (and a CIDR field) in the selectors, with M14's WireGuard views; (b) keep them API-only. Recommendation: (a) in M14.
+  (and a CIDR field) in the selectors, with M14's WireGuard views; (b) keep them API-only. Recommendation: (a), in the
+  milestone that takes the client actions of P3-M14-01; M14 did not add them (it shows the clients' networks in the
+  WireGuard views only).
 - Acceptance: with (a), a Playwright test creates a fault on a client's networks and the request carries the scope.
 - Needs maintainer: yes
 - Effort: S

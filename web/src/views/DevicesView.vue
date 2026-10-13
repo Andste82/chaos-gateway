@@ -109,7 +109,12 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
           </span>
           <span role="cell" class="mono truncate text-[13px]">{{ d.observed.addresses?.join(', ') || '—' }}</span>
           <span role="cell" class="mono truncate text-[13px] text-text-2">{{ d.observed.macs?.join(', ') || '—' }}</span>
-          <span role="cell" class="truncate text-text-2">{{ networkName(d.network) }}</span>
+          <span role="cell" class="truncate text-text-2">
+            <RouterLink v-if="d.network && networkName(d.network) !== '—'" :to="`/networks/${d.network}`" class="text-text-2" @click.stop>{{
+              networkName(d.network)
+            }}</RouterLink>
+            <template v-else>—</template>
+          </span>
           <span role="cell" class="mono text-[13px] text-text-2"
             >{{ formatByteRate(d.observed.upload_bps) }} / {{ formatByteRate(d.observed.download_bps) }}</span
           >

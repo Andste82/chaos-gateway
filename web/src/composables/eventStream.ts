@@ -13,21 +13,23 @@ import { useConnectionStore } from '../stores/connection';
 import { useEventStore } from '../stores/events';
 import { useToastStore } from '../stores/toasts';
 
-/** The cached data each event type changes (query key prefixes of the generated hooks). */
+/** The cached data each event type changes (query key prefixes of the generated hooks). The kernel
+ * state of the technical view (`['linux-state']`, outside the `state` prefix: reading it runs nft, tc,
+ * ip and wg) is refetched only for events that change what the gateway applied, and polls otherwise. */
 export const invalidates: Partial<Record<EventType, string[][]>> = {
-  applied: [['state'], ['devices'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles'], ['routing']],
+  applied: [['state'], ['devices'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles'], ['routing'], ['linux-state']],
   apply_failed: [['state']],
   confirm_pending: [['state']],
   revision_created: [['revisions']],
-  revision_applied: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing']],
+  revision_applied: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['linux-state']],
   // a confirmed revision becomes the active one: the views of the configuration change with it
-  revision_confirmed: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing']],
-  revision_rolled_back: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing']],
-  overlay_created: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
-  overlay_updated: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
-  overlay_removed: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
-  overlay_expired: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
-  overlay_orphaned: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state']],
+  revision_confirmed: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['linux-state']],
+  revision_rolled_back: [['state'], ['revisions'], ['devices'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing'], ['linux-state']],
+  overlay_created: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_updated: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_removed: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_expired: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_orphaned: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
   device_discovered: [['devices'], ['networks']],
   device_online: [['devices']],
   device_offline: [['devices']],

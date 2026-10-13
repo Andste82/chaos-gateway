@@ -182,7 +182,8 @@ useApiScreen('this device', () => [
           <dl class="m-0 grid grid-cols-[100px_1fr] gap-x-4 gap-y-2 text-sm" data-testid="device-lease">
             <dt class="text-text-2">Network</dt>
             <dd class="m-0">
-              {{ networkConfig?.name ?? '—' }}
+              <RouterLink v-if="network && networkConfig?.name" :to="`/networks/${network.id}`">{{ networkConfig.name }}</RouterLink>
+              <template v-else>—</template>
               <span v-if="networkConfig?.address" class="mono text-text-3">{{ subnetOf(networkConfig.address) }}</span>
             </dd>
             <dt class="text-text-2">Lease</dt>

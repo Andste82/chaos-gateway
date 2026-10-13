@@ -3496,7 +3496,9 @@ import for now (P3-M14-01).
   count as. The dialog warns that the configuration holds the client's private key (or says that it has the placeholder
   `<PRIVATE_KEY>` when the gateway holds none), and shows the text on request. Every opening counts: an export that
   answers after the dialog was closed or opened for another client is dropped, so the dialog never shows another client's
-  code or file under this client's name.
+  code or file under this client's name. An "export once" text is the only copy of the key and is never dropped: an
+  opening for the same client while its export is in flight waits for it instead of exporting again (which would only get
+  the placeholder), and an answer no opening showed is kept in memory and shown by the next opening.
 - **Access matrix** (`AccessMatrix.vue`, logic in `src/lib/networks.ts`). Rows are the test and WireGuard networks, columns
   the Internet (uplink), the networks and the management network; a cell is Allowed or Blocked with a text label, "default"
   when no entry exists (the spec's default: a local test network reaches the uplink, everything else is blocked), and a
@@ -3537,10 +3539,14 @@ import for now (P3-M14-01).
   shows at most 256 elements and how many more; the generation chain is left out), the tc trees with the counters of every
   qdisc, class and filter, the bridges with their addresses and ports, the policy rules and routes of Chaos Gateway's tables,
   and the WireGuard interfaces with their peers (public keys, allowed IPs, endpoint, handshake, bytes; never a private or
-  preshared key). The page shows the four parts (or one), filtered by a word, and reads again every 5 s; the excerpt of a
+  preshared key). The page shows the four parts (or one), filtered by a word, and reads again every 5 s, and at once after
+  an event that changes what the gateway applied (an apply, a revision, an overlay); its query key `['linux-state']` is
+  outside the `state` prefix, so the many events that refresh the state (counters, a degraded network, a pending
+  confirmation) do not each run nft, tc, ip and wg. The excerpt of a
   network keeps the lines that name its interface, its subnet or its gateway address (whole words), with the table and the
   chain, set or interface around them (`src/lib/linuxView.ts`).
-- **Navigation.** Networks is a link now; Routing and the Linux view are reached from the Networks page (plan §2.17: the
+- **Navigation.** Networks is a link now, and a device's network (in the device table and the device detail) links to
+  `/networks/{id}`; Routing and the Linux view are reached from the Networks page (plan §2.17: the
   technical view is "never needed for normal use").
 
 ### Tests
@@ -3606,7 +3612,7 @@ not run on this branch with the M14 flow yet.
 | Scope: network cards and detail, DHCP pool/leases | `networks.spec.ts` "network cards and the detail of a test network: subnet, gateway, attachment, DHCP pool and leases, DNS, IPv6", "empty and failed: …", "failed: an access matrix, an uplink or a routing configuration the gateway did not deliver says so instead of showing defaults"; `src/lib/networks.test.ts` (the default pool) |
 | Scope: WireGuard networks with client list, client status | `networks.spec.ts` "a WireGuard hub lists its clients with their status; a link shows its peer and its routes", "a client that goes offline is shown offline after the next poll", "backing out of the drawer keeps the new client in the draft, marked NEW, …" |
 | Scope: add-client dialog (proposes the next free tunnel address of the hub, computed client-side) | `networks.spec.ts` "add a client: …" (the proposal, the checks under the fields, the request, the next proposal after the apply), "a new client the gateway refuses says why in its row; Fix opens it again with the message under its field"; `src/lib/networks.test.ts` "the next free tunnel address of a hub (plan M14, computed client-side)", "the add-client form" |
-| Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …", "a slow export of one client never shows up in the dialog of another"; the testbed flow |
+| Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …", "a slow export of one client never shows up in the dialog of another", "an export-once key is never lost: …", "an export-once answer that arrives while no dialog is open …"; the testbed flow |
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
 | Scope: access matrix editing with commit-confirm | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |

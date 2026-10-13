@@ -4,13 +4,13 @@
 // to whole chains (`chains`). The counters are live: the view reads again every 5 s while it is open.
 import { useQuery } from '@tanstack/vue-query';
 import { computed } from 'vue';
-import { getGetLinuxStateQueryKey, getLinuxState } from '../../api/generated/hooks/system/system';
+import { getLinuxState } from '../../api/generated/hooks/system/system';
 import { groupExcerpt, nftExcerpt, sectionLabels, sectionsOf } from '../../lib/linuxView';
 import LoadError from '../ui/LoadError.vue';
 
 const props = defineProps<{ terms?: string[]; chains?: string[] }>();
 
-const linux = useQuery({ queryKey: getGetLinuxStateQueryKey(), queryFn: ({ signal }) => getLinuxState({ signal }), refetchInterval: 5_000 });
+const linux = useQuery({ queryKey: ['linux-state'], queryFn: ({ signal }) => getLinuxState({ signal }), refetchInterval: 5_000 });
 
 const parts = computed(() =>
   sectionsOf(linux.data.value)

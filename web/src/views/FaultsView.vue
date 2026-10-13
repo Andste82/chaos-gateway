@@ -3,7 +3,9 @@
 // group → network → everything), overlays and configured faults marked; per fault its selector,
 // parameters, affected packets, TTL and "overridden by X" where another fault wins. Faults are
 // added and edited in the fault dialog: an overlay applies at once, a configured fault goes into the
-// draft (unapplied-changes bar, preview and apply). "Explain" names the winner per family for a
+// draft (unapplied-changes bar, preview and apply): new and changed ones are marked, a deleted one
+// stays struck through with an undo until the draft is applied or discarded, and one the gateway
+// refused in a candidate is marked with its problems. "Explain" names the winner per family for a
 // device and a destination.
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
@@ -60,6 +62,10 @@ interface Row {
   overriddenBy: string[];
   isNew?: boolean;
   changed?: boolean;
+  /** A configured fault the draft deletes: shown until the draft is applied or discarded. */
+  deleted?: boolean;
+  /** What the gateway refused about the fault in the last candidate. */
+  problems?: string[];
   overlay?: Overlay;
   config?: { id: string; fault: ConfigFault };
 }
@@ -141,7 +147,25 @@ const rows = computed<Row[]>(() => {
       overriddenBy: changed.has(id) ? [] : (v?.overridden_by ?? []).map(refText),
       isNew: !(id in (draft.baseConfig?.faults ?? {})),
       changed: changed.has(id),
+      problems: draft.serverErrors[id] ? Object.values(draft.serverErrors[id]) : undefined,
       config: { id, fault: f },
+    });
+  }
+  for (const [id, f] of Object.entries(draft.faults)) {
+    const before = draft.baseConfig?.faults?.[id];
+    if (f !== null || !before) continue;
+    out.push({
+      id,
+      layer: 'config',
+      family: before.family ?? 'impairment',
+      level: before.source ? levelOf(before.source) : 5,
+      target: before.source ? describeScope(before.source, n) : 'Tunnel',
+      name: before.name,
+      device: before.source?.device,
+      destination: describeMatch(before, n),
+      chips: faultChips(before),
+      overriddenBy: [],
+      deleted: true,
     });
   }
   return out.sort((a, b) => a.level - b.level || (a.layer === b.layer ? a.target.localeCompare(b.target) : a.layer === 'overlay' ? -1 : 1));
@@ -233,12 +257,16 @@ const context = computed(() => `The most specific fault wins · an overlay beats
         :key="`${r.layer}:${r.id}`"
         role="row"
         class="data-row grid grid-cols-[minmax(180px,1.2fr)_minmax(0,2fr)_100px_80px_150px] items-center gap-3 px-2.5 py-2"
+        :class="{ 'shadow-[inset_3px_0_0_var(--color-block-border)]': r.problems }"
         data-testid="fault-row"
       >
         <span role="cell" class="min-w-0">
-          <RouterLink v-if="r.device" :to="`/devices/${r.device}`" class="text-text no-underline hover:underline">{{ r.target }}</RouterLink>
-          <span v-else>{{ r.target }}</span>
-          <span v-if="r.destination" class="ml-1 text-text-3">{{ r.destination }}</span>
+          <span :class="{ 'text-text-3 line-through': r.deleted }">
+            <span v-if="r.deleted">{{ r.target }}</span>
+            <RouterLink v-else-if="r.device" :to="`/devices/${r.device}`" class="text-text no-underline hover:underline">{{ r.target }}</RouterLink>
+            <span v-else>{{ r.target }}</span>
+            <span v-if="r.destination" class="ml-1 text-text-3">{{ r.destination }}</span>
+          </span>
           <span class="mt-0.5 flex flex-wrap gap-1.5 text-xs">
             <span
               class="rounded border px-1.5"
@@ -247,27 +275,41 @@ const context = computed(() => `The most specific fault wins · an overlay beats
               >{{ r.layer === 'overlay' ? 'OVERLAY' : 'CONFIGURATION' }}</span
             >
             <span v-if="r.name" class="mono text-text-2">{{ r.name }}</span>
-            <span v-if="r.isNew" class="rounded border border-accent-strong px-1.5 text-[#cfe6ff]">NEW</span>
+            <span v-if="r.deleted" class="rounded border border-accent-strong px-1.5 text-[#cfe6ff]">DELETED</span>
+            <span v-else-if="r.isNew" class="rounded border border-accent-strong px-1.5 text-[#cfe6ff]">NEW</span>
             <span v-else-if="r.changed" class="rounded border border-accent-strong px-1.5 text-[#cfe6ff]">CHANGED</span>
+            <span v-if="r.problems" class="rounded border border-block-border px-1.5 text-block-text">NEEDS FIXING</span>
           </span>
         </span>
         <span role="cell" class="flex min-w-0 flex-col gap-1">
-          <span class="flex flex-wrap items-center gap-1.5">
+          <span class="flex flex-wrap items-center gap-1.5" :class="{ 'opacity-60': r.deleted }">
             <FaultChip v-for="c in r.chips" :key="c" :text="c" />
-            <span v-if="r.state" class="text-xs" :class="r.state === 'effective' ? 'text-text-3' : 'text-fault-text'" data-testid="fault-state">{{
+            <span v-if="r.deleted" class="text-xs text-text-3">removed when applied</span>
+            <span v-else-if="r.state" class="text-xs" :class="r.state === 'effective' ? 'text-text-3' : 'text-fault-text'" data-testid="fault-state">{{
               stateLabels[r.state] ?? r.state
             }}</span>
             <span v-else-if="r.changed || r.isNew" class="text-xs text-text-3">not applied yet</span>
           </span>
           <span v-if="r.overriddenBy.length" class="text-xs text-fault-text" data-testid="overridden-by">overridden by {{ r.overriddenBy.join('; ') }}</span>
+          <span v-for="p in r.problems" :key="p" class="text-xs text-block-text" data-testid="fault-problem">{{ p }}</span>
         </span>
         <span role="cell" class="mono text-[13px] text-text-2">{{ r.packets !== undefined ? `${formatCount(r.packets)} pkts` : '—' }}</span>
         <span role="cell" class="mono text-[13px]" :class="r.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{
           r.expiresAt ? formatRemaining(new Date(r.expiresAt).getTime() - now.getTime()) : r.layer === 'config' ? 'configured' : 'no TTL'
         }}</span>
         <span role="cell" class="flex justify-end gap-1.5">
+          <button
+            v-if="r.deleted"
+            type="button"
+            class="btn btn-sm"
+            :aria-label="`Undo the removal of ${r.chips.join(', ')} on ${r.target}`"
+            @click="draft.restoreFault(r.id)"
+          >
+            Undo
+          </button>
           <button v-if="editable(r)" type="button" class="btn btn-sm" :aria-label="`Edit ${r.chips.join(', ')} on ${r.target}`" @click="edit(r)">Edit</button>
           <button
+            v-if="!r.deleted"
             type="button"
             class="btn btn-sm"
             :aria-label="`Remove ${r.chips.join(', ')} on ${r.target}`"

@@ -4,7 +4,8 @@
 // then the configured rules in their order — with position, name, selector, access chip, hit
 // counter and enable switch; a selected rule opens in the editor next to it (IF / THEN) with its
 // matches: hits, bytes, last match and the effective result in words. Edits, new rules, deletions
-// and moves go into the configuration draft and reach the gateway through Preview & apply.
+// and moves go into the configuration draft and reach the gateway through Preview & apply; a deleted
+// rule stays at its place, struck through with an undo, until the draft is applied or discarded.
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, watch } from 'vue';
 import { errorMessage } from '../api/fetcher';
@@ -19,7 +20,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import SwitchToggle from '../components/ui/SwitchToggle.vue';
 import { firstError, useAccessRules, useActiveConfig, useGatewayState, useNames, useOverlays } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
-import { describeScope } from '../lib/faults';
+import { describeOwner, describeScope } from '../lib/faults';
 import { formatAgo, formatBytes, formatCount, formatRemaining } from '../lib/format';
 import { newId } from '../lib/ids';
 import { newRule, ruleEffectInWords, ruleSummary } from '../lib/rules';
@@ -61,6 +62,20 @@ const configRules = computed(() =>
     invalid: id in draft.invalid || id in draft.serverErrors,
   })),
 );
+
+type ListRow = ((typeof configRules.value)[number] & { deleted: false }) | { deleted: true; id: string; rule: AccessRule };
+/** The configured rules, with the ones the draft deletes struck through at their place until it is applied or discarded. */
+const listRows = computed<ListRow[]>(() => {
+  const out: ListRow[] = configRules.value.map((row) => ({ ...row, deleted: false as const }));
+  const baseOrder = draft.baseConfig?.access_rule_order ?? [];
+  for (const [id, r] of Object.entries(draft.rules)) {
+    const before = draft.baseConfig?.access_rules?.[id];
+    if (r !== null || !before) continue;
+    const prev = baseOrder.slice(0, baseOrder.indexOf(id)).reverse().find((x) => out.some((o) => o.id === x));
+    out.splice(prev === undefined ? 0 : out.findIndex((o) => o.id === prev) + 1, 0, { deleted: true, id, rule: before });
+  }
+  return out;
+});
 
 const selected = ref<string>();
 watch(
@@ -198,45 +213,62 @@ const rowClass = (on: boolean) =>
         <span class="w-9" />
       </div>
 
-      <!-- the configured rules in their order -->
+      <!-- the configured rules in their order; a deleted one struck through until apply -->
+      <template v-for="l in listRows" :key="l.id">
       <div
-        v-for="r in configRules"
-        :key="r.id"
-        class="flex items-center gap-3.5 rounded-lg border px-3.5 py-3"
-        :class="[rowClass(selected === `config:${r.id}`), r.invalid ? '!border-block-border' : '']"
+        v-if="l.deleted"
+        class="flex items-center gap-3.5 rounded-lg border border-dashed border-border px-3.5 py-3"
         data-testid="rule-row"
       >
-        <span class="mono w-6 text-xs text-text-3">{{ r.pos }}</span>
+        <span class="mono w-6 text-xs text-text-3" aria-hidden="true">—</span>
+        <span class="flex min-w-0 flex-1 flex-col items-start gap-1.5">
+          <span class="flex items-center gap-2 text-[15px] font-medium text-text-3">
+            <span class="line-through">{{ l.rule.name }}</span>
+            <span class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]" data-testid="rule-deleted">DELETED</span>
+          </span>
+          <span class="mono text-xs text-text-3 line-through">{{ ruleSummary(l.rule, names) }}</span>
+          <span class="text-xs text-text-3">removed when applied</span>
+        </span>
+        <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of rule ${l.rule.name}`" @click="draft.restoreRule(l.id)">Undo</button>
+      </div>
+      <div
+        v-else
+        class="flex items-center gap-3.5 rounded-lg border px-3.5 py-3"
+        :class="[rowClass(selected === `config:${l.id}`), l.invalid ? '!border-block-border' : '']"
+        data-testid="rule-row"
+      >
+        <span class="mono w-6 text-xs text-text-3">{{ l.pos }}</span>
         <button
           type="button"
           class="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-1.5 border-0 bg-transparent p-0 text-left text-text"
-          :aria-label="`Edit rule ${r.rule.name ?? r.pos}`"
-          @click="selected = `config:${r.id}`"
+          :aria-label="`Edit rule ${l.rule.name ?? l.pos}`"
+          @click="selected = `config:${l.id}`"
         >
           <span class="flex items-center gap-2 text-[15px] font-medium">
-            {{ r.rule.name ?? `Rule ${r.pos}` }}
-            <span v-if="r.isNew" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]">NEW</span>
-            <span v-else-if="r.changed" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]" data-testid="rule-changed">CHANGED</span>
-            <span v-if="r.invalid" class="rounded border border-block-border px-1.5 text-[11px] text-block-text">NEEDS FIXING</span>
+            {{ l.rule.name ?? `Rule ${l.pos}` }}
+            <span v-if="l.isNew" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]">NEW</span>
+            <span v-else-if="l.changed" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]" data-testid="rule-changed">CHANGED</span>
+            <span v-if="l.invalid" class="rounded border border-block-border px-1.5 text-[11px] text-block-text">NEEDS FIXING</span>
           </span>
-          <span class="mono text-xs text-text-2">{{ ruleSummary(r.rule, names) }}</span>
+          <span class="mono text-xs text-text-2">{{ ruleSummary(l.rule, names) }}</span>
           <span class="flex items-center gap-1.5">
-            <AccessChip :action="r.rule.action" />
-            <span v-if="r.rule.cut_existing" class="text-xs text-text-2">cut existing</span>
-            <span v-if="r.rule.enabled === false" class="text-xs text-text-3">disabled</span>
+            <AccessChip :action="l.rule.action" />
+            <span v-if="l.rule.cut_existing" class="text-xs text-text-2">cut existing</span>
+            <span v-if="l.rule.enabled === false" class="text-xs text-text-3">disabled</span>
           </span>
         </button>
         <div class="w-28 text-right">
-          <div class="mono text-[13px]">{{ r.view?.counters ? formatCount(r.view.counters.packets) : '—' }}</div>
+          <div class="mono text-[13px]">{{ l.view?.counters ? formatCount(l.view.counters.packets) : '—' }}</div>
           <div class="text-xs text-text-3">hits</div>
         </div>
         <SwitchToggle
-          :model-value="r.rule.enabled !== false"
+          :model-value="l.rule.enabled !== false"
           hide-label
-          :label="`Enable rule ${r.rule.name ?? r.pos}`"
-          @update:model-value="(v: boolean) => setEnabled(r.id, r.rule, v)"
+          :label="`Enable rule ${l.rule.name ?? l.pos}`"
+          @update:model-value="(v: boolean) => setEnabled(l.id, l.rule, v)"
         />
       </div>
+      </template>
 
       <EmptyState v-if="configRules.length === 0 && overlayRules.length === 0" text="No access rules yet: traffic between the networks follows the access matrix.">
         <button type="button" class="btn btn-primary" :disabled="!draft.baseConfig" @click="addRule">Add rule</button>
@@ -275,7 +307,7 @@ const rowClass = (on: boolean) =>
           <h2 id="rule-editor-title" class="m-0 mt-1 text-lg font-semibold">{{ ruleSummary({ ...selOverlay.rule!, source: selOverlay.target }, names) }}</h2>
         </div>
         <p class="m-0 text-sm leading-relaxed text-[#d9dee5]">
-          Set by {{ selOverlay.owner.type === 'run' ? 'a scenario run' : selOverlay.owner.type === 'token' ? `the token ${selOverlay.owner.name ?? selOverlay.owner.id}` : selOverlay.owner.name ?? 'the admin' }}
+          Set by {{ describeOwner(selOverlay.owner) }}
           for {{ describeScope(selOverlay.target, names) }}<template v-if="selOverlay.expires_at">; it ends in
             <span class="mono text-fault-text">{{ formatRemaining(new Date(selOverlay.expires_at).getTime() - now.getTime()) }}</span></template
           >. An overlay is not part of the configuration: it is changed through the API and removed here.

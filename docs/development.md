@@ -3266,7 +3266,8 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
 
 - **The configuration draft** (`src/stores/draft.ts`). Every change of the configuration the UI makes — access rules and
   their order, configured faults, an adopted device — goes into one draft, edited against the revision that was active when
-  the first edit was made (`GET /revisions/active`; a clean draft follows the active revision, `track`). The draft holds the
+  the first edit was made (`GET /revisions/active`; a clean draft follows the active revision, `track`, also when its last
+  edit was undone by hand while another revision became active, so the screens show what is active). The draft holds the
   edited objects whole (`null` for a deleted one) and the order of the rules when it was touched; the changes in words are
   computed field by field against the base (`changes`: rule, field, old → new; a moved rule is a change of its position, a new
   rule at the end moves none), and an edit back to the base is no change. Nothing reaches the gateway before "Preview &
@@ -3276,17 +3277,22 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
   into one revision, and a screen change does not lose it.
 - **Unapplied-changes bar** (`src/components/apply/DraftChanges.vue`, plan §2.17 "Unapplied changes"): the sticky bar "N
   changes in M rules · not applied yet" (or faults, devices) with Discard and Preview & apply; changed rows are marked
-  CHANGED (a new one NEW). Preview & apply stays disabled while a rule of the draft is not valid (plan §2.17 "Validation"),
+  CHANGED (a new one NEW), and a deleted rule or configured fault stays at its place, struck through and marked DELETED,
+  with Undo (`restoreRule` puts a rule back at its place in the order, `restoreFault`), until the draft is applied or
+  discarded. Preview & apply stays disabled while a rule of the draft is not valid (plan §2.17 "Validation"),
   while a revision waits for confirmation and while the gateway does not answer.
 - **Preview-and-apply drawer** (`PreviewDrawer.vue`, "Preview", "Applying / applied", "Apply failed"): marked "dry run ·
   nothing changed yet", it creates the candidate and shows the gateway's dry run (`POST /revisions/{id}/preview`): what
   changes in domain terms (the domain diff with its fields, old → new), warnings, whether the change needs a confirmation,
   overlays the change would orphan (applying them away needs a tick, `force=true`), and on request the Linux changes
   (the unified diffs of nftables, tc, routes, WireGuard, BIRD and the services, and the verify step). Back to editing (or
-  Escape) discards the candidate and keeps the draft. "Apply revision N" (busy while it runs) answers with the toast
+  Escape) discards the candidate and keeps the draft; closed (or opened again) while the candidate is still being created,
+  the drawer discards that candidate when it arrives and does not preview it (each open counts as a generation). "Apply revision N" (busy while it runs) answers with the toast
   "Revision N applied and verified in X ms" (or "waiting for confirmation", and the commit-confirm banner takes over). A
   candidate the gateway refuses (422) lists the problems with the object and field they name ("Rule no-dot · ports: …"),
-  and the editor shows each under its field until the object is edited (`setServerErrors`). A failed apply
+  and the editor shows each under its field until the object is edited (`setServerErrors`; for a configured fault the
+  faults screen marks the row NEEDS FIXING with the messages, and its dialog puts them under the fields the pointer names
+  and the rest below the form). A failed apply
   (`apply_failed`, `verify_failed`) stays in the drawer with the failing step, the gateway's message and the revision that
   is active again ("Revision 42 restored; nothing of revision 43 is active"), and the draft stays for another try.
 - **Concurrent-change dialog** (`ConflictDialog.vue`, "Concurrent change"): a base that is not the active revision any more
@@ -3332,13 +3338,17 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
   direction (Both / Upload / Download), "Start from" LTE, Bad LTE, Satellite, Offline (the parameters of the built-in
   profiles of the same name), latency, jitter, loss and duration (1 min to 1 hour, or until removed); Advanced: rate,
   reorder, duplicate, corrupt, keep packet order. The live preview is one sentence ("ESP32-42 · MQTT · TCP 8883 · upload &
-  download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min"). The checks (jitter ≤ latency, percentages up to 100, a rate
+  download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min"). The checks (at least one parameter — the gateway refuses a
+  fault that sets none —, jitter ≤ latency, percentages up to 100, a rate
   of at least 8 bit/s in the units of the spec, reorder needs a latency, ports and destination) stand under the fields,
   Apply waits until the form is valid, and what the gateway refuses (422) goes under the field its path names. Apply writes
   an overlay (`POST /overlays`, answered after the verify): it appears with its TTL counting down and a toast "Fault active
   on ESP32-42" ("Expires after 5 min."). A loss of 100 % is a blackout. Editing an overlay writes it again under the same key
-  (owner, target, family and selector: it keeps its id and gets the new TTL); with another traffic selector it is a new overlay
-  and the old one is removed. On the faults screen a fault can instead be saved in the configuration ("Configuration · after
+  (owner, target, family and selector: it keeps its id and gets the new TTL); whenever the gateway answers with another
+  overlay — another traffic selector, or an overlay of an API token or a run, which the browser's write cannot replace
+  because the key includes the owner — the old one is removed, so the edit replaces it (the dialog says "Set by the token
+  ci-runner. Applying removes it and puts a fault of yours in its place."; P3-M13-06). Under "</> API" the dialog shows the
+  requests it would send. On the faults screen a fault can instead be saved in the configuration ("Configuration · after
   preview", with a name; it goes into the draft), and a configured fault is edited there; parameters the dialog does not show
   (burst loss, flapping, different directions, …) are named before they would be replaced. The device detail has "Add
   fault", "Edit" for the device's own faults and "Apply profile".
@@ -3354,9 +3364,9 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
   `overlay_expired` raises the toast and refreshes the lists (overlay events now also refresh the profiles).
 - **`</> API` panel** (`src/components/layout/ApiPanel.vue`, `src/stores/apiPanel.ts`, plan §2.17 "every UI action has an
   API equivalent, and the UI can show it"). A toggle in every page header (`aria-pressed`) opens the panel below it. It shows
-  the requests of the last action on the screen ("Last action: Add fault" — the `POST /api/v1/overlays` with its body; the
-  candidate, preview and apply of a revision with `If-Match`; an explain; a profile activation), else what the open dialog
-  would send, else what the screen reads, as HTTP or as curl with `Authorization: Bearer $CHAOSGW_TOKEN`. A new screen
+  what the open dialog would send ("This dialog: Add fault"), else the requests of the last action on the screen ("Last
+  action: Add fault" — the `POST /api/v1/overlays` with its body; the candidate, preview and apply of a revision with
+  `If-Match`; an explain; a profile activation), else what the screen reads, as HTTP or as curl with `Authorization: Bearer $CHAOSGW_TOKEN`. A new screen
   forgets the action of the one before.
 - **Adopt** (M12's dialog) now goes through the draft and the drawer: the dialog asks for the name and says what changes,
   "Preview & apply" puts the device into the draft and opens the drawer; a conflict is the dialog above (P3-M12-03).
@@ -3370,8 +3380,9 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
 |---|---|
 | Merge patch: no change, changed members, `null` for what went, arrays whole, patch applied gives the target | `src/lib/mergePatch.test.ts` |
 | Rules in words, ports, field changes, the effect in words, the editor's checks | `src/lib/rules.test.ts` |
-| Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks, the preview sentence, presets, the overlay key | `src/lib/faultForm.test.ts` |
-| Draft: base tracking, change counting, the merge patch with order and deletions, devices, invalid rules and the gateway's errors, rebase on another revision; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
+| Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks (also a fault without any parameter), the preview sentence, presets, the gateway's pointers to the form's fields | `src/lib/faultForm.test.ts` |
+| Draft: base tracking (also after edits undone by hand), change counting, the merge patch with order and deletions, undoing a deletion, devices, invalid rules and the gateway's errors (a fault's by pointer), rebase on another revision; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
+| Owners in words | `src/lib/faults.test.ts` |
 | Overlays name what overrides them | `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` (`internal/api/overlays_test.go`) |
 | A rule's last match | `TestARulesCounterSaysWhenItLastMatched` (`internal/api/rules_test.go`) |
 | Screens against the mocked API (Playwright) | `web/e2e/rules.spec.ts`, `faults.spec.ts`, `profiles.spec.ts`, `devices.spec.ts` (adopt through the drawer and the conflict dialog) |
@@ -3381,8 +3392,8 @@ the navigation without a link; "Measure with probe" on the profile cards comes w
 `created_by`), candidates with their base (an apply on a base that is not active is a 409), `applyFromApi` (someone else
 applies a revision, with the domain diff `GET /revisions/{id}/diff` answers), a preview of the candidate's patch, the rules
 with counters (`withRules`), `POST /overlays` with the replacement by key, profiles with their activations, `GET /explain`,
-and switches for a refused candidate (`rejectRevision`), a refused overlay (`rejectOverlay`) and a failed apply
-(`failApply`).
+and switches for a refused candidate (`rejectRevision`), a candidate that answers late (`revisionGate`), a refused overlay
+(`rejectOverlay`) and a failed apply (`failApply`); every recorded request has its query parameters.
 
 **The browser flow in the testbed.** `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` builds the testbed with the
 configuration of `testbed_wg.yaml` (network IoT on lan0), lets devices A and B ping their gateway address so the gateway
@@ -3413,15 +3424,15 @@ branch with the M13 flow yet.
 | Plan M13 Tests | Test |
 |---|---|
 | Playwright — create a fault in the UI, then verify the measured effect in the testbed | `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` + `web/e2e-testbed/faults.spec.ts` (CI job `testbed-ui`); against the mocked API `faults.spec.ts` "add a fault on the device: presets, the live preview, Apply → the fault with its TTL, a toast and the API panel", "a configured fault goes through the unapplied-changes bar, the preview and the apply" |
-| validation errors are shown | `faults.spec.ts` "validation errors are shown under the fields, and Apply waits until the form is valid" (also the gateway's 422 under the field), `rules.spec.ts` "validation: the message stands under the field and Preview & apply waits until the rule is valid", "the gateway's refusal of a candidate is shown in the drawer and under the field"; in the testbed flow the jitter error |
+| validation errors are shown | `faults.spec.ts` "validation errors are shown under the fields, and Apply waits until the form is valid" (also the gateway's 422 under the field and a fault without any parameter), "a configured fault the gateway refused in a candidate is marked, and its dialog shows why", `rules.spec.ts` "validation: the message stands under the field and Preview & apply waits until the rule is valid", "the gateway's refusal of a candidate is shown in the drawer and under the field"; in the testbed flow the jitter error |
 | a conflicting change made through the API triggers the conflict dialog | `rules.spec.ts` "a conflicting change made through the API opens the conflict dialog; reload and reapply mine", "the concurrent-change dialog can discard the draft instead"; `devices.spec.ts` "adopting while the draft is based on an older revision opens the conflict dialog: reload and reapply"; in the testbed flow with a real token |
 | the faults screen marks an overridden fault | `faults.spec.ts` "the faults screen groups by family, sorts by scope, marks overlays and configuration, and marks an overridden fault"; in the testbed flow on the real gateway; backend `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` |
-| Scope: access-rules screen (ordered list, editor IF/THEN, counters) | `rules.spec.ts` "the ordered list: …", "editing a rule marks it CHANGED …", "add, move and delete rules …", "empty: no rules yet …" |
-| Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation" |
-| Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …", "edit a fault overlay on the faults screen …", "removing: an overlay at once, a configured fault through the draft", "empty: no faults …" |
+| Scope: access-rules screen (ordered list, editor IF/THEN, counters) | `rules.spec.ts` "the ordered list: …", "editing a rule marks it CHANGED …", "add, move and delete rules …", "a deleted rule is shown struck through at its place, and Undo brings it back there", "empty: no rules yet …" |
+| Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a deleted rule is shown struck through …", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation"; `faults.spec.ts` "closing the drawer while the candidate is created discards it when it arrives"; `src/stores/draft.test.ts` "edits undone by hand leave a clean draft on the newest active revision" |
+| Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
 | Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, M12's `device-detail.spec.ts` |
-| Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` |
+| Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` |
 
 ## Generated code
 

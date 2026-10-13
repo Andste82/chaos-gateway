@@ -1,6 +1,6 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { FaultBody, NetemParams, Overlay, Scope, TrafficMatch } from '../api/generated/model';
+import type { FaultBody, NetemParams, Overlay, Owner, Scope, TrafficMatch } from '../api/generated/model';
 import { formatDuration } from './format';
 
 function pct(p: string | undefined): string {
@@ -109,4 +109,11 @@ export function describeMatch(m: TrafficMatch | undefined, names: Names = {}): s
     parts.push(`${m.protocol.toUpperCase()}${ports.length ? ' ' + ports.join(',') : ''}`);
   }
   return parts.length ? `→ ${parts.join(' ')}` : '';
+}
+
+/** Who set an overlay, in words: "admin", "the token ci-runner", "a scenario run". */
+export function describeOwner(o: Owner): string {
+  if (o.type === 'run') return 'a scenario run';
+  if (o.type === 'token') return `the token ${o.name ?? o.id}`;
+  return o.name ?? 'the admin';
 }

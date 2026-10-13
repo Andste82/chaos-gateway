@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { AccessRule, ConfigFault, Configuration, ConfigurationPatch, Device, RevisionWithConfiguration } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
 import { cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
@@ -49,6 +49,21 @@ export const useDraftStore = defineStore('draft', () => {
   }
   /** The newest active revision seen; the base after a discard. */
   let latest: RevisionWithConfiguration | undefined;
+  /** The newest active revision as the base (a clean draft, after a discard or the last edit undone). */
+  function rebaseOnLatest() {
+    if (!latest || base.value === latest.id) return;
+    base.value = latest.id;
+    baseConfig.value = latest.configuration;
+  }
+  // edits undone by hand leave a clean draft: it follows the active revision again, as after a
+  // discard, so a revision applied meanwhile is shown and the next edit starts from it
+  watch(
+    dirty,
+    (d) => {
+      if (!d) rebaseOnLatest();
+    },
+    { flush: 'sync' },
+  );
 
   const baseRules = computed(() => baseConfig.value?.access_rules ?? {});
   const baseOrder = computed(() => baseConfig.value?.access_rule_order ?? []);
@@ -126,6 +141,24 @@ export const useDraftStore = defineStore('draft', () => {
     } else {
       faults.value = { ...faults.value, [id]: fault === null ? null : cloneJSON(fault) };
     }
+  }
+
+  /** Undoes the deletion of a rule of the base: it comes back as it was, at its place in the order. */
+  function restoreRule(id: string) {
+    const before = baseRules.value[id];
+    if (!before || rules.value[id] !== null) return;
+    setRule(id, before);
+    const ids = effectiveOrder.value.filter((x) => x !== id);
+    // after the nearest rule that stands before it in the base and is still there
+    const prev = baseOrder.value.slice(0, baseOrder.value.indexOf(id)).reverse().find((x) => ids.includes(x));
+    ids.splice(prev === undefined ? 0 : ids.indexOf(prev) + 1, 0, id);
+    setOrder(ids);
+  }
+
+  /** Undoes the deletion of a configured fault of the base. */
+  function restoreFault(id: string) {
+    const before = baseFaults.value[id];
+    if (before && faults.value[id] === null) setFault(id, before);
   }
 
   function setDevice(id: string, device: Device | null) {
@@ -272,24 +305,25 @@ export const useDraftStore = defineStore('draft', () => {
     portsText.value = {};
     serverErrors.value = {};
     // a clean draft is based on the newest active revision seen
-    if (latest) {
-      base.value = latest.id;
-      baseConfig.value = latest.configuration;
-    }
+    rebaseOnLatest();
   }
 
   /**
    * What the gateway refused when the draft became a candidate (422), by object id and field
-   * (`rule` for the object as a whole); an edit of the object clears its messages.
+   * (`rule` for a rule or a device as a whole; for a fault the pointer below it, `fault` for the
+   * fault as a whole); an edit of the object clears its messages.
    */
   const serverErrors = ref<Record<string, Record<string, string>>>({});
 
   function setServerErrors(errors: { path?: string; message?: string }[]) {
     const out: Record<string, Record<string, string>> = {};
     for (const e of errors) {
-      const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/([^/]+))?/.exec(e.path ?? '');
+      const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/(.+))?/.exec(e.path ?? '');
       if (!m) continue;
-      const field = m[3] === 'port_ranges' ? 'ports' : (m[3] ?? 'rule');
+      // a fault keeps the rest of the pointer ("upload/latency", `fault` for the fault as a whole),
+      // which the fault dialog maps to its fields; a rule and a device the field below the object
+      const first = m[3]?.split('/')[0];
+      const field = m[1] === 'faults' ? (m[3] ?? 'fault') : first === 'port_ranges' ? 'ports' : (first ?? 'rule');
       (out[m[2]!] ??= {})[field] = e.message ?? 'not valid';
     }
     serverErrors.value = out;
@@ -318,6 +352,8 @@ export const useDraftStore = defineStore('draft', () => {
     setOrder,
     move,
     setFault,
+    restoreRule,
+    restoreFault,
     setDevice,
     setPortsText,
     changes,

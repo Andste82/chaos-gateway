@@ -6,7 +6,11 @@
 // An overlay is written at once (`POST /overlays`, the answer comes after the verify) and appears
 // with its TTL; on the faults screen a fault can instead go into the configuration, through the
 // unapplied-changes bar and the preview. Editing an overlay writes it again under the same key (it
-// keeps its id); a changed target or traffic is a new overlay, and the old one is removed.
+// keeps its id); whenever the gateway answers with another overlay — a changed target or traffic,
+// or an overlay of another owner (a token, a run), whose key includes its owner (§2.1.1) — the
+// old one is removed, so the edit replaces it. A configured fault the gateway refused in a
+// candidate opens with the refusal under its fields. The dialog's requests are shown in it under
+// `</> API`.
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, useId, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
@@ -18,19 +22,19 @@ import {
   emptyForm,
   faultFormErrors,
   faultToForm,
+  fieldOf,
   formToConfigFault,
   formToOverlay,
   hiddenParameters,
-  overlayKey,
   presets,
   previewSentence,
   trafficPresets,
   type FaultField,
   type FaultForm,
 } from '../../lib/faultForm';
-import { describeScope } from '../../lib/faults';
+import { describeOwner, describeScope } from '../../lib/faults';
 import { newId } from '../../lib/ids';
-import { useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
+import { httpOf, useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
@@ -90,7 +94,12 @@ watch(open, (o) => {
   }
   const f = form.value;
   advanced.value = !!(f.rate || f.reorder || f.duplicate || f.corrupt || f.keepOrder);
+  // what the gateway refused in the last candidate, until the fault is edited
+  const refused = props.config ? draft.serverErrors[props.config.id] : undefined;
+  if (refused) showRefusal(Object.entries(refused).map(([path, message]) => ({ path, message })));
 });
+
+const owner = computed(() => (props.overlay && props.overlay.owner.type !== 'user' ? describeOwner(props.overlay.owner) : undefined));
 
 const hidden = computed(() => hiddenParameters(props.overlay?.fault ?? props.config?.fault));
 
@@ -131,41 +140,35 @@ watch(
   { deep: true, immediate: true },
 );
 
+/** The form as it was when the gateway refused it; an edit after that takes the messages away. */
+let refusedForm = '';
 watch(
   form,
-  () => {
+  (f) => {
     // an edited field is no longer what the gateway refused
-    serverErrors.value = {};
+    if (JSON.stringify(f) !== refusedForm) serverErrors.value = {};
   },
   { deep: true },
 );
 
+/** The gateway's problems under the fields they name; the others below the form. */
+function showRefusal(errors: { path?: string; message?: string }[]) {
+  const out: Partial<Record<FaultField, string>> = {};
+  const rest: string[] = [];
+  for (const x of errors) {
+    const f = fieldOf(x.path);
+    if (f) out[f] = x.message ?? 'not valid';
+    else rest.push(x.message ?? '');
+  }
+  serverErrors.value = out;
+  refusedForm = JSON.stringify(form.value);
+  if (out.rate || out.reorder || out.duplicate || out.corrupt) advanced.value = true;
+  error.value = rest.length ? rest.join(' ') : 'The gateway refused the fault; see the marked fields.';
+}
+
 function pick(values: Partial<FaultForm>) {
   form.value = { ...form.value, ...values };
   if (values.rate) advanced.value = true;
-}
-
-/** "/fault/jitter", "/fault/upload/latency", "/target" → the form's field. */
-function fieldOf(path: string | undefined): FaultField | undefined {
-  const last = (path ?? '').split('/').filter(Boolean).at(-1) ?? '';
-  const map: Record<string, FaultField> = {
-    latency: 'latency',
-    jitter: 'jitter',
-    loss: 'loss',
-    rate: 'rate',
-    reorder: 'reorder',
-    duplicate: 'duplicate',
-    corrupt: 'corrupt',
-    ports: 'ports',
-    port_ranges: 'ports',
-    destination: 'destination',
-    cidr: 'destination',
-    target: 'target',
-    device: 'target',
-    network: 'target',
-    group: 'target',
-  };
-  return map[last];
 }
 
 async function submit() {
@@ -183,9 +186,14 @@ async function submit() {
     const ov = await createOverlay(req);
     const calls: ApiCall[] = [{ method: 'POST', path: '/overlays', body: req }];
     const old = props.overlay;
-    if (old && overlayKey(old) !== overlayKey(req) && old.id !== ov.id) {
-      await deleteOverlay(old.id);
-      calls.push({ method: 'DELETE', path: `/overlays/${old.id}`, note: 'the fault before the edit' });
+    // another key (target, traffic, or the owner: one of a token or a run is written as the
+    // admin's) is another overlay: the edit replaces the old one
+    if (old && old.id !== ov.id) {
+      // one that expired meanwhile is gone already
+      await deleteOverlay(old.id).catch((e: unknown) => {
+        if (!(e instanceof ApiError && e.status === 404)) throw e;
+      });
+      calls.push({ method: 'DELETE', path: `/overlays/${old.id}`, note: owner.value ? `the fault of ${owner.value} before the edit` : 'the fault before the edit' });
     }
     apiPanel.record(editing.value ? 'Edit fault' : 'Add fault', calls);
     const d = durations.find((x) => x.value === form.value.duration);
@@ -194,16 +202,7 @@ async function submit() {
     await Promise.all(['overlays', 'devices', 'faults', 'profiles', 'state'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {
     if (e instanceof ApiError && e.status === 422 && e.problem?.errors?.length) {
-      const out: Partial<Record<FaultField, string>> = {};
-      const rest: string[] = [];
-      for (const x of e.problem.errors) {
-        const f = fieldOf(x.path);
-        if (f) out[f] = x.message ?? 'not valid';
-        else rest.push(x.message ?? '');
-      }
-      serverErrors.value = out;
-      if (Object.keys(out).length && (form.value.rate || form.value.reorder || form.value.duplicate || form.value.corrupt)) advanced.value = true;
-      error.value = rest.length ? rest.join(' ') : 'The gateway refused the fault; see the marked fields.';
+      showRefusal(e.problem.errors);
     } else {
       error.value = errorMessage(e);
     }
@@ -372,10 +371,25 @@ const errId = (f: string) => `${uid}-${f}-error`;
         This fault has {{ hidden.join(', ') }}, which this dialog does not show; saving replaces them with the parameters above.
       </p>
 
+      <p v-if="owner" class="m-0 text-[13px] text-fault-text" data-testid="fault-owner">
+        Set by {{ owner }}. Applying removes it and puts a fault of yours in its place.
+      </p>
+
       <div class="rounded-md border border-border bg-surface-2 p-3 text-sm" aria-live="polite" data-testid="fault-preview">
         <div class="mb-1 text-xs text-text-3">Preview</div>
         {{ preview }}
       </div>
+
+      <details v-if="apiPanel.draft" class="text-[13px]" data-testid="fault-api">
+        <summary class="cursor-pointer text-text-2">&lt;/&gt; API · what {{ layer === 'config' ? 'the preview' : 'Apply' }} sends</summary>
+        <pre
+          v-for="(c, i) in apiPanel.draft.calls"
+          :key="i"
+          class="mono m-0 mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]"
+          data-testid="api-call"
+          >{{ httpOf(c) }}</pre
+        >
+      </details>
 
       <p v-if="error" class="field-error m-0" role="alert">{{ error }}</p>
       <p v-if="blocked" class="m-0 text-[13px] text-fault-text">

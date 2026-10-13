@@ -149,11 +149,13 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-  # The browser flow of M12 against the real stack (plan §5 M12 Tests): the gateway runs on the
-  # real executor in the namespace testbed and serves the built web app, and Chromium walks through
-  # the setup wizard until the device list shows a discovered device. Level 1 (a privileged
-  # container) like the job above; the tag browser keeps the test out of the other testbed jobs,
-  # which have no web build and no browser.
+  # The browser flows of M12 and M13 against the real stack (plan §5 M12 and M13 Tests): the
+  # gateway runs on the real executor in the namespace testbed and serves the built web app, and
+  # Chromium walks through the setup wizard until the device list shows a discovered device (M12,
+  # TestFirstStartInTheBrowserUntilADiscoveredDevice), and creates a fault in the UI whose effect is
+  # then measured on the wire (M13, TestAFaultCreatedInTheBrowserTakesEffectOnTheWire); `-run
+  # InTheBrowser` selects both. Level 1 (a privileged container) like the job above; the tag
+  # browser keeps the tests out of the other testbed jobs, which have no web build and no browser.
   testbed-ui:
     name: testbed UI flow (level 1, privileged container)
     runs-on: ubuntu-24.04

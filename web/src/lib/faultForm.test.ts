@@ -4,10 +4,10 @@ import {
   emptyForm,
   faultFormErrors,
   faultToForm,
+  fieldOf,
   formToConfigFault,
   formToOverlay,
   hiddenParameters,
-  overlayKey,
   parseRate,
   presets,
   previewSentence,
@@ -93,9 +93,25 @@ describe('the fault dialog', () => {
     expect(parseRate('1.5 gbit/s')).toBe('1.5Gbit');
   });
 
-  it('the key of an overlay: the same target and selector replace, another is new', () => {
-    const a = overlayKey({ target: { device: 'd1' }, fault: { protocol: 'tcp', ports: [8883], latency: '1ms' } });
-    expect(overlayKey({ target: { device: 'd1' }, fault: { protocol: 'tcp', ports: [8883], latency: '9ms' } })).toBe(a);
-    expect(overlayKey({ target: { device: 'd1' }, fault: { protocol: 'tcp', ports: [443] } })).not.toBe(a);
+  it('a fault that sets no parameter cannot be applied', () => {
+    const none = 'Set at least one parameter: latency, loss, a rate, …';
+    expect(faultFormErrors(form({})).latency).toBe(none);
+    expect(faultFormErrors(form({ direction: 'download' }), 'config').latency).toBe(none);
+    expect(faultFormErrors(form({ keepOrder: true })).latency).toBe(none);
+    expect(faultFormErrors(form({ latency: '0', loss: '0' })).latency).toBe(none);
+    expect(faultFormErrors(form({ loss: '100' }))).toEqual({});
+    expect(faultFormErrors(form({ rate: '64kbit' }))).toEqual({});
+    expect(faultFormErrors(form({ corrupt: '1' }))).toEqual({});
+    // a broken latency keeps its own message
+    expect(faultFormErrors(form({ latency: '-5' })).latency).toBe('A number of 0 or more.');
+  });
+
+  it('the gateway names a field by its JSON pointer', () => {
+    expect(fieldOf('/fault/jitter')).toBe('jitter');
+    expect(fieldOf('/fault/upload/latency')).toBe('latency');
+    expect(fieldOf('/faults/c0f0/source/device')).toBe('target');
+    expect(fieldOf('/faults/c0f0/port_ranges/0')).toBe('ports');
+    expect(fieldOf('/fault')).toBeUndefined();
+    expect(fieldOf('/faults/c0f0')).toBeUndefined();
   });
 });

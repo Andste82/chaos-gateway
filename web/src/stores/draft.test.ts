@@ -45,6 +45,39 @@ describe('the configuration draft', () => {
     expect(d.dirty).toBe(false);
   });
 
+  it('edits undone by hand leave a clean draft on the newest active revision', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setRule(B, { name: 'b', source: { global: true }, protocol: 'tcp', ports: [80], action: 'allow', enabled: false });
+    d.track(revision(43, { faults: {} }));
+    expect(d.base).toBe(42);
+    expect(d.effectiveFaults).toHaveProperty('f1');
+    // the switch back: no edit is left, so the draft shows what is active now
+    d.setRule(B, { name: 'b', source: { global: true }, protocol: 'tcp', ports: [80], action: 'allow' });
+    expect(d.dirty).toBe(false);
+    expect(d.base).toBe(43);
+    expect(d.effectiveFaults).toEqual({});
+  });
+
+  it('a deletion is undone: the rule comes back at its place, the fault as it was', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { access_rules: { ...revision(42).configuration.access_rules, [C]: { name: 'c', source: { global: true }, action: 'drop' } }, access_rule_order: [A, B, C] }));
+    d.setRule(B, null);
+    d.setFault('f1', null);
+    expect(d.effectiveOrder).toEqual([A, C]);
+    expect(d.summary()).toBe('2 changes in 1 rule and 1 fault');
+    d.restoreRule(B);
+    expect(d.effectiveOrder).toEqual([A, B, C]);
+    d.restoreFault('f1');
+    expect(d.dirty).toBe(false);
+    // the first rule goes back to the front, and another edit stays
+    d.setRule(A, null);
+    d.setRule(C, { name: 'c', source: { global: true }, action: 'reject' });
+    d.restoreRule(A);
+    expect(d.effectiveOrder).toEqual([A, B, C]);
+    expect(d.summary()).toBe('1 change in 1 rule');
+  });
+
   it('counts the changes per field and per rule, and edits back to the base are no change', () => {
     const d = useDraftStore();
     d.track(revision(42));
@@ -92,6 +125,12 @@ describe('the configuration draft', () => {
     expect(d.patch().devices).toEqual({ d1: { name: 'thermostat', identifiers: { macs: ['02:00:00:00:00:01'] }, network: 'n1' } });
     d.setServerErrors([{ path: '/devices/d1/name', message: 'taken' }]);
     expect(d.serverErrors).toEqual({ d1: { name: 'taken' } });
+    // a fault keeps the pointer below it for the fault dialog's fields
+    d.setServerErrors([
+      { path: '/faults/f1/upload/latency', message: 'too long' },
+      { path: '/faults/f1', message: 'the fault sets no parameter' },
+    ]);
+    expect(d.serverErrors).toEqual({ f1: { 'upload/latency': 'too long', fault: 'the fault sets no parameter' } });
   });
 
   it('a move of base rules is a change of their positions', () => {

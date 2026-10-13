@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Overlay } from '../api/generated/model';
-import { describeMatch, describeScope, faultChips, overlayChips } from './faults';
+import { describeMatch, describeOwner, describeScope, faultChips, overlayChips } from './faults';
 
 const names = { device: (id: string) => ({ d1: 'ESP32-42' })[id], network: (id: string) => ({ n1: 'IoT' })[id], group: () => 'Sensors' };
 
@@ -51,5 +51,13 @@ describe('selectors in words', () => {
     expect(describeMatch({ destination: { network: 'n1' } }, names)).toBe('→ network IoT');
     expect(describeMatch({ protocol: 'any' })).toBe('');
     expect(describeMatch(undefined)).toBe('');
+  });
+
+  it('names who set an overlay', () => {
+    expect(describeOwner({ type: 'user', id: 'admin', name: 'admin' })).toBe('admin');
+    expect(describeOwner({ type: 'user', id: 'admin' })).toBe('the admin');
+    expect(describeOwner({ type: 'token', id: 't1', name: 'ci-runner' })).toBe('the token ci-runner');
+    expect(describeOwner({ type: 'token', id: 't1' })).toBe('the token t1');
+    expect(describeOwner({ type: 'run', id: 'r1' })).toBe('a scenario run');
   });
 });

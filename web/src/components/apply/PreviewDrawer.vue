@@ -65,7 +65,15 @@ function where(path: string | undefined): string {
   return `${objectName(m[1]!, m[2]!)}${m[3] ? ` · ${m[3].replace(/\//g, ' ')}` : ''}`;
 }
 
+/**
+ * Counts the opens and closes of the drawer: a candidate that arrives for an earlier one (the
+ * drawer was closed or opened again while it was being created) is discarded, not shown.
+ */
+let generation = 0;
+const stale = (gen: number) => gen !== generation || !draft.drawerOpen;
+
 async function prepare() {
+  const gen = ++generation;
   phase.value = 'creating';
   candidate.value = undefined;
   preview.value = undefined;
@@ -81,11 +89,18 @@ async function prepare() {
   calls = [{ method: 'POST', path: `/revisions?message=${encodeURIComponent(message)}`, headers, body: patch, note: 'the candidate: a merge patch against the base revision' }];
   try {
     const rev = await createRevision(patch, { message }, { headers });
+    if (stale(gen)) {
+      await discardRevision(rev.id).catch(() => undefined);
+      return;
+    }
     candidate.value = rev.id;
     calls.push({ method: 'POST', path: `/revisions/${rev.id}/preview`, note: 'the dry run' });
-    preview.value = await previewRevision(rev.id);
+    const p = await previewRevision(rev.id);
+    if (stale(gen)) return; // closed during the dry run: back() discarded the candidate
+    preview.value = p;
     phase.value = 'ready';
   } catch (e) {
+    if (stale(gen)) return;
     if (e instanceof ApiError && e.code === 'revision_conflict' && base !== undefined) {
       if (candidate.value !== undefined) await discardRevision(candidate.value).catch(() => undefined);
       candidate.value = undefined;
@@ -106,6 +121,8 @@ async function prepare() {
 }
 
 async function back() {
+  // a candidate still being created is discarded when it arrives (prepare)
+  generation++;
   const id = candidate.value;
   candidate.value = undefined;
   draft.drawerOpen = false;

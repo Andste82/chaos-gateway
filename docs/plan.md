@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 in progress: M12 complete (branch `phase-3-web-ui`, draft PR #56) · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 in progress: M12 and M13 complete (branch `phase-3-web-ui`, draft PR #56) · October 2026
 
 ---
 
@@ -1413,6 +1413,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M11.
 
 **M13 — UI for faults, rules and profiles** (L)
+- **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `1de83f2`, CI run 38411177290 green, the testbed browser flow `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` included); Phase 3 merges to `main` as one PR after M14. Open questions: `docs/open-items.md`, Phase 3.
 - Scope: add/edit fault dialog with preview, access-rules screen (ordered list, rule editor IF/THEN, counters) and faults screen (by family and scope, "overridden by", explain), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog (reload and reapply), profile cards, TTL display, `</> API` panel.
 - Tests: Playwright — create a fault in the UI, then verify the measured effect in the testbed; validation errors are shown; a conflicting change made through the API triggers the conflict dialog; the faults screen marks an overridden fault.
 - Depends on: M12.

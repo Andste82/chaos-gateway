@@ -529,8 +529,8 @@ P2-M9-06, a hardware measurement for H1, which also carries the arm64 apply-cost
 The Phase 2 audit of 2026-10-12 ("Phase 2 audit result" above) added 16 items, P2-AUDIT-01 to P2-AUDIT-16 (two of medium
 severity, fourteen low; the per-night record of measurements was found under M8b, M10 and the cross-cutting checks and is
 one item, P2-AUDIT-07). P2-AUDIT-06 was fixed in the audit's own PR. The maintainer decided P2-AUDIT-01 and P2-AUDIT-07 on
-2026-10-12 (third table), and the other 15 were closed on 2026-10-12 together with P2-AUDIT-17, a low item the work on
-P2-AUDIT-15 found (fourth table); their blocks are gone. So one Phase 2 item is open: P2-M9-06, under "Items that stay open".
+2026-10-12 (third table). The 15 items left after P2-AUDIT-06, these two included, were closed on 2026-10-12 together
+with P2-AUDIT-17, a low item the work on P2-AUDIT-15 found (fourth table, 16 rows); their blocks are gone. So one Phase 2 item is open: P2-M9-06, under "Items that stay open".
 
 ### Decisions (made 2026-10-11)
 

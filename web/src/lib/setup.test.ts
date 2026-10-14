@@ -3,7 +3,6 @@ import type { HostInterface } from '../api/generated/model';
 import {
   buildSetupRequest,
   managementURL,
-  netplanHint,
   prefixRange,
   proposeNetwork,
   suggestAddress,
@@ -76,14 +75,6 @@ describe('setup wizard', () => {
     expect(validatePassword('short', 'short').password).toBe('At least 12 characters.');
     expect(validatePassword('long enough pw', 'long enough pX').repeat).toBe('The passwords differ.');
     expect(validatePassword('long enough pw', 'long enough pw')).toEqual({});
-  });
-
-  it('hints at netplan for an interface the OS configures', () => {
-    const hint = netplanHint({ name: 'eth3', mac: '52:54:00:00:00:04', os_managed: true });
-    expect(hint).toMatch(/eth3 is configured by the operating system. Delete its entry "eth3:".*sudo netplan apply/);
-    // plan §3.4: a test interface has no entry at all; one that only turns DHCP off is not enough
-    expect(hint).not.toMatch(/dhcp4/);
-    expect(netplanHint({ name: 'eth2', mac: '52:54:00:00:00:03', os_managed: false })).toBeUndefined();
   });
 
   it('builds revision 1 of the request from the choices, as the spec wants it', () => {

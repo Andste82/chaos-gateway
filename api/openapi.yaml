@@ -296,6 +296,15 @@ paths:
       tags: [system]
       operationId: getPreflight
       summary: Result of the last preflight check (plan §3.4)
+      description: |
+        The checks of the host made when the API started (kernel, modules), and one check per host
+        interface that is assigned to a test network or may become one (every interface but the uplink
+        and the management interface), made at the request: whether netplan or NetworkManager configures
+        it (`interface.<name>.os_config`, with `interface`). A test interface must carry no OS
+        configuration (plan §3.4): the message names the file and the entry (or the NetworkManager
+        connection), `fix` says what to remove; the status is `fail` for an assigned interface and
+        `warn` for a candidate. The executor reads the files; nothing of their content but where an
+        interface is named is reported. `GET /setup` carries the same report for the setup wizard.
       x-milestone: M5
       x-required-scope: read
       responses:
@@ -4165,6 +4174,9 @@ components:
                 enum: [ok, warn, fail]
               message: {type: string}
               fix: {type: string}
+              interface:
+                type: string
+                description: The host interface the check is about (the OS-configuration check of a test interface).
     HostInterface:
       type: object
       required: [name, mac]
@@ -4182,7 +4194,7 @@ components:
           items: {$ref: '#/components/schemas/Ipv4Interface'}
         os_managed:
           type: boolean
-          description: Configured by netplan/NetworkManager (must be false for test interfaces).
+          description: Configured by netplan/NetworkManager (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
         assigned:
           type: object
           properties:

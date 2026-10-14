@@ -1001,7 +1001,7 @@ chaos-gateway/
 
 | Container | Privileges | Why |
 |---|---|---|
-| `exec` | **privileged** (the only one), host network, `/run/netns` shared with the host (`rshared`), `/lib/modules` read-only | writes nftables, tc, routes, sysctls (per-interface sysctls of new bridges need a writable `/proc/sys`, which only a privileged container has, S7), network namespaces for probes, loads missing modules |
+| `exec` | **privileged** (the only one), host network, `/run/netns` shared with the host (`rshared`), `/lib/modules` read-only, the host's `/etc` read-only at `/host/etc` | writes nftables, tc, routes, sysctls (per-interface sysctls of new bridges need a writable `/proc/sys`, which only a privileged container has, S7), network namespaces for probes, loads missing modules; reads where netplan and NetworkManager configure an interface for the preflight (§3.4, root-only files) |
 | `api` | unprivileged user, all capabilities dropped | REST/SSE/UI; reaches the executor, Kea and BIRD through Unix sockets on a shared volume |
 | `svcns` | none, `--network none` | holder of the service namespace: only `sleep`; the executor attaches the `svc0` veth pair to it by PID and installs the redirect rules inside |
 | `dns`, `tls` | `NET_BIND_SERVICE`, joined to `svcns` (`network_mode: service:svcns`), unprivileged user | bind port 53 and the redirect ports inside the service namespace |

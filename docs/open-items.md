@@ -749,10 +749,20 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M12-07 The netplan hints of the wizard are not taken from the preflight
 
-- Status: new
-- Decision (2026-10-14): option (a) — a preflight check per assigned or candidate interface names the netplan file and entry (or the
-  NetworkManager connection) to remove; the wizard (and the CLI where it shows the preflight) shows the preflight's text;
-  the client-side hint is removed
+- Status: closed (2026-10-14): decided — option (a): a preflight check per interface that is or may become a test
+  interface (not the uplink or the management interface), made at each `GET /setup` and `GET /system/preflight`
+  (`interface.<name>.os_config` with `interface`): the executor reads where netplan and NetworkManager configure an
+  interface (`preflight.ReadOSConfig`, read operation `host_net`, `chaosgw exec --host-root /host`, the host's `/etc`
+  mounted read-only at `/host/etc` in `deploy/compose.executor.yaml`; only the file, the entry and what it selects leave
+  the executor), and the check names the file and the entry (or the NetworkManager connection) and what to remove, a
+  warning for a candidate and a failure for an assigned test interface; `HostInterface.os_managed` comes from the same
+  read. The wizard shows the preflight's text for each chosen test interface ("Check again" reads it anew); the
+  client-side `netplanHint` is removed. No CLI command shows the preflight; every client reads it from
+  `GET /system/preflight`. `deploy/host-setup.sh` now says to delete the entry. Tests
+  `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent`,
+  `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`,
+  `TestExecutorContainerHardeningProfile` (the mount, read-only); `setup.spec.ts` "first start: the wizard sets up the
+  gateway and confirms the revision" (the preflight's text for eth3, nothing for eth2 and the uplink, Check again)
 - Severity: low
 - Reason: needs-decision. M12 Scope says "netplan hints from the preflight", and plan §3.4 says the preflight checks that the
   test interfaces carry no OS configuration. The preflight (`internal/preflight`) has no per-interface netplan check yet;

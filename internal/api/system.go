@@ -22,6 +22,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/supervisor"
 )
@@ -361,13 +362,11 @@ func (s *Server) GetHealth(c *gin.Context) {
 	c.JSON(code, body)
 }
 
-// GetPreflight implements GET /system/preflight.
+// GetPreflight implements GET /system/preflight: the checks of the host made when the process started, and
+// the check of every interface that is or may become a test interface, made now (P3-M12-07).
 func (s *Server) GetPreflight(c *gin.Context) {
-	if r := s.preflightReport(); r != nil {
-		c.JSON(200, r)
-		return
-	}
-	c.JSON(200, gin.H{"status": "warn", "checks": []gin.H{{"id": "preflight", "status": "warn", "message": "no preflight check has run in this process"}}})
+	osc := s.readOSConfig(contextOf(c))
+	c.JSON(200, s.preflightReport(s.hostInterfaces(osc), osc, true))
 }
 
 // ---- interfaces
@@ -385,11 +384,43 @@ type hostInterface struct {
 	LinkUp    *bool           `json:"link_up,omitempty"`
 	MAC       string          `json:"mac"`
 	Name      string          `json:"name"`
-	SpeedMbps int             `json:"speed_mbps,omitempty"`
+	// OSManaged says whether netplan or NetworkManager configures the interface; absent when that could not
+	// be read
+	OSManaged *bool `json:"os_managed,omitempty"`
+	SpeedMbps int   `json:"speed_mbps,omitempty"`
 }
 
-// hostInterfaces describes the physical interfaces of the host and what they are used for.
-func (s *Server) hostInterfaces() []hostInterface {
+// osConfig is where the host's operating system configures network interfaces, read through the executor
+// for one request; err is set when it could not be read.
+type osConfig struct {
+	state *executor.HostNetState
+	err   error
+}
+
+func (s *Server) readOSConfig(ctx context.Context) osConfig {
+	st, err := s.cfg.Engine.HostNetConfig(ctx)
+	if err != nil {
+		s.log.Warn("cannot read the host's network configuration", "error", err)
+	}
+	return osConfig{state: st, err: err}
+}
+
+// configures reports whether the operating system configures the interface; ok is false when that is not known.
+func (o osConfig) configures(name, mac string) (yes, ok bool) {
+	if o.err != nil || o.state == nil {
+		return false, false
+	}
+	for _, e := range o.state.Entries {
+		if e.Matches(name, mac) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// hostInterfaces describes the physical interfaces of the host, what they are used for and whether the
+// operating system configures them (osc, read for the request).
+func (s *Server) hostInterfaces(osc osConfig) []hostInterface {
 	snap := s.cfg.Engine.Snapshot()
 	cfg := snap.Config
 	out := []hostInterface{}
@@ -406,6 +437,9 @@ func (s *Server) hostInterfaces() []hostInterface {
 		sysfs(&hi)
 		if cfg != nil {
 			hi.Assigned = assignment(cfg, l)
+		}
+		if yes, ok := osc.configures(l.Name, l.MAC); ok {
+			hi.OSManaged = &yes
 		}
 		out = append(out, hi)
 	}
@@ -517,7 +551,7 @@ func linkBytes(name string) (rx, tx int64, ok bool) {
 
 // ListHostInterfaces implements GET /system/interfaces.
 func (s *Server) ListHostInterfaces(c *gin.Context, params model.ListHostInterfacesParams) {
-	items, next, err := page(s.hostInterfaces(), func(h hostInterface) string { return h.Name }, params.Cursor, params.Limit)
+	items, next, err := page(s.hostInterfaces(s.readOSConfig(contextOf(c))), func(h hostInterface) string { return h.Name }, params.Cursor, params.Limit)
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeBadRequest, "%v", err))
 		return
@@ -537,10 +571,9 @@ func (s *Server) GetSetup(c *gin.Context) {
 		c.JSON(200, gin.H{"completed": true})
 		return
 	}
-	st := gin.H{"completed": false, "interfaces": s.hostInterfaces()}
-	if r := s.preflightReport(); r != nil {
-		st["preflight"] = r
-	}
+	osc := s.readOSConfig(contextOf(c))
+	ifaces := s.hostInterfaces(osc)
+	st := gin.H{"completed": false, "interfaces": ifaces, "preflight": s.preflightReport(ifaces, osc, false)}
 	snap := s.cfg.Engine.Snapshot()
 	for _, d := range snap.Host.Defaults {
 		if l, ok := snap.Host.Link(d.Dev); ok {
@@ -551,14 +584,54 @@ func (s *Server) GetSetup(c *gin.Context) {
 	c.JSON(200, st)
 }
 
-func (s *Server) preflightReport() any {
-	if s.cfg.Preflight == nil {
-		return nil
+// preflightReport is the report of the preflight (plan §3.4): the checks of the host the process made when it
+// started (kernel, modules; Config.Preflight), and one check per interface that is assigned to a test network
+// or may become one (not the uplink, not the management interface), made now: whether netplan or
+// NetworkManager configures it, and which entry to remove (docs/open-items.md P3-M12-07). The wizard and every
+// client show the same text. noRun adds a warning when no check of the host has run in this process.
+func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun bool) *PreflightReport {
+	r := &PreflightReport{Status: "ok"}
+	if s.cfg.Preflight != nil {
+		if base := s.cfg.Preflight(); base != nil {
+			r.At, r.Status = base.At, base.Status
+			r.Checks = append(r.Checks, base.Checks...)
+		}
 	}
-	if r := s.cfg.Preflight(); r != nil {
-		return r
+	if r.At == nil && noRun {
+		r.Checks = append(r.Checks, PreflightCheck{ID: "preflight", Status: "warn", Message: "no preflight check has run in this process"})
 	}
-	return nil
+	add := func(c PreflightCheck) {
+		r.Checks = append(r.Checks, c)
+	}
+	switch {
+	case osc.err != nil:
+		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "the network configuration of the operating system cannot be read: " + firstLine(osc.err.Error()),
+			Fix: "give the executor the host's /etc read-only at /host/etc (--host-root /host, deploy/compose.executor.yaml)"})
+	case osc.state != nil && len(osc.state.Errors) > 0:
+		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "some network configuration files of the operating system cannot be read: " + strings.Join(osc.state.Errors, "; ")})
+	}
+	if osc.state != nil {
+		for _, hi := range ifaces {
+			role := ""
+			if hi.Assigned != nil {
+				role = hi.Assigned.Role
+			}
+			if role == "uplink" || role == "management" {
+				continue // the operating system keeps them (D3)
+			}
+			status, msg, fix := preflight.InterfaceCheck(hi.Name, hi.MAC, role == "network", osc.state.Entries)
+			add(PreflightCheck{ID: "interface." + hi.Name + ".os_config", Interface: hi.Name, Status: status, Message: msg, Fix: fix})
+		}
+	}
+	for _, c := range r.Checks {
+		switch {
+		case c.Status == "fail":
+			r.Status = "fail"
+		case c.Status == "warn" && r.Status == "ok":
+			r.Status = "warn"
+		}
+	}
+	return r
 }
 
 // minPassword is the shortest admin password (the spec's minLength).

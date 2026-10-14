@@ -341,6 +341,22 @@ const preflightWarn: PreflightReport = {
   checks: [
     { id: 'kernel.version', status: 'ok', message: 'kernel 6.8 is supported' },
     { id: 'module.sch_netem', status: 'warn', message: 'sch_netem is not loaded yet', fix: 'echo sch_netem | sudo tee /etc/modules-load.d/chaos-gateway.conf' },
+    // the OS-configuration check of every interface but the uplink and the management interface (P3-M12-07)
+    {
+      id: 'interface.eth0.os_config',
+      interface: 'eth0',
+      status: 'warn',
+      message: 'eth0 is configured by netplan (/etc/netplan/50-cloud-init.yaml, "eth0" under "ethernets"); a test interface must not be',
+      fix: 'delete the entry "eth0:" under "ethernets" in /etc/netplan/50-cloud-init.yaml, then run "sudo netplan apply"',
+    },
+    { id: 'interface.eth2.os_config', interface: 'eth2', status: 'ok', message: 'eth2 carries no network configuration of the operating system' },
+    {
+      id: 'interface.eth3.os_config',
+      interface: 'eth3',
+      status: 'warn',
+      message: 'eth3 is configured by netplan (/etc/netplan/60-lab.yaml, "lab" under "ethernets") and by NetworkManager (connection "Wired connection 2", /etc/NetworkManager/system-connections/Wired connection 2.nmconnection); a test interface must not be',
+      fix: 'delete the entry "lab:" under "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"; delete the NetworkManager connection "Wired connection 2" (sudo nmcli connection delete "Wired connection 2")',
+    },
   ],
 };
 

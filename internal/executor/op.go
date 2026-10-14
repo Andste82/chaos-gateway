@@ -411,6 +411,9 @@ const (
 	ReadServiceNS  = "service_ns"
 	ReadAssigned   = "assigned"
 	ReadDockerUser = "docker_user"
+	// ReadHostNet returns where the host's operating system configures network interfaces (netplan,
+	// NetworkManager; HostNetState): the preflight's check that test interfaces carry no OS configuration.
+	ReadHostNet = "host_net"
 )
 
 func (NftApply) OpType() string          { return TypeNftApply }

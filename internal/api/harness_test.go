@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
@@ -101,6 +102,9 @@ type options struct {
 	classLimit int
 	// ui is the web app the server serves outside /api/ (nil: none)
 	ui fs.FS
+	// hostFS is the host root the executor reads netplan and NetworkManager from (nil: an empty one, so a
+	// test never reads the machine's own configuration)
+	hostFS fs.FS
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -138,6 +142,10 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if k != nil {
 		eopts = append(eopts, executor.WithNetnsInode(k.NetnsInode))
 	}
+	if o.hostFS == nil {
+		o.hostFS = fstest.MapFS{}
+	}
+	eopts = append(eopts, executor.WithHostRoot(o.hostFS))
 	ex, err := executor.New(runner, eopts...)
 	if err != nil {
 		t.Fatal(err)

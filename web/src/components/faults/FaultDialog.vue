@@ -8,7 +8,9 @@
 // unapplied-changes bar and the preview. Editing an overlay writes it again under the same key (it
 // keeps its id); whenever the gateway answers with another overlay — a changed target or traffic,
 // or an overlay of another owner (a token, a run), whose key includes its owner (§2.1.1) — the
-// old one is removed, so the edit replaces it. A configured fault the gateway refused in a
+// old one is removed, so the edit replaces it. An edit keeps the overlay's remaining time unless
+// another duration is chosen (it is sent as the TTL; an own TTL the dialog does not list is offered
+// as such; P3-M13-06). A configured fault the gateway refused in a
 // candidate opens with the refusal under its fields. The dialog's requests are shown in it under
 // `</> API`.
 import { useQueryClient } from '@tanstack/vue-query';
@@ -18,7 +20,9 @@ import { createOverlay, deleteOverlay } from '../../api/generated/hooks/overlays
 import type { ConfigFault, Overlay, OverlayRequest } from '../../api/generated/model';
 import { useGatewayState, useGroups, useNames } from '../../composables/gateway';
 import {
+  durationChoices,
   durations,
+  durationTtl,
   emptyForm,
   faultFormErrors,
   faultToForm,
@@ -29,10 +33,14 @@ import {
   presets,
   previewSentence,
   trafficPresets,
+  ttlText,
   type FaultField,
   type FaultForm,
 } from '../../lib/faultForm';
 import { describeOwner, describeScope } from '../../lib/faults';
+import { gatewayNow } from '../../lib/clock';
+import { formatHM } from '../../lib/format';
+import { useNow } from '../../composables/useNow';
 import { newId } from '../../lib/ids';
 import { httpOf, useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
@@ -81,7 +89,7 @@ watch(open, (o) => {
   error.value = '';
   serverErrors.value = {};
   if (props.overlay) {
-    form.value = faultToForm(props.overlay.fault, props.overlay.target, { ttl: props.overlay.ttl });
+    form.value = faultToForm(props.overlay.fault, props.overlay.target, { ttl: props.overlay.ttl, expiresAt: props.overlay.expires_at });
     layer.value = 'overlay';
   } else if (props.config) {
     form.value = faultToForm(props.config.fault, props.config.fault.source, { name: props.config.fault.name });
@@ -125,7 +133,10 @@ const clientErrors = computed(() => faultFormErrors(form.value, layer.value));
 const errors = computed<Partial<Record<FaultField, string>>>(() => ({ ...serverErrors.value, ...clientErrors.value }));
 const valid = computed(() => Object.keys(clientErrors.value).length === 0);
 const preview = computed(() => previewSentence(form.value, targetName.value, layer.value));
-const request = computed<OverlayRequest>(() => formToOverlay(form.value));
+const now = useNow();
+const durationOptions = computed(() => durationChoices(form.value, props.overlay?.ttl, now.value));
+// the request as it would be sent now (a kept remaining time shrinks with the clock)
+const request = computed<OverlayRequest>(() => formToOverlay(form.value, now.value));
 
 // what the dialog would send, for the `</> API` panel
 watch(
@@ -181,7 +192,7 @@ async function submit() {
     return;
   }
   busy.value = true;
-  const req = request.value;
+  const req = formToOverlay(form.value, gatewayNow());
   try {
     const ov = await createOverlay(req);
     const calls: ApiCall[] = [{ method: 'POST', path: '/overlays', body: req }];
@@ -199,7 +210,8 @@ async function submit() {
       });
     }
     apiPanel.record(editing.value ? 'Edit fault' : 'Add fault', calls);
-    const d = durations.find((x) => x.value === form.value.duration);
+    const ttl = durationTtl(form.value.duration);
+    const kept = form.value.duration === 'keep' && form.value.keepUntil;
     if (leftOver) {
       toasts.push(
         'error',
@@ -207,7 +219,15 @@ async function submit() {
         `The edited fault is active on ${targetName.value}, but removing the old one failed (${leftOver}). Remove it on the faults screen.`,
       );
     } else {
-      toasts.push('success', `Fault active on ${targetName.value}`, d?.ttl ? `Expires after ${d.label}.` : 'Until removed.');
+      toasts.push(
+        'success',
+        `Fault active on ${targetName.value}`,
+        kept
+          ? `Expires at ${formatHM(form.value.keepUntil)} as before.`
+          : ttl
+            ? `Expires after ${durations.find((d) => d.value === form.value.duration)?.label ?? ttlText(ttl)}.`
+            : 'Until removed.',
+      );
     }
     open.value = false;
     await Promise.all(['overlays', 'devices', 'faults', 'profiles', 'state'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
@@ -337,7 +357,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         <div v-if="layer === 'overlay'">
           <label class="label" :for="fieldId('duration')">Duration</label>
           <select :id="fieldId('duration')" v-model="form.duration" class="input">
-            <option v-for="d in durations" :key="d.value" :value="d.value">{{ d.label }}</option>
+            <option v-for="d in durationOptions" :key="d.value" :value="d.value">{{ d.label }}</option>
           </select>
         </div>
         <div v-else>

@@ -3361,7 +3361,13 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   (owner, target, family and selector: it keeps its id and gets the new TTL); whenever the gateway answers with another
   overlay — another traffic selector, or an overlay of an API token or a run, which the browser's write cannot replace
   because the key includes the owner — the old one is removed, so the edit replaces it (the dialog says "Set by the token
-  ci-runner. Applying removes it and puts a fault of yours in its place."; P3-M13-06). Under "</> API" the dialog shows the
+  ci-runner. Applying removes it and puts a fault of yours in its place."; P3-M13-06). An edit keeps the overlay's
+  remaining time unless another duration is chosen (P3-M13-06): the duration's first choice is "Keep: 4:12 left of 5 min"
+  (`durationChoices`), and Apply sends the remaining time on the gateway's clock as the TTL in whole seconds
+  (`remainingTtl`; the API's `ttl` is "remove after this time" and a written overlay's TTL starts over, so no API field is
+  needed, also not for an overlay of another owner, which is a new overlay), so the expiry stays where it was ("Expires at
+  12:46 as before."). A TTL that is not one of the choices (`30m` from the API, or a kept `1199s`) is offered as such ("30
+  min (its own TTL)", `ttlText`) instead of becoming 15 minutes. Under "</> API" the dialog shows the
   requests it would send. On the faults screen a fault can instead be saved in the configuration ("Configuration · after
   preview", with a name; it goes into the draft), and a configured fault is edited there; parameters the dialog does not show
   (burst loss, flapping, different directions, …) are named before they would be replaced. The device detail has "Add
@@ -3445,7 +3451,7 @@ branch with the M13 flow yet.
 | Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a deleted rule is shown struck through …", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation"; `faults.spec.ts` "closing the drawer while the candidate is created discards it when it arrives"; `src/stores/draft.test.ts` "edits undone by hand leave a clean draft on the newest active revision" |
 | Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
-| Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, M12's `device-detail.spec.ts` |
+| Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)" (also the token's overlay taken over in "edit a fault overlay of an API token: …"); `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"; M12's `device-detail.spec.ts` |
 | Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` (also an apostrophe in a body or header, quoted for the shell) |
 
 ## Web UI: networks, WireGuard, routing and the technical view (M14)

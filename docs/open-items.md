@@ -1169,3 +1169,26 @@ decided option is implemented. As of 2026-10-14 every Phase 3 item is closed exc
 - Acceptance: the job `testbed-ui` passes with the three browser flows.
 - Needs maintainer: no
 - Effort: S
+
+### Phase 3 audit: choices made in the backend and security fixes (2026-10-14)
+
+The audit's backend and security findings were fixed without a maintainer decision; where a fix had to choose, it took
+the option closest to the plan, recorded here:
+
+- `GET /setup` (no authentication before the setup) shares one read of the host's network configuration through the
+  executor for 2 seconds among its callers (`osConfigCache`, as the health check's probe, M5-13). Its report does not
+  quote the executor's error (the log has it), but it still names the files that cannot be read and the netplan entries
+  and NetworkManager connections (ids included) that configure an interface: plan §3.4 wants the wizard to show the
+  entry to remove before the setup. Sending these details only with a valid `X-Setup-Token` (the wizard asks for the
+  token first, but only `POST /setup` checks it today) would need a change of the spec; the maintainer may want it.
+- A logout clears the query cache and the draft. An export-once WireGuard configuration that no dialog has shown yet
+  (`ClientConfigDialog`'s module-level `unseen`) is kept: it is the only copy of the client's private key, there is a
+  single admin, and dropping it would force a key rotation. An ended session (401) clears the cache, as before, and
+  keeps the draft, so an expired session loses no edits.
+- The executor keeps the host's whole `/etc` mounted read-only (the comment in `internal/executor/exec.go` was wrong):
+  a bind mount needs its source, a host without netplan or NetworkManager has no such directory, and
+  `create_host_path` would create them on the host. The executor is privileged anyway.
+- netplan: a renderer per device type is no entry and does not hand every port to NetworkManager (netplan's global
+  NetworkManager renderer does; a per-type one only affects the section's devices, which are entries anyway); a
+  `match` by a key the preflight cannot evaluate (empty, or `path` and the like) counts for every interface, a warning
+  rather than a missed configuration.

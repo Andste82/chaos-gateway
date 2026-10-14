@@ -5,7 +5,7 @@
 // part a profile already has (defined over the API, available with M20/M21) is kept as it is.
 import type { Profile, ProfileParts } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneProfilesNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
-import type { MtuMode } from './faultForm';
+import { mtuOf, type MtuMode } from './faultForm';
 import {
   emptyImpairment,
   impairmentErrors,
@@ -60,7 +60,7 @@ export function keptParts(base: Profile | undefined): Pick<ProfileParts, 'dns' |
 export function formToProfile(f: ProfileForm, base?: Profile): Profile {
   const parts: ProfileParts = { ...keptParts(base) };
   if (f.impairmentOn) parts.impairment = impairmentParams(f.impairment);
-  if (f.mtuOn) parts.mtu = { size: Number(f.mtuSize), mode: f.mtuMode };
+  if (f.mtuOn) parts.mtu = mtuOf(f.mtuSize, f.mtuMode, base?.parts.mtu);
   return { name: f.name.trim(), ...(f.description.trim() ? { description: f.description.trim() } : {}), parts };
 }
 

@@ -267,7 +267,7 @@ function match(f: FaultForm): Pick<FaultBody, 'protocol' | 'ports' | 'port_range
 export function formToFault(f: FaultForm): FaultBody {
   switch (f.family) {
     case 'mtu':
-      return { family: 'mtu', ...match(f), mtu: { size: Number(f.mtuSize), mode: f.mtuMode } };
+      return { family: 'mtu', ...match(f), mtu: mtuOf(f.mtuSize, f.mtuMode) };
     case 'tunnel':
       return { family: 'tunnel', ...(tunnelOf(f.tunnel) ? { tunnel: tunnelOf(f.tunnel) } : {}), ...impairmentParams(f, true) };
     default:
@@ -290,12 +290,23 @@ export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRe
   return { ...base, ...(ttl ? { ttl } : {}) };
 }
 
+/**
+ * The MTU part of the form. The mode `icmp` is the API's default: a base without a mode keeps
+ * leaving it out, so an edit elsewhere does not write the default into the profile or the
+ * configured fault.
+ */
+export function mtuOf(size: string, mode: MtuMode, base?: { mode?: MtuMode }): { size: number; mode?: MtuMode } {
+  return base && base.mode === undefined && mode === 'icmp' ? { size: Number(size) } : { size: Number(size), mode };
+}
+
 /** A configured fault from the form (a tunnel fault has no source); the description and the switch are kept from `base`. */
 export function formToConfigFault(f: FaultForm, base?: ConfigFault): ConfigFault {
   const keep: ConfigFault = {};
   if (base?.description) keep.description = base.description;
   if (base?.enabled === false) keep.enabled = false;
-  return { ...keep, ...(f.name ? { name: f.name } : {}), ...(f.family === 'tunnel' ? {} : { source: scopeOf(f.target) }), ...formToFault(f) };
+  const body = formToFault(f);
+  if (f.family === 'mtu' && base?.family === 'mtu') body.mtu = mtuOf(f.mtuSize, f.mtuMode, base.mtu);
+  return { ...keep, ...(f.name ? { name: f.name } : {}), ...(f.family === 'tunnel' ? {} : { source: scopeOf(f.target) }), ...body };
 }
 
 /** The form of an existing fault (an overlay's or a configured one), whatever its family. */

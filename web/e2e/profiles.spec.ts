@@ -187,8 +187,16 @@ test('edit and delete a custom profile through the draft; a refused profile show
   const slow = card(page, 'slow-lab');
   // a built-in profile is not edited
   await expect(card(page, 'LTE').getByRole('button', { name: /^(Edit|Delete) / })).toHaveCount(0);
+  // saved without a change, it is no change: the defaults the editor fills in (the MTU mode) are not one
   await slow.getByRole('button', { name: 'Edit slow-lab' }).click();
   const d = editor(page);
+  await expect(d.getByLabel('Mode', { exact: true })).toHaveValue('icmp');
+  await d.getByRole('button', { name: 'Save to the changes' }).click();
+  await expect(d).toBeHidden();
+  await expect(slow.getByTestId('profile-mark')).toHaveCount(0);
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+
+  await slow.getByRole('button', { name: 'Edit slow-lab' }).click();
   await expect(d.getByLabel('Name')).toHaveValue('slow-lab');
   await expect(d.getByLabel('Latency (ms)')).toHaveValue('20');
   await expect(d.getByLabel('MTU part')).toBeChecked();
@@ -207,6 +215,12 @@ test('edit and delete a custom profile through the draft; a refused profile show
   gw.rejectRevision = [{ path: `/profiles/${SLOW_LAB}/parts/impairment/download/loss`, code: 'invalid_value', message: 'the loss is not allowed here' }];
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   const drawer = page.getByRole('dialog', { name: 'Preview' });
+  // the merge patch takes the flat latency away and writes each direction (the latency went to the
+  // upload, the download has its own loss); the MTU part is unchanged
+  await expect.poll(() => gw.requestsTo('POST', '/revisions').length).toBe(1);
+  expect((gw.requestsTo('POST', '/revisions')[0]!.body as { profiles: unknown }).profiles).toEqual({
+    [SLOW_LAB]: { parts: { impairment: { latency: null, upload: { latency: '20ms' }, download: { loss: '1%' } } } },
+  });
   await expect(drawer.getByTestId('preview-invalid')).toContainText('Profile slow-lab · parts impairment download loss: the loss is not allowed here');
   await drawer.getByRole('button', { name: 'Back to editing' }).click();
   await expect(slow).toContainText('NEEDS FIXING');
@@ -230,4 +244,23 @@ test('edit and delete a custom profile through the draft; a refused profile show
   await preview.getByRole('button', { name: 'Apply revision 43' }).click();
   await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
   await expect(page.getByTestId('profile-card')).toHaveCount(3);
+});
+
+test('a custom profile saved without a change is no change, also where the editor reads it in another form (P3-M13-03)', async ({ page }) => {
+  const gw = lab();
+  // written per direction with the same parameters and a latency in seconds: the editor shows it flat in ms
+  gw.profiles = [
+    ...gw.profiles,
+    { id: 'c0000000-0000-4000-8000-0000000000c2', builtin: false, available: true, config: { name: 'same-both', parts: { impairment: { upload: { latency: '1s' }, download: { latency: '1s' } } } } },
+  ];
+  await gw.install(page);
+  await page.goto('/profiles');
+  const same = card(page, 'same-both');
+  await same.getByRole('button', { name: 'Edit same-both' }).click();
+  const d = editor(page);
+  await expect(d.getByLabel('Latency (ms)')).toHaveValue('1000');
+  await d.getByRole('button', { name: 'Save to the changes' }).click();
+  await expect(d).toBeHidden();
+  await expect(same.getByTestId('profile-mark')).toHaveCount(0);
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
 });

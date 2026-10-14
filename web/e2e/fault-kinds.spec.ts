@@ -74,6 +74,50 @@ test('an MTU fault: created with the kind MTU / PMTUD, then edited on the faults
   await expect(row).toContainText('MTU 1400 mss_clamp');
 });
 
+test('a configured fault saved without a change is no change; an edit of an MTU fault writes only what changed', async ({ page }) => {
+  const SMALL = 'c0f00000-0000-4000-8000-0000000000a1';
+  const SAME = 'c0f00000-0000-4000-8000-0000000000a2';
+  const gw = MockGateway.sample();
+  gw.config = {
+    ...gw.config,
+    faults: {
+      ...gw.config.faults,
+      [SMALL]: { name: 'small-mtu', source: { device: ESP }, family: 'mtu', mtu: { size: 1280 } },
+      // written per direction with the same parameters and a latency in seconds: the dialog shows it flat in ms
+      [SAME]: { name: 'same-both', source: { device: ESP }, upload: { latency: '1s' }, download: { latency: '1s' } },
+    },
+  };
+  await gw.install(page);
+  await page.goto('/faults');
+  const row = page.getByTestId('fault-row').filter({ hasText: 'small-mtu' });
+  await row.getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  await expect(d.getByLabel('Packet size (bytes)')).toHaveValue('1280');
+  // the dialog shows the default mode; saving it unchanged records nothing
+  await expect(d.getByLabel('Mode', { exact: true })).toHaveValue('icmp');
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(d).toBeHidden();
+  await expect(row).not.toContainText('CHANGED');
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+  const same = page.getByTestId('fault-row').filter({ hasText: 'same-both' });
+  await same.getByRole('button', { name: /^Edit / }).click();
+  await expect(d.getByLabel('Latency (ms)')).toHaveValue('1000');
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(d).toBeHidden();
+  await expect(same).not.toContainText('CHANGED');
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+
+  // a new size: the patch has the size, not the default mode
+  await row.getByRole('button', { name: /^Edit / }).click();
+  await d.getByLabel('Packet size (bytes)').fill('1400');
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(row).toContainText('CHANGED');
+  await expect(page.getByTestId('unapplied-bar')).toHaveText(/1 change in 1 fault/);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
+  expect((gw.requestsTo('POST', '/revisions')[0]!.body as { faults: unknown }).faults).toEqual({ [SMALL]: { mtu: { size: 1400 } } });
+});
+
 test('a tunnel fault: edited with the parameters a tunnel takes, and one configured on a link through the draft', async ({ page }) => {
   const TUN = 'f0000000-0000-4000-8000-0000000000d1';
   const gw = withNetworks(MockGateway.sample());

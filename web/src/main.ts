@@ -6,7 +6,8 @@ import { ApiError, onReachable, onUnauthorized, onUnavailable, onUnreachable } f
 import { getSetup } from './api/generated/hooks/system/system';
 import { createAppRouter } from './router';
 import { useConnectionStore } from './stores/connection';
-import { useSessionStore } from './stores/session';
+import { useDraftStore } from './stores/draft';
+import { onLoggedOut, useSessionStore } from './stores/session';
 import { useToastStore } from './stores/toasts';
 import './styles.css';
 
@@ -28,6 +29,13 @@ const app = createApp(App).use(pinia).use(router).use(VueQueryPlugin, { queryCli
 const connection = useConnectionStore(pinia);
 onReachable(() => connection.answered());
 onUnreachable(() => connection.unreachable());
+// a logout leaves nothing of the session in the page: the server data it read and the draft it edited
+// (Phase 3 audit). An export-once WireGuard configuration not yet shown stays (ClientConfigDialog): it is
+// the only copy of the client's key, for the same admin's next login.
+onLoggedOut(() => {
+  queryClient.clear();
+  useDraftStore(pinia).forget();
+});
 onUnauthorized(() => {
   const session = useSessionStore(pinia);
   if (session.status !== 'authenticated') return;

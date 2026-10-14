@@ -12,6 +12,18 @@ import type { Session } from '../api/generated/model';
  */
 export type SessionStatus = 'unknown' | 'setup' | 'anonymous' | 'authenticated';
 
+const loggedOutHandlers = new Set<() => void>();
+
+/**
+ * fn runs when the admin logs out (also when the gateway's answer to the logout fails): what the
+ * session read and edited must not stay in the page for the next login (the query cache, the draft;
+ * Phase 3 audit). main.ts registers the cleanup.
+ */
+export function onLoggedOut(fn: () => void): () => void {
+  loggedOutHandlers.add(fn);
+  return () => loggedOutHandlers.delete(fn);
+}
+
 export const useSessionStore = defineStore('session', () => {
   const status = ref<SessionStatus>('unknown');
   const session = ref<Session | undefined>();
@@ -70,6 +82,7 @@ export const useSessionStore = defineStore('session', () => {
       await apiLogout();
     } finally {
       drop();
+      for (const fn of loggedOutHandlers) fn();
     }
   }
 

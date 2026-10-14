@@ -830,6 +830,20 @@ export const useDraftStore = defineStore('draft', () => {
   }
 
   /**
+   * Drops the edits and everything the draft learned of the configuration (its base, the newest
+   * revision seen, the open drawer and conflict): the admin logged out (Phase 3 audit), and the next
+   * session starts from the active revision it reads itself.
+   */
+  function forget() {
+    latest = undefined;
+    discard();
+    base.value = undefined;
+    baseConfig.value = undefined;
+    drawerOpen.value = false;
+    conflict.value = undefined;
+  }
+
+  /**
    * What the gateway refused when the draft became a candidate (422), by object id and field
    * (`rule` for a rule or a device as a whole; for a fault the pointer below it, `fault` for the
    * fault as a whole); an edit of the object clears its messages.
@@ -926,6 +940,7 @@ export const useDraftStore = defineStore('draft', () => {
     overlaps,
     rebase,
     discard,
+    forget,
     serverErrors,
     setServerErrors,
     drawerOpen,

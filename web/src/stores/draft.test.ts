@@ -46,6 +46,23 @@ describe('the configuration draft', () => {
     expect(d.dirty).toBe(false);
   });
 
+  it('forgets the edits and the configuration at a logout (Phase 3 audit)', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setRule(A, { name: 'a', source: { global: true }, action: 'reject' });
+    d.drawerOpen = true;
+    d.forget();
+    expect(d.dirty).toBe(false);
+    expect(d.base).toBeUndefined();
+    expect(d.baseConfig).toBeUndefined();
+    expect(d.drawerOpen).toBe(false);
+    // the next session starts from the revision it reads, not from one the last one saw
+    d.discard();
+    expect(d.base).toBeUndefined();
+    d.track(revision(44));
+    expect(d.base).toBe(44);
+  });
+
   it('edits undone by hand leave a clean draft on the newest active revision', () => {
     const d = useDraftStore();
     d.track(revision(42));

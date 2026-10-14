@@ -25,6 +25,7 @@ import type { ConfigFault, Overlay, OverlayRequest } from '../../api/generated/m
 import { useGatewayState, useGroups, useNames } from '../../composables/gateway';
 import {
   durationChoices,
+  keepError,
   durations,
   durationTtl,
   emptyForm,
@@ -49,7 +50,7 @@ import { useNow } from '../../composables/useNow';
 import { newId } from '../../lib/ids';
 import { httpOf, useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
 import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
@@ -85,6 +86,8 @@ const error = ref('');
 const busy = ref(false);
 /** The form as the dialog opened it: a configured fault saved unchanged records nothing (the defaults it fills in are no change). */
 let openedForm = '';
+/** The revision the form of a configured fault was built on (a revision applied meanwhile meets the edit in the conflict dialog). */
+let origin: EditOrigin | undefined;
 
 const editing = computed(() => !!props.overlay || !!props.config);
 const title = computed(() => (editing.value ? 'Edit fault' : 'Add fault'));
@@ -109,6 +112,7 @@ watch(open, (o) => {
     layer.value = 'overlay';
   }
   openedForm = JSON.stringify(form.value);
+  origin = props.config ? draft.editOrigin() : undefined;
   // what the gateway refused in the last candidate, until the fault is edited
   const refused = props.config ? draft.serverErrors[props.config.id] : undefined;
   if (refused) showRefusal(Object.entries(refused).map(([path, message]) => ({ path, message })));
@@ -148,11 +152,15 @@ const targetName = computed(() =>
   form.value.family === 'tunnel' ? describeTunnel(formToOverlay(form.value).fault?.tunnel, names.value) : describeScope(scopeOfTarget.value, names.value),
 );
 
-const clientErrors = computed(() => faultFormErrors(form.value, layer.value));
+const now = useNow();
+const clientErrors = computed<Partial<Record<FaultField, string>>>(() => {
+  const e = faultFormErrors(form.value, layer.value);
+  const expired = layer.value === 'overlay' ? keepError(form.value, now.value) : undefined;
+  return expired ? { ...e, duration: expired } : e;
+});
 const errors = computed<Partial<Record<FaultField, string>>>(() => ({ ...serverErrors.value, ...clientErrors.value }));
 const valid = computed(() => Object.keys(clientErrors.value).length === 0);
 const preview = computed(() => previewSentence(form.value, targetName.value, layer.value, names.value));
-const now = useNow();
 const durationOptions = computed(() => durationChoices(form.value, props.overlay?.ttl, now.value));
 // the request as it would be sent now (a kept remaining time shrinks with the clock)
 const request = computed<OverlayRequest>(() => formToOverlay(form.value, now.value));
@@ -206,7 +214,7 @@ async function submit() {
       return;
     }
     const id = props.config?.id ?? newId();
-    draft.setFault(id, formToConfigFault(form.value, props.config?.fault));
+    draft.editFrom(origin, () => draft.setFault(id, formToConfigFault(form.value, props.config?.fault)));
     open.value = false;
     return;
   }
@@ -418,9 +426,16 @@ const errId = (f: string) => `${uid}-${f}-error`;
       <div class="grid grid-cols-3 gap-3">
         <div v-if="layer === 'overlay'">
           <label class="label" :for="fieldId('duration')">Duration</label>
-          <select :id="fieldId('duration')" v-model="form.duration" class="input">
+          <select
+            :id="fieldId('duration')"
+            v-model="form.duration"
+            class="input"
+            :aria-invalid="!!errors.duration"
+            :aria-describedby="errors.duration ? `${fieldId('duration')}-error` : undefined"
+          >
             <option v-for="d in durationOptions" :key="d.value" :value="d.value">{{ d.label }}</option>
           </select>
+          <p v-if="errors.duration" :id="`${fieldId('duration')}-error`" class="field-error">{{ errors.duration }}</p>
         </div>
         <div v-else>
           <label class="label" :for="fieldId('name')">Name</label>

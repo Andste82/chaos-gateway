@@ -604,6 +604,28 @@ test('empty: no faults, the dashed box offers Add fault', async ({ page }) => {
   await expect(dialog(page)).toBeVisible();
 });
 
+test('an overlay that expires while its edit dialog is open is not written again for a second: Keep says it expired, a new duration is asked for', async ({ page }) => {
+  const gw = lab();
+  gw.overlays = gw.overlays.map((o) => (o.id === ESP_FAULT ? { ...o, ttl: '5m', expires_at: new Date(Date.now() + 3_000).toISOString() } : o));
+  await gw.install(page);
+  await page.goto('/faults');
+  await page.getByTestId('fault-row').filter({ hasText: 'ESP32-42' }).first().getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  await expect(d.getByLabel('Duration')).toHaveValue('keep');
+  await expect(d.getByText(/^The fault expired at \d\d:\d\d: choose how long it runs now\.$/)).toBeVisible({ timeout: 6_000 });
+  await expect(d.getByLabel('Duration')).toHaveAttribute('aria-invalid', 'true');
+  await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
+  gw.overlays = gw.overlays.filter((o) => o.id !== ESP_FAULT);
+  await gw.emit(page, { type: 'overlay_expired', subject: { kind: 'overlay', id: ESP_FAULT, name: 'ESP32-42 fault' } });
+  await d.getByLabel('Duration').selectOption('15m');
+  await expect(d.getByText(/^The fault expired at/)).toHaveCount(0);
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(d).toBeHidden();
+  const req = gw.requestsTo('POST', '/overlays').at(-1)!.body as { ttl?: string; expires_in?: string };
+  expect(req.ttl).toBe('15m');
+  expect(req.expires_in).toBeUndefined();
+});
+
 test('an expiring fault counts down on the faults screen and says so when it is gone', async ({ page }) => {
   const gw = lab();
   gw.overlays = gw.overlays.map((o) => (o.id === ESP_FAULT ? { ...o, expires_at: new Date(Date.now() + 3_000).toISOString() } : o));

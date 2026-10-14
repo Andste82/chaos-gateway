@@ -18,7 +18,7 @@ import {
   type RoutingSettingsForm,
 } from '../../lib/routingForm';
 import { useApiPanelStore } from '../../stores/apiPanel';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 import TextField from '../ui/TextField.vue';
 
@@ -34,9 +34,13 @@ const busy = ref(false);
 const refused = ref<Record<string, string>>({});
 let refusedForm = '';
 
+/** The revision the form was built on (a revision applied meanwhile meets the edit in the conflict dialog). */
+let origin: EditOrigin | undefined;
+
 watch(open, (o) => {
   if (!o) return;
   form.value = formFromRouting(draft.effectiveRouting);
+  origin = draft.editOrigin();
   refused.value = draft.serverErrors['routing'] ?? {};
   refusedForm = JSON.stringify(form.value);
   tried.value = Object.keys(refused.value).length > 0;
@@ -88,7 +92,7 @@ async function submit() {
   error.value = '';
   try {
     if (!draft.dirty) draft.track(await getActiveRevision());
-    draft.setRouting(routingFromForm(form.value, draft.effectiveRouting));
+    draft.editFrom(origin, () => draft.setRouting(routingFromForm(form.value, draft.effectiveRouting)));
     open.value = false;
     if (draft.dirty) draft.drawerOpen = true;
   } catch (e) {

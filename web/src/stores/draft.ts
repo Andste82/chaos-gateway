@@ -99,6 +99,12 @@ function fieldLabel(kind: string, path: string[]): string {
   return path.join(' ').replace(/_/g, ' ');
 }
 
+/** The revision an editor's form was built on (`editOrigin`). */
+export interface EditOrigin {
+  base?: number;
+  config?: Configuration;
+}
+
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
   kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing';
@@ -157,8 +163,27 @@ export const useDraftStore = defineStore('draft', () => {
       matrix.value !== undefined,
   );
 
+  /**
+   * The revision this UI applied that waits for confirmation, with the base the draft had then (the
+   * revision before it, still the active one while it waits). Edits made meanwhile are based on that
+   * one; when the own revision is confirmed and becomes active, the draft moves onto it silently: its
+   * edits met nobody else's change, so there is nothing for the concurrent-change dialog (Phase 3 audit).
+   */
+  let ownPending: { revision: number; base: number } | undefined;
+  /** The apply of `revision` waits for confirmation (the drawer, after its discard of the draft). */
+  function notePending(revision: number) {
+    ownPending = base.value !== undefined ? { revision, base: base.value } : undefined;
+  }
+
   /** Takes the active revision as the base, unless the draft has edits on another one. */
   function track(rev: RevisionWithConfiguration) {
+    const own = ownPending;
+    // anything but the revision before it as the active one: the waiting is over (confirmed, or another)
+    if (own && rev.id !== own.base) ownPending = undefined;
+    if (own && rev.id === own.revision && dirty.value && base.value === own.base) {
+      rebase(rev);
+      return;
+    }
     latest = rev;
     if (dirty.value && base.value !== undefined) return;
     base.value = rev.id;
@@ -181,6 +206,31 @@ export const useDraftStore = defineStore('draft', () => {
     },
     { flush: 'sync' },
   );
+
+  /**
+   * Where an editor started: the base its form was built on (Phase 3 audit). While the draft is clean
+   * its base follows the active revision, so a revision applied while an edit dialog is open would
+   * otherwise become the base of a form built on the older one: every field the other revision changed
+   * and the user left alone would be sent back as the user's, and If-Match would not see it.
+   */
+  function editOrigin(): EditOrigin {
+    return { base: base.value, config: baseConfig.value };
+  }
+  /**
+   * Saves an editor's result (`save` runs the `set…` of the object) against the revision the editor
+   * was opened on: a clean draft whose base moved meanwhile goes back to that revision, so the edit is
+   * what the user changed there, and the newer revision meets it in the concurrent-change dialog
+   * (reload and reapply keeps their fields) instead of being overwritten unseen. An edit that changes
+   * nothing leaves the draft clean, on the newest revision.
+   */
+  function editFrom(origin: EditOrigin | undefined, save: () => void) {
+    if (origin?.base !== undefined && origin.config && !dirty.value && base.value !== origin.base) {
+      base.value = origin.base;
+      baseConfig.value = origin.config;
+    }
+    save();
+    if (!dirty.value) rebaseOnLatest();
+  }
 
   const baseRules = computed(() => baseConfig.value?.access_rules ?? {});
   const baseOrder = computed(() => baseConfig.value?.access_rule_order ?? []);
@@ -731,9 +781,28 @@ export const useDraftStore = defineStore('draft', () => {
           .filter(([, c]) => c.network === net)
           .map(([id, c]) => [id, c.client]),
       );
+      if (hubGone(net, theirs)) {
+        // a client cannot be kept without its hub: the change of it is dropped (rebase)
+        const hubName = old?.networks?.[net]?.name ?? names.network?.(net) ?? net;
+        for (const [id, m] of Object.entries(edits)) {
+          const name = m?.name ?? clientsIn(old, net)[id]?.name ?? id;
+          out.push({ kind: 'client', id, name, field: 'client', from: `hub ${hubName} deleted`, to: 'my change dropped' });
+        }
+        continue;
+      }
       compare('client', edits, clientsIn(old, net), clientsIn(theirs, net), named);
     }
     return out;
+  }
+
+  /**
+   * The hub of client edits is gone in their revision and the draft does not bring it back (as a
+   * network of its own edit): a client has no place without its hub, so the client edits drop out
+   * instead of a merge patch that would make a network of clients only.
+   */
+  function hubGone(net: string, theirs: Configuration): boolean {
+    const mine = networks.value[net];
+    return theirs.networks?.[net] === undefined && (mine === undefined || mine === null);
   }
 
   /**
@@ -792,6 +861,8 @@ export const useDraftStore = defineStore('draft', () => {
     // clients hub by hub, like the other objects
     const nextClients: typeof clients.value = {};
     for (const net of new Set(Object.values(myClients).map((c) => c.network))) {
+      // a hub they deleted takes my client edits along (the network edits are reapplied above)
+      if (hubGone(net, rev.configuration)) continue;
       const edits = Object.fromEntries(
         Object.entries(myClients)
           .filter(([, c]) => c.network === net)
@@ -848,6 +919,7 @@ export const useDraftStore = defineStore('draft', () => {
    */
   function forget() {
     latest = undefined;
+    ownPending = undefined;
     discard();
     base.value = undefined;
     baseConfig.value = undefined;
@@ -927,6 +999,9 @@ export const useDraftStore = defineStore('draft', () => {
     baseClient,
     invalid,
     track,
+    notePending,
+    editOrigin,
+    editFrom,
     setRule,
     setOrder,
     move,

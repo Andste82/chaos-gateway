@@ -199,6 +199,8 @@ async function apply() {
     );
     candidate.value = undefined;
     draft.discard();
+    // edits made while it waits for confirmation move onto it once it is confirmed
+    if (res.status === 'pending_confirm') draft.notePending(res.revision);
     draft.drawerOpen = false;
     await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {

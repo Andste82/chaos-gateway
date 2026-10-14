@@ -16,7 +16,7 @@ import { firstError, useNetworks, useWireGuardClients } from '../../composables/
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes } from '../../lib/format';
 import { keysText, parseIPv4, withEnabled } from '../../lib/networks';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import EmptyState from '../ui/EmptyState.vue';
 import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
@@ -118,6 +118,12 @@ function undo(r: Row) {
   draft.setClient(props.network.id, r.id, draft.baseClient(props.network.id, r.id) ?? null);
 }
 const rotating = ref<Row>();
+/** The revision the rotation dialog's client was taken from (a revision applied meanwhile meets the edit in the conflict dialog). */
+let rotateOrigin: EditOrigin | undefined;
+function startRotate(r: Row) {
+  rotateOrigin = draft.editOrigin();
+  rotating.value = r;
+}
 const rotateOpen = computed({
   get: () => !!rotating.value,
   set: (v) => {
@@ -125,7 +131,8 @@ const rotateOpen = computed({
   },
 });
 function rotate(c: WireGuardClient) {
-  if (rotating.value) draft.setClient(props.network.id, rotating.value.id, c);
+  const r = rotating.value;
+  if (r) draft.editFrom(rotateOrigin, () => draft.setClient(props.network.id, r.id, c));
 }
 
 function handshake(v: WireGuardClientView | undefined): string {
@@ -227,7 +234,7 @@ function handshake(v: WireGuardClientView | undefined): string {
                 <button type="button" class="btn btn-sm" :aria-label="`${r.enabled ? 'Disable' : 'Enable'} ${r.name}`" @click="setEnabled(r, !r.enabled)">
                   {{ r.enabled ? 'Disable' : 'Enable' }}
                 </button>
-                <button type="button" class="btn btn-sm" :aria-label="`Rotate the keys of ${r.name}`" @click="rotating = r">Rotate keys</button>
+                <button type="button" class="btn btn-sm" :aria-label="`Rotate the keys of ${r.name}`" @click="startRotate(r)">Rotate keys</button>
                 <button
                   type="button"
                   class="btn btn-sm"

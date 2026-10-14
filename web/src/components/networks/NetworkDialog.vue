@@ -36,7 +36,7 @@ import {
 } from '../../lib/networkForm';
 import { subnetText } from '../../lib/networks';
 import { useApiPanelStore } from '../../stores/apiPanel';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import TextField from '../ui/TextField.vue';
@@ -100,9 +100,13 @@ function propose(kind: NetworkKind): NetworkForm {
   return emptyNetworkForm(kind, proposeAddress(kind, taken), kind === 'lan' ? '' : proposeListenPort(ports));
 }
 
+/** The revision the form of a network was built on (a revision applied meanwhile meets the edit in the conflict dialog). */
+let origin: EditOrigin | undefined;
+
 watch(open, (o) => {
   if (!o) return;
   form.value = before.value ? formFromNetwork(before.value) : propose('lan');
+  origin = props.network ? draft.editOrigin() : undefined;
   refused.value = (props.network && draft.serverErrors[props.network]) || {};
   refusedForm = JSON.stringify(form.value);
   tried.value = Object.keys(refused.value).length > 0;
@@ -222,7 +226,9 @@ async function submit() {
   try {
     if (!draft.dirty) draft.track(await getActiveRevision());
     const id = props.network ?? newId();
-    draft.setNetwork(id, networkFromForm(form.value, props.network ? draft.effectiveNetworks[props.network] : undefined, hosts.data.value ?? []));
+    draft.editFrom(origin, () =>
+      draft.setNetwork(id, networkFromForm(form.value, props.network ? draft.effectiveNetworks[props.network] : undefined, hosts.data.value ?? [])),
+    );
     open.value = false;
     emit('saved', id);
     draft.drawerOpen = true;

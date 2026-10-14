@@ -498,6 +498,32 @@ test('client actions: disabling a client of the management hub waits for confirm
   expect(hubClients(gw, ADMIN_HUB)[LAPTOP]).toEqual({ name: 'admin-laptop', address: '10.98.0.2', enabled: false });
 });
 
+test('edits made while the own revision waits for confirmation move onto it once confirmed, with no conflict dialog', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  const LAPTOP = 'c1000000-0000-4000-8000-0000000000a2';
+  gw.config.networks![ADMIN_HUB] = { ...(gw.config.networks![ADMIN_HUB] as WireGuardNetwork), clients: { [LAPTOP]: { name: 'admin-laptop', address: '10.98.0.2' } } };
+  await open(page, `/networks/${ADMIN_HUB}`, gw);
+  await clientRows(page).filter({ hasText: 'admin-laptop' }).getByRole('button', { name: 'Disable admin-laptop' }).click();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied, waiting for confirmation')).toBeVisible();
+  // while it waits, a cell of the access matrix is changed (in the app: a reload starts a new draft)
+  await page.getByRole('navigation').getByRole('link', { name: 'Networks' }).click();
+  const cell = page.getByTestId('access-matrix').locator('[data-cell="IoT>Internet"]');
+  await cell.click();
+  await expect(bar(page)).toContainText('1 change in the access matrix');
+  await page.getByTestId('countdown-banner').getByRole('button', { name: 'Confirm' }).click();
+  await expect(toast(page, 'Revision 43 confirmed')).toBeVisible();
+  await expect(bar(page)).toContainText('1 change in the access matrix');
+  // the draft is based on the own revision now: the preview, not the conflict dialog
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'The configuration was changed' })).toHaveCount(0);
+  const req = gw.requestsTo('POST', '/revisions').at(-1)!;
+  expect(req.headers['if-match']).toBe('"43"');
+  expect(Object.keys(req.body as object)).toEqual(['access_matrix']);
+});
+
 test('the QR code of a client decodes to the configuration the download saves, from one export', async ({ page }) => {
   const gw = await open(page, `/networks/${HUB}`);
   await clientRows(page).nth(0).getByRole('button', { name: 'Configuration and QR code of rA' }).click();

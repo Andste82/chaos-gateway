@@ -376,6 +376,8 @@ export class MockGateway {
   password = 'correct horse battery staple';
   setup: SetupStatus = { completed: true };
   loggedIn = true;
+  /** Seconds for which POST /auth/login answers 429 rate_limited with Retry-After (the lockout after failed logins). */
+  loginLockedFor = 0;
   unreachable = false;
   state: GatewayState = {
     generation: 42,
@@ -598,6 +600,11 @@ export class MockGateway {
     if (path === '/system/health') return json(200, this.health);
     if (!this.setup.completed) return problem(503, 'unavailable', 'the first-start setup is not finished');
     if (path === '/auth/login') {
+      if (this.loginLockedFor > 0) {
+        const s = this.loginLockedFor;
+        const p = { type: 'about:blank', title: 'rate_limited', status: 429, code: 'rate_limited', detail: `too many failed logins; try again in ${s} seconds` };
+        return route.fulfill({ status: 429, headers: { ...headers, 'Retry-After': String(s) }, contentType: 'application/problem+json', body: JSON.stringify(p) });
+      }
       if ((body as { password?: string }).password !== this.password) return problem(401, 'unauthorized', 'wrong user name or password');
       this.loggedIn = true;
       return json(200, this.session());

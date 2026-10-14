@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // Login (plan §2.16): one admin account; the session is an HTTP-only cookie.
-import { ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError, errorMessage } from '../api/fetcher';
+import { formatRemaining } from '../lib/format';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -13,7 +14,31 @@ const password = ref('');
 const error = ref('');
 const busy = ref(false);
 
+// After repeated failures the gateway refuses logins for a while (429 with Retry-After: 5 s, doubling up
+// to 15 min): the form says how long and offers no new attempt until then.
+const lockedUntil = ref<number>();
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | undefined;
+const lockedMs = computed(() => (lockedUntil.value === undefined ? 0 : Math.max(0, lockedUntil.value - now.value)));
+
+function lock(seconds: number) {
+  lockedUntil.value = Date.now() + seconds * 1000;
+  now.value = Date.now();
+  clearInterval(ticker);
+  ticker = setInterval(() => {
+    now.value = Date.now();
+    if (lockedMs.value > 0) return;
+    clearInterval(ticker);
+    lockedUntil.value = undefined;
+    error.value = '';
+  }, 250);
+}
+onBeforeUnmount(() => clearInterval(ticker));
+
+const shownError = computed(() => (lockedMs.value > 0 ? `Too many failed attempts. Try again in ${formatRemaining(lockedMs.value)}.` : error.value));
+
 async function submit() {
+  if (lockedMs.value > 0) return;
   error.value = '';
   if (!password.value) {
     error.value = 'Enter the admin password.';
@@ -26,8 +51,8 @@ async function submit() {
     await router.replace(next);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) error.value = 'Wrong password.';
-    else if (e instanceof ApiError && e.status === 429) error.value = 'Too many attempts. Wait a moment and try again.';
-    else error.value = errorMessage(e);
+    else if (e instanceof ApiError && e.status === 429 && e.retryAfter !== undefined) lock(e.retryAfter);
+    else error.value = errorMessage(e); // a 429 without Retry-After: its detail says how long to wait
   } finally {
     busy.value = false;
   }
@@ -49,13 +74,13 @@ async function submit() {
           class="input"
           type="password"
           autocomplete="current-password"
-          :aria-invalid="!!error"
-          :aria-describedby="error ? 'login-error' : undefined"
+          :aria-invalid="!!shownError"
+          :aria-describedby="shownError ? 'login-error' : undefined"
           autofocus
         />
-        <p v-if="error" id="login-error" class="field-error" role="alert">{{ error }}</p>
+        <p v-if="shownError" id="login-error" class="field-error" role="alert">{{ shownError }}</p>
       </div>
-      <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? 'Logging in…' : 'Log in' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="busy || lockedMs > 0">{{ busy ? 'Logging in…' : 'Log in' }}</button>
     </form>
   </div>
 </template>

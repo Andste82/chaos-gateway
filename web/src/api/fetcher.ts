@@ -20,6 +20,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly problem: Problem | undefined,
+    /** The seconds the gateway asks to wait before the next attempt (its Retry-After header), if it said. */
+    readonly retryAfter?: number,
   ) {
     super(problem?.detail ?? problem?.title ?? `HTTP ${status}`);
   }
@@ -117,10 +119,16 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
       emit(unauthorizedListeners);
     }
     if (response.status === 503 && problem?.code === 'unavailable') emit(unavailableListeners);
-    throw new ApiError(response.status, problem);
+    throw new ApiError(response.status, problem, retryAfterSeconds(response.headers.get('Retry-After')));
   }
   return body as T;
 };
+
+/** The seconds of a Retry-After header in its delay-seconds form; undefined without one or for an HTTP date. */
+function retryAfterSeconds(v: string | null): number | undefined {
+  if (v === null || !/^\s*\d+\s*$/.test(v)) return undefined;
+  return Number(v);
+}
 
 /** The message to show for an error of a request. */
 export function errorMessage(e: unknown): string {

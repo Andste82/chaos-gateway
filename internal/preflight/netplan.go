@@ -3,9 +3,11 @@ package preflight
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -22,7 +24,10 @@ import (
 
 // Where netplan and NetworkManager keep their configuration, relative to the host's root. netplan reads
 // /etc, /run and /lib (a file in /etc overrides one of the same name in /run and /lib); NetworkManager's
-// keyfiles are in /etc and, generated (also by netplan's NetworkManager renderer), in /run.
+// keyfiles are in /etc and, generated (also by netplan's NetworkManager renderer), in /run. A directory is
+// read only when it is there under the root: the shipped deployment (deploy/compose.executor.yaml) mounts
+// only the host's /etc, so there /run/netplan, /lib/netplan and /run/NetworkManager are not seen. The
+// keyfiles netplan generates under /run come from its YAML in /etc, which is read.
 var (
 	NetplanDirs = []string{"etc/netplan", "run/netplan", "lib/netplan"}
 	NMDirs      = []string{"etc/NetworkManager/system-connections", "run/NetworkManager/system-connections"}
@@ -158,7 +163,7 @@ func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
 		Network map[string]yaml.Node `yaml:"network"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, err
+		return nil, notNetplan(err, "")
 	}
 	var sections []string
 	for s := range doc.Network {
@@ -180,7 +185,7 @@ func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
 			Link       string   `yaml:"link"`
 		}
 		if err := node.Decode(&devs); err != nil {
-			return nil, fmt.Errorf("network.%s: %w", section, err)
+			return nil, notNetplan(err, "network."+section)
 		}
 		var ids []string
 		for id := range devs {
@@ -203,6 +208,26 @@ func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
 		}
 	}
 	return out, nil
+}
+
+// yamlLine is where yaml.v3 says the problem is ("yaml: line 3: ...", "line 3: cannot unmarshal ...").
+var yamlLine = regexp.MustCompile(`\bline (\d+)\b`)
+
+// notNetplan is the error of a file that is not valid netplan YAML: where (the section, the line yaml.v3
+// names), never yaml.v3's own text, which quotes the offending scalar and so a piece of the file
+// ("cannot unmarshal !!str `secret` into ...", P3-M12-07: no content leaves the executor).
+func notNetplan(err error, where string) error {
+	var at []string
+	if where != "" {
+		at = append(at, where)
+	}
+	if m := yamlLine.FindStringSubmatch(err.Error()); m != nil {
+		at = append(at, "line "+m[1])
+	}
+	if len(at) == 0 {
+		return errors.New("not valid netplan YAML")
+	}
+	return fmt.Errorf("not valid netplan YAML (%s)", strings.Join(at, ", "))
 }
 
 // nmEntry reads a NetworkManager keyfile: the connection's id and the interface it is bound to, by name

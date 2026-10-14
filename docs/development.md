@@ -3204,17 +3204,25 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   `/run/netplan`, `/lib/netplan`) and NetworkManager (`system-connections` in `/etc` and `/run`) configure an interface
   (`preflight.ReadOSConfig`: a netplan entry by its id or its `match` by name glob or MAC, a port of a netplan bridge or
   bond, the link of a VLAN, a NetworkManager keyfile by `interface-name` or `mac-address`) from the host root it is given
-  (`chaosgw exec --host-root /host`; `deploy/compose.executor.yaml` mounts the host's `/etc` read-only at `/host/etc`,
-  since netplan's and NetworkManager's files are root's and the API container's user cannot read them). The read
-  operation `host_net` returns only the file, the section, the entry and what it selects (`executor.HostNetState`),
-  never a file's content (no address, no key, no Wi-Fi secret). The API (`preflightReport` in `internal/api/system.go`)
+  (`chaosgw exec --host-root /host`), each directory only when it is there under that root. `deploy/compose.executor.yaml`
+  mounts only the host's `/etc`, read-only at `/host/etc` (netplan's and NetworkManager's files are root's and the API
+  container's user cannot read them), so the shipped deployment reads `/etc/netplan` and
+  `/etc/NetworkManager/system-connections` and sees nothing of `/run` and `/lib`; the keyfiles netplan's NetworkManager
+  renderer generates under `/run` come from its YAML in `/etc`, which is read. The read operation `host_net` returns
+  only the file, the section, the entry and what it selects (`executor.HostNetState`), never a file's content (no
+  address, no key, no Wi-Fi secret); a file that is not valid netplan YAML is named with the section and the line
+  (`not valid netplan YAML (network.ethernets, line 4)`), never with the YAML library's text, which quotes the
+  offending value. The API (`preflightReport` in `internal/api/system.go`)
   adds to the checks of the host made at start one check per interface that is or may become a test interface (every
   interface but the uplink and the management interface), made at each `GET /setup` and `GET /system/preflight`:
   `interface.<name>.os_config` with `interface`, `ok` when nothing configures it, otherwise `warn` for a candidate and
   `fail` for an assigned test interface, the message naming the file and the entry ("eth3 is configured by netplan
   (/etc/netplan/60-lab.yaml, "lab" under "ethernets")") and `fix` what to remove (`delete the entry "lab:" under
   "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"`, `sudo nmcli connection delete "…"`); a file
-  that cannot be read or parsed is a warning of its own. `HostInterface.os_managed` comes from the same read. The wizard
+  that cannot be read or parsed is a warning of its own. A failing read is logged as a warning once (again when its
+  message changes, its end once), not at each request of a polling screen. The check "no preflight check has run in
+  this process" is added only when there is no report of the checks at start, not when that report has no time (the
+  host could not be inspected: its own `host` warning). `HostInterface.os_managed` comes from the same read. The wizard
   shows the host's checks on its first step and the check of each chosen test interface where the test interfaces are
   chosen; the client-side hint (`netplanHint`) is gone. No CLI command shows the preflight; every client reads it from
   `GET /system/preflight`. `deploy/host-setup.sh` says to delete the entry too (it showed one that turns DHCP off).
@@ -3227,8 +3235,8 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
 | Setup wizard rules, free proposals and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
-| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content, an unreadable file (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
-| The preflight checks every candidate and test interface: a warning before the setup, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
+| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
+| The preflight checks every candidate and test interface: a warning before the setup, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
 | Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
 | Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
@@ -3714,7 +3722,7 @@ routing configuration stays with the API and the configuration import until the 
 | `POST /revisions/{id}/rollback`: rolled back at once, the event with `reason` and `restored`, refused afterwards, audited | `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` (`internal/api/revisions_test.go`) |
 | `GET /state/linux`: the table in nft syntax with counters, the matrix rule, a netem queue with counters, bridges and routes, WireGuard peers, no key | `TestTheLinuxStateShowsTheKernelWithItsCounters` (`internal/api/linux_test.go`) |
 | The nft renderer: the recorded `nft -j` listing, named counters, maps, cut sets, the expressions of the compiler, an unknown one as JSON | `internal/linux/nftrender_test.go` |
-| `GET /state/linux/{kind}/{id}`: a rule's rules, counter and source set, a fault's mark chain, counters, elements, classes and netem queues, a device's identity and classification elements, nothing of another object, by id and name, empty for an object the kernel lacks (P3-M14-03) | `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` (`internal/api/linuxobject_test.go`), `TestRenderObjectShowsOnlyWhatTheSelectionNames` (`internal/apply/objectview_test.go`), `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`, `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange` (`internal/engine/linuxview_internal_test.go`) |
+| `GET /state/linux/{kind}/{id}`: a rule's rules, counter and source set, a fault's mark chain, counters, elements, classes and netem queues, a device's identity and classification elements, nothing of another object, by id and name (a name only one rule can carry), empty for an object the kernel lacks (P3-M14-03) | `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`, `TestTheLinuxViewFindsARuleByANameThatOnlyOneRuleCanCarry` (`internal/api/linuxobject_test.go`), `TestRenderObjectShowsOnlyWhatTheSelectionNames` (`internal/apply/objectview_test.go`), `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`, `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange` (`internal/engine/linuxview_internal_test.go`) |
 | A client of the draft opens again as the form that made it; the gateway's messages by field | `src/lib/networks.test.ts` "opens a client of the draft again as the form that made it", "puts the gateway's messages under the field they are about" |
 | The PNG QR code of the gateway (`wireguard.QRPNG`): every module a square of whole pixels, 100 codes of random configurations decode | `TestEveryQRCodeDecodes` (`internal/wireguard/export_test.go`) |
 | Screens against the mocked API (Playwright) | `web/e2e/networks.spec.ts` |

@@ -144,3 +144,21 @@ func TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt(t *test
 		t.Errorf("the rule by its name: %v", byName)
 	}
 }
+
+// The view finds a rule by its name without asking which of several: the configuration cannot hold two
+// access rules of one name (ignoring case), nor a rule whose name is the form of an id (review B5 round 1).
+func TestTheLinuxViewFindsARuleByANameThatOnlyOneRuleCanCarry(t *testing.T) {
+	g := dhcpGateway(t)
+	p := rulesPatch()
+	rules := p["access_rules"].(map[string]any)
+	ruleD := "a1000000-0000-4000-8000-000000000004"
+	ruleE := "a1000000-0000-4000-8000-000000000005"
+	rules[ruleD] = map[string]any{"name": "NO-DOT", "source": map[string]any{"network": "IoT"}, "protocol": "tcp", "ports": []int{854}, "action": "drop"}
+	rules[ruleE] = map[string]any{"name": ruleA, "source": map[string]any{"network": "IoT"}, "protocol": "tcp", "ports": []int{855}, "action": "drop"}
+	p["access_rule_order"] = []string{ruleB, ruleC, ruleA, ruleD, ruleE}
+	r := g.patch(p)
+	if r.Status != 409 || !strings.Contains(string(r.Body), `"duplicate_name"`) || !strings.Contains(string(r.Body), `"name_is_uuid"`) ||
+		!strings.Contains(string(r.Body), "/access_rules/"+ruleD+"/name") || !strings.Contains(string(r.Body), "/access_rules/"+ruleE+"/name") {
+		t.Errorf("two rules of one name, a name of an id's form: %d %s", r.Status, r.Body)
+	}
+}

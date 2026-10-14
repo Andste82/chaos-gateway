@@ -861,7 +861,8 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 - Status: closed (2026-10-14): decided — options (a) and (d): an edit takes another owner's overlay over (as before) and
   keeps the overlay's remaining time unless the user chooses another duration. The dialog's first duration is "Keep:
   4:12 left of 5 min"; Apply sends the overlay's own TTL again and the remaining time on the gateway's clock in whole
-  seconds as the new write-only API field `expires_in` (`OverlayRequest`: only with a `ttl` at least as long; the first
+  seconds as the new write-only API field `expires_in` (`OverlayRequest`, marked `writeOnly`; the code generators
+  ignore the flag, so the read types carry an `expires_in` the gateway never sets; only with a `ttl` at least as long; the first
   removal comes after it, the overlay keeps `ttl` as written), which also covers the taken-over overlay, a new one of the
   admin. So the expiry stays where it was and the TTL stays the overlay's own: a TTL that is not one of the choices
   (`30m`) is shown as "30 min (its own TTL)" and kept, never turned into 15 minutes nor into the remaining seconds
@@ -937,7 +938,8 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   prefix inside a remote network: …", `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them
   (P3-M13-08)", `rules.spec.ts` "a rule from a prefix inside a WireGuard client's networks: From offers the remote
   networks and takes the prefix, the patch carries it (P3-M13-08)" (the prefix choice stays while its prefix is empty),
-  `src/lib/scopes.test.ts`, `src/lib/faultForm.test.ts` "keeps the choice "a prefix inside a remote network" while its
+  `src/lib/scopes.test.ts` (the prefix is checked as the API's `remote_network.cidr`: a prefix length is required and the
+  host bits must be zero, so `10.50.0.5` and `10.50.0.5/25` are refused in the browser), `src/lib/faultForm.test.ts` "keeps the choice "a prefix inside a remote network" while its
   prefix is still empty"
 - Severity: low
 - Reason: needs-decision. A fault, an overlay and an access rule can act on a `remote_network` (the client networks of a
@@ -964,9 +966,11 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   and Delete, each an edit of the configuration draft with Undo, through the preview drawer, the concurrent-change
   dialog and commit-confirm for a client of a management hub (`ClientsCard.vue`, `RotateKeysDialog.vue`,
   `src/lib/networks.ts`; the actions and Undo start from the client as the draft's base revision has it, so a disable
-  and an enable leave no change also for a client with an explicit `enabled: true`); tests `networks.spec.ts` "client
-  actions: …" (six tests), `src/lib/networks.test.ts` "the
-  client actions (P3-M14-01)", `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of
+  and an enable leave no change also for a client with an explicit `enabled: true`, and the note "New keys once
+  applied" compares with that client too, so a rebase onto another revision's key rotation shows no rotation of the
+  draft); tests `networks.spec.ts` "client actions: …" (seven tests, among them "client actions: a draft rebased onto
+  another revision's key rotation shows no rotation of its own (P3-M14-01)"), `src/lib/networks.test.ts` "the client
+  actions (P3-M14-01)", `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of
   their fields (P3-M14-01)". The network forms (part 2) and the routing forms (part 3) follow; the item closes with
   them.
 - Decision (2026-10-14): option (a) in full — client actions (disable/enable, rotate keys, delete), network forms (create, edit,

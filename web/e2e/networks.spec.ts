@@ -320,6 +320,29 @@ test('client actions: a client changed meanwhile through the API opens the confl
   expect(hubClients(gw, HUB)[CLIENT_RA]).toMatchObject({ keepalive: '5s', enabled: false });
 });
 
+test("client actions: a draft rebased onto another revision's key rotation shows no rotation of its own (P3-M14-01)", async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  await gw.install(page);
+  // the client list stays as first read (key generation 1) until it is read again
+  const first = JSON.stringify({ items: gw.clientViews(HUB) });
+  await page.route((url) => url.pathname === `/api/v1/networks/${HUB}/clients`, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: first }));
+  await page.goto(`/networks/${HUB}`);
+  const rA = clientRows(page).filter({ hasText: 'rA' });
+  await rA.getByRole('button', { name: 'Disable rA' }).click();
+  // meanwhile a token rotates rA's keys
+  gw.applyFromApi({ networks: { [HUB]: { clients: { [CLIENT_RA]: { key: { generation: 2 } } } } } }, { type: 'token', id: 't1', name: 'ci-runner' }, [
+    { op: 'changed', kind: 'client', id: CLIENT_RA, name: 'rA', path: `/networks/${HUB}/clients/${CLIENT_RA}`, summary: 'WireGuard client rA: new keys' },
+  ]);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')[1]!.body).toEqual({ networks: { [HUB]: { clients: { [CLIENT_RA]: { enabled: false } } } } });
+  await page.keyboard.press('Escape');
+  await expect(rA).toContainText('CHANGED');
+  await expect(rA.getByTestId('client-rotated')).toHaveCount(0);
+});
+
 test('client actions: delete a client, Undo brings it back, deleted through the drawer it is gone (P3-M14-01)', async ({ page }) => {
   const gw = await open(page, `/networks/${HUB}`);
   const rA = clientRows(page).filter({ hasText: 'rA' });

@@ -51,7 +51,10 @@ describe('remote networks in the scope selectors (P3-M13-08)', () => {
 
   it("checks the prefix under the target, and puts the gateway's refusal of it there too", () => {
     expect(remoteCidrError(CIDR_CHOICE)).toMatch(/^Enter a prefix inside a client network/);
-    expect(remoteCidrError('remote_network:cidr:10.50.0/25')).toBe('An IPv4 address or a prefix like 10.50.0.0/25.');
+    expect(remoteCidrError('remote_network:cidr:10.50.0/25')).toBe('A prefix like 10.50.0.0/25.');
+    expect(remoteCidrError('remote_network:cidr:10.50.0.5')).toBe('A prefix like 10.50.0.0/25.');
+    expect(remoteCidrError('remote_network:cidr:10.50.0.5/25')).toBe('The host bits must be zero, like 10.50.0.0/25.');
+    expect(remoteCidrError('remote_network:cidr:10.50.0.128/25')).toBeUndefined();
     expect(remoteCidrError('network:iot')).toBeUndefined();
     expect(faultFormErrors({ ...emptyForm(CIDR_CHOICE), latency: '100' }).target).toMatch(/^Enter a prefix/);
     expect(fieldOf('/target/remote_network/cidr')).toBe('target');

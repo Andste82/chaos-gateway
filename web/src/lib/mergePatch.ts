@@ -55,3 +55,25 @@ export function applyMergePatch<T>(doc: T, patch: unknown): T {
   }
   return out as T;
 }
+
+/**
+ * The members that two edits of the same document both changed, to different values: the paths
+ * (lists of member names) where the merge patch of `theirs` and that of `mine` against `base` meet.
+ * Reapplying `mine` on `theirs` (my merge patch on their version) takes my value there. A member
+ * named in `atomic` is compared as a whole (a scope with one property is one choice, not two
+ * members); the others are followed into their objects.
+ */
+export function bothChanged(base: unknown, theirs: unknown, mine: unknown, atomic: ReadonlySet<string> = new Set()): string[][] {
+  const out: string[][] = [];
+  const at = (v: unknown, k: string) => (isObject(v) ? v[k] : undefined);
+  const walk = (pt: unknown, pm: unknown, t: unknown, m: unknown, path: string[]) => {
+    if (pt === undefined || pm === undefined) return;
+    if (isObject(pt) && isObject(pm) && !atomic.has(path.at(-1) ?? '')) {
+      for (const k of Object.keys(pm)) if (k in pt) walk(pt[k], pm[k], at(t, k), at(m, k), [...path, k]);
+      return;
+    }
+    if (!jsonEqual(t, m)) out.push(path);
+  };
+  walk(createMergePatch(base, theirs), createMergePatch(base, mine), theirs, mine, []);
+  return out;
+}

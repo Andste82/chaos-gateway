@@ -8,7 +8,8 @@ import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import { useGatewayState, useNames } from '../../composables/gateway';
 import { useConnectionStore } from '../../stores/connection';
-import { useDraftStore } from '../../stores/draft';
+import type { Configuration } from '../../api/generated/model';
+import { useDraftStore, type DraftChange } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
 import StickyActionBar from '../ui/StickyActionBar.vue';
 import ConflictDialog from './ConflictDialog.vue';
@@ -23,7 +24,9 @@ const { names } = useNames();
 const invalidCount = computed(() => Object.keys(draft.invalid).length);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
 const kinds = { rule: 'Rule', fault: 'Fault', device: 'Device', client: 'WireGuard client', matrix: 'Access' };
-const yours = computed(() => draft.changes(names.value).map((c) => `${kinds[c.kind]} ${c.name} ${c.field}: ${c.from} → ${c.to}`));
+const inWords = (c: DraftChange) => `${kinds[c.kind]} ${c.name} ${c.field}: ${c.from} → ${c.to}`;
+const yours = computed(() => draft.changes(names.value).map(inWords));
+const overlaps = (theirs: Configuration) => draft.overlaps(theirs, names.value).map(inWords);
 
 const conflictOpen = computed({
   get: () => !!draft.conflict,
@@ -86,6 +89,7 @@ function discardMine() {
     v-model:open="conflictOpen"
     :base="draft.conflict.base"
     :yours="yours"
+    :overlaps="overlaps"
     :busy="reloading"
     :error="reloadError"
     @reapply="reapply"

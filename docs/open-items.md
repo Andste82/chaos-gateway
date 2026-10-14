@@ -883,9 +883,15 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-07 "Reload and reapply mine" takes the user's value of a field both sides changed
 
-- Status: new
-- Decision (2026-10-14): keep the per-field merge, and option (b) — the conflict dialog names the fields both sides changed (their value
-  → mine) before reapplying; a Playwright test
+- Status: closed (2026-10-14): decided — the per-field merge stays, with option (b): the conflict dialog lists the fields
+  both sides changed under "Changed on both sides · theirs → yours" ("Rule no-dns-2 action: TCP reset → Reject"; also an
+  object they changed that the user deletes and one the user changed that they removed) before reapplying, and its text
+  points at them as the fields where the user's value wins (`overlaps` in `src/stores/draft.ts`, `bothChanged` in
+  `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a field both changed, their value → mine, and
+  reapplying takes mine (P3-M13-07)", "the conflict dialog lists no field when the two changes do not meet",
+  `src/stores/draft.test.ts` "names the fields both sides changed, their value and mine, before reapplying (P3-M13-07)",
+  "names a client field both sides changed; …", `src/lib/mergePatch.test.ts` "names the members both edits changed to
+  different values, a scope as a whole"
 - Severity: low
 - Reason: needs-decision. Plan §2.17 says only "reload and reapply mine". Reapplying merges field by field: the user's
   change of an object (a merge patch against the old base) is applied to the other side's version, so their fields stay and

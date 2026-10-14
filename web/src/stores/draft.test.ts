@@ -211,6 +211,32 @@ describe('the configuration draft', () => {
     });
   });
 
+  it('names the fields both sides changed, their value and mine, before reapplying (P3-M13-07)', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setRule(A, { name: 'a', source: { global: true }, action: 'reject', cut_existing: true });
+    d.setRule(B, null);
+    d.setFault('f1', { name: 'slow', source: { global: true }, latency: '50ms' });
+    const theirs = revision(43, {
+      access_rules: {
+        [A]: { name: 'a', source: { global: true }, action: 'reset', enabled: false },
+        [B]: { name: 'b', source: { global: true }, protocol: 'tcp', ports: [8080], action: 'allow' },
+      },
+      faults: { f1: { name: 'slow', source: { global: true }, latency: '20ms', loss: '1%' } },
+    }).configuration;
+    expect(d.overlaps(theirs)).toEqual([
+      { kind: 'rule', id: A, name: 'a', field: 'action', from: 'TCP reset', to: 'Reject' },
+      { kind: 'rule', id: B, name: 'b', field: 'rule', from: 'changed', to: 'deleted' },
+      { kind: 'fault', id: 'f1', name: 'slow', field: 'latency', from: '20ms', to: '50ms' },
+    ]);
+    // a rule they removed comes back as mine; one they left as it was is no conflict
+    expect(d.overlaps(revision(43, { access_rules: {}, faults: {} }).configuration)).toEqual([
+      { kind: 'rule', id: A, name: 'a', field: 'rule', from: 'deleted', to: 'kept with my change' },
+      { kind: 'fault', id: 'f1', name: 'slow', field: 'fault', from: 'deleted', to: 'kept with my change' },
+    ]);
+    expect(d.overlaps(revision(43).configuration)).toEqual([]);
+  });
+
   it('reapplying drops an edit that their revision made already, and keeps a rule they removed as mine', () => {
     const d = useDraftStore();
     d.track(revision(42));
@@ -317,6 +343,21 @@ describe('WireGuard clients and the access matrix in the draft (M14)', () => {
     d.rebase(revision(45, { networks: networks(), access_matrix: { entries: [{ from: { network: IOT }, to: { uplink: true }, policy: 'deny' }] } }));
     expect(d.matrix).toBeUndefined();
     expect(d.dirty).toBe(false);
+  });
+
+  it('names a client field both sides changed; a matrix pair both changed agrees (P3-M13-07)', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { networks: networks() }));
+    d.setClient(HUB, RA, { name: 'rA', address: '10.99.0.2', enabled: false });
+    d.toggleMatrix(`network:${IOT}`, 'uplink');
+    const theirs = networks()!;
+    (theirs[HUB] as { clients: Record<string, unknown> }).clients[RA] = { name: 'rA', address: '10.99.0.2', enabled: true, keepalive: '5s' };
+    // they switched it on explicitly, I switched it off; their keepalive stays theirs
+    expect(d.overlaps(revision(43, { networks: theirs }).configuration)).toEqual([
+      { kind: 'client', id: RA, name: 'rA', field: 'enabled', from: 'yes', to: 'no' },
+    ]);
+    const theirMatrix = { entries: [{ from: { network: IOT }, to: { uplink: true as const }, policy: 'deny' as const }] };
+    expect(d.overlaps(revision(43, { networks: networks(), access_matrix: theirMatrix }).configuration)).toEqual([]);
   });
 });
 

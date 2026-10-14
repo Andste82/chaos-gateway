@@ -13,9 +13,30 @@ import type {
   WireGuardNetwork,
 } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
-import { applyMergePatch, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
+import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
 import { cellOf, entryKey, matrixChanges, toggleCell } from '../lib/networks';
-import { ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
+import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
+
+/** The members compared as a whole when both sides changed an object: a scope or a destination is one choice. */
+const atomicMembers = new Set(['source', 'target', 'destination']);
+
+/** The value of a member in words, for the fields both sides changed: "Reject", "no", "80, 443", "Network IoT". */
+function valueText(key: string, v: unknown, names: Names, other?: unknown): string {
+  if (key === 'enabled') return v === false ? 'no' : 'yes';
+  // a switch that is not set is off (the other side's value says it is a switch)
+  if (v === undefined || v === null) return typeof other === 'boolean' ? 'no' : '—';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (key === 'source' || key === 'target') return describeScope(v as Parameters<typeof describeScope>[0], names);
+  if (key === 'destination') return describeDestination(v as Parameters<typeof describeDestination>[0], names);
+  if (key === 'action') return accessLabels[v as keyof typeof accessLabels] ?? String(v);
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => (typeof x === 'object' && x !== null && 'from' in x && 'to' in x ? `${(x as { from: number }).from}-${(x as { to: number }).to}` : typeof x === 'object' ? JSON.stringify(x) : String(x)))
+      .join(', ') || '—';
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
@@ -379,6 +400,54 @@ export const useDraftStore = defineStore('draft', () => {
   }
 
   /**
+   * What both the draft and another revision changed, as the concurrent-change dialog names it before
+   * reapplying (P3-M13-07): per object the fields both changed to different values, `from` their
+   * value and `to` mine (which `rebase` takes); an object they changed that I delete, and one I
+   * changed that they removed (it comes back as mine). A pair of the access matrix has two
+   * policies, so where both changed it they agree.
+   */
+  function overlaps(theirs: Configuration, names: Names = {}): DraftChange[] {
+    const out: DraftChange[] = [];
+    const old = baseConfig.value;
+    function compare<T extends object>(kind: DraftChange['kind'], edits: Record<string, T | null>, before: Record<string, T>, after: Record<string, T>, nameOf: (o: T) => string | undefined) {
+      for (const [id, m] of Object.entries(edits)) {
+        const was = before[id];
+        const now = after[id];
+        if (was === undefined) continue; // new on my side: nothing of theirs to meet
+        const name = (m && nameOf(m)) ?? nameOf(was) ?? id;
+        if (m === null) {
+          if (now !== undefined && !jsonEqual(was, now)) out.push({ kind, id, name, field: kind === 'client' ? 'client' : kind, from: 'changed', to: 'deleted' });
+          continue;
+        }
+        if (now === undefined) {
+          if (!jsonEqual(was, m)) out.push({ kind, id, name, field: kind === 'client' ? 'client' : kind, from: 'deleted', to: 'kept with my change' });
+          continue;
+        }
+        for (const path of bothChanged(was, now, m, atomicMembers)) {
+          const get = (o: unknown) => path.reduce<unknown>((v, k) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>)[k] : undefined), o);
+          const key = path.at(-1) ?? '';
+          const t = get(now);
+          const mv = get(m);
+          out.push({ kind, id, name, field: path.join(' ').replace(/_/g, ' '), from: valueText(key, t, names, mv), to: valueText(key, mv, names, t) });
+        }
+      }
+    }
+    const named = (o: { name?: string }) => o.name;
+    compare('rule', rules.value, old?.access_rules ?? {}, theirs.access_rules ?? {}, named);
+    compare('fault', faults.value, old?.faults ?? {}, theirs.faults ?? {}, named);
+    compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
+    for (const net of new Set(Object.values(clients.value).map((c) => c.network))) {
+      const edits = Object.fromEntries(
+        Object.entries(clients.value)
+          .filter(([, c]) => c.network === net)
+          .map(([id, c]) => [id, c.client]),
+      );
+      compare('client', edits, clientsIn(old, net), clientsIn(theirs, net), named);
+    }
+    return out;
+  }
+
+  /**
    * Reapplies the draft on another revision (the concurrent-change dialog's "reload and reapply"):
    * my change of an object (a merge patch against the old base) on their version of it, so a field
    * only they changed keeps their value and a field both changed takes mine; an object they removed
@@ -535,6 +604,7 @@ export const useDraftStore = defineStore('draft', () => {
     changes,
     summary,
     patch,
+    overlaps,
     rebase,
     discard,
     serverErrors,

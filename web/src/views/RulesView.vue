@@ -12,6 +12,7 @@ import { errorMessage } from '../api/fetcher';
 import { deleteOverlay } from '../api/generated/hooks/overlays/overlays';
 import type { AccessRule, AccessRuleView, Overlay } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
+import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
 import RuleEditor from '../components/rules/RuleEditor.vue';
 import AccessChip from '../components/ui/AccessChip.vue';
 import AppIcon from '../components/ui/AppIcon.vue';
@@ -99,6 +100,11 @@ function lastMatch(at: string | undefined, applied: boolean): string {
   if (!applied) return 'not applied yet';
   return at ? formatAgo(at, now.value) : 'never since the rule was applied';
 }
+
+// "Show Linux view" (plan §2.17 "Technical view", P3-M14-03): the selected rule's compiled rule in both
+// hooks with its counter and last match; closed again when another rule is selected
+const linuxOpen = ref(false);
+watch(selected, () => (linuxOpen.value = false));
 
 function setEnabled(id: string, rule: AccessRule, on: boolean) {
   const next = { ...rule };
@@ -301,6 +307,17 @@ const rowClass = (on: boolean) =>
             {{ ruleEffectInWords(selConfig.rule, { state: selConfig.view?.state, overlayRules: overlayRules.length, applied: !selConfig.isNew && !selConfig.changed }) }}
           </div>
         </div>
+        <template v-if="!selConfig.isNew">
+          <button
+            type="button"
+            class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
+            :aria-expanded="linuxOpen"
+            @click="linuxOpen = !linuxOpen"
+          >
+            {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
+          </button>
+          <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selConfig.id" />
+        </template>
       </template>
 
       <template v-else-if="selOverlay">
@@ -324,6 +341,15 @@ const rowClass = (on: boolean) =>
             {{ ruleEffectInWords({ ...selOverlay.rule!, source: selOverlay.target ?? { global: true } }, { state: selOverlay.state, applied: true }) }}
           </div>
         </div>
+        <button
+          type="button"
+          class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
+          :aria-expanded="linuxOpen"
+          @click="linuxOpen = !linuxOpen"
+        >
+          {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
+        </button>
+        <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selOverlay.id" />
         <button type="button" class="btn self-start" :disabled="removing || !!state.data.value?.pending_confirm || connection.offline" @click="removeOverlayRule(selOverlay)">
           <AppIcon name="close" />Remove overlay rule
         </button>
@@ -347,6 +373,15 @@ const rowClass = (on: boolean) =>
           </div>
           <div class="text-[13px] text-[#d9dee5]">Evaluated before every other rule.</div>
         </div>
+        <button
+          type="button"
+          class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
+          :aria-expanded="linuxOpen"
+          @click="linuxOpen = !linuxOpen"
+        >
+          {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
+        </button>
+        <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selSystem.key" />
       </template>
       <p v-else id="rule-editor-title" class="m-0 text-sm text-text-2">Select a rule to see it here.</p>
     </section>

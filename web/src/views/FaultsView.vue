@@ -15,6 +15,7 @@ import type { ConfigFault, FaultRef, FaultView, Overlay, Scope } from '../api/ge
 import ExplainCard from '../components/faults/ExplainCard.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
+import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
@@ -222,6 +223,11 @@ async function remove(r: Row) {
 const loadError = computed(() => firstError(overlays, configFaults, active));
 const retry = () => Promise.all([overlays.refetch(), configFaults.refetch(), active.refetch()]);
 const removeBlocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
+// "Show Linux view" of one fault (plan §2.17 "Technical view", P3-M14-03): its mark chain, counters,
+// classification elements, tc classes and netem queues, below its row
+const linuxOpen = ref<string>();
+const rowKey = (r: Row) => `${r.layer}:${r.id}`;
+
 const context = computed(() => `The most specific fault wins · an overlay beats the configuration · revision ${draft.base ?? state.data.value?.active_revision ?? '…'}`);
 </script>
 
@@ -254,9 +260,8 @@ const context = computed(() => `The most specific fault wins · an overlay beats
         <span role="columnheader">Expires</span>
         <span role="columnheader"><span class="sr-only">Actions</span></span>
       </div>
+      <template v-for="r in g.rows" :key="`${r.layer}:${r.id}`">
       <div
-        v-for="r in g.rows"
-        :key="`${r.layer}:${r.id}`"
         role="row"
         class="data-row grid grid-cols-[minmax(180px,1.2fr)_minmax(0,2fr)_100px_80px_150px] items-center gap-3 px-2.5 py-2"
         :class="{ 'shadow-[inset_3px_0_0_var(--color-block-border)]': r.problems }"
@@ -294,6 +299,16 @@ const context = computed(() => `The most specific fault wins · an overlay beats
           </span>
           <span v-if="r.overriddenBy.length" class="text-xs text-fault-text" data-testid="overridden-by">overridden by {{ r.overriddenBy.join('; ') }}</span>
           <span v-for="p in r.problems" :key="p" class="text-xs text-block-text" data-testid="fault-problem">{{ p }}</span>
+          <button
+            v-if="!r.isNew && !r.deleted"
+            type="button"
+            class="self-start border-0 bg-transparent p-0 text-xs text-accent-text"
+            :aria-expanded="linuxOpen === rowKey(r)"
+            :aria-label="`${linuxOpen === rowKey(r) ? 'Hide' : 'Show'} the Linux view of ${r.chips.join(', ')} on ${r.target}`"
+            @click="linuxOpen = linuxOpen === rowKey(r) ? undefined : rowKey(r)"
+          >
+            {{ linuxOpen === rowKey(r) ? 'Hide Linux view' : 'Show Linux view (classes and queues)' }}
+          </button>
         </span>
         <span role="cell" class="mono text-[13px] text-text-2">{{ r.packets !== undefined ? `${formatCount(r.packets)} pkts` : '—' }}</span>
         <span role="cell" class="mono text-[13px]" :class="r.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{
@@ -322,6 +337,10 @@ const context = computed(() => `The most specific fault wins · an overlay beats
           </button>
         </span>
       </div>
+      <div v-if="linuxOpen === rowKey(r)" class="border-b border-border px-2.5 pt-1 pb-3">
+        <LinuxObjectExcerpt kind="fault" :id="r.id" />
+      </div>
+      </template>
     </div>
   </SectionCard>
   </template>

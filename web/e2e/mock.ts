@@ -21,6 +21,7 @@ import type {
   GroupView,
   Health,
   HostInterface,
+  LinuxObjectState,
   LinuxState,
   NetworkView,
   Overlay,
@@ -435,6 +436,8 @@ export class MockGateway {
     routes: 'bridge br-iot up\n  address 10.10.0.1/24\n  port eth1\nbridge br-test up\n  address 10.20.0.1/24\n  port eth2\nroute table 100 10.10.0.0/24 dev br-iot\nroute table 100 10.20.0.0/24 dev br-test\n',
     wireguard: '',
   };
+  /** GET /state/linux/{kind}/{id} by `kind/id`; an object without an entry holds nothing in the kernel. */
+  linuxObjects: Record<string, Pick<LinuxObjectState, 'keys' | 'nftables' | 'tc'>> = {};
   /** How long a lockout-relevant apply waits for confirmation. */
   confirmWindowMs = 60_000;
   /**
@@ -620,6 +623,13 @@ export class MockGateway {
     if (path === '/routing/status') return json(200, this.routingStatus);
     if (path === '/routing/routes') return json(200, this.page(this.routes, url));
     if (path === '/state/linux') return json(200, this.linux);
+    const lobj = /^\/state\/linux\/(device|rule|fault)\/([^/]+)$/.exec(path);
+    if (lobj) {
+      const kind = lobj[1] as LinuxObjectState['kind'];
+      const id = decodeURIComponent(lobj[2]!);
+      const o = this.linuxObjects[`${kind}/${id}`] ?? { keys: [], nftables: '', tc: '' };
+      return json(200, { kind, id, revision: 42, generation: 42, read_at: new Date().toISOString(), ...o } satisfies LinuxObjectState);
+    }
     if (path === '/groups') return json(200, this.page(this.groups, url));
     if (path === '/profiles') return json(200, this.page(this.profileViews(), url));
     if (path === '/faults') return json(200, this.page(this.faultList(), url));

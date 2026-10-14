@@ -3659,6 +3659,22 @@ routing configuration stays with the API and the configuration import until the 
   confirmation) do not each run nft, tc, ip and wg. The excerpt of a
   network keeps the lines that name its interface, its subnet or its gateway address (whole words), with the table and the
   chain, set or interface around them (`src/lib/linuxView.ts`).
+- **The Linux view of one object** (P3-M14-03, decided option (a); plan §2.17 "Per object, the compiled configuration next
+  to the domain view … reached from 'Show Linux view'"). "Show Linux view" on a device (the device detail's identity card),
+  an access rule (the rule editor, also an overlay rule and the system rule) and a fault (a row of the faults screen) opens
+  `LinuxObjectExcerpt.vue`, which reads `GET /state/linux/{kind}/{id}` every 5 s while it is open. The gateway cuts the
+  kernel state down to the objects the compiler made for it, by the names and keys the applied target gave them
+  (`engine.LinuxObjectView`, `apply.RenderObject`): for a rule (by id, name, or `system:anti_lockout`) its rule in both
+  hooks with `counter name` and `last used`, its named counter and the set of its sources; for a fault (a configured fault
+  or an overlay, a profile activation too) the chain `mark_<id>` of every fault id it has with its counters, the
+  classification elements that go to it (the maps' elements whose value is the chain), the tc classes `1:<minor>` on every
+  interface with their netem leaves and the fw filters that lead to them, a tunnel fault's ingress filter, and an MTU
+  fault's chain, counters and elements; for a device (by id or name) the identity map element with its numeral and the
+  elements of the classification maps (`cls_*`, `pmtu_*`) whose source covers one of its addresses, and the queues of the
+  faults that have a queue of their own for it. The map names' bases are `compiler.IdentityMapBase`, `ClassifyMapBase` and
+  `PMTUMapBase`. `keys` lists every kernel object found ("counter rule_…", "chain mark_7", "map ident4_… 10.10.0.31",
+  "class br-iot 1:12"); an object the kernel holds nothing of (an unknown id, a disabled rule) is answered with empty
+  texts, and the UI says so.
 - **Navigation.** Networks is a link now, and a device's network (in the device table and the device detail) links to
   `/networks/{id}`; Routing and the Linux view are reached from the Networks page (plan §2.17: the
   technical view is "never needed for normal use").
@@ -3676,6 +3692,7 @@ routing configuration stays with the API and the configuration import until the 
 | `POST /revisions/{id}/rollback`: rolled back at once, the event with `reason` and `restored`, refused afterwards, audited | `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` (`internal/api/revisions_test.go`) |
 | `GET /state/linux`: the table in nft syntax with counters, the matrix rule, a netem queue with counters, bridges and routes, WireGuard peers, no key | `TestTheLinuxStateShowsTheKernelWithItsCounters` (`internal/api/linux_test.go`) |
 | The nft renderer: the recorded `nft -j` listing, named counters, maps, cut sets, the expressions of the compiler, an unknown one as JSON | `internal/linux/nftrender_test.go` |
+| `GET /state/linux/{kind}/{id}`: a rule's rules, counter and source set, a fault's mark chain, counters, elements, classes and netem queues, a device's identity and classification elements, nothing of another object, by id and name, empty for an object the kernel lacks (P3-M14-03) | `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` (`internal/api/linuxobject_test.go`), `TestRenderObjectShowsOnlyWhatTheSelectionNames` (`internal/apply/objectview_test.go`), `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`, `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange` (`internal/engine/linuxview_internal_test.go`) |
 | A client of the draft opens again as the form that made it; the gateway's messages by field | `src/lib/networks.test.ts` "opens a client of the draft again as the form that made it", "puts the gateway's messages under the field they are about" |
 | The PNG QR code of the gateway (`wireguard.QRPNG`): every module a square of whole pixels, 100 codes of random configurations decode | `TestEveryQRCodeDecodes` (`internal/wireguard/export_test.go`) |
 | Screens against the mocked API (Playwright) | `web/e2e/networks.spec.ts` |
@@ -3731,6 +3748,7 @@ not run on this branch with the M14 flow yet.
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
 | Scope: access matrix editing (commit-confirm where lockout-relevant) | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |
+| "Show Linux view" on a device, an access rule and a fault (plan §2.17 "Technical view", P3-M14-03) | `linux-view.spec.ts` ""Show Linux view" on a rule shows its compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row (P3-M14-03)", ""Show Linux view" on a device shows its identity element and the classification of its address (P3-M14-03)"; backend `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` |
 
 ## Generated code
 

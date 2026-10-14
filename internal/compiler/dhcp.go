@@ -218,7 +218,7 @@ func (t *Target) compileIdentity(idx *domain.Index, id *domain.Identity, prev ma
 			md.Elements = append(md.Elements, MapElement{Key: a, Value: num})
 		}
 	}
-	md.Name = hashMapName("ident4", md.KeyType, md.ValueType, md.Flags)
+	md.Name = hashMapName(IdentityMapBase, md.KeyType, md.ValueType, md.Flags)
 	t.identityMap = md
 	t.IdentityMap = md.Name
 }

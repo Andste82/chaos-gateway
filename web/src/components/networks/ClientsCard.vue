@@ -62,7 +62,7 @@ const rows = computed<Row[]>(() => {
       nets: c.client_networks ?? [],
       client: c,
       enabled: c.enabled !== false,
-      rotated: !!edit?.client && keysText(edit.client) !== keysText(v.config),
+      rotated: !!edit?.client && keysText(edit.client) !== keysText(draft.baseClient(props.network.id, v.id) ?? v.config),
       view: v,
       mark: edit ? (edit.client === null ? 'DELETED' : 'CHANGED') : undefined,
     });

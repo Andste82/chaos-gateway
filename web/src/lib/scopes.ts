@@ -3,7 +3,8 @@
 // routed via a link, or a CIDR inside them (`remote_network`). The selectors offer them next to
 // everything, network, group and device; the target is the text of `faultForm.targetOf`.
 import type { NetworkView, WireGuardNetwork } from '../api/generated/model';
-import { createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp } from '../api/generated/zod/overlays/overlays';
+import { createOverlayBodyTargetRemoteNetworkCidrRegExp as prefixRegExp } from '../api/generated/zod/overlays/overlays';
+import { parseSubnet, subnetText } from './networks';
 
 /** The choice "a prefix inside a remote network"; the prefix follows it in the target. */
 export const CIDR_CHOICE = 'remote_network:cidr:';
@@ -55,6 +56,8 @@ export function remoteCidrError(target: string): string | undefined {
   if (!target.startsWith(CIDR_CHOICE)) return undefined;
   const cidr = target.slice(CIDR_CHOICE.length).trim();
   if (!cidr) return 'Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.';
-  if (!cidrRegExp.test(cidr)) return 'An IPv4 address or a prefix like 10.50.0.0/25.';
+  if (!prefixRegExp.test(cidr)) return 'A prefix like 10.50.0.0/25.';
+  const p = parseSubnet(cidr)!;
+  if (p.address !== p.network) return `The host bits must be zero, like ${subnetText(cidr)}.`;
   return undefined;
 }

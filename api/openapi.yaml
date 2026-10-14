@@ -3541,6 +3541,7 @@ components:
           description: Remove the overlay after this time.
         expires_in:
           allOf: [{$ref: '#/components/schemas/Duration'}]
+          writeOnly: true
           description: |
             Only with `ttl`, at most `ttl`: this write removes the overlay after this time instead of
             after `ttl`; `ttl` stays the overlay's TTL (shown, and started over by a later write

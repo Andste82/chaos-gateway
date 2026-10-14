@@ -3296,23 +3296,23 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   and the rest below the form). A failed apply
   (`apply_failed`, `verify_failed`) stays in the drawer with the failing step, the gateway's message and the revision that
   is active again ("Revision 42 restored; nothing of revision 43 is active"), and the draft stays for another try.
-- **Concurrent-change dialog** (`ConflictDialog.vue`, "Concurrent change"): a base that is not the active revision any more
-  (409 `revision_conflict`, at the candidate or at the apply) opens it: "Revision 43 was applied by token ci-runner while you
-  were editing (your change is based on revision 42)" — when several revisions were applied since the base, all of them with
-  their authors ("Revisions 43 and 44 were applied by token ci-runner and admin", from `GET /revisions`), since the diff
-  covers them all —, their change (`GET /revisions/{active}/diff?base=42`) and the user's
-  (the draft's changes in words). "Reload and reapply mine" puts the draft on the active revision (`rebase`: the user's
-  change of each object, a merge patch against the old base, applied to their version of it, so a field only they changed
-  keeps their value and a field both changed takes the user's; an object they removed comes back as the user has it, an edit
-  they made already drops out, a deletion of what is gone drops out, rules they added keep their place in the order) and
-  opens the drawer again, so the user sees the preview of the
-  combined result before anything is applied. Before that the dialog names what both sides changed, under "Changed on both
-  sides · theirs → yours" (`overlaps`, P3-M13-07: per object the members both merge patches touch with different values,
-  `bothChanged` in `src/lib/mergePatch.ts`, a scope or destination compared as a whole — "Rule no-dns-2 action: TCP reset →
-  Reject" —, an object they changed that the user deletes, one the user changed that they removed; a pair of the access
-  matrix has two policies, so both changing it agree), and its text points at those fields as the ones where the user's
-  value wins; "Discard mine" drops the draft. There is no "overwrite theirs" (plan §2.17:
-  the prototype's three-way dialog is superseded).
+- **Concurrent-change dialog** (`ConflictDialog.vue`, "Concurrent change"): a base that is not the active revision any
+  more (409 `revision_conflict`, at the candidate or at the apply) opens it: "Revision 43 was applied by token ci-runner
+  while you were editing (your change is based on revision 42)" — when several revisions were applied since the base,
+  all of them with their authors ("Revisions 43 and 44 were applied by token ci-runner and admin", from
+  `GET /revisions`), since the diff covers them all —, their change (`GET /revisions/{active}/diff?base=42`) and the
+  user's (the draft's changes in words). "Reload and reapply mine" puts the draft on the active revision (`rebase`: the
+  user's change of each object, a merge patch against the old base, applied to their version of it, so a field only they
+  changed keeps their value and a field both changed takes the user's; an object they removed comes back as the user has
+  it, an edit they made already drops out, a deletion of what is gone drops out, rules they added keep their place in
+  the order) and opens the drawer again, so the user sees the preview of the combined result before anything is applied.
+  Before that the dialog names what both sides changed, under "Changed on both sides · theirs → yours" (`overlaps`,
+  P3-M13-07: per object the members both merge patches touch with different values, `bothChanged` in
+  `src/lib/mergePatch.ts`, a scope or destination compared as a whole — "Rule no-dns-2 action: TCP reset → Reject" —, an
+  object they changed that the user deletes, one the user changed that they removed; a pair of the access matrix has two
+  policies, so both changing it agree), and its text points at those fields as the ones where the user's value wins;
+  "Discard mine" drops the draft. There is no "overwrite theirs" (plan §2.17: the prototype's three-way dialog is
+  superseded).
 - **Access rules** (`src/views/RulesView.vue`, `src/components/rules/RuleEditor.vue`, `src/lib/rules.ts`). The list in
   evaluation order: the system rule "Control plane access" locked at the top (SYSTEM, its hits, a switch that cannot be
   turned off), the overlay rules (OVERLAY, newest first, their remaining time), then the configured rules with position,
@@ -3347,31 +3347,31 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   fault through the draft. **Explain** (`ExplainCard.vue`): device, destination (address or host name), protocol and port
   → `GET /explain`: the access verdict and what decided it, and per family the winner (layer, level) with the faults that
   lost and why ("fault iot-slow lost: level 2 beats level 8").
-- **Add/edit fault dialog** (`src/components/faults/FaultDialog.vue`, `src/lib/faultForm.ts`, plan §2.17 "Add fault"). Target
-  (fixed to the device on its page), traffic (all, MQTT, MQTTS, HTTPS, HTTP, DNS, or protocol, ports and destination),
-  direction (Both / Upload / Download), "Start from" LTE, Bad LTE, Satellite, Offline (the parameters of the built-in
-  profiles of the same name), latency, jitter, loss and duration (1 min to 1 hour, or until removed); Advanced: rate,
-  reorder, duplicate, corrupt, keep packet order. The live preview is one sentence ("ESP32-42 · MQTT · TCP 8883 · upload &
-  download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min"). The checks (at least one parameter — the gateway refuses a
-  fault that sets none —, jitter ≤ latency, percentages up to 100, a rate
-  of at least 8 bit/s in the units of the spec, reorder needs a latency, ports and destination) stand under the fields,
-  Apply waits until the form is valid, and what the gateway refuses (422) goes under the field its path names. Apply writes
-  an overlay (`POST /overlays`, answered after the verify): it appears with its TTL counting down and a toast "Fault active
-  on ESP32-42" ("Expires after 5 min."). A loss of 100 % is a blackout. Editing an overlay writes it again under the same key
-  (owner, target, family and selector: it keeps its id and gets the new TTL); whenever the gateway answers with another
-  overlay — another traffic selector, or an overlay of an API token or a run, which the browser's write cannot replace
-  because the key includes the owner — the old one is removed, so the edit replaces it (the dialog says "Set by the token
-  ci-runner. Applying removes it and puts a fault of yours in its place."; P3-M13-06). An edit keeps the overlay's
-  remaining time unless another duration is chosen (P3-M13-06): the duration's first choice is "Keep: 4:12 left of 5 min"
-  (`durationChoices`), and Apply sends the remaining time on the gateway's clock as the TTL in whole seconds
-  (`remainingTtl`; the API's `ttl` is "remove after this time" and a written overlay's TTL starts over, so no API field is
-  needed, also not for an overlay of another owner, which is a new overlay), so the expiry stays where it was ("Expires at
-  12:46 as before."). A TTL that is not one of the choices (`30m` from the API, or a kept `1199s`) is offered as such ("30
-  min (its own TTL)", `ttlText`) instead of becoming 15 minutes. Under "</> API" the dialog shows the
-  requests it would send. On the faults screen a fault can instead be saved in the configuration ("Configuration · after
-  preview", with a name; it goes into the draft), and a configured fault is edited there; parameters the dialog does not show
-  (burst loss, flapping, different directions, …) are named before they would be replaced. The device detail has "Add
-  fault", "Edit" for the device's own faults and "Apply profile".
+- **Add/edit fault dialog** (`src/components/faults/FaultDialog.vue`, `src/lib/faultForm.ts`, plan §2.17 "Add fault").
+  Target (fixed to the device on its page), traffic (all, MQTT, MQTTS, HTTPS, HTTP, DNS, or protocol, ports and
+  destination), direction (Both / Upload / Download), "Start from" LTE, Bad LTE, Satellite, Offline (the parameters of
+  the built-in profiles of the same name), latency, jitter, loss and duration (1 min to 1 hour, or until removed);
+  Advanced: rate, reorder, duplicate, corrupt, keep packet order. The live preview is one sentence ("ESP32-42 · MQTT ·
+  TCP 8883 · upload & download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min"). The checks (at least one parameter —
+  the gateway refuses a fault that sets none —, jitter ≤ latency, percentages up to 100, a rate of at least 8 bit/s in
+  the units of the spec, reorder needs a latency, ports and destination) stand under the fields, Apply waits until the
+  form is valid, and what the gateway refuses (422) goes under the field its path names. Apply writes an overlay
+  (`POST /overlays`, answered after the verify): it appears with its TTL counting down and a toast "Fault active on
+  ESP32-42" ("Expires after 5 min."). A loss of 100 % is a blackout. Editing an overlay writes it again under the same
+  key (owner, target, family and selector: it keeps its id and gets the new TTL); whenever the gateway answers with
+  another overlay — another traffic selector, or an overlay of an API token or a run, which the browser's write cannot
+  replace because the key includes the owner — the old one is removed, so the edit replaces it (the dialog says "Set by
+  the token ci-runner. Applying removes it and puts a fault of yours in its place."; P3-M13-06). An edit keeps the
+  overlay's remaining time unless another duration is chosen (P3-M13-06): the duration's first choice is "Keep: 4:12
+  left of 5 min" (`durationChoices`), and Apply sends the remaining time on the gateway's clock as the TTL in whole
+  seconds (`remainingTtl`; the API's `ttl` is "remove after this time" and a written overlay's TTL starts over, so no
+  API field is needed, also not for an overlay of another owner, which is a new overlay), so the expiry stays where it
+  was ("Expires at 12:46 as before."). A TTL that is not one of the choices (`30m` from the API, or a kept `1199s`) is
+  offered as such ("30 min (its own TTL)", `ttlText`) instead of becoming 15 minutes. Under "</> API" the dialog shows
+  the requests it would send. On the faults screen a fault can instead be saved in the configuration ("Configuration ·
+  after preview", with a name; it goes into the draft), and a configured fault is edited there; parameters the dialog
+  does not show (burst loss, flapping, different directions, …) are named before they would be replaced. The device
+  detail has "Add fault", "Edit" for the device's own faults and "Apply profile".
 - **Profiles** (`src/views/ProfilesView.vue`, `src/lib/profiles.ts`). A card per profile (built-in first, custom marked):
   its display name ("Bad LTE"), description, parameters as chips, where it is active (target, remaining time, state, owner)
   and, for a profile whose family comes later, why it cannot be activated. The scope selector (everything, network, group,
@@ -3382,14 +3382,14 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 - **Remote networks in the scope selectors** (`src/lib/scopes.ts`, `ScopeSelect.vue`; P3-M13-08). The fault dialog's
   target, the profiles' "Activate on" and the rule editor's From offer, after everything, the networks, groups and
   devices, the remote networks of plan §2.4: "Client networks · rA (10.50.0.0/24)" for each WireGuard client with client
-  networks, "Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)" for each link (its static routes and the routes it
-  learned), and "Remote network · a prefix inside them…", which shows a field for the prefix beside the selector. They are
-  sent as `remote_network` (`client`, `link` or `cidr`). The prefix is checked in the browser as an IPv4 prefix (the message
-  under the selector; Apply, Activate and Preview & apply wait); whether it lies inside a client network or a link's route the
-  gateway decides (`unknown_remote_network`, a link with dynamic routing takes any prefix), and its message goes under the
-  target too (`fieldOf` maps `…/remote_network/…` to the target). A scope the options do not have any more stays selectable
-  under its name. A rule's To keeps the destinations of the model (a remote prefix is an address or prefix there, a link or
-  hub its WireGuard network); `Destination` has no `remote_network`.
+  networks, "Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)" for each link (its static routes and the routes
+  it learned), and "Remote network · a prefix inside them…", which shows a field for the prefix beside the selector.
+  They are sent as `remote_network` (`client`, `link` or `cidr`). The prefix is checked in the browser as an IPv4 prefix
+  (the message under the selector; Apply, Activate and Preview & apply wait); whether it lies inside a client network or
+  a link's route the gateway decides (`unknown_remote_network`, a link with dynamic routing takes any prefix), and its
+  message goes under the target too (`fieldOf` maps `…/remote_network/…` to the target). A scope the options do not have
+  any more stays selectable under its name. A rule's To keeps the destinations of the model (a remote prefix is an
+  address or prefix there, a link or hub its WireGuard network); `Destination` has no `remote_network`.
 - **TTL display.** Every overlay and profile activation shows its remaining time on the gateway's clock (M12's `useNow`),
   in the device detail, the overview, the faults screen, the overlay rules and the profile cards; the event stream's
   `overlay_expired` raises the toast and refreshes the lists (overlay events now also refresh the profiles).
@@ -3472,9 +3472,9 @@ Plan §2.17 ("Networks", "Technical view", "Commit-confirm"), §2.2, §2.2.1, §
 detail of a network, the DHCP pool and leases, the WireGuard networks with their client list and the clients' status, the
 add-client dialog with the next free tunnel address proposed in the browser, the QR dialog and the download of a client's
 configuration, the routing view, the access matrix edited through the draft (with commit-confirm where the gateway asks for
-it) and the compiled-state view. Editing networks themselves (a new network, its subnet, DHCP or DNS settings), clients
-after they were added (disable, rotate keys, delete) and the routing configuration stays with the API and the configuration
-import for now (P3-M14-01).
+it) and the compiled-state view. The client actions of plan §2.2.1 (disable/enable, rotate keys, delete) go through the
+draft too (P3-M14-01, part 1); editing networks themselves (a new network, its subnet, DHCP or DNS settings) and the
+routing configuration stays with the API and the configuration import until the other parts of P3-M14-01 follow.
 
 ### How it works
 
@@ -3496,6 +3496,19 @@ import for now (P3-M14-01).
   3 min, plan §2.2.1) and the last handshake, the endpoint the gateway sees it at and its bytes. A client of the draft is
   marked NEW ("not applied yet", without its configuration until it is applied); one the gateway refused is marked NEEDS
   FIXING, its row says why as text ("The gateway refused it: …"), and **Fix** opens it again in the add-client dialog.
+- **Client actions** (`ClientsCard.vue`, `RotateKeysDialog.vue`, `withEnabled`, `withRotatedKeys`, `rotatedKeyError`,
+  `keysText` in `src/lib/networks.ts`; plan §2.2.1, P3-M14-01). A client of the gateway has **Disable**/**Enable**,
+  **Rotate keys** and **Delete** next to Configuration. Each is an edit of the configuration draft (`setClient`):
+  disabling sets `enabled: false`, enabling drops it (the default); rotating raises `key.generation` for keys the
+  gateway generates (it makes a new key pair and a new preshared key at the apply, the dialog says the client needs its
+  new configuration then, and the row says so until the apply) or, for a client with its own key, sets the new public
+  key the dialog asks for (checked under the field: a WireGuard key, not the current one; the gateway refuses a
+  generation for such a key); deleting marks the row DELETED. A changed row is marked CHANGED, and **Undo** takes the
+  client back to what the gateway has. The changes in words name the field ("enabled: yes → no", "keys: generation 1 →
+  generation 2"), the merge patch carries only the changed members (`{"enabled": false, "key": {"generation": 2}}`,
+  `null` for a deleted client), and Preview & apply goes through the drawer, the concurrent-change dialog (reapplying on
+  their version of the client) and commit-confirm, which the gateway asks for when the client belongs to a management
+  hub.
 - **Add client** (`AddClientDialog.vue`, logic in `src/lib/networks.ts`). The tunnel address is proposed in the browser
   (`nextFreeAddress`): the lowest host address of the hub's subnet that is not the gateway's own, not the network or broadcast
   address and not taken by a client of the gateway or of the draft. Name and address are the common case; Advanced has the
@@ -3638,6 +3651,7 @@ not run on this branch with the M14 flow yet.
 | Scope: WireGuard networks with client list, client status | `networks.spec.ts` "a WireGuard hub lists its clients with their status; a link shows its peer and its routes", "a client that goes offline is shown offline after the next poll", "backing out of the drawer keeps the new client in the draft, marked NEW, …" |
 | Scope: add-client dialog (proposes the next free tunnel address of the hub, computed client-side) | `networks.spec.ts` "add a client: …" (the proposal, the checks under the fields, the request, the next proposal after the apply), "a new client the gateway refuses says why in its row; Fix opens it again with the message under its field"; `src/lib/networks.test.ts` "the next free tunnel address of a hub (plan M14, computed client-side)", "the add-client form" |
 | Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …", "a slow export of one client never shows up in the dialog of another", "an export-once key is never lost: …", "an export-once answer that arrives while no dialog is open …"; the testbed flow |
+| Client actions: disable/enable, rotate keys, delete through the draft, the drawer, the conflict dialog and commit-confirm (P3-M14-01, part 1) | `networks.spec.ts` "client actions: disable and rotate the keys of a client through the draft, the drawer and the apply; Undo takes them back (P3-M14-01)", "client actions: a client changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change (P3-M14-01)", "client actions: delete a client, Undo brings it back, deleted through the drawer it is gone (P3-M14-01)", "client actions: a client with its own key rotates by its new public key, checked under the field (P3-M14-01)", "client actions: disabling a client of the management hub waits for confirmation (P3-M14-01)"; `src/lib/networks.test.ts` "the client actions (P3-M14-01)"; `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of their fields (P3-M14-01)" |
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
 | Scope: access matrix editing (commit-confirm where lockout-relevant) | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |

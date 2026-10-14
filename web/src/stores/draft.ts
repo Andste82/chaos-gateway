@@ -14,7 +14,7 @@ import type {
 } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
 import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
-import { cellOf, entryKey, matrixChanges, toggleCell } from '../lib/networks';
+import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
 /** The members compared as a whole when both sides changed an object: a scope or a destination is one choice. */
@@ -325,7 +325,16 @@ export const useDraftStore = defineStore('draft', () => {
         add('address', before.address, client.address);
         add('client networks', (before.client_networks ?? []).join(', '), (client.client_networks ?? []).join(', '));
         add('enabled', before.enabled === false ? 'no' : 'yes', client.enabled === false ? 'no' : 'yes');
-        const rest = (c: WireGuardClient) => ({ ...c, name: '', address: '', client_networks: [], enabled: true });
+        // a key rotation: the next generation of generated keys, or the client's new public key
+        add('keys', keysText(before), keysText(client));
+        const rest = (c: WireGuardClient) => ({
+          ...c,
+          name: '',
+          address: '',
+          client_networks: [],
+          enabled: true,
+          key: { ...c.key, generation: undefined, public_key: undefined },
+        });
         if (!jsonEqual(rest(before), rest(client))) out.push({ kind: 'client', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }

@@ -302,6 +302,23 @@ describe('WireGuard clients and the access matrix in the draft (M14)', () => {
     expect(d.dirty).toBe(false);
   });
 
+  it('the client actions are changes in words and a merge patch of their fields (P3-M14-01)', () => {
+    const d = useDraftStore();
+    d.track(revision(42, { networks: networks() }));
+    d.setClient(HUB, RA, { name: 'rA', address: '10.99.0.2', enabled: false, key: { generation: 2 } });
+    expect(d.changes()).toEqual([
+      { kind: 'client', id: RA, name: 'rA', field: 'enabled', from: 'yes', to: 'no' },
+      { kind: 'client', id: RA, name: 'rA', field: 'keys', from: 'generation 1', to: 'generation 2' },
+    ]);
+    expect(d.patch()).toEqual({ networks: { [HUB]: { clients: { [RA]: { enabled: false, key: { generation: 2 } } } } } });
+    d.setClient(HUB, RA, null);
+    expect(d.changes()).toEqual([{ kind: 'client', id: RA, name: 'rA', field: 'client', from: 'present', to: 'deleted' }]);
+    expect(d.patch()).toEqual({ networks: { [HUB]: { clients: { [RA]: null } } } });
+    // undone: the client as it is
+    d.setClient(HUB, RA, { name: 'rA', address: '10.99.0.2' });
+    expect(d.dirty).toBe(false);
+  });
+
   it('a matrix cell flipped is a change; flipped back it is none; the patch replaces the entries', () => {
     const d = useDraftStore();
     d.track(revision(42, { networks: networks(), access_matrix: { entries: [{ from: { network: 'IoT' }, to: { network: 'lab-hub' }, policy: 'allow' }] } }));

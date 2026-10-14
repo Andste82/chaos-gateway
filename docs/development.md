@@ -3312,6 +3312,12 @@ off the browser's (`clockSkewMs`: a `Date` header and deadlines on that clock) a
 `EventSource` is replaced by a fake the test drives (`gw.emit`, `__sse.fail`, `__sse.reopen`), so a live update is
 asserted deterministically instead of by a poll.
 
+**Timing under load** (`web/playwright.config.ts`, the Phase 3 audit): assertions wait up to 10 s, the `open()` helpers of
+`networks.spec.ts` and `network-forms.spec.ts` wait up to 15 s for the first heading after `page.goto` (a cold first render
+on a busy runner took longer than 5 s), and a test that navigates after an edit first asserts the edit landed (the switch's
+`aria-checked`, the unapplied-changes bar) and then the new URL and heading. In CI a failed test runs once more; the report
+lists it as "flaky", so a timing problem stays visible without failing the job on one slow start.
+
 **The browser flow in the testbed.** `TestFirstStartInTheBrowserUntilADiscoveredDevice` builds the default topology, starts
 the gateway on the real executor in the gateway's namespace with the built app (`web/dist`) and an open setup, lets device
 A ping its gateway address every second, and runs `playwright test --config playwright.testbed.config.ts` with the

@@ -15,7 +15,8 @@ const IOT_FAULT = 'c0f00000-0000-4000-8000-0000000000c2';
 async function open(page: Page, path = '/networks', gw = withNetworks(MockGateway.sample()), heading = 'Networks') {
   await gw.install(page);
   await page.goto(path);
-  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  // the first render after a cold start can be slow under load
+  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible({ timeout: 15_000 });
   return gw;
 }
 

@@ -3,19 +3,24 @@
 // active (with the remaining time of each activation), a scope selector (everything / network /
 // group / device, and the remote networks of P3-M13-08) and a duration; activate or deactivate on
 // the chosen scope. One profile per scope: activating another one on the same scope switches it
-// (the overlay keeps its id). "Measure with probe" arrives with the probes (M25).
+// (the overlay keeps its id). Custom profiles are made, edited and deleted in the profile editor
+// (P3-M13-03): a custom profile is an object of the configuration, so the change goes into the draft
+// and through the unapplied-changes bar, the preview and the apply; until then the card is marked
+// NEW, CHANGED or DELETED (with Undo) and cannot be activated, and a profile the gateway refused in a
+// candidate is marked with its problems. "Measure with probe" arrives with the probes (M25).
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
 import { useRoute } from 'vue-router';
 import { errorMessage } from '../api/fetcher';
 import { createOverlay, deleteOverlay } from '../api/generated/hooks/overlays/overlays';
-import type { OverlayRequest, ProfileActivation, ProfileView } from '../api/generated/model';
+import type { OverlayRequest, Profile, ProfileActivation, ProfileView } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
+import ProfileDialog from '../components/profiles/ProfileDialog.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import ScopeSelect from '../components/ui/ScopeSelect.vue';
-import { firstError, useGatewayState, useGroups, useNames, useProfiles } from '../composables/gateway';
+import { firstError, useActiveConfig, useGatewayState, useGroups, useNames, useProfiles } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { durations, scopeOf, targetOf } from '../lib/faultForm';
 import { describeScope } from '../lib/faults';
@@ -24,6 +29,7 @@ import { remoteCidrError, remoteScopeOptions } from '../lib/scopes';
 import { profileChips, profileTitle } from '../lib/profiles';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
+import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
 
 const profiles = useProfiles();
@@ -36,6 +42,9 @@ const toasts = useToastStore();
 const apiPanel = useApiPanelStore();
 const now = useNow();
 const uid = useId();
+const draft = useDraftStore();
+// the draft's base: a custom profile is edited against the active revision's configuration
+const active = useActiveConfig();
 
 useApiScreen('the profiles', () => [{ method: 'GET', path: '/profiles', note: 'built-in and custom profiles with their activations' }]);
 
@@ -62,9 +71,56 @@ function here(p: ProfileView): ProfileActivation[] {
   return (p.activations ?? []).filter((a) => targetOf(a.target) === scope.value);
 }
 
-const cards = computed(() =>
-  [...(profiles.data.value ?? [])].sort((a, b) => Number(b.builtin) - Number(a.builtin)).map((p) => ({ p, title: profileTitle(p.config.name), chips: profileChips(p.config.parts) })),
-);
+interface Card {
+  p: ProfileView;
+  title: string;
+  chips: string[];
+  isNew?: boolean;
+  changed?: boolean;
+  /** A custom profile the draft deletes: shown until the draft is applied or discarded. */
+  deleted?: boolean;
+  /** What the gateway refused about the profile in the last candidate. */
+  problems?: string[];
+}
+
+/** The profiles as the gateway has them, with the draft's custom profiles: new, changed and deleted ones. */
+const cards = computed<Card[]>(() => {
+  const views = profiles.data.value ?? [];
+  const out: Card[] = [];
+  const card = (p: ProfileView, extra: Partial<Card> = {}): Card => ({
+    p,
+    title: profileTitle(p.config.name),
+    chips: profileChips(p.config.parts),
+    ...(draft.serverErrors[p.id] ? { problems: Object.values(draft.serverErrors[p.id]!) } : {}),
+    ...extra,
+  });
+  for (const v of views) {
+    const edit = v.builtin ? undefined : draft.profiles[v.id];
+    if (edit === undefined) out.push(card(v));
+    else if (edit === null) out.push(card(v, { deleted: true }));
+    else out.push(card({ ...v, config: edit }, { changed: true }));
+  }
+  for (const [id, edit] of Object.entries(draft.profiles)) {
+    if (edit && !views.some((v) => v.id === id)) out.push(card({ id, builtin: false, available: true, config: edit }, { isNew: true }));
+  }
+  return out.sort((a, b) => Number(b.p.builtin) - Number(a.p.builtin));
+});
+
+/** Not on the gateway as shown: a new, changed or deleted profile is activated after the apply. */
+const pending = (c: Card) => !!(c.isNew || c.changed || c.deleted);
+
+// the profile editor: new, or a custom profile as the draft has it
+const editorOpen = ref(false);
+const editing = ref<{ id: string; config: Profile }>();
+const allNames = computed(() => cards.value.filter((c) => !c.deleted).map((c) => c.p.config.name));
+function newProfile() {
+  editing.value = undefined;
+  editorOpen.value = true;
+}
+function editProfile(c: Card) {
+  editing.value = { id: c.p.id, config: c.p.config };
+  editorOpen.value = true;
+}
 
 const busy = ref<string>();
 async function activate(p: ProfileView) {
@@ -114,10 +170,15 @@ function activationText(a: ProfileActivation): string {
 }
 
 const blocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
+const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
 </script>
 
 <template>
-  <PageHeader title="Profiles" context="Named network conditions · one active profile per target · device faults still win over a profile" />
+  <PageHeader title="Profiles" context="Named network conditions · one active profile per target · device faults still win over a profile">
+    <template #actions>
+      <button type="button" class="btn btn-primary" @click="newProfile">New profile</button>
+    </template>
+  </PageHeader>
 
   <div class="card flex flex-wrap items-end gap-4">
     <div class="min-w-[240px]">
@@ -144,51 +205,74 @@ const blocked = computed(() => !!state.data.value?.pending_confirm || connection
     </p>
   </div>
 
-  <p v-if="profiles.isLoading.value" class="text-text-2">Loading the profiles…</p>
-  <LoadError v-else-if="firstError(profiles)" :error="firstError(profiles)" what="The profiles are not loaded" :retry="profiles.refetch" />
+  <p v-if="profiles.isLoading.value || active.isLoading.value" class="text-text-2">Loading the profiles…</p>
+  <LoadError v-else-if="firstError(profiles, active)" :error="firstError(profiles, active)" what="The profiles are not loaded" :retry="retry" />
   <EmptyState v-else-if="cards.length === 0" text="No profiles." />
   <div v-else class="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3" data-testid="profile-cards">
     <section
-      v-for="{ p, title, chips } in cards"
-      :key="p.id"
+      v-for="c in cards"
+      :key="c.p.id"
       class="card flex flex-col gap-2.5"
-      :class="p.activations?.length ? '!border-fault-border' : ''"
-      :aria-labelledby="`${uid}-${p.id}`"
+      :class="[c.p.activations?.length ? '!border-fault-border' : '', c.problems ? 'shadow-[inset_3px_0_0_var(--color-block-border)]' : '']"
+      :aria-labelledby="`${uid}-${c.p.id}`"
       data-testid="profile-card"
     >
-      <div class="flex items-center gap-2">
-        <h2 :id="`${uid}-${p.id}`" class="m-0 text-base font-semibold">{{ title }}</h2>
-        <span v-if="p.activations?.length" class="rounded border border-fault-border bg-fault-tint px-1.5 text-xs text-fault-text">active</span>
-        <span v-if="!p.builtin" class="rounded border border-border-strong px-1.5 text-xs text-text-2">custom</span>
+      <div class="flex items-center gap-2" :class="{ 'opacity-60': c.deleted }">
+        <h2 :id="`${uid}-${c.p.id}`" class="m-0 text-base font-semibold" :class="{ 'line-through': c.deleted }">{{ c.title }}</h2>
+        <span v-if="c.p.activations?.length" class="rounded border border-fault-border bg-fault-tint px-1.5 text-xs text-fault-text">active</span>
+        <span v-if="!c.p.builtin" class="rounded border border-border-strong px-1.5 text-xs text-text-2">custom</span>
+        <span v-if="c.deleted" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="profile-mark">DELETED</span>
+        <span v-else-if="c.isNew" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="profile-mark">NEW</span>
+        <span v-else-if="c.changed" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="profile-mark">CHANGED</span>
+        <span v-if="c.problems" class="rounded border border-block-border px-1.5 text-xs text-block-text">NEEDS FIXING</span>
       </div>
-      <p v-if="p.config.description" class="m-0 text-[13px] text-text-2">{{ p.config.description }}</p>
-      <div class="flex flex-wrap gap-1.5">
-        <FaultChip v-for="c in chips" :key="c" :text="c" />
+      <p v-for="m in c.problems" :key="m" class="m-0 text-xs text-block-text" data-testid="profile-problem">{{ m }}</p>
+      <p v-if="c.p.config.description" class="m-0 text-[13px] text-text-2">{{ c.p.config.description }}</p>
+      <div class="flex flex-wrap gap-1.5" :class="{ 'opacity-60': c.deleted }">
+        <FaultChip v-for="chip in c.chips" :key="chip" :text="chip" />
       </div>
       <div class="text-[13px]" data-testid="profile-active">
-        <template v-if="p.activations?.length">
+        <template v-if="c.p.activations?.length">
           Active on
           <ul class="m-0 mt-1 list-none p-0">
-            <li v-for="a in p.activations" :key="a.overlay" class="mono text-xs text-fault-text">{{ activationText(a) }}</li>
+            <li v-for="a in c.p.activations" :key="a.overlay" class="mono text-xs text-fault-text">{{ activationText(a) }}</li>
           </ul>
         </template>
         <span v-else class="text-text-3">Not active</span>
       </div>
-      <p v-if="!p.available" class="m-0 text-[13px] text-text-2">{{ p.unavailable_reason ?? 'Not available in this build.' }}</p>
-      <div class="mt-auto flex gap-2 pt-1">
+      <p v-if="!c.p.available" class="m-0 text-[13px] text-text-2">{{ c.p.unavailable_reason ?? 'Not available in this build.' }}</p>
+      <p v-if="pending(c)" class="m-0 text-[13px] text-text-2" data-testid="profile-pending">
+        {{ c.deleted ? 'Removed when the changes are applied.' : 'Not applied yet: it can be activated after the changes are applied.' }}
+      </p>
+      <div class="mt-auto flex flex-wrap gap-2 pt-1">
         <button
-          v-if="here(p).length"
+          v-if="here(c.p).length"
           type="button"
           class="btn btn-sm"
-          :disabled="busy === p.id || blocked"
-          @click="deactivate(p)"
+          :disabled="busy === c.p.id || blocked"
+          @click="deactivate(c.p)"
         >
           Deactivate on {{ scopeName }}
         </button>
-        <button v-else type="button" class="btn btn-primary btn-sm" :disabled="busy === p.id || blocked || !p.available || !!scopeError" @click="activate(p)">
+        <button
+          v-else
+          type="button"
+          class="btn btn-primary btn-sm"
+          :disabled="busy === c.p.id || blocked || !c.p.available || !!scopeError || pending(c)"
+          @click="activate(c.p)"
+        >
           Activate on {{ scopeName }}
         </button>
+        <template v-if="!c.p.builtin">
+          <button v-if="c.deleted" type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${c.title}`" @click="draft.restoreProfile(c.p.id)">Undo</button>
+          <template v-else>
+            <button type="button" class="btn btn-sm" :aria-label="`Edit ${c.title}`" @click="editProfile(c)">Edit</button>
+            <button type="button" class="btn btn-sm" :aria-label="`Delete ${c.title}`" @click="draft.setProfile(c.p.id, null)">Delete</button>
+          </template>
+        </template>
       </div>
     </section>
   </div>
+
+  <ProfileDialog v-model:open="editorOpen" :profile="editing" :names="allNames" />
 </template>

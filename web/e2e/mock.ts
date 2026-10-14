@@ -472,6 +472,7 @@ export class MockGateway {
   }
 
   async install(page: Page): Promise<void> {
+    this.moveCustomProfiles();
     await page.addInitScript(() => {
       type Listener = (e: { data: string }) => void;
       class FakeEventSource {
@@ -799,13 +800,34 @@ export class MockGateway {
     return [...this.faults, ...configured];
   }
 
+  /**
+   * The built-in profiles of `profiles` and the custom profiles of the active configuration. A custom
+   * profile a test put into `profiles` is moved into the configuration the first time (it is an object
+   * of the configuration, edited and deleted through revisions).
+   */
   profileViews(): ProfileView[] {
-    return this.profiles.map((p) => ({
+    this.moveCustomProfiles();
+    const all: ProfileView[] = [
+      ...this.profiles,
+      ...Object.entries(this.config.profiles ?? {}).map(([id, config]) => ({ id, builtin: false, ...(this.profileExtras[id] ?? { available: true }), config })),
+    ];
+    return all.map((p) => ({
       ...p,
       activations: this.overlays
         .filter((o) => o.kind === 'profile' && (o.profile === p.id || o.profile === p.config.name))
         .map((o) => ({ overlay: o.id, target: o.target!, owner: o.owner, expires_at: o.expires_at, state: o.state })),
     }));
+  }
+
+  /** What the gateway says about a custom profile besides its configuration (`available`), by id. */
+  private profileExtras: Record<string, Pick<ProfileView, 'available' | 'unavailable_reason'>> = {};
+
+  private moveCustomProfiles() {
+    const custom = this.profiles.filter((p) => !p.builtin);
+    if (!custom.length) return;
+    this.config = { ...this.config, profiles: { ...Object.fromEntries(custom.map((p) => [p.id, p.config])), ...this.config.profiles } };
+    for (const p of custom) this.profileExtras[p.id] = { available: p.available, ...(p.unavailable_reason ? { unavailable_reason: p.unavailable_reason } : {}) };
+    this.profiles = this.profiles.filter((p) => p.builtin);
   }
 
   previewOf(id: number, patch: unknown): Preview {
@@ -824,6 +846,12 @@ export class MockGateway {
       const name = String(before?.name ?? v?.['name'] ?? key);
       const op = v === null ? 'removed' : before ? 'changed' : 'added';
       domain.push({ op, kind: 'fault', id: key, name, path: `/faults/${key}`, summary: `fault ${name} ${op}` });
+    }
+    for (const [key, v] of Object.entries((patch as { profiles?: Record<string, { name?: string } | null> }).profiles ?? {})) {
+      const before = this.config.profiles?.[key];
+      const name = String(v?.name ?? before?.name ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'profile', id: key, name, path: `/profiles/${key}`, summary: `profile ${name} ${op}` });
     }
     for (const [key, v] of Object.entries((patch as { devices?: Record<string, { name?: string } | null> }).devices ?? {})) {
       const name = String(v?.name ?? key);

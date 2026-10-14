@@ -8,6 +8,7 @@ import type {
   Device,
   MatrixEntry,
   NetworkView,
+  Profile,
   RevisionWithConfiguration,
   WireGuardClient,
   WireGuardNetwork,
@@ -15,6 +16,7 @@ import type {
 import { faultChips, describeScope, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
+import { profileChips } from '../lib/profiles';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
 /** The members compared and reapplied as a whole when both sides changed an object: a scope or a destination is one choice. */
@@ -40,7 +42,7 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix';
+  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -48,7 +50,7 @@ export interface DraftChange extends FieldChange {
 
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
- * access rules, their order, configured faults, adopted devices, WireGuard clients and the access matrix, edited
+ * access rules, their order, configured faults, custom profiles, adopted devices, WireGuard clients and the access matrix, edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -64,6 +66,8 @@ export const useDraftStore = defineStore('draft', () => {
   const order = ref<string[]>();
   /** Edited configured faults by id, `null` for a deleted one. */
   const faults = ref<Record<string, ConfigFault | null>>({});
+  /** Custom profiles added, changed or deleted (`null`), by id (P3-M13-03). */
+  const profiles = ref<Record<string, Profile | null>>({});
   /** Devices added to the configuration (adopted), by id. */
   const devices = ref<Record<string, Device | null>>({});
   /** WireGuard clients added, changed or deleted (`client: null`), by client id with their hub. */
@@ -78,6 +82,7 @@ export const useDraftStore = defineStore('draft', () => {
       Object.keys(rules.value).length > 0 ||
       order.value !== undefined ||
       Object.keys(faults.value).length > 0 ||
+      Object.keys(profiles.value).length > 0 ||
       Object.keys(devices.value).length > 0 ||
       Object.keys(clients.value).length > 0 ||
       matrix.value !== undefined,
@@ -111,6 +116,7 @@ export const useDraftStore = defineStore('draft', () => {
   const baseRules = computed(() => baseConfig.value?.access_rules ?? {});
   const baseOrder = computed(() => baseConfig.value?.access_rule_order ?? []);
   const baseFaults = computed(() => baseConfig.value?.faults ?? {});
+  const baseProfiles = computed(() => baseConfig.value?.profiles ?? {});
 
   /** The rules as the draft has them: base with the edits. */
   const effectiveRules = computed<Record<string, AccessRule>>(() => {
@@ -135,6 +141,16 @@ export const useDraftStore = defineStore('draft', () => {
     for (const [id, f] of Object.entries(faults.value)) {
       if (f === null) delete out[id];
       else out[id] = f;
+    }
+    return out;
+  });
+
+  /** The custom profiles as the draft has them: base with the edits. */
+  const effectiveProfiles = computed<Record<string, Profile>>(() => {
+    const out: Record<string, Profile> = { ...baseProfiles.value };
+    for (const [id, p] of Object.entries(profiles.value)) {
+      if (p === null) delete out[id];
+      else out[id] = p;
     }
     return out;
   });
@@ -196,6 +212,23 @@ export const useDraftStore = defineStore('draft', () => {
     const prev = baseOrder.value.slice(0, baseOrder.value.indexOf(id)).reverse().find((x) => ids.includes(x));
     ids.splice(prev === undefined ? 0 : ids.indexOf(prev) + 1, 0, id);
     setOrder(ids);
+  }
+
+  function setProfile(id: string, profile: Profile | null) {
+    clearServerErrors(id);
+    const before = baseProfiles.value[id];
+    if ((profile === null && before === undefined) || (profile !== null && before !== undefined && jsonEqual(before, profile))) {
+      const { [id]: _drop, ...rest } = profiles.value;
+      profiles.value = rest;
+    } else {
+      profiles.value = { ...profiles.value, [id]: profile === null ? null : cloneJSON(profile) };
+    }
+  }
+
+  /** Undoes the deletion of a custom profile of the base. */
+  function restoreProfile(id: string) {
+    const before = baseProfiles.value[id];
+    if (before && profiles.value[id] === null) setProfile(id, before);
   }
 
   /** Undoes the deletion of a configured fault of the base. */
@@ -309,6 +342,18 @@ export const useDraftStore = defineStore('draft', () => {
         add('enabled', before.enabled === false ? 'no' : 'yes', f.enabled === false ? 'no' : 'yes');
       }
     }
+    for (const [id, p] of Object.entries(profiles.value)) {
+      const before = baseProfiles.value[id];
+      const name = p?.name ?? before?.name ?? id;
+      if (p === null) out.push({ kind: 'profile', id, name, field: 'profile', from: 'present', to: 'deleted' });
+      else if (!before) out.push({ kind: 'profile', id, name, field: 'profile', from: '—', to: `added (${profileChips(p.parts).join(', ')})` });
+      else {
+        const add = (field: string, a: string, b: string) => a !== b && out.push({ kind: 'profile', id, name, field, from: a || '—', to: b || '—' });
+        add('name', before.name, p.name);
+        add('description', before.description ?? '', p.description ?? '');
+        add('parameters', profileChips(before.parts).join(', '), profileChips(p.parts).join(', '));
+      }
+    }
     for (const [id, dv] of Object.entries(devices.value)) {
       const before = baseConfig.value?.devices?.[id];
       const name = dv?.name ?? before?.name ?? id;
@@ -356,11 +401,13 @@ export const useDraftStore = defineStore('draft', () => {
     const cs = changes(names);
     const ruleIds = new Set(cs.filter((c) => c.kind === 'rule').map((c) => c.id));
     const faultIds = new Set(cs.filter((c) => c.kind === 'fault').map((c) => c.id));
+    const profileIds = new Set(cs.filter((c) => c.kind === 'profile').map((c) => c.id));
     const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
     const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
+      profileIds.size ? `${profileIds.size} ${profileIds.size === 1 ? 'profile' : 'profiles'}` : '',
       deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
       cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
@@ -396,6 +443,12 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) fp[id] = p;
     }
     if (Object.keys(fp).length) out.faults = fp;
+    const pp: Record<string, unknown> = {};
+    for (const [id, p] of Object.entries(profiles.value)) {
+      const mp = createMergePatch(baseProfiles.value[id], p);
+      if (mp !== undefined) pp[id] = mp;
+    }
+    if (Object.keys(pp).length) out.profiles = pp;
     const dp: Record<string, unknown> = {};
     for (const [id, dv] of Object.entries(devices.value)) {
       const p = createMergePatch(baseConfig.value?.devices?.[id], dv);
@@ -461,6 +514,7 @@ export const useDraftStore = defineStore('draft', () => {
       }
     }
     compare('fault', faults.value, old?.faults ?? {}, theirs.faults ?? {}, named);
+    compare('profile', profiles.value, old?.profiles ?? {}, theirs.profiles ?? {}, named);
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
     for (const net of new Set(Object.values(clients.value).map((c) => c.network))) {
       const edits = Object.fromEntries(
@@ -518,6 +572,7 @@ export const useDraftStore = defineStore('draft', () => {
     baseConfig.value = rev.configuration;
     rules.value = reapply(rules.value, old?.access_rules ?? {}, theirRules);
     faults.value = reapply(faults.value, old?.faults ?? {}, theirFaults);
+    profiles.value = reapply(profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
     devices.value = reapply(devices.value, old?.devices ?? {}, theirDevices);
     // clients hub by hub, like the other objects
     const nextClients: typeof clients.value = {};
@@ -559,6 +614,7 @@ export const useDraftStore = defineStore('draft', () => {
     rules.value = {};
     order.value = undefined;
     faults.value = {};
+    profiles.value = {};
     devices.value = {};
     clients.value = {};
     matrix.value = undefined;
@@ -583,12 +639,14 @@ export const useDraftStore = defineStore('draft', () => {
         (out[c[1]!] ??= {})[c[2] ?? 'client'] = e.message ?? 'not valid';
         continue;
       }
-      const m = /^\/(access_rules|faults|devices)\/([^/]+)(?:\/(.+))?/.exec(e.path ?? '');
+      const m = /^\/(access_rules|faults|profiles|devices)\/([^/]+)(?:\/(.+))?/.exec(e.path ?? '');
       if (!m) continue;
-      // a fault keeps the rest of the pointer ("upload/latency", `fault` for the fault as a whole),
-      // which the fault dialog maps to its fields; a rule and a device the field below the object
+      // a fault and a profile keep the rest of the pointer ("upload/latency", "parts/mtu/size"; `fault`
+      // or `profile` for the object as a whole), which their dialogs map to their fields; a rule and a
+      // device the field below the object
       const first = m[3]?.split('/')[0];
-      const field = m[1] === 'faults' ? (m[3] ?? 'fault') : first === 'port_ranges' ? 'ports' : (first ?? 'rule');
+      const field =
+        m[1] === 'faults' ? (m[3] ?? 'fault') : m[1] === 'profiles' ? (m[3] ?? 'profile') : first === 'port_ranges' ? 'ports' : (first ?? 'rule');
       (out[m[2]!] ??= {})[field] = e.message ?? 'not valid';
     }
     serverErrors.value = out;
@@ -605,6 +663,7 @@ export const useDraftStore = defineStore('draft', () => {
     rules,
     order,
     faults,
+    profiles,
     devices,
     clients,
     matrix,
@@ -613,6 +672,7 @@ export const useDraftStore = defineStore('draft', () => {
     effectiveRules,
     effectiveOrder,
     effectiveFaults,
+    effectiveProfiles,
     effectiveMatrix,
     effectiveClients,
     baseClient,
@@ -622,8 +682,10 @@ export const useDraftStore = defineStore('draft', () => {
     setOrder,
     move,
     setFault,
+    setProfile,
     restoreRule,
     restoreFault,
+    restoreProfile,
     setDevice,
     setClient,
     toggleMatrix,

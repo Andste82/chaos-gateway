@@ -26,7 +26,7 @@ const names = computed(() => ({ ...known.value, device: (id: string) => known.va
 
 const invalidCount = computed(() => Object.keys(draft.invalid).length);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
-const kinds = { rule: 'Rule', fault: 'Fault', device: 'Device', client: 'WireGuard client', matrix: 'Access' };
+const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Device', client: 'WireGuard client', matrix: 'Access' };
 const inWords = (c: DraftChange) => `${[kinds[c.kind], c.name, c.field].filter(Boolean).join(' ')}: ${c.from} → ${c.to}`;
 const yours = computed(() => draft.changes(names.value).map(inWords));
 const overlaps = (theirs: Configuration) => draft.overlaps(theirs, names.value).map(inWords);

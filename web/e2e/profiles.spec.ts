@@ -264,7 +264,7 @@ test('delete an active custom profile: the card says its activations end, the dr
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   const preview = page.getByRole('dialog', { name: 'Preview revision 43' });
   const refs = preview.getByTestId('preview-references');
-  await expect(refs).toContainText(`overlay ${ACT} (/profiles/${SLOW_LAB})`);
+  await expect(refs).toContainText(`overlay ${ACT} (Profile slow-lab)`);
   const apply = preview.getByRole('button', { name: 'Apply revision 43' });
   await expect(apply).toBeDisabled();
   await refs.getByLabel('Remove them when applying').check();

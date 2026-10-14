@@ -219,6 +219,8 @@ export function withNetworks(m: MockGateway, now = Date.now()): MockGateway {
   const lan = (id: string) => m.networks.find((n) => n.id === id)!.config;
   m.config = {
     ...m.config,
+    // the management network has an interface of its own, which no test network may take
+    management: { interface: { name: 'eth5' } },
     networks: {
       [IOT]: lan(IOT),
       [TEST]: lan(TEST),
@@ -438,6 +440,15 @@ export class MockGateway {
   exportGate?: Promise<void>;
   /** Clients whose private key the gateway does not hold (any more): their export has a placeholder. */
   keyGone = new Set<string>();
+  /** GET /system/interfaces: the host's interfaces with their assignment. */
+  hostInterfaces: HostInterface[] = [
+    { name: 'eth0', mac: '52:54:00:00:00:01', driver: 'virtio_net', bus: 'pci', link_up: true, addresses: ['192.168.1.57/24'], os_managed: true, assigned: { role: 'uplink' } },
+    { name: 'eth1', mac: '52:54:00:00:00:02', driver: 'igb', bus: 'pci', link_up: true, os_managed: false, assigned: { role: 'network', network: IOT } },
+    { name: 'eth2', mac: '52:54:00:00:00:03', driver: 'igb', bus: 'pci', link_up: true, os_managed: false, assigned: { role: 'network', network: TEST } },
+    { name: 'eth3', mac: '52:54:00:00:00:04', driver: 'igb', bus: 'pci', link_up: true, os_managed: false },
+    { name: 'eth4', mac: '52:54:00:00:00:05', driver: 'r8152', bus: 'usb', link_up: false, os_managed: false },
+    { name: 'eth5', mac: '52:54:00:00:00:06', driver: 'igb', bus: 'pci', link_up: true, addresses: ['192.168.56.10/24'], os_managed: true, assigned: { role: 'management' } },
+  ];
   /** GET /routing, /routing/status and /routing/routes. */
   routing: Routing = {};
   routingStatus: RoutingStatus = { bird: { running: false }, protocols: [] };
@@ -635,7 +646,8 @@ export class MockGateway {
       if (gate) await gate;
       return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${c.config.name}.conf"` }, contentType: 'text/plain; charset=utf-8', body: conf });
     }
-    if (path === '/routing') return json(200, this.routing);
+    if (path === '/routing') return json(200, this.config.routing ?? this.routing);
+    if (path === '/system/interfaces') return json(200, this.page(this.hostInterfaces, url));
     if (path === '/routing/status') return json(200, this.routingStatus);
     if (path === '/routing/routes') return json(200, this.page(this.routes, url));
     if (path === '/state/linux') return json(200, this.linux);
@@ -692,8 +704,10 @@ export class MockGateway {
         this.conflictOnce = false;
         return problem(409, 'revision_conflict', `revision ${base} is not the active revision any more`);
       }
-      if (this.rejectRevision) {
-        const errors = typeof this.rejectRevision === 'function' ? this.rejectRevision(body) : this.rejectRevision;
+      // like the gateway: a deleted network something still refers to makes the candidate invalid
+      const dangling = this.danglingReferences(body);
+      if (this.rejectRevision || dangling.length) {
+        const errors = this.rejectRevision ? (typeof this.rejectRevision === 'function' ? this.rejectRevision(body) : this.rejectRevision) : dangling;
         this.rejectRevision = undefined;
         return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: `the configuration is not valid (${errors.length} problems)`, errors });
       }
@@ -890,20 +904,70 @@ export class MockGateway {
       const name = String(v?.name ?? key);
       domain.push({ op: v === null ? 'removed' : 'added', kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${v === null ? 'removed' : 'added'}` });
     }
-    const nets = (patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> }> }).networks ?? {};
+    const nets = (patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> } | null> }).networks ?? {};
     for (const [netId, n] of Object.entries(nets)) {
-      for (const [key, c] of Object.entries(n.clients ?? {})) {
+      for (const [key, c] of Object.entries(n?.clients ?? {})) {
         const before = (this.config.networks?.[netId] as WireGuardNetwork | undefined)?.clients?.[key];
         const name = String(c?.name ?? before?.name ?? key);
         const op = c === null ? 'removed' : before ? 'changed' : 'added';
         domain.push({ op, kind: 'client', id: key, name, path: `/networks/${netId}/clients/${key}`, summary: `WireGuard client ${name} ${op}${c?.address ? ` (${c.address})` : ''}` });
       }
     }
+    for (const [netId, n] of Object.entries(nets)) {
+      const before = this.config.networks?.[netId];
+      const own = n === null ? null : Object.keys(n).filter((k) => k !== 'clients');
+      if (own !== null && own.length === 0) continue;
+      const name = String((n as { name?: string } | null)?.name ?? before?.name ?? netId);
+      const op = n === null ? 'removed' : before ? 'changed' : 'added';
+      const fields = n && before ? own!.map((f) => ({ path: f, old: (before as unknown as Record<string, unknown>)[f], new: (n as Record<string, unknown>)[f] })) : undefined;
+      domain.push({ op, kind: 'network', id: netId, name, path: `/networks/${netId}`, summary: `network ${name} ${op}`, ...(fields ? { fields } : {}) });
+    }
+    const routing = (patch as { routing?: { protocols?: Record<string, { name?: string } | null> } & Record<string, unknown> }).routing;
+    if (routing) {
+      for (const [key, v] of Object.entries(routing.protocols ?? {})) {
+        const before = this.config.routing?.protocols?.[key];
+        const name = String(v?.name ?? before?.name ?? key);
+        const op = v === null ? 'removed' : before ? 'changed' : 'added';
+        domain.push({ op, kind: 'routing_protocol', id: key, name, path: `/routing/protocols/${key}`, summary: `routing protocol ${name} ${op}` });
+      }
+      if (Object.keys(routing).some((k) => k !== 'protocols')) domain.push({ op: 'changed', kind: 'routing', path: '/routing', summary: 'routing settings changed' });
+    }
     if ((patch as { access_matrix?: unknown }).access_matrix) {
       domain.push({ op: 'changed', kind: 'access_matrix', path: '/access_matrix', summary: 'access between networks changed' });
     }
     const references = this.referencesOf(patch);
     return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: this.requiresConfirm(patch), ...(references.length ? { references } : {}) };
+  }
+
+  /**
+   * The references of the configuration to a network the candidate deletes, as the gateway reports them
+   * (`unknown_reference`): access rules, faults and devices, the access matrix and the routing protocols.
+   */
+  danglingReferences(patch: unknown): ValidationError[] {
+    const nets = (patch as { networks?: Record<string, unknown> } | undefined)?.networks ?? {};
+    const deleted = Object.keys(nets).filter((id) => nets[id] === null);
+    if (!deleted.length) return [];
+    const cfg = applyMergePatch(this.config, patch);
+    const out: ValidationError[] = [];
+    const ref = (path: string, id: string | undefined) => {
+      const hit = deleted.find((d) => d === id || this.config.networks?.[d]?.name === id);
+      if (hit) out.push({ path, code: 'unknown_reference', message: `there is no network "${id}"` });
+    };
+    for (const [id, r] of Object.entries(cfg.access_rules ?? {})) {
+      ref(`/access_rules/${id}/source/network`, r.source.network);
+      ref(`/access_rules/${id}/destination/network`, r.destination?.network);
+    }
+    for (const [id, f] of Object.entries(cfg.faults ?? {})) ref(`/faults/${id}/source/network`, f.source?.network);
+    for (const [id, d] of Object.entries(cfg.devices ?? {})) ref(`/devices/${id}/network`, d.network);
+    (cfg.access_matrix?.entries ?? []).forEach((e, i) => {
+      ref(`/access_matrix/entries/${i}/from/network`, e.from.network);
+      ref(`/access_matrix/entries/${i}/to/network`, e.to.network);
+    });
+    for (const [id, p] of Object.entries(cfg.routing?.protocols ?? {})) {
+      ref(`/routing/protocols/${id}/link`, p.link);
+      (p.announce ?? []).forEach((a, i) => ref(`/routing/protocols/${id}/announce/${i}/network`, a.network));
+    }
+    return out;
   }
 
   /** The active overlays a candidate would orphan: the activations of a custom profile it deletes. */
@@ -919,15 +983,27 @@ export class MockGateway {
       });
   }
 
-  /** The network views, their configuration as the active revision has it (a client added by an apply is there). */
+  /**
+   * The network views, their configuration as the active revision has it (a client added by an apply is
+   * there). Once the configuration has networks, a network it does not have is gone and one it adds is
+   * listed.
+   */
   networkViews(): NetworkView[] {
-    return this.networks.map((n) => {
-      const cfg = this.config.networks?.[n.id];
+    const cfgs = this.config.networks;
+    const added: NetworkView[] = Object.entries(cfgs ?? {})
+      .filter(([id]) => !this.networks.some((n) => n.id === id))
+      .map(([id, config]) => ({ id, config, status: { state: 'ok', interface: `${config.type === 'lan' ? 'br' : 'wg'}-${config.name}`.slice(0, 15) } }));
+    return [...this.networks.filter((n) => !cfgs || n.id in cfgs), ...added].map((n) => {
+      const cfg = cfgs?.[n.id];
       if (!cfg) return n;
       const clients = cfg.type === 'wireguard' ? Object.keys((cfg as WireGuardNetwork).clients ?? {}) : [];
+      // a local network's ports are those of its configuration, present and up unless the status says otherwise
+      const ports = cfg.type === 'lan' ? cfg.interfaces.map((i) => n.status.ports?.find((p) => p.name === i.name) ?? { name: i.name ?? i.mac, present: true, link_up: true }) : undefined;
       const status = cfg.type === 'wireguard' && (cfg as WireGuardNetwork).kind === 'hub'
         ? { ...n.status, peers_total: clients.length, peers_online: clients.filter((id) => this.clientStatus[id]?.online).length }
-        : n.status;
+        : ports && n.status.ports
+          ? { ...n.status, ports }
+          : n.status;
       return { ...n, config: cfg, status };
     });
   }

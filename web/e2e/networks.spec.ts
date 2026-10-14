@@ -41,7 +41,7 @@ test('network cards and the detail of a test network: subnet, gateway, attachmen
   await expect(cards.nth(3)).toContainText('WireGuard hub · management');
   await expect(cards.nth(4)).toContainText('site-b');
   await expect(cards.nth(4)).toContainText('peer online');
-  await expect(page.getByTestId('management-card')).toContainText('eth1');
+  await expect(page.getByTestId('management-card')).toContainText('eth5');
   await expect(page.getByTestId('uplink-card')).toContainText('192.168.1.57/24 · eth0');
   await expect(page.getByTestId('uplink-card')).toContainText('via 192.168.1.1');
 

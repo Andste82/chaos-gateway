@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual } from './mergePatch';
+import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from './mergePatch';
 
 describe('merge patch (RFC 7396)', () => {
   it('is undefined between equal documents, key order and undefined members aside', () => {
@@ -45,5 +45,24 @@ describe('merge patch (RFC 7396)', () => {
     expect(bothChanged(base, theirs, mine, new Set(['source']))).toEqual([['action'], ['source']]);
     expect(bothChanged(base, { ...base, upload: { latency: '30ms' } }, { ...base, upload: { latency: '40ms', loss: '1%' } })).toEqual([['upload', 'latency']]);
     expect(bothChanged(base, base, mine)).toEqual([]);
+  });
+
+  it('reapplies my edit on theirs: their fields stay, a scope I changed is mine as a whole', () => {
+    const atomic = new Set(['source', 'target']);
+    const base = { name: 'a', action: 'drop', source: { group: 'g1' }, upload: { latency: '10ms' } };
+    const theirs = { name: 'a', action: 'drop', enabled: false, source: { device: 'd2' }, upload: { latency: '20ms' } };
+    const mine = { name: 'a', action: 'reject', source: { device: 'd1' }, upload: { latency: '10ms', loss: '1%' } };
+    // merged key by key the scope would be { group: deleted, device: d1 } on { device: d2 }; with a
+    // network of mine it would carry two keys
+    expect(reapplyMergePatch(base, theirs, mine, atomic)).toEqual({ name: 'a', action: 'reject', enabled: false, source: { device: 'd1' }, upload: { latency: '20ms', loss: '1%' } });
+    const mineNet = { ...base, source: { network: 'n1' } };
+    expect(applyMergePatch(theirs, createMergePatch(base, mineNet)).source).toEqual({ device: 'd2', network: 'n1' });
+    expect(reapplyMergePatch(base, theirs, mineNet, atomic).source).toEqual({ network: 'n1' });
+    // a scope inside a scope (remote_network client vs link) goes with it
+    const t2 = { ...base, target: { remote_network: { link: 'l1' } } };
+    expect(reapplyMergePatch({ ...base, target: { global: true } }, t2, { ...base, target: { remote_network: { client: 'c1' } } }, atomic).target).toEqual({ remote_network: { client: 'c1' } });
+    // a scope only they changed stays theirs; no edit of mine leaves theirs
+    expect(reapplyMergePatch(base, theirs, { ...base, action: 'reject' }, atomic).source).toEqual({ device: 'd2' });
+    expect(reapplyMergePatch(base, theirs, base, atomic)).toEqual(theirs);
   });
 });

@@ -237,6 +237,37 @@ describe('the configuration draft', () => {
     expect(d.overlaps(revision(43).configuration)).toEqual([]);
   });
 
+  it('a scope or a destination both changed: the dialog names it, and reapplying takes mine whole (P3-M13-07)', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    // mine: rule A from a group, to a prefix; fault f1 on a client's networks
+    d.setRule(A, { name: 'a', source: { group: 'g1' }, destination: { cidr: '10.9.0.0/24' }, action: 'drop' });
+    d.setFault('f1', { name: 'slow', source: { remote_network: { client: 'c1' } }, latency: '10ms' });
+    // theirs: rule A from a device, to the uplink; fault f1 on a link's networks
+    const theirs = revision(43, {
+      access_rules: {
+        [A]: { name: 'a', source: { device: 'd2' }, destination: { uplink: true }, action: 'drop' },
+        [B]: revision(42).configuration.access_rules![B]!,
+      },
+      faults: { f1: { name: 'slow', source: { remote_network: { link: 'l1' } }, latency: '10ms' } },
+    });
+    const names = { device: (id: string) => ({ d1: 'D1', d2: 'D2' })[id], group: (id: string) => ({ g1: 'G' })[id] };
+    expect(d.overlaps(theirs.configuration, names).map((c) => [c.kind, c.field, c.from, c.to])).toEqual([
+      ['rule', 'source', 'D2', 'Group G'],
+      ['rule', 'destination', 'uplink', '10.9.0.0/24'],
+      ['fault', 'source', 'Remote networks of link l1', 'Client networks of c1'],
+    ]);
+    d.rebase(theirs);
+    // exactly mine: no scope with two keys, and the candidate is valid
+    expect(d.effectiveRules[A]).toEqual({ name: 'a', source: { group: 'g1' }, destination: { cidr: '10.9.0.0/24' }, action: 'drop' });
+    expect(d.effectiveFaults.f1?.source).toEqual({ remote_network: { client: 'c1' } });
+    expect(d.invalid).toEqual({});
+    expect(d.patch()).toEqual({
+      access_rules: { [A]: { source: { device: null, group: 'g1' }, destination: { uplink: null, cidr: '10.9.0.0/24' } } },
+      faults: { f1: { source: { remote_network: { link: null, client: 'c1' } } } },
+    });
+  });
+
   it('names the rule order when both moved rules to different orders (P3-M13-07)', () => {
     const C = 'c0000000-0000-4000-8000-00000000000c';
     const rule = (name: string): AccessRule => ({ name, source: { global: true }, action: 'drop' });

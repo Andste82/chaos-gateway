@@ -370,6 +370,23 @@ test('the conflict dialog names a field both changed, their value → mine, and 
   expect(gw.config.access_rules?.[RULE_DNS]).toMatchObject({ name: 'no-dns-2', action: 'reject', protocol: 'tcp', ports: [53, 853] });
 });
 
+test("the conflict dialog names a rule's From both changed, their scope → mine, and reapplying sends exactly mine (P3-M13-07)", async ({ page }) => {
+  const gw = await open(page, withNetworks(withRules(MockGateway.sample())));
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  await page.getByTestId('rule-editor').getByLabel('From').selectOption({ label: 'Client networks · rA (10.50.0.0/24)' });
+  // a token changes the same rule's From to everything
+  gw.applyFromApi({ access_rules: { [RULE_DNS]: { source: { network: null, global: true } } } }, { type: 'token', id: 't1', name: 'ci-runner' }, [
+    { op: 'changed', kind: 'access_rule', id: RULE_DNS, name: 'no-dns', path: `/access_rules/${RULE_DNS}`, summary: 'access rule no-dns: source changed' },
+  ]);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  await expect(conflict.getByTestId('conflict-both').getByRole('listitem')).toHaveText(['Rule no-dns source: Everything → Client networks of rA']);
+  await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
+  // mine as a whole: their global goes, no scope with two keys
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')[1]!.body).toEqual({ access_rules: { [RULE_DNS]: { source: { global: null, remote_network: { client: CLIENT_RA } } } } });
+});
+
 test('the conflict dialog names the rule order when both moved rules, and reapplying takes mine (P3-M13-07)', async ({ page }) => {
   const gw = await open(page);
   // mine: test-web to the top

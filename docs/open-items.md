@@ -871,7 +871,7 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `faults.spec.ts` "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)",
   "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so" (the token's 50 minutes
   kept), `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen
-  (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"
+  (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"; `internal/api` `TestAnEditWithExpiresInKeepsItsTTLAndExpiresAfterTheRemainingTime`
 - Severity: low
 - Reason: needs-decision. Plan §2.1.1 keys an overlay by *(owner, kind, target, selector)*, and a UI action's owner is the
   admin user (§2.15). Writing an edited overlay of an API token or a scenario run from the browser therefore creates a
@@ -904,7 +904,13 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `src/stores/draft.test.ts` "names the fields both sides changed, their value and mine, before reapplying (P3-M13-07)",
   "names the rule order when both moved rules to different orders (P3-M13-07)",
   "names a client field both sides changed; …", `src/lib/mergePatch.test.ts` "names the members both edits changed to
-  different values, a scope as a whole"
+  different values, a scope as a whole". A scope or a destination both changed (a rule's From or destination, a
+  fault's scope, a client's or a link's remote network) is listed as one field and reapplied as the user's whole, so
+  reapplying does what the dialog says and never merges two choices into one scope (`reapplyMergePatch` in
+  `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a rule's From both changed, their scope →
+  mine, and reapplying sends exactly mine (P3-M13-07)", `src/stores/draft.test.ts` "a scope or a destination both
+  changed: the dialog names it, and reapplying takes mine whole (P3-M13-07)", `src/lib/mergePatch.test.ts` "reapplies
+  my edit on theirs: their fields stay, a scope I changed is mine as a whole"
 - Severity: low
 - Reason: needs-decision. Plan §2.17 says only "reload and reapply mine". Reapplying merges field by field: the user's
   change of an object (a merge patch against the old base) is applied to the other side's version, so their fields stay and
@@ -957,7 +963,9 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   Disable/Enable, Rotate keys (the next key generation for generated keys, the new public key for a client's own key)
   and Delete, each an edit of the configuration draft with Undo, through the preview drawer, the concurrent-change
   dialog and commit-confirm for a client of a management hub (`ClientsCard.vue`, `RotateKeysDialog.vue`,
-  `src/lib/networks.ts`); tests `networks.spec.ts` "client actions: …" (five tests), `src/lib/networks.test.ts` "the
+  `src/lib/networks.ts`; the actions and Undo start from the client as the draft's base revision has it, so a disable
+  and an enable leave no change also for a client with an explicit `enabled: true`); tests `networks.spec.ts` "client
+  actions: …" (six tests), `src/lib/networks.test.ts` "the
   client actions (P3-M14-01)", `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of
   their fields (P3-M14-01)". The network forms (part 2) and the routing forms (part 3) follow; the item closes with
   them.

@@ -50,9 +50,11 @@ interface Row {
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
   const server = clients.data.value ?? [];
+  const effective = draft.effectiveClients(props.network.id);
   for (const v of server) {
     const edit = draft.clients[v.id];
-    const c = edit?.client ?? v.config;
+    // the client as the draft has it (its base revision with the edits); the gateway's view for one the base does not know yet
+    const c = effective[v.id] ?? draft.baseClient(props.network.id, v.id) ?? v.config;
     out.push({
       id: v.id,
       name: c.name,
@@ -100,15 +102,16 @@ const configOpen = computed({
   },
 });
 
-// the client actions: each one an edit of the draft against the client as the gateway has it
+// the client actions: each one an edit of the draft against the client as its base revision has it
 function setEnabled(r: Row, enabled: boolean) {
-  draft.setClient(props.network.id, r.id, withEnabled(r.client, enabled));
+  draft.setClient(props.network.id, r.id, withEnabled(r.client, enabled, draft.baseClient(props.network.id, r.id)));
 }
 function remove(r: Row) {
   draft.setClient(props.network.id, r.id, null);
 }
 function undo(r: Row) {
-  if (r.view) draft.setClient(props.network.id, r.id, r.view.config);
+  const base = draft.baseClient(props.network.id, r.id);
+  if (base) draft.setClient(props.network.id, r.id, base);
 }
 const rotating = ref<Row>();
 const rotateOpen = computed({

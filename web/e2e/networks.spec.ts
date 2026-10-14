@@ -281,6 +281,24 @@ test('client actions: disable and rotate the keys of a client through the draft,
   expect(gw.requestsTo('POST', '/revisions')[1]!.body).toEqual({ networks: { [HUB]: { clients: { [CLIENT_RA]: { enabled: null } } } } });
 });
 
+test('client actions: a client the configuration has with enabled: true is no change after Disable and Enable, and Undo goes back to it (P3-M14-01)', async ({ page }) => {
+  const sample = withNetworks(MockGateway.sample());
+  (sample.config.networks![HUB] as WireGuardNetwork).clients![CLIENT_RA]!.enabled = true;
+  await open(page, `/networks/${HUB}`, sample);
+  const rA = clientRows(page).filter({ hasText: 'rA' });
+  await rA.getByRole('button', { name: 'Disable rA' }).click();
+  await expect(rA).toContainText('CHANGED');
+  await expect(bar(page)).toHaveText(/1 change in 1 WireGuard client/);
+  await rA.getByRole('button', { name: 'Enable rA' }).click();
+  // back at the configuration: nothing is left to apply
+  await expect(rA).not.toContainText('CHANGED');
+  await expect(bar(page)).toBeHidden();
+  await rA.getByRole('button', { name: 'Disable rA' }).click();
+  await rA.getByRole('button', { name: 'Undo the changes of rA' }).click();
+  await expect(bar(page)).toBeHidden();
+  await expect(rA.getByTestId('client-disabled')).toHaveCount(0);
+});
+
 test('client actions: a client changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change (P3-M14-01)', async ({ page }) => {
   const gw = await open(page, `/networks/${HUB}`);
   const rA = clientRows(page).filter({ hasText: 'rA' });

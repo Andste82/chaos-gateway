@@ -233,6 +233,44 @@ func TestALeaseIsRenewedOverTheAPIAndALapsedOneIsRemoved(t *testing.T) {
 	t.Fatal("the lease never ran out")
 }
 
+func TestAnEditWithExpiresInKeepsItsTTLAndExpiresAfterTheRemainingTime(t *testing.T) {
+	g := ready(t)
+	before := time.Now()
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"50ms"},"ttl":"30m","expires_in":"600s"}`)
+	after := time.Now()
+	// the TTL as written, expires_in is not kept, and the expiry is the remaining time from now (P3-M13-06)
+	if ov["ttl"] != "30m" {
+		t.Errorf("ttl %v", ov["ttl"])
+	}
+	if _, ok := ov["expires_in"]; ok {
+		t.Errorf("expires_in is no member of the answer: %v", ov)
+	}
+	at, err := time.Parse(time.RFC3339Nano, fmt.Sprint(ov["expires_at"]))
+	if err != nil {
+		t.Fatalf("expires_at %v: %v", ov["expires_at"], err)
+	}
+	if lo, hi := before.Add(600*time.Second-time.Second), after.Add(600*time.Second+time.Second); at.Before(lo) || at.After(hi) {
+		t.Errorf("expires_at %s, want between %s and %s", at, lo, hi)
+	}
+	// read back: the same TTL and expiry (the expiry runs on the monotonic clock and is shown in
+	// wall time, so it may differ by the clocks' drift)
+	got := g.do("GET", "/overlays/"+ov["id"].(string), nil, nil, nil).json(t)
+	again, err := time.Parse(time.RFC3339Nano, fmt.Sprint(got["expires_at"]))
+	if err != nil || got["ttl"] != "30m" || again.Sub(at).Abs() > time.Second {
+		t.Errorf("read back %v, created with expires_at %v", got, ov["expires_at"])
+	}
+	// expires_in longer than the ttl, or without one, is refused at its pointer
+	for body, path := range map[string]string{
+		`{"target":{"network":"IoT"},"fault":{"latency":"50ms"},"ttl":"5m","expires_in":"600s"}`: "/expires_in",
+		`{"target":{"network":"IoT"},"fault":{"latency":"50ms"},"expires_in":"600s"}`:            "/ttl",
+	} {
+		r := g.createOverlay(body)
+		if r.Status != 422 || r.code(t) != "validation_failed" || r.json(t)["errors"].([]any)[0].(map[string]any)["path"] != path {
+			t.Errorf("%s: %d %s", body, r.Status, r.Body)
+		}
+	}
+}
+
 func TestDeletingAnOverlayAnswers204AfterTheVerify(t *testing.T) {
 	g := ready(t)
 	ov := g.mustCreateOverlay(iotFault)

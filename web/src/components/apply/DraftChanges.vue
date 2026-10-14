@@ -19,7 +19,10 @@ const draft = useDraftStore();
 const toasts = useToastStore();
 const state = useGatewayState();
 const connection = useConnectionStore();
-const { names } = useNames();
+const { names: known } = useNames();
+// a WireGuard client in a scope ("Client networks of rA") by its name in the configuration, also
+// when the device list does not have it (yet)
+const names = computed(() => ({ ...known.value, device: (id: string) => known.value.device?.(id) ?? draft.clientName(id) }));
 
 const invalidCount = computed(() => Object.keys(draft.invalid).length);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);

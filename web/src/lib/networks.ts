@@ -181,10 +181,15 @@ export function clientFromForm(f: ClientForm): WireGuardClient {
 
 // ---- client actions (plan §2.2.1: enable/disable, rotate keys, delete; P3-M14-01) -----------------
 
-/** The client enabled or disabled; enabled is the default, so it carries no `enabled` then. */
-export function withEnabled(c: WireGuardClient, enabled: boolean): WireGuardClient {
+/**
+ * The client enabled or disabled; enabled is the default, so it carries no `enabled` then, unless
+ * `base` (the client as the configuration has it) says `enabled: true`, which an enable keeps, so
+ * that a disable and an enable leave no change.
+ */
+export function withEnabled(c: WireGuardClient, enabled: boolean, base?: WireGuardClient): WireGuardClient {
   const { enabled: _was, ...rest } = c;
-  return enabled ? rest : { ...rest, enabled: false };
+  if (!enabled) return { ...rest, enabled: false };
+  return base?.enabled === true ? { ...rest, enabled: true } : rest;
 }
 
 /** Whether the gateway generates the client's keys (and so rotates them itself). */

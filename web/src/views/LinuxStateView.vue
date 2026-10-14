@@ -9,6 +9,7 @@ import { computed, ref, useId } from 'vue';
 import { getLinuxState } from '../api/generated/hooks/system/system';
 import PageHeader from '../components/layout/PageHeader.vue';
 import LoadError from '../components/ui/LoadError.vue';
+import StaleNotice from '../components/linux/StaleNotice.vue';
 import SegmentedControl from '../components/ui/SegmentedControl.vue';
 import { formatClock } from '../lib/format';
 import { groupExcerpt, nftExcerpt, sectionLabels, sectionsOf, type SectionName } from '../lib/linuxView';
@@ -57,11 +58,24 @@ const shown = computed(() =>
     </div>
   </div>
 
+  <StaleNotice v-if="linux.error.value && linux.data.value" :error="linux.error.value" :read-at="linux.dataUpdatedAt.value" />
   <p v-if="linux.isLoading.value" class="text-text-2">Reading the kernel state…</p>
   <LoadError v-else-if="linux.error.value && !linux.data.value" :error="linux.error.value" what="The kernel state is not read" :retry="linux.refetch" />
-  <section v-for="s in shown" v-else :key="s.name" class="card flex flex-col gap-2" :aria-labelledby="`${uid}-${s.name}`" :data-testid="`linux-${s.name}`">
+  <section
+    v-for="s in shown"
+    v-else
+    :key="s.name"
+    class="card flex flex-col gap-2"
+    :aria-labelledby="`${uid}-${s.name}`"
+    :data-testid="`linux-${s.name}`"
+  >
     <h2 :id="`${uid}-${s.name}`" class="card-title">{{ sectionLabels[s.name] }}</h2>
-    <pre v-if="s.text.trim()" class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre text-[#d9dee5]">{{ s.text }}</pre>
+    <pre
+      v-if="s.text.trim()"
+      class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre text-[#d9dee5]"
+      :class="{ stale: linux.error.value }"
+      >{{ s.text }}</pre
+    >
     <p v-else class="m-0 text-[13px] text-text-2">{{ filter.trim() ? 'No line names it.' : 'Nothing of Chaos Gateway’s.' }}</p>
   </section>
 </template>

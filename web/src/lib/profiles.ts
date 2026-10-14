@@ -3,25 +3,7 @@
 import type { ProfileParts } from '../api/generated/model';
 import { faultChips } from './faults';
 
-const titles: Record<string, string> = {
-  normal: 'Normal',
-  lte: 'LTE',
-  'bad-lte': 'Bad LTE',
-  satellite: 'Satellite',
-  'congested-wifi': 'Congested WiFi',
-  offline: 'Offline',
-  intermittent: 'Intermittent',
-  'dns-broken': 'DNS broken',
-  'tls-broken': 'TLS broken',
-};
-
-/** The names of the built-in profiles: reserved, a custom profile cannot have one (case-insensitive). */
-export const builtinProfileNames = Object.keys(titles);
-
-/** "bad-lte" → "Bad LTE"; a custom profile keeps its name. */
-export function profileTitle(name: string): string {
-  return titles[name] ?? name;
-}
+export { builtinProfileNames, profileTitle } from './profileNames';
 
 /** The parameters of a profile as chips, part by part. */
 export function profileChips(parts: ProfileParts): string[] {

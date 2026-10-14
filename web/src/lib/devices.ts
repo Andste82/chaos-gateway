@@ -1,6 +1,8 @@
 // How the device list and the device detail present a device (plan §2.3, §2.17).
-import type { DeviceView } from '../api/generated/model';
+import type { DeviceView, FaultBody, LanNetwork, Network, Overlay, WireGuardNetwork } from '../api/generated/model';
 import type { DotTone } from '../components/ui/StatusDot.vue';
+import { faultChips, overlayChips } from './faults';
+import { profileTitle } from './profileNames';
 
 export type DeviceFilter = 'all' | 'online' | 'faulted' | 'unadopted';
 
@@ -8,14 +10,74 @@ export function isAdopted(d: DeviceView): boolean {
   return d.origin !== 'discovered';
 }
 
-/** The faults that act on the device: the winners per family, without the ones that impair nothing. */
-export function deviceFaults(d: DeviceView): string[] {
-  return (d.effective ?? [])
-    .filter((f) => !(f.profile?.name === 'normal'))
-    .map((f) => {
-      const what = f.profile?.name ? `profile ${f.profile.name}` : (f.summary ?? f.name ?? f.family);
-      return f.summary && f.profile?.name ? `${what}: ${f.summary}` : what;
-    });
+/** Where the chips of a winning fault come from: the overlay or the configured fault it names. */
+export interface FaultBodies {
+  overlay?: (id: string) => Overlay | undefined;
+  config?: (id: string) => FaultBody | undefined;
+}
+
+const chipFamilies = new Set(['impairment', 'mtu', 'tunnel']);
+
+/**
+ * The faults that act on the device as fault chips: the winners per family (DeviceView.effective),
+ * without the ones that impair nothing, in the same compact form as the overview and the faults
+ * screen ("↑↓ 200 ms ±50", "5 % loss", "profile LTE"). A winner whose overlay or configured fault is
+ * not at hand falls back to the gateway's summary.
+ */
+export function deviceFaults(d: DeviceView, bodies: FaultBodies = {}): string[] {
+  const out: string[] = [];
+  for (const f of d.effective ?? []) {
+    if (f.profile?.name === 'normal') continue;
+    if (f.profile?.name) {
+      out.push(`profile ${profileTitle(f.profile.name)}`);
+      continue;
+    }
+    if (f.layer === 'overlay') {
+      const o = bodies.overlay?.(f.id);
+      if (o) {
+        out.push(...overlayChips(o));
+        continue;
+      }
+    } else if (chipFamilies.has(f.family)) {
+      const body = bodies.config?.(f.id);
+      if (body) {
+        out.push(...faultChips(body));
+        continue;
+      }
+    }
+    out.push(f.summary ?? f.name ?? f.family);
+  }
+  return [...new Set(out)];
+}
+
+/** The router and the DNS servers a device of a network is given, as the device detail shows them. */
+export interface DeviceNetworkInfo {
+  /** The default router; undefined where there is none to show (a WireGuard tunnel). */
+  gateway?: string;
+  /** The DNS servers; empty when none is handed out. */
+  dns: string[];
+  /** Whether the DNS server is the gateway's own address: its DNS proxy (DNS faults apply). */
+  proxy: boolean;
+}
+
+/**
+ * What a device in a network is told (plan §2.7): in a local network the DHCP options router and DNS
+ * servers, each defaulting to the network's gateway address; for a WireGuard client the DNS setting
+ * of its exported configuration (the hub address by default, custom servers, or none).
+ */
+export function deviceNetworkInfo(network: Network | undefined, deviceId: string): DeviceNetworkInfo | undefined {
+  if (!network?.address) return undefined;
+  const own = network.address.split('/')[0]!;
+  if (network.type === 'wireguard') {
+    const client = (network as WireGuardNetwork).clients?.[deviceId];
+    if (!client) return undefined;
+    const mode = client.dns?.mode ?? 'gateway';
+    const dns = mode === 'gateway' ? [own] : mode === 'custom' ? (client.dns?.servers ?? []) : [];
+    return { dns, proxy: dns.includes(own) };
+  }
+  const opts = (network as LanNetwork).dhcp?.options;
+  const dns = opts?.dns_servers?.length ? opts.dns_servers : [own];
+  return { gateway: opts?.router ?? own, dns, proxy: dns.includes(own) };
 }
 
 export function matchesFilter(d: DeviceView, f: DeviceFilter): boolean {

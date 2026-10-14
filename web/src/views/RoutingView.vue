@@ -27,6 +27,7 @@ import { jsonEqual } from '../lib/mergePatch';
 import { prefixesText } from '../lib/routingForm';
 import { useApiScreen } from '../stores/apiPanel';
 import { useDraftStore } from '../stores/draft';
+import { refocusAfterSwap } from '../lib/focus';
 
 const status = useQuery({ queryKey: getGetRoutingStatusQueryKey(), queryFn: ({ signal }) => getRoutingStatus({ signal }), refetchInterval: 5_000 });
 const config = useQuery({ queryKey: ['routing', 'config'], queryFn: ({ signal }) => getRouting(undefined, { signal }) });
@@ -206,7 +207,7 @@ const settingsRefused = computed(() => Object.values(draft.serverErrors['routing
         </dd>
       </dl>
       <p v-if="settingsChanged" class="m-0 flex items-center gap-2 text-[13px] text-text-2" data-testid="routing-settings-changed">
-        <span class="rounded border border-accent-strong px-1.5 text-[11px] text-accent-text">CHANGED</span> not applied yet
+        <span class="rounded border border-accent-strong px-1.5 text-xs text-accent-text">CHANGED</span> not applied yet
         <button type="button" class="btn btn-sm" aria-label="Undo the changes of the routing settings" @click="undoSettings">Undo</button>
       </p>
       <p v-if="settingsRefused.length" class="m-0 text-[13px] text-block-text" role="alert">The gateway refused the settings: {{ settingsRefused.join(' ') }}</p>
@@ -218,27 +219,59 @@ const settingsRefused = computed(() => Object.values(draft.serverErrors['routing
         :class="r.mark === 'DELETED' ? 'opacity-60' : ''"
         data-testid="protocol"
       >
-        <div class="flex flex-wrap items-center gap-3">
-          <span class="text-[15px] font-semibold" :class="r.mark === 'DELETED' ? 'line-through' : ''">{{ r.p.name }}</span>
-          <span class="rounded border border-border-strong px-1.5 text-[11px] text-text-2 uppercase">{{ r.p.type }}</span>
+        <div class="flex flex-wrap items-center gap-3" data-focus-group>
+          <span class="text-base font-semibold" :class="r.mark === 'DELETED' ? 'line-through' : ''">{{ r.p.name }}</span>
+          <span class="rounded border border-border-strong px-1.5 text-xs text-text-2 uppercase">{{ r.p.type }}</span>
           <span class="text-[13px] text-text-2">on link {{ linkName(r.p.link) }}</span>
           <span v-if="r.p.enabled === false" class="text-xs text-text-3">disabled</span>
-          <span v-if="r.p.custom_snippet" class="rounded border border-fault-border px-1.5 text-[11px] text-fault-text">unmanaged snippet</span>
+          <span v-if="r.p.custom_snippet" class="rounded border border-fault-border px-1.5 text-xs text-fault-text">unmanaged snippet</span>
           <span
             v-if="r.mark"
-            class="rounded border px-1.5 text-[11px]"
+            class="rounded border px-1.5 text-xs"
             :class="r.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
             data-testid="protocol-mark"
             >{{ r.mark }}</span
           >
           <span class="flex-1" />
           <template v-if="r.mark === 'DELETED'">
-            <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${r.p.name}`" @click="undoProtocol(r)">Undo</button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :aria-label="`Undo the deletion of ${r.p.name}`"
+              data-focus-swap
+              @click="
+                refocusAfterSwap($event);
+                undoProtocol(r);
+              "
+            >
+              Undo
+            </button>
           </template>
           <template v-else>
             <button type="button" class="btn btn-sm" :aria-label="`${r.refused.length ? 'Fix' : 'Edit'} ${r.p.name}`" @click="editProtocol(r.id)">{{ r.refused.length ? 'Fix' : 'Edit' }}</button>
-            <button type="button" class="btn btn-sm" :aria-label="`Delete ${r.p.name}`" @click="draft.setProtocol(r.id, null)">Delete</button>
-            <button v-if="r.mark" type="button" class="btn btn-sm" :aria-label="`Undo the changes of ${r.p.name}`" @click="undoProtocol(r)">Undo</button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :aria-label="`Delete ${r.p.name}`"
+              @click="
+                refocusAfterSwap($event);
+                draft.setProtocol(r.id, null);
+              "
+            >
+              Delete
+            </button>
+            <button
+              v-if="r.mark"
+              type="button"
+              class="btn btn-sm"
+              :aria-label="`Undo the changes of ${r.p.name}`"
+              @click="
+                refocusAfterSwap($event);
+                undoProtocol(r);
+              "
+            >
+              Undo
+            </button>
           </template>
         </div>
         <div class="mt-2 grid grid-cols-1 gap-2 text-[13px] md:grid-cols-3">
@@ -265,17 +298,18 @@ const settingsRefused = computed(() => Object.values(draft.serverErrors['routing
 
   <SectionCard title="Sessions">
     <LoadError v-if="firstError(status)" :error="firstError(status)" what="The sessions are not loaded" :retry="status.refetch" />
+    <p v-else-if="status.isLoading.value" class="m-0 text-sm text-text-2" role="status" data-testid="sessions-loading">Loading the sessions…</p>
     <EmptyState
-      v-else-if="!status.isLoading.value && protocols.length === 0"
+      v-else-if="protocols.length === 0"
       text="No routing session. Dynamic routing runs on WireGuard links; add a protocol in the configuration above."
     />
     <div v-else class="flex flex-col gap-3" data-testid="sessions">
       <article v-for="p in protocols" :key="p.id" class="rounded-lg border border-[#2a323d] bg-surface-2 px-4 py-3" data-testid="session">
         <div class="flex flex-wrap items-center gap-3">
-          <span class="text-[15px] font-semibold">{{ p.name }}</span>
-          <span class="rounded border border-border-strong px-1.5 text-[11px] text-text-2 uppercase">{{ p.type }}</span>
+          <span class="text-base font-semibold">{{ p.name }}</span>
+          <span class="rounded border border-border-strong px-1.5 text-xs text-text-2 uppercase">{{ p.type }}</span>
           <span v-if="configOf(p)" class="text-[13px] text-text-2">on link {{ configOf(p)!.link }}</span>
-          <span v-if="configOf(p)?.snippet" class="rounded border border-fault-border px-1.5 text-[11px] text-fault-text" title="Raw BIRD configuration added by hand">unmanaged snippet</span>
+          <span v-if="configOf(p)?.snippet" class="rounded border border-fault-border px-1.5 text-xs text-fault-text" title="Raw BIRD configuration added by hand">unmanaged snippet</span>
           <span class="flex-1" />
           <StatusDot :tone="tone(p)" :label="`${p.state}${p.info ? ` · ${p.info}` : ''}`" />
           <span v-if="p.since" class="text-xs text-text-3">since {{ formatAgo(p.since, now) }}</span>

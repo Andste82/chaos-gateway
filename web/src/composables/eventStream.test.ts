@@ -78,6 +78,17 @@ describe('the event stream', () => {
     expect(keys(invalidate)).not.toContainEqual(['networks']);
   });
 
+  it('reads the groups again when a revision changes the configuration, so their names stay current', () => {
+    const { es, invalidate } = setup();
+    for (const t of ['applied', 'revision_applied', 'revision_confirmed', 'revision_rolled_back']) {
+      es.send(t, {});
+      expect(keys(invalidate)).toContainEqual(['groups']);
+      invalidate.mockClear();
+    }
+    es.send('device_online', {});
+    expect(keys(invalidate)).not.toContainEqual(['groups']);
+  });
+
   it('reads the kernel state again only for events that change what the gateway applied', () => {
     const { es, invalidate } = setup();
     for (const t of ['counter_epoch', 'confirm_pending', 'network_degraded', 'safe_mode']) {

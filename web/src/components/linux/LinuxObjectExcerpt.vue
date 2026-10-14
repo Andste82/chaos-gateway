@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/vue-query';
 import { computed } from 'vue';
 import { getLinuxObject } from '../../api/generated/hooks/system/system';
 import LoadError from '../ui/LoadError.vue';
+import StaleNotice from './StaleNotice.vue';
 
 const props = defineProps<{ kind: 'device' | 'rule' | 'fault'; id: string }>();
 
@@ -33,10 +34,12 @@ const parts = computed(() => {
     <p v-if="linux.isLoading.value" class="m-0 text-[13px] text-text-2">Reading the kernel state…</p>
     <LoadError v-else-if="linux.error.value && !linux.data.value" :error="linux.error.value" what="The kernel state is not read" :retry="linux.refetch" />
     <template v-else>
+      <StaleNotice v-if="linux.error.value" :error="linux.error.value" :read-at="linux.dataUpdatedAt.value" />
       <template v-for="p in parts" :key="p.name">
         <div class="text-xs text-text-3">{{ p.name }}</div>
         <pre
           class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre text-[#d9dee5]"
+          :class="{ stale: linux.error.value }"
           :data-testid="`linux-object-${p.name}`"
           >{{ p.text }}</pre
         >

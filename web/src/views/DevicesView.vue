@@ -1,6 +1,9 @@
 <script setup lang="ts">
 // Devices (plan §2.17): name, IP, MAC, network, traffic, faults, status; search; the filter chips
-// All / Online / With faults / Not adopted; adopt a discovered device; a row opens the device.
+// All / Online / With faults / Not adopted; adopt a discovered device; a row opens the device. The
+// Faults column shows the winning faults the gateway reports per device (DeviceView.effective) as
+// the same compact chips as the overview; an adoption that is in the draft but not applied yet is
+// marked, and Undo takes it back.
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { DeviceView } from '../api/generated/model';
@@ -12,17 +15,26 @@ import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SegmentedControl from '../components/ui/SegmentedControl.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { firstError, useGatewayState, useNames } from '../composables/gateway';
-import { compareDevices, deviceFaults, deviceStatus, isAdopted, matchesFilter, matchesSearch, type DeviceFilter } from '../lib/devices';
+import { firstError, useConfigFaults, useGatewayState, useNames, useOverlays } from '../composables/gateway';
+import { compareDevices, deviceFaults, deviceStatus, isAdopted, matchesFilter, matchesSearch, type DeviceFilter, type FaultBodies } from '../lib/devices';
+import { refocusAfterSwap } from '../lib/focus';
 import { formatByteRate } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
+import { useDraftStore } from '../stores/draft';
 
 const { names, devices } = useNames();
+const overlays = useOverlays();
+const configFaults = useConfigFaults();
 const state = useGatewayState();
 const connection = useConnectionStore();
+const draft = useDraftStore();
 const router = useRouter();
-useApiScreen('the devices', () => [{ method: 'GET', path: '/devices?limit=500', note: 'every device, page by page (next_cursor)' }]);
+useApiScreen('the devices', () => [
+  { method: 'GET', path: '/devices?limit=500', note: 'every device with its winning faults (effective), page by page (next_cursor)' },
+  { method: 'GET', path: '/overlays', note: 'the parameters of the winning overlays, for the fault chips' },
+  { method: 'GET', path: '/faults', note: 'the parameters of the winning configured faults' },
+]);
 
 const search = ref('');
 const filter = ref<DeviceFilter>('all');
@@ -38,16 +50,31 @@ const filters: { value: DeviceFilter; label: string }[] = [
 const chips = computed(() => filters.map((f) => ({ ...f, count: all.value.filter((d) => matchesFilter(d, f.value)).length })));
 const rows = computed(() => all.value.filter((d) => matchesFilter(d, filter.value) && matchesSearch(d, search.value)));
 
+const bodies = computed<FaultBodies>(() => {
+  const ov = new Map((overlays.data.value ?? []).map((o) => [o.id, o]));
+  const cf = new Map((configFaults.data.value ?? []).map((f) => [f.id, f.config]));
+  return { overlay: (id) => ov.get(id), config: (id) => cf.get(id) };
+});
+
+/** The name a discovered device is adopted under in the draft, while that is not applied yet. */
+function adoptedAs(d: DeviceView): string | undefined {
+  return isAdopted(d) ? undefined : (draft.devices[d.id]?.name ?? undefined);
+}
+
 const adopting = ref<DeviceView>();
 const adoptOpen = ref(false);
 function adopt(d: DeviceView) {
   adopting.value = d;
   adoptOpen.value = true;
 }
+function undoAdoption(e: Event, d: DeviceView) {
+  refocusAfterSwap(e);
+  draft.setDevice(d.id, null);
+}
 const blocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
 
 const networkName = (id: string | undefined) => (id ? (names.value.network?.(id) ?? '—') : '—');
-const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170px_minmax(140px,1.2fr)_110px]';
+const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170px_minmax(140px,1.2fr)_90px_100px]';
 </script>
 
 <template>
@@ -55,7 +82,11 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
   <p class="-mt-3 mb-0 text-[13px] text-text-3">Identified by MAC address or IP · discovered from DHCP, the neighbor table and conntrack</p>
 
   <div class="flex flex-wrap items-center gap-3">
-    <div class="flex h-[38px] w-[360px] max-w-full items-center gap-2 rounded-md border border-border-strong bg-surface px-3">
+    <!-- the input has no outline of its own: the box around it shows the focus ring (plan §2.17) -->
+    <div
+      class="flex h-[38px] w-[360px] max-w-full items-center gap-2 rounded-md border border-border-strong bg-surface px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent"
+      data-testid="device-search"
+    >
       <AppIcon name="search" class="text-text-2" />
       <input
         v-model="search"
@@ -69,13 +100,13 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
   </div>
 
   <section aria-label="Device list" class="card min-h-0 flex-1 overflow-hidden p-0" data-testid="device-list">
-    <p v-if="devices.isLoading.value" class="m-0 p-4 text-sm text-text-2">Loading devices…</p>
+    <p v-if="devices.isLoading.value" class="m-0 p-4 text-sm text-text-2" role="status">Loading devices…</p>
     <div v-else-if="devicesError" class="p-4">
       <LoadError :error="devicesError" what="The devices are not loaded" :retry="devices.refetch" />
     </div>
     <div v-else-if="all.length === 0" class="p-4">
-      <EmptyState text="No devices yet. A device appears here as soon as it gets a DHCP lease or sends traffic through the gateway.">
-        <RouterLink to="/" class="btn">Back to the overview</RouterLink>
+      <EmptyState text="No devices yet: a device appears as soon as it gets a DHCP lease or sends traffic through a test network.">
+        <RouterLink to="/networks" class="btn btn-primary">Check the test networks</RouterLink>
       </EmptyState>
     </div>
     <div v-else role="table" aria-label="Devices" :aria-rowcount="rows.length + 1" class="flex h-full flex-col">
@@ -87,6 +118,7 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
         <span role="columnheader">Traffic ↑ / ↓</span>
         <span role="columnheader">Faults</span>
         <span role="columnheader">Status</span>
+        <span role="columnheader"><span class="sr-only">Actions</span></span>
       </div>
       <div class="flex-1 overflow-auto">
         <div
@@ -98,13 +130,19 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
           data-testid="device-row"
           @click="router.push(`/devices/${d.id}`)"
         >
-          <span role="cell" class="min-w-0 truncate">
+          <span role="cell" class="flex min-w-0 flex-col items-start gap-0.5">
             <RouterLink
               :to="`/devices/${d.id}`"
-              class="no-underline"
+              class="max-w-full truncate no-underline"
               :class="isAdopted(d) ? 'font-medium text-text' : 'text-text-2 italic'"
               @click.stop
               >{{ d.name }}</RouterLink
+            >
+            <span
+              v-if="adoptedAs(d)"
+              class="rounded border border-accent-strong px-1.5 text-xs text-accent-text"
+              data-testid="device-adopted-mark"
+              >ADOPTED as {{ adoptedAs(d) }} · not applied yet</span
             >
           </span>
           <span role="cell" class="mono truncate text-[13px]">{{ d.observed.addresses?.join(', ') || '—' }}</span>
@@ -118,20 +156,35 @@ const cols = 'grid-cols-[minmax(150px,1.3fr)_130px_160px_minmax(80px,0.7fr)_170p
           <span role="cell" class="mono text-[13px] text-text-2"
             >{{ formatByteRate(d.observed.upload_bps) }} / {{ formatByteRate(d.observed.download_bps) }}</span
           >
-          <span role="cell" class="flex min-w-0 flex-wrap items-center gap-1.5">
-            <FaultChip v-for="f in deviceFaults(d)" :key="f" :text="f" />
-            <button
-              v-if="!isAdopted(d)"
-              type="button"
-              class="btn btn-sm bg-surface-2"
-              :disabled="blocked"
-              :aria-label="`Adopt ${d.name}`"
-              @click.stop="adopt(d)"
-            >
-              Adopt
-            </button>
+          <span role="cell" class="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="device-faults">
+            <FaultChip v-for="f in deviceFaults(d, bodies)" :key="f" :text="f" />
           </span>
           <span role="cell"><StatusDot v-bind="deviceStatus(d)" /></span>
+          <span role="cell" class="flex justify-end" data-focus-group>
+            <template v-if="!isAdopted(d)">
+              <button
+                v-if="adoptedAs(d)"
+                type="button"
+                class="btn btn-sm"
+                :aria-label="`Undo the adoption of ${d.name}`"
+                data-focus-swap
+                @click.stop="undoAdoption($event, d)"
+              >
+                Undo
+              </button>
+              <button
+                v-else
+                type="button"
+                class="btn btn-sm bg-surface-2"
+                :disabled="blocked"
+                :aria-label="`Adopt ${d.name}`"
+                data-focus-swap
+                @click.stop="adopt(d)"
+              >
+                Adopt
+              </button>
+            </template>
+          </span>
         </div>
         <p v-if="rows.length === 0" class="m-0 px-4 py-12 text-center text-sm text-text-2" data-testid="no-match">
           No devices match<template v-if="search"> “{{ search }}”</template><template v-if="filter !== 'all'"> in this filter</template>.

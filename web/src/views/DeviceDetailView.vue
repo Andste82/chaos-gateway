@@ -20,10 +20,13 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { fetchAll, firstError, useGatewayState, useNames, type ActiveFault } from '../composables/gateway';
+import { fetchAll, firstError, useConfigFaults, useGatewayState, useNames, type ActiveFault } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
-import { deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
-import { describeMatch, describeScope, overlayChips } from '../lib/faults';
+import { deviceNetworkInfo, deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
+import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
+import { focusAfterUpdate } from '../lib/focus';
+import { profileTitle } from '../lib/profileNames';
+import { useDraftStore } from '../stores/draft';
 import { formatAgo, formatByteRate, formatClock, formatRemaining, subnetOf } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -40,8 +43,10 @@ const overlays = useQuery({
   queryFn: ({ signal }) => fetchAll<Overlay>((cursor) => listOverlays({ device: props.id, limit: 500, cursor }, { signal }), signal),
   refetchInterval: 5_000,
 });
+const configFaults = useConfigFaults();
 const { names, networks } = useNames();
 const state = useGatewayState();
+const draft = useDraftStore();
 const connection = useConnectionStore();
 const now = useNow();
 
@@ -49,6 +54,7 @@ const d = computed(() => device.data.value);
 const notFound = computed(() => device.error.value instanceof ApiError && device.error.value.status === 404);
 const network = computed(() => networks.data.value?.find((n) => n.id === d.value?.network));
 const networkConfig = computed(() => network.value?.config as { name?: string; address?: string } | undefined);
+const netInfo = computed(() => (d.value ? deviceNetworkInfo(network.value?.config, d.value.id) : undefined));
 const groupNames = computed(() => (d.value?.groups ?? []).map((g) => names.value.group?.(g) ?? g));
 
 const identity = computed(() => {
@@ -84,10 +90,22 @@ const faults = computed<ActiveFault[]>(() => {
       widerScope: own ? undefined : describeScope(o.target, n),
     });
   }
-  // configured faults that win for this device (the overlays are listed above already)
+  // configured faults that win for this device (the overlays are listed above already), with the
+  // compact chips of their parameters when the configured fault is at hand
+  const configured = new Map((configFaults.data.value ?? []).map((f) => [f.id, f]));
   for (const f of d.value?.effective ?? []) {
     if (f.layer !== 'config') continue;
-    out.push({ id: f.id, layer: 'config', kind: 'fault', target: f.name ?? '', destination: f.name ? `fault ${f.name}` : '', chips: [f.summary ?? f.family] });
+    const cf = configured.get(f.id);
+    const chips = f.profile?.name ? [`profile ${profileTitle(f.profile.name)}`] : cf ? faultChips(cf.config) : [f.summary ?? f.family];
+    out.push({
+      id: f.id,
+      layer: 'config',
+      kind: 'fault',
+      target: cf?.config.source ? describeScope(cf.config.source, n) : (f.name ?? ''),
+      destination: [f.name ? `fault ${f.name}` : '', cf ? describeMatch(cf.config, n) : ''].filter(Boolean).join(' '),
+      chips,
+      packets: cf?.counters?.packets,
+    });
   }
   return out;
 });
@@ -96,6 +114,12 @@ const lease = computed(() => d.value?.observed.lease);
 const leaseLeft = computed(() => (lease.value ? new Date(lease.value.expires_at).getTime() - now.value.getTime() : 0));
 
 const adoptOpen = ref(false);
+/** The name the device is adopted under in the draft, while that is not applied yet. */
+const adoptedAs = computed(() => (d.value && !isAdopted(d.value) ? (draft.devices[d.value.id]?.name ?? undefined) : undefined));
+function undoAdoption() {
+  if (d.value) draft.setDevice(d.value.id, null);
+  focusAfterUpdate('[data-focus-key="adopt"]');
+}
 const faultOpen = ref(false);
 const editing = ref<Overlay>();
 function addFault() {
@@ -133,11 +157,13 @@ useApiScreen('this device', () => [
       <template #actions>
         <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add fault</button>
         <RouterLink class="btn" :to="{ path: '/profiles', query: { scope: `device:${d.id}` } }">Apply profile</RouterLink>
+        <button v-if="adoptedAs" type="button" class="btn" :aria-label="`Undo the adoption of ${d.name}`" @click="undoAdoption">Undo adoption</button>
         <button
-          v-if="!isAdopted(d)"
+          v-else-if="!isAdopted(d)"
           type="button"
           class="btn"
           :disabled="changeBlocked"
+          data-focus-key="adopt"
           @click="adoptOpen = true"
         >
           Adopt
@@ -147,6 +173,9 @@ useApiScreen('this device', () => [
     <div class="-mt-2 flex flex-wrap items-center gap-3 text-sm" data-testid="device-identity">
       <StatusDot v-bind="deviceStatus(d)" />
       <span class="mono text-text-2">{{ identity }}</span>
+      <span v-if="adoptedAs" class="rounded border border-accent-strong px-1.5 text-xs text-accent-text" data-testid="device-adopted-mark"
+        >ADOPTED as {{ adoptedAs }} · not applied yet</span
+      >
     </div>
 
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -186,10 +215,12 @@ useApiScreen('this device', () => [
         <SectionCard title="Network">
           <dl class="m-0 grid grid-cols-[100px_1fr] gap-x-4 gap-y-2 text-sm" data-testid="device-lease">
             <dt class="text-text-2">Network</dt>
-            <dd class="m-0">
+            <dd class="m-0" data-testid="device-network">
               <RouterLink v-if="network && networkConfig?.name" :to="`/networks/${network.id}`">{{ networkConfig.name }}</RouterLink>
               <template v-else>—</template>
-              <span v-if="networkConfig?.address" class="mono text-text-3">{{ subnetOf(networkConfig.address) }}</span>
+              <template v-if="networkConfig?.address">
+                {{ ' · ' }}<span class="mono text-text-2">{{ subnetOf(networkConfig.address) }}</span>
+              </template>
             </dd>
             <dt class="text-text-2">Lease</dt>
             <dd class="m-0">
@@ -201,13 +232,17 @@ useApiScreen('this device', () => [
               </template>
               <template v-else>no DHCP lease</template>
             </dd>
-            <dt class="text-text-2">Gateway</dt>
-            <dd class="mono m-0">{{ networkConfig?.address?.split('/')[0] ?? '—' }}</dd>
-            <dt class="text-text-2">DNS</dt>
-            <dd class="m-0">
-              <span class="mono">{{ networkConfig?.address?.split('/')[0] ?? '—' }}</span>
-              <span v-if="networkConfig?.address" class="text-text-3"> (proxy)</span>
-            </dd>
+            <template v-if="netInfo?.gateway">
+              <dt class="text-text-2">Gateway</dt>
+              <dd class="mono m-0" data-testid="device-gateway">{{ netInfo.gateway }}</dd>
+            </template>
+            <template v-if="netInfo">
+              <dt class="text-text-2">DNS</dt>
+              <dd class="m-0" data-testid="device-dns">
+                <span class="mono">{{ netInfo.dns.join(', ') || 'none' }}</span>
+                <span v-if="netInfo.proxy" class="text-text-2"> (proxy)</span>
+              </dd>
+            </template>
           </dl>
         </SectionCard>
 

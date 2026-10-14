@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DeviceView } from '../api/generated/model';
-import { compareDevices, deviceFaults, deviceStatus, matchesFilter, matchesSearch, sourcesLabel } from './devices';
+import type { DeviceView, Network, Overlay } from '../api/generated/model';
+import { compareDevices, deviceFaults, deviceNetworkInfo,deviceStatus, matchesFilter, matchesSearch, sourcesLabel } from './devices';
 
 const dev = (over: Partial<DeviceView>): DeviceView => ({
   id: 'd',
@@ -24,8 +24,43 @@ describe('devices', () => {
   it('do not count the normal profile as a fault', () => {
     expect(deviceFaults(dev({ effective: [{ family: 'impairment', layer: 'overlay', id: 'o', profile: { name: 'normal' } }] }))).toEqual([]);
     expect(deviceFaults(dev({ effective: [{ family: 'impairment', layer: 'overlay', id: 'o', profile: { name: 'lte' }, summary: '50 ms' }] }))).toEqual([
-      'profile lte: 50 ms',
+      'profile LTE',
     ]);
+  });
+
+  it('show the winners as the compact chips of the other screens, the summary only when the fault is not at hand', () => {
+    const d = dev({
+      effective: [
+        { family: 'impairment', layer: 'overlay', id: 'o1', summary: 'latency 200ms jitter 50ms' },
+        { family: 'mtu', layer: 'config', id: 'c1', summary: 'mtu 1280' },
+        { family: 'dns', layer: 'config', id: 'c2', name: 'no-dns', summary: 'dns nxdomain' },
+      ],
+    });
+    expect(deviceFaults(d)).toEqual(['latency 200ms jitter 50ms', 'mtu 1280', 'dns nxdomain']);
+    const overlay = { id: 'o1', kind: 'fault', fault: { latency: '200ms', jitter: '50ms', loss: '5%' } } as Overlay;
+    expect(
+      deviceFaults(d, { overlay: (id) => (id === 'o1' ? overlay : undefined), config: (id) => (id === 'c1' ? { family: 'mtu', mtu: { size: 1280 } } : undefined) }),
+    ).toEqual(['↑↓ 200 ms ±50', '5 % loss', 'MTU 1280', 'dns nxdomain']);
+  });
+
+  it('say which router and DNS servers a device is given', () => {
+    const lan = { type: 'lan', name: 'IoT', interfaces: [], address: '10.10.0.1/24' } as Network;
+    expect(deviceNetworkInfo(lan, 'd')).toEqual({ gateway: '10.10.0.1', dns: ['10.10.0.1'], proxy: true });
+    const own = { ...lan, dhcp: { options: { router: '10.10.0.254', dns_servers: ['1.1.1.1', '9.9.9.9'] } } } as Network;
+    expect(deviceNetworkInfo(own, 'd')).toEqual({ gateway: '10.10.0.254', dns: ['1.1.1.1', '9.9.9.9'], proxy: false });
+    const hub = {
+      type: 'wireguard',
+      kind: 'hub',
+      name: 'lab-hub',
+      address: '10.30.0.1/24',
+      listen_port: 51820,
+      clients: { c1: { name: 'rA', address: '10.30.0.2' }, c2: { name: 'rB', address: '10.30.0.3', dns: { mode: 'custom', servers: ['1.1.1.1'] } }, c3: { name: 'rC', address: '10.30.0.4', dns: { mode: 'none' } } },
+    } as unknown as Network;
+    expect(deviceNetworkInfo(hub, 'c1')).toEqual({ dns: ['10.30.0.1'], proxy: true });
+    expect(deviceNetworkInfo(hub, 'c2')).toEqual({ dns: ['1.1.1.1'], proxy: false });
+    expect(deviceNetworkInfo(hub, 'c3')).toEqual({ dns: [], proxy: false });
+    expect(deviceNetworkInfo(hub, 'other')).toBeUndefined();
+    expect(deviceNetworkInfo(undefined, 'd')).toBeUndefined();
   });
 
   it('search by name, IP, MAC and host name, every word', () => {

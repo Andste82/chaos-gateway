@@ -19,6 +19,8 @@ test('offline: a banner, live data greyed out with the time it was last updated,
   await expect(page.getByTestId('last-updated')).toHaveText(/^Last updated \d\d:\d\d:\d\d\.$/);
   // the last data stays, greyed out
   await expect(page.getByTestId('page')).toHaveClass(/stale/);
+  // greyed out, not "still loading": a screen reader keeps reading the page (the alert says offline)
+  await expect(page.getByTestId('page')).not.toHaveAttribute('aria-busy', /.*/);
   await expect(page.getByTestId('device-row')).toHaveCount(5);
   await expect(page.getByRole('button', { name: 'Adopt dev-3a-f1-9c-22-07-b4' })).toBeDisabled();
 

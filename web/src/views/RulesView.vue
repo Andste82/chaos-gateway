@@ -29,6 +29,7 @@ import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
+import { focusAfterUpdate } from '../lib/focus';
 
 const active = useActiveConfig();
 const rules = useAccessRules();
@@ -128,6 +129,13 @@ function removeRule(id: string) {
   draft.setRule(id, null);
   const next = configRules.value[Math.min(i, configRules.value.length - 1)];
   selected.value = next ? `config:${next.id}` : undefined;
+  // the focus goes to the deleted row's Undo, not to <body> or the next rule's Delete
+  focusAfterUpdate(`[data-focus-key="undo-rule-${id}"]`);
+}
+
+function restoreRule(id: string) {
+  draft.restoreRule(id);
+  focusAfterUpdate(`[data-focus-key="rule-${id}"]`);
 }
 
 const apiPanel = useApiPanelStore();
@@ -150,8 +158,9 @@ const context = computed(() => {
   const rev = draft.base ?? state.data.value?.active_revision;
   return `First matching rule wins · overlay rules before configured rules · revision ${rev ?? '…'}`;
 });
-const loadError = computed(() => firstError(active, rules));
-const retry = () => Promise.all([active.refetch(), rules.refetch()]);
+// the overlay rules are evaluated first: without them the list and the effect in words would be wrong, not just short
+const loadError = computed(() => firstError(active, rules, overlays));
+const retry = () => Promise.all([active.refetch(), rules.refetch(), overlays.refetch()]);
 const rowClass = (on: boolean) =>
   on ? 'border-accent-strong bg-surface-2' : 'border-border bg-surface hover:border-[#3a4552]';
 </script>
@@ -163,7 +172,7 @@ const rowClass = (on: boolean) =>
     </template>
   </PageHeader>
 
-  <p v-if="active.isLoading.value || rules.isLoading.value" class="text-text-2">Loading the rules…</p>
+  <p v-if="active.isLoading.value || rules.isLoading.value || overlays.isLoading.value" class="text-text-2">Loading the rules…</p>
   <LoadError v-else-if="loadError" :error="loadError" what="The access rules are not loaded" :retry="retry" />
   <div v-else class="grid min-h-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_470px]">
     <section aria-label="Rules in order" class="flex min-w-0 flex-col gap-2" data-testid="rule-list">
@@ -176,10 +185,10 @@ const rowClass = (on: boolean) =>
         data-testid="rule-row"
       >
         <span class="mono w-6 text-xs text-text-3" aria-hidden="true">—</span>
-        <button type="button" class="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-1.5 border-0 bg-transparent p-0 text-left text-text" :aria-label="`Show rule ${s.name}`" @click="selected = s.key">
-          <span class="flex items-center gap-2 text-[15px] font-medium">
+        <button type="button" class="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-1.5 border-0 bg-transparent p-0 text-left text-text" :aria-label="`Show rule ${s.name}`" :aria-current="selected === s.key ? 'true' : undefined" @click="selected = s.key">
+          <span class="flex items-center gap-2 text-base font-medium">
             {{ s.name }}
-            <span class="rounded border border-border-strong px-1.5 text-[11px] text-text-2">SYSTEM</span>
+            <span class="rounded border border-border-strong px-1.5 text-xs text-text-2">SYSTEM</span>
           </span>
           <span class="mono text-xs text-text-2">Management → gateway · UI, API and SSH</span>
           <AccessChip action="allow" />
@@ -204,11 +213,12 @@ const rowClass = (on: boolean) =>
           type="button"
           class="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-1.5 border-0 bg-transparent p-0 text-left text-text"
           :aria-label="`Show overlay rule ${ruleSummary({ ...o.rule!, source: o.target }, names)}`"
+          :aria-current="selected === `overlay:${o.id}` ? 'true' : undefined"
           @click="selected = `overlay:${o.id}`"
         >
-          <span class="flex items-center gap-2 text-[15px] font-medium">
+          <span class="flex items-center gap-2 text-base font-medium">
             Overlay rule
-            <span class="rounded border border-fault-border px-1.5 text-[11px] text-fault-text">OVERLAY</span>
+            <span class="rounded border border-fault-border px-1.5 text-xs text-fault-text">OVERLAY</span>
             <span v-if="o.expires_at" class="mono text-xs text-fault-text">{{ formatRemaining(new Date(o.expires_at).getTime() - now.getTime()) }} left</span>
           </span>
           <span class="mono text-xs text-text-2">{{ ruleSummary({ ...o.rule!, source: o.target }, names) }}</span>
@@ -230,14 +240,22 @@ const rowClass = (on: boolean) =>
       >
         <span class="mono w-6 text-xs text-text-3" aria-hidden="true">—</span>
         <span class="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-          <span class="flex items-center gap-2 text-[15px] font-medium text-text-3">
+          <span class="flex items-center gap-2 text-base font-medium text-text-3">
             <span class="line-through">{{ l.rule.name }}</span>
-            <span class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]" data-testid="rule-deleted">DELETED</span>
+            <span class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="rule-deleted">DELETED</span>
           </span>
           <span class="mono text-xs text-text-3 line-through">{{ ruleSummary(l.rule, names) }}</span>
           <span class="text-xs text-text-3">removed when applied</span>
         </span>
-        <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of rule ${l.rule.name}`" @click="draft.restoreRule(l.id)">Undo</button>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :aria-label="`Undo the deletion of rule ${l.rule.name}`"
+          :data-focus-key="`undo-rule-${l.id}`"
+          @click="restoreRule(l.id)"
+        >
+          Undo
+        </button>
       </div>
       <div
         v-else
@@ -250,13 +268,15 @@ const rowClass = (on: boolean) =>
           type="button"
           class="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-1.5 border-0 bg-transparent p-0 text-left text-text"
           :aria-label="`Edit rule ${l.rule.name ?? l.pos}`"
+          :aria-current="selected === `config:${l.id}` ? 'true' : undefined"
+          :data-focus-key="`rule-${l.id}`"
           @click="selected = `config:${l.id}`"
         >
-          <span class="flex items-center gap-2 text-[15px] font-medium">
+          <span class="flex items-center gap-2 text-base font-medium">
             {{ l.rule.name ?? `Rule ${l.pos}` }}
-            <span v-if="l.isNew" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]">NEW</span>
-            <span v-else-if="l.changed" class="rounded border border-accent-strong px-1.5 text-[11px] text-[#cfe6ff]" data-testid="rule-changed">CHANGED</span>
-            <span v-if="l.invalid" class="rounded border border-block-border px-1.5 text-[11px] text-block-text">NEEDS FIXING</span>
+            <span v-if="l.isNew" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]">NEW</span>
+            <span v-else-if="l.changed" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="rule-changed">CHANGED</span>
+            <span v-if="l.invalid" class="rounded border border-block-border px-1.5 text-xs text-block-text">NEEDS FIXING</span>
           </span>
           <span class="mono text-xs text-text-2">{{ ruleSummary(l.rule, names) }}</span>
           <span class="flex items-center gap-1.5">
@@ -288,7 +308,7 @@ const rowClass = (on: boolean) =>
         <div class="flex items-start justify-between gap-3">
           <div>
             <div class="text-xs tracking-[0.04em] text-text-3">RULE {{ selConfig.pos }}</div>
-            <h2 id="rule-editor-title" class="m-0 mt-1 text-lg font-semibold">{{ selConfig.rule.name ?? `Rule ${selConfig.pos}` }}</h2>
+            <h2 id="rule-editor-title" class="m-0 mt-1 text-xl font-semibold">{{ selConfig.rule.name ?? `Rule ${selConfig.pos}` }}</h2>
           </div>
           <div class="flex gap-1.5">
             <button type="button" class="btn btn-sm px-2" aria-label="Move up" :disabled="selConfig.pos === 1" @click="draft.move(selConfig.id, -1)">↑</button>
@@ -323,7 +343,7 @@ const rowClass = (on: boolean) =>
       <template v-else-if="selOverlay">
         <div>
           <div class="text-xs tracking-[0.04em] text-text-3">OVERLAY RULE · BEFORE THE CONFIGURED RULES</div>
-          <h2 id="rule-editor-title" class="m-0 mt-1 text-lg font-semibold">{{ ruleSummary({ ...selOverlay.rule!, source: selOverlay.target }, names) }}</h2>
+          <h2 id="rule-editor-title" class="m-0 mt-1 text-xl font-semibold">{{ ruleSummary({ ...selOverlay.rule!, source: selOverlay.target }, names) }}</h2>
         </div>
         <p class="m-0 text-sm leading-relaxed text-[#d9dee5]">
           Set by {{ describeOwner(selOverlay.owner) }}
@@ -358,7 +378,7 @@ const rowClass = (on: boolean) =>
       <template v-else-if="selSystem">
         <div>
           <div class="text-xs tracking-[0.04em] text-text-3">SYSTEM RULE</div>
-          <h2 id="rule-editor-title" class="m-0 mt-1 text-lg font-semibold">{{ selSystem.name }}</h2>
+          <h2 id="rule-editor-title" class="m-0 mt-1 text-xl font-semibold">{{ selSystem.name }}</h2>
         </div>
         <div class="rounded-lg border border-border-strong bg-[#10151b] p-3.5 text-sm leading-relaxed text-[#d9dee5]">
           Always allowed. This rule keeps the gateway's UI, API and SSH reachable from the management network, so no other rule can lock you out. It

@@ -36,6 +36,7 @@ const deviceCounts = computed(() => {
   <TopologyCard
     :networks="faults.networks.data.value ?? []"
     :networks-error="firstError(faults.networks)"
+    :networks-loading="faults.networks.isLoading.value"
     :device-counts="deviceCounts"
     :faults="faults.items.value"
     :faults-error="faults.error.value"

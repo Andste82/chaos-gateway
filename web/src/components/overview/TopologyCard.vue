@@ -8,12 +8,14 @@ import type { ActiveFault } from '../../composables/gateway';
 import { errorMessage } from '../../api/fetcher';
 import { subnetOf } from '../../lib/format';
 import SectionCard from '../ui/SectionCard.vue';
-import StatusDot from '../ui/StatusDot.vue';
+import StatusDot, { type DotTone } from '../ui/StatusDot.vue';
 
 const props = defineProps<{
   networks: NetworkView[];
   /** The networks could not be loaded: the card must not say there are none. */
   networksError?: unknown;
+  /** The networks are still loading: the card must not say there are none yet. */
+  networksLoading?: boolean;
   deviceCounts: Map<string, number>;
   faults: ActiveFault[];
   /** The faults could not be loaded: their count is unknown. */
@@ -50,6 +52,15 @@ const boxes = computed<Box[]>(() =>
 const profiles = computed(() => props.faults.filter((f) => f.kind === 'profile'));
 const faultCount = computed(() => props.faults.length);
 const up = computed(() => uplink.data.value?.status);
+// no status is claimed without the gateway's answer: loading and failed read as such, not as "up"
+const uplinkDot = computed<{ tone: DotTone; label: string }>(() => {
+  if (!uplink.data.value) {
+    if (uplink.error.value) return { tone: 'unknown', label: `Uplink not loaded: ${errorMessage(uplink.error.value)}` };
+    return { tone: 'unknown', label: 'Loading…' };
+  }
+  if (up.value?.link_up === false) return { tone: 'block', label: 'no link' };
+  return { tone: 'normal', label: up.value?.gateway ? `via ${up.value.gateway}` : 'up' };
+});
 </script>
 
 <template>
@@ -58,7 +69,7 @@ const up = computed(() => uplink.data.value?.status);
     <div class="flex items-center" data-testid="topology">
       <div class="flex flex-col gap-2.5">
         <div v-for="b in boxes" :key="b.id" class="w-[210px] rounded-lg border border-[#2a323d] bg-surface-2 px-3.5 py-3" data-testid="topology-network">
-          <RouterLink :to="`/networks/${b.id}`" class="block text-[15px] font-semibold text-text no-underline hover:underline">{{ b.name }}</RouterLink>
+          <RouterLink :to="`/networks/${b.id}`" class="block text-base font-semibold text-text no-underline hover:underline">{{ b.name }}</RouterLink>
           <div class="mono mt-0.5 text-xs text-text-2">{{ b.detail }}</div>
           <div class="mt-1.5 text-[13px] text-text-2">{{ b.meta }}</div>
           <StatusDot v-if="b.degraded" class="mt-1" tone="block" label="degraded: a port is missing" />
@@ -70,8 +81,17 @@ const up = computed(() => uplink.data.value?.status);
         >
           Networks not loaded: {{ errorMessage(networksError) }}
         </div>
+        <div
+          v-else-if="boxes.length === 0 && networksLoading"
+          class="w-[210px] rounded-lg border border-dashed border-border-strong px-3.5 py-3 text-[13px] text-text-2"
+          role="status"
+          data-testid="topology-networks-loading"
+        >
+          Loading the networks…
+        </div>
         <div v-else-if="boxes.length === 0" class="w-[210px] rounded-lg border border-dashed border-border-strong px-3.5 py-3 text-[13px] text-text-2">
           No test network
+          <RouterLink to="/networks" class="mt-1 block">Add a test network</RouterLink>
         </div>
       </div>
       <div class="relative mx-3 h-0.5 flex-1 bg-border-strong">
@@ -88,10 +108,11 @@ const up = computed(() => uplink.data.value?.status);
           >↑↓ {{ faultCount }} {{ faultCount === 1 ? 'fault' : 'faults' }} on the path</span
         >
       </div>
-      <div class="w-[250px] rounded-lg border border-[#3a4552] bg-surface-2 px-4 py-3.5">
-        <div class="text-[15px] font-semibold">Chaos Gateway</div>
+      <div class="w-[250px] rounded-lg border border-[#3a4552] bg-surface-2 px-4 py-3.5" data-testid="topology-gateway">
+        <RouterLink to="/linux" class="block text-base font-semibold text-text no-underline hover:underline">Chaos Gateway</RouterLink>
         <div class="mt-1.5 text-[13px] leading-relaxed text-text-2">
           <template v-if="networksError && !networks.length">networks unknown</template>
+          <template v-else-if="networksLoading && !networks.length">networks loading</template>
           <template v-else>{{ networks.length }} {{ networks.length === 1 ? 'network' : 'networks' }}</template>
           ·
           <template v-if="faultsError">faults unknown</template>
@@ -101,13 +122,9 @@ const up = computed(() => uplink.data.value?.status);
       </div>
       <div class="mx-3 h-0.5 flex-1 bg-border-strong" />
       <div class="w-[200px] rounded-lg border border-[#2a323d] bg-surface-2 px-3.5 py-3" data-testid="topology-uplink">
-        <div class="text-[15px] font-semibold">Uplink</div>
+        <RouterLink to="/networks" class="block text-base font-semibold text-text no-underline hover:underline">Uplink</RouterLink>
         <div class="mono mt-0.5 text-xs text-text-2">{{ [up?.address, up?.interface].filter(Boolean).join(' · ') || '—' }}</div>
-        <StatusDot
-          class="mt-1.5"
-          :tone="up?.link_up === false ? 'block' : 'normal'"
-          :label="up?.link_up === false ? 'no link' : up?.gateway ? `via ${up.gateway}` : 'up'"
-        />
+        <StatusDot class="mt-1.5" v-bind="uplinkDot" />
       </div>
     </div>
   </SectionCard>

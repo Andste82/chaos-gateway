@@ -93,6 +93,8 @@ export function sampleLab(now = Date.now()) {
       id: 'a1b2c3d4-0000-4000-8000-000000000057',
       name: 'Sensor-07',
       observed: { online: true, macs: ['02:00:00:00:00:39'], addresses: ['10.10.0.57'], upload_bps: 800, download_bps: 8000 },
+      // the configured fault sensor7-slow wins for it (the gateway's summary, as GET /devices sends it)
+      effective: [{ family: 'impairment', layer: 'config', id: 'c0f00000-0000-4000-8000-000000000007', name: 'sensor7-slow', summary: 'download rate 64kbit' }],
     }),
     device({
       id: 'a1b2c3d4-0000-4000-8000-000000000059',
@@ -409,6 +411,8 @@ export class MockGateway {
   clockSkewMs = 0;
   /** GET paths (without /api/v1) the gateway answers with this error status instead of the data. */
   failing: Record<string, number> = {};
+  /** GET paths (without /api/v1) the gateway answers only after the promise settles (a slow read: the loading states). */
+  holding: Record<string, Promise<void>> = {};
   /** The next POST /revisions is refused with 409 revision_conflict (someone else applied one). */
   conflictOnce = false;
   private nextRevision = 43;
@@ -585,6 +589,8 @@ export class MockGateway {
     const problem = (status: number, code: string, detail: string) => json(status, { type: 'about:blank', title: code, status, code, detail });
     const failure = method === 'GET' ? this.failing[path] : undefined;
     if (failure) return problem(failure, 'internal', `the gateway failed to read ${path}`);
+    const hold = method === 'GET' ? this.holding[path] : undefined;
+    if (hold) await hold;
 
     if (path === '/setup' && method === 'GET') return json(200, this.setup);
     if (path === '/setup' && method === 'POST') {

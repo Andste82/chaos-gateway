@@ -432,11 +432,11 @@ func (l *lastError) set(err error) (changed bool, before string) {
 }
 
 // configures reports whether the operating system configures the interface; ok is false when that is not known.
-func (o osConfig) configures(name, mac string) (yes, ok bool) {
+func (o osConfig) configures(name, mac, driver string) (yes, ok bool) {
 	if o.err != nil || o.state == nil {
 		return false, false
 	}
-	return len(preflight.Configuring(o.state.Entries, name, mac)) > 0, true
+	return len(preflight.Configuring(o.state.Entries, name, mac, driver)) > 0, true
 }
 
 // hostInterfaces describes the physical interfaces of the host, what they are used for and whether the
@@ -459,7 +459,7 @@ func (s *Server) hostInterfaces(osc osConfig) []hostInterface {
 		if cfg != nil {
 			hi.Assigned = assignment(cfg, l)
 		}
-		if yes, ok := osc.configures(l.Name, l.MAC); ok {
+		if yes, ok := osc.configures(l.Name, l.MAC, hi.Driver); ok {
 			hi.OSManaged = &yes
 		}
 		out = append(out, hi)
@@ -647,7 +647,7 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun boo
 				continue // the operating system keeps them (D3)
 			}
 			assigned[hi.Name] = role == "network"
-			status, msg, fix := preflight.InterfaceCheck(hi.Name, hi.MAC, role == "network", osc.state.Entries)
+			status, msg, fix := preflight.InterfaceCheck(hi.Name, hi.MAC, hi.Driver, role == "network", osc.state.Entries)
 			add(PreflightCheck{ID: "interface." + hi.Name + ".os_config", Interface: hi.Name, Status: status, Message: msg, Fix: fix})
 		}
 	}

@@ -149,6 +149,26 @@ export function portKey(i: InterfaceRef): string {
   return i.name ?? i.mac ?? '';
 }
 
+/**
+ * The key under which the form holds a host interface as a port: its MAC when the form or the network as
+ * it was has the port by MAC (the configuration names it by MAC only), else its name. The port picker
+ * ticks and unticks it by that key, so a MAC-only port is shown as chosen, is not added a second time by
+ * name, and ticked again after it was unticked keeps its reference by MAC.
+ */
+export function hostPortKey(h: Pick<HostInterface, 'name' | 'mac'>, ports: string[], had: string[] = []): string {
+  if (!h.mac || ports.includes(h.name)) return h.name;
+  return ports.includes(h.mac) || (had.includes(h.mac) && !had.includes(h.name)) ? h.mac : h.name;
+}
+
+/** The fields under "Advanced" in the network form, by kind (a link's static routes stand above it). */
+export function advancedFields(kind: NetworkKind): NetworkField[] {
+  return kind === 'lan'
+    ? ['description', 'router', 'dhcpDns', 'domain', 'ntp', 'customOptions', 'staticEntries', 'routes']
+    : kind === 'link'
+      ? ['description', 'endpoint', 'mtu', 'peerKeepalive', 'peerPublicKey']
+      : ['description', 'endpoint', 'mtu'];
+}
+
 /** Words or lines, as typed: "a, b c" → ["a", "b", "c"]. */
 function list(text: string): string[] {
   return text

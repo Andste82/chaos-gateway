@@ -3,8 +3,10 @@ import type { LanNetwork, WireGuardNetwork } from '../api/generated/model';
 import { CompleteSetupBody } from '../api/generated/zod/system/system';
 import { networkChanges } from './networkChanges';
 import {
+  advancedFields,
   emptyNetworkForm,
   formFromNetwork,
+  hostPortKey,
   networkFieldOf,
   networkFormErrors,
   networkFromForm,
@@ -161,6 +163,30 @@ describe('the network form (P3-M14-01)', () => {
     expect(networkChanges(link, networkFromForm({ ...formFromNetwork(link), peerEndpoint: '203.0.113.40:51821' }, link))).toEqual([
       { field: 'peer', from: '10.255.0.1', to: '10.255.0.1 at 203.0.113.40:51821' },
     ]);
+  });
+
+  it('the port picker holds a port the configuration names by MAC only under its MAC, and every other port by name', () => {
+    const lan: LanNetwork = { type: 'lan', name: 'IoT', address: '10.10.0.1/24', interfaces: [{ mac: '52:54:00:00:00:04' }] };
+    const f = formFromNetwork(lan);
+    expect(hostPortKey(hosts[0]!, f.ports)).toBe('52:54:00:00:00:04');
+    expect(hostPortKey(hosts[1]!, f.ports)).toBe('eth4');
+    expect(hostPortKey(hosts[0]!, ['eth3'])).toBe('eth3');
+    // unticked, it is ticked again by its MAC
+    expect(hostPortKey(hosts[0]!, [], f.ports)).toBe('52:54:00:00:00:04');
+    // unticked by that key, the port is gone; ticked again, it is one reference, not two
+    expect((networkFromForm({ ...f, ports: [] }, lan, hosts as never) as LanNetwork).interfaces).toEqual([]);
+    expect((networkFromForm({ ...f, ports: [hostPortKey(hosts[0]!, f.ports)] }, lan, hosts as never) as LanNetwork).interfaces).toEqual([{ mac: '52:54:00:00:00:04' }]);
+  });
+
+  it('knows which fields stand under Advanced, so a check of a hidden field opens it', () => {
+    const lan = formFromNetwork({ type: 'lan', name: 'cams', address: '10.30.0.1/24', interfaces: [{ name: 'eth3' }], routes: [{ destination: '10.40.0.0/24', via: '10.30.0.254' }] });
+    expect(networkFormErrors(lan, ctx)).toEqual({});
+    const e = networkFormErrors({ ...lan, address: '10.31.0.1/24' }, ctx);
+    expect(Object.keys(e)).toEqual(['routes']);
+    expect(advancedFields('lan')).toContain('routes');
+    expect(advancedFields('link')).not.toContain('routes');
+    expect(advancedFields('link')).toContain('peerPublicKey');
+    expect(advancedFields('hub')).toEqual(['description', 'endpoint', 'mtu']);
   });
 
   it("puts the gateway's messages under the field they are about", () => {

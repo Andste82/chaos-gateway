@@ -94,6 +94,12 @@ describe('the routing forms (P3-M14-01)', () => {
     expect(routingSettingsErrors({ ...f, asn: '' }, true).asn).toBe('BGP needs the local AS number.');
     expect(routingSettingsErrors({ ...f, externalTable: '100' }, false).externalTable).toBe('Table 100 belongs to the system or to Chaos Gateway.');
     expect(routingSettingsErrors({ ...f, routerId: '224.0.0.1' }, false).routerId).toMatch(/unicast/);
+    // off, the hidden table and filter are not checked and not taken: they stay as they were
+    const off = { ...f, externalEnabled: false, externalTable: '', externalPrefixes: '10.80.0.0/33', externalMaxPrefixes: 'many' };
+    expect(routingSettingsErrors(off, true)).toEqual({});
+    const external = { enabled: true, table: 200, import: { allowed_prefixes: [{ prefix: '10.80.0.0/16' }] } };
+    expect(routingFromForm(off, { external }).external).toEqual({ ...external, enabled: false });
+    expect(routingSettingsErrors({ ...off, externalEnabled: true }, true)).toMatchObject({ externalTable: expect.any(String), externalPrefixes: expect.any(String), externalMaxPrefixes: expect.any(String) });
     // an external mode never set and off stays out
     expect(routingFromForm(formFromRouting({ asn: 65001 }), { asn: 65001 })).toEqual({ asn: 65001 });
   });

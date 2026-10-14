@@ -1069,10 +1069,13 @@ decided option is implemented. As of 2026-10-14 every Phase 3 item is closed exc
   `setProtocol`): BGP, OSPF or Babel on a link with what it announces, its import filter, the settings of its type and a
   custom snippet. Everything goes through the draft, the preview drawer, the concurrent-change dialog and commit-confirm,
   which the gateway asks for when a WireGuard network with the role management is added, changed or deleted. Tests
-  `network-forms.spec.ts` (thirteen tests: create, edit and delete a test network, a hub and a link through the drawer,
-  validation errors under the fields, a refused network fixed, the references of a deleted network, a management hub
-  waiting for confirmation, the conflict dialog, a LAN network with several ports, and the routing: a protocol added,
-  edited, deleted, the BIRD settings, validation errors and a refused protocol fixed), `src/lib/networkForm.test.ts`,
+  `network-forms.spec.ts` (seventeen tests: create, edit and delete a test network through the drawer; create and edit a
+  hub and a link; the management hub admin deleted and confirmed; the link site-b deleted, first refused with its BGP
+  protocol named, then together with the protocol; validation errors under the fields, also under Advanced, which opens
+  for them; a port the configuration names by MAC only; a refused network fixed; the references of a deleted network — a
+  device, a fault, rules, the access matrix and a routing protocol; a management hub waiting for confirmation; the
+  conflict dialog; a LAN network with several ports; and the routing: a protocol added, edited, deleted, the BIRD
+  settings, the hidden fields of the external mode switched off, validation errors and a refused protocol fixed), `src/lib/networkForm.test.ts`,
   `src/lib/routingForm.test.ts`, `src/stores/draft.networks.test.ts`; `docs/development.md` "Web UI: networks, WireGuard,
   routing and the technical view (M14)".
 - Decision (2026-10-14): option (a) in full — client actions (disable/enable, rotate keys, delete), network forms (create, edit,

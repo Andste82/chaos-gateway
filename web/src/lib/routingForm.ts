@@ -121,11 +121,12 @@ export function routingSettingsErrors(f: RoutingSettingsForm, bgp: boolean): Par
     if (!t) e.externalTable = 'The kernel table the other daemon writes its routes into is required.';
     else if (!/^\d+$/.test(t) || Number(t) < 1 || Number(t) > 4294967294) e.externalTable = 'A table number from 1 to 4294967294.';
     else if (reservedTable(Number(t))) e.externalTable = `Table ${t} belongs to the system or to Chaos Gateway.`;
+    // the filter is checked only while the external mode is on: off, its fields are hidden and not taken
+    const p = prefixesError(f.externalPrefixes);
+    if (p) e.externalPrefixes = p;
+    const m = maxPrefixesError(f.externalMaxPrefixes);
+    if (m) e.externalMaxPrefixes = m;
   }
-  const p = prefixesError(f.externalPrefixes);
-  if (p) e.externalPrefixes = p;
-  const m = maxPrefixesError(f.externalMaxPrefixes);
-  if (m) e.externalMaxPrefixes = m;
   return e;
 }
 
@@ -137,13 +138,17 @@ export function routingFromForm(f: RoutingSettingsForm, before: Routing | undefi
   if (f.asn.trim()) r.asn = Number(f.asn.trim());
   else delete r.asn;
   const x = { ...(r.external ?? {}) };
-  if (f.externalEnabled) x.enabled = true;
-  else if (x.enabled !== undefined) x.enabled = false;
-  if (f.externalTable.trim()) x.table = Number(f.externalTable.trim());
-  else delete x.table;
-  const imp = importFrom(x.import, f.externalPrefixes, f.externalAllowDefault, f.externalMaxPrefixes);
-  if (imp) x.import = imp;
-  else delete x.import;
+  if (f.externalEnabled) {
+    x.enabled = true;
+    if (f.externalTable.trim()) x.table = Number(f.externalTable.trim());
+    else delete x.table;
+    const imp = importFrom(x.import, f.externalPrefixes, f.externalAllowDefault, f.externalMaxPrefixes);
+    if (imp) x.import = imp;
+    else delete x.import;
+  } else if (x.enabled !== undefined) {
+    // off: the table and the filter, whose fields are hidden, stay as they were
+    x.enabled = false;
+  }
   // an external mode that was never set and is off stays out
   if (Object.keys(x).length && !(Object.keys(x).length === 1 && x.enabled === false && !before?.external)) r.external = x;
   else delete r.external;

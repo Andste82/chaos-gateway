@@ -1192,3 +1192,29 @@ the option closest to the plan, recorded here:
   NetworkManager renderer does; a per-type one only affects the section's devices, which are entries anyway); a
   `match` by a key the preflight cannot evaluate (empty, or `path` and the like) counts for every interface, a warning
   rather than a missed configuration.
+
+### Phase 3 audit: choices made in the M12, states and visual fixes (2026-10-14)
+
+The audit's findings on the shell, the overview, the devices, the states of §2.17 and the visual system were fixed
+without a maintainer decision; where a fix had to choose, it took the option closest to the plan:
+
+- `DeviceView.effective` is filled by the gateway (the spec declared it, nothing sent it), not computed in the browser
+  from `/overlays` and `/faults`: the precedence of plan §2.4 lives in one place. It is the device's winning fault of each
+  family for its traffic without a destination, as `GET /explain` resolves it, and only for the active revision (overlays
+  act on what runs); `overlays`, which the spec leaves open, lists the overlays among the device's candidates, winning or
+  overridden. The UI draws the chips from the overlay or configured fault an entry names and falls back to the gateway's
+  summary.
+- The type scale: the prototype's 11 px badges and 15 px titles became 12 and 16 px, its 18 px dialog titles 20 px, so the
+  plan's sizes hold; the plan was not given an exception.
+- `text-3` became `#848E9D` (was `#7D8796`, 4.45:1 on `surface-2`) and plan §2.17's token table says it now reaches
+  4.5:1 on `surface` and `surface-2`; on the accent tint the UI uses `text-2`.
+- "Every item links to its detail" (plan §2.17 Overview): a fault on a group or on everything, which has no page, links
+  to the faults screen (it has no filter by target yet); a revision event stays plain text (there is no revision screen
+  before the history view); the gateway box links to the Linux view, its technical detail.
+- The topology's "No test network" box, a placeholder rather than a screen's empty state, got an "Add a test network"
+  link as well.
+- The profile editor shows its own checks once a field changed or "Add to the changes" was pressed, like the network
+  form; "Add to the changes" is disabled only after it was pressed with errors.
+- After a dialog or drawer whose opener is gone (the sticky bar's button while it was hidden is kept mounted; Apply
+  ends the draft), the focus goes to the page's heading; a Remove/Delete/Adopt swapped for Undo hands it to its
+  replacement. Deleting a rule moves the editor to the next rule as before, but the focus to the deleted rule's Undo.

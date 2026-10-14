@@ -858,10 +858,16 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-06 Editing an overlay of another owner replaces it with the admin's
 
-- Status: new
-- Decision (2026-10-14): options (a) and (d) — an edit takes the overlay over (as now) and keeps its remaining time unless the user
-  changes the TTL; a TTL that is not one of the dialog's choices is shown as such and kept (an API field or the remaining
-  time sent as the TTL, whichever is cleaner in the API); tested
+- Status: closed (2026-10-14): decided — options (a) and (d): an edit takes another owner's overlay over (as before) and
+  keeps the overlay's remaining time unless the user chooses another duration. The dialog's first duration is "Keep: 4:12
+  left of 5 min"; Apply sends the remaining time on the gateway's clock as the TTL in whole seconds (no API field: `ttl` is
+  "remove after this time" and a written overlay's TTL starts over, which also covers the taken-over overlay, a new one of
+  the admin); a TTL that is not one of the choices (`30m`) is shown as "30 min (its own TTL)" and kept, never turned into
+  15 minutes (`durationChoices`, `remainingTtl`, `ttlText` in `src/lib/faultForm.ts`). Tests `faults.spec.ts` "editing a
+  fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)", "edit a fault overlay of an API
+  token: the admin's fault replaces it, and the dialog says so" (the token's 50 minutes kept), `src/lib/faultForm.test.ts`
+  "an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)", "a TTL that is not one of
+  the choices is shown as such and kept (P3-M13-06)"
 - Severity: low
 - Reason: needs-decision. Plan §2.1.1 keys an overlay by *(owner, kind, target, selector)*, and a UI action's owner is the
   admin user (§2.15). Writing an edited overlay of an API token or a scenario run from the browser therefore creates a

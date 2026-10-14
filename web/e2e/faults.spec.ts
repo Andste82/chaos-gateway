@@ -183,7 +183,9 @@ test('edit a fault overlay on the faults screen: the same key is written again a
   await expect(d.getByLabel('Jitter (ms)')).toHaveValue('50');
   await expect(d.getByLabel('Loss (%)')).toHaveValue('5');
   await expect(d.getByLabel('Traffic')).toHaveValue('mqtts');
-  await expect(d.getByLabel('Duration')).toHaveValue('5m');
+  // the edit keeps the overlay's remaining time (P3-M13-06)
+  await expect(d.getByLabel('Duration')).toHaveValue('keep');
+  await expect(d.getByLabel('Duration').locator('option:checked')).toHaveText(/^Keep: 4:\d\d left of 5 min$/);
   await d.getByLabel('Latency (ms)').fill('250');
   await d.getByRole('button', { name: 'Apply fault' }).click();
   await expect(toast(page, 'Fault active on ESP32-42')).toBeVisible();
@@ -191,6 +193,56 @@ test('edit a fault overlay on the faults screen: the same key is written again a
   expect(gw.overlays.find((o) => o.id === ESP_FAULT)?.fault?.latency).toBe('250ms');
   expect(gw.requestsTo('DELETE', `/overlays/${ESP_FAULT}`)).toHaveLength(0);
   await expect(page.getByTestId('fault-row').filter({ hasText: 'ESP32-42' }).first()).toContainText('↑↓ 250 ms ±50');
+});
+
+test('editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)', async ({ page }) => {
+  const gw = lab();
+  const sensor = gw.devices[1]!;
+  const LONG = 'f0000000-0000-4000-8000-0000000000c1';
+  const expiresAt = new Date(Date.now() + 20 * 60_000);
+  gw.overlays = [
+    ...gw.overlays,
+    {
+      id: LONG,
+      kind: 'fault',
+      owner: { type: 'user', id: 'admin', name: 'admin' },
+      target: { device: sensor.id },
+      fault: { loss: '2%' },
+      // set over the API with a TTL the dialog has no choice for
+      ttl: '30m',
+      expires_at: expiresAt.toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      generation: 42,
+      state: 'effective',
+    },
+  ];
+  await gw.install(page);
+  await page.goto('/faults');
+  await page.getByTestId('fault-row').filter({ hasText: '2 % loss' }).getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  const duration = d.getByLabel('Duration');
+  await expect(duration).toHaveValue('keep');
+  await expect(duration.locator('option:checked')).toHaveText(/^Keep: (20:00|19:\d\d) left of 30 min$/);
+  await expect(duration.locator('option')).toHaveText([/^Keep: /, '1 min', '5 min', '15 min', '1 hour', 'Until removed', '30 min (its own TTL)']);
+  await expect(d.getByTestId('fault-preview')).toContainText(/expires at \d\d:\d\d as before/);
+  await d.getByLabel('Loss (%)').fill('3');
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(toast(page, `Fault active on ${sensor.name}`)).toContainText(/Expires at \d\d:\d\d as before\./);
+
+  // the remaining time was sent as the TTL, so the expiry stays where it was
+  const sent = gw.requestsTo('POST', '/overlays')[0]!.body as { ttl: string };
+  expect(Number(/^(\d+)s$/.exec(sent.ttl)?.[1])).toBeGreaterThan(19 * 60);
+  expect(Number(/^(\d+)s$/.exec(sent.ttl)?.[1])).toBeLessThanOrEqual(20 * 60);
+  const kept = gw.overlays.find((o) => o.id === LONG)!;
+  expect(kept.fault).toEqual({ loss: '3%' });
+  expect(Math.abs(new Date(kept.expires_at!).getTime() - expiresAt.getTime())).toBeLessThan(5_000);
+
+  // the next edit still keeps the same expiry; the kept time is the overlay's TTL now, shown in words
+  await page.getByTestId('fault-row').filter({ hasText: '3 % loss' }).getByRole('button', { name: /^Edit / }).click();
+  await expect(duration).toHaveValue('keep');
+  await expect(duration.locator('option:checked')).toHaveText(/^Keep: (20:00|19:\d\d) left of (20 min|19 min \d+ s)$/);
+  await expect(duration.locator('option').last()).toHaveText(/^(20 min|19 min \d+ s) \(its own TTL\)$/);
 });
 
 test('a configured fault goes through the unapplied-changes bar, the preview and the apply', async ({ page }) => {
@@ -296,7 +348,10 @@ test("edit a fault overlay of an API token: the admin's fault replaces it, and t
   expect(gw.requestsTo('DELETE', `/overlays/${TOKEN_FAULT}`)).toHaveLength(1);
   const onSensor = gw.overlays.filter((o) => o.target?.device === sensor.id);
   expect(onSensor).toHaveLength(1);
-  expect(onSensor[0]).toMatchObject({ owner: { type: 'user' }, fault: { loss: '4%' }, ttl: '1h' });
+  expect(onSensor[0]).toMatchObject({ owner: { type: 'user' }, fault: { loss: '4%' } });
+  // the token's overlay had 50 of its 60 minutes left: the admin's keeps them (P3-M13-06)
+  expect(onSensor[0]!.ttl).toMatch(/^\d+s$/);
+  expect(Math.abs(new Date(onSensor[0]!.expires_at!).getTime() - (Date.now() + 50 * 60_000))).toBeLessThan(30_000);
   await expect(page.getByTestId('fault-row').filter({ hasText: '4 % loss' })).toHaveCount(1);
   await expect(page.getByTestId('fault-row').filter({ hasText: '2 % loss' })).toHaveCount(0);
   // the admin's own fault: no note

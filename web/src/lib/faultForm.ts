@@ -7,8 +7,9 @@ import {
   createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp,
 } from '../api/generated/zod/overlays/overlays';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
+import { gatewayNow } from './clock';
 import { faultChips } from './faults';
-import { durationMs } from './format';
+import { durationMs, formatDuration, formatHM, formatRemaining } from './format';
 import { formatPorts, parsePorts } from './rules';
 
 export type Direction = 'both' | 'upload' | 'download';
@@ -31,8 +32,10 @@ export interface FaultForm {
   duplicate: string;
   corrupt: string;
   keepOrder: boolean;
-  /** a key of `durations` */
+  /** a key of `durations`, `keep` (the edited overlay's remaining time) or `ttl:<its own TTL>` */
   duration: string;
+  /** the expiry of the edited overlay, which `keep` keeps; empty for a new fault or one without a TTL */
+  keepUntil: string;
   /** the name of a configured fault */
   name: string;
 }
@@ -85,8 +88,52 @@ export function emptyForm(target = 'global'): FaultForm {
     corrupt: '',
     keepOrder: false,
     duration: '15m',
+    keepUntil: '',
     name: '',
   };
+}
+
+/** A TTL in words: "30m" → "30 min", "1199s" (a kept remaining time) → "19 min 59 s". */
+export function ttlText(ttl: string): string {
+  const ms = durationMs(ttl);
+  if (ms === undefined || ms < 1000) return formatDuration(ttl);
+  const total = Math.round(ms / 1000);
+  const parts: [number, string][] = [
+    [Math.floor(total / 3600), 'h'],
+    [Math.floor((total % 3600) / 60), 'min'],
+    [total % 60, 's'],
+  ];
+  return parts
+    .filter(([n]) => n > 0)
+    .map(([n, u]) => `${n} ${u}`)
+    .join(' ');
+}
+
+/** The TTL of a duration choice: one of `durations`, or an overlay's own TTL (`ttl:30m`); undefined until removed. */
+export function durationTtl(value: string): string | undefined {
+  if (value.startsWith('ttl:')) return value.slice(4);
+  return durations.find((d) => d.value === value)?.ttl;
+}
+
+/**
+ * The duration choices of the dialog. An edited overlay with a TTL (P3-M13-06) first offers to keep
+ * its remaining time ("Keep: 4:12 left of 30 min", the default), and a TTL of its own that is not one
+ * of the choices (`30m` set over the API) is offered as such, starting over.
+ */
+export function durationChoices(f: FaultForm, ownTtl: string | undefined, now: Date): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = [];
+  if (f.keepUntil) {
+    const left = formatRemaining(new Date(f.keepUntil).getTime() - now.getTime());
+    out.push({ value: 'keep', label: `Keep: ${left} left${ownTtl ? ` of ${ttlText(ownTtl)}` : ''}` });
+  }
+  out.push(...durations.map(({ value, label }) => ({ value, label })));
+  if (ownTtl && !durations.some((d) => d.ttl === ownTtl)) out.push({ value: `ttl:${ownTtl}`, label: `${ttlText(ownTtl)} (its own TTL)` });
+  return out;
+}
+
+/** The remaining time of an expiry as a TTL in whole seconds, at least one. */
+export function remainingTtl(until: string, now: Date): string {
+  return `${Math.max(1, Math.ceil((new Date(until).getTime() - now.getTime()) / 1000))}s`;
 }
 
 export function scopeOf(target: string): Scope {
@@ -229,8 +276,12 @@ export function formToFault(f: FaultForm): FaultBody {
   return body;
 }
 
-export function formToOverlay(f: FaultForm): OverlayRequest {
-  const ttl = durations.find((d) => d.value === f.duration)?.ttl;
+/**
+ * The overlay of the form. `keep` sends the remaining time of the edited overlay as its TTL (the
+ * gateway starts a written overlay's TTL over), on the gateway's clock.
+ */
+export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRequest {
+  const ttl = f.duration === 'keep' && f.keepUntil ? remainingTtl(f.keepUntil, now) : durationTtl(f.duration);
   return { target: scopeOf(f.target), fault: formToFault(f), ...(ttl ? { ttl } : {}) };
 }
 
@@ -243,7 +294,7 @@ export function formToConfigFault(f: FaultForm, base?: ConfigFault): ConfigFault
 }
 
 /** The form of an existing fault (an overlay's or a configured one). */
-export function faultToForm(fault: FaultBody | undefined, target: Scope | undefined, extra: { ttl?: string; name?: string } = {}): FaultForm {
+export function faultToForm(fault: FaultBody | undefined, target: Scope | undefined, extra: { ttl?: string; expiresAt?: string; name?: string } = {}): FaultForm {
   const f = emptyForm(targetOf(target));
   if (!fault) return f;
   let p: NetemParams = fault;
@@ -278,8 +329,10 @@ export function faultToForm(fault: FaultBody | undefined, target: Scope | undefi
     f.ports = formatPorts(fault);
     f.destination = fault.destination?.cidr ?? '';
   }
-  const ttl = extra.ttl ? durations.find((d) => d.ttl === extra.ttl)?.value : undefined;
-  f.duration = extra.ttl ? (ttl ?? '15m') : 'perm';
+  // an overlay with a TTL keeps its remaining time unless another duration is chosen (P3-M13-06)
+  const ttl = extra.ttl ? (durations.find((d) => d.ttl === extra.ttl)?.value ?? `ttl:${extra.ttl}`) : undefined;
+  f.keepUntil = extra.expiresAt ?? '';
+  f.duration = f.keepUntil ? 'keep' : (ttl ?? 'perm');
   f.name = extra.name ?? '';
   return f;
 }
@@ -313,9 +366,11 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
   const until =
     layer === 'config'
       ? 'configured until removed (after preview and apply)'
-      : f.duration === 'perm'
-        ? 'until removed'
-        : `expires after ${durations.find((d) => d.value === f.duration)?.label ?? f.duration}`;
+      : f.duration === 'keep' && f.keepUntil
+        ? `expires at ${formatHM(f.keepUntil)} as before`
+        : f.duration === 'perm'
+          ? 'until removed'
+          : `expires after ${durations.find((d) => d.value === f.duration)?.label ?? ttlText(durationTtl(f.duration) ?? f.duration)}`;
   return `${targetName} · ${traffic} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;
 }
 

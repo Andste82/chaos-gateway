@@ -661,6 +661,23 @@ export class MockGateway {
       if (gate) await gate;
       return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${c.config.name}.conf"` }, contentType: 'text/plain; charset=utf-8', body: conf });
     }
+    const netExp = /^\/networks\/([^/]+)\/export$/.exec(path);
+    if (netExp) {
+      // a link: the remote side's wg-quick configuration, or the BIRD snippet of the protocol on it
+      const n = this.config.networks?.[netExp[1]!] as WireGuardNetwork | undefined;
+      if (n?.type !== 'wireguard' || n.kind !== 'link') return problem(422, 'validation_failed', 'only a link exports conf or bird here');
+      const format = url.searchParams.get('format') ?? 'conf';
+      const key = (seed: string) => btoa(seed.padEnd(32, '#').slice(0, 32));
+      let body: string;
+      if (format === 'bird') {
+        const p = Object.values(this.config.routing?.protocols ?? {}).find((x) => x.link === netExp[1] || x.link === n.name);
+        if (!p) return problem(422, 'validation_failed', 'no routing protocol runs on the link');
+        body = `protocol bgp ${p.name} {\n  local as 65002;\n  neighbor ${n.address.split('/')[0]} as ${this.config.routing?.asn ?? 65001};\n  connect retry time 5;\n  error wait time 1, 30;\n}\n`;
+      } else {
+        body = ['[Interface]', `PrivateKey = ${key(`remote ${netExp[1]}`)}`, `Address = ${n.peer?.address ?? ''}/31`, '', '[Peer]', `PublicKey = ${key(`link ${netExp[1]}`)}`, `AllowedIPs = ${n.address}`, `Endpoint = 192.168.1.57:${n.listen_port}`, ''].join('\n');
+      }
+      return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${n.name}.${format === 'bird' ? 'bird' : 'conf'}"` }, contentType: 'text/plain; charset=utf-8', body });
+    }
     if (path === '/routing') return json(200, this.config.routing ?? this.routing);
     if (path === '/system/interfaces') return json(200, this.page(this.hostInterfaces, url));
     if (path === '/routing/status') return json(200, this.routingStatus);

@@ -5,8 +5,9 @@
 // field and "Preview & apply" waits until the form is valid (plan §2.17 "Validation"). The client goes
 // into the configuration draft and the preview-and-apply drawer opens, like every configuration change;
 // a hub with the role management makes the change lockout-relevant, so the apply waits for confirmation.
-// A client of the draft the gateway refused opens again in this dialog (`fix`): its fields as they were,
-// the gateway's messages under the fields they are about until the form is changed.
+// A client of the draft the gateway refused, or a new one not applied yet, opens again in this dialog
+// (`fix`): its fields as they were, the gateway's messages under the fields they are about until the
+// form is changed.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
@@ -20,6 +21,7 @@ import {
   emptyClientForm,
   formFromClient,
   nextFreeAddress,
+  reachChoices as networkReachChoices,
   subnetText,
   type ClientField,
   type ClientForm,
@@ -32,7 +34,7 @@ const props = defineProps<{
   hub: NetworkView;
   networks: NetworkView[];
   clients: WireGuardClientView[];
-  /** A client of the draft the gateway refused, to fix. */
+  /** A new client of the draft (one the gateway refused, or not applied yet), to fix or edit. */
   fix?: string;
 }>();
 const open = defineModel<boolean>('open', { required: true });
@@ -105,10 +107,8 @@ function shown(f: ClientField): string | undefined {
   return tried.value || f === 'address' ? errors.value[f] : undefined;
 }
 
-const reachChoices = computed(() => [
-  { key: 'uplink', label: 'Internet through the uplink (full tunnel)' },
-  ...props.networks.filter((n) => n.id !== props.hub.id).map((n) => ({ key: `network:${n.id}`, label: `${(n.config as { name: string }).name} (${subnetText((n.config as { address: string }).address)})` })),
-]);
+// the uplink, the other networks and the other clients' networks (plan §2.2.1 "Create clients")
+const reachChoices = computed(() => networkReachChoices(props.hub.id, props.networks, (hub) => draft.effectiveClients(hub), props.fix));
 
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
 const management = computed(() => wg.value.role === 'management');
@@ -159,7 +159,7 @@ function toggleReach(key: string, on: boolean) {
 </script>
 
 <template>
-  <ModalDialog v-model:open="open" :title="fix ? `Fix client of ${wg.name}` : `Add client to ${wg.name}`" :description="`A WireGuard peer of the hub, with a tunnel address in ${subnetText(wg.address)}.`" width="600px">
+  <ModalDialog v-model:open="open" :title="fix ? `${Object.keys(refused).length ? 'Fix' : 'Edit'} client of ${wg.name}` : `Add client to ${wg.name}`" :description="`A WireGuard peer of the hub, with a tunnel address in ${subnetText(wg.address)}.`" width="600px">
     <form class="flex flex-col gap-4" novalidate data-testid="add-client" @submit.prevent="submit">
       <div class="grid grid-cols-2 gap-4">
         <div>

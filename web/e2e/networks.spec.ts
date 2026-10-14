@@ -99,7 +99,9 @@ test('a WireGuard hub lists its clients with their status; a link shows its peer
   await expect(ra).toContainText('Online');
   await expect(ra).toContainText(/handshake \d+ s ago/);
   await expect(ra).toContainText('198.51.100.7:40312');
-  await expect(ra).toContainText('↓ 1.8 MB ↑ 240 KB');
+  // the arrows are the client's: the 1.8 MB the gateway received is what rA sent (↑)
+  await expect(ra.getByTestId('client-upload')).toHaveText('↑ 1.8 MB');
+  await expect(ra.getByTestId('client-download')).toHaveText('↓ 240 KB');
 
   await page.goto(`/networks/${LINK}`);
   await expect(settings.getByRole('heading', { name: 'site-b WireGuard link' })).toBeVisible();
@@ -107,9 +109,43 @@ test('a WireGuard hub lists its clients with their status; a link shows its peer
   await expect(peer).toContainText('10.255.0.1 at 203.0.113.40:51821 (the gateway connects)');
   await expect(peer).toContainText('Online');
   await expect(peer).toContainText(/handshake \d+ s ago/);
+  // the remote side's view: it sent the 52 KB the gateway received
+  await expect(peer.getByTestId('link-traffic')).toHaveText('↓ 48.0 KB ↑ 52.0 KB');
   await expect(settings).toContainText('10.60.0.0/24 (static)');
   await expect(settings).toContainText('10.70.0.0/24 (learned)');
   await expect(clientRows(page)).toHaveCount(0);
+});
+
+test("a link exports its remote side's configuration, with the secret warning, and the BIRD snippet of the protocol on it", async ({ page }) => {
+  const gw = await open(page, `/networks/${LINK}`);
+  const actions = page.getByTestId('link-export-actions');
+  await actions.getByRole('button', { name: 'Remote configuration' }).click();
+  const conf = page.getByRole('dialog', { name: 'Remote configuration of site-b' });
+  await expect(conf.getByTestId('link-export-secret')).toContainText("This configuration contains the remote side's private key");
+  // the secret is shown on request only
+  await expect(conf.getByTestId('link-export-text')).toHaveCount(0);
+  await conf.getByRole('button', { name: 'Show the configuration text' }).click();
+  await expect(conf.getByTestId('link-export-text')).toContainText('Address = 10.255.0.1/31');
+  const download = page.waitForEvent('download');
+  await conf.getByRole('button', { name: 'Download site-b-remote.conf' }).click();
+  expect((await download).suggestedFilename()).toBe('site-b-remote.conf');
+  expect(gw.requestsTo('GET', `/networks/${LINK}/export`)[0]!.query).toEqual({ format: 'conf' });
+  await conf.getByRole('button', { name: 'Close' }).first().click();
+
+  // a BGP session runs on the link: its snippet
+  await actions.getByRole('button', { name: 'BIRD snippet' }).click();
+  const bird = page.getByRole('dialog', { name: 'BIRD snippet of site-b' });
+  await expect(bird.getByTestId('link-export-text')).toContainText('protocol bgp site-b-bgp');
+  await expect(bird.getByTestId('link-export-secret')).toHaveCount(0);
+  expect(gw.requestsTo('GET', `/networks/${LINK}/export`)[1]!.query).toEqual({ format: 'bird' });
+});
+
+test('a link without a routing protocol offers no BIRD snippet', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  gw.config = { ...gw.config, routing: { ...gw.config.routing, protocols: {} } };
+  await open(page, `/networks/${LINK}`, gw);
+  await expect(page.getByTestId('link-export-actions').getByRole('button', { name: 'Remote configuration' })).toBeVisible();
+  await expect(page.getByTestId('link-export-actions').getByRole('button', { name: 'BIRD snippet' })).toHaveCount(0);
 });
 
 test('a client that goes offline is shown offline after the next poll', async ({ page }) => {
@@ -147,6 +183,8 @@ test('add a client: the next free address is proposed, the checks stand under th
   await expect(dialog.getByText('10.51.0.0 is no IPv4 network such as 10.50.0.0/24.')).toBeVisible();
   await dialog.getByLabel('Client networks (subnets behind the client)').fill('10.51.0.0/24');
   await dialog.getByRole('checkbox', { name: /IoT/ }).check();
+  // another client's networks are a choice too (plan §2.2.1)
+  await dialog.getByRole('checkbox', { name: 'Client networks of rA (10.50.0.0/24)' }).check();
   await expect(dialog.getByTestId('add-client-preview')).toContainText('Client rC is added to lab-hub with the tunnel address 10.99.0.3');
 
   // the API panel shows the candidate the dialog would send
@@ -160,7 +198,7 @@ test('add a client: the next free address is proposed, the checks stand under th
   const created = gw.requestsTo('POST', '/revisions').at(-1)!;
   const patch = created.body as { networks: Record<string, { clients: Record<string, unknown> }> };
   expect(Object.values(patch.networks[HUB]!.clients)).toEqual([
-    { name: 'rC', address: '10.99.0.3', client_networks: ['10.51.0.0/24'], reachable: [{ network: IOT }], key: { mode: 'generated' } },
+    { name: 'rC', address: '10.99.0.3', client_networks: ['10.51.0.0/24'], reachable: [{ network: IOT }, { client: CLIENT_RA }], key: { mode: 'generated' } },
   ]);
   await page.getByRole('button', { name: 'Apply revision 43' }).click();
   await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
@@ -189,6 +227,58 @@ test('backing out of the drawer keeps the new client in the draft, marked NEW, u
   await expect(clientRows(page).nth(1).getByRole('button', { name: /Configuration/ })).toHaveCount(0);
   await page.getByRole('button', { name: 'Discard' }).click();
   await expect(clientRows(page)).toHaveCount(1);
+});
+
+test('a new client not applied yet can be edited and undone on its own; the other changes of the draft stay', async ({ page }) => {
+  const gw = await open(page, `/networks/${HUB}`);
+  const rA = clientRows(page).filter({ hasText: 'rA' });
+  await rA.getByRole('button', { name: 'Disable rA' }).click();
+  await page.getByRole('button', { name: 'Add client' }).first().click();
+  await page.getByRole('dialog', { name: 'Add client to lab-hub' }).getByLabel('Name').fill('rC');
+  await page.getByRole('dialog', { name: 'Add client to lab-hub' }).getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+  await expect(bar(page)).toHaveText(/2 changes in 2 WireGuard clients/);
+
+  // Edit opens it with its fields as they are
+  const rC = clientRows(page).filter({ hasText: 'NEW' });
+  await rC.getByRole('button', { name: 'Edit rC' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit client of lab-hub' });
+  await expect(edit.getByLabel('Name')).toHaveValue('rC');
+  await expect(edit.getByLabel('Tunnel address')).toHaveValue('10.99.0.3');
+  await edit.getByLabel('Name').fill('rD');
+  await edit.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByTestId('preview-drawer')).toContainText('WireGuard client rD added (10.99.0.3)');
+  const patch = gw.requestsTo('POST', '/revisions').at(-1)!.body as { networks: Record<string, { clients: Record<string, { name: string }> }> };
+  const { [CLIENT_RA]: changed, ...added } = patch.networks[HUB]!.clients;
+  expect(changed).toEqual({ enabled: false });
+  expect(Object.values(added).map((c) => c.name)).toEqual(['rD']);
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+
+  // Undo takes only the new client out of the draft; rA's change stays
+  const rD = clientRows(page).filter({ hasText: 'rD' });
+  await rD.getByRole('button', { name: 'Undo adding rD' }).click();
+  await expect(clientRows(page)).toHaveCount(1);
+  await expect(bar(page)).toHaveText(/1 change in 1 WireGuard client/);
+  await expect(rA).toContainText('CHANGED');
+});
+
+test('a refused action on a client of the gateway is marked in its row, with what the gateway said and its actions', async ({ page }) => {
+  const gw = await open(page, `/networks/${HUB}`);
+  const rA = clientRows(page).filter({ hasText: 'rA' });
+  await rA.getByRole('button', { name: 'Rotate the keys of rA' }).click();
+  await page.getByRole('dialog', { name: 'Rotate the keys of rA' }).getByRole('button', { name: 'Rotate keys' }).click();
+  gw.rejectRevision = [{ path: `/networks/${HUB}/clients/${CLIENT_RA}/key`, code: 'invalid', message: 'the key generation must grow by one.' }];
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByTestId('preview-invalid')).toContainText('WireGuard client rA · key: the key generation must grow by one.');
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+  await expect(rA).toContainText('CHANGED');
+  await expect(rA).toContainText('NEEDS FIXING');
+  await expect(rA.getByTestId('client-refused')).toHaveText('The gateway refused it: the key generation must grow by one.');
+  // its actions stay: rotate again, or Undo
+  await expect(rA.getByRole('button', { name: 'Rotate the keys of rA' })).toBeVisible();
+  await rA.getByRole('button', { name: 'Undo the changes of rA' }).click();
+  await expect(rA).not.toContainText('NEEDS FIXING');
+  await expect(bar(page)).toBeHidden();
 });
 
 test("a new client the gateway refuses says why in its row; Fix opens it again with the message under its field", async ({ page }) => {

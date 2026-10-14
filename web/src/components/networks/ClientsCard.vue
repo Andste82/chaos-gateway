@@ -4,7 +4,8 @@
 // seen at and its bytes; a client of the configuration draft is marked NEW until it is applied. Add client
 // opens the add-client dialog, Configuration the QR code and the download of a client's configuration.
 // A new client the gateway refused says why in its row, and Fix opens it again in the dialog with the
-// messages under its fields (plan §2.17 "Validation"). A client of the gateway can be disabled or
+// messages under its fields (plan §2.17 "Validation"); a new client not applied yet can be edited in
+// the same dialog or undone on its own. A refused action on a client of the gateway is marked too. A client of the gateway can be disabled or
 // enabled, get new keys and be deleted (plan §2.2.1; P3-M14-01): each action goes into the
 // configuration draft (marked CHANGED or DELETED, Undo takes it back) and through the preview and the
 // apply, with commit-confirm where the gateway says the change could lock the admin out (a client of
@@ -66,6 +67,8 @@ const rows = computed<Row[]>(() => {
       rotated: !!edit?.client && keysText(edit.client) !== keysText(draft.baseClient(props.network.id, v.id) ?? v.config),
       view: v,
       mark: edit ? (edit.client === null ? 'DELETED' : 'CHANGED') : undefined,
+      // a refused action on a client of the gateway (disable, new keys, delete) is marked as well
+      errors: draft.serverErrors[v.id],
     });
   }
   for (const [id, c] of Object.entries(draft.effectiveClients(props.network.id))) {
@@ -111,8 +114,8 @@ function remove(r: Row) {
   draft.setClient(props.network.id, r.id, null);
 }
 function undo(r: Row) {
-  const base = draft.baseClient(props.network.id, r.id);
-  if (base) draft.setClient(props.network.id, r.id, base);
+  // a client of the base gets its version back; a new one leaves the draft (the other changes stay)
+  draft.setClient(props.network.id, r.id, draft.baseClient(props.network.id, r.id) ?? null);
 }
 const rotating = ref<Row>();
 const rotateOpen = computed({
@@ -134,7 +137,7 @@ function handshake(v: WireGuardClientView | undefined): string {
 <template>
   <SectionCard :title="`Clients of ${wg.name}`">
     <template #actions>
-      <span class="text-xs text-text-3">online: a handshake in the last 3 min</span>
+      <span class="text-xs text-text-3">online: a handshake in the last 3 min · traffic as the client sees it: ↑ sent, ↓ received</span>
       <button type="button" class="btn btn-primary btn-sm" @click="add">Add client</button>
     </template>
     <p v-if="clients.isLoading.value" class="m-0 text-sm text-text-2">Loading the clients…</p>
@@ -182,12 +185,29 @@ function handshake(v: WireGuardClientView | undefined): string {
           </td>
           <td class="mono py-2.5 text-[13px]">{{ r.view?.status.endpoint || '—' }}</td>
           <td class="mono py-2.5 text-[13px]">
-            <template v-if="r.view?.status.rx_bytes !== undefined">↓ {{ formatBytes(r.view.status.rx_bytes) }} ↑ {{ formatBytes(r.view.status.tx_bytes) }}</template>
+            <!-- the gateway counts rx/tx from its side: what it received is what the client sent (↑), as the device's traffic and the fault chips have it -->
+            <template v-if="r.view?.status.rx_bytes !== undefined"
+              ><span data-testid="client-download">↓ {{ formatBytes(r.view.status.tx_bytes) }}</span> <span data-testid="client-upload">↑ {{ formatBytes(r.view.status.rx_bytes) }}</span></template
+            >
             <template v-else>—</template>
           </td>
           <td class="py-2.5 text-right">
             <div class="flex flex-wrap justify-end gap-1.5" data-focus-group>
-              <button v-if="r.errors" type="button" class="btn btn-sm" :aria-label="`Fix ${r.name}`" @click="fix(r.id)">Fix</button>
+              <button v-if="r.errors && !r.view" type="button" class="btn btn-sm" :aria-label="`Fix ${r.name}`" @click="fix(r.id)">Fix</button>
+              <template v-else-if="r.mark === 'NEW'">
+                <button type="button" class="btn btn-sm" :aria-label="`Edit ${r.name}`" @click="fix(r.id)">Edit</button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :aria-label="`Undo adding ${r.name}`"
+                  @click="
+                    refocusAfterSwap($event);
+                    undo(r);
+                  "
+                >
+                  Undo
+                </button>
+              </template>
               <template v-else-if="r.view && r.mark === 'DELETED'">
                 <button
                   type="button"
@@ -202,7 +222,7 @@ function handshake(v: WireGuardClientView | undefined): string {
                   Undo
                 </button>
               </template>
-              <template v-else-if="r.view && r.mark !== 'NEW'">
+              <template v-else-if="r.view">
                 <button type="button" class="btn btn-sm" :aria-label="`Configuration and QR code of ${r.name}`" @click="showing = r.view">Configuration</button>
                 <button type="button" class="btn btn-sm" :aria-label="`${r.enabled ? 'Disable' : 'Enable'} ${r.name}`" @click="setEnabled(r, !r.enabled)">
                   {{ r.enabled ? 'Disable' : 'Enable' }}

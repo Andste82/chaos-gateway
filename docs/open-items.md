@@ -737,6 +737,7 @@ decided option is implemented. As of 2026-10-14 every Phase 3 item is closed exc
   shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery".
 - Evidence: `web/src/components/layout/AppShell.vue`.
 - Task: when M27/M30 write the recovery instructions, point the link at them (served with the app or in the docs).
+  M30's Scope in docs/plan.md §5 names the recovery instructions and the banner link (added by the Phase 3 audit).
 - Acceptance: the link leads to the recovery instructions.
 - Needs maintainer: no
 - Effort: S
@@ -1218,3 +1219,38 @@ without a maintainer decision; where a fix had to choose, it took the option clo
 - After a dialog or drawer whose opener is gone (the sticky bar's button while it was hidden is kept mounted; Apply
   ends the draft), the focus goes to the page's heading; a Remove/Delete/Adopt swapped for Undo hands it to its
   replacement. Deleting a rule moves the editor to the next rule as before, but the focus to the deleted rule's Undo.
+
+
+### Phase 3 audit: choices made in the M13, M14 and interplay fixes (2026-10-14)
+
+The audit's findings on the faults, rules and profiles screens, the networks screen and the interplay of the draft with
+other revisions were fixed without a maintainer decision; where a fix had to choose, it took the option closest to the
+plan:
+
+- A revision applied while an edit dialog is open (on a clean draft): the dialog saves against the revision it opened on
+  (`editOrigin`/`editFrom`), so the next preview gets 409 and the concurrent-change dialog, whose reapply keeps the
+  fields only the other revision changed. The other option, reapplying the edit silently onto the newer revision, was
+  not taken: where both changed the same field, the user would not see that theirs is overwritten. Adding a new object
+  needs no origin (there is nothing of theirs to meet).
+- Edits made while the own revision waits for confirmation: when it is confirmed, the draft moves onto it silently
+  (only for the revision this UI applied, and only while nothing else became active). Plan §2.17's "controls that would
+  change more are disabled until resolved" was not extended to every editor: Preview & apply stays disabled while a
+  revision waits, which keeps the plan's guarantee that nothing more is applied.
+- A client edit whose hub the other revision deleted is dropped on reapply and named ("hub … deleted → my change
+  dropped"); it is kept only when the draft brings the hub back itself.
+- A TCP reset rule: choosing TCP reset selects TCP, and another protocol is refused under Access (as the gateway's
+  `reset_requires_tcp`, which reports it on `/action`).
+- The preview drawer cannot be closed while the apply runs, rather than reporting a failed apply in a toast after it
+  was closed.
+- An overlay that expired while its edit dialog was open: Keep says it expired and the dialog asks for a new duration,
+  rather than closing the dialog.
+- WireGuard traffic of a client and of a link's peer is shown from the remote side (↑ what it sent = the gateway's
+  `rx_bytes`), as plan §2.2.1 sets the directions of tunnel faults and the UI shows a device's traffic.
+- A link exports its remote configuration and BIRD snippet in the UI (plan §2.2.1 "Keys and export"); the zip of a
+  hub's client configurations stays an API/CLI export (the UI exports each client in its dialog, which keeps the
+  "export once" handling in one place, and the web fetcher reads text).
+- A new client of the draft has Edit and Undo of its own; a refused action on a client of the gateway is marked in its
+  row, which keeps its actions (the add-client dialog's Fix would rebuild the client from the add form and lose its
+  `enabled` and key generation).
+- Plan §5 M14 Scope and the §2.17 Networks and Profiles rows now name what P3-M14-01, P3-M14-03 and P3-M13-08 added; M30's
+  Scope names the recovery instructions and the safe-mode banner's link (P3-M12-05).

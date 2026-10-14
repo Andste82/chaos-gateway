@@ -3587,9 +3587,10 @@ Plan §2.17 ("Networks", "Technical view", "Commit-confirm"), §2.2, §2.2.1, §
 detail of a network, the DHCP pool and leases, the WireGuard networks with their client list and the clients' status, the
 add-client dialog with the next free tunnel address proposed in the browser, the QR dialog and the download of a client's
 configuration, the routing view, the access matrix edited through the draft (with commit-confirm where the gateway asks for
-it) and the compiled-state view. The client actions of plan §2.2.1 (disable/enable, rotate keys, delete) go through the
-draft too (P3-M14-01, part 1); editing networks themselves (a new network, its subnet, DHCP or DNS settings) and the
-routing configuration stays with the API and the configuration import until the other parts of P3-M14-01 follow.
+it) and the compiled-state view. The client actions of plan §2.2.1 (disable/enable, rotate keys, delete; P3-M14-01, part
+1), the networks themselves (add, edit and delete local test networks with one or several ports, DHCP and DNS, and
+WireGuard hubs and links; part 2, which also closes P3-M12-04) and the routing configuration of plan §2.2.2 (the BIRD
+settings and the protocols on the links; part 3) go through the draft too.
 
 ### How it works
 
@@ -3676,6 +3677,63 @@ routing configuration stays with the API and the configuration import until the 
   An access matrix change is not lockout-relevant in the backend (the control plane is gateway protection, not the matrix),
   so it is applied at once; a client of a management hub is the change of the networks view that waits for confirmation
   (decided 2026-10-14, P3-M14-02: M14's Scope says "access matrix editing (commit-confirm where lockout-relevant)").
+- **Network forms** (`NetworkDialog.vue`, logic in `src/lib/networkForm.ts` and `src/lib/networkChanges.ts`; plan §2.2,
+  §2.2.1, §2.7, §2.6; P3-M14-01, part 2). **Add network** in the page header opens the form with the kind (Test network,
+  WireGuard hub, WireGuard link) and a proposal (`proposeAddress`: the first free 10.N.0.1/24 from 10.30 on, a hub from
+  10.90 on, a link the first free /31 of 10.255.0.0/24; `proposeListenPort`: the first free UDP port from 51820 on). A
+  local network has its name, gateway address with the prefix (the subnet is shown as the hint), its **ports** — one or
+  several physical interfaces of its bridge, chosen from the host's interfaces (`GET /system/interfaces`, with MAC, driver,
+  link and "configured by the OS"); the uplink and the management interface and the ports of other networks of the draft
+  cannot be chosen, and a port the network has that the host does not show stays listed — DHCP (on/off, pools as
+  "start-end", lease time; under Advanced the router, DNS, domain and NTP options and custom options as "code value"
+  lines), DNS (redirect hardcoded resolvers, block DoT; static entries as "name address, …" lines), downstream routes
+  ("10.40.0.0/24 via 10.30.0.254") and masquerade. A WireGuard network has its role (test, or management: the form says
+  that the apply will wait for confirmation), listen port, MTU and public endpoint; a link the remote side's address (the
+  other address of the /31, following the transfer network), its endpoint (the gateway connects when it is set), keepalive,
+  keys (generated, or the remote side's public key; a preshared key) and enabled switch, and its static routes. The checks
+  of the spec and of the gateway's validation that the browser can make stand under their fields (`networkFormErrors`:
+  the name pattern and a name no other network has, a host address with a prefix of at most /30 — a link /31 — that
+  overlaps no other network of the draft, at least one port and none of the uplink, the management network or another
+  network, pools inside the subnet, in order, without the gateway address and not overlapping, durations, IPv4 options,
+  option codes once and from 1 to 254, host names, routers inside the subnet, a free listen port, MTU 1280 to 1500,
+  endpoints as host:port, the peer inside the transfer network, a WireGuard key); the address from the start, the rest
+  from the first Preview & apply on. `networkFromForm` builds the network from the one the draft has, so what the form does
+  not edit stays (a hub's clients, a link's key generation, an explicit default), a new port is named by name and MAC like
+  the setup does, and a port the configuration names by MAC only keeps that reference. The network goes into the draft
+  (`setNetwork`: the network's own settings, without the clients of a hub, which `clients` holds) and the drawer opens; the
+  merge patch carries a new network whole and of a changed one only the changed members (`{"interfaces": [...], "dhcp":
+  {"pools": [...]}}`), with the client edits of a hub in the same `networks.<id>` entry. The selected network has **Edit**,
+  **Delete** and, for a network of the draft, **Undo**; its card and its settings are marked NEW, CHANGED or DELETED and
+  show the draft's settings (a new network is listed as "not applied yet", without leases or clients until the apply). A
+  deleted network takes the client edits of its hub along (the patch is `null`). The gateway refuses a deletion while
+  something still refers to the network (`unknown_reference` at the referring object: a device, a probe, a rule, a fault,
+  a matrix entry, a routing protocol, a client's `reachable`); the drawer lists each by its object and field and says
+  "refers to IoT, which this change deletes; remove the reference first or keep the network", and an overlay the deletion
+  would orphan is listed under "Applying removes what refers to a deleted object" by its object ("Network IoT"). A network
+  the gateway refused (422, mapped by `setServerErrors` from `/networks/<id>/<pointer>`) says so in its settings, and
+  **Fix** opens the form with each message under the field it is about (`networkFieldOf`) until the form is changed. The
+  changes in words (`networkChanges`) name a new network ("added (test network 10.30.0.0/24, ports eth3, eth4)") and the
+  fields of a changed one (ports, DHCP, DNS, routes, role, listen port, MTU, endpoint, peer). The concurrent-change dialog
+  compares and reapplies networks like the other objects (their settings without the clients). Commit-confirm is the
+  gateway's: a WireGuard network with the role management, added, changed or deleted, is lockout-relevant.
+- **Routing forms** (`RoutingView.vue` card "Configuration", `ProtocolDialog.vue`, `RoutingSettingsDialog.vue`, logic in
+  `src/lib/routingForm.ts`; plan §2.2.2; P3-M14-01, part 3). The card shows the routing as the draft has it: router id,
+  local AS, external mode, and a row per protocol (name, type, link, its settings, what it announces and imports,
+  "unmanaged snippet", NEW/CHANGED/DELETED, Edit/Fix, Delete, Undo). **Settings** edits the router id, the local AS (required
+  while a BGP protocol exists) and the external mode (kernel table — not one of the system's or Chaos Gateway's own,
+  100 to 110 and 253 to 255 — with its import filter). **Add protocol** chooses BGP, OSPF or Babel, its link (the WireGuard
+  links of the draft; one protocol of each type per link), what it announces (the networks, the clients of the hubs with
+  client networks, further prefixes), the import filter (allowed prefixes one per line, "10.70.0.0/16 le 24" for longer
+  ones up to /24; the default route; the most prefixes), the settings of its type (BGP: neighbor AS, neighbor address —
+  the link's peer by default —, hold and keepalive time, at least three keepalives per hold time, passive; OSPF: area,
+  hello and dead interval, the dead one longer, cost; Babel: hello interval, receive cost), the enabled switch and a custom
+  BIRD snippet. `protocolFromForm` keeps what the form does not edit and drops the settings of another type (the gateway
+  refuses them). The routing goes into the draft whole (`setRouting`, `setProtocol`, `restoreProtocol`; a routing back at
+  its base is no change), its merge patch against the base (`routing.protocols.<id>` whole for a new protocol, the changed
+  members otherwise, `null` for a deleted one), and its changes in words per protocol ("protocol site-b-bgp neighbor AS:
+  65002 → 65003"). The gateway's messages about `/routing/protocols/<id>/…` and `/routing/…` go to the protocol and to the
+  settings (`protocolFieldOf`, `routingSettingsFieldOf`); the concurrent-change dialog names a field both changed by the
+  protocol's name and reapplies member by member. The status of the sessions below stays the gateway's.
 - **Routing** (`src/views/RoutingView.vue`, `/networks/routing`): the BIRD instance (running, version, router id, ASN, last
   configuration, last error, external mode), a card per session (`GET /routing/status`, every 5 s; BGP, OSPF, Babel) with
   its link, its state with BIRD's detail ("up · Established") and since when, imported, filtered and exported routes, the
@@ -3736,7 +3794,11 @@ routing configuration stays with the API and the configuration import until the 
 | `GET /state/linux/{kind}/{id}`: a rule's rules, counter and source set, a fault's mark chain, counters, elements, classes and netem queues, a device's identity and classification elements, nothing of another object, by id and name (a name only one rule can carry), empty for an object the kernel lacks (P3-M14-03) | `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`, `TestTheLinuxViewFindsARuleByANameThatOnlyOneRuleCanCarry` (`internal/api/linuxobject_test.go`), `TestRenderObjectShowsOnlyWhatTheSelectionNames` (`internal/apply/objectview_test.go`), `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`, `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange` (`internal/engine/linuxview_internal_test.go`) |
 | A client of the draft opens again as the form that made it; the gateway's messages by field | `src/lib/networks.test.ts` "opens a client of the draft again as the form that made it", "puts the gateway's messages under the field they are about" |
 | The PNG QR code of the gateway (`wireguard.QRPNG`): every module a square of whole pixels, 100 codes of random configurations decode | `TestEveryQRCodeDecodes` (`internal/wireguard/export_test.go`) |
-| Screens against the mocked API (Playwright) | `web/e2e/networks.spec.ts` |
+| The network form: a test network with several ports, DHCP and DNS and a hub and a link built as the spec accepts them (the generated Zod schema), the checks under the fields, the form of a network and what it keeps, the gateway's messages by field, the proposals (P3-M14-01) | `src/lib/networkForm.test.ts` |
+| The routing forms: durations and prefix filters, an OSPF protocol and the BIRD settings as the spec accepts them, the checks, what they keep, the gateway's messages by field (P3-M14-01) | `src/lib/routingForm.test.ts` |
+| Draft: a network added (several ports), changed (a hub without its clients, with a client in the same entry), deleted (with its client edits), the gateway's messages for networks, protocols and the routing settings, the routing's changes and merge patch, reapplying networks and the routing on their revision (P3-M14-01) | `src/stores/draft.networks.test.ts` |
+| Deleting a network that is referenced: `unknown_reference` at every referring object with the network's id in the message; deleted with its references, it goes | `TestDeletingAReferencedNetworkNamesEveryReference` (`internal/domain/candidate_test.go`) |
+| Screens against the mocked API (Playwright) | `web/e2e/networks.spec.ts`, `web/e2e/network-forms.spec.ts` (the network and routing forms) |
 | The browser flow against the real stack | `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/wireguard.spec.ts` |
 
 **The mocked API** (`web/e2e/mock.ts`) grew the networks of the testbed's configuration (`withNetworks`: IoT and Test, the
@@ -3748,7 +3810,13 @@ management hub answers `pending_confirm` with a deadline `confirmWindowMs` away 
 /revisions/{id}/rollback`, and `rollBackPending`, which rolls the waiting revision back and returns the event the gateway
 would send. The preview names added clients and the matrix change and says whether the change needs a confirmation.
 `rejectRevision` may be a function of the merge patch (a refusal that names the new client's id), and `exportGate` holds
-the next client export back (a slow export).
+the next client export back (a slow export). For the network and routing forms (P3-M14-01) it lists the host's interfaces
+(`GET /system/interfaces`, `hostInterfaces`), lists the networks of the active configuration once it has networks (an
+applied new network appears, a deleted one goes; a local network's ports follow its configuration), answers `GET
+/routing` from the active configuration, names added, changed and removed networks and routing protocols in the preview,
+and refuses a candidate that deletes a network something still refers to (`danglingReferences`: rules, faults, devices,
+the matrix, routing protocols, each as `unknown_reference` at its pointer), as the gateway does. In `withNetworks` the
+management network has an interface of its own (`eth5`).
 
 **The browser flow in the testbed.** `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` builds the testbed with the
 configuration of `testbed_wg.yaml`, polls the WireGuard state every second and gives commit-confirm a window of 90 s. In
@@ -3786,6 +3854,9 @@ not run on this branch with the M14 flow yet.
 | Scope: add-client dialog (proposes the next free tunnel address of the hub, computed client-side) | `networks.spec.ts` "add a client: …" (the proposal, the checks under the fields, the request, the next proposal after the apply), "a new client the gateway refuses says why in its row; Fix opens it again with the message under its field"; `src/lib/networks.test.ts` "the next free tunnel address of a hub (plan M14, computed client-side)", "the add-client form" |
 | Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …", "a slow export of one client never shows up in the dialog of another", "an export-once key is never lost: …", "an export-once answer that arrives while no dialog is open …"; the testbed flow |
 | Client actions: disable/enable, rotate keys, delete through the draft, the drawer, the conflict dialog and commit-confirm (P3-M14-01, part 1) | `networks.spec.ts` "client actions: disable and rotate the keys of a client through the draft, the drawer and the apply; Undo takes them back (P3-M14-01)", "client actions: a client the configuration has with enabled: true is no change after Disable and Enable, and Undo goes back to it (P3-M14-01)", "client actions: a client changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change (P3-M14-01)", "client actions: a draft rebased onto another revision's key rotation shows no rotation of its own (P3-M14-01)", "client actions: delete a client, Undo brings it back, deleted through the drawer it is gone (P3-M14-01)", "client actions: a client with its own key rotates by its new public key, checked under the field (P3-M14-01)", "client actions: disabling a client of the management hub waits for confirmation (P3-M14-01)"; `src/lib/networks.test.ts` "the client actions (P3-M14-01)"; `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of their fields (P3-M14-01)" |
+| Network forms: create, edit and delete local test networks (several ports, DHCP, DNS) and WireGuard hubs and links through the draft, the drawer, the conflict dialog and commit-confirm; validation errors under the fields; what still refers to a deleted network (P3-M14-01, part 2) | `network-forms.spec.ts` "network forms: add a test network with several ports through the drawer; after the apply it is listed with both ports (P3-M12-04)", "network forms: edit a test network — a second port, a pool and DNS; the patch has only what changed, Undo takes it back (P3-M12-04)", "network forms: delete a test network through the drawer; Undo before brings it back", "network forms: deleting a network that rules, the access matrix and the routing still refer to shows what the gateway reports", "network forms: the checks stand under the fields, and Preview & apply waits until the form is valid", "network forms: a network the gateway refuses says why; Fix opens it again with the gateway's message under its field", "network forms: a WireGuard hub is added, and edited — its clients stay out of the patch", "network forms: a WireGuard link is added with its peer and routes, and edited", "network forms: a management WireGuard network is lockout-relevant — the apply waits for confirmation, Confirm makes it active", "network forms: a network changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change"; `src/lib/networkForm.test.ts`; `src/stores/draft.networks.test.ts`; backend `TestDeletingAReferencedNetworkNamesEveryReference` |
+| A LAN network with several ports (P3-M12-04) | `network-forms.spec.ts` "network forms: add a test network with several ports through the drawer; after the apply it is listed with both ports (P3-M12-04)", "network forms: edit a test network — a second port, a pool and DNS; the patch has only what changed, Undo takes it back (P3-M12-04)"; `src/lib/networkForm.test.ts` "a test network with several ports, DHCP and DNS: no problem, and the network the spec accepts" |
+| Routing forms: the BIRD settings and the protocols of plan §2.2.2 through the draft and the drawer; validation errors under the fields (P3-M14-01, part 3) | `network-forms.spec.ts` "routing forms: add an OSPF protocol on a link through the drawer; it is listed with what it announces and imports", "routing forms: edit and delete a protocol and change the BIRD settings through the draft; Undo takes each back", "routing forms: the checks stand under the fields; a protocol the gateway refuses opens again with the gateway's message under its field"; `src/lib/routingForm.test.ts`; `src/stores/draft.networks.test.ts` |
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
 | Scope: access matrix editing (commit-confirm where lockout-relevant) | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |

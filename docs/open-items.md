@@ -648,9 +648,7 @@ Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
 2026-10-14; an item that is decided but not yet done carries a "Decision (2026-10-14)" line and is closed when the
-decided option is implemented. As of 2026-10-14 every Phase 3 item is closed except: P3-M12-05, which waits for M27/M30;
-P3-M14-01, whose client actions (part 1) are done while the network forms (part 2) and the routing forms (part 3) are
-not yet implemented; and P3-M12-04, which closes when the network form of P3-M14-01 edits several ports of a LAN network.
+decided option is implemented. As of 2026-10-14 every Phase 3 item is closed except P3-M12-05, which waits for M27/M30.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 
@@ -710,7 +708,15 @@ not yet implemented; and P3-M12-04, which closes when the network form of P3-M14
 
 ### P3-M12-04 The setup wizard makes one test network per test interface
 
-- Status: new
+- Status: closed (2026-10-14): decided — the wizard stays as it is (one LAN network per test interface), and the network
+  form of P3-M14-01 adds and edits a LAN network with several ports: its ports are chosen from the host's interfaces
+  (`GET /system/interfaces`; the uplink, the management interface and the ports of other networks cannot be chosen) and
+  go into `interfaces` by name and MAC (`web/src/components/networks/NetworkDialog.vue`, `web/src/lib/networkForm.ts`);
+  tests `network-forms.spec.ts` "network forms: add a test network with several ports through the drawer; after the
+  apply it is listed with both ports (P3-M12-04)", "network forms: edit a test network — a second port, a pool and DNS;
+  the patch has only what changed, Undo takes it back (P3-M12-04)", `src/lib/networkForm.test.ts` "a test network with
+  several ports, DHCP and DNS: no problem, and the network the spec accepts", `src/stores/draft.networks.test.ts` "a new
+  test network with several ports is a change in words and the whole network in the patch; taken back it is none"
 - Decision (2026-10-14): keep the wizard as is (one LAN network per test interface); several ports per LAN network are edited in
   the network form of P3-M14-01; the item closes when that form can do it
 - Severity: low
@@ -1040,7 +1046,7 @@ not yet implemented; and P3-M12-04, which closes when the network form of P3-M14
 
 ### P3-M14-01 Networks, clients after they were added and the routing configuration are not edited in the UI
 
-- Status: in progress (2026-10-14): part 1, the client actions, is done — a WireGuard client of the gateway has
+- Status: closed (2026-10-14): option (a) in full. Part 1, the client actions — a WireGuard client of the gateway has
   Disable/Enable, Rotate keys (the next key generation for generated keys, the new public key for a client's own key)
   and Delete, each an edit of the configuration draft with Undo, through the preview drawer, the concurrent-change
   dialog and commit-confirm for a client of a management hub (`ClientsCard.vue`, `RotateKeysDialog.vue`,
@@ -1050,8 +1056,25 @@ not yet implemented; and P3-M12-04, which closes when the network form of P3-M14
   draft); tests `networks.spec.ts` "client actions: …" (seven tests, among them "client actions: a draft rebased onto
   another revision's key rotation shows no rotation of its own (P3-M14-01)"), `src/lib/networks.test.ts` "the client
   actions (P3-M14-01)", `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of
-  their fields (P3-M14-01)". The network forms (part 2) and the routing forms (part 3) follow; the item closes with
-  them.
+  their fields (P3-M14-01)". Part 2, the network forms — Add network, and Edit, Delete and Undo of the selected network
+  (`NetworkDialog.vue`, `NetworkSettings.vue`, `NetworksView.vue`, `src/lib/networkForm.ts`, `src/lib/networkChanges.ts`,
+  the draft's `setNetwork`): a local test network with its gateway address and subnet, one or several ports, DHCP (pools,
+  lease time, options), DNS (redirect, DoT, static entries), downstream routes and masquerade; a WireGuard hub or link
+  with its role, listen port, MTU, endpoint and, for a link, the remote side (address, endpoint, keepalive, keys) and its
+  static routes; the checks under the fields, the gateway's messages under the fields (Fix), and for a deleted network
+  that something still refers to the gateway's report in the drawer ("refers to IoT, which this change deletes"; backend
+  `TestDeletingAReferencedNetworkNamesEveryReference`). Part 3, the routing forms — the configuration card of the routing
+  view with Settings (router id, local AS, external mode with its import filter) and Add protocol, Edit, Delete and Undo
+  per protocol (`ProtocolDialog.vue`, `RoutingSettingsDialog.vue`, `src/lib/routingForm.ts`, the draft's `setRouting`,
+  `setProtocol`): BGP, OSPF or Babel on a link with what it announces, its import filter, the settings of its type and a
+  custom snippet. Everything goes through the draft, the preview drawer, the concurrent-change dialog and commit-confirm,
+  which the gateway asks for when a WireGuard network with the role management is added, changed or deleted. Tests
+  `network-forms.spec.ts` (thirteen tests: create, edit and delete a test network, a hub and a link through the drawer,
+  validation errors under the fields, a refused network fixed, the references of a deleted network, a management hub
+  waiting for confirmation, the conflict dialog, a LAN network with several ports, and the routing: a protocol added,
+  edited, deleted, the BIRD settings, validation errors and a refused protocol fixed), `src/lib/networkForm.test.ts`,
+  `src/lib/routingForm.test.ts`, `src/stores/draft.networks.test.ts`; `docs/development.md` "Web UI: networks, WireGuard,
+  routing and the technical view (M14)".
 - Decision (2026-10-14): option (a) in full — client actions (disable/enable, rotate keys, delete), network forms (create, edit,
   delete LAN networks with subnet, several ports, DHCP, DNS, and WireGuard networks with kind, role, endpoint, …, as the
   model allows) and routing forms (the protocols of plan §2.2.2), each through the draft, the preview drawer, the conflict

@@ -11,7 +11,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   stays open: P2-M9-06, a hardware measurement for H1.
 - **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. The result is
   in [Phase 3 audit result](#phase-3-audit-result), right before the Phase 3 open items; its items, P3-AUDIT-01 to
-  P3-AUDIT-36, are fixed. What the implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
+  P3-AUDIT-36, are fixed; the final CI run with the fixes is still to be recorded there, and four choices the fixes
+  made are listed there to confirm. What the implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
@@ -658,16 +659,41 @@ states of §2.17 and the visual system (M12), the faults, rules and profiles scr
 P3-AUDIT-35 and P3-AUDIT-36. Fixed: 2026-10-14, on the same branch, in the commits named below (the "close-phase-3" round).
 
 **Phase 3 is complete on the branch.** Every milestone delivers its scope, every test the plan lists exists and passes
-(level 0 locally; the Playwright suite against the mocked API; the three testbed browser flows in CI), and every item this
-audit found is fixed, each with a test or the corrected document. No item needed a maintainer decision; where a fix had to
-choose, the choice is recorded below under "Phase 3 audit: choices made in …". Of the Phase 3 open items only P3-M12-05
-stays open; it waits for M27/M30.
+(level 0 locally; the Playwright suite against the mocked API; the three testbed browser flows in CI on `3a120ad`), and
+every item this audit found is fixed, each with a test or the corrected document. One check is still due: the fixes added
+assertions to the testbed browser flow of M13 (`web/e2e-testbed/faults.spec.ts`, in `0b95142`: the device row shows
+"↑↓ 30 ms", the "With faults" filter, the active fault on the device page), which depend on the gateway's new
+`DeviceView.effective` and run only in CI or `make test-vm`; they have not run yet. "Complete" holds once the `testbed-ui`
+job passes with them (see "CI after the fixes" below); if it fails, this verdict is corrected. Of the Phase 3 open items
+only P3-M12-05 stays open; it waits for M27/M30.
+
+No fix was blocked on a maintainer decision; where a fix had to choose, it took the option closest to the plan, and each
+choice is recorded below under "Phase 3 audit: choices made in …". The maintainer may revisit any of them; these four
+are open to confirm (to confirm, not yet confirmed):
+
+1. **The setup's OS-configuration details without a token.** The unauthenticated `GET /setup` still names the files it
+   cannot read and the netplan entries and NetworkManager connections (ids included) that configure an interface, as
+   plan §3.4 wants the wizard to show them. Sending them only with a valid `X-Setup-Token` would need a change of the
+   spec (today only `POST /setup` checks the token).
+2. **The export-once WireGuard configuration across a logout.** A logout clears the query cache and the draft but keeps
+   a configuration no dialog has shown yet (`ClientConfigDialog`'s `unseen`): it is the only copy of the client's private
+   key, and dropping it would force a key rotation.
+3. **The conflict dialog for an edit dialog on a moved base.** An edit dialog open while another revision was applied
+   saves against the revision it opened on and meets the newer one in the concurrent-change dialog, rather than being
+   reapplied silently onto it (where both changed the same field the user would not see theirs overwritten).
+4. **Editors stay open while the own revision waits for confirmation.** Only Preview & apply is disabled; edits made
+   meanwhile move onto the revision once it is confirmed. Plan §2.17's "controls that would change more are disabled
+   until resolved" was not extended to every editor.
+
+Each item is in exactly one row: an item that touches several milestones is in the row most of it concerns
+(P3-AUDIT-10, the states, under M12; P3-AUDIT-17, mostly the rules and profiles, under M13), and the interplay of the
+draft with other revisions (P3-AUDIT-26 to P3-AUDIT-29) is cross-cutting.
 
 | Milestone | Verdict | Audit items (all fixed on 2026-10-14) |
 |---|---|---|
-| M12 UI shell, overview, devices | done with gaps, fixed | P3-AUDIT-01, P3-AUDIT-03, P3-AUDIT-05 to P3-AUDIT-17, P3-AUDIT-36 |
-| M13 UI for faults, rules and profiles | done with gaps, fixed | P3-AUDIT-17 to P3-AUDIT-20, P3-AUDIT-29 |
-| M14 Networks view and technical view | done with gaps, fixed | P3-AUDIT-10, P3-AUDIT-21 to P3-AUDIT-25, P3-AUDIT-27 |
+| M12 UI shell, overview, devices | done with gaps, fixed | P3-AUDIT-01, P3-AUDIT-03, P3-AUDIT-05 to P3-AUDIT-16, P3-AUDIT-36 |
+| M13 UI for faults, rules and profiles | done with gaps, fixed | P3-AUDIT-17 to P3-AUDIT-20 |
+| M14 Networks view and technical view | done with gaps, fixed | P3-AUDIT-21 to P3-AUDIT-25 |
 | Cross-cutting (interplay, API, tests and CI, documents) | done with gaps, fixed | P3-AUDIT-02, P3-AUDIT-04, P3-AUDIT-26 to P3-AUDIT-35 |
 
 ### Evidence
@@ -676,7 +702,9 @@ stays open; it waits for M27/M30.
   and the `testbed-ui` job with the browser flows of M12, M13 and M14).
 - **Local, after the fixes:** `make test`, `make lint`, `make check-spec`, `make check-generated`, `make check-clients`,
   `npm run build` and `make test-e2e` pass.
-- **CI after the fixes:** the final run of the close-phase-3 round on PR #56 is recorded here once the round has pushed.
+- **CI after the fixes:** not run yet. The final run of the close-phase-3 round on PR #56 is recorded here (run id and
+  commit) once the round has pushed; it is the first run of the changed `web/e2e-testbed/faults.spec.ts` (`0b95142`) in the
+  `testbed-ui` job.
 
 ### Items
 
@@ -713,14 +741,14 @@ development guide's acceptance maps name the tests).
 | P3-AUDIT-26 | interplay | An edit dialog open while another revision was applied saved onto the newer revision, overwriting its fields unseen | `a7624a2` |
 | P3-AUDIT-27 | interplay | A client edit whose hub the other revision deleted was kept on reapply | `a7624a2` |
 | P3-AUDIT-28 | interplay | Edits made while the own revision waited for confirmation stayed on the old base once it was confirmed | `a7624a2` |
-| P3-AUDIT-29 | interplay | Keeping an overlay whose expiry passed while its dialog was open closed the dialog instead of asking for a new duration | `a7624a2` |
+| P3-AUDIT-29 | interplay | An overlay that expired while its edit dialog was open was written again for 1 s ("Keep: 0:00 left", `remainingTtl` clamps to one second); Keep now says it expired and a new duration is required (`keepError`) | `a7624a2` |
 | P3-AUDIT-30 | tests | A direct `testvm` run in which no test ran passed, and the `testbed-ui` job could stay green with a renamed browser flow | `0b067e6` |
 | P3-AUDIT-31 | tests | Flaky e2e tests: the adopt-conflict test, the networks helpers' first render, assertion timeouts under CI load | `822cf08` |
 | P3-AUDIT-32 | docs | The development guide and the open items did not record the fixes and the choices they made | `249b355`, `5baf400`, `b187f94` |
 | P3-AUDIT-33 | docs | Plan §5 M14 Scope, the §2.17 Networks and Profiles rows and M30's Scope did not name what the open items added | `b187f94` |
 | P3-AUDIT-34 | docs | The M12 to M14 Status lines, the header of this file and the README did not say the open items were closed; a Decision line marked open work | `dd99280` |
-| P3-AUDIT-35 | docs | (re-review) No audit result for Phase 3 in this file and no phase-level Status line in the plan | this section and the Phase 3 Status line of `docs/plan.md`, in the commit after `dd99280` |
-| P3-AUDIT-36 | accessibility | (re-review) The lockout countdown re-rendered every second inside the login's `role="alert"`, so screen readers announced it again and again; the alert now names the time of day once, and the countdown beside it is no live region (`login.spec.ts` "a locked-out login says how long to wait") | the commit after `dd99280` |
+| P3-AUDIT-35 | docs | (re-review) No audit result for Phase 3 in this file and no phase-level Status line in the plan | this section and the Phase 3 Status line of `docs/plan.md`, in `263defe` |
+| P3-AUDIT-36 | accessibility | (re-review) The lockout countdown re-rendered every second inside the login's `role="alert"`, so screen readers announced it again and again; the alert now names the time of day once, and the countdown beside it is no live region (`login.spec.ts` "a locked-out login says how long to wait") | `263defe` |
 
 ## Phase 3 open items
 
@@ -1262,7 +1290,8 @@ the option closest to the plan, recorded here:
   quote the executor's error (the log has it), but it still names the files that cannot be read and the netplan entries
   and NetworkManager connections (ids included) that configure an interface: plan §3.4 wants the wizard to show the
   entry to remove before the setup. Sending these details only with a valid `X-Setup-Token` (the wizard asks for the
-  token first, but only `POST /setup` checks it today) would need a change of the spec; the maintainer may want it.
+  token first, but only `POST /setup` checks it today) would need a change of the spec; open to confirm (Phase 3 audit
+  result, item 1 of the choices to confirm).
 - A logout clears the query cache and the draft. An export-once WireGuard configuration that no dialog has shown yet
   (`ClientConfigDialog`'s module-level `unseen`) is kept: it is the only copy of the client's private key, there is a
   single admin, and dropping it would force a key rotation. An ended session (401) clears the cache, as before, and
@@ -1323,8 +1352,8 @@ plan:
   `reset_requires_tcp`, which reports it on `/action`).
 - The preview drawer cannot be closed while the apply runs, rather than reporting a failed apply in a toast after it
   was closed.
-- An overlay that expired while its edit dialog was open: Keep says it expired and the dialog asks for a new duration,
-  rather than closing the dialog.
+- An overlay that expired while its edit dialog was open: Keep says it expired ("Keep: expired at 19:31") and the
+  dialog asks for a new duration, rather than writing the ended fault again for one second.
 - WireGuard traffic of a client and of a link's peer is shown from the remote side (↑ what it sent = the gateway's
   `rx_bytes`), as plan §2.2.1 sets the directions of tunnel faults and the UI shows a device's traffic.
 - A link exports its remote configuration and BIRD snippet in the UI (plan §2.2.1 "Keys and export"); the zip of a

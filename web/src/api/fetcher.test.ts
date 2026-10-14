@@ -54,6 +54,22 @@ describe('customFetch', () => {
     expect((error as ApiError).status).toBe(409);
     expect((error as ApiError).code).toBe('revision_conflict');
     expect((error as ApiError).message).toBe('revision 7 is not active any more');
+    expect((error as ApiError).retryAfter).toBeUndefined();
+  });
+
+  it('passes the Retry-After of a refusal on (a locked-out login)', async () => {
+    const limited = (retryAfter: string) =>
+      new Response('{"code":"rate_limited","detail":"too many failed logins; try again in 320 seconds"}', {
+        status: 429,
+        headers: { 'Content-Type': 'application/problem+json', 'Retry-After': retryAfter },
+      });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(limited('320')));
+    const error = (await customFetch('/auth/login', { method: 'POST' }).catch((e: unknown) => e)) as ApiError;
+    expect(error.status).toBe(429);
+    expect(error.retryAfter).toBe(320);
+    // the HTTP-date form is not taken
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(limited('Wed, 21 Oct 2026 07:28:00 GMT')));
+    expect(((await customFetch('/auth/login', { method: 'POST' }).catch((e: unknown) => e)) as ApiError).retryAfter).toBeUndefined();
   });
 
   it('falls back to the title and then to the status for the message', async () => {

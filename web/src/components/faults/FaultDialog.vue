@@ -83,6 +83,8 @@ const layer = ref<'overlay' | 'config'>('overlay');
 const serverErrors = ref<Partial<Record<FaultField, string>>>({});
 const error = ref('');
 const busy = ref(false);
+/** The form as the dialog opened it: a configured fault saved unchanged records nothing (the defaults it fills in are no change). */
+let openedForm = '';
 
 const editing = computed(() => !!props.overlay || !!props.config);
 const title = computed(() => (editing.value ? 'Edit fault' : 'Add fault'));
@@ -106,6 +108,7 @@ watch(open, (o) => {
     form.value.jitter = '50';
     layer.value = 'overlay';
   }
+  openedForm = JSON.stringify(form.value);
   // what the gateway refused in the last candidate, until the fault is edited
   const refused = props.config ? draft.serverErrors[props.config.id] : undefined;
   if (refused) showRefusal(Object.entries(refused).map(([path, message]) => ({ path, message })));
@@ -196,6 +199,11 @@ async function submit() {
   if (!valid.value || busy.value) return;
   error.value = '';
   if (layer.value === 'config') {
+    // an unchanged configured fault is no change: writing the form's defaults back would only rewrite it
+    if (props.config && JSON.stringify(form.value) === openedForm) {
+      open.value = false;
+      return;
+    }
     const id = props.config?.id ?? newId();
     draft.setFault(id, formToConfigFault(form.value, props.config?.fault));
     open.value = false;

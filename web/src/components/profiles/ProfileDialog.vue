@@ -35,6 +35,8 @@ const form = ref<ProfileForm>(emptyProfileForm());
 const serverErrors = ref<Partial<Record<ProfileField, string>>>({});
 const general = ref<string[]>([]);
 let refusedForm = '';
+/** The form as the dialog opened it: saved unchanged, it records nothing (the defaults it fills in are no change). */
+let openedForm = '';
 
 const title = computed(() => (props.profile ? 'Edit profile' : 'New profile'));
 const id = computed(() => props.profile?.id ?? '<new uuid>');
@@ -45,6 +47,7 @@ watch(open, (o) => {
     return;
   }
   form.value = props.profile ? profileToForm(props.profile.config) : emptyProfileForm();
+  openedForm = JSON.stringify(form.value);
   serverErrors.value = {};
   general.value = [];
   // what the gateway refused in the last candidate, until the profile is edited
@@ -101,6 +104,11 @@ watch(
 
 function submit() {
   if (!valid.value) return;
+  // an unchanged profile is no change: writing the form's defaults back would only rewrite it
+  if (props.profile && JSON.stringify(form.value) === openedForm) {
+    open.value = false;
+    return;
+  }
   draft.setProfile(props.profile?.id ?? newId(), result.value);
   open.value = false;
 }

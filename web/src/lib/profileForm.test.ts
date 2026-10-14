@@ -38,6 +38,17 @@ describe('the profile editor (P3-M13-03)', () => {
     expect(formToProfile({ ...f, impairmentOn: false, mtuOn: true })).toEqual({ name: 'asym', parts: { mtu: { size: 1280, mode: 'icmp' } } });
   });
 
+  it("an MTU part without a mode keeps leaving out the default mode; a chosen one is written", () => {
+    const base = { name: 'slow-lab', parts: { impairment: { latency: '20ms' }, mtu: { size: 1280 } } };
+    const f = profileToForm(base);
+    expect(f.mtuMode).toBe('icmp');
+    expect(formToProfile(f, base)).toEqual(base);
+    expect(formToProfile({ ...f, mtuSize: '1400' }, base).parts.mtu).toEqual({ size: 1400 });
+    expect(formToProfile({ ...f, mtuMode: 'blackhole' }, base).parts.mtu).toEqual({ size: 1280, mode: 'blackhole' });
+    // a base with the mode written keeps it written
+    expect(formToProfile(f, { ...base, parts: { mtu: { size: 1280, mode: 'icmp' } } }).parts.mtu).toEqual({ size: 1280, mode: 'icmp' });
+  });
+
   it('keeps a DNS or TLS part the editor does not make', () => {
     const base = { name: 'dns-and-delay', parts: { dns: { action: 'servfail' as const }, impairment: { latency: '5ms' } } };
     const f = profileToForm(base);

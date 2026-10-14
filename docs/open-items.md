@@ -814,7 +814,9 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   reapply after a concurrent change), the card is marked NEW, CHANGED or DELETED and is activated after the apply
   (`ProfileDialog.vue`, `src/lib/profileForm.ts`, `ProfilesView.vue`). Tests `profiles.spec.ts` "create a profile
   through the editor and the drawer, then activate it (P3-M13-03)", "edit and delete a custom profile through the
-  draft; a refused profile shows why (P3-M13-03)"; `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
+  draft; a refused profile shows why (P3-M13-03)" (also: saved unchanged it records nothing, the edit's merge patch),
+  "a custom profile saved without a change is no change, also where the editor reads it in another form (P3-M13-03)";
+  `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
   profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and
   names a field both changed (P3-M13-03)"
 - Decision (2026-10-14): option (a) — a profile editor in the UI (create, edit, delete custom profiles with the impairment and MTU parts
@@ -846,7 +848,8 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `src/lib/netemForm.ts`; `src/lib/faultForm.ts`, `FaultDialog.vue`); plan §2.17's "Add fault" row lists them. Tests
   `fault-kinds.spec.ts` "an MTU fault: created with the kind MTU / PMTUD, then edited on the faults screen", "a tunnel
   fault: edited with the parameters a tunnel takes, and one configured on a link through the draft", "the advanced
-  impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own";
+  impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own", "a configured
+  fault saved without a change is no change; an edit of an MTU fault writes only what changed";
   `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)"
 - Decision (2026-10-14): option (a) — the dialog creates and edits every fault kind the API offers: MTU/PMTUD and tunnel faults (M10)
   and the advanced impairment parameters (burst loss, flapping, distributions, different parameters per direction); no

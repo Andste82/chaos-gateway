@@ -75,6 +75,15 @@ describe('the fault dialog', () => {
     });
   });
 
+  it("a configured MTU fault without a mode keeps leaving out the default mode", () => {
+    const base = { name: 'small', source: { network: 'n1' }, family: 'mtu' as const, mtu: { size: 1280 } };
+    const f = faultToForm(base, base.source, { name: base.name });
+    expect(formToConfigFault(f, base)).toEqual(base);
+    expect(formToConfigFault({ ...f, mtuMode: 'mss_clamp' }, base).mtu).toEqual({ size: 1280, mode: 'mss_clamp' });
+    // a new one writes the mode
+    expect(formToConfigFault(f).mtu).toEqual({ size: 1280, mode: 'icmp' });
+  });
+
   it('an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)', () => {
     const now = new Date('2026-10-14T12:00:00Z');
     const expiresAt = '2026-10-14T12:04:12.300Z';

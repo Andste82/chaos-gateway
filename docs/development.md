@@ -3086,9 +3086,9 @@ the printed distribution before touching a tolerance (a tolerance below the §4.
 Plan §2.17, §3.7 and M12: the shell of the web app with its visual system and shared components, login and the first-start
 setup wizard, the overview, the device list and the device detail, live updates over the event stream, and the empty,
 offline and safe-mode states. The screens of M13 (faults, rules, profiles, the preview-and-apply drawer, the `</> API`
-panel) and of M14 (networks, routing, technical view) follow in their own sections below; panels
-whose backend comes later (running scenario, captures, diagnostics, DHCP and TLS test actions, the flow view of M26) are
-left out.
+panel) and of M14 (networks, routing, technical view) follow in their own sections below; panels whose backend comes
+later (running scenario, captures, diagnostics, DHCP and TLS test actions) are left out, and a device's flows and recent
+DNS queries come with the flow view of M26 (P3-M12-02).
 
 ### How it works
 
@@ -3258,7 +3258,7 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 
 Plan §2.17, §2.4, §2.9 and M13: the add/edit fault dialog with its live preview, the access-rules screen (ordered list,
 rule editor IF / THEN, counters), the faults screen (by family and scope, "overridden by", explain), the unapplied-changes
-bar, the preview-and-apply drawer, the concurrent-change dialog (reload and reapply), the profile cards, the TTL display
+bar, the preview-and-apply drawer, the concurrent-change dialog (reload and reapply mine · discard mine), the profile cards, the TTL display
 and the `</> API` panel. M14's screens (networks, WireGuard, routing, access matrix, compiled state) follow in the next
 section; "Measure with probe" on the profile cards comes with the probes (M25).
 
@@ -3522,7 +3522,8 @@ import for now (P3-M14-01).
   client of a management hub is listed once it is confirmed; the dialog says so. A confirmation (the button or the event
   `revision_confirmed`) therefore refreshes the views of the configuration, not only the state.
   An access matrix change is not lockout-relevant in the backend (the control plane is gateway protection, not the matrix),
-  so it is applied at once; a client of a management hub is the change of the networks view that waits for confirmation.
+  so it is applied at once; a client of a management hub is the change of the networks view that waits for confirmation
+  (decided 2026-10-14, P3-M14-02: M14's Scope says "access matrix editing (commit-confirm where lockout-relevant)").
 - **Routing** (`src/views/RoutingView.vue`, `/networks/routing`): the BIRD instance (running, version, router id, ASN, last
   configuration, last error, external mode), a card per session (`GET /routing/status`, every 5 s; BGP, OSPF, Babel) with
   its link, its state with BIRD's detail ("up · Established") and since when, imported, filtered and exported routes, the
@@ -3614,7 +3615,7 @@ not run on this branch with the M14 flow yet.
 | Scope: add-client dialog (proposes the next free tunnel address of the hub, computed client-side) | `networks.spec.ts` "add a client: …" (the proposal, the checks under the fields, the request, the next proposal after the apply), "a new client the gateway refuses says why in its row; Fix opens it again with the message under its field"; `src/lib/networks.test.ts` "the next free tunnel address of a hub (plan M14, computed client-side)", "the add-client form" |
 | Scope: QR dialog and config download | `networks.spec.ts` "the QR code of a client decodes to the configuration the download saves, from one export", "a client exported once: …", "a slow export of one client never shows up in the dialog of another", "an export-once key is never lost: …", "an export-once answer that arrives while no dialog is open …"; the testbed flow |
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
-| Scope: access matrix editing with commit-confirm | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
+| Scope: access matrix editing (commit-confirm where lockout-relevant) | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |
 
 ## Generated code

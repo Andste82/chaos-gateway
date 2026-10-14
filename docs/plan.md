@@ -631,7 +631,7 @@ POST /api/v1/reset                            → remove all overlays, stop runs
 
 ## 2.17 Web UI
 
-**Reference prototype:** a clickable design of the main screens is kept in [`docs/ui/prototype/`](ui/prototype/) (one `.dc.html` file per screen, sample data). Where this section and the prototype disagree, this section wins — in particular, the prototype still shows access rules and faults in one list (now two screens, D25) and a three-way conflict dialog (now reload and reapply).
+**Reference prototype:** a clickable design of the main screens is kept in [`docs/ui/prototype/`](ui/prototype/) (one `.dc.html` file per screen, sample data). Where this section and the prototype disagree, this section wins — in particular, the prototype still shows access rules and faults in one list (now two screens, D25) and a three-way conflict dialog (now reload and reapply mine · discard mine).
 
 ### Design direction
 
@@ -1414,13 +1414,13 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 **M13 — UI for faults, rules and profiles** (L)
 - **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `1de83f2`, CI run 38411177290 green, the testbed browser flow `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` included); Phase 3 merges to `main` as one PR after M14. Open questions: `docs/open-items.md`, Phase 3.
-- Scope: add/edit fault dialog with preview, access-rules screen (ordered list, rule editor IF/THEN, counters) and faults screen (by family and scope, "overridden by", explain), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog (reload and reapply), profile cards, TTL display, `</> API` panel.
+- Scope: add/edit fault dialog with preview, access-rules screen (ordered list, rule editor IF/THEN, counters) and faults screen (by family and scope, "overridden by", explain), unapplied-changes bar, preview-and-apply drawer, concurrent-change dialog (reload and reapply mine · discard mine), profile cards, TTL display, `</> API` panel.
 - Tests: Playwright — create a fault in the UI, then verify the measured effect in the testbed; validation errors are shown; a conflicting change made through the API triggers the conflict dialog; the faults screen marks an overridden fault.
 - Depends on: M12.
 
 **M14 — Networks view and technical view** (M)
-- **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `5397d3b`, CI run 38447039664 green, the testbed browser flow `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` included); Phase 3 merges to `main` as one PR. Open questions: `docs/open-items.md`, Phase 3 (P3-M14-01 to P3-M14-03 need a maintainer decision, among them the wording of "access matrix editing with commit-confirm", P3-M14-02).
-- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog (proposes the next free tunnel address of the hub, computed client-side), QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing with commit-confirm, compiled-state view (nftables, tc, routes, WireGuard).
+- **Status:** done — on the branch `phase-3-web-ui` (draft PR #56, `5397d3b`, CI run 38447039664 green, the testbed browser flow `TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel` included); Phase 3 merges to `main` as one PR. Open questions: `docs/open-items.md`, Phase 3 (decided 2026-10-14: P3-M14-01 and P3-M14-03 option (a); the access matrix keeps its commit-confirm where lockout-relevant, P3-M14-02).
+- Scope: network cards and detail, DHCP pool/leases, WireGuard networks with client list, client status, add-client dialog (proposes the next free tunnel address of the hub, computed client-side), QR dialog and config download, routing view (BIRD sessions, received and announced prefixes), access matrix editing (commit-confirm where lockout-relevant), compiled-state view (nftables, tc, routes, WireGuard).
 - Tests: Playwright; commit-confirm — an unconfirmed change is rolled back after the timeout and the UI shows it; create a WireGuard client in the UI, scan its QR in the test (decoded content equals the download) and bring the tunnel up in the testbed.
 - Depends on: M13.
 
@@ -1492,8 +1492,8 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M8b, M24.
 
 **M26 — Metrics and flow view** (S)
-- Scope: Prometheus metrics endpoint (counters from M7–M9, interface and queue statistics, system health); flow view in the UI (flow data from M6a).
-- Tests: metric values against known traffic; Playwright for the flow view.
+- Scope: Prometheus metrics endpoint (counters from M7–M9, interface and queue statistics, system health); flow view in the UI (flow data from M6a), with a device's flows and its recent DNS queries (`GET /dns/queries?device=`, M6b) on the device detail (§2.17; `docs/open-items.md` P3-M12-02).
+- Tests: metric values against known traffic; Playwright for the flow view and for the device detail's flows and recent DNS queries.
 - Depends on: M9, M13.
 
 ## Phase 7 — Production Readiness

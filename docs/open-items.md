@@ -647,7 +647,9 @@ stayed open".
 Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below were found while implementing M12, M13
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items
-stayed open".
+stayed open". The maintainer decided every item that needed a decision on 2026-10-14; an item that is decided but not yet
+done carries a "Decision (2026-10-14)" line and is closed when the decided option is implemented. P3-M12-05 waits for
+M27/M30.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 
@@ -670,7 +672,9 @@ stayed open".
 
 ### P3-M12-02 The device detail's flows and recent DNS are not shown yet
 
-- Status: new
+- Status: closed (2026-10-14): decided — the device's flows and its recent DNS queries stay with M26, as the plan
+  says; plan §5 M26 names them in its Scope (a device's flows and its recent DNS queries on the device detail) and its
+  Tests (Playwright for the device detail's flows and recent DNS queries); `docs/development.md` (M12) says so
 - Severity: low
 - Reason: deferred. Plan §2.17 lists flows, recent DNS, captures, the DHCP lease and test actions, TLS test and diagnose on
   the device detail. M12 scopes the detail to "the data available after Phase 2 (identity, lease, active faults,
@@ -681,7 +685,7 @@ stayed open".
   connections, last seen). Decide whether the device's flows and its recent DNS queries belong to M13 (with the device's
   faults) or stay with M26.
 - Acceptance: the milestone that takes them lists them in its Scope and Tests.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M12-03 Adopting a device applies directly instead of through the preview-and-apply drawer
@@ -706,6 +710,8 @@ stayed open".
 ### P3-M12-04 The setup wizard makes one test network per test interface
 
 - Status: new
+- Decision (2026-10-14): keep the wizard as is (one LAN network per test interface); several ports per LAN network are edited in
+  the network form of P3-M14-01; the item closes when that form can do it
 - Severity: low
 - Reason: plan-error (underspecified). M12 says "assign test interfaces"; a LAN network can have several ports (plan §2.2).
 - Evidence: `web/src/lib/setup.ts` (`buildSetupRequest`).
@@ -713,7 +719,7 @@ stayed open".
   and DHCP switch; more ports, WireGuard networks and the access matrix are edited afterwards (M14's networks view).
   Confirm, or ask for grouping several ports into one network in the wizard.
 - Acceptance: the decision is recorded here; a change gets a Playwright test.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M12-05 The safe-mode banner links to the plan, not to recovery instructions
@@ -745,6 +751,9 @@ stayed open".
 ### P3-M12-07 The netplan hints of the wizard are not taken from the preflight
 
 - Status: new
+- Decision (2026-10-14): option (a) — a preflight check per assigned or candidate interface names the netplan file and entry (or the
+  NetworkManager connection) to remove; the wizard (and the CLI where it shows the preflight) shows the preflight's text;
+  the client-side hint is removed
 - Severity: low
 - Reason: needs-decision. M12 Scope says "netplan hints from the preflight", and plan §3.4 says the preflight checks that the
   test interfaces carry no OS configuration. The preflight (`internal/preflight`) has no per-interface netplan check yet;
@@ -756,12 +765,15 @@ stayed open".
   the netplan file and entry (or the NetworkManager connection) to remove, shown by the wizard and the CLI alike, with
   M28's host-setup script; (b) keep the client-side hint. Recommendation: (a) with M28.
 - Acceptance: with (a), the preflight reports the entry with a test, and the wizard shows the preflight's text in a Playwright test.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-01 The last match of an access rule is the time the gateway first read the counter higher
 
 - Status: new
+- Decision (2026-10-14): option (b) — the nftables `last` statement on every access rule's counter (kernel 5.17+, target 6.8), compiled
+  with the rule and read from the ruleset listing, replaces the read-based time of `internal/api/matches.go`; unit tests for
+  the compiler and the normalizer/parser, the kernel gates, and a testbed test that asserts the time
 - Severity: low
 - Reason: needs-decision. Plan §2.17 asks for "hits, bytes, last match" in the rule editor. nftables counters keep no
   time; the API now gives `Counter.last_match`, the time of the first read that found a rule's counter higher than the read
@@ -773,12 +785,15 @@ stayed open".
   engine reads the rule counters on its own every few seconds, so the time does not depend on a reader. Recommendation: (a)
   until a user needs it to the second, then (b).
 - Acceptance: with (b) or (c), a kernel or engine test asserts the time.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S (c), M (b)
 
 ### P3-M13-02 The concurrent-change dialog offers "Discard mine" next to "Reload and reapply mine"
 
-- Status: new
+- Status: closed (2026-10-14): decided — both buttons stay; plan §2.17 (the introduction's note on the prototype) and
+  M13's Scope now say "reload and reapply mine · discard mine", as the states table does; `docs/development.md` (M13) too.
+  The behavior is tested already (`rules.spec.ts` "a conflicting change made through the API opens the conflict dialog;
+  reload and reapply mine", "the concurrent-change dialog can discard the draft instead")
 - Severity: low
 - Reason: plan-error (small contradiction). M13 Scope and the introduction of plan §2.17 name "reload and reapply"; the
   states table of §2.17 lists "reload and reapply mine · discard mine". The dialog offers both and never "overwrite theirs".
@@ -787,12 +802,15 @@ stayed open".
 - Evidence: `web/src/components/apply/ConflictDialog.vue`, `web/src/stores/draft.ts` (`rebase`).
 - Task: implemented — both buttons. Confirm, or drop "Discard mine" (the bar's Discard does the same afterwards).
 - Acceptance: the decision is recorded here; the plan's two sentences say the same.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-03 Custom profiles are not created or edited in the UI
 
 - Status: new
+- Decision (2026-10-14): option (a) — a profile editor in the UI (create, edit, delete custom profiles with the impairment and MTU parts
+  the API accepts) through the draft and the preview drawer; a Playwright test creates a profile through the drawer and
+  activates it
 - Severity: low
 - Reason: needs-decision. M13 Scope lists "profile cards"; the prototype has a "New profile" button, plan §2.17's Profiles
   row does not. Custom profiles are objects of the configuration (P2-M11-02), so an editor would be a form over the draft
@@ -802,12 +820,15 @@ stayed open".
   the API. Options: (a) a profile editor (impairment and MTU parts) over the draft in M14 or later; (b) leave it to the API and
   the configuration import. Recommendation: (a), small, after M14.
 - Acceptance: with (a), a Playwright test creates a profile through the drawer and activates it.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-04 The fault dialog edits impairment faults only
 
 - Status: new
+- Decision (2026-10-14): option (a) — the dialog creates and edits every fault kind the API offers: MTU/PMTUD and tunnel faults (M10)
+  and the advanced impairment parameters (burst loss, flapping, distributions, different parameters per direction); no
+  more "saving would replace hidden parameters"; Playwright tests edit one of each new kind
 - Severity: low
 - Reason: deferred. Plan §2.17 specifies the dialog with the impairment parameters (target, traffic, direction, presets,
   latency, jitter, loss, duration; rate, reorder, duplicate, corrupt, keep order). MTU and tunnel faults (M10) and burst
@@ -818,7 +839,7 @@ stayed open".
 - Task: implemented as described. Decide whether MTU and tunnel faults (and the advanced impairment parameters) get fields
   in the dialog, and in which milestone.
 - Acceptance: the milestone that takes them lists them; a Playwright test edits one.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-05 The browser flow of M13 in the testbed
@@ -839,6 +860,9 @@ stayed open".
 ### P3-M13-06 Editing an overlay of another owner replaces it with the admin's
 
 - Status: new
+- Decision (2026-10-14): options (a) and (d) — an edit takes the overlay over (as now) and keeps its remaining time unless the user
+  changes the TTL; a TTL that is not one of the dialog's choices is shown as such and kept (an API field or the remaining
+  time sent as the TTL, whichever is cleaner in the API); tested
 - Severity: low
 - Reason: needs-decision. Plan §2.1.1 keys an overlay by *(owner, kind, target, selector)*, and a UI action's owner is the
   admin user (§2.15). Writing an edited overlay of an API token or a scenario run from the browser therefore creates a
@@ -855,12 +879,14 @@ stayed open".
   in the API). Recommendation: (a) and (c), with the dialog listing the overlay's own TTL when it is not one of its choices.
 - Acceptance: the decision is recorded here; with (b), a Playwright test shows another owner's overlay without Edit; with
   (d), a test edits a fault and keeps its expiry.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-07 "Reload and reapply mine" takes the user's value of a field both sides changed
 
 - Status: new
+- Decision (2026-10-14): keep the per-field merge, and option (b) — the conflict dialog names the fields both sides changed (their value
+  → mine) before reapplying; a Playwright test
 - Severity: low
 - Reason: needs-decision. Plan §2.17 says only "reload and reapply mine". Reapplying merges field by field: the user's
   change of an object (a merge patch against the old base) is applied to the other side's version, so their fields stay and
@@ -872,12 +898,15 @@ stayed open".
 - Task: implemented — the user's value wins per field. Options: (a) keep it; (b) the dialog names the fields both sides
   changed (their value → mine) before reapplying. Recommendation: (a), with (b) when users report surprises.
 - Acceptance: the decision is recorded here; with (b), a Playwright test shows a field both changed in the dialog.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M13-08 The scope selectors do not offer remote networks as a choice
 
 - Status: new
+- Decision (2026-10-14): option (a) — the scope selectors (fault dialog, profile activation, rule editor From/To where the model allows)
+  offer WireGuard clients' networks, links' remote networks and a CIDR inside them; a Playwright test creates a fault on a
+  client's networks and asserts the request's scope
 - Severity: low
 - Reason: needs-decision. A fault, an overlay and an access rule can act on a `remote_network` (the client networks of a
   WireGuard client, the prefixes of a link, or a CIDR inside them; plan §2.4 puts it on the network level). The scope
@@ -893,12 +922,16 @@ stayed open".
   milestone that takes the client actions of P3-M14-01; M14 did not add them (it shows the clients' networks in the
   WireGuard views only).
 - Acceptance: with (a), a Playwright test creates a fault on a client's networks and the request carries the scope.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M14-01 Networks, clients after they were added and the routing configuration are not edited in the UI
 
 - Status: new
+- Decision (2026-10-14): option (a) in full — client actions (disable/enable, rotate keys, delete), network forms (create, edit,
+  delete LAN networks with subnet, several ports, DHCP, DNS, and WireGuard networks with kind, role, endpoint, …, as the
+  model allows) and routing forms (the protocols of plan §2.2.2), each through the draft, the preview drawer, the conflict
+  dialog and commit-confirm where lockout-relevant; a Playwright test for each through the drawer
 - Severity: low
 - Reason: needs-decision. M14 Scope lists "network cards and detail", "WireGuard networks with client list, client status,
   add-client dialog", "routing view" and "access matrix editing". Plan §2.2.1 also names creating, editing and deleting
@@ -913,12 +946,16 @@ stayed open".
   in V1. Recommendation: (a) for the client actions (small, the draft supports clients already), (b) for the rest until users
   ask.
 - Acceptance: the milestone that takes them lists them; a Playwright test edits each through the drawer.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S (client actions), M (network and routing forms)
 
 ### P3-M14-02 An access matrix change never waits for confirmation
 
-- Status: new
+- Status: closed (2026-10-14): option (a) — the matrix is not lockout-relevant and is applied at once; M14's Scope in plan
+  §5 now says "access matrix editing (commit-confirm where lockout-relevant)", as §2.17 "Networks" does;
+  `docs/development.md` (M14, its acceptance map) says the same. Tested already (`networks.spec.ts` "the access matrix: a
+  click changes a cell in the draft, the bar counts it, the preview and the apply", the commit-confirm tests of a client
+  of a management hub)
 - Severity: low
 - Reason: plan-error (small contradiction). M14 Scope says "access matrix editing with commit-confirm"; plan §2.17
   ("Networks") says "commit-confirm only if it is lockout-relevant", and the gateway's `LockoutRelevant` counts the
@@ -931,12 +968,15 @@ stayed open".
   management network or a management-role WireGuard network as lockout-relevant. Recommendation: (a); reword M14's Scope to
   "access matrix editing (commit-confirm where lockout-relevant)".
 - Acceptance: the decision is recorded here and the plan's two sentences say the same.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: S
 
 ### P3-M14-03 The technical view shows the kernel state per network and as a whole, not per device, rule or fault
 
 - Status: new
+- Decision (2026-10-14): option (a) — "Show Linux view" on a device (identity map elements, classification), an access rule (its rule
+  and counter) and a fault (its classes and netem queues), by the keys the compiler gives them, with backend support and
+  Go tests; a Playwright test opens the Linux view of a rule and of a fault
 - Severity: low
 - Reason: deferred. Plan §2.17 "Technical view": "Per object, the compiled configuration next to the domain view …
   Reached from 'Show Linux view' / 'Show Linux changes' links". M14 Scope names the "compiled-state view (nftables, tc,
@@ -950,7 +990,7 @@ stayed open".
   and counter) and a fault (its classes and netem queues), by the keys the compiler gives them; (b) keep the network and
   global views. Recommendation: (a) after V1, when users ask.
 - Acceptance: with (a), a Playwright test opens the Linux view of a rule and of a fault.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-14)
 - Effort: M
 
 ### P3-M14-04 The browser flow of M14 in the testbed

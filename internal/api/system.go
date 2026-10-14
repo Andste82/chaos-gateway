@@ -160,6 +160,8 @@ func (s *Server) GetLinuxObject(c *gin.Context, kind model.GetLinuxObjectParamsK
 				id = d.ID
 			}
 		case model.GetLinuxObjectParamsKindRule:
+			// names are unique per kind ignoring case and never have the form of a UUID (domain.CodeDuplicateName,
+			// CodeNameIsUUID), so at most one rule has this name and no name is another rule's id
 			if cfg.AccessRules != nil {
 				for rid, r := range *cfg.AccessRules {
 					if r.Name != nil && strings.EqualFold(*r.Name, objectId) {
@@ -399,10 +401,34 @@ type osConfig struct {
 
 func (s *Server) readOSConfig(ctx context.Context) osConfig {
 	st, err := s.cfg.Engine.HostNetConfig(ctx)
-	if err != nil {
+	switch changed, before := s.osConfigErr.set(err); {
+	case changed && err != nil:
 		s.log.Warn("cannot read the host's network configuration", "error", err)
+	case changed:
+		s.log.Info("the host's network configuration can be read again", "error_before", before)
+	case err != nil:
+		s.log.Debug("cannot read the host's network configuration", "error", err)
 	}
 	return osConfig{state: st, err: err}
+}
+
+// lastError remembers the message of the last failure of a repeated operation (empty: it succeeded).
+type lastError struct {
+	mu  sync.Mutex
+	msg string
+}
+
+// set records the outcome of the operation; changed reports whether it differs from the last one (another
+// message, a failure after a success or a success after a failure), before is the last message.
+func (l *lastError) set(err error) (changed bool, before string) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	before, l.msg = l.msg, msg
+	return before != msg, before
 }
 
 // configures reports whether the operating system configures the interface; ok is false when that is not known.
@@ -588,16 +614,19 @@ func (s *Server) GetSetup(c *gin.Context) {
 // started (kernel, modules; Config.Preflight), and one check per interface that is assigned to a test network
 // or may become one (not the uplink, not the management interface), made now: whether netplan or
 // NetworkManager configures it, and which entry to remove (docs/open-items.md P3-M12-07). The wizard and every
-// client show the same text. noRun adds a warning when no check of the host has run in this process.
+// client show the same text. noRun adds a warning when no check of the host has run in this process (Config.Preflight
+// is nil or returns nil; a report without a time, such as a host that cannot be inspected, is a check that ran).
 func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun bool) *PreflightReport {
 	r := &PreflightReport{Status: "ok"}
+	ran := false
 	if s.cfg.Preflight != nil {
 		if base := s.cfg.Preflight(); base != nil {
+			ran = true
 			r.At, r.Status = base.At, base.Status
 			r.Checks = append(r.Checks, base.Checks...)
 		}
 	}
-	if r.At == nil && noRun {
+	if !ran && noRun {
 		r.Checks = append(r.Checks, PreflightCheck{ID: "preflight", Status: "warn", Message: "no preflight check has run in this process"})
 	}
 	add := func(c PreflightCheck) {

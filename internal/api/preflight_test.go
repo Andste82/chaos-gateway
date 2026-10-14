@@ -1,9 +1,20 @@
 package api_test
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
+
+	"github.com/Andste82/chaos-gateway/internal/api"
+	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
 // P3-M12-07 (plan §3.4): the preflight checks every interface that is or may become a test interface for
@@ -99,5 +110,120 @@ func TestThePreflightSaysWhichOSConfigurationFileItCannotRead(t *testing.T) {
 	}
 	if lan1 == nil || lan1["status"] != "warn" {
 		t.Errorf("the readable file is still checked: %v", lan1)
+	}
+}
+
+// A report of the checks made at start that has no time (the host could not be inspected, buildPreflight's
+// "host" warning) is a check that ran: GET /system/preflight does not add "no preflight check has run". It
+// adds it only when there is no report at all (review B5 round 1).
+func TestThePreflightSaysNoCheckRanOnlyWhenNoneDid(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		report func() *api.PreflightReport
+		noRun  bool
+	}{
+		{"a report without a time", func() *api.PreflightReport {
+			return &api.PreflightReport{Status: "warn", Checks: []api.PreflightCheck{{ID: "host", Status: "warn", Message: "the host cannot be inspected from here: no /proc"}}}
+		}, false},
+		{"no report", func() *api.PreflightReport { return nil }, true},
+		{"no preflight", nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newGW(t, func(o *options) { o.preflight = c.report })
+			g.finishSetup()
+			pf := g.do("GET", "/system/preflight", nil, nil, nil).json(t)
+			ids := map[string]bool{}
+			for _, ch := range pf["checks"].([]any) {
+				ids[ch.(map[string]any)["id"].(string)] = true
+			}
+			if ids["preflight"] != c.noRun || (c.report != nil && c.report() != nil && !ids["host"]) {
+				t.Errorf("checks: %v", pf["checks"])
+			}
+			if pf["status"] != "warn" && pf["status"] != "fail" {
+				t.Errorf("status: %v", pf["status"])
+			}
+		})
+	}
+}
+
+// failingHostNet fails the executor's read of the host's network configuration while failing is set.
+type failingHostNet struct {
+	inner   apply.Exec
+	failing *atomic.Pointer[string]
+}
+
+func (f failingHostNet) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	if msg := f.failing.Load(); msg != nil {
+		for _, op := range ops {
+			if r, ok := op.(*executor.Read); ok && r.What == executor.ReadHostNet {
+				return executor.Outcome{}, errors.New(*msg)
+			}
+		}
+	}
+	return f.inner.Do(ctx, ops...)
+}
+
+// syncBuffer is a log destination the server's goroutines can share.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) count(sub string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Count(s.b.String(), sub)
+}
+
+// A screen polls GET /system/interfaces every few seconds, and each request reads the host's network
+// configuration through the executor: a failing read is logged as a warning once, again only when its
+// message changes, and its end once (review B5 round 1); every response still says it.
+func TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce(t *testing.T) {
+	var failing atomic.Pointer[string]
+	var logs syncBuffer
+	g := newGW(t, func(o *options) {
+		o.execWrap = func(e apply.Exec) apply.Exec { return failingHostNet{inner: e, failing: &failing} }
+		o.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	})
+	g.finishSetup()
+	warned := func() int { return logs.count(`level=WARN msg="cannot read the host's network configuration"`) }
+	poll := func() {
+		t.Helper()
+		for range 5 {
+			if r := g.do("GET", "/system/interfaces", nil, nil, nil); r.Status != 200 {
+				t.Fatalf("%d %s", r.Status, r.Body)
+			}
+		}
+	}
+	gone := "the executor is gone"
+	failing.Store(&gone)
+	poll()
+	if n := warned(); n != 1 {
+		t.Errorf("one failure, %d warnings", n)
+	}
+	if pf := g.do("GET", "/system/preflight", nil, nil, nil).json(t); !strings.Contains(fmt.Sprint(pf["checks"]), "cannot be read: the executor is gone") {
+		t.Errorf("the preflight does not say it: %v", pf["checks"])
+	}
+	other := "permission denied"
+	failing.Store(&other)
+	poll()
+	if n := warned(); n != 2 {
+		t.Errorf("another failure, %d warnings in all", n)
+	}
+	failing.Store(nil)
+	poll()
+	if n := logs.count("can be read again"); n != 1 {
+		t.Errorf("the end of the failure: logged %d times", n)
+	}
+	failing.Store(&gone)
+	poll()
+	if n := warned(); n != 3 {
+		t.Errorf("a new failure, %d warnings in all", n)
 	}
 }

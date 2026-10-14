@@ -70,6 +70,9 @@ type Server struct {
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
 	// endpoint must not give every caller its own round trip to the executor.
 	health healthProbeCache
+	// osConfigErr is the last failure to read the host's network configuration, so that a screen that
+	// polls GET /system/interfaces logs a failure once, not at every request (P3-M12-07)
+	osConfigErr lastError
 	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
 	unsubEvents func()
 	eventsDone  chan struct{}

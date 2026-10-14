@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -105,6 +106,9 @@ type options struct {
 	// hostFS is the host root the executor reads netplan and NetworkManager from (nil: an empty one, so a
 	// test never reads the machine's own configuration)
 	hostFS fs.FS
+	// preflight is the report of the checks made at start (nil: none was made); log the server's logger
+	preflight func() *api.PreflightReport
+	log       *slog.Logger
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -181,7 +185,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(e.Close)
 	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui,
+		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers

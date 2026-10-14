@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCsrfToken } from '../api/fetcher';
 import { useConnectionStore } from './connection';
 import { useEventStore } from './events';
-import { useSessionStore } from './session';
+import { onLoggedOut, useSessionStore } from './session';
 import { useToastStore } from './toasts';
 import { useTrafficStore } from './traffic';
 
@@ -73,6 +73,33 @@ describe('session store', () => {
     // the CSRF token of the gone session is not sent any more
     await s.logout();
     expect(new Headers(fetchMock.mock.calls[1]?.[1].headers).get('X-CSRF-Token')).toBeNull();
+  });
+
+  it('a logout tells the page to drop what the session read, also when the gateway does not answer it', async () => {
+    const dropped = vi.fn();
+    const off = onLoggedOut(dropped);
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValueOnce(respond(200, { kind: 'session', scope: 'full', csrf_token: 'tok4' }))
+          .mockResolvedValueOnce(respond(204, undefined))
+          .mockRejectedValueOnce(new TypeError('Failed to fetch')),
+      );
+      const s = useSessionStore();
+      await s.login('pw');
+      expect(dropped).not.toHaveBeenCalled();
+      await s.logout();
+      expect(dropped).toHaveBeenCalledTimes(1);
+      await s.logout().catch(() => undefined);
+      expect(dropped).toHaveBeenCalledTimes(2);
+      // an ended session (401 elsewhere) is no logout: main.ts clears the cache itself and keeps the draft
+      s.ended();
+      expect(dropped).toHaveBeenCalledTimes(2);
+    } finally {
+      off();
+    }
   });
 
   it('passes other failures on, so the app can say the gateway does not answer', async () => {

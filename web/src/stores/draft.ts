@@ -13,7 +13,7 @@ import type {
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
-import { faultChips, describeScope, type Names } from '../lib/faults';
+import { faultChips, describeScope, describeTunnel, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { profileChips } from '../lib/profiles';
@@ -334,12 +334,18 @@ export const useDraftStore = defineStore('draft', () => {
       if (f === null) out.push({ kind: 'fault', id, name, field: 'fault', from: 'present', to: 'deleted' });
       else if (!before) out.push({ kind: 'fault', id, name, field: 'fault', from: '—', to: `added (${faultChips(f).join(', ')})` });
       else {
+        const count = out.length;
         const add = (field: string, a: string, b: string) => a !== b && out.push({ kind: 'fault', id, name, field, from: a || '—', to: b || '—' });
+        const traffic = (x: ConfigFault) => `${x.protocol ?? 'any'} ${formatPorts(x)} ${x.destination ? describeDestination(x.destination, names) : ''}`.replace(/\s+/g, ' ').trim();
         add('name', before.name ?? '', f.name ?? '');
+        add('description', before.description ?? '', f.description ?? '');
         add('target', describeScope(before.source, names), describeScope(f.source, names));
-        add('traffic', `${before.protocol ?? 'any'} ${formatPorts(before)} ${before.destination?.cidr ?? ''}`.trim(), `${f.protocol ?? 'any'} ${formatPorts(f)} ${f.destination?.cidr ?? ''}`.trim());
+        if (before.tunnel || f.tunnel) add('tunnel', before.tunnel ? describeTunnel(before.tunnel, names) : '', f.tunnel ? describeTunnel(f.tunnel, names) : '');
+        add('traffic', traffic(before), traffic(f));
         add('parameters', faultChips(before).join(', '), faultChips(f).join(', '));
         add('enabled', before.enabled === false ? 'no' : 'yes', f.enabled === false ? 'no' : 'yes');
+        // a change the words above do not show (setFault keeps no edit that equals the base)
+        if (out.length === count) out.push({ kind: 'fault', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }
     for (const [id, p] of Object.entries(profiles.value)) {
@@ -348,10 +354,13 @@ export const useDraftStore = defineStore('draft', () => {
       if (p === null) out.push({ kind: 'profile', id, name, field: 'profile', from: 'present', to: 'deleted' });
       else if (!before) out.push({ kind: 'profile', id, name, field: 'profile', from: '—', to: `added (${profileChips(p.parts).join(', ')})` });
       else {
+        const count = out.length;
         const add = (field: string, a: string, b: string) => a !== b && out.push({ kind: 'profile', id, name, field, from: a || '—', to: b || '—' });
         add('name', before.name, p.name);
         add('description', before.description ?? '', p.description ?? '');
         add('parameters', profileChips(before.parts).join(', '), profileChips(p.parts).join(', '));
+        // a change the words above do not show (setProfile keeps no edit that equals the base)
+        if (out.length === count) out.push({ kind: 'profile', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }
     for (const [id, dv] of Object.entries(devices.value)) {

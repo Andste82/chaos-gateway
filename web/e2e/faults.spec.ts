@@ -49,7 +49,7 @@ test('add a fault on the device: presets, the live preview, Apply → the fault 
   await expect(d.getByRole('button', { name: 'Hide advanced' })).toHaveAttribute('aria-expanded', 'true');
   await expect(d.getByLabel('Rate limit')).toHaveValue('2 Mbit/s');
   await d.getByLabel('Keep packet order').check();
-  await expect(d.getByTestId('fault-preview')).toContainText('↓ 150 ms ±50, 3 % loss, ↓ 2 Mbit/s');
+  await expect(d.getByTestId('fault-preview')).toContainText('↓ 150 ms ±50, keep order, 3 % loss, ↓ 2 Mbit/s');
 
   // the panel shows what the dialog would send, before anything is sent
   await page.keyboard.press('Escape');

@@ -246,6 +246,36 @@ test('edit and delete a custom profile through the draft; a refused profile show
   await expect(page.getByTestId('profile-card')).toHaveCount(3);
 });
 
+test('delete an active custom profile: the card says its activations end, the drawer lists them and Apply waits for "Remove them" (P3-M13-03)', async ({ page }) => {
+  const ACT = 'f0000000-0000-4000-8000-0000000000a7';
+  const gw = lab();
+  const now = new Date().toISOString();
+  gw.overlays = [
+    ...gw.overlays,
+    { id: ACT, kind: 'profile', owner: { type: 'user', id: 'admin', name: 'admin' }, target: { device: ESP }, profile: SLOW_LAB, created_at: now, updated_at: now, generation: 42, state: 'effective' },
+  ];
+  await gw.install(page);
+  await page.goto('/profiles');
+  const slow = card(page, 'slow-lab');
+  await expect(slow.getByTestId('profile-active')).toContainText('Active on');
+  await slow.getByRole('button', { name: 'Delete slow-lab' }).click();
+  await expect(slow.getByTestId('profile-mark')).toHaveText('DELETED');
+  await expect(slow.getByTestId('profile-pending')).toHaveText('Removed when the changes are applied, and with it its activation: the preview lists it and asks first.');
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const preview = page.getByRole('dialog', { name: 'Preview revision 43' });
+  const refs = preview.getByTestId('preview-references');
+  await expect(refs).toContainText(`overlay ${ACT} (/profiles/${SLOW_LAB})`);
+  const apply = preview.getByRole('button', { name: 'Apply revision 43' });
+  await expect(apply).toBeDisabled();
+  await refs.getByLabel('Remove them when applying').check();
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions/43/apply')[0]!.query).toEqual({ force: 'true' });
+  expect(gw.overlays.some((o) => o.id === ACT)).toBe(false);
+  await expect(page.getByTestId('profile-card')).toHaveCount(3);
+});
+
 test('a custom profile saved without a change is no change, also where the editor reads it in another form (P3-M13-03)', async ({ page }) => {
   const gw = lab();
   // written per direction with the same parameters and a latency in seconds: the editor shows it flat in ms

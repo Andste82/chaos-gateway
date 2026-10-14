@@ -106,6 +106,13 @@ const cards = computed<Card[]>(() => {
   return out.sort((a, b) => Number(b.p.builtin) - Number(a.p.builtin));
 });
 
+/** A deleted profile's note: its activations end with it, the preview lists them and asks first. */
+function deletedText(c: Card): string {
+  const n = c.p.activations?.length ?? 0;
+  if (!n) return 'Removed when the changes are applied.';
+  return `Removed when the changes are applied, and with it ${n === 1 ? 'its activation' : `its ${n} activations`}: the preview lists ${n === 1 ? 'it' : 'them'} and asks first.`;
+}
+
 /** Not on the gateway as shown: a new, changed or deleted profile is activated after the apply. */
 const pending = (c: Card) => !!(c.isNew || c.changed || c.deleted);
 
@@ -242,7 +249,7 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
       </div>
       <p v-if="!c.p.available" class="m-0 text-[13px] text-text-2">{{ c.p.unavailable_reason ?? 'Not available in this build.' }}</p>
       <p v-if="pending(c)" class="m-0 text-[13px] text-text-2" data-testid="profile-pending">
-        {{ c.deleted ? 'Removed when the changes are applied.' : 'Not applied yet: it can be activated after the changes are applied.' }}
+        {{ c.deleted ? deletedText(c) : 'Not applied yet: it can be activated after the changes are applied.' }}
       </p>
       <div class="mt-auto flex flex-wrap gap-2 pt-1">
         <button

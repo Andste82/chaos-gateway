@@ -824,7 +824,20 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-04 The fault dialog edits impairment faults only
 
-- Status: new
+- Status: closed (2026-10-14): decided — option (a): the dialog creates and edits every fault kind the API offers. A new
+  fault has a kind (Impairment, MTU / PMTUD, Tunnel; no tunnel on a device's page); an MTU fault has its traffic, the
+  packet size and the mode (ICMP, black hole, MSS clamp, each with its effect in words), a tunnel fault the WireGuard
+  client or link and only the parameters a tunnel takes (no target, no traffic); an impairment fault has under Advanced
+  the delay distribution, burst loss (Gilbert-Elliott) or loss correlation, the queue limit and flapping besides rate,
+  reorder, duplicate, corrupt and keep order, a destination of any kind (uplink, network, address or prefix, host name),
+  and "Each its own" for different parameters per direction. The faults screen offers Edit for every impairment, MTU and
+  tunnel fault, overlay or configured; `hiddenParameters` and the note "saving replaces them" are gone, since nothing is
+  hidden any more. The impairment fields are one component the profile editor shares (`ImpairmentFields.vue`,
+  `src/lib/netemForm.ts`; `src/lib/faultForm.ts`, `FaultDialog.vue`); plan §2.17's "Add fault" row lists them. Tests
+  `fault-kinds.spec.ts` "an MTU fault: created with the kind MTU / PMTUD, then edited on the faults screen", "a tunnel
+  fault: edited with the parameters a tunnel takes, and one configured on a link through the draft", "the advanced
+  impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own";
+  `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)"
 - Decision (2026-10-14): option (a) — the dialog creates and edits every fault kind the API offers: MTU/PMTUD and tunnel faults (M10)
   and the advanced impairment parameters (burst loss, flapping, distributions, different parameters per direction); no
   more "saving would replace hidden parameters"; Playwright tests edit one of each new kind

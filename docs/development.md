@@ -3356,14 +3356,27 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   → `GET /explain`: the access verdict and what decided it, and per family the winner (layer, level) with the faults that
   lost and why ("fault iot-slow lost: level 2 beats level 8").
 - **Add/edit fault dialog** (`src/components/faults/FaultDialog.vue`, `src/lib/faultForm.ts`, plan §2.17 "Add fault").
-  Target (fixed to the device on its page), traffic (all, MQTT, MQTTS, HTTPS, HTTP, DNS, or protocol, ports and
-  destination), direction (Both / Upload / Download), "Start from" LTE, Bad LTE, Satellite, Offline (the parameters of
+  A new fault has a kind (P3-M13-04): Impairment, MTU / PMTUD or Tunnel (not on a device's page: a tunnel fault has
+  no target). Target (fixed to the device on its page), traffic (all, MQTT, MQTTS, HTTPS, HTTP, DNS, or protocol, ports
+  and a destination: anywhere, the uplink, a network, an address or prefix, a host name), direction (Both / Upload /
+  Download / Each its own — then "Parameters of Upload | Download" switches the fields between the two parameter sets,
+  and a problem of the other set is named beside it), "Start from" LTE, Bad LTE, Satellite, Offline (the parameters of
   the built-in profiles of the same name), latency, jitter, loss and duration (1 min to 1 hour, or until removed);
-  Advanced: rate, reorder, duplicate, corrupt, keep packet order. The live preview is one sentence ("ESP32-42 · MQTT ·
-  TCP 8883 · upload & download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min"). The checks (at least one parameter —
-  the gateway refuses a fault that sets none —, jitter ≤ latency, percentages up to 100, a rate of at least 8 bit/s in
-  the units of the spec, reorder needs a latency, ports and destination) stand under the fields, Apply waits until the
-  form is valid, and what the gateway refuses (422) goes under the field its path names. Apply writes an overlay
+  Advanced: rate, queue limit, reorder, duplicate, corrupt, the delay distribution (uniform, normal, pareto,
+  pareto-normal), keep packet order, the loss model (random with its correlation, or Gilbert-Elliott burst loss with
+  good → bad, bad → good and the delivery in each state) and flapping (up and down in seconds). The impairment fields are
+  one component (`ImpairmentFields.vue`, `src/lib/netemForm.ts`) the profile editor shares. An MTU fault has the target,
+  the traffic, the packet size (552–1500 bytes) and the mode (ICMP · fragmentation needed, Black hole · dropped
+  silently, MSS clamp · TCP only), each mode with its effect in words (the server's cached path MTU for ICMP); a tunnel
+  fault has the WireGuard client or link (`tunnelOptions`), no traffic, and only the parameters a tunnel takes (latency,
+  jitter, loss, burst loss, blackout, flapping; the directions are the peer's, "Upload · from the peer"). The live
+  preview is one sentence ("ESP32-42 · MQTT · TCP 8883 · upload & download → ↑↓ 200 ms ±50, 5 % loss · expires after 5
+  min", "ESP32-42 · HTTPS · TCP 443 → packets above 1280 bytes: Black hole · until removed", "Tunnel of rA · upload only
+  → …"). The checks (at least one parameter — the gateway refuses a fault that sets none —, jitter ≤ latency,
+  percentages up to 100, a rate of at least 8 bit/s in the units of the spec, reorder needs a latency, burst loss needs
+  good → bad and bad → good, a queue limit of 1 to 1000000 packets, flapping needs both times and no blackout, an MTU
+  of 552 to 1500, a tunnel, ports and destination) stand under the fields, Apply waits until the form is valid, and what
+  the gateway refuses (422) goes under the field its path names (a download parameter under the download set's field). Apply writes an overlay
   (`POST /overlays`, answered after the verify): it appears with its TTL counting down and a toast "Fault active on
   ESP32-42" ("Expires after 5 min."). A loss of 100 % is a blackout. Editing an overlay writes it again under the same
   key (owner, target, family and selector: it keeps its id and gets the new TTL); whenever the gateway answers with
@@ -3377,9 +3390,10 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   overlay keeps its TTL (`30m` stays `30m`, so the next edit says "Keep: … left of 30 min" again). A TTL that is not one
   of the choices (`30m` from the API) is offered as such ("30 min (its own TTL)", `ttlText`) instead of becoming 15 minutes. Under "</> API" the dialog shows
   the requests it would send. On the faults screen a fault can instead be saved in the configuration ("Configuration ·
-  after preview", with a name; it goes into the draft), and a configured fault is edited there; parameters the dialog
-  does not show (burst loss, flapping, different directions, …) are named before they would be replaced. The device
-  detail has "Add fault", "Edit" for the device's own faults and "Apply profile".
+  after preview", with a name; it goes into the draft), and a configured fault is edited there. Every fault the API
+  makes is edited with all its parameters (the faults screen offers Edit for impairment, MTU and tunnel faults, overlays
+  and configured ones), so saving never replaces one the dialog does not show; a configured fault keeps its description
+  and its switch. The device detail has "Add fault", "Edit" for the device's own faults and "Apply profile".
 - **Profiles** (`src/views/ProfilesView.vue`, `src/lib/profiles.ts`). A card per profile (built-in first, custom marked):
   its display name ("Bad LTE"), description, parameters as chips, where it is active (target, remaining time, state, owner)
   and, for a profile whose family comes later, why it cannot be activated. The scope selector (everything, network, group,
@@ -3419,12 +3433,12 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 |---|---|
 | Merge patch: no change, changed members, `null` for what went, arrays whole, patch applied gives the target | `src/lib/mergePatch.test.ts` |
 | Rules in words, ports, field changes, the effect in words, the editor's checks | `src/lib/rules.test.ts` |
-| Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks (also a fault without any parameter), the preview sentence, presets, the gateway's pointers to the form's fields | `src/lib/faultForm.test.ts` |
+| Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks (also a fault without any parameter), the preview sentence, presets, the gateway's pointers to the form's fields; every fault kind (P3-M13-04): an MTU fault, a tunnel fault, burst loss, flapping, a distribution, loss correlation, a queue limit, each direction its own, every destination, each read back and sent unchanged | `src/lib/faultForm.test.ts` ("every fault kind in the dialog (P3-M13-04)") |
 | Draft: base tracking (also after edits undone by hand), change counting, the merge patch with order and deletions, undoing a deletion, devices, invalid rules and the gateway's errors (a fault's by pointer), rebase on another revision; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
 | Owners in words | `src/lib/faults.test.ts` |
 | Overlays name what overrides them | `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` (`internal/api/overlays_test.go`) |
 | A rule's last match | `TestARulesCounterSaysWhenItLastMatched` (`internal/api/rules_test.go`) |
-| Screens against the mocked API (Playwright) | `web/e2e/rules.spec.ts`, `faults.spec.ts`, `profiles.spec.ts`, `devices.spec.ts` (adopt through the drawer and the conflict dialog) |
+| Screens against the mocked API (Playwright) | `web/e2e/rules.spec.ts`, `faults.spec.ts`, `fault-kinds.spec.ts`, `profiles.spec.ts`, `devices.spec.ts` (adopt through the drawer and the conflict dialog) |
 | The browser flow against the real stack | `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/faults.spec.ts` |
 
 **The mocked API** (`web/e2e/mock.ts`) grew the active revision's configuration (`config`, `GET /revisions/active` with
@@ -3468,6 +3482,7 @@ branch with the M13 flow yet.
 | the faults screen marks an overridden fault | `faults.spec.ts` "the faults screen groups by family, sorts by scope, marks overlays and configuration, and marks an overridden fault"; in the testbed flow on the real gateway; backend `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` |
 | Scope: access-rules screen (ordered list, editor IF/THEN, counters) | `rules.spec.ts` "the ordered list: …", "when the selected overlay rule is gone, the first rule is selected", "editing a rule marks it CHANGED …", "add, move and delete rules …", "a deleted rule is shown struck through at its place, and Undo brings it back there", "empty: no rules yet …" |
 | Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a deleted rule is shown struck through …", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation"; `faults.spec.ts` "closing the drawer while the candidate is created discards it when it arrives"; `src/stores/draft.test.ts` "edits undone by hand leave a clean draft on the newest active revision" |
+| Every fault kind in the dialog (P3-M13-04) | `fault-kinds.spec.ts` "an MTU fault: created with the kind MTU / PMTUD, then edited on the faults screen", "a tunnel fault: edited with the parameters a tunnel takes, and one configured on a link through the draft", "the advanced impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own"; `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)" |
 | Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
 | Remote networks in the scope selectors (P3-M13-08) | `faults.spec.ts` "a fault on a WireGuard client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a prefix inside a remote network: the prefix is checked under the target, the gateway's refusal stands there too (P3-M13-08)" (also a configured fault on a link's prefixes), `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them (P3-M13-08)", `rules.spec.ts` "a rule from a prefix inside a WireGuard client's networks: From offers the remote networks and takes the prefix, the patch carries it (P3-M13-08)"; `src/lib/scopes.test.ts`, `src/lib/faultForm.test.ts` "keeps the choice "a prefix inside a remote network" while its prefix is still empty", `src/lib/rules.test.ts` "checks a rule before it can be applied", `src/lib/faults.test.ts` "names the source by its object" |

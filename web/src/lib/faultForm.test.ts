@@ -7,8 +7,8 @@ import {
   faultToForm,
   fieldOf,
   formToConfigFault,
+  formToFault,
   formToOverlay,
-  hiddenParameters,
   parseRate,
   presets,
   previewSentence,
@@ -59,7 +59,7 @@ describe('the fault dialog', () => {
   });
 
   it('custom traffic: protocol, ports and a destination', () => {
-    const req = formToOverlay(form({ traffic: 'custom', protocol: 'udp', ports: '5683, 6000-6010', destination: '203.0.113.0/24', latency: '20' }));
+    const req = formToOverlay(form({ traffic: 'custom', protocol: 'udp', ports: '5683, 6000-6010', destKind: 'cidr', destination: '203.0.113.0/24', latency: '20' }));
     expect(req.fault).toEqual({ protocol: 'udp', ports: [5683], port_ranges: [{ from: 6000, to: 6010 }], destination: { cidr: '203.0.113.0/24' }, latency: '20ms' });
     expect(CreateOverlayBody.safeParse(req).success).toBe(true);
   });
@@ -127,8 +127,6 @@ describe('the fault dialog', () => {
     expect(g).toMatchObject({ target: 'global', direction: 'upload', rate: '64 kbit/s', loss: '100', duration: 'perm' });
     const h = faultToForm({ protocol: 'udp', ports: [5683], latency: '1s' }, { group: 'g1' });
     expect(h).toMatchObject({ traffic: 'custom', protocol: 'udp', ports: '5683', latency: '1000', target: 'group:g1' });
-    expect(hiddenParameters({ upload: { latency: '1ms' }, download: { latency: '2ms' } })).toEqual(['different upload and download parameters']);
-    expect(hiddenParameters({ flapping: { up: '1s', down: '1s' } })).toEqual(['flapping']);
   });
 
   it('checks the fields: jitter, loss, rate, reorder, ports, destination, name', () => {
@@ -140,7 +138,7 @@ describe('the fault dialog', () => {
     expect(faultFormErrors(form({ rate: '4 bit/s' })).rate).toBe('At least 8 bit/s.');
     expect(faultFormErrors(form({ reorder: '5' })).reorder).toBe('Reordering needs a latency.');
     expect(faultFormErrors(form({ traffic: 'custom', ports: '80' })).ports).toBe('Ports need the protocol TCP or UDP.');
-    expect(faultFormErrors(form({ traffic: 'custom', destination: '10.0' })).destination).toMatch(/IPv4 address or a prefix/);
+    expect(faultFormErrors(form({ traffic: 'custom', destKind: 'cidr', destination: '10.0' })).destination).toMatch(/IPv4 address or a prefix/);
     expect(faultFormErrors(form({ name: '-x' }), 'config').name).toBeTruthy();
     expect(faultFormErrors(form({ name: '-x' }), 'overlay').name).toBeUndefined();
   });
@@ -180,5 +178,120 @@ describe('the fault dialog', () => {
     expect(fieldOf('/faults/c0f0/port_ranges/0')).toBe('ports');
     expect(fieldOf('/fault')).toBeUndefined();
     expect(fieldOf('/faults/c0f0')).toBeUndefined();
+  });
+});
+
+describe('every fault kind in the dialog (P3-M13-04)', () => {
+  const valid = (f: FaultForm) => CreateOverlayBody.safeParse(formToOverlay(f)).success;
+
+  it('an MTU fault: its traffic, size and mode, read back and sent unchanged', () => {
+    const f = form({ family: 'mtu', traffic: 'https', mtuSize: '1280', mtuMode: 'blackhole' });
+    expect(faultFormErrors(f)).toEqual({});
+    expect(formToOverlay(f)).toMatchObject({ target: { device: 'd1' }, fault: { family: 'mtu', protocol: 'tcp', ports: [443], mtu: { size: 1280, mode: 'blackhole' } } });
+    expect(valid(f)).toBe(true);
+    const back = faultToForm(formToFault(f), { device: 'd1' });
+    expect(back).toMatchObject({ family: 'mtu', traffic: 'https', mtuSize: '1280', mtuMode: 'blackhole' });
+    expect(formToFault(back)).toEqual(formToFault(f));
+    expect(faultFormErrors(form({ family: 'mtu', mtuSize: '500' })).mtuSize).toBe('A packet size from 552 to 1500 bytes.');
+    expect(faultFormErrors(form({ family: 'mtu', mtuSize: '1400.5' })).mtuSize).toBeTruthy();
+    expect(previewSentence(form({ family: 'mtu', mtuSize: '1280', mtuMode: 'icmp', duration: 'perm' }), 'ESP32-42')).toBe(
+      'ESP32-42 · All traffic → packets above 1280 bytes: ICMP · until removed',
+    );
+  });
+
+  it('a tunnel fault: no target, no traffic, only the parameters a tunnel takes', () => {
+    const f = form({ family: 'tunnel', tunnel: 'client:c1', latency: '100', jitter: '10', rate: '1 Mbit/s', reorder: '5', duration: '5m' });
+    expect(faultFormErrors(f)).toEqual({});
+    const req = formToOverlay(f);
+    expect(req).toEqual({ fault: { family: 'tunnel', tunnel: { client: 'c1' }, latency: '100ms', jitter: '10ms' }, ttl: '5m' });
+    expect(valid(f)).toBe(true);
+    expect(formToConfigFault(f)).toEqual({ family: 'tunnel', tunnel: { client: 'c1' }, latency: '100ms', jitter: '10ms' });
+    expect(faultFormErrors(form({ family: 'tunnel', latency: '10' })).tunnel).toMatch(/Choose the WireGuard client or link/);
+    // a rate alone is no tunnel parameter: the fault would set nothing
+    expect(faultFormErrors(form({ family: 'tunnel', tunnel: 'link:l1', rate: '1 Mbit/s' })).latency).toMatch(/Set at least one parameter/);
+    const back = faultToForm({ family: 'tunnel', tunnel: { link: 'l1' }, upload: { flapping: { up: '20s', down: '10s' } } }, undefined);
+    expect(back).toMatchObject({ family: 'tunnel', tunnel: 'link:l1', direction: 'upload', flapping: true, flapUp: '20', flapDown: '10' });
+    expect(formToOverlay(back).fault).toEqual({ family: 'tunnel', tunnel: { link: 'l1' }, upload: { flapping: { up: '20s', down: '10s' } } });
+    expect(previewSentence(back, 'Tunnel of link site-b')).toBe('Tunnel of link site-b · upload only → tunnel ↑ flapping 20s up / 10s down · until removed');
+  });
+
+  it('the advanced impairment parameters: burst loss, flapping, a distribution, loss correlation, queue limit', () => {
+    const f = form({
+      latency: '100',
+      jitter: '20',
+      distribution: 'pareto',
+      lossModel: 'burst',
+      burstP: '1',
+      burstR: '30',
+      burstK: '99',
+      queueLimit: '50',
+      flapping: true,
+      flapUp: '20',
+      flapDown: '0.5',
+    });
+    expect(faultFormErrors(f)).toEqual({});
+    expect(formToFault(f)).toEqual({
+      latency: '100ms',
+      jitter: '20ms',
+      distribution: 'pareto',
+      burst_loss: { p: '1%', r: '30%', k: '99%' },
+      queue_limit: 50,
+      flapping: { up: '20s', down: '500ms' },
+    });
+    expect(valid(f)).toBe(true);
+    const back = faultToForm(formToFault(f), { device: 'd1' });
+    expect(formToFault(back)).toEqual(formToFault(f));
+    expect(faultToForm({ loss: '2%', loss_correlation: '25%' }, { device: 'd1' })).toMatchObject({ lossModel: 'random', loss: '2', lossCorrelation: '25' });
+    // the checks of the advanced fields
+    expect(faultFormErrors(form({ lossModel: 'burst', burstR: '10' })).burstP).toBe('Needed for burst loss.');
+    expect(faultFormErrors(form({ latency: '1', queueLimit: '0' })).queueLimit).toMatch(/from 1 to 1000000/);
+    expect(faultFormErrors(form({ latency: '1', flapping: true, flapUp: '0', flapDown: '5' })).flapUp).toBe('A time in seconds above 0.');
+    expect(faultFormErrors(form({ loss: '100', flapping: true, flapUp: '5', flapDown: '5' })).flapUp).toMatch(/timed blackout/);
+  });
+
+  it('different parameters per direction', () => {
+    const f = form({ direction: 'each', latency: '50' });
+    f.download.loss = '10';
+    f.download.rate = '64kbit';
+    expect(faultFormErrors(f)).toEqual({});
+    expect(formToFault(f)).toEqual({ upload: { latency: '50ms' }, download: { loss: '10%', rate: '64kbit' } });
+    expect(valid(f)).toBe(true);
+    const back = faultToForm(formToFault(f), { device: 'd1' });
+    expect(back.direction).toBe('each');
+    expect(back.download).toMatchObject({ loss: '10', rate: '64 kbit/s' });
+    expect(formToFault(back)).toEqual(formToFault(f));
+    // the same parameters both ways are one set
+    expect(faultToForm({ upload: { latency: '5ms' }, download: { latency: '5ms' } }, undefined).direction).toBe('both');
+    // the download set's problems are its own
+    f.download.jitter = '20';
+    expect(faultFormErrors(f)).toEqual({ 'download.jitter': 'Jitter cannot be larger than the latency.' });
+    expect(fieldOf('/fault/download/jitter', true)).toBe('download.jitter');
+    expect(fieldOf('/fault/download/jitter')).toBe('jitter');
+    expect(previewSentence(form({ direction: 'each', latency: '50', duration: 'perm' }), 'ESP32-42')).toBe(
+      'ESP32-42 · All traffic · upload and download apart → ↑ 50 ms · until removed',
+    );
+  });
+
+  it('every destination a fault can have', () => {
+    for (const destination of [{ uplink: true as const }, { network: 'n1' }, { cidr: '203.0.113.0/24' }, { hostname: 'broker.example.com' }]) {
+      const f = faultToForm({ destination, latency: '10ms' }, { device: 'd1' });
+      expect(f.traffic).toBe('custom');
+      expect(formToFault(f).destination).toEqual(destination);
+      expect(faultFormErrors(f)).toEqual({});
+    }
+    expect(faultFormErrors(form({ traffic: 'custom', destKind: 'hostname', destination: 'not a name', latency: '1' })).destination).toMatch(/host name/);
+    expect(previewSentence(form({ traffic: 'custom', destKind: 'uplink', latency: '10', duration: 'perm' }), 'ESP32-42')).toBe(
+      'ESP32-42 · any protocol to uplink · upload & download → ↑↓ 10 ms · until removed',
+    );
+  });
+
+  it("the gateway's pointers of the new fields", () => {
+    expect(fieldOf('/fault/burst_loss/p')).toBe('burstP');
+    expect(fieldOf('/fault/upload/flapping')).toBe('flapUp');
+    expect(fieldOf('/fault/queue_limit')).toBe('queueLimit');
+    expect(fieldOf('/fault/mtu/size')).toBe('mtuSize');
+    expect(fieldOf('/fault/mtu')).toBe('mtuSize');
+    expect(fieldOf('/fault/tunnel')).toBe('tunnel');
+    expect(fieldOf('/faults/x/destination/network')).toBe('destination');
   });
 });

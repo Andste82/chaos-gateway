@@ -1,38 +1,53 @@
-// The add/edit fault dialog (plan §2.17 "Add fault"): the form with the three fields of the common
-// case (latency, jitter, loss) and the advanced ones, the presets to start from, the checks under
-// the fields, the live preview sentence, and the request it becomes — an overlay
-// (`POST /overlays`) or a configured fault in a candidate revision.
-import type { ConfigFault, FaultBody, NetemParams, OverlayRequest, Protocol, Scope } from '../api/generated/model';
+// The add/edit fault dialog (plan §2.17 "Add fault"): the form of every fault kind the API offers
+// (P3-M13-04) — an impairment fault with the three fields of the common case (latency, jitter, loss)
+// and the advanced ones (`netemForm`), an MTU/PMTUD fault (size and mode) and a tunnel fault (the
+// impairment of a WireGuard client's or a link's encrypted traffic, M10) — the presets to start
+// from, the checks under the fields, the live preview sentence, and the request it becomes: an
+// overlay (`POST /overlays`) or a configured fault in a candidate revision.
+import type { ConfigFault, Destination, FaultBody, MtuParams, OverlayRequest, Protocol, Scope, TunnelRef } from '../api/generated/model';
 import {
   createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp,
+  createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp,
 } from '../api/generated/zod/overlays/overlays';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { gatewayNow } from './clock';
-import { faultChips } from './faults';
+import { faultChips, type Names } from './faults';
 import { durationMs, formatDuration, formatHM, formatRemaining } from './format';
-import { formatPorts, parsePorts } from './rules';
+import {
+  emptyImpairment,
+  impairmentErrors,
+  impairmentParams,
+  impairmentToForm,
+  netemFieldOf,
+  type Direction,
+  type ImpairmentField,
+  type ImpairmentForm,
+} from './netemForm';
+import { describeDestination, formatPorts, parsePorts } from './rules';
 import { remoteCidrError } from './scopes';
 
-export type Direction = 'both' | 'upload' | 'download';
+export { parseRate, presets, rateText, type Direction } from './netemForm';
 
-export interface FaultForm {
+export type FaultFamily = 'impairment' | 'mtu' | 'tunnel';
+export type MtuMode = NonNullable<MtuParams['mode']>;
+export type DestKind = 'any' | 'uplink' | 'network' | 'cidr' | 'hostname';
+
+export interface FaultForm extends ImpairmentForm {
+  family: FaultFamily;
   /** `device:<id>`, `group:<id>`, `network:<id>`, `remote_network:<client|link|cidr>:<value>` or `global` */
   target: string;
+  /** a tunnel fault's tunnel: `client:<id>` or `link:<id>` */
+  tunnel: string;
   /** a key of `trafficPresets`, or `custom` */
   traffic: string;
   protocol: Protocol;
   ports: string;
-  /** an address or prefix; empty for any destination */
+  /** the kind of destination of custom traffic; `destination` holds its network, address or host name */
+  destKind: DestKind;
   destination: string;
-  direction: Direction;
-  latency: string;
-  jitter: string;
-  loss: string;
-  rate: string;
-  reorder: string;
-  duplicate: string;
-  corrupt: string;
-  keepOrder: boolean;
+  /** an MTU fault's packet size (bytes) and mode */
+  mtuSize: string;
+  mtuMode: MtuMode;
   /** a key of `durations`, `keep` (the edited overlay's remaining time) or `ttl:<its own TTL>` */
   duration: string;
   /** the expiry of the edited overlay, which `keep` keeps; empty for a new fault or one without a TTL */
@@ -58,6 +73,14 @@ export const trafficPresets: Record<string, TrafficPreset> = {
   dns: { label: 'DNS · UDP 53', protocol: 'udp', ports: [53] },
 };
 
+export const familyLabels: Record<FaultFamily, string> = { impairment: 'Impairment', mtu: 'MTU / PMTUD', tunnel: 'Tunnel' };
+
+export const mtuModes: { value: MtuMode; label: string; hint: string }[] = [
+  { value: 'icmp', label: 'ICMP · fragmentation needed', hint: 'Larger packets are refused with "fragmentation needed": path MTU discovery works. The server caches the smaller path MTU for the shared NAT address (about 10 min), which reaches other devices talking to it.' },
+  { value: 'blackhole', label: 'Black hole · dropped silently', hint: 'Larger packets are dropped without a message: path MTU discovery fails, TCP transfers stall.' },
+  { value: 'mss_clamp', label: 'MSS clamp · TCP only', hint: 'The MSS of a TCP SYN is set to the size minus 40: only TCP of the target, no side effect on others.' },
+];
+
 export const durations: { value: string; label: string; ttl?: string }[] = [
   { value: '1m', label: '1 min', ttl: '1m' },
   { value: '5m', label: '5 min', ttl: '5m' },
@@ -66,30 +89,19 @@ export const durations: { value: string; label: string; ttl?: string }[] = [
   { value: 'perm', label: 'Until removed' },
 ];
 
-/** "Start from": the parameters of the built-in profiles of the same name (domain/builtin.go). */
-export const presets: { label: string; values: Partial<FaultForm> }[] = [
-  { label: 'LTE', values: { latency: '50', jitter: '10', loss: '0.1', rate: '' } },
-  { label: 'Bad LTE', values: { latency: '150', jitter: '50', loss: '3', rate: '2 Mbit/s' } },
-  { label: 'Satellite', values: { latency: '600', jitter: '30', loss: '1', rate: '' } },
-  { label: 'Offline', values: { latency: '', jitter: '', loss: '100', rate: '' } },
-];
-
 export function emptyForm(target = 'global'): FaultForm {
   return {
+    ...emptyImpairment(),
+    family: 'impairment',
     target,
+    tunnel: '',
     traffic: 'all',
     protocol: 'any',
     ports: '',
+    destKind: 'any',
     destination: '',
-    direction: 'both',
-    latency: '',
-    jitter: '',
-    loss: '',
-    rate: '',
-    reorder: '',
-    duplicate: '',
-    corrupt: '',
-    keepOrder: false,
+    mtuSize: '1280',
+    mtuMode: 'icmp',
     duration: '15m',
     keepUntil: '',
     keepTtl: '',
@@ -169,97 +181,66 @@ export function targetOf(s: Scope | undefined): string {
   return 'global';
 }
 
-/** "2 Mbit/s", "64kbit", "500 kbit/s" → "2Mbit", "64kbit"; undefined when it is no rate. */
-export function parseRate(text: string): string | undefined {
-  const m = /^\s*([0-9]+(?:\.[0-9]+)?)\s*(bit|kbit|mbit|gbit)(?:\/s)?\s*$/i.exec(text);
-  if (!m) return undefined;
-  const unit = { bit: 'bit', kbit: 'kbit', mbit: 'Mbit', gbit: 'Gbit' }[m[2]!.toLowerCase()]!;
-  return `${m[1]}${unit}`;
+/** `client:<id>` → `{client: id}`; undefined while no tunnel is chosen. */
+export function tunnelOf(tunnel: string): TunnelRef | undefined {
+  const m = /^(client|link):(.+)$/.exec(tunnel);
+  return m ? ({ [m[1]!]: m[2] } as TunnelRef) : undefined;
 }
 
-function rateBits(rate: string): number {
-  const m = /^([0-9.]+)(bit|kbit|Mbit|Gbit)$/.exec(rate);
-  if (!m) return 0;
-  return Number(m[1]) * { bit: 1, kbit: 1e3, Mbit: 1e6, Gbit: 1e9 }[m[2] as 'bit']!;
+export function tunnelValue(t: TunnelRef | undefined): string {
+  if (t?.client) return `client:${t.client}`;
+  if (t?.link) return `link:${t.link}`;
+  return '';
 }
 
-/** "2Mbit" → "2 Mbit/s" (the form's text). */
-export function rateText(rate: string | undefined): string {
-  const m = rate ? /^([0-9.]+)(bit|kbit|Mbit|Gbit)$/.exec(rate) : null;
-  return m ? `${m[1]} ${m[2]}/s` : (rate ?? '');
-}
-
-const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
-const pctText = (p: string | undefined) => (p ? p.replace(/%$/, '') : '');
-const msText = (d: string | undefined) => {
-  const ms = durationMs(d);
-  return ms === undefined ? '' : String(ms);
-};
-
-export type FaultField = 'latency' | 'jitter' | 'loss' | 'rate' | 'reorder' | 'duplicate' | 'corrupt' | 'ports' | 'destination' | 'name' | 'target';
+/** A problem of the form: a parameter (`download.<field>` of the download set), or a field of the fault. */
+export type FaultField = ImpairmentField | 'ports' | 'destination' | 'name' | 'target' | 'tunnel' | 'mtuSize' | 'mtuMode';
 
 /** The problems of the form, by field; empty when it can be applied. */
 export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'overlay'): Partial<Record<FaultField, string>> {
   const e: Partial<Record<FaultField, string>> = {};
-  const nonNegative = (field: FaultField, max?: number) => {
-    const v = num(f[field as keyof FaultForm] as string);
-    if (v === undefined) return;
-    if (!Number.isFinite(v) || v < 0) e[field] = 'A number of 0 or more.';
-    else if (max !== undefined && v > max) e[field] = `At most ${max}.`;
-  };
-  nonNegative('latency', 3_600_000);
-  nonNegative('jitter', 3_600_000);
-  for (const p of ['loss', 'reorder', 'duplicate', 'corrupt'] as const) nonNegative(p, 100);
-  const latency = num(f.latency) ?? 0;
-  const jitter = num(f.jitter) ?? 0;
-  if (!e.jitter && jitter > 0 && jitter > latency) e.jitter = 'Jitter cannot be larger than the latency.';
-  if (!e.reorder && (num(f.reorder) ?? 0) > 0 && latency <= 0) e.reorder = 'Reordering needs a latency.';
-  if (f.rate.trim()) {
-    const r = parseRate(f.rate);
-    if (!r) e.rate = 'A rate like 2 Mbit/s, 500 kbit/s or 64kbit.';
-    else if (rateBits(r) < 8) e.rate = 'At least 8 bit/s.';
+  if (f.family === 'mtu') {
+    const size = Number(f.mtuSize);
+    if (!f.mtuSize.trim() || !Number.isInteger(size) || size < 552 || size > 1500) e.mtuSize = 'A packet size from 552 to 1500 bytes.';
+  } else {
+    // the gateway refuses a fault that changes nothing ("the fault sets no parameter"); keeping the
+    // packet order alone changes nothing either
+    Object.assign(e, impairmentErrors(f, f.family === 'tunnel'));
   }
-  if (f.traffic === 'custom') {
+  if (f.family !== 'tunnel' && f.traffic === 'custom') {
     const p = parsePorts(f.ports);
     if (p.error) e.ports = p.error;
     else if ((p.ports || p.port_ranges) && f.protocol !== 'tcp' && f.protocol !== 'udp') e.ports = 'Ports need the protocol TCP or UDP.';
-    if (f.destination.trim() && !cidrRegExp.test(f.destination.trim())) e.destination = 'An IPv4 address or a prefix like 203.0.113.0/24.';
+    const d = f.destination.trim();
+    if (f.destKind === 'cidr' && !cidrRegExp.test(d)) e.destination = 'An IPv4 address or a prefix like 203.0.113.0/24.';
+    if (f.destKind === 'hostname' && !hostnameRegExp.test(d)) e.destination = 'A host name like broker.example.com or *.example.com.';
+    if (f.destKind === 'network' && !d) e.destination = 'Choose a network.';
   }
-  // the gateway refuses a fault that changes nothing ("the fault sets no parameter"); keeping the
-  // packet order alone changes nothing either
-  const { keep_order: _keep, ...params } = netem(f);
-  if (!e.latency && Object.keys(params).length === 0) e.latency = 'Set at least one parameter: latency, loss, a rate, …';
   if (layer === 'config' && f.name && !nameRegExp.test(f.name)) e.name = 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.';
-  if (!f.target) e.target = 'Choose a target.';
-  const remote = remoteCidrError(f.target);
-  if (remote) e.target = remote;
+  if (f.family === 'tunnel') {
+    if (!tunnelOf(f.tunnel)) e.tunnel = 'Choose the WireGuard client or link whose tunnel is impaired.';
+  } else {
+    if (!f.target) e.target = 'Choose a target.';
+    const remote = remoteCidrError(f.target);
+    if (remote) e.target = remote;
+  }
   return e;
 }
 
-/** The parameters of one direction, from the form. */
-function netem(f: FaultForm): NetemParams {
-  const p: NetemParams = {};
-  const loss = num(f.loss);
-  if (loss !== undefined && loss >= 100) {
-    p.blackout = true;
-    return p;
+function destinationOf(f: FaultForm): Destination | undefined {
+  const d = f.destination.trim();
+  switch (f.destKind) {
+    case 'uplink':
+      return { uplink: true };
+    case 'network':
+      return { network: d };
+    case 'cidr':
+      return { cidr: d };
+    case 'hostname':
+      return { hostname: d };
+    default:
+      return undefined;
   }
-  const latency = num(f.latency);
-  const jitter = num(f.jitter);
-  if (latency) p.latency = `${latency}ms`;
-  if (jitter) p.jitter = `${jitter}ms`;
-  if (loss) p.loss = `${loss}%`;
-  const rate = f.rate.trim() ? parseRate(f.rate) : undefined;
-  if (rate) p.rate = rate;
-  const pct = (s: string) => {
-    const v = num(s);
-    return v ? `${v}%` : undefined;
-  };
-  if (pct(f.reorder)) p.reorder = pct(f.reorder);
-  if (pct(f.duplicate)) p.duplicate = pct(f.duplicate);
-  if (pct(f.corrupt)) p.corrupt = pct(f.corrupt);
-  if (f.keepOrder) p.keep_order = true;
-  return p;
 }
 
 /** The selector of the traffic: protocol, ports and destination. */
@@ -273,26 +254,34 @@ function match(f: FaultForm): Pick<FaultBody, 'protocol' | 'ports' | 'port_range
   const p = parsePorts(f.ports);
   if (p.ports) out.ports = p.ports;
   if (p.port_ranges) out.port_ranges = p.port_ranges;
-  if (f.destination.trim()) out.destination = { cidr: f.destination.trim() };
+  const d = destinationOf(f);
+  if (d) out.destination = d;
   return out;
 }
 
-/** The fault body of the form: flat parameters for both directions, or only one direction's. */
+/**
+ * The fault body of the form: an impairment fault's traffic and parameters (flat for both
+ * directions, one direction's, or each its own), an MTU fault's traffic and size, or a tunnel
+ * fault's tunnel and parameters.
+ */
 export function formToFault(f: FaultForm): FaultBody {
-  const params = netem(f);
-  const body: FaultBody = { ...match(f) };
-  if (f.direction === 'both') Object.assign(body, params);
-  else body[f.direction] = params;
-  return body;
+  switch (f.family) {
+    case 'mtu':
+      return { family: 'mtu', ...match(f), mtu: { size: Number(f.mtuSize), mode: f.mtuMode } };
+    case 'tunnel':
+      return { family: 'tunnel', ...(tunnelOf(f.tunnel) ? { tunnel: tunnelOf(f.tunnel) } : {}), ...impairmentParams(f, true) };
+    default:
+      return { ...match(f), ...impairmentParams(f) };
+  }
 }
 
 /**
- * The overlay of the form. `keep` sends the edited overlay's own TTL again and its remaining time on
- * the gateway's clock as `expires_in` (P3-M13-06): the gateway removes it at the same time as before,
- * and the overlay keeps its TTL (`30m` stays `30m`).
+ * The overlay of the form; a tunnel fault has no target. `keep` sends the edited overlay's own TTL
+ * again and its remaining time on the gateway's clock as `expires_in` (P3-M13-06): the gateway
+ * removes it at the same time as before, and the overlay keeps its TTL (`30m` stays `30m`).
  */
 export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRequest {
-  const base = { target: scopeOf(f.target), fault: formToFault(f) };
+  const base: OverlayRequest = { ...(f.family === 'tunnel' ? {} : { target: scopeOf(f.target) }), fault: formToFault(f) };
   if (f.duration === 'keep' && f.keepUntil) {
     if (!f.keepTtl) return { ...base, ttl: remainingTtl(f.keepUntil, now) };
     return { ...base, ttl: f.keepTtl, expires_in: remainingTtl(f.keepUntil, now, f.keepTtl) };
@@ -301,52 +290,40 @@ export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRe
   return { ...base, ...(ttl ? { ttl } : {}) };
 }
 
-/** A configured fault from the form; the fields the form does not show are kept from `base`. */
+/** A configured fault from the form (a tunnel fault has no source); the description and the switch are kept from `base`. */
 export function formToConfigFault(f: FaultForm, base?: ConfigFault): ConfigFault {
   const keep: ConfigFault = {};
   if (base?.description) keep.description = base.description;
   if (base?.enabled === false) keep.enabled = false;
-  return { ...keep, ...(f.name ? { name: f.name } : {}), source: scopeOf(f.target), ...formToFault(f) };
+  return { ...keep, ...(f.name ? { name: f.name } : {}), ...(f.family === 'tunnel' ? {} : { source: scopeOf(f.target) }), ...formToFault(f) };
 }
 
-/** The form of an existing fault (an overlay's or a configured one). */
+/** The form of an existing fault (an overlay's or a configured one), whatever its family. */
 export function faultToForm(fault: FaultBody | undefined, target: Scope | undefined, extra: { ttl?: string; expiresAt?: string; name?: string } = {}): FaultForm {
   const f = emptyForm(targetOf(target));
   if (!fault) return f;
-  let p: NetemParams = fault;
-  if (fault.upload && !fault.download) {
-    f.direction = 'upload';
-    p = fault.upload;
-  } else if (fault.download && !fault.upload) {
-    f.direction = 'download';
-    p = fault.download;
-  } else if (fault.upload) {
-    p = fault.upload;
+  f.family = fault.family ?? 'impairment';
+  if (f.family === 'mtu' && fault.mtu) {
+    f.mtuSize = String(fault.mtu.size);
+    f.mtuMode = fault.mtu.mode ?? 'icmp';
+  } else {
+    impairmentToForm(fault, f);
   }
-  f.latency = msText(p.latency);
-  f.jitter = msText(p.jitter);
-  f.loss = p.blackout ? '100' : pctText(p.loss);
-  f.rate = rateText(p.rate);
-  f.reorder = pctText(p.reorder);
-  f.duplicate = pctText(p.duplicate);
-  f.corrupt = pctText(p.corrupt);
-  f.keepOrder = !!p.keep_order;
+  f.tunnel = tunnelValue(fault.tunnel);
+  const d = fault.destination;
   const preset = Object.entries(trafficPresets).find(
-    ([, t]) =>
-      !fault.destination &&
-      !fault.port_ranges?.length &&
-      (fault.protocol ?? 'any') === t.protocol &&
-      (fault.ports ?? []).join(',') === t.ports.join(','),
+    ([, t]) => !d && !fault.port_ranges?.length && (fault.protocol ?? 'any') === t.protocol && (fault.ports ?? []).join(',') === t.ports.join(','),
   );
   if (preset) f.traffic = preset[0];
   else {
     f.traffic = 'custom';
     f.protocol = fault.protocol ?? 'any';
     f.ports = formatPorts(fault);
-    f.destination = fault.destination?.cidr ?? '';
+    f.destKind = !d ? 'any' : d.uplink ? 'uplink' : d.network !== undefined ? 'network' : d.hostname !== undefined ? 'hostname' : 'cidr';
+    f.destination = d?.network ?? d?.hostname ?? d?.cidr ?? '';
   }
   // an overlay with a TTL keeps its remaining time unless another duration is chosen (P3-M13-06)
-  const ttl = extra.ttl ? (durations.find((d) => d.ttl === extra.ttl)?.value ?? `ttl:${extra.ttl}`) : undefined;
+  const ttl = extra.ttl ? (durations.find((x) => x.ttl === extra.ttl)?.value ?? `ttl:${extra.ttl}`) : undefined;
   f.keepUntil = extra.expiresAt ?? '';
   f.keepTtl = extra.ttl ?? '';
   f.duration = f.keepUntil ? 'keep' : (ttl ?? 'perm');
@@ -354,30 +331,19 @@ export function faultToForm(fault: FaultBody | undefined, target: Scope | undefi
   return f;
 }
 
-/** The parameters the form leaves out that an existing fault has (they would be lost on save). */
-export function hiddenParameters(fault: FaultBody | undefined): string[] {
-  if (!fault) return [];
-  const out: string[] = [];
-  const both = fault.upload && fault.download;
-  if (both && JSON.stringify(fault.upload) !== JSON.stringify(fault.download)) out.push('different upload and download parameters');
-  const ps = [fault, fault.upload, fault.download].filter(Boolean) as NetemParams[];
-  if (ps.some((p) => p.burst_loss)) out.push('burst loss');
-  if (ps.some((p) => p.flapping)) out.push('flapping');
-  if (ps.some((p) => p.distribution && p.distribution !== 'uniform')) out.push('the delay distribution');
-  if (ps.some((p) => p.queue_limit)) out.push('the queue limit');
-  if (ps.some((p) => p.loss_correlation)) out.push('the loss correlation');
-  if (fault.destination && !fault.destination.cidr) out.push('the destination');
-  return out;
-}
+const directionText: Record<Direction, string> = { both: 'upload & download', upload: 'upload only', download: 'download only', each: 'upload and download apart' };
 
-const directionText: Record<Direction, string> = { both: 'upload & download', upload: 'upload only', download: 'download only' };
-
-/** The live preview: "ESP32-42 · MQTT · TCP 8883 · upload & download → ↑↓ 200 ms ±50, 5 % loss · expires after 5 min". */
-export function previewSentence(f: FaultForm, targetName: string, layer: 'overlay' | 'config' = 'overlay'): string {
+/**
+ * The live preview: "ESP32-42 · MQTT · TCP 8883 · upload & download → ↑↓ 200 ms ±50, 5 % loss ·
+ * expires after 5 min"; an MTU fault has no direction, a tunnel fault no traffic (`targetName` is
+ * the tunnel's name then).
+ */
+export function previewSentence(f: FaultForm, targetName: string, layer: 'overlay' | 'config' = 'overlay', names: Names = {}): string {
   let traffic: string;
   if (f.traffic === 'custom') {
     const proto = f.protocol === 'any' ? 'any protocol' : f.protocol.toUpperCase();
-    traffic = `${proto}${f.ports.trim() ? ' ' + f.ports.trim() : ''}${f.destination.trim() ? ' to ' + f.destination.trim() : ''}`;
+    const dest = f.destKind === 'any' ? '' : ` to ${describeDestination(destinationOf(f), names)}`;
+    traffic = `${proto}${f.ports.trim() ? ' ' + f.ports.trim() : ''}${dest}`;
   } else traffic = trafficPresets[f.traffic]?.label ?? 'All traffic';
   const chips = faultChips(formToFault(f));
   const until =
@@ -388,30 +354,33 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
         : f.duration === 'perm'
           ? 'until removed'
           : `expires after ${durations.find((d) => d.value === f.duration)?.label ?? ttlText(durationTtl(f.duration) ?? f.duration)}`;
+  const mode = mtuModes.find((m) => m.value === f.mtuMode)?.label.split(' · ')[0];
+  if (f.family === 'mtu') return `${targetName} · ${traffic} → packets above ${f.mtuSize} bytes: ${mode} · ${until}`;
+  if (f.family === 'tunnel') return `${targetName} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;
   return `${targetName} · ${traffic} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;
 }
 
 /**
  * The form's field of a problem the gateway reported, by its JSON pointer: "/fault/jitter",
- * "/fault/upload/latency", "/target", "/faults/<id>/source/device"; undefined for the fault as a whole.
+ * "/fault/upload/latency", "/fault/burst_loss/p", "/fault/mtu/size", "/target", "/faults/<id>/source/device";
+ * undefined for the fault as a whole. With `each` (upload and download apart), a download
+ * parameter is `download.<field>`.
  */
-export function fieldOf(path: string | undefined): FaultField | undefined {
+export function fieldOf(path: string | undefined, each = false): FaultField | undefined {
+  const p = path ?? '';
   // a remote network's prefix is the target's, not the destination's ("/target/remote_network/cidr")
-  if (/\/remote_network(\/|$)/.test(path ?? '')) return 'target';
-  // the last name in the pointer, past the index of a list ("/ports/0")
-  const last = (path ?? '').split('/').filter((s) => s && !/^\d+$/.test(s)).at(-1) ?? '';
+  if (/\/remote_network(\/|$)/.test(p)) return 'target';
+  if (/\/destination(\/|$)/.test(p)) return 'destination';
+  if (/\/tunnel(\/|$)/.test(p)) return 'tunnel';
+  if (/\/mtu\/mode$/.test(p)) return 'mtuMode';
+  if (/\/mtu(\/|$)/.test(p)) return 'mtuSize';
+  // the names in the pointer, past the index of a list ("/ports/0")
+  const segments = p.split('/').filter((s) => s && !/^\d+$/.test(s));
+  const last = segments.at(-1) ?? '';
   const map: Record<string, FaultField> = {
-    latency: 'latency',
-    jitter: 'jitter',
-    loss: 'loss',
-    rate: 'rate',
-    reorder: 'reorder',
-    duplicate: 'duplicate',
-    corrupt: 'corrupt',
     ports: 'ports',
     port_ranges: 'ports',
-    destination: 'destination',
-    cidr: 'destination',
+    protocol: 'ports',
     name: 'name',
     target: 'target',
     source: 'target',
@@ -419,5 +388,8 @@ export function fieldOf(path: string | undefined): FaultField | undefined {
     network: 'target',
     group: 'target',
   };
-  return map[last];
+  if (map[last]) return map[last];
+  const field = netemFieldOf(segments);
+  if (!field) return undefined;
+  return each && segments.includes('download') ? `download.${field}` : field;
 }

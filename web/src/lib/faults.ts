@@ -1,6 +1,6 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { FaultBody, NetemParams, Overlay, Owner, Scope, TrafficMatch } from '../api/generated/model';
+import type { FaultBody, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
 import { formatDuration } from './format';
 
 function pct(p: string | undefined): string {
@@ -21,22 +21,28 @@ export function netemChips(p: NetemParams | undefined, arrow: string): string[] 
     const jitter = p.jitter ? ` ±${formatDuration(p.jitter).replace(/ ms$/, '')}` : '';
     out.push(`${arrow} ${formatDuration(p.latency)}${jitter}`);
   }
+  if (p.distribution && p.distribution !== 'uniform') out.push(`${p.distribution} delay`);
   if (p.loss) out.push(`${pct(p.loss)} loss`);
+  if (p.loss_correlation) out.push(`loss correlation ${pct(p.loss_correlation)}`);
   if (p.burst_loss) out.push('burst loss');
   if (p.rate) out.push(`${arrow} ${rate(p.rate)}`);
+  if (p.queue_limit) out.push(`queue ${p.queue_limit} pkts`);
   if (p.duplicate) out.push(`${pct(p.duplicate)} duplicate`);
   if (p.reorder) out.push(`${pct(p.reorder)} reorder`);
   if (p.corrupt) out.push(`${pct(p.corrupt)} corrupt`);
-  if (p.flapping) out.push(`flapping ${p.flapping.up} up / ${p.flapping.down} down`);
+  if (p.flapping) out.push(`${arrow} flapping ${p.flapping.up} up / ${p.flapping.down} down`);
   return out;
 }
 
 const netemKeys: (keyof NetemParams)[] = [
   'latency',
   'jitter',
+  'distribution',
   'loss',
+  'loss_correlation',
   'burst_loss',
   'rate',
+  'queue_limit',
   'duplicate',
   'reorder',
   'corrupt',
@@ -100,6 +106,13 @@ export function describeScope(s: Scope | undefined, names: Names = {}): string {
   }
   if (s.global) return 'Everything';
   return 'Everything';
+}
+
+/** The tunnel of a tunnel fault in words: "Tunnel of rA", "Tunnel of link site-b". */
+export function describeTunnel(t: TunnelRef | undefined, names: Names = {}): string {
+  if (t?.client) return `Tunnel of ${names.device?.(t.client) ?? t.client}`;
+  if (t?.link) return `Tunnel of link ${names.network?.(t.link) ?? t.link}`;
+  return 'Tunnel';
 }
 
 /** The destination part of a selector: "→ TCP 8883", "→ 203.0.113.0/24", "" for any. */

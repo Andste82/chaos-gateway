@@ -73,6 +73,8 @@ type Server struct {
 	// osConfigErr is the last failure to read the host's network configuration, so that a screen that
 	// polls GET /system/interfaces logs a failure once, not at every request (P3-M12-07)
 	osConfigErr lastError
+	// setupOSConfig caches that read for the unauthenticated GET /setup (Phase 3 audit, as health)
+	setupOSConfig osConfigCache
 	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
 	unsubEvents func()
 	eventsDone  chan struct{}

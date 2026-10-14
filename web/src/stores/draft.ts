@@ -8,14 +8,18 @@ import type {
   Device,
   ImpairmentParams,
   MatrixEntry,
+  Network,
   NetworkView,
   Profile,
   RevisionWithConfiguration,
+  Routing,
+  RoutingProtocol,
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
 import { faultChips, describeScope, describeTunnel, impairmentCombines, impairmentKeys, impairmentOf, withImpairment, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
+import { networkChanges, protocolChanges, routingSettingsChanges, withoutClients } from '../lib/networkChanges';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { profileChips } from '../lib/profiles';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
@@ -85,7 +89,7 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile';
+  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -93,7 +97,8 @@ export interface DraftChange extends FieldChange {
 
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
- * access rules, their order, configured faults, custom profiles, adopted devices, WireGuard clients and the access matrix, edited
+ * access rules, their order, configured faults, custom profiles, adopted devices, networks (P3-M14-01), WireGuard clients, the access
+ * matrix and the routing (P3-M14-01), edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -117,6 +122,13 @@ export const useDraftStore = defineStore('draft', () => {
   const clients = ref<Record<string, { network: string; client: WireGuardClient | null }>>({});
   /** The entries of the access matrix, when they were edited. */
   const matrix = ref<MatrixEntry[]>();
+  /**
+   * Networks added, changed or deleted (`null`), by id (P3-M14-01): the network's own settings, without
+   * the clients of a hub, which `clients` holds.
+   */
+  const networks = ref<Record<string, Network | null>>({});
+  /** The routing (plan §2.2.2: the BIRD settings and the protocols), when it was edited (P3-M14-01). */
+  const routing = ref<Routing>();
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
@@ -128,6 +140,8 @@ export const useDraftStore = defineStore('draft', () => {
       Object.keys(profiles.value).length > 0 ||
       Object.keys(devices.value).length > 0 ||
       Object.keys(clients.value).length > 0 ||
+      Object.keys(networks.value).length > 0 ||
+      routing.value !== undefined ||
       matrix.value !== undefined,
   );
 
@@ -291,6 +305,11 @@ export const useDraftStore = defineStore('draft', () => {
     }
   }
 
+  /** The networks of a configuration without the clients of the hubs (what network edits are compared with). */
+  function networkSettings(c: Configuration | undefined): Record<string, Network> {
+    return Object.fromEntries(Object.entries(c?.networks ?? {}).map(([id, n]) => [id, withoutClients(n)]));
+  }
+
   /** The networks of the base as the matrix functions take them (they read the type and the name). */
   const baseNetworks = computed<NetworkView[]>(() =>
     Object.entries(baseConfig.value?.networks ?? {}).map(([id, config]) => ({ id, config, status: { state: 'ok' as const } })),
@@ -324,6 +343,80 @@ export const useDraftStore = defineStore('draft', () => {
     } else {
       clients.value = { ...clients.value, [id]: { network, client: client === null ? null : cloneJSON(client) } };
     }
+  }
+
+  /** A network of the base revision without the clients of a hub (what a network edit is compared with). */
+  function baseNetwork(id: string): Network | undefined {
+    const n = baseConfig.value?.networks?.[id];
+    return n ? withoutClients(n) : undefined;
+  }
+
+  /** The networks as the draft has them: the base's with the edits (a hub with the clients of the base). */
+  const effectiveNetworks = computed<Record<string, Network>>(() => {
+    const out: Record<string, Network> = { ...(baseConfig.value?.networks ?? {}) };
+    for (const [id, n] of Object.entries(networks.value)) {
+      if (n === null) {
+        delete out[id];
+        continue;
+      }
+      const clientsOf = (out[id] as WireGuardNetwork | undefined)?.clients;
+      out[id] = clientsOf && n.type === 'wireguard' ? ({ ...n, clients: clientsOf } as WireGuardNetwork) : n;
+    }
+    return out;
+  });
+
+  /**
+   * Adds, changes or deletes (`null`) a network (P3-M14-01). The clients of a hub are not part of it: they
+   * stay as they are, and a network deleted takes the edits of its clients with it.
+   */
+  function setNetwork(id: string, network: Network | null) {
+    clearServerErrors(id);
+    const before = baseNetwork(id);
+    const n = network === null ? null : withoutClients(network);
+    if ((n === null && before === undefined) || (n !== null && before !== undefined && jsonEqual(before, n))) {
+      const { [id]: _drop, ...rest } = networks.value;
+      networks.value = rest;
+    } else {
+      networks.value = { ...networks.value, [id]: n === null ? null : cloneJSON(n) };
+    }
+    if (n === null) {
+      clients.value = Object.fromEntries(Object.entries(clients.value).filter(([, c]) => c.network !== id));
+    }
+  }
+
+  /** Undoes the edit or the deletion of a network of the base. */
+  function restoreNetwork(id: string) {
+    const before = baseNetwork(id);
+    if (before) setNetwork(id, before);
+  }
+
+  const baseRouting = computed<Routing>(() => baseConfig.value?.routing ?? {});
+  /** The routing as the draft has it. */
+  const effectiveRouting = computed<Routing>(() => routing.value ?? baseRouting.value);
+
+  /** The routing edited (P3-M14-01); a routing back at its base is no change. */
+  function setRouting(r: Routing) {
+    clearServerErrors('routing');
+    for (const id of Object.keys(r.protocols ?? {})) clearServerErrors(id);
+    for (const id of Object.keys(effectiveRouting.value.protocols ?? {})) clearServerErrors(id);
+    const next = cloneJSON(r);
+    // the last protocol deleted from a routing that had none in the base leaves no empty map behind
+    if (next.protocols && Object.keys(next.protocols).length === 0 && !baseRouting.value.protocols) delete next.protocols;
+    routing.value = jsonEqual(next, baseRouting.value) ? undefined : next;
+  }
+
+  /** A routing protocol added, changed or deleted (`null`). */
+  function setProtocol(id: string, p: RoutingProtocol | null) {
+    const protocols = { ...(effectiveRouting.value.protocols ?? {}) };
+    if (p === null) delete protocols[id];
+    else protocols[id] = p;
+    setRouting({ ...effectiveRouting.value, protocols });
+  }
+
+  /** Undoes the edit or the deletion of a protocol of the base. */
+  function restoreProtocol(id: string) {
+    const before = baseRouting.value.protocols?.[id];
+    if (before) setProtocol(id, before);
   }
 
   /** Flips the policy of one pair of the matrix (`toggleCell`); a matrix back at its base is no change. */
@@ -440,6 +533,22 @@ export const useDraftStore = defineStore('draft', () => {
         if (!jsonEqual(rest(before), rest(client))) out.push({ kind: 'client', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }
+    for (const [id, n] of Object.entries(networks.value)) {
+      const before = baseNetwork(id);
+      const name = n?.name ?? before?.name ?? id;
+      for (const c of networkChanges(before, n)) out.push({ kind: 'network', id, name, ...c });
+    }
+    if (routing.value) {
+      const was = baseRouting.value;
+      const now = routing.value;
+      const label = { network: (id: string) => effectiveNetworks.value[id]?.name ?? netName(id), client: (id: string) => clientName(id) };
+      for (const c of routingSettingsChanges(was, now)) out.push({ kind: 'routing', id: 'routing', name: 'settings', ...c });
+      for (const pid of new Set([...Object.keys(was.protocols ?? {}), ...Object.keys(now.protocols ?? {})])) {
+        const a = was.protocols?.[pid];
+        const b = now.protocols?.[pid];
+        for (const c of protocolChanges(a, b, label)) out.push({ kind: 'routing', id: pid, name: `protocol ${b?.name ?? a?.name ?? pid}`, ...c });
+      }
+    }
     if (matrix.value) {
       for (const c of matrixChanges(baseMatrix.value, matrix.value, baseNetworks.value, { network: netName, client: clientName })) {
         out.push({ kind: 'matrix', id: c.field, name: 'Access between networks', ...c });
@@ -456,13 +565,16 @@ export const useDraftStore = defineStore('draft', () => {
     const profileIds = new Set(cs.filter((c) => c.kind === 'profile').map((c) => c.id));
     const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
     const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
+    const networkIds = new Set(cs.filter((c) => c.kind === 'network').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
       profileIds.size ? `${profileIds.size} ${profileIds.size === 1 ? 'profile' : 'profiles'}` : '',
       deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
+      networkIds.size ? `${networkIds.size} ${networkIds.size === 1 ? 'network' : 'networks'}` : '',
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
       cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
+      cs.some((c) => c.kind === 'routing') ? 'the routing' : '',
     ].filter(Boolean);
     const list = objects.length > 1 ? `${objects.slice(0, -1).join(', ')} and ${objects.at(-1)}` : (objects[0] ?? '');
     return `${cs.length} ${cs.length === 1 ? 'change' : 'changes'} in ${list}`;
@@ -516,12 +628,23 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) dp[id] = p;
     }
     if (Object.keys(dp).length) out.devices = dp;
-    const np: Record<string, { clients: Record<string, unknown> }> = {};
+    // a network's own settings, and the clients of a hub inside it (a network deleted takes its clients along)
+    const np: Record<string, Record<string, unknown> | null> = {};
+    for (const [id, n] of Object.entries(networks.value)) {
+      const p = createMergePatch(baseNetwork(id), n);
+      if (p !== undefined) np[id] = p as Record<string, unknown> | null;
+    }
     for (const [id, { network, client }] of Object.entries(clients.value)) {
       const p = createMergePatch(clientsIn(baseConfig.value, network)[id], client);
-      if (p !== undefined) (np[network] ??= { clients: {} }).clients[id] = p;
+      if (p === undefined || np[network] === null) continue;
+      const n = (np[network] ??= {});
+      ((n.clients ??= {}) as Record<string, unknown>)[id] = p;
     }
     if (Object.keys(np).length) out.networks = np;
+    if (routing.value) {
+      const p = createMergePatch(baseConfig.value?.routing, routing.value);
+      if (p !== undefined) out.routing = p as ConfigurationPatch;
+    }
     // the entries are an array: the merge patch replaces it whole
     if (matrix.value && !jsonEqual(matrix.value, baseMatrix.value)) out.access_matrix = { entries: cloneJSON(matrix.value) };
     return out;
@@ -582,6 +705,14 @@ export const useDraftStore = defineStore('draft', () => {
     compare('fault', faults.value, old?.faults ?? {}, theirs.faults ?? {}, named);
     compare('profile', profiles.value, old?.profiles ?? {}, theirs.profiles ?? {}, named);
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
+    compare('network', networks.value, networkSettings(old), networkSettings(theirs), named);
+    if (routing.value) {
+      const count = out.length;
+      compare('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: theirs.routing ?? {} }, () => 'routing');
+      // a protocol by its name, not its id
+      const protocols = { ...(theirs.routing?.protocols ?? {}), ...(routing.value.protocols ?? {}) };
+      for (const c of out.slice(count)) c.field = c.field.replace(/^protocols ([0-9a-f-]{36})/, (_m, id: string) => `protocol ${protocols[id]?.name ?? id}`);
+    }
     for (const net of new Set(Object.values(clients.value).map((c) => c.network))) {
       const edits = Object.fromEntries(
         Object.entries(clients.value)
@@ -641,6 +772,11 @@ export const useDraftStore = defineStore('draft', () => {
     faults.value = reapply('fault', faults.value, old?.faults ?? {}, theirFaults);
     profiles.value = reapply('profile', profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
     devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
+    networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
+    if (routing.value) {
+      const r = reapply('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: rev.configuration.routing ?? {} }).routing;
+      routing.value = r && !jsonEqual(r, rev.configuration.routing ?? {}) ? r : undefined;
+    }
     // clients hub by hub, like the other objects
     const nextClients: typeof clients.value = {};
     for (const net of new Set(Object.values(myClients).map((c) => c.network))) {
@@ -684,6 +820,8 @@ export const useDraftStore = defineStore('draft', () => {
     profiles.value = {};
     devices.value = {};
     clients.value = {};
+    networks.value = {};
+    routing.value = undefined;
     matrix.value = undefined;
     portsText.value = {};
     serverErrors.value = {};
@@ -704,6 +842,18 @@ export const useDraftStore = defineStore('draft', () => {
       const c = /^\/networks\/[^/]+\/clients\/([^/]+)(?:\/([^/]+))?/.exec(e.path ?? '');
       if (c) {
         (out[c[1]!] ??= {})[c[2] ?? 'client'] = e.message ?? 'not valid';
+        continue;
+      }
+      // a network and a routing protocol keep the pointer below them (their dialogs map it to their fields;
+      // `network` and `protocol` for the object as a whole), the BIRD settings theirs under `routing`
+      const n = /^\/networks\/([^/]+)(?:\/(.+))?$/.exec(e.path ?? '');
+      if (n) {
+        (out[n[1]!] ??= {})[n[2] ?? 'network'] = e.message ?? 'not valid';
+        continue;
+      }
+      const r = /^\/routing(?:\/protocols\/([^/]+))?(?:\/(.+))?$/.exec(e.path ?? '');
+      if (r) {
+        (out[r[1] ?? 'routing'] ??= {})[r[2] ?? (r[1] ? 'protocol' : 'routing')] = e.message ?? 'not valid';
         continue;
       }
       const m = /^\/(access_rules|faults|profiles|devices)\/([^/]+)(?:\/(.+))?/.exec(e.path ?? '');
@@ -733,6 +883,8 @@ export const useDraftStore = defineStore('draft', () => {
     profiles,
     devices,
     clients,
+    networks,
+    routing,
     matrix,
     portsText,
     dirty,
@@ -742,6 +894,10 @@ export const useDraftStore = defineStore('draft', () => {
     effectiveProfiles,
     effectiveMatrix,
     effectiveClients,
+    effectiveNetworks,
+    effectiveRouting,
+    baseNetwork,
+    baseRouting,
     baseClient,
     invalid,
     track,
@@ -755,6 +911,11 @@ export const useDraftStore = defineStore('draft', () => {
     restoreProfile,
     setDevice,
     setClient,
+    setNetwork,
+    restoreNetwork,
+    setRouting,
+    setProtocol,
+    restoreProtocol,
     toggleMatrix,
     clientName,
     setPortsText,

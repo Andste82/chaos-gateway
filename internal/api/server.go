@@ -110,8 +110,11 @@ func New(cfg Config) (*Server, error) {
 
 // auditSystemEvents records the audit log entries of changes the engine makes on its own (M5-05):
 // today, only a commit-confirm rollback (timeout, or an unconfirmed revision found at restart). A
-// rollback that leaves nothing committed was the setup's own first revision (M5-03): the admin
-// password it set is of no use without the configuration it was paired with, so the setup reopens.
+// rollback an admin requested (POST /revisions/{id}/rollback, reason "requested") is the admin's and
+// RollbackRevision records it: it is not recorded a second time as the system's (Phase 3 audit). A
+// rollback that leaves nothing committed, requested or not, was the setup's own first revision (M5-03):
+// the admin password it set is of no use without the configuration it was paired with, so the setup
+// reopens.
 func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 	defer close(s.eventsDone)
 	for ev := range events {
@@ -120,8 +123,10 @@ func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 		}
 		rev, _ := ev.Data["revision"].(int64)
 		reason, _ := ev.Data["reason"].(string)
-		_, _ = s.cfg.Audit.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system",
-			Action: "revision.rolled_back", Revision: rev, Detail: reason})
+		if reason != "requested" {
+			_, _ = s.cfg.Audit.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system",
+				Action: "revision.rolled_back", Revision: rev, Detail: reason})
+		}
 		if s.cfg.Engine.Snapshot().Revision != 0 {
 			continue
 		}

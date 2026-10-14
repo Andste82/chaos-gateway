@@ -3379,6 +3379,17 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   activation (`POST /overlays` with `profile` and `ttl`; another profile on the same scope replaces it, one profile per
   scope), "Deactivate on Network IoT" removes the activations of that scope. The device page's "Apply profile" opens the
   profiles with the device as the scope (`?scope=device:<id>`).
+- **Remote networks in the scope selectors** (`src/lib/scopes.ts`, `ScopeSelect.vue`; P3-M13-08). The fault dialog's
+  target, the profiles' "Activate on" and the rule editor's From offer, after everything, the networks, groups and
+  devices, the remote networks of plan §2.4: "Client networks · rA (10.50.0.0/24)" for each WireGuard client with client
+  networks, "Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)" for each link (its static routes and the routes it
+  learned), and "Remote network · a prefix inside them…", which shows a field for the prefix beside the selector. They are
+  sent as `remote_network` (`client`, `link` or `cidr`). The prefix is checked in the browser as an IPv4 prefix (the message
+  under the selector; Apply, Activate and Preview & apply wait); whether it lies inside a client network or a link's route the
+  gateway decides (`unknown_remote_network`, a link with dynamic routing takes any prefix), and its message goes under the
+  target too (`fieldOf` maps `…/remote_network/…` to the target). A scope the options do not have any more stays selectable
+  under its name. A rule's To keeps the destinations of the model (a remote prefix is an address or prefix there, a link or
+  hub its WireGuard network); `Destination` has no `remote_network`.
 - **TTL display.** Every overlay and profile activation shows its remaining time on the gateway's clock (M12's `useNow`),
   in the device detail, the overview, the faults screen, the overlay rules and the profile cards; the event stream's
   `overlay_expired` raises the toast and refreshes the lists (overlay events now also refresh the profiles).
@@ -3451,6 +3462,7 @@ branch with the M13 flow yet.
 | Scope: unapplied-changes bar, preview-and-apply drawer | `rules.spec.ts` "editing a rule marks it CHANGED and the bar counts the changes; Discard takes them back", "preview and apply: the drawer says what changes, Linux changes on request, Apply → verified toast", "Back to editing discards the candidate and keeps the draft", "a deleted rule is shown struck through …", "a failed apply says which step failed and which revision the gateway restored", "Preview & apply waits while a revision waits for confirmation"; `faults.spec.ts` "closing the drawer while the candidate is created discards it when it arrives"; `src/stores/draft.test.ts` "edits undone by hand leave a clean draft on the newest active revision" |
 | Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
+| Remote networks in the scope selectors (P3-M13-08) | `faults.spec.ts` "a fault on a WireGuard client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a prefix inside a remote network: the prefix is checked under the target, the gateway's refusal stands there too (P3-M13-08)" (also a configured fault on a link's prefixes), `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them (P3-M13-08)", `rules.spec.ts` "a rule from a WireGuard client's networks: From offers the remote networks, the patch carries the source (P3-M13-08)"; `src/lib/scopes.test.ts`, `src/lib/rules.test.ts` "checks a rule before it can be applied", `src/lib/faults.test.ts` "names the source by its object" |
 | Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)" (also the token's overlay taken over in "edit a fault overlay of an API token: …"); `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"; M12's `device-detail.spec.ts` |
 | Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` (also an apostrophe in a body or header, quoted for the shell) |
 

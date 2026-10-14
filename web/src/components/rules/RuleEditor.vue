@@ -3,14 +3,17 @@
 // ports, THEN Allow · Drop · Reject · TCP reset and "also cut existing connections". Every edit goes
 // into the configuration draft (the unapplied-changes bar), nothing reaches the gateway before
 // Preview & apply. Each message stands under its field; the gateway's refusal of a candidate is
-// shown there too.
+// shown there too. From offers the remote networks too (P3-M13-08); To has the destinations of the
+// model (a link's or a client's prefixes are an address or prefix, or the WireGuard network).
 import { computed, useId } from 'vue';
 import type { AccessAction, AccessRule, Destination, Protocol, RejectType } from '../../api/generated/model';
 import { useNames } from '../../composables/gateway';
 import { scopeOf, targetOf } from '../../lib/faultForm';
 import { describeScope } from '../../lib/faults';
 import { accessLabels, formatPorts, parsePorts, rejectLabels, ruleErrors } from '../../lib/rules';
+import { remoteScopeOptions } from '../../lib/scopes';
 import { useDraftStore } from '../../stores/draft';
+import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import SwitchToggle from '../ui/SwitchToggle.vue';
 
@@ -35,10 +38,11 @@ const sources = computed(() => {
   for (const [gid, g] of Object.entries(draft.baseConfig?.groups ?? {})) out.push({ value: `group:${gid}`, label: `Group · ${g.name}` });
   // a configured rule names configured devices only
   for (const d of devices.data.value ?? []) if (d.origin !== 'discovered') out.push({ value: `device:${d.id}`, label: `Device · ${d.name}` });
-  const cur = targetOf(props.rule.source);
-  if (!out.some((o) => o.value === cur)) out.push({ value: cur, label: describeScope(props.rule.source, n) });
+  // the client networks of a WireGuard client, a link's prefixes or a prefix inside them (P3-M13-08)
+  out.push(...remoteScopeOptions(networks.data.value ?? []));
   return out;
 });
+const sourceName = computed(() => describeScope(props.rule.source, names.value));
 
 const source = computed({
   get: () => targetOf(props.rule.source),
@@ -141,9 +145,14 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="label" :for="fid('from')">From</label>
-        <select :id="fid('from')" v-model="source" class="input" :aria-invalid="!!errors.source" :aria-describedby="errors.source ? eid('from') : undefined">
-          <option v-for="o in sources" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
+        <ScopeSelect
+          :id="fid('from')"
+          v-model="source"
+          :options="sources"
+          :current-label="sourceName"
+          :invalid="!!errors.source"
+          :describedby="errors.source ? eid('from') : undefined"
+        />
         <p v-if="errors.source" :id="eid('from')" class="field-error">{{ errors.source }}</p>
       </div>
       <div>

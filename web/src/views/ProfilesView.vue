@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Profiles (plan §2.17 "Profiles", §2.9): a card per profile with its parameters and where it is
 // active (with the remaining time of each activation), a scope selector (everything / network /
-// group / device) and a duration; activate or deactivate on the chosen scope. One profile per scope:
-// activating another one on the same scope switches it (the overlay keeps its id). "Measure with
-// probe" arrives with the probes (M25).
+// group / device, and the remote networks of P3-M13-08) and a duration; activate or deactivate on
+// the chosen scope. One profile per scope: activating another one on the same scope switches it
+// (the overlay keeps its id). "Measure with probe" arrives with the probes (M25).
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
 import { useRoute } from 'vue-router';
@@ -14,11 +14,13 @@ import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
+import ScopeSelect from '../components/ui/ScopeSelect.vue';
 import { firstError, useGatewayState, useGroups, useNames, useProfiles } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { durations, scopeOf, targetOf } from '../lib/faultForm';
 import { describeScope } from '../lib/faults';
 import { formatRemaining } from '../lib/format';
+import { remoteCidrError, remoteScopeOptions } from '../lib/scopes';
 import { profileChips, profileTitle } from '../lib/profiles';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -47,8 +49,11 @@ const scopes = computed(() => {
   for (const net of networks.data.value ?? []) out.push({ value: `network:${net.id}`, label: `Network · ${n.network?.(net.id) ?? net.id}` });
   for (const g of groupList.value) out.push({ value: `group:${g.id}`, label: `Group · ${g.name}` });
   for (const d of devices.data.value ?? []) out.push({ value: `device:${d.id}`, label: `Device · ${d.name}` });
+  // the client networks of a WireGuard client, a link's prefixes or a prefix inside them (P3-M13-08)
+  out.push(...remoteScopeOptions(networks.data.value ?? []));
   return out;
 });
+const scopeError = computed(() => remoteCidrError(scope.value));
 const groupList = computed(() => (groups.data.value ?? []).map((g) => ({ id: g.id, name: g.config.name })));
 const scopeName = computed(() => describeScope(scopeOf(scope.value), names.value));
 
@@ -117,9 +122,15 @@ const blocked = computed(() => !!state.data.value?.pending_confirm || connection
   <div class="card flex flex-wrap items-end gap-4">
     <div class="min-w-[240px]">
       <label class="label" :for="`${uid}-scope`">Activate on</label>
-      <select :id="`${uid}-scope`" v-model="scope" class="input">
-        <option v-for="s in scopes" :key="s.value" :value="s.value">{{ s.label }}</option>
-      </select>
+      <ScopeSelect
+        :id="`${uid}-scope`"
+        v-model="scope"
+        :options="scopes"
+        :current-label="scopeName"
+        :invalid="!!scopeError"
+        :describedby="scopeError ? `${uid}-scope-error` : undefined"
+      />
+      <p v-if="scopeError" :id="`${uid}-scope-error`" class="field-error">{{ scopeError }}</p>
     </div>
     <div class="min-w-[160px]">
       <label class="label" :for="`${uid}-ttl`">For</label>
@@ -174,7 +185,7 @@ const blocked = computed(() => !!state.data.value?.pending_confirm || connection
         >
           Deactivate on {{ scopeName }}
         </button>
-        <button v-else type="button" class="btn btn-primary btn-sm" :disabled="busy === p.id || blocked || !p.available" @click="activate(p)">
+        <button v-else type="button" class="btn btn-primary btn-sm" :disabled="busy === p.id || blocked || !p.available || !!scopeError" @click="activate(p)">
           Activate on {{ scopeName }}
         </button>
       </div>

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ProfileView } from '../src/api/generated/model';
-import { MockGateway, toast } from './mock';
+import { LINK, MockGateway, toast, withNetworks } from './mock';
 
 // M13: profile cards with their parameters and where they are active (TTL), the scope selector and
 // the duration, activate and deactivate on the chosen scope (one profile per scope).
@@ -71,6 +71,27 @@ test('activate on the chosen scope for a duration, then deactivate', async ({ pa
   await expect(toast(page, 'LTE deactivated on Network IoT')).toBeVisible();
   expect(gw.requestsTo('DELETE', '/overlays/f0000000-0000-4000-8000-000000000002')).toHaveLength(1);
   await expect(card(page, 'LTE').getByTestId('profile-active')).toHaveText('Not active');
+});
+
+test("activate on a link's remote networks or a prefix inside them (P3-M13-08)", async ({ page }) => {
+  const gw = withNetworks(lab());
+  await gw.install(page);
+  await page.goto('/profiles');
+  const scope = page.getByLabel('Activate on');
+  await scope.selectOption({ label: 'Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)' });
+  await card(page, 'Bad LTE').getByRole('button', { name: 'Activate on Remote networks of link site-b' }).click();
+  await expect(toast(page, 'Bad LTE active on Remote networks of link site-b')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({ target: { remote_network: { link: LINK } }, profile: BAD_LTE });
+  await expect(card(page, 'Bad LTE').getByTestId('profile-active')).toContainText('Remote networks of link site-b');
+
+  // a prefix: Activate waits for a valid one
+  await scope.selectOption({ label: 'Remote network · a prefix inside them…' });
+  await expect(page.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeVisible();
+  await expect(card(page, 'LTE').getByRole('button', { name: /^Activate on/ })).toBeDisabled();
+  await page.getByLabel('Prefix inside a remote network').fill('10.50.0.0/25');
+  await card(page, 'LTE').getByRole('button', { name: 'Activate on Remote network 10.50.0.0/25' }).click();
+  await expect(toast(page, 'LTE active on Remote network 10.50.0.0/25')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[1]!.body).toEqual({ target: { remote_network: { cidr: '10.50.0.0/25' } }, profile: LTE });
 });
 
 test("the device page's Apply profile opens the profiles with the device as the scope", async ({ page }) => {

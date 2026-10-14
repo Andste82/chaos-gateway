@@ -11,6 +11,7 @@ import { gatewayNow } from './clock';
 import { faultChips } from './faults';
 import { durationMs, formatDuration, formatHM, formatRemaining } from './format';
 import { formatPorts, parsePorts } from './rules';
+import { remoteCidrError } from './scopes';
 
 export type Direction = 'both' | 'upload' | 'download';
 
@@ -223,6 +224,8 @@ export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'ove
   if (!e.latency && Object.keys(params).length === 0) e.latency = 'Set at least one parameter: latency, loss, a rate, …';
   if (layer === 'config' && f.name && !nameRegExp.test(f.name)) e.name = 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.';
   if (!f.target) e.target = 'Choose a target.';
+  const remote = remoteCidrError(f.target);
+  if (remote) e.target = remote;
   return e;
 }
 
@@ -379,6 +382,8 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
  * "/fault/upload/latency", "/target", "/faults/<id>/source/device"; undefined for the fault as a whole.
  */
 export function fieldOf(path: string | undefined): FaultField | undefined {
+  // a remote network's prefix is the target's, not the destination's ("/target/remote_network/cidr")
+  if (/\/remote_network(\/|$)/.test(path ?? '')) return 'target';
   // the last name in the pointer, past the index of a list ("/ports/0")
   const last = (path ?? '').split('/').filter((s) => s && !/^\d+$/.test(s)).at(-1) ?? '';
   const map: Record<string, FaultField> = {

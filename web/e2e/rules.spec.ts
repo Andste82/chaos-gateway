@@ -326,6 +326,42 @@ test('reload and reapply where both changed the same rule: their field stays, mi
   expect(gw.config.access_rules?.[RULE_DNS]).toMatchObject({ action: 'reject', enabled: false });
 });
 
+test('the conflict dialog names a field both changed, their value → mine, and reapplying takes mine (P3-M13-07)', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  await page.getByTestId('rule-editor').getByRole('group', { name: 'Access' }).getByRole('button', { name: 'Reject' }).click();
+  await page.getByTestId('rule-editor').getByLabel('Name').fill('no-dns-2');
+  // a token changes the same rule's access to a TCP reset and its ports, but not its name
+  gw.applyFromApi({ access_rules: { [RULE_DNS]: { action: 'reset', protocol: 'tcp', ports: [53, 853] } } }, { type: 'token', id: 't1', name: 'ci-runner' }, [
+    { op: 'changed', kind: 'access_rule', id: RULE_DNS, name: 'no-dns', path: `/access_rules/${RULE_DNS}`, summary: 'access rule no-dns: action drop → reset' },
+  ]);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  const both = conflict.getByTestId('conflict-both');
+  await expect(both).toContainText('CHANGED ON BOTH SIDES · THEIRS → YOURS');
+  await expect(both.getByRole('listitem')).toHaveText(['Rule no-dns-2 action: TCP reset → Reject']);
+  await expect(conflict).toContainText('where both changed the same field of an object, yours wins (the fields above)');
+  await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 44' });
+  await expect(drawer).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')[1]!.body).toEqual({ access_rules: { [RULE_DNS]: { name: 'no-dns-2', action: 'reject' } } });
+  await drawer.getByRole('button', { name: 'Apply revision 44' }).click();
+  await expect(toast(page, 'Revision 44 applied and verified in 87 ms')).toBeVisible();
+  // their ports stay, my access wins
+  expect(gw.config.access_rules?.[RULE_DNS]).toMatchObject({ name: 'no-dns-2', action: 'reject', protocol: 'tcp', ports: [53, 853] });
+});
+
+test('the conflict dialog lists no field when the two changes do not meet', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(2).getByRole('switch', { name: 'Enable rule no-dot' }).click();
+  gw.applyFromApi({ access_rules: { [RULE_DNS]: { action: 'reset' } } }, { type: 'token', id: 't1', name: 'ci-runner' }, []);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  await expect(conflict.getByTestId('conflict-yours')).toContainText('Rule no-dot enabled: yes → no');
+  await expect(conflict.getByTestId('conflict-both')).toHaveCount(0);
+  await expect(conflict).not.toContainText('(the fields above)');
+});
+
 test('the concurrent-change dialog can discard the draft instead', async ({ page }) => {
   const gw = await open(page);
   await rows(page).nth(2).getByRole('switch', { name: 'Enable rule no-dot' }).click();

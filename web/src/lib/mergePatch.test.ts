@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyMergePatch, cloneJSON, createMergePatch, jsonEqual } from './mergePatch';
+import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual } from './mergePatch';
 
 describe('merge patch (RFC 7396)', () => {
   it('is undefined between equal documents, key order and undefined members aside', () => {
@@ -35,5 +35,15 @@ describe('merge patch (RFC 7396)', () => {
     const c = cloneJSON(v);
     c.a[0]!.b = 2;
     expect(v.a[0]!.b).toBe(1);
+  });
+
+  it('names the members both edits changed to different values, a scope as a whole', () => {
+    const base = { name: 'a', action: 'drop', enabled: true, source: { network: 'n1' }, upload: { latency: '10ms', loss: '1%' } };
+    const theirs = { name: 'b', action: 'reset', source: { group: 'g' }, upload: { latency: '20ms', loss: '1%' } };
+    const mine = { name: 'b', action: 'reject', enabled: true, source: { network: 'n2' }, upload: { latency: '10ms', loss: '2%' } };
+    // the name both set to b is no conflict; the loss only I changed and the removed enabled only they did
+    expect(bothChanged(base, theirs, mine, new Set(['source']))).toEqual([['action'], ['source']]);
+    expect(bothChanged(base, { ...base, upload: { latency: '30ms' } }, { ...base, upload: { latency: '40ms', loss: '1%' } })).toEqual([['upload', 'latency']]);
+    expect(bothChanged(base, base, mine)).toEqual([]);
   });
 });

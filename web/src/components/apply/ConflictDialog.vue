@@ -3,10 +3,12 @@
 // someone else (another tab, an API token, a test) while this browser was editing, so the gateway
 // refused the change against the old base (409 revision_conflict). It says who changed what, and
 // offers to reload and reapply the user's change on the new revision, or to discard it. There is no
-// "overwrite theirs" (plan §2.17: the prototype's three-way dialog is superseded).
+// "overwrite theirs" (plan §2.17: the prototype's three-way dialog is superseded). Before the user
+// reapplies, it names the fields both sides changed, their value → mine (P3-M13-07): reapplying
+// merges field by field, so there mine wins.
 import { useQuery } from '@tanstack/vue-query';
 import { computed } from 'vue';
-import type { Actor } from '../../api/generated/model';
+import type { Actor, Configuration } from '../../api/generated/model';
 import { diffRevision, getActiveRevision, listRevisions } from '../../api/generated/hooks/revisions/revisions';
 import LoadError from '../ui/LoadError.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -16,6 +18,8 @@ const props = defineProps<{
   base: number;
   /** The user's change in words. */
   yours: string[];
+  /** The fields both sides changed in words ("Rule no-dns access: TCP reset → Reject"), against their configuration. */
+  overlaps?: (theirs: Configuration) => string[];
   busy?: boolean;
   error?: string;
 }>();
@@ -42,6 +46,7 @@ function actor(by: Actor | undefined): string {
   return by.name ?? by.type;
 }
 const who = computed(() => actor(active.data.value?.created_by));
+const both = computed(() => (active.data.value && props.overlaps ? props.overlaps(active.data.value.configuration) : []));
 
 /** More than one revision may have come after the base: the diff covers them all, so all are named. */
 const several = computed(() => !!active.data.value && active.data.value.id - props.base > 1);
@@ -97,9 +102,16 @@ const description = computed(() => {
         <li v-for="(c, i) in yours" :key="i" class="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">{{ c }}</li>
       </ul>
     </div>
+    <div v-if="both.length" data-testid="conflict-both">
+      <div class="mb-1.5 text-xs font-semibold tracking-[0.06em] text-text-2">CHANGED ON BOTH SIDES · THEIRS → YOURS</div>
+      <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
+        <li v-for="(c, i) in both" :key="i" class="rounded-md border border-fault-border bg-fault-tint px-3 py-2 text-sm text-fault-text">{{ c }}</li>
+      </ul>
+    </div>
     <p class="m-0 text-[13px] text-text-2">
       Reapplying puts your change on top of revision {{ active.data.value?.id ?? 'the new revision' }}: what only they changed stays as they made
-      it, and where both changed the same field of an object, yours wins. You see the preview before anything is applied.
+      it, and where both changed the same field of an object, yours wins<template v-if="both.length"> (the fields above)</template>. You see the
+      preview before anything is applied.
     </p>
     <p v-if="error" class="field-error" role="alert">{{ error }}</p>
     <template #footer>

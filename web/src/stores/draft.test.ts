@@ -190,7 +190,7 @@ describe('the configuration draft', () => {
     expect(d.invalid).toEqual({});
     d.setPortsText(A, '53, x');
     expect(d.invalid[A]?.ports).toMatch(/x is no port/);
-    d.setServerErrors([{ path: `/access_rules/${A}/port_ranges/0`, message: 'too many' }, { path: '/networks/x', message: 'ignored' }]);
+    d.setServerErrors([{ path: `/access_rules/${A}/port_ranges/0`, message: 'too many' }, { path: '/settings/x', message: 'ignored' }]);
     expect(d.serverErrors).toEqual({ [A]: { ports: 'too many' } });
     d.setRule(A, { name: 'a', source: { global: true }, action: 'drop', protocol: 'udp', ports: [5353] });
     expect(d.serverErrors).toEqual({});

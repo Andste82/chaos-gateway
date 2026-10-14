@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,11 +26,18 @@ func (oc overlayContext) ruleCounter(r compiler.AccessRule) *model.Counter {
 	if !ok {
 		return nil
 	}
-	c := &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.RuleEpochs[r.Key]}
-	if oc.matched != nil {
-		c.LastMatch = oc.matched(r.Counter, c.Packets, c.Epoch)
+	return &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.RuleEpochs[r.Key], LastMatch: oc.lastMatch(v)}
+}
+
+// lastMatch is when a rule that counts into the counter last matched: the kernel's `last` statement says
+// how long before the read that was (P3-M13-01). Nil when the rule has not matched since it was made (a
+// new rule, a new table: an apply carries the time over to the rule that replaces it).
+func (oc overlayContext) lastMatch(v engine.CounterValue) *time.Time {
+	if v.LastUsed == nil {
+		return nil
 	}
-	return c
+	t := oc.readAt.Add(-*v.LastUsed).UTC()
+	return &t
 }
 
 // systemRules are the rules the gateway adds that no rule or overlay can override, with their counters.
@@ -37,10 +45,7 @@ func (oc overlayContext) systemRules() []model.SystemAccessRule {
 	r := compiler.AntiLockoutRule
 	sr := model.SystemAccessRule{Key: r.Key, Name: r.Name, Description: r.Description}
 	if v, ok := oc.counters[r.Counter]; ok && oc.counters != nil {
-		sr.Counters = &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.CounterEpoch}
-		if oc.matched != nil {
-			sr.Counters.LastMatch = oc.matched(r.Counter, v.Packets, oc.snap.CounterEpoch)
-		}
+		sr.Counters = &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.CounterEpoch, LastMatch: oc.lastMatch(v)}
 	}
 	return []model.SystemAccessRule{sr}
 }

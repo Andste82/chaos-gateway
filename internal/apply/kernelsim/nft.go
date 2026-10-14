@@ -6,7 +6,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
@@ -100,10 +102,70 @@ func (k *Kernel) nftList() any {
 		}
 		out = append(out, map[string]any{"chain": m})
 		for _, r := range c.rules {
-			out = append(out, map[string]any{"rule": map[string]any{"family": "inet", "table": "chaosgw", "chain": n, "handle": next(), "comment": r.comment, "expr": r.expr}})
+			out = append(out, map[string]any{"rule": map[string]any{"family": "inet", "table": "chaosgw", "chain": n, "handle": next(), "comment": r.comment, "expr": r.listedExpr()}})
 		}
 	}
 	return map[string]any{"nftables": out}
+}
+
+// simClock is the time of the `last` statements: when a rule matched (BumpCounter) and how long ago that was
+// when the ruleset is listed. It is the real clock: the API that reads the listing counts back from its own.
+var simClock clock.Clock = clock.NewReal()
+
+// lastOfExpr reads the `last` statement of a rule that is added: whether it has one and, when it was given
+// a time ({"last": {"used": <ms>}}), when the rule counts as having last matched (the kernel's nft_last).
+func lastOfExpr(expr []any) (has bool, at time.Time) {
+	for _, e := range expr {
+		m, ok := e.(map[string]any)
+		if !ok || len(m) != 1 {
+			continue
+		}
+		v, ok := m["last"]
+		if !ok {
+			continue
+		}
+		if a, ok := v.(map[string]any); ok {
+			if used, ok := a["used"].(float64); ok && used >= 0 {
+				return true, simClock.Now().Add(-time.Duration(used) * time.Millisecond)
+			}
+		}
+		return true, time.Time{}
+	}
+	return false, time.Time{}
+}
+
+// listedExpr is the rule as `nft -j list` prints it: a `last` statement says how long ago the rule last
+// matched ({"last": {"used": <ms>}}), or {"last": null} while it has not.
+func (r nftRule) listedExpr() []any {
+	if !r.hasLast {
+		return r.expr
+	}
+	out := make([]any, len(r.expr))
+	for i, e := range r.expr {
+		out[i] = e
+		if m, ok := e.(map[string]any); ok && len(m) == 1 {
+			if _, ok := m["last"]; ok {
+				var v any
+				if !r.lastAt.IsZero() {
+					v = map[string]any{"used": max(simClock.Now().Sub(r.lastAt).Milliseconds(), 0)}
+				}
+				out[i] = map[string]any{"last": v}
+			}
+		}
+	}
+	return out
+}
+
+// counterOf returns the named counter a rule counts into, "" for none.
+func counterOf(expr []any) string {
+	for _, e := range expr {
+		if m, ok := e.(map[string]any); ok && len(m) == 1 {
+			if c, ok := m["counter"].(string); ok {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 type nftErr string
@@ -377,7 +439,9 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 				return t, err
 			}
 		}
-		c.rules = append(c.rules, nftRule{expr: expr, comment: str(f, "comment")})
+		r := nftRule{expr: expr, comment: str(f, "comment")}
+		r.hasLast, r.lastAt = lastOfExpr(expr)
+		c.rules = append(c.rules, r)
 	default:
 		return t, nftErr(kind + " is not simulated")
 	}

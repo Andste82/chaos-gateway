@@ -61,7 +61,7 @@ func TestARuleIsEvaluatedAfterTheProtectionsAndBeforeTheMatrixAndTheGatewaysAnsw
 	if jump < 0 {
 		t.Fatalf("input does not run the access rules: %v", renderRules(in))
 	}
-	anti := indexOfRule(in, `counter "anti_lockout" accept`)
+	anti := indexOfRule(in, `counter "anti_lockout" last accept`)
 	ui := indexOfRule(in, `counter "input_drop" drop`)
 	dns := indexOfRule(in, "udp dport 53 accept")
 	last := indexOfRule(in, `iifname @ifs_test`, `counter "input_drop" drop`)
@@ -70,7 +70,7 @@ func TestARuleIsEvaluatedAfterTheProtectionsAndBeforeTheMatrixAndTheGatewaysAnsw
 	}
 
 	rule := chainOf(t, tg, AccessForwardChain).Rules
-	want := fmt.Sprintf(`ct original ip saddr @%s meta l4proto udp ct original proto-dst 53 counter %q drop`, scopeSetName(model.Scope{Device: ptr(devESP42)}), ruleCounterName("config:"+ruleA))
+	want := fmt.Sprintf(`ct original ip saddr @%s meta l4proto udp ct original proto-dst 53 counter %q last drop`, scopeSetName(model.Scope{Device: ptr(devESP42)}), ruleCounterName("config:"+ruleA))
 	if len(rule) != 1 || renderRule(rule[0]) != want {
 		t.Fatalf("access_forward = %v\nwant %s", renderRules(chainOf(t, tg, AccessForwardChain)), want)
 	}
@@ -129,7 +129,7 @@ func TestTheAntiLockoutRuleCannotBeOverriddenByAnyRuleOrOverlay(t *testing.T) {
 	in := renderRules(chainOf(t, tg, "input"))
 	anti := -1
 	for i, r := range in {
-		if strings.Contains(r, `counter "anti_lockout" accept`) {
+		if strings.Contains(r, `counter "anti_lockout" last accept`) {
 			anti = i
 		}
 	}
@@ -228,7 +228,7 @@ func TestEveryActionHasItsVerdictInForwardAndInput(t *testing.T) {
 	} {
 		rules := renderRules(chainOf(t, tg, c.chain))
 		for i, want := range c.want {
-			if !strings.HasSuffix(rules[i], `" `+want) {
+			if !strings.HasSuffix(rules[i], `" last `+want) {
 				t.Errorf("%s rule %d = %s, want the verdict %q", c.chain, i, rules[i], want)
 			}
 		}

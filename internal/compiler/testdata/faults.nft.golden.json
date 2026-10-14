@@ -1540,7 +1540,7 @@
       "add": {
         "rule": {
           "chain": "input",
-          "comment": "c5eebee2c8c7",
+          "comment": "dd0a9572388a",
           "expr": [
             {
               "match": {
@@ -1584,6 +1584,9 @@
             },
             {
               "counter": "anti_lockout"
+            },
+            {
+              "last": null
             },
             {
               "accept": null

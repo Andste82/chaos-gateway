@@ -3345,15 +3345,31 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   TCP or UDP, port numbers and ranges, an address or prefix, a host name, cut existing only for a refusing rule with TCP or
   any) and says it under the field (`aria-describedby`); a rule that needs fixing is marked in the list. An overlay rule is
   shown read-only with its owner and can be removed.
-- **Last match** (backend, `internal/api/matches.go`). The kernel keeps no time of a rule's last match, so the API notes
-  every reading of the rules' counters and gives `Counter.last_match`: the time of the first read that found the counter
-  higher than the read before (a counter that started over and counts again also). The time lies between two reads; the
-  rules screen reads every 5 s. Absent until a read saw the counter grow since the gateway started. Concurrent requests
-  may note their readings in any order: a reading older than the newest one noted changes nothing, and within an epoch
-  the highest reading stays, so a late one never makes the counter seem to grow again. Each read forgets the counters it
-  does not have any more (removed rules and overlays). Tests: `TestARulesCounterSaysWhenItLastMatched` (configured, system
-  and overlay rules), `TestMatchTrackerIgnoresAReadingOlderThanTheNewest`, `TestMatchTrackerKeepsTheHighestReadingOfAnEpoch`,
-  `TestMatchTrackerForgetsTheCountersThatAreGone`.
+- **Last match** (backend, the nftables `last` statement, decided option (b) of P3-M13-01). Every access rule (in both
+  hooks) and the anti-lockout rule carry `last` right after their named counter (`compiler.lastStmt`, kernel 5.17 or
+  newer, nftables 1.0.1 or newer; the target is 6.8): the kernel notes when the rule last matched and `nft -j list`
+  prints `{"last": {"used": <ms>}}` (milliseconds before the listing) or `{"last": null}` (never). The compiled rule
+  says never; since an apply flushes the compiled chains and fills them anew, `Nft.Transaction` carries the time of
+  the kernel's rule of the same chain and named counter over to the rule that replaces it (`withLast`,
+  `linux.Ruleset.LastUsedIn`): the kernel takes `{"last": {"used": N}}` as "matched N ms ago", so the time is
+  late by at most the length of the apply (between the read of the state and the commit). The comment (the hash of
+  the compiled expression) is unchanged, so verify recognizes the rule. `Engine.ReadCounters` gives every named
+  counter the most recent `last` of the rules counting into it (`CounterValue.LastUsed`, `linux.Ruleset.LastUsed`),
+  and the API's `Counter.last_match` is the end of the read minus it (`overlayContext.lastMatch`). It replaced the
+  read-based time of `internal/api/matches.go` (the first read that found the counter higher), which depended on
+  someone reading. Absent while the rule has not matched since it was made (a new rule, a table made anew). The
+  technical view prints the statement as nft does (`last used 2s`, `last used never`, `linux.RenderNft`); the
+  simulated kernel keeps the time per rule and sets it when a test bumps a counter (`kernelsim.BumpCounter`). Tests:
+  `TestEveryAccessRuleAndTheAntiLockoutRuleNoteTheirLastMatch`, `TestATransactionCarriesTheLastMatchOverToTheRuleThatReplacesIt`
+  (also `nft -c` parses the carried statement), `TestTheLastStatementOfARuleIsReadByItsNamedCounter`,
+  `TestRenderNftPrintsTheLastStatementAsNftDoes`, `TestARulesCounterSaysWhenItLastMatched` (a read 2 s after the match
+  gives the match's time; an overlay's apply keeps it; a new rule has none); on the real kernel
+  `TestTheKernelListsTheLastMatchAndTakesItOverFromTheRuleItReplaces` (the kernel gate: never after a first apply, a
+  carried 1.5 s counts on) and `TestARulesLastMatchIsTheKernelsAndAnApplyKeepsIt` (a ping the rule drops, read 3 s
+  later, then a second overlay's apply). The kernel gates (`TestEveryCompiledRulesetIsAcceptedByTheKernel`,
+  `TestEveryCutWindowIsAcceptedByTheKernel`) and the access rules' kernel tests run with the statement; all of them passed
+  in the emulated VM (`make test-vm ARGS='-no-kvm -run ...' ./internal/compiler ./internal/api`, kernel 6.8.0-142,
+  2026-10-14; the API test needs a commit-confirm window longer than the emulated first apply).
 - **Faults** (`src/views/FaultsView.vue`). Every fault grouped by family (impairment, MTU, tunnel, profiles, DNS, TLS, DHCP,
   WireGuard actions) and sorted by scope (device → group → network → remote network → everything → tunnel; at the same
   scope the overlay first), each marked OVERLAY or CONFIGURATION (with its name), with its selector, parameters as fault
@@ -3471,7 +3487,7 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 | Profile editor: the profile of the form (checked against the generated Zod schema of `POST /revisions`), read back unchanged, each direction its own, an MTU part without a mode kept without it, a kept DNS part, the checks (name, parts, fields), the gateway's pointers below a profile; the draft's profiles (changes, patch, delete and Undo, the gateway's problems, reapply and the fields both changed) | `src/lib/profileForm.test.ts`, `src/stores/draft.test.ts` "a custom profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and names a field both changed (P3-M13-03)" |
 | Owners in words | `src/lib/faults.test.ts` |
 | Overlays name what overrides them | `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` (`internal/api/overlays_test.go`) |
-| A rule's last match | `TestARulesCounterSaysWhenItLastMatched` (`internal/api/rules_test.go`) |
+| A rule's last match (the nftables `last` statement, P3-M13-01) | `TestARulesCounterSaysWhenItLastMatched` (`internal/api/rules_test.go`), `TestATransactionCarriesTheLastMatchOverToTheRuleThatReplacesIt`, `TestTheKernelListsTheLastMatchAndTakesItOverFromTheRuleItReplaces` (testbed), `TestARulesLastMatchIsTheKernelsAndAnApplyKeepsIt` (testbed) |
 | Screens against the mocked API (Playwright) | `web/e2e/rules.spec.ts`, `faults.spec.ts`, `fault-kinds.spec.ts`, `profiles.spec.ts`, `devices.spec.ts` (adopt through the drawer and the conflict dialog) |
 | The browser flow against the real stack | `TestAFaultCreatedInTheBrowserTakesEffectOnTheWire` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/faults.spec.ts` |
 

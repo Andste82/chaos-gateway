@@ -70,8 +70,6 @@ type Server struct {
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
 	// endpoint must not give every caller its own round trip to the executor.
 	health healthProbeCache
-	// matches remembers when the counters of the access rules were last seen growing
-	matches matchTracker
 	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
 	unsubEvents func()
 	eventsDone  chan struct{}

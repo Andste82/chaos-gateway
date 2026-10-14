@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
@@ -181,9 +182,12 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 	for _, m := range n.Maps {
 		cmds = append(cmds, mapUpdate(m, base)...)
 	}
+	// a flushed chain's rules start anew; the time a rule last matched is carried over to the rule that
+	// replaces it (the same chain, the same named counter), so an apply does not make "last match" never
+	lasts := current.LastUsedIn()
 	for _, c := range n.chains() {
 		for _, r := range c.Rules {
-			cmds = append(cmds, cmd("add", "rule", map[string]any{"chain": c.Name, "expr": r.Expr, "comment": r.Comment}))
+			cmds = append(cmds, cmd("add", "rule", map[string]any{"chain": c.Name, "expr": withLast(r.Expr, c.Name, lasts), "comment": r.Comment}))
 		}
 	}
 
@@ -244,6 +248,38 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 		}
 	}
 	return json.Marshal(map[string]any{"nftables": cmds})
+}
+
+// withLast returns the expression of a rule with its `last` statement set to the time the kernel's rule
+// of the same chain and named counter last matched (lasts: linux.Ruleset.LastUsedIn), so the new rule
+// starts as if it had matched then. The kernel takes {"last": {"used": <ms>}} as "matched <ms> ago";
+// the time between the listing and the commit is lost, so the carried time is late by at most the
+// length of the apply. A rule without a `last`, or one whose predecessor never matched, is unchanged.
+// The comment (the hash of the compiled expression) stays the same, so verify recognizes the rule.
+func withLast(expr []any, chain string, lasts map[string]time.Duration) []any {
+	if len(lasts) == 0 {
+		return expr
+	}
+	name, at := "", -1
+	for i, e := range expr {
+		m, ok := e.(map[string]any)
+		if !ok || len(m) != 1 {
+			continue
+		}
+		if c, ok := m["counter"].(string); ok {
+			name = c
+		}
+		if v, ok := m["last"]; ok && v == nil {
+			at = i
+		}
+	}
+	used, ok := lasts[linux.LastKey(chain, name)]
+	if name == "" || at < 0 || !ok {
+		return expr
+	}
+	out := append([]any(nil), expr...)
+	out[at] = map[string]any{"last": map[string]any{"used": used.Milliseconds()}}
+	return out
 }
 
 // setUpdate is the part of a transaction that gives a static set the elements of the target. A set

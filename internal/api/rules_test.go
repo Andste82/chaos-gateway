@@ -269,8 +269,9 @@ func TestThePreviewListsTheEffectiveRulesInOrderAndMarksTheNewOnes(t *testing.T)
 	}
 }
 
-// M13 (the rule editor's matches box): a rule's counter says when it was last seen growing. The first
-// read knows nothing of the time before it; a read that finds the counter higher gives the time.
+// M13 (the rule editor's matches box), P3-M13-01: a rule's counter says when the rule last matched, as the
+// kernel's `last` statement keeps it: the time of the match, not of the read that saw it, also when the
+// first read comes long after; an apply that makes the chains anew keeps it; a new rule has none.
 func TestARulesCounterSaysWhenItLastMatched(t *testing.T) {
 	g := ready(t)
 	if r := g.apply(g.mustPatch(rulesPatch())); r.Status != 200 {
@@ -283,43 +284,66 @@ func TestARulesCounterSaysWhenItLastMatched(t *testing.T) {
 		system = body["system_rules"].([]any)[0].(map[string]any)["counters"].(map[string]any)
 		return rule, system
 	}
+	at := func(c map[string]any) time.Time {
+		t.Helper()
+		v, err := time.Parse(time.RFC3339Nano, fmt.Sprint(c["last_match"]))
+		if err != nil {
+			t.Fatalf("last_match of %v: %v", c, err)
+		}
+		return v
+	}
+	// two reads of the same match differ by the time a read takes (the kernel counts back from its listing,
+	// the API from the end of the read): milliseconds natively, more under an emulated testbed VM
+	near := func(a, b time.Time) bool { return a.Sub(b).Abs() < time.Second }
 	if c, sys := counters(); c["last_match"] != nil || sys["last_match"] != nil {
-		t.Fatalf("a counter that was not seen growing has a last match: %v %v", c, sys)
+		t.Fatalf("a rule that never matched has a last match: %v %v", c, sys)
 	}
-	if c, _ := counters(); c["last_match"] != nil {
-		t.Fatalf("a counter that did not grow has a last match: %v", c)
-	}
-	before := time.Now().Add(-time.Second)
 	cr, ok := g.e.Snapshot().Access.Rule("config:" + ruleB)
 	if !ok {
 		t.Fatal("the rule is not compiled")
 	}
+	before := time.Now()
 	g.k.BumpCounter(cr.Counter, 3)
 	g.k.BumpCounter(compiler.AntiLockoutRule.Counter, 2)
+	after := time.Now()
+	// the first read comes later: it gives the time of the match, not its own
+	time.Sleep(2 * time.Second)
+	read := time.Now()
 	c, sys := counters()
-	at, err := time.Parse(time.RFC3339Nano, fmt.Sprint(c["last_match"]))
-	if err != nil || at.Before(before) || at.After(time.Now()) || c["packets"] != float64(3) {
-		t.Errorf("after a match: %v (%v)", c, err)
+	took := time.Since(read)
+	matched := at(c)
+	if matched.Before(before.Add(-50*time.Millisecond)) || matched.After(after.Add(took+50*time.Millisecond)) || matched.After(read.Add(-time.Second)) || c["packets"] != float64(3) {
+		t.Errorf("after a match between %s and %s, read at %s: %v", before.Format(time.StampMilli), after.Format(time.StampMilli), read.Format(time.StampMilli), c)
 	}
-	if sys["last_match"] == nil {
-		t.Errorf("the system rule's counter grew: %v", sys)
+	if sys["last_match"] == nil || !near(at(sys), matched) {
+		t.Errorf("the system rule matched with it: %v", sys)
 	}
-	// it stays when the counter does not grow, and the overlay rules' counters have it too
-	if again, _ := counters(); again["last_match"] != c["last_match"] {
+	// it stays when the rule does not match
+	if again, _ := counters(); !near(at(again), matched) {
 		t.Errorf("the last match moved without a match: %v, before %v", again["last_match"], c["last_match"])
 	}
+	// an overlay is an apply that flushes the access chains and fills them anew: the time is carried over
 	g.mintToken("overlays")
 	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"rule":{"protocol":"udp","ports":[5353],"action":"drop"}}`)
 	or, ok := g.e.Snapshot().Access.Rule("overlay:" + ov["id"].(string))
 	if !ok {
 		t.Fatal("the overlay rule is not compiled")
 	}
+	var rule map[string]any
+	for _, it := range g.do("GET", "/rules", nil, nil, nil).json(t)["items"].([]any) {
+		if r := it.(map[string]any); r["id"] == ruleB {
+			rule = r["counters"].(map[string]any)
+		}
+	}
+	if rule == nil || rule["last_match"] == nil || !near(at(rule), matched) {
+		t.Errorf("after an apply the rule's last match is %v, it matched at %s", rule, matched.Format(time.StampMilli))
+	}
 	path := "/overlays/" + ov["id"].(string)
 	if got := g.do("GET", path, nil, nil, nil).json(t)["counters"].(map[string]any); got["last_match"] != nil {
 		t.Errorf("a new overlay rule: %v", got)
 	}
 	g.k.BumpCounter(or.Counter, 1)
-	if got := g.do("GET", path, nil, nil, nil).json(t)["counters"].(map[string]any); got["last_match"] == nil {
+	if got := g.do("GET", path, nil, nil, nil).json(t)["counters"].(map[string]any); got["last_match"] == nil || at(got).Before(matched) {
 		t.Errorf("an overlay rule that matched: %v", got)
 	}
 }

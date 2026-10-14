@@ -24,6 +24,11 @@ type deviceView struct {
 	Config   *model.Device  `json:"config,omitempty"`
 	Groups   []string       `json:"groups,omitempty"`
 	Observed deviceObserved `json:"observed"`
+	// Effective is the winning fault of each family for the device's traffic without a destination,
+	// Overlays the overlays among the candidates (winning or overridden); both only for the active
+	// revision, since overlays act on what runs.
+	Effective []model.FaultRef `json:"effective,omitempty"`
+	Overlays  []string         `json:"overlays,omitempty"`
 }
 
 type deviceObserved struct {
@@ -104,8 +109,53 @@ func (s *Server) deviceViews(cfg *model.Configuration, withDiscovered bool) []de
 			out = append(out, deviceView{ID: st.ID, Name: st.Name, Origin: "discovered", Network: st.Network, Observed: observedOf(&cp, nil)})
 		}
 	}
+	if withDiscovered {
+		// the active revision: the faults that act on each device, as GET /explain resolves them for
+		// the device's traffic in general (plan §2.4)
+		if world, err := domain.NewWorld(cfg, snap.Overlays); err == nil {
+			for i := range out {
+				out[i].Effective, out[i].Overlays = effectiveOf(world, snap, out[i], states[out[i].ID])
+			}
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return sortKey(out[i].Name, out[i].ID) < sortKey(out[j].Name, out[j].ID) })
 	return out
+}
+
+// effectiveOf resolves the faults of a device's traffic without a destination: the winner of each
+// family, and the overlays that compete for it.
+func effectiveOf(world *domain.World, snap *engine.Snapshot, d deviceView, st *engine.DeviceState) ([]model.FaultRef, []string) {
+	sub := domain.Subject{Device: strings.ToLower(d.ID), Network: strings.ToLower(d.Network)}
+	if st != nil && len(st.Addresses) > 0 {
+		sub.IP = st.Addresses[0]
+	} else if as := snap.Identity.Addresses[sub.Device]; len(as) > 0 {
+		sub.IP = as[0]
+	}
+	if sub.Network == "" && sub.IP.IsValid() {
+		if n, ok := world.NetworkOf(sub.IP); ok {
+			sub.Network = n
+		}
+	}
+	var eff []model.FaultRef
+	var ovs []string
+	seen := map[string]bool{}
+	addOverlay := func(c domain.Candidate) {
+		if c.Layer == domain.LayerOverlay && !seen[c.ID] {
+			seen[c.ID] = true
+			ovs = append(ovs, c.ID)
+		}
+	}
+	for _, r := range world.Resolve(domain.Query{Source: sub}) {
+		if r.Winner != nil {
+			eff = append(eff, r.Winner.Ref(""))
+			addOverlay(*r.Winner)
+		}
+		for _, o := range r.Overridden {
+			addOverlay(o.Candidate)
+		}
+	}
+	sort.Strings(ovs)
+	return eff, ovs
 }
 
 // ListDevices implements GET /devices.

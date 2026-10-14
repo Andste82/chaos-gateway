@@ -51,5 +51,9 @@ describe('access rules in words', () => {
     expect(ruleErrors({ ...rule, cut_existing: true }).cut_existing).toBe('Cutting connections needs the protocol TCP or any.');
     expect(ruleErrors({ ...rule, destination: { cidr: '10.0.0' } }).destination).toMatch(/IPv4 address or a prefix/);
     expect(ruleErrors({ ...rule, destination: { hostname: 'bad host' } }).destination).toMatch(/host name/);
+    // a remote network as the source (P3-M13-08): a client's networks, or a prefix that must be one
+    expect(ruleErrors({ ...rule, source: { remote_network: { client: 'c1' } } })).toEqual({});
+    expect(ruleErrors({ ...rule, source: { remote_network: { cidr: '10.50.0.0/25' } } })).toEqual({});
+    expect(ruleErrors({ ...rule, source: { remote_network: { cidr: '' } } }).source).toMatch(/^Enter a prefix inside a client network/);
   });
 });

@@ -914,10 +914,16 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-08 The scope selectors do not offer remote networks as a choice
 
-- Status: new
-- Decision (2026-10-14): option (a) — the scope selectors (fault dialog, profile activation, rule editor From/To where the model allows)
-  offer WireGuard clients' networks, links' remote networks and a CIDR inside them; a Playwright test creates a fault on a
-  client's networks and asserts the request's scope
+- Status: closed (2026-10-14): decided — option (a): the fault dialog's target, the profiles' "Activate on" and the rule
+  editor's From offer each WireGuard client with client networks ("Client networks · rA (10.50.0.0/24)"), each link with
+  its prefixes and "Remote network · a prefix inside them…" with a field for the prefix, sent as `remote_network`
+  (`src/lib/scopes.ts`, `src/components/ui/ScopeSelect.vue`); the prefix is checked under the selector, and the gateway's
+  `unknown_remote_network` stands there too. A rule's To keeps the model's destinations (`Destination` has no
+  `remote_network`; a remote prefix is an address or prefix there). Tests `faults.spec.ts` "a fault on a WireGuard client's
+  networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a prefix
+  inside a remote network: …", `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them
+  (P3-M13-08)", `rules.spec.ts` "a rule from a WireGuard client's networks: From offers the remote networks, the patch
+  carries the source (P3-M13-08)", `src/lib/scopes.test.ts`
 - Severity: low
 - Reason: needs-decision. A fault, an overlay and an access rule can act on a `remote_network` (the client networks of a
   WireGuard client, the prefixes of a link, or a CIDR inside them; plan §2.4 puts it on the network level). The scope

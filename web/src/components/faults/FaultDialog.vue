@@ -38,6 +38,7 @@ import {
   type FaultForm,
 } from '../../lib/faultForm';
 import { describeOwner, describeScope } from '../../lib/faults';
+import { remoteScopeOptions } from '../../lib/scopes';
 import { gatewayNow } from '../../lib/clock';
 import { formatHM } from '../../lib/format';
 import { useNow } from '../../composables/useNow';
@@ -47,6 +48,7 @@ import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
 import ModalDialog from '../ui/ModalDialog.vue';
+import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 
 const props = defineProps<{
@@ -121,7 +123,8 @@ const targets = computed(() => {
     if (layer.value === 'config' && d.origin === 'discovered') continue;
     out.push({ value: `device:${d.id}`, label: `Device · ${d.name}` });
   }
-  if (!out.some((o) => o.value === form.value.target)) out.push({ value: form.value.target, label: describeScope(scopeOfTarget.value, n) });
+  // the client networks of the WireGuard clients, the links' prefixes and a prefix inside them (P3-M13-08)
+  out.push(...remoteScopeOptions(networks.data.value ?? []));
   return out;
 });
 
@@ -265,16 +268,15 @@ const errId = (f: string) => `${uid}-${f}-error`;
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="label" :for="fieldId('target')">Target</label>
-          <select
+          <ScopeSelect
             :id="fieldId('target')"
             v-model="form.target"
-            class="input"
+            :options="targets"
+            :current-label="targetName"
             :disabled="!!fixedTarget || !!overlay"
-            :aria-invalid="!!errors.target"
-            :aria-describedby="errors.target ? errId('target') : undefined"
-          >
-            <option v-for="t in targets" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
+            :invalid="!!errors.target"
+            :describedby="errors.target ? errId('target') : undefined"
+          />
           <p v-if="errors.target" :id="errId('target')" class="field-error">{{ errors.target }}</p>
         </div>
         <div>

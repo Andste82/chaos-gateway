@@ -43,6 +43,8 @@ describe('selectors in words', () => {
     expect(describeScope(undefined)).toBe('Everything');
     expect(describeScope({ remote_network: { cidr: '10.9.0.0/24' } })).toBe('Remote network 10.9.0.0/24');
     expect(describeScope({ remote_network: { link: 'n1' } }, names)).toBe('Remote networks of link IoT');
+    // a WireGuard client is a device of the same id and name
+    expect(describeScope({ remote_network: { client: 'd1' } }, names)).toBe('Client networks of ESP32-42');
   });
 
   it('names the destination, protocol and ports', () => {

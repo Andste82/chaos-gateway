@@ -6,6 +6,7 @@ import { createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp, createOve
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { describeScope, type Names } from './faults';
 import { jsonEqual } from './mergePatch';
+import { CIDR_CHOICE, remoteCidrError } from './scopes';
 
 export const accessLabels: Record<AccessAction, string> = { allow: 'Allow', drop: 'Drop', reject: 'Reject', reset: 'TCP reset' };
 
@@ -147,6 +148,8 @@ export function ruleErrors(r: AccessRule, portsText?: string): Partial<Record<Ru
   const e: Partial<Record<RuleField, string>> = {};
   if (r.name && !nameRegExp.test(r.name)) e.name = 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.';
   if (!r.source || Object.keys(r.source).length !== 1) e.source = 'Choose where the traffic comes from.';
+  else if (r.source.remote_network?.cidr !== undefined) e.source = remoteCidrError(`${CIDR_CHOICE}${r.source.remote_network.cidr}`);
+  if (!e.source) delete e.source;
   const d = r.destination;
   if (d?.cidr !== undefined && !cidrRegExp.test(d.cidr)) e.destination = 'An IPv4 address or a prefix like 203.0.113.0/24.';
   if (d?.hostname !== undefined && !hostnameRegExp.test(d.hostname)) e.destination = 'A host name like broker.example.com or *.example.com.';

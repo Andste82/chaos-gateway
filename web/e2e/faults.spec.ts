@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { IOT, MockGateway, toast } from './mock';
+import { CLIENT_RA, HUB, IOT, LINK, MockGateway, device, toast, withNetworks } from './mock';
 
 // M13: the add/edit fault dialog with its preview, validation errors, the faults screen (by family
 // and scope, overlays and configuration marked, "overridden by", explain), the TTL display and the
@@ -243,6 +243,65 @@ test('editing a fault keeps its expiry; a TTL the dialog does not list is shown 
   await expect(duration).toHaveValue('keep');
   await expect(duration.locator('option:checked')).toHaveText(/^Keep: (20:00|19:\d\d) left of (20 min|19 min \d+ s)$/);
   await expect(duration.locator('option').last()).toHaveText(/^(20 min|19 min \d+ s) \(its own TTL\)$/);
+});
+
+/** The sample lab with its WireGuard networks; the client rA is a device of its own too (plan §2.2.1). */
+function remoteLab(): MockGateway {
+  const gw = withNetworks(lab());
+  gw.devices = [...gw.devices, device({ id: CLIENT_RA, name: 'rA', origin: 'wireguard_client', network: HUB })];
+  return gw;
+}
+
+test("a fault on a WireGuard client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", async ({ page }) => {
+  const gw = remoteLab();
+  await gw.install(page);
+  await page.goto('/faults');
+  await page.getByRole('button', { name: 'Add fault' }).first().click();
+  const d = dialog(page);
+  const target = d.getByLabel('Target');
+  await expect(target.locator('option')).toContainText([
+    'Client networks · rA (10.50.0.0/24)',
+    'Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)',
+    'Remote network · a prefix inside them…',
+  ]);
+  await target.selectOption({ label: 'Client networks · rA (10.50.0.0/24)' });
+  await expect(d.getByTestId('fault-preview')).toContainText('Client networks of rA ·');
+  await d.getByLabel('Latency (ms)').fill('120');
+  await d.getByLabel('Jitter (ms)').fill('');
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(toast(page, 'Fault active on Client networks of rA')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({ target: { remote_network: { client: CLIENT_RA } }, fault: { latency: '120ms' }, ttl: '15m' });
+  await expect(page.getByTestId('fault-row').filter({ hasText: 'Client networks of rA' })).toContainText('↑↓ 120 ms');
+});
+
+test("a fault on a prefix inside a remote network: the prefix is checked under the target, the gateway's refusal stands there too (P3-M13-08)", async ({ page }) => {
+  const gw = remoteLab();
+  await gw.install(page);
+  await page.goto('/faults');
+  await page.getByRole('button', { name: 'Add fault' }).first().click();
+  const d = dialog(page);
+  await d.getByLabel('Target').selectOption({ label: 'Remote network · a prefix inside them…' });
+  await expect(d.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeVisible();
+  await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
+  await d.getByLabel('Prefix inside a remote network').fill('10.80.0.0/24');
+  // the gateway knows no remote network there
+  gw.rejectOverlay = [{ path: '/target/remote_network/cidr', code: 'unknown_remote_network', message: '10.80.0.0/24 is not inside a client network or a route via a link' }];
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(d.getByText('10.80.0.0/24 is not inside a client network or a route via a link')).toBeVisible();
+  await expect(d.getByLabel('Prefix inside a remote network')).toHaveAttribute('aria-invalid', 'true');
+  await d.getByLabel('Prefix inside a remote network').fill('10.60.0.128/25');
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(toast(page, 'Fault active on Remote network 10.60.0.128/25')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[1]!.body).toMatchObject({ target: { remote_network: { cidr: '10.60.0.128/25' } } });
+  // a configured fault on a link's prefixes goes through the draft with the same scope
+  await page.getByRole('button', { name: 'Add fault' }).first().click();
+  await d.getByRole('group', { name: 'Save as' }).getByRole('button', { name: 'Configuration · after preview' }).click();
+  await d.getByLabel('Target').selectOption({ label: 'Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)' });
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: /^Preview revision/ })).toBeVisible();
+  const faults = (gw.requestsTo('POST', '/revisions')[0]!.body as { faults: Record<string, { source: unknown }> }).faults;
+  expect(Object.values(faults)[0]!.source).toEqual({ remote_network: { link: LINK } });
 });
 
 test('a configured fault goes through the unapplied-changes bar, the preview and the apply', async ({ page }) => {

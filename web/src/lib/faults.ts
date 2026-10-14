@@ -94,7 +94,8 @@ export function describeScope(s: Scope | undefined, names: Names = {}): string {
     const r = s.remote_network;
     if (r.cidr) return `Remote network ${r.cidr}`;
     if (r.link) return `Remote networks of link ${names.network?.(r.link) ?? r.link}`;
-    if (r.client) return `Client networks of ${r.client}`;
+    // a WireGuard client is a device of the same id and name
+    if (r.client) return `Client networks of ${names.device?.(r.client) ?? r.client}`;
     return 'Remote network';
   }
   if (s.global) return 'Everything';

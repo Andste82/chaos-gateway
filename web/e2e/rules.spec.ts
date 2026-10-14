@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { IOT, MockGateway, RULE_DNS, RULE_DOT, RULE_WEB, toast, withRules } from './mock';
+import { CLIENT_RA, IOT, MockGateway, RULE_DNS, RULE_DOT, RULE_WEB, toast, withNetworks, withRules } from './mock';
 
 // M13: the access-rules screen (ordered list, rule editor IF/THEN, counters), the unapplied-changes
 // bar, the preview-and-apply drawer, validation, a failed apply and the concurrent-change dialog.
@@ -168,6 +168,22 @@ test('add, move and delete rules: new rows, the order in the patch, a deleted ru
   const added = Object.keys(body.access_rules).find((k) => k !== RULE_DNS)!;
   expect(body.access_rules[added]).toEqual({ name: 'rule-4', source: { network: IOT }, destination: { uplink: true }, protocol: 'any', action: 'drop', enabled: true });
   expect(body.access_rule_order).toEqual([RULE_DOT, added, RULE_WEB]);
+});
+
+test("a rule from a WireGuard client's networks: From offers the remote networks, the patch carries the source (P3-M13-08)", async ({ page }) => {
+  const gw = await open(page, withNetworks(withRules(MockGateway.sample())));
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  const editor = page.getByTestId('rule-editor');
+  await editor.getByLabel('From').selectOption({ label: 'Client networks · rA (10.50.0.0/24)' });
+  await expect(rows(page).nth(3)).toContainText('CHANGED');
+  // a prefix inside them is checked under From
+  await editor.getByLabel('From').selectOption({ label: 'Remote network · a prefix inside them…' });
+  await expect(editor.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await editor.getByLabel('From').selectOption({ label: 'Client networks · rA (10.50.0.0/24)' });
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')[0]!.body).toEqual({ access_rules: { [RULE_DNS]: { source: { network: null, remote_network: { client: CLIENT_RA } } } } });
 });
 
 test('a deleted rule is shown struck through at its place, and Undo brings it back there', async ({ page }) => {

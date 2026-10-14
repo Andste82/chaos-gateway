@@ -436,12 +436,7 @@ func (o osConfig) configures(name, mac string) (yes, ok bool) {
 	if o.err != nil || o.state == nil {
 		return false, false
 	}
-	for _, e := range o.state.Entries {
-		if e.Matches(name, mac) {
-			return true, true
-		}
-	}
-	return false, true
+	return len(preflight.Configuring(o.state.Entries, name, mac)) > 0, true
 }
 
 // hostInterfaces describes the physical interfaces of the host, what they are used for and whether the
@@ -614,8 +609,10 @@ func (s *Server) GetSetup(c *gin.Context) {
 // started (kernel, modules; Config.Preflight), and one check per interface that is assigned to a test network
 // or may become one (not the uplink, not the management interface), made now: whether netplan or
 // NetworkManager configures it, and which entry to remove (docs/open-items.md P3-M12-07). The wizard and every
-// client show the same text. noRun adds a warning when no check of the host has run in this process (Config.Preflight
-// is nil or returns nil; a report without a time, such as a host that cannot be inspected, is a check that ran).
+// client show the same text. The report's status counts the checks of the host and of the assigned test
+// interfaces, not a candidate's warning. noRun adds a warning when no check of the host has run in this
+// process (Config.Preflight is nil or returns nil; a report without a time, such as a host that cannot be
+// inspected, is a check that ran).
 func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun bool) *PreflightReport {
 	r := &PreflightReport{Status: "ok"}
 	ran := false
@@ -639,6 +636,7 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun boo
 	case osc.state != nil && len(osc.state.Errors) > 0:
 		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "some network configuration files of the operating system cannot be read: " + strings.Join(osc.state.Errors, "; ")})
 	}
+	assigned := map[string]bool{}
 	if osc.state != nil {
 		for _, hi := range ifaces {
 			role := ""
@@ -648,12 +646,17 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun boo
 			if role == "uplink" || role == "management" {
 				continue // the operating system keeps them (D3)
 			}
+			assigned[hi.Name] = role == "network"
 			status, msg, fix := preflight.InterfaceCheck(hi.Name, hi.MAC, role == "network", osc.state.Entries)
 			add(PreflightCheck{ID: "interface." + hi.Name + ".os_config", Interface: hi.Name, Status: status, Message: msg, Fix: fix})
 		}
 	}
 	for _, c := range r.Checks {
 		switch {
+		case c.Interface != "" && !assigned[c.Interface]:
+			// a candidate's warning is shown on its check (the wizard shows it where the test interfaces are
+			// chosen) but is no warning of the gateway: before the setup every interface, the future uplink too,
+			// is a candidate, and after it an interface the gateway does not use is the operating system's
 		case c.Status == "fail":
 			r.Status = "fail"
 		case c.Status == "warn" && r.Status == "ok":

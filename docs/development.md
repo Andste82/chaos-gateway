@@ -3203,7 +3203,14 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   check that the test interfaces carry no OS configuration. The executor reads where netplan (`/etc/netplan`,
   `/run/netplan`, `/lib/netplan`) and NetworkManager (`system-connections` in `/etc` and `/run`) configure an interface
   (`preflight.ReadOSConfig`: a netplan entry by its id or its `match` by name glob or MAC, a port of a netplan bridge or
-  bond, the link of a VLAN, a NetworkManager keyfile by `interface-name` or `mac-address`) from the host root it is given
+  bond, the link of a VLAN, a NetworkManager keyfile by `interface-name` or `mac-address`; and what hands every
+  interface to NetworkManager: netplan's global `renderer: NetworkManager`, the last one by file name winning, and an
+  ethernet keyfile bound to no interface that NetworkManager brings up by itself; for these the fix is
+  `unmanaged-devices=interface-name:<name>` in `/etc/NetworkManager/conf.d/99-chaos-gateway.conf`, and an interface
+  that `unmanaged-devices` under `[keyfile]` in `NetworkManager.conf` or `conf.d` names, by `interface-name:` or
+  `mac:`, is not reported for NetworkManager, only for its netplan entries; what NetworkManager does by its own
+  defaults outside these files, such as an auto-default "Wired connection N" without a file, is not seen) from the
+  host root it is given
   (`chaosgw exec --host-root /host`), each directory only when it is there under that root. `deploy/compose.executor.yaml`
   mounts only the host's `/etc`, read-only at `/host/etc` (netplan's and NetworkManager's files are root's and the API
   container's user cannot read them), so the shipped deployment reads `/etc/netplan` and
@@ -3216,7 +3223,9 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   adds to the checks of the host made at start one check per interface that is or may become a test interface (every
   interface but the uplink and the management interface), made at each `GET /setup` and `GET /system/preflight`:
   `interface.<name>.os_config` with `interface`, `ok` when nothing configures it, otherwise `warn` for a candidate and
-  `fail` for an assigned test interface, the message naming the file and the entry ("eth3 is configured by netplan
+  `fail` for an assigned test interface (the report's `status` counts the host's checks and those of the assigned
+  test interfaces, not a candidate's warning: before the setup the future uplink is a candidate too, and after it an
+  interface the gateway does not use is the operating system's), the message naming the file and the entry ("eth3 is configured by netplan
   (/etc/netplan/60-lab.yaml, "lab" under "ethernets")") and `fix` what to remove (`delete the entry "lab:" under
   "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"`, `sudo nmcli connection delete "…"`); a file
   that cannot be read or parsed is a warning of its own. A failing read is logged as a warning once (again when its
@@ -3235,8 +3244,8 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
 | Setup wizard rules, free proposals and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
-| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
-| The preflight checks every candidate and test interface: a warning before the setup, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
+| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file; netplan's NetworkManager renderer for all devices and an unbound ethernet connection for every interface, `unmanaged-devices` turning NetworkManager off for an interface (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestThePreflightSeesNetworkManagerTakeEveryInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
+| The preflight checks every candidate and test interface: a warning before the setup (the suggested uplink too) that the report's status does not count, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
 | Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
 | Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
@@ -3691,7 +3700,9 @@ routing configuration stays with the API and the configuration import until the 
   chain, set or interface around them (`src/lib/linuxView.ts`).
 - **The Linux view of one object** (P3-M14-03, decided option (a); plan §2.17 "Per object, the compiled configuration next
   to the domain view … reached from 'Show Linux view'"). "Show Linux view" on a device (the device detail's identity card),
-  an access rule (the rule editor, also an overlay rule and the system rule) and a fault (a row of the faults screen) opens
+  an access rule (the rule editor, also an overlay rule and the system rule) and a fault (a row of the faults screen of an
+  impairment, MTU or tunnel fault or a profile activation; DNS, TLS, DHCP and WireGuard faults are carried out by the
+  gateway's services and offer none, and an empty view of a fault says so) opens
   `LinuxObjectExcerpt.vue`, which reads `GET /state/linux/{kind}/{id}` every 5 s while it is open. The gateway cuts the
   kernel state down to the objects the compiler made for it, by the names and keys the applied target gave them
   (`engine.LinuxObjectView`, `apply.RenderObject`): for a rule (by id, name, or `system:anti_lockout`) its rule in both
@@ -3778,7 +3789,7 @@ not run on this branch with the M14 flow yet.
 | Scope: routing view (BIRD sessions, received and announced prefixes) | `networks.spec.ts` "the routing view: BIRD, the sessions with their announced and received prefixes, the routes by origin", "the routing view without dynamic routing says so", "failed: an access matrix, an uplink or a routing configuration …" |
 | Scope: access matrix editing (commit-confirm where lockout-relevant) | `networks.spec.ts` "the access matrix: a click changes a cell in the draft, the bar counts it, the preview and the apply" and the commit-confirm tests above; `src/stores/draft.test.ts` (the matrix in the draft and its rebase); `src/lib/networks.test.ts` "the access matrix" |
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |
-| "Show Linux view" on a device, an access rule and a fault (plan §2.17 "Technical view", P3-M14-03) | `linux-view.spec.ts` ""Show Linux view" on a rule shows its compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row (P3-M14-03)", ""Show Linux view" on a device shows its identity element and the classification of its address (P3-M14-03)"; backend `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` |
+| "Show Linux view" on a device, an access rule and a fault (plan §2.17 "Technical view", P3-M14-03) | `linux-view.spec.ts` ""Show Linux view" on a rule shows its compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row; a DNS fault has none (P3-M14-03)", ""Show Linux view" on a device shows its identity element and the classification of its address (P3-M14-03)"; backend `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` |
 
 ## Generated code
 

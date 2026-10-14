@@ -117,3 +117,61 @@ psk=another-secret
 		t.Errorf("an empty host: %v %v", es, errs)
 	}
 }
+
+// P3-M12-07 (review): NetworkManager may take an interface no entry names — netplan's NetworkManager
+// renderer for all devices, an ethernet connection bound to no interface — and the check says so, with
+// how to keep NetworkManager off the interface; `unmanaged-devices` in NetworkManager's configuration
+// turns that (and NetworkManager's connections) off for the devices it names, not netplan's entries.
+func TestThePreflightSeesNetworkManagerTakeEveryInterface(t *testing.T) {
+	host := fstest.MapFS{
+		"etc/netplan/01-network-manager-all.yaml": {Data: []byte("network:\n  version: 2\n  renderer: NetworkManager\n")},
+		"etc/netplan/50-lab.yaml":                 {Data: []byte("network:\n  ethernets:\n    eth4:\n      dhcp4: true\n")},
+		"etc/NetworkManager/system-connections/any.nmconnection": {Data: []byte(
+			"[connection]\nid=Wired\ntype=ethernet\n\n[ipv4]\nmethod=auto\n")},
+		"etc/NetworkManager/system-connections/manual.nmconnection": {Data: []byte(
+			"[connection]\nid=Manual\ntype=ethernet\nautoconnect=false\n")},
+		"etc/NetworkManager/NetworkManager.conf": {Data: []byte("[main]\nplugins=keyfile\n")},
+		"etc/NetworkManager/conf.d/99-chaos-gateway.conf": {Data: []byte(
+			"[keyfile]\nunmanaged-devices=interface-name:eth3;mac:52:54:00:00:00:09\nunmanaged-devices+=interface-name:eth4\n")},
+	}
+	entries, errs := ReadOSConfig(host)
+	if len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	// eth2: the renderer and the unbound connection, one fix
+	status, msg, fix := InterfaceCheck("eth2", "52:54:00:00:00:02", false, entries)
+	if status != "warn" ||
+		!strings.Contains(msg, `netplan (/etc/netplan/01-network-manager-all.yaml, renderer "NetworkManager" for all devices)`) ||
+		!strings.Contains(msg, `NetworkManager (connection "Wired", /etc/NetworkManager/system-connections/any.nmconnection, bound to no interface)`) ||
+		strings.Contains(msg, "Manual") {
+		t.Errorf("eth2: %s %q", status, msg)
+	}
+	want := `keep NetworkManager off eth2: add "interface-name:eth2" to "unmanaged-devices=" under "[keyfile]" in /etc/NetworkManager/conf.d/99-chaos-gateway.conf (entries separated by ";"), then run "sudo systemctl reload NetworkManager"`
+	if fix != want {
+		t.Errorf("eth2 fix %q", fix)
+	}
+	// eth3 by name and eth5 by MAC are unmanaged: nothing configures them
+	for _, c := range [][2]string{{"eth3", "52:54:00:00:00:03"}, {"eth5", "52:54:00:00:00:09"}} {
+		if st, m, _ := InterfaceCheck(c[0], c[1], true, entries); st != "ok" {
+			t.Errorf("%s: %s %q", c[0], st, m)
+		}
+	}
+	// eth4 is unmanaged, but netplan's entry for it stays
+	if st, m, f := InterfaceCheck("eth4", "", true, entries); st != "fail" || strings.Contains(m, "NetworkManager (") ||
+		f != `delete the entry "eth4:" under "ethernets" in /etc/netplan/50-lab.yaml, then run "sudo netplan apply"` {
+		t.Errorf("eth4: %s %q %q", st, m, f)
+	}
+
+	// a later file that names another renderer wins; /etc hides a file of the same name in /lib
+	host["lib/netplan/90-networkd.yaml"] = &fstest.MapFile{Data: []byte("network:\n  renderer: networkd\n")}
+	delete(host, "etc/NetworkManager/system-connections/any.nmconnection")
+	entries, _ = ReadOSConfig(host)
+	if st, m, _ := InterfaceCheck("eth2", "", false, entries); st != "ok" {
+		t.Errorf("eth2 under networkd: %s %q", st, m)
+	}
+	host["etc/netplan/90-networkd.yaml"] = &fstest.MapFile{Data: []byte("network:\n  version: 2\n")}
+	entries, _ = ReadOSConfig(host)
+	if st, _, _ := InterfaceCheck("eth2", "", false, entries); st != "warn" {
+		t.Errorf("eth2 with the networkd file hidden: %s", st)
+	}
+}

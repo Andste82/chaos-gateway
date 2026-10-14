@@ -41,7 +41,12 @@ const parts = computed(() => {
           >{{ p.text }}</pre
         >
       </template>
-      <p v-if="parts.length === 0" class="m-0 text-[13px] text-text-2">The kernel holds nothing of Chaos Gateway's for this.</p>
+      <p v-if="parts.length === 0" class="m-0 text-[13px] text-text-2">
+        The kernel holds nothing of Chaos Gateway's for this.<template v-if="kind === 'fault'">
+          Only impairment, MTU and tunnel faults are put into the kernel; DNS, TLS, DHCP and WireGuard parts are carried out
+          by the gateway's services.</template
+        >
+      </p>
       <RouterLink to="/linux" class="text-[13px]">Open the whole Linux view →</RouterLink>
     </template>
   </div>

@@ -4160,6 +4160,10 @@ components:
         status:
           type: string
           enum: [ok, warn, fail]
+          description: >-
+            The worst status of the host's checks and of the checks of the interfaces assigned to test
+            networks. The check of an interface that may become a test interface (before the setup every
+            interface) keeps its own status but does not count here.
         checks:
           type: array
           items:

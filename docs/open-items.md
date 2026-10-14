@@ -756,11 +756,19 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   mounted read-only at `/host/etc` in `deploy/compose.executor.yaml`; only the file, the entry and what it selects leave
   the executor), and the check names the file and the entry (or the NetworkManager connection) and what to remove, a
   warning for a candidate and a failure for an assigned test interface; `HostInterface.os_managed` comes from the same
-  read. The wizard shows the preflight's text for each chosen test interface ("Check again" reads it anew); the
+  read. netplan's global NetworkManager renderer and an ethernet connection bound to no interface hand every interface
+  to NetworkManager and are reported for each, with `unmanaged-devices` as the fix; an interface NetworkManager's
+  `unmanaged-devices` names is not reported for it (NetworkManager's own defaults outside the files, such as an
+  auto-default connection without a file, are not seen; docs/development.md). The report's `status` counts the host's
+  checks and the assigned test interfaces', not a candidate's warning (before the setup the suggested uplink is a
+  candidate too; after it an unused interface is the operating system's), so it does not stay `warn` for an interface
+  the gateway does not use. The wizard shows the preflight's text for each chosen test interface ("Check again" reads it anew); the
   client-side `netplanHint` is removed. No CLI command shows the preflight; every client reads it from
   `GET /system/preflight`. `deploy/host-setup.sh` now says to delete the entry. Tests
   `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent`,
+  `TestThePreflightSeesNetworkManagerTakeEveryInterface`,
   `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`,
+  `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce`,
   `TestExecutorContainerHardeningProfile` (the mount, read-only); `setup.spec.ts` "first start: the wizard sets up the
   gateway and confirms the revision" (the preflight's text for eth3, nothing for eth2 and the uplink, Check again)
 - Severity: low
@@ -1093,12 +1101,15 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   rule (its rule in both hooks with counter and `last`, the named counter, the source set; also an overlay rule and
   `system:anti_lockout`) or fault (its `mark_<id>` chains with counters, the elements that go to them, its tc classes,
   netem queues and filters, a tunnel fault's ingress filter, an MTU fault's chain and elements), found by the names and
-  keys of the applied target; "Show Linux view" on the device detail, in the rule editor and on a fault's row
-  (`LinuxObjectExcerpt.vue`). Tests `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`,
+  keys of the applied target; "Show Linux view" on the device detail, in the rule editor and on the row of a fault
+  the compiler puts into the kernel (impairment, MTU, tunnel, a profile activation; a DNS, TLS, DHCP or WireGuard fault
+  offers none) (`LinuxObjectExcerpt.vue`). Tests `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`,
+  `TestTheLinuxViewFindsARuleByANameThatOnlyOneRuleCanCarry`,
   `TestRenderObjectShowsOnlyWhatTheSelectionNames`, `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`,
   `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange`; `linux-view.spec.ts` ""Show Linux view" on a rule shows its
   compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on
-  a fault shows its mark chain, classes and netem queues with their counters below its row (P3-M14-03)", ""Show Linux
+  a fault shows its mark chain, classes and netem queues with their counters below its row; a DNS fault has none
+  (P3-M14-03)", ""Show Linux
   view" on a device shows its identity element and the classification of its address (P3-M14-03)"
 - Severity: low
 - Reason: deferred. Plan §2.17 "Technical view": "Per object, the compiled configuration next to the domain view …

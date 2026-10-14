@@ -4920,13 +4920,15 @@ type PreflightReport struct {
 		Message   string                      `json:"message"`
 		Status    PreflightReportChecksStatus `json:"status"`
 	} `json:"checks"`
+
+	// Status The worst status of the host's checks and of the checks of the interfaces assigned to test networks. The check of an interface that may become a test interface (before the setup every interface) keeps its own status but does not count here.
 	Status PreflightReportStatus `json:"status"`
 }
 
 // PreflightReportChecksStatus defines model for PreflightReport.Checks.Status.
 type PreflightReportChecksStatus string
 
-// PreflightReportStatus defines model for PreflightReport.Status.
+// PreflightReportStatus The worst status of the host's checks and of the checks of the interfaces assigned to test networks. The check of an interface that may become a test interface (before the setup every interface) keeps its own status but does not count here.
 type PreflightReportStatus string
 
 // Preview defines model for Preview.

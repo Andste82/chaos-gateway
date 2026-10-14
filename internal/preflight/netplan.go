@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,9 +29,17 @@ import (
 // read only when it is there under the root: the shipped deployment (deploy/compose.executor.yaml) mounts
 // only the host's /etc, so there /run/netplan, /lib/netplan and /run/NetworkManager are not seen. The
 // keyfiles netplan generates under /run come from its YAML in /etc, which is read.
+//
+// NetworkManager's own configuration (NetworkManager.conf and its conf.d directories) says which devices it
+// leaves alone (`unmanaged-devices` under [keyfile]; the values of all files are taken together). What
+// NetworkManager does by its own defaults, outside these files, is not seen: a NetworkManager that manages
+// every ethernet port without netplan's NetworkManager renderer and without a keyfile (an auto-default
+// "Wired connection N" has no file) is not reported.
 var (
 	NetplanDirs = []string{"etc/netplan", "run/netplan", "lib/netplan"}
 	NMDirs      = []string{"etc/NetworkManager/system-connections", "run/NetworkManager/system-connections"}
+	NMConfFiles = []string{"etc/NetworkManager/NetworkManager.conf"}
+	NMConfDirs  = []string{"usr/lib/NetworkManager/conf.d", "run/NetworkManager/conf.d", "etc/NetworkManager/conf.d"}
 )
 
 // Managers of the OS network configuration.
@@ -55,10 +64,29 @@ type OSEntry struct {
 	Name   string `json:"name,omitempty"`
 	MAC    string `json:"mac,omitempty"`
 	Member bool   `json:"member,omitempty"`
+	// All is set when the entry hands every interface to NetworkManager: an ethernet connection of
+	// NetworkManager bound to no interface (it may come up on any ethernet port), or netplan's NetworkManager
+	// renderer for all devices (Section "renderer", ID the renderer; NetworkManager then manages every device
+	// and brings up a port without a connection of its own with DHCP).
+	All bool `json:"all,omitempty"`
+	// Unmanaged is set for a NetworkManager setting (`unmanaged-devices` under [keyfile], File the
+	// configuration file) that leaves the interfaces Name or MAC selects alone: it configures nothing, and
+	// for those interfaces Configuring leaves out NetworkManager's entries and the All entries.
+	Unmanaged bool `json:"unmanaged,omitempty"`
 }
 
-// Matches reports whether the entry configures the interface with this name and MAC address.
+// Matches reports whether the entry, on its own, configures the interface with this name and MAC address
+// (an Unmanaged entry configures nothing; Configuring takes it into account).
 func (e OSEntry) Matches(name, mac string) bool {
+	return !e.Unmanaged && e.selects(name, mac)
+}
+
+// selects reports whether the entry names the interface with this name and MAC address: by its name
+// glob and MAC, or All.
+func (e OSEntry) selects(name, mac string) bool {
+	if e.All {
+		return true
+	}
 	if e.Name == "" && e.MAC == "" {
 		return false
 	}
@@ -77,7 +105,12 @@ func (e OSEntry) Matches(name, mac string) bool {
 // Where says where the entry is, in the words of its manager: `netplan (/etc/netplan/50-cloud-init.yaml,
 // "enp3s0" under "ethernets")`, `NetworkManager (connection "Wired connection 1", /etc/...)`.
 func (e OSEntry) Where() string {
-	if e.Manager == ManagerNetworkManager {
+	switch {
+	case e.All && e.Manager == ManagerNetworkManager:
+		return fmt.Sprintf("NetworkManager (connection %q, %s, bound to no interface)", e.ID, e.File)
+	case e.All:
+		return fmt.Sprintf("netplan (%s, renderer %q for all devices)", e.File, e.ID)
+	case e.Manager == ManagerNetworkManager:
 		return fmt.Sprintf("NetworkManager (connection %q, %s)", e.ID, e.File)
 	}
 	return fmt.Sprintf("netplan (%s, %q under %q)", e.File, e.ID, e.Section)
@@ -85,7 +118,10 @@ func (e OSEntry) Where() string {
 
 // Fix says what to remove so that the operating system leaves the interface alone.
 func (e OSEntry) Fix(iface string) string {
-	if e.Manager == ManagerNetworkManager {
+	switch {
+	case e.All:
+		return fmt.Sprintf(`keep NetworkManager off %s: add "interface-name:%s" to "unmanaged-devices=" under "[keyfile]" in /etc/NetworkManager/conf.d/99-chaos-gateway.conf (entries separated by ";"), then run "sudo systemctl reload NetworkManager"`, iface, iface)
+	case e.Manager == ManagerNetworkManager:
 		return fmt.Sprintf("delete the NetworkManager connection %q (sudo nmcli connection delete %q)", e.ID, e.ID)
 	}
 	apply := `, then run "sudo netplan apply"`
@@ -102,6 +138,10 @@ func (e OSEntry) Fix(iface string) string {
 // that cannot be read or parsed is reported in errs and the others are still read; a directory that does
 // not exist is no error (no netplan, no NetworkManager).
 func ReadOSConfig(fsys fs.FS) (entries []OSEntry, errs []error) {
+	// netplan's global renderer: the files are merged in the order of their names (a file in /etc hides
+	// one of the same name in /run and /lib), and a later "renderer" wins.
+	type rendered struct{ file, renderer string }
+	renderers := map[string]rendered{}
 	for _, dir := range NetplanDirs {
 		for _, f := range files(fsys, dir, ".yaml", ".yml") {
 			raw, err := fs.ReadFile(fsys, f)
@@ -109,13 +149,25 @@ func ReadOSConfig(fsys fs.FS) (entries []OSEntry, errs []error) {
 				errs = append(errs, err)
 				continue
 			}
-			es, err := netplanEntries(raw, "/"+f)
+			es, renderer, err := netplanEntries(raw, "/"+f)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("/%s: %w", f, err))
 				continue
 			}
 			entries = append(entries, es...)
+			if _, hidden := renderers[path.Base(f)]; !hidden {
+				renderers[path.Base(f)] = rendered{"/" + f, renderer}
+			}
 		}
+	}
+	var global rendered
+	for _, name := range sortedKeys(renderers) {
+		if r := renderers[name]; r.renderer != "" {
+			global = r
+		}
+	}
+	if strings.EqualFold(global.renderer, ManagerNetworkManager) {
+		entries = append(entries, OSEntry{Manager: ManagerNetplan, File: global.file, Section: "renderer", ID: global.renderer, All: true})
 	}
 	for _, dir := range NMDirs {
 		for _, f := range files(fsys, dir) {
@@ -129,7 +181,90 @@ func ReadOSConfig(fsys fs.FS) (entries []OSEntry, errs []error) {
 			}
 		}
 	}
+	conf := append([]string(nil), NMConfFiles...)
+	for _, dir := range NMConfDirs {
+		conf = append(conf, files(fsys, dir, ".conf")...)
+	}
+	for _, f := range conf {
+		raw, err := fs.ReadFile(fsys, f)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		entries = append(entries, nmUnmanaged(raw, "/"+f)...)
+	}
 	return entries, errs
+}
+
+// sortedKeys returns the keys of m in order.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Configuring returns the entries that configure the interface with this name and MAC address: those
+// that select it, without NetworkManager's entries and the All entries when a NetworkManager setting
+// leaves the interface alone (`unmanaged-devices`).
+func Configuring(entries []OSEntry, name, mac string) []OSEntry {
+	unmanaged := false
+	for _, e := range entries {
+		unmanaged = unmanaged || (e.Unmanaged && e.selects(name, mac))
+	}
+	var out []OSEntry
+	for _, e := range entries {
+		if !e.Matches(name, mac) || (unmanaged && (e.All || e.Manager == ManagerNetworkManager)) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// nmUnmanaged reads the devices a NetworkManager configuration file leaves alone: `unmanaged-devices`
+// under [keyfile], its `interface-name:` and `mac:` specs (other kinds of spec, "except:" and "none" are
+// not taken).
+func nmUnmanaged(raw []byte, file string) []OSEntry {
+	var out []OSEntry
+	section := ""
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	for sc.Scan() {
+		l := strings.TrimSpace(sc.Text())
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+			continue
+		}
+		if strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]") {
+			section = l[1 : len(l)-1]
+			continue
+		}
+		k, v, ok := strings.Cut(l, "=")
+		k = strings.TrimSuffix(strings.TrimSpace(k), "+") // unmanaged-devices+= adds to the list
+		if !ok || section != "keyfile" || k != "unmanaged-devices" {
+			continue
+		}
+		for _, spec := range strings.FieldsFunc(v, func(r rune) bool { return r == ';' || r == ',' }) {
+			spec = strings.TrimSpace(spec)
+			e := OSEntry{Manager: ManagerNetworkManager, File: file, Section: "unmanaged-devices", ID: spec, Unmanaged: true}
+			switch {
+			case strings.HasPrefix(spec, "interface-name:"):
+				e.Name = strings.TrimPrefix(strings.TrimPrefix(spec, "interface-name:"), "=")
+			case strings.HasPrefix(spec, "mac:"):
+				e.MAC = strings.TrimPrefix(spec, "mac:")
+			default:
+				continue
+			}
+			if e.Name != "" || e.MAC != "" {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
 }
 
 // files lists the regular files of a directory with one of the extensions (any without), sorted.
@@ -157,22 +292,24 @@ func files(fsys fs.FS, dir string, exts ...string) []string {
 
 // netplanEntries reads the entries of one netplan file: every device of every section, the interface it
 // selects (its id, or its match by name or MAC), and the interfaces a bridge or a bond takes as ports and a
-// VLAN is on.
-func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
+// VLAN is on; renderer is the file's global renderer (`network.renderer`), empty without one.
+func netplanEntries(raw []byte, file string) (out []OSEntry, renderer string, err error) {
 	var doc struct {
 		Network map[string]yaml.Node `yaml:"network"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, notNetplan(err, "")
+		return nil, "", notNetplan(err, "")
 	}
 	var sections []string
 	for s := range doc.Network {
 		sections = append(sections, s)
 	}
 	sort.Strings(sections)
-	var out []OSEntry
 	for _, section := range sections {
 		node := doc.Network[section]
+		if section == "renderer" && node.Kind == yaml.ScalarNode {
+			renderer = node.Value
+		}
 		if node.Kind != yaml.MappingNode {
 			continue // version, renderer
 		}
@@ -185,7 +322,7 @@ func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
 			Link       string   `yaml:"link"`
 		}
 		if err := node.Decode(&devs); err != nil {
-			return nil, notNetplan(err, "network."+section)
+			return nil, "", notNetplan(err, "network."+section)
 		}
 		var ids []string
 		for id := range devs {
@@ -207,7 +344,7 @@ func netplanEntries(raw []byte, file string) ([]OSEntry, error) {
 			}
 		}
 	}
-	return out, nil
+	return out, renderer, nil
 }
 
 // yamlLine is where yaml.v3 says the problem is ("yaml: line 3: ...", "line 3: cannot unmarshal ...").
@@ -231,11 +368,12 @@ func notNetplan(err error, where string) error {
 }
 
 // nmEntry reads a NetworkManager keyfile: the connection's id and the interface it is bound to, by name
-// (`interface-name`) or by MAC (`mac-address` of the [ethernet] section). A connection bound to neither,
-// or a file that is no keyfile, is not reported.
+// (`interface-name`) or by MAC (`mac-address` of the [ethernet] section). An ethernet connection bound to
+// neither that NetworkManager brings up by itself (autoconnect not false) may come up on any ethernet port:
+// it is an All entry. Another connection bound to neither, or a file that is no keyfile, is not reported.
 func nmEntry(raw []byte, file string) (OSEntry, bool) {
 	e := OSEntry{Manager: ManagerNetworkManager, File: file}
-	section := ""
+	section, typ, autoconnect := "", "", true
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for sc.Scan() {
 		l := strings.TrimSpace(sc.Text())
@@ -254,6 +392,10 @@ func nmEntry(raw []byte, file string) (OSEntry, bool) {
 		switch {
 		case section == "connection" && k == "id":
 			e.ID = v
+		case section == "connection" && k == "type":
+			typ = v
+		case section == "connection" && k == "autoconnect":
+			autoconnect = !strings.EqualFold(v, "false") && v != "0" && !strings.EqualFold(v, "no")
 		case section == "connection" && k == "interface-name":
 			e.Name = v
 		case (section == "ethernet" || section == "802-3-ethernet") && k == "mac-address":
@@ -263,7 +405,10 @@ func nmEntry(raw []byte, file string) (OSEntry, bool) {
 	if e.ID == "" {
 		e.ID = strings.TrimSuffix(path.Base(file), ".nmconnection")
 	}
-	return e, e.Name != "" || e.MAC != ""
+	if e.Name == "" && e.MAC == "" && (typ == "ethernet" || typ == "802-3-ethernet") && autoconnect {
+		e.All = true
+	}
+	return e, e.Name != "" || e.MAC != "" || e.All
 }
 
 // InterfaceCheck is the preflight's verdict on one host interface that is a test interface (assigned) or
@@ -271,10 +416,10 @@ func nmEntry(raw []byte, file string) (OSEntry, bool) {
 // one and "warn" for a candidate, with the entries that configure it and what to remove (P3-M12-07).
 func InterfaceCheck(name, mac string, assigned bool, entries []OSEntry) (status, message, fix string) {
 	var where, fixes []string
-	for _, e := range entries {
-		if e.Matches(name, mac) {
-			where = append(where, e.Where())
-			fixes = append(fixes, e.Fix(name))
+	for _, e := range Configuring(entries, name, mac) {
+		where = append(where, e.Where())
+		if f := e.Fix(name); !slices.Contains(fixes, f) {
+			fixes = append(fixes, f)
 		}
 	}
 	if len(where) == 0 {

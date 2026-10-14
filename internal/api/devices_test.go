@@ -313,3 +313,55 @@ func TestLeaseEventsArriveOverTheDatagramSocket(t *testing.T) {
 		t.Errorf("ListenKeaEvents: %v", err)
 	}
 }
+
+// The device list and the device detail carry the winning fault of each family (the Faults column
+// and the "With faults" filter of plan §2.17): a configured network fault, then an overlay on the
+// device itself that beats it, with the overlay named among the device's overlays.
+func TestADeviceCarriesTheFaultsThatWinForIt(t *testing.T) {
+	g := dhcpGateway(t)
+	fid := "5f1c7a9e-6d3b-4e8a-9c2f-1a2b3c4d5e6f"
+	rev := g.mustPatch(map[string]any{"faults": map[string]any{fid: map[string]any{
+		"name": "iot-delay", "source": map[string]any{"network": "IoT"}, "latency": "150ms",
+	}}})
+	if r := g.apply(rev); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31")})
+	g.observe()
+	winner := func(d map[string]any) map[string]any {
+		t.Helper()
+		eff, _ := d["effective"].([]any)
+		for _, e := range eff {
+			if m := e.(map[string]any); m["family"] == "impairment" {
+				return m
+			}
+		}
+		t.Fatalf("no impairment winner: %v", d)
+		return nil
+	}
+	d := g.do("GET", "/devices/esp32-42", nil, nil, nil).json(t)
+	if w := winner(d); w["layer"] != "config" || w["id"] != fid || w["name"] != "iot-delay" || !strings.Contains(w["summary"].(string), "150ms") {
+		t.Errorf("configured winner: %v", w)
+	}
+	if d["overlays"] != nil {
+		t.Errorf("no overlays yet: %v", d["overlays"])
+	}
+
+	ov := g.mustCreateOverlay(map[string]any{"target": map[string]any{"device": "esp32-42"}, "fault": map[string]any{"loss": "5%"}})
+	items := g.do("GET", "/devices?origin=configured", nil, nil, nil).json(t)["items"].([]any)
+	var esp map[string]any
+	for _, it := range items {
+		if m := it.(map[string]any); m["id"] == espID {
+			esp = m
+		}
+	}
+	if esp == nil {
+		t.Fatalf("%v", items)
+	}
+	if w := winner(esp); w["layer"] != "overlay" || w["id"] != ov["id"] {
+		t.Errorf("overlay winner: %v", w)
+	}
+	if o, _ := esp["overlays"].([]any); len(o) != 1 || o[0] != ov["id"] {
+		t.Errorf("overlays: %v", esp["overlays"])
+	}
+}

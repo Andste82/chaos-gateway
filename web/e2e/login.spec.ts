@@ -48,7 +48,9 @@ test('logging out drops the draft and the data the session read', async ({ page 
 });
 
 // Phase 3 audit: after failed logins the gateway refuses more for a while (5 s, doubling up to 15 min); the
-// form says how long, from the answer's Retry-After, and offers no new attempt until then.
+// form says until when, from the answer's Retry-After, and offers no new attempt until then. The alert is
+// announced once: its text names a time of day and stays the same, while the countdown beside it ticks
+// outside any live region.
 test('a locked-out login says how long to wait', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.loggedIn = false;
@@ -57,17 +59,29 @@ test('a locked-out login says how long to wait', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('Password').fill(gw.password);
   await page.getByRole('button', { name: 'Log in' }).click();
-  await expect(page.getByRole('alert')).toHaveText(/^Too many failed attempts\. Try again in 5:(20|19)\.$/);
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveText(/^Too many failed attempts\. You can try again at \d\d:\d\d:\d\d\.$/);
+  const countdown = page.getByTestId('login-countdown');
+  await expect(countdown).toHaveText(/^5:(20|19) left$/);
   await expect(page.getByRole('button', { name: 'Log in' })).toBeDisabled();
+  const announced = await alert.textContent();
+  const first = await countdown.textContent();
+  await expect(countdown).not.toHaveText(first ?? '', { timeout: 3_000 });
+  await expect(alert).toHaveText(announced ?? '');
+  // the countdown is no live region and not inside one
+  await expect(page.locator('[role="alert"] [data-testid="login-countdown"], [aria-live] [data-testid="login-countdown"]')).toHaveCount(0);
+  await expect(countdown).not.toHaveAttribute('role');
+  await expect(countdown).not.toHaveAttribute('aria-live');
 
   // a short lockout ends by itself, and the next attempt goes through
   gw.loginLockedFor = 1;
   await page.reload();
   await page.getByLabel('Password').fill(gw.password);
   await page.getByRole('button', { name: 'Log in' }).click();
-  await expect(page.getByRole('alert')).toHaveText('Too many failed attempts. Try again in 0:01.');
+  await expect(page.getByRole('alert')).toHaveText(/^Too many failed attempts\. You can try again at \d\d:\d\d:\d\d\.$/);
   gw.loginLockedFor = 0;
   await expect(page.getByRole('alert')).toBeHidden({ timeout: 5_000 });
+  await expect(countdown).toBeHidden();
   await page.getByRole('button', { name: 'Log in' }).click();
   await expect(page).toHaveURL(/\/$/);
   expect(gw.requestsTo('POST', '/auth/login')).toHaveLength(3);

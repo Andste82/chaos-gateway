@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError, errorMessage } from '../api/fetcher';
-import { formatRemaining } from '../lib/format';
+import { formatClock, formatRemaining } from '../lib/format';
 import { useSessionStore } from '../stores/session';
 
 const session = useSessionStore();
@@ -15,7 +15,8 @@ const error = ref('');
 const busy = ref(false);
 
 // After repeated failures the gateway refuses logins for a while (429 with Retry-After: 5 s, doubling up
-// to 15 min): the form says how long and offers no new attempt until then.
+// to 15 min): the form says until when and offers no new attempt until then. The alert names the time once, so
+// assistive technology announces it once; the ticking countdown next to it is not a live region.
 const lockedUntil = ref<number>();
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | undefined;
@@ -35,10 +36,13 @@ function lock(seconds: number) {
 }
 onBeforeUnmount(() => clearInterval(ticker));
 
-const shownError = computed(() => (lockedMs.value > 0 ? `Too many failed attempts. Try again in ${formatRemaining(lockedMs.value)}.` : error.value));
+const locked = computed(() => lockedMs.value > 0);
+const shownError = computed(() =>
+  locked.value && lockedUntil.value !== undefined ? `Too many failed attempts. You can try again at ${formatClock(new Date(lockedUntil.value))}.` : error.value,
+);
 
 async function submit() {
-  if (lockedMs.value > 0) return;
+  if (locked.value) return;
   error.value = '';
   if (!password.value) {
     error.value = 'Enter the admin password.';
@@ -79,8 +83,9 @@ async function submit() {
           autofocus
         />
         <p v-if="shownError" id="login-error" class="field-error" role="alert">{{ shownError }}</p>
+        <p v-if="locked" class="mono mt-1 mb-0 text-xs text-text-2" data-testid="login-countdown">{{ formatRemaining(lockedMs) }} left</p>
       </div>
-      <button type="submit" class="btn btn-primary" :disabled="busy || lockedMs > 0">{{ busy ? 'Logging in…' : 'Log in' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="busy || locked">{{ busy ? 'Logging in…' : 'Log in' }}</button>
     </form>
   </div>
 </template>

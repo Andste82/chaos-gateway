@@ -9,8 +9,9 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   found, P2-AUDIT-01 to P2-AUDIT-16, and P2-AUDIT-17, which the work on them found, are closed (table
   "Closed after the audit (2026-10-12)" under [Phase 2 open items](#phase-2-open-items)). One Phase 2 item
   stays open: P2-M9-06, a hardware measurement for H1.
-- **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. What the
-  implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
+- **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. The result is
+  in [Phase 3 audit result](#phase-3-audit-result), right before the Phase 3 open items; its items, P3-AUDIT-01 to
+  P3-AUDIT-36, are fixed. What the implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
@@ -644,6 +645,82 @@ stayed open".
   for example by keeping which interfaces carried a tree at the last apply).
 - Needs maintainer: no
 - Effort: S
+
+## Phase 3 audit result
+
+Date: 2026-10-14. Audited on the branch `phase-3-web-ui` (draft PR #56) at `3a120ad`, after the Phase 3 open items were
+decided and implemented, against `docs/plan.md` §5 Phase 3 (M12, M13, M14), the behavior sections the milestones refer to
+(§2.1–§2.17, especially §2.16 and §2.17, and §3.x), `api/openapi.yaml`, the web UI's sections and acceptance maps in
+`docs/development.md`, the reference design `docs/ui/prototype/*.dc.html` (the plan wins where they disagree) and the code.
+The audit read the branch through several lenses: backend and security, the shell with the overview, the devices, the
+states of §2.17 and the visual system (M12), the faults, rules and profiles screens (M13), the networks and technical views
+(M14), the interplay of the draft with other revisions, and the tests and CI. A re-review of the fixes on 2026-10-14 added
+P3-AUDIT-35 and P3-AUDIT-36. Fixed: 2026-10-14, on the same branch, in the commits named below (the "close-phase-3" round).
+
+**Phase 3 is complete on the branch.** Every milestone delivers its scope, every test the plan lists exists and passes
+(level 0 locally; the Playwright suite against the mocked API; the three testbed browser flows in CI), and every item this
+audit found is fixed, each with a test or the corrected document. No item needed a maintainer decision; where a fix had to
+choose, the choice is recorded below under "Phase 3 audit: choices made in …". Of the Phase 3 open items only P3-M12-05
+stays open; it waits for M27/M30.
+
+| Milestone | Verdict | Audit items (all fixed on 2026-10-14) |
+|---|---|---|
+| M12 UI shell, overview, devices | done with gaps, fixed | P3-AUDIT-01, P3-AUDIT-03, P3-AUDIT-05 to P3-AUDIT-17, P3-AUDIT-36 |
+| M13 UI for faults, rules and profiles | done with gaps, fixed | P3-AUDIT-17 to P3-AUDIT-20, P3-AUDIT-29 |
+| M14 Networks view and technical view | done with gaps, fixed | P3-AUDIT-10, P3-AUDIT-21 to P3-AUDIT-25, P3-AUDIT-27 |
+| Cross-cutting (interplay, API, tests and CI, documents) | done with gaps, fixed | P3-AUDIT-02, P3-AUDIT-04, P3-AUDIT-26 to P3-AUDIT-35 |
+
+### Evidence
+
+- **CI on the audited commit:** run 38571841356 on `3a120ad`, conclusion success (level 0, e2e, arm64, the testbed levels
+  and the `testbed-ui` job with the browser flows of M12, M13 and M14).
+- **Local, after the fixes:** `make test`, `make lint`, `make check-spec`, `make check-generated`, `make check-clients`,
+  `npm run build` and `make test-e2e` pass.
+- **CI after the fixes:** the final run of the close-phase-3 round on PR #56 is recorded here once the round has pushed.
+
+### Items
+
+Each item names the finding as the audit made it and the commit that fixed it (its message says what changed; the
+development guide's acceptance maps name the tests).
+
+| Item | Lens | Finding | Fixed in |
+|---|---|---|---|
+| P3-AUDIT-01 | backend | The preflight's netplan check did not take only the file that shadows the others (`/run` before `/etc` before `/lib`), dropped a file over a renderer per device type or a device it could not read, and missed a match by driver or by a key it cannot evaluate | `2ad96f4` |
+| P3-AUDIT-02 | backend | The executor's comment claimed that only parts of the host's `/etc` are mounted | `2ad96f4` |
+| P3-AUDIT-03 | security | The unauthenticated `GET /setup` read the host's network configuration through the executor on every call and quoted the executor's error | `48139ba` |
+| P3-AUDIT-04 | backend | A requested rollback was audited twice, as the caller's and as a system rollback; the spec did not say that rolling back the setup's first revision reopens the setup | `9f71f91` |
+| P3-AUDIT-05 | security | A logout kept the query cache and the draft for the next session in the same browser | `7c13fe1` |
+| P3-AUDIT-06 | M12 | A locked-out login did not say how long to wait and offered new attempts the gateway refused | `068771b` |
+| P3-AUDIT-07 | API | `DeviceView.effective` and `overlays`, declared by the spec, were never sent | `cd304e6` |
+| P3-AUDIT-08 | M12 | The device list and detail computed a device's faults in the browser, not as the overview's chips from the gateway's winning faults | `0b95142` |
+| P3-AUDIT-09 | M12 | Not every overview item linked to its detail (fault targets, events, the topology's boxes) | `0b95142` |
+| P3-AUDIT-10 | states | Loading, failed and stale data read as an answer: the topology, recent events, routing sessions and uplink said "none" or "up", a failed overlay read left the rules list short, the Linux views did not say their counters are not live | `0b95142` |
+| P3-AUDIT-11 | M12 | The device list did not mark an adoption that is not applied yet nor offer its Undo; its empty state had no primary action; Adopt shared a column | `0b95142` |
+| P3-AUDIT-12 | M12 | The device detail did not show the router and DNS servers its network hands out | `0b95142` |
+| P3-AUDIT-13 | M12 | Group names did not follow applied revisions, the uplink chart's time axis did not start at now in 24-hour time, the offline page stayed `aria-busy` | `0b95142` |
+| P3-AUDIT-14 | accessibility | The focus did not return to the opener after a dialog or drawer, nor move to the replacement of a Remove/Delete/Undo swap | `2c88f12` |
+| P3-AUDIT-15 | visual | Tall dialogs pushed their action row out of view | `2c88f12` |
+| P3-AUDIT-16 | visual | Sizes outside the plan's type scale, `text-3` below 4.5:1 on `surface-2`, light native controls | `2c88f12` |
+| P3-AUDIT-17 | accessibility | The selected rule was marked only by its colour, profile buttons did not name their profile, a UDP rule did not say why existing connections cannot be cut, the profile editor showed errors before any input; the conflict dialog's wording, the setup's interface selects, the access matrix's overflow, the verify step's wrapping and a hub's default endpoint | `2c88f12` |
+| P3-AUDIT-18 | M13 | A TCP reset rule kept another protocol, which the gateway refuses | `e73807c` |
+| P3-AUDIT-19 | M13 | The preview drawer could be closed while the apply ran, so a failed apply was not shown | `e73807c` |
+| P3-AUDIT-20 | M13 | Explain did not name the tunnel of a tunnel family's fault | `e73807c` |
+| P3-AUDIT-21 | M14 | WireGuard traffic arrows showed the gateway's side, not the remote side as plan §2.2.1 sets the directions | `a512ca9` |
+| P3-AUDIT-22 | M14 | A link could not export its remote configuration and BIRD snippet in the UI | `a512ca9` |
+| P3-AUDIT-23 | M14 | A client could not be given other clients' networks to reach | `a512ca9` |
+| P3-AUDIT-24 | M14 | A new client of the draft could not be edited or undone on its own | `a512ca9` |
+| P3-AUDIT-25 | M14 | A refused action on a client was not marked in its row | `a512ca9` |
+| P3-AUDIT-26 | interplay | An edit dialog open while another revision was applied saved onto the newer revision, overwriting its fields unseen | `a7624a2` |
+| P3-AUDIT-27 | interplay | A client edit whose hub the other revision deleted was kept on reapply | `a7624a2` |
+| P3-AUDIT-28 | interplay | Edits made while the own revision waited for confirmation stayed on the old base once it was confirmed | `a7624a2` |
+| P3-AUDIT-29 | interplay | Keeping an overlay whose expiry passed while its dialog was open closed the dialog instead of asking for a new duration | `a7624a2` |
+| P3-AUDIT-30 | tests | A direct `testvm` run in which no test ran passed, and the `testbed-ui` job could stay green with a renamed browser flow | `0b067e6` |
+| P3-AUDIT-31 | tests | Flaky e2e tests: the adopt-conflict test, the networks helpers' first render, assertion timeouts under CI load | `822cf08` |
+| P3-AUDIT-32 | docs | The development guide and the open items did not record the fixes and the choices they made | `249b355`, `5baf400`, `b187f94` |
+| P3-AUDIT-33 | docs | Plan §5 M14 Scope, the §2.17 Networks and Profiles rows and M30's Scope did not name what the open items added | `b187f94` |
+| P3-AUDIT-34 | docs | The M12 to M14 Status lines, the header of this file and the README did not say the open items were closed; a Decision line marked open work | `dd99280` |
+| P3-AUDIT-35 | docs | (re-review) No audit result for Phase 3 in this file and no phase-level Status line in the plan | this section and the Phase 3 Status line of `docs/plan.md`, in the commit after `dd99280` |
+| P3-AUDIT-36 | accessibility | (re-review) The lockout countdown re-rendered every second inside the login's `role="alert"`, so screen readers announced it again and again; the alert now names the time of day once, and the countdown beside it is no live region (`login.spec.ts` "a locked-out login says how long to wait") | the commit after `dd99280` |
 
 ## Phase 3 open items
 

@@ -725,7 +725,10 @@ handlers, every other operation answers `422 unsupported_feature` and names its 
   `POST /revisions` (`428` instead of the generated binding's `400`). Until the setup is finished only
   `GET/POST /setup` and the health check answer; everything else is `503 unavailable`. A wrong
   credential is `401`, never "anonymous". The login is rate-limited per client address (5 failures,
-  then 5 s doubling to 15 min, `429` with `Retry-After`).
+  then 5 s doubling to 15 min, `429` with `Retry-After`); the login page says how long to wait from
+  `Retry-After` and offers no new attempt until then. A logout clears the page's query cache and the
+  draft (`onLoggedOut` in `src/stores/session.ts`, wired in `src/main.ts`; the Phase 3 audit), as an
+  ended session clears the cache.
 - **Setup.** The first start prints `Setup token: …` to the log (only its hash is stored; every start
   of an unfinished setup prints a new one). `POST /setup` validates the configuration, provisions the
   WireGuard keys, creates revision 1, applies it and only then sets the admin password: a failed apply
@@ -3200,9 +3203,12 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   `ModalDialog` (Reka UI dialogs: focus trap, Escape, labelled by the title), `CountdownBanner`, `AppBanner`, `AppIcon`
   (16 px stroke icons). The focus ring is the accent (`--color-accent`) at 2 px on every control.
 - **The preflight's check of the test interfaces** (P3-M12-07, decided option (a)). Plan §3.4 wants the preflight to
-  check that the test interfaces carry no OS configuration. The executor reads where netplan (`/etc/netplan`,
-  `/run/netplan`, `/lib/netplan`) and NetworkManager (`system-connections` in `/etc` and `/run`) configure an interface
-  (`preflight.ReadOSConfig`: a netplan entry by its id or its `match` by name glob or MAC, a port of a netplan bridge or
+  check that the test interfaces carry no OS configuration. The executor reads where netplan (`/run/netplan`,
+  `/etc/netplan`, `/lib/netplan`, one file per name as netplan takes it: `/run` shadows `/etc`, `/etc` shadows `/lib`)
+  and NetworkManager (`system-connections` in `/etc` and `/run`) configure an interface
+  (`preflight.ReadOSConfig`: a netplan entry by its id or its `match` by name glob, MAC or driver glob, all that are
+  set; a `match` by none of them, empty or by another key, counts for every interface; a section's own `renderer`
+  is no entry; a device that cannot be read is still named by its id and the file's other devices are kept; a port of a netplan bridge or
   bond, the link of a VLAN, a NetworkManager keyfile by `interface-name` or `mac-address`; and what hands every
   interface to NetworkManager: netplan's global `renderer: NetworkManager`, the last one by file name winning, and an
   ethernet keyfile bound to no interface that NetworkManager brings up by itself; for these the fix is
@@ -3213,12 +3219,13 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   host root it is given
   (`chaosgw exec --host-root /host`), each directory only when it is there under that root. `deploy/compose.executor.yaml`
   mounts only the host's `/etc`, read-only at `/host/etc` (netplan's and NetworkManager's files are root's and the API
-  container's user cannot read them), so the shipped deployment reads `/etc/netplan` and
+  container's user cannot read them; the whole `/etc`, because a bind mount needs its source and a host without
+  netplan or NetworkManager has no such directory), so the shipped deployment reads `/etc/netplan` and
   `/etc/NetworkManager/system-connections` and sees nothing of `/run` and `/lib`; the keyfiles netplan's NetworkManager
   renderer generates under `/run` come from its YAML in `/etc`, which is read. The read operation `host_net` returns
   only the file, the section, the entry and what it selects (`executor.HostNetState`), never a file's content (no
   address, no key, no Wi-Fi secret); a file that is not valid netplan YAML is named with the section and the line
-  (`not valid netplan YAML (network.ethernets, line 4)`), never with the YAML library's text, which quotes the
+  (`not valid netplan YAML (network.ethernets.enp3s0, line 4)`), never with the YAML library's text, which quotes the
   offending value. The API (`preflightReport` in `internal/api/system.go`)
   adds to the checks of the host made at start one check per interface that is or may become a test interface (every
   interface but the uplink and the management interface), made at each `GET /setup` and `GET /system/preflight`:
@@ -3229,7 +3236,10 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   (/etc/netplan/60-lab.yaml, "lab" under "ethernets")") and `fix` what to remove (`delete the entry "lab:" under
   "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"`, `sudo nmcli connection delete "…"`); a file
   that cannot be read or parsed is a warning of its own. A failing read is logged as a warning once (again when its
-  message changes, its end once), not at each request of a polling screen. The check "no preflight check has run in
+  message changes, its end once), not at each request of a polling screen. `GET /setup` needs no authentication, so
+  its requests share one read through the executor for 2 seconds (`osConfigCache`, like the health check's probe,
+  M5-13), and its report says only that the configuration cannot be read, not the executor's error (the log has
+  it); the files, entries and connections it names are what the wizard must show (the Phase 3 audit). The check "no preflight check has run in
   this process" is added only when there is no report of the checks at start, not when that report has no time (the
   host could not be inspected: its own `host` warning). `HostInterface.os_managed` comes from the same read. The wizard
   shows the host's checks on its first step and the check of each chosen test interface where the test interfaces are
@@ -3240,13 +3250,13 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 
 | What | Where |
 |---|---|
-| Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, reachability, ended session, 503 `unavailable` | `src/api/fetcher.test.ts` |
+| Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, `Retry-After`, reachability, ended session, 503 `unavailable` | `src/api/fetcher.test.ts` |
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
 | Setup wizard rules, free proposals and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
-| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file; netplan's NetworkManager renderer for all devices and an unbound ethernet connection for every interface, `unmanaged-devices` turning NetworkManager off for an interface (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestThePreflightSeesNetworkManagerTakeEveryInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
-| The preflight checks every candidate and test interface: a warning before the setup (the suggested uplink too) that the report's status does not count, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
-| Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
+| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file; netplan's NetworkManager renderer for all devices and an unbound ethernet connection for every interface, `unmanaged-devices` turning NetworkManager off for an interface (P3-M12-07); a renderer per device type, a device that cannot be read, `/run` shadowing `/etc` shadowing `/lib`, a match by driver or by a key the preflight cannot evaluate (the Phase 3 audit) | `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestThePreflightSeesNetworkManagerTakeEveryInterface`, `TestThePreflightReadsANetplanFileWithARendererPerDeviceType`, `TestThePreflightTakesOnlyTheNetplanFileThatShadowsTheOthers`, `TestThePreflightEvaluatesANetplanMatchByDriver` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
+| The preflight checks every candidate and test interface: a warning before the setup (the suggested uplink too) that the report's status does not count, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce`, `TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
+| Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback, a logout that drops what the session read), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
 | Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
 | Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
@@ -3295,7 +3305,7 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 | … data that did not load | `states.spec.ts` "a list the gateway did not deliver says so and does not claim to be empty", "devices and a device the gateway did not deliver: an error, not an empty list or a blank page" |
 | … offline | `states.spec.ts` "offline: a banner, live data greyed out with the time it was last updated, and back", "offline from the start: the page says so and tries again", "offline from the start, then the setup is open: Try again leads to the wizard", "offline from the start, then no session: Try again leads to the login and back to the page"; `device-detail.spec.ts` "faults cannot be removed while a revision waits for confirmation or the gateway is offline" |
 | … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
-| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts`, `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
+| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts` (a logout drops the draft and the data read, a locked-out login says how long to wait), `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
 | An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
 
 ## Web UI: faults, rules and profiles (M13)
@@ -3522,7 +3532,7 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 | Merge patch: no change, changed members, `null` for what went, arrays whole, patch applied gives the target | `src/lib/mergePatch.test.ts` |
 | Rules in words, ports, field changes, the effect in words, the editor's checks | `src/lib/rules.test.ts` |
 | Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks (also a fault without any parameter), the preview sentence, presets, the gateway's pointers to the form's fields; every fault kind (P3-M13-04): an MTU fault, a tunnel fault, burst loss, flapping, a distribution, loss correlation, a queue limit, each direction its own, every destination, each read back and sent unchanged | `src/lib/faultForm.test.ts` ("every fault kind in the dialog (P3-M13-04)") |
-| Draft: base tracking (also after edits undone by hand), change counting, the merge patch with order and deletions, undoing a deletion, devices, invalid rules and the gateway's errors (a fault's by pointer), rebase on another revision; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
+| Draft: base tracking (also after edits undone by hand), change counting, the merge patch with order and deletions, undoing a deletion, devices, invalid rules and the gateway's errors (a fault's by pointer), rebase on another revision, forgotten at a logout; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
 | Profile editor: the profile of the form (checked against the generated Zod schema of `POST /revisions`), read back unchanged, each direction its own, an MTU part without a mode kept without it, a kept DNS part, the checks (name, parts, fields), the gateway's pointers below a profile; the draft's profiles (changes, patch, delete and Undo, the gateway's problems, reapply and the fields both changed) | `src/lib/profileForm.test.ts`, `src/stores/draft.test.ts` "a custom profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and names a field both changed (P3-M13-03)" |
 | Owners in words | `src/lib/faults.test.ts` |
 | Overlays name what overrides them | `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` (`internal/api/overlays_test.go`) |
@@ -3800,7 +3810,7 @@ settings and the protocols on the links; part 3) go through the draft too.
 | Draft: a client as a change, a merge patch below its hub and the gateway's errors for it; a matrix cell flipped and back, the entries replaced whole; reapplying both on their revision | `src/stores/draft.test.ts` |
 | The rollback toast names the restored revision, at the deadline and on request | `src/composables/eventStream.test.ts` |
 | Routes of the networks, routing and Linux views | `src/router.test.ts` |
-| `POST /revisions/{id}/rollback`: rolled back at once, the event with `reason` and `restored`, refused afterwards, audited | `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` (`internal/api/revisions_test.go`) |
+| `POST /revisions/{id}/rollback`: rolled back at once, the event with `reason` and `restored`, refused afterwards, audited once, as the caller's and not also as the system's (the Phase 3 audit) | `TestARevisionWaitingForConfirmationIsRolledBackOnRequest` (`internal/api/revisions_test.go`) |
 | `GET /state/linux`: the table in nft syntax with counters, the matrix rule, a netem queue with counters, bridges and routes, WireGuard peers, no key | `TestTheLinuxStateShowsTheKernelWithItsCounters` (`internal/api/linux_test.go`) |
 | The nft renderer: the recorded `nft -j` listing, named counters, maps, cut sets, the expressions of the compiler, an unknown one as JSON | `internal/linux/nftrender_test.go` |
 | `GET /state/linux/{kind}/{id}`: a rule's rules, counter and source set, a fault's mark chain, counters, elements, classes and netem queues, a device's identity and classification elements, nothing of another object, by id and name (a name only one rule can carry), empty for an object the kernel lacks (P3-M14-03) | `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`, `TestTheLinuxViewFindsARuleByANameThatOnlyOneRuleCanCarry` (`internal/api/linuxobject_test.go`), `TestRenderObjectShowsOnlyWhatTheSelectionNames` (`internal/apply/objectview_test.go`), `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`, `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange` (`internal/engine/linuxview_internal_test.go`) |

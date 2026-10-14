@@ -3257,10 +3257,11 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 ## Web UI: faults, rules and profiles (M13)
 
 Plan §2.17, §2.4, §2.9 and M13: the add/edit fault dialog with its live preview, the access-rules screen (ordered list,
-rule editor IF / THEN, counters), the faults screen (by family and scope, "overridden by", explain), the unapplied-changes
-bar, the preview-and-apply drawer, the concurrent-change dialog (reload and reapply mine · discard mine), the profile cards, the TTL display
-and the `</> API` panel. M14's screens (networks, WireGuard, routing, access matrix, compiled state) follow in the next
-section; "Measure with probe" on the profile cards comes with the probes (M25).
+rule editor IF / THEN, counters), the faults screen (by family and scope, "overridden by", explain), the
+unapplied-changes bar, the preview-and-apply drawer, the concurrent-change dialog (reload and reapply mine · discard
+mine), the profile cards, the TTL display and the `</> API` panel. M14's screens (networks, WireGuard, routing, access
+matrix, compiled state) follow in the next section; "Measure with probe" on the profile cards comes with the probes
+(M25).
 
 ### How it works
 

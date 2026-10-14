@@ -667,7 +667,7 @@ M27/M30.
   with reason `manual`) and the button with it, in M14, where the access matrix is the first lockout-relevant edit of the UI;
   (b) leave it to the timeout. Recommendation: (a).
 - Acceptance: with (a), the endpoint exists with a test, and the banner's Roll back now restores the previous revision in a Playwright test.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S
 
 ### P3-M12-02 The device detail's flows and recent DNS are not shown yet

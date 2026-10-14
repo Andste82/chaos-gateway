@@ -4,10 +4,12 @@
 // gateway, attachment, DHCP with its pool and leases, DNS, IPv6 blocked; for a WireGuard hub its clients
 // with their status, the add-client dialog and the QR code of a client's configuration; for a link its
 // peer); the access matrix between the networks, whose changes go through the preview and the apply like
-// any other (commit-confirm only when the gateway says the change could lock the admin out). The routing
-// view and the technical view are pages of their own.
-import { computed } from 'vue';
-import { useRoute } from 'vue-router';
+// any other (commit-confirm only when the gateway says the change could lock the admin out). Add network
+// opens the network form, and the selected network is edited and deleted through the draft (P3-M14-01): a
+// network of the draft is marked NEW, CHANGED or DELETED until it is applied, and Undo takes the edit back.
+// The routing view and the technical view are pages of their own.
+import { computed, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { errorMessage } from '../api/fetcher';
 import { useGetUplink } from '../api/generated/hooks/config/config';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../api/generated/model';
@@ -15,6 +17,7 @@ import PageHeader from '../components/layout/PageHeader.vue';
 import AccessMatrix from '../components/networks/AccessMatrix.vue';
 import ClientsCard from '../components/networks/ClientsCard.vue';
 import LeasesCard from '../components/networks/LeasesCard.vue';
+import NetworkDialog from '../components/networks/NetworkDialog.vue';
 import NetworkSettings from '../components/networks/NetworkSettings.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
@@ -22,6 +25,7 @@ import StatusDot from '../components/ui/StatusDot.vue';
 import { firstError, useActiveConfig, useDevices, useNetworks } from '../composables/gateway';
 import { subnetText } from '../lib/networks';
 import { useApiScreen } from '../stores/apiPanel';
+import { useDraftStore } from '../stores/draft';
 
 const props = defineProps<{ id?: string }>();
 
@@ -30,8 +34,33 @@ const devices = useDevices();
 const uplink = useGetUplink();
 const active = useActiveConfig();
 const route = useRoute();
+const router = useRouter();
+const draft = useDraftStore();
 
-const list = computed(() => networks.data.value ?? []);
+/** The networks of the gateway. */
+const applied = computed(() => networks.data.value ?? []);
+/** A network of the draft: added, changed or deleted, not applied yet. */
+const marks = computed<Record<string, 'NEW' | 'CHANGED' | 'DELETED'>>(() => {
+  const out: Record<string, 'NEW' | 'CHANGED' | 'DELETED'> = {};
+  for (const [id, n] of Object.entries(draft.networks)) out[id] = n === null ? 'DELETED' : draft.baseNetwork(id) ? 'CHANGED' : 'NEW';
+  return out;
+});
+/**
+ * The networks as the draft has them: those of the gateway with the draft's settings (a hub keeps its
+ * clients), and the networks the draft adds, pending until they are applied.
+ */
+const list = computed<NetworkView[]>(() => {
+  const out = applied.value.map((n) => {
+    const edit = draft.networks[n.id];
+    if (!edit) return n;
+    const clients = n.config.type === 'wireguard' ? (n.config as WireGuardNetwork).clients : undefined;
+    return { ...n, config: clients && edit.type === 'wireguard' ? ({ ...edit, clients } as WireGuardNetwork) : edit };
+  });
+  for (const [id, n] of Object.entries(draft.networks)) {
+    if (n && !applied.value.some((x) => x.id === id)) out.push({ id, config: n, status: { state: 'pending' } });
+  }
+  return out;
+});
 const selected = computed<NetworkView | undefined>(() => {
   const id = props.id;
   return list.value.find((n) => n.id === id || (n.config as { name: string }).name === id) ?? (id ? undefined : list.value[0]);
@@ -44,7 +73,7 @@ useApiScreen('the networks', () => {
     { method: 'GET' as const, path: '/revisions/active', note: 'the access matrix of the active revision' },
   ];
   const n = selected.value;
-  if (n?.config.type === 'lan') calls.push({ method: 'GET', path: `/networks/${n.id}/leases`, note: 'the DHCP leases' });
+  if (n?.config.type === 'lan' && n.status.state !== 'pending') calls.push({ method: 'GET', path: `/networks/${n.id}/leases`, note: 'the DHCP leases' });
   if (n?.config.type === 'wireguard' && (n.config as WireGuardNetwork).kind === 'hub')
     calls.push({ method: 'GET', path: `/networks/${n.id}/clients`, note: 'the clients with their status' });
   return calls;
@@ -63,6 +92,7 @@ interface Card {
   addr: string;
   meta: string;
   degraded: boolean;
+  mark?: 'NEW' | 'CHANGED' | 'DELETED';
 }
 
 const cards = computed<Card[]>(() =>
@@ -71,7 +101,7 @@ const cards = computed<Card[]>(() =>
     if (n.config.type === 'lan') {
       const c = n.config as LanNetwork;
       const meta = [`${devs} ${devs === 1 ? 'device' : 'devices'}`, c.dhcp?.enabled === false ? 'no DHCP' : 'DHCP', 'DNS'];
-      return { id: n.id, name: c.name, tag: 'test network', addr: subnetText(c.address), meta: meta.join(' · '), degraded: n.status.state === 'degraded' };
+      return { id: n.id, name: c.name, tag: 'test network', addr: subnetText(c.address), meta: meta.join(' · '), degraded: n.status.state === 'degraded', mark: marks.value[n.id] };
     }
     const w = n.config as WireGuardNetwork;
     const meta =
@@ -81,7 +111,7 @@ const cards = computed<Card[]>(() =>
           ? 'peer online'
           : 'peer offline';
     const role = w.role === 'management' ? ' · management' : '';
-    return { id: n.id, name: w.name, tag: `WireGuard ${w.kind}${role}`, addr: subnetText(w.address), meta, degraded: n.status.state === 'degraded' };
+    return { id: n.id, name: w.name, tag: `WireGuard ${w.kind}${role}`, addr: subnetText(w.address), meta: n.status.state === 'pending' ? 'not applied yet' : meta, degraded: n.status.state === 'degraded', mark: marks.value[n.id] };
   }),
 );
 
@@ -90,7 +120,30 @@ const up = computed(() => uplink.data.value);
 const unknownNetwork = computed(() => !!props.id && list.value.length > 0 && !selected.value);
 const hub = computed(() => {
   const n = selected.value;
-  return n?.config.type === 'wireguard' && (n.config as WireGuardNetwork).kind === 'hub' ? n : undefined;
+  return n?.config.type === 'wireguard' && (n.config as WireGuardNetwork).kind === 'hub' && n.status.state !== 'pending' ? n : undefined;
+});
+
+// the network form: Add network, or Edit (and Fix) of the selected network
+const formOpen = ref(false);
+const editing = ref<string>();
+function addNetwork() {
+  editing.value = undefined;
+  formOpen.value = true;
+}
+function editNetwork(id: string) {
+  editing.value = id;
+  formOpen.value = true;
+}
+function saved(id: string) {
+  if (id !== selected.value?.id) void router.push(`/networks/${id}`);
+}
+// a network deleted here and applied is gone: the page goes back to the list instead of saying "not found"
+const deletedHere = new Set<string>();
+watch(marks, (m) => {
+  for (const [id, mark] of Object.entries(m)) if (mark === 'DELETED') deletedHere.add(id);
+});
+watch(unknownNetwork, (unknown) => {
+  if (unknown && props.id && deletedHere.has(props.id)) void router.replace('/networks');
 });
 </script>
 
@@ -99,6 +152,7 @@ const hub = computed(() => {
     <template #actions>
       <RouterLink class="btn" to="/networks/routing">Routing</RouterLink>
       <RouterLink class="btn" to="/linux">Linux view</RouterLink>
+      <button type="button" class="btn btn-primary" @click="addNetwork">Add network</button>
     </template>
   </PageHeader>
   <p class="-mt-3 mb-0 text-[13px] text-text-2">Test networks are IPv4-only in V1 · the gateway routes between them and the uplink</p>
@@ -106,7 +160,9 @@ const hub = computed(() => {
   <p v-if="networks.isLoading.value" class="text-text-2">Loading the networks…</p>
   <LoadError v-else-if="firstError(networks)" :error="firstError(networks)" what="The networks are not loaded" :retry="networks.refetch" />
   <template v-else>
-    <EmptyState v-if="list.length === 0" text="No test network yet. The setup assigns the first ones; more follow with a configuration import or the API." />
+    <EmptyState v-if="list.length === 0" text="No test network yet. The setup assigns the first ones; Add network makes more.">
+      <button type="button" class="btn btn-primary btn-sm" @click="addNetwork">Add network</button>
+    </EmptyState>
     <nav aria-label="Networks" class="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4" data-testid="network-cards">
       <RouterLink
         v-for="c in cards"
@@ -117,10 +173,17 @@ const hub = computed(() => {
         :aria-current="selected?.id === c.id ? 'page' : undefined"
         data-testid="network-card"
       >
-        <span class="flex items-center gap-2 text-base font-semibold text-text">
-          {{ c.name }}
+        <span class="flex items-center gap-2 text-base font-semibold text-text" :class="c.mark === 'DELETED' ? 'line-through opacity-60' : ''">
+          <span data-testid="network-name">{{ c.name }}</span>
           <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">{{ c.tag }}</span>
         </span>
+        <span
+          v-if="c.mark"
+          class="rounded border px-1.5 text-[11px]"
+          :class="c.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
+          data-testid="network-mark"
+          >{{ c.mark }}</span
+        >
         <span class="mono text-xs text-text-2">{{ c.addr }}</span>
         <span class="text-[13px] text-text-2">{{ c.meta }}</span>
         <StatusDot v-if="c.degraded" tone="block" label="degraded: a port is missing" />
@@ -163,12 +226,13 @@ const hub = computed(() => {
     <LoadError v-if="unknownNetwork" :error="`no network ${route.params.id}`" what="Not found" />
 
     <div v-if="selected" class="grid grid-cols-1 gap-5 xl:grid-cols-[440px_minmax(0,1fr)]">
-      <NetworkSettings :network="selected" />
-      <AccessMatrix :networks="list" />
+      <NetworkSettings :network="selected" :mark="marks[selected.id]" @edit="editNetwork(selected.id)" />
+      <AccessMatrix :networks="applied" />
     </div>
-    <div v-else-if="list.length" class="grid grid-cols-1 gap-5"><AccessMatrix :networks="list" /></div>
+    <div v-else-if="applied.length" class="grid grid-cols-1 gap-5"><AccessMatrix :networks="applied" /></div>
 
-    <LeasesCard v-if="selected?.config.type === 'lan'" :network="selected" />
+    <LeasesCard v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending'" :network="selected" />
     <ClientsCard v-if="hub" :network="hub" />
   </template>
+  <NetworkDialog v-model:open="formOpen" :network="editing" @saved="saved" />
 </template>

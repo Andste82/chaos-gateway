@@ -67,9 +67,45 @@ function where(path: string | undefined): string {
     return `WireGuard client ${name}${c[3] ? ` · ${c[3].replace(/\//g, ' ')}` : ''}`;
   }
   if (path?.startsWith('/access_matrix')) return 'Access between networks';
+  const rest = (r: string | undefined) => (r ? ` · ${r.replace(/\//g, ' ')}` : '');
+  const n = /^\/networks\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (n) return `Network ${networkName(n[1]!)}${rest(n[2])}`;
+  const p = /^\/routing\/protocols\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (p) {
+    const name = draft.effectiveRouting.protocols?.[p[1]!]?.name ?? draft.baseRouting.protocols?.[p[1]!]?.name ?? p[1];
+    return `Routing protocol ${name}${rest(p[2])}`;
+  }
+  if (path === '/routing' || path?.startsWith('/routing/')) return `Routing${rest(path.slice('/routing/'.length))}`;
+  const o = /^\/(groups|probes|scenarios)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (o) {
+    const kind = { groups: 'Group', probes: 'Probe', scenarios: 'Scenario' }[o[1] as 'groups'];
+    const name = (draft.baseConfig?.[o[1] as 'groups']?.[o[2]!] as { name?: string } | undefined)?.name ?? o[2];
+    return `${kind} ${name}${rest(o[3])}`;
+  }
   const m = /^\/(access_rules|faults|profiles|devices)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (!m) return path || 'configuration';
-  return `${objectName(m[1]!, m[2]!)}${m[3] ? ` · ${m[3].replace(/\//g, ' ')}` : ''}`;
+  return `${objectName(m[1]!, m[2]!)}${rest(m[3])}`;
+}
+
+function networkName(id: string): string {
+  return draft.effectiveNetworks[id]?.name ?? draft.baseConfig?.networks?.[id]?.name ?? id;
+}
+
+/**
+ * The gateway's message in the user's words: a reference to a network this change deletes names the
+ * network and says so (P3-M14-01: deleting a network something still refers to — a device, a rule, a
+ * fault, the access matrix, a routing protocol — shows what refers to it).
+ */
+function messageOf(e: { code?: string; message?: string }): string {
+  const msg = e.message ?? '';
+  if (e.code !== 'unknown_reference') return msg;
+  for (const [id, n] of Object.entries(draft.networks)) {
+    const name = draft.baseConfig?.networks?.[id]?.name;
+    // the reference by UUID, or by name where the configuration has one
+    if (n !== null || !(msg.includes(id) || (name && msg.includes(`"${name}"`)))) continue;
+    return `refers to ${name ?? id}, which this change deletes; remove the reference first or keep the network`;
+  }
+  return msg;
 }
 
 /**
@@ -120,7 +156,7 @@ async function prepare() {
     if (e instanceof ApiError && e.status === 422) {
       const errs = e.problem?.errors ?? [];
       draft.setServerErrors(errs);
-      problems.value = errs.length ? errs.map((x) => ({ where: where(x.path), message: x.message ?? '' })) : [{ where: 'configuration', message: e.message }];
+      problems.value = errs.length ? errs.map((x) => ({ where: where(x.path), message: messageOf(x) })) : [{ where: 'configuration', message: e.message }];
       phase.value = 'invalid';
       return;
     }
@@ -263,7 +299,7 @@ function value(v: unknown): string {
         <div v-if="references.length" class="rounded-md border border-block-border bg-block-tint p-3 text-[13px] text-block-text" data-testid="preview-references">
           Applying removes what refers to a deleted object:
           <ul class="my-1.5 pl-5">
-            <li v-for="r in references" :key="r.id">{{ r.kind }} <span class="mono">{{ r.id }}</span> ({{ r.object }})</li>
+            <li v-for="r in references" :key="r.id">{{ r.kind }} <span class="mono">{{ r.id }}</span> ({{ where(r.object) }})</li>
           </ul>
           <label class="flex items-center gap-2 text-text"><input v-model="force" type="checkbox" /> Remove them when applying</label>
         </div>

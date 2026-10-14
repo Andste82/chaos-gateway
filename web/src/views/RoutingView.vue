@@ -4,21 +4,29 @@
 // and how many it imported, filtered and exported; and the routes in Chaos Gateway's routing tables by
 // origin. Sessions and counts are polled, route changes also arrive as events. What the status does
 // not say (ASN, the link of a session, the external mode) comes from the routing configuration; when
-// that is not loaded, the BIRD card says so.
+// that is not loaded, the BIRD card says so. The configuration card edits the routing of the model
+// (P3-M14-01): the BIRD settings (router id, local AS, external mode) and the protocols on the WireGuard
+// links, each through the configuration draft, the preview and the apply; a protocol of the draft is
+// marked NEW, CHANGED or DELETED until it is applied, and Undo takes the edit back.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
 import { getGetRoutingStatusQueryKey, getRouting, getRoutingStatus, listRoutes } from '../api/generated/hooks/routing/routing';
-import type { RouteEntry, RoutingStatusProtocolsItem } from '../api/generated/model';
+import type { RouteEntry, RoutingProtocol, RoutingStatusProtocolsItem } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
+import ProtocolDialog from '../components/routing/ProtocolDialog.vue';
+import RoutingSettingsDialog from '../components/routing/RoutingSettingsDialog.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import SegmentedControl from '../components/ui/SegmentedControl.vue';
 import StatusDot, { type DotTone } from '../components/ui/StatusDot.vue';
-import { fetchAll, firstError, useNames } from '../composables/gateway';
+import { fetchAll, firstError, useActiveConfig, useNames } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { formatAgo, formatClock } from '../lib/format';
+import { jsonEqual } from '../lib/mergePatch';
+import { prefixesText } from '../lib/routingForm';
 import { useApiScreen } from '../stores/apiPanel';
+import { useDraftStore } from '../stores/draft';
 
 const status = useQuery({ queryKey: getGetRoutingStatusQueryKey(), queryFn: ({ signal }) => getRoutingStatus({ signal }), refetchInterval: 5_000 });
 const config = useQuery({ queryKey: ['routing', 'config'], queryFn: ({ signal }) => getRouting(undefined, { signal }) });
@@ -29,6 +37,8 @@ const routes = useQuery({
 });
 const { names } = useNames();
 const now = useNow(1000);
+const active = useActiveConfig();
+const draft = useDraftStore();
 
 useApiScreen('the routing', () => [
   { method: 'GET', path: '/routing/status', note: 'BIRD and its sessions' },
@@ -71,6 +81,63 @@ const origins = computed(() => {
 });
 const shownRoutes = computed(() => (routes.data.value ?? []).filter((r) => origin.value === 'all' || r.origin === origin.value));
 const external = computed(() => config.data.value?.external);
+
+// ---- the routing configuration, as the draft has it (P3-M14-01)
+const routing = computed(() => draft.effectiveRouting);
+const settingsChanged = computed(() => {
+  const strip = (r: typeof routing.value) => ({ ...r, protocols: undefined });
+  return draft.routing !== undefined && !jsonEqual(strip(draft.routing), strip(draft.baseRouting));
+});
+const linkName = (id: string) => draft.effectiveNetworks[id]?.name ?? names.value.network?.(id) ?? id;
+interface ProtocolRow {
+  id: string;
+  p: RoutingProtocol;
+  mark?: 'NEW' | 'CHANGED' | 'DELETED';
+  refused: string[];
+}
+const protocolRows = computed<ProtocolRow[]>(() => {
+  const base = draft.baseRouting.protocols ?? {};
+  const now = routing.value.protocols ?? {};
+  const rows: ProtocolRow[] = [];
+  for (const id of new Set([...Object.keys(base), ...Object.keys(now)])) {
+    const p = now[id] ?? base[id]!;
+    const mark = !now[id] ? 'DELETED' : !base[id] ? 'NEW' : !jsonEqual(base[id], now[id]) ? 'CHANGED' : undefined;
+    rows.push({ id, p, mark, refused: Object.values(draft.serverErrors[id] ?? {}) });
+  }
+  return rows;
+});
+function announced(p: RoutingProtocol): string {
+  return (
+    (p.announce ?? [])
+      .map((a) => (a.network ? linkName(a.network) : a.client ? `client ${draft.clientName(a.client) ?? a.client}` : (a.cidr ?? '')))
+      .join(', ') || 'nothing'
+  );
+}
+function settingsOf(p: RoutingProtocol): string {
+  if (p.type === 'bgp') return `neighbor AS ${p.bgp?.neighbor_asn ?? '—'}${p.bgp?.neighbor_address ? ` at ${p.bgp.neighbor_address}` : ''}${p.bgp?.passive ? ', passive' : ''}`;
+  if (p.type === 'ospf') return `area ${p.ospf?.area ?? '0.0.0.0'}, cost ${p.ospf?.cost ?? 10}`;
+  return `hello ${p.babel?.hello_interval ?? '4s'}, rxcost ${p.babel?.rxcost ?? 96}`;
+}
+const protocolOpen = ref(false);
+const editing = ref<string>();
+const settingsOpen = ref(false);
+function addProtocol() {
+  editing.value = undefined;
+  protocolOpen.value = true;
+}
+function editProtocol(id: string) {
+  editing.value = id;
+  protocolOpen.value = true;
+}
+function undoProtocol(r: ProtocolRow) {
+  if (r.mark === 'NEW') draft.setProtocol(r.id, null);
+  else draft.restoreProtocol(r.id);
+}
+function undoSettings() {
+  const base = draft.baseRouting;
+  draft.setRouting({ ...base, protocols: routing.value.protocols });
+}
+const settingsRefused = computed(() => Object.values(draft.serverErrors['routing'] ?? {}));
 </script>
 
 <template>
@@ -119,11 +186,88 @@ const external = computed(() => config.data.value?.external);
     />
   </SectionCard>
 
+  <SectionCard title="Configuration">
+    <template #actions>
+      <button type="button" class="btn btn-sm" @click="settingsOpen = true">{{ settingsRefused.length ? 'Fix settings' : 'Settings' }}</button>
+      <button type="button" class="btn btn-primary btn-sm" :disabled="!draft.baseConfig" @click="addProtocol">Add protocol</button>
+    </template>
+    <p v-if="active.isLoading.value" class="m-0 text-sm text-text-2">Loading the configuration…</p>
+    <LoadError v-else-if="firstError(active)" :error="firstError(active)" what="The routing configuration is not loaded" :retry="active.refetch" />
+    <div v-else class="flex flex-col gap-3" data-testid="routing-config">
+      <dl class="m-0 grid grid-cols-[160px_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm" data-testid="routing-settings">
+        <dt class="text-text-2">Router id</dt>
+        <dd class="mono m-0 text-[13px]">{{ routing.router_id ?? 'the lowest gateway address' }}</dd>
+        <dt class="text-text-2">Local AS</dt>
+        <dd class="mono m-0 text-[13px]">{{ routing.asn ?? '—' }}</dd>
+        <dt class="text-text-2">External mode</dt>
+        <dd class="m-0">
+          <template v-if="routing.external?.enabled">kernel table <span class="mono">{{ routing.external.table }}</span></template>
+          <template v-else>off</template>
+        </dd>
+      </dl>
+      <p v-if="settingsChanged" class="m-0 flex items-center gap-2 text-[13px] text-text-2" data-testid="routing-settings-changed">
+        <span class="rounded border border-accent-strong px-1.5 text-[11px] text-accent-text">CHANGED</span> not applied yet
+        <button type="button" class="btn btn-sm" aria-label="Undo the changes of the routing settings" @click="undoSettings">Undo</button>
+      </p>
+      <p v-if="settingsRefused.length" class="m-0 text-[13px] text-block-text" role="alert">The gateway refused the settings: {{ settingsRefused.join(' ') }}</p>
+      <EmptyState v-if="protocolRows.length === 0" text="No routing protocol: static routes only. Add one to run BGP, OSPF or Babel on a WireGuard link." />
+      <article
+        v-for="r in protocolRows"
+        :key="r.id"
+        class="rounded-lg border border-[#2a323d] bg-surface-2 px-4 py-3"
+        :class="r.mark === 'DELETED' ? 'opacity-60' : ''"
+        data-testid="protocol"
+      >
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="text-[15px] font-semibold" :class="r.mark === 'DELETED' ? 'line-through' : ''">{{ r.p.name }}</span>
+          <span class="rounded border border-border-strong px-1.5 text-[11px] text-text-2 uppercase">{{ r.p.type }}</span>
+          <span class="text-[13px] text-text-2">on link {{ linkName(r.p.link) }}</span>
+          <span v-if="r.p.enabled === false" class="text-xs text-text-3">disabled</span>
+          <span v-if="r.p.custom_snippet" class="rounded border border-fault-border px-1.5 text-[11px] text-fault-text">unmanaged snippet</span>
+          <span
+            v-if="r.mark"
+            class="rounded border px-1.5 text-[11px]"
+            :class="r.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
+            data-testid="protocol-mark"
+            >{{ r.mark }}</span
+          >
+          <span class="flex-1" />
+          <template v-if="r.mark === 'DELETED'">
+            <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${r.p.name}`" @click="undoProtocol(r)">Undo</button>
+          </template>
+          <template v-else>
+            <button type="button" class="btn btn-sm" :aria-label="`${r.refused.length ? 'Fix' : 'Edit'} ${r.p.name}`" @click="editProtocol(r.id)">{{ r.refused.length ? 'Fix' : 'Edit' }}</button>
+            <button type="button" class="btn btn-sm" :aria-label="`Delete ${r.p.name}`" @click="draft.setProtocol(r.id, null)">Delete</button>
+            <button v-if="r.mark" type="button" class="btn btn-sm" :aria-label="`Undo the changes of ${r.p.name}`" @click="undoProtocol(r)">Undo</button>
+          </template>
+        </div>
+        <div class="mt-2 grid grid-cols-1 gap-2 text-[13px] md:grid-cols-3">
+          <div>
+            <div class="text-xs text-text-3">Settings</div>
+            <span data-testid="protocol-settings">{{ settingsOf(r.p) }}</span>
+          </div>
+          <div>
+            <div class="text-xs text-text-3">Announces</div>
+            <span data-testid="protocol-announce">{{ announced(r.p) }}</span>
+          </div>
+          <div>
+            <div class="text-xs text-text-3">Imports</div>
+            <span class="mono" data-testid="protocol-import">{{ prefixesText(r.p.import).replace(/\n/g, ', ') || 'any allowed prefix' }}</span>
+            <span class="block text-text-2">{{ r.p.import?.allow_default ? 'default route accepted' : 'no default route' }} · at most {{ r.p.import?.max_prefixes ?? 100 }}</span>
+          </div>
+        </div>
+        <p v-if="r.refused.length" class="mt-2 mb-0 text-[13px] text-block-text" role="alert" data-testid="protocol-refused">The gateway refused it: {{ r.refused.join(' ') }}</p>
+      </article>
+    </div>
+  </SectionCard>
+  <ProtocolDialog v-model:open="protocolOpen" :protocol="editing" />
+  <RoutingSettingsDialog v-model:open="settingsOpen" />
+
   <SectionCard title="Sessions">
     <LoadError v-if="firstError(status)" :error="firstError(status)" what="The sessions are not loaded" :retry="status.refetch" />
     <EmptyState
       v-else-if="!status.isLoading.value && protocols.length === 0"
-      text="No routing session. Dynamic routing runs on WireGuard links; its protocols are configured with the routing configuration (API or import)."
+      text="No routing session. Dynamic routing runs on WireGuard links; add a protocol in the configuration above."
     />
     <div v-else class="flex flex-col gap-3" data-testid="sessions">
       <article v-for="p in protocols" :key="p.id" class="rounded-lg border border-[#2a323d] bg-surface-2 px-4 py-3" data-testid="session">

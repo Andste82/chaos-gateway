@@ -3,16 +3,33 @@
 // IPv6 blocked), in the user's words; a WireGuard network shows its tunnel, endpoint and peers instead.
 // "Show Linux view" opens what the kernel holds for the network: its bridge or WireGuard interface and
 // its subnet in nftables, tc, the routes and WireGuard (plan §2.17 "Technical view").
+// Edit opens the network form and Delete takes the network out of the configuration draft (P3-M14-01);
+// a network of the draft says so (NEW, CHANGED, DELETED) and Undo takes the edit back. A network the
+// gateway refused says why, and Fix opens the form with the messages under their fields.
 import { computed, ref, watch } from 'vue';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../../api/generated/model';
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
 import { effectivePools, hostOf, subnetText } from '../../lib/networks';
+import { useDraftStore } from '../../stores/draft';
 import StatusDot from '../ui/StatusDot.vue';
 import LinuxExcerpt from './LinuxExcerpt.vue';
 
-const props = defineProps<{ network: NetworkView }>();
+const props = defineProps<{ network: NetworkView; mark?: 'NEW' | 'CHANGED' | 'DELETED' }>();
+const emit = defineEmits<{ edit: [] }>();
 const now = useNow(1000);
+const draft = useDraftStore();
+
+const name = computed(() => (props.network.config as { name: string }).name);
+/** What the gateway refused of this network in the last preview. */
+const refused = computed(() => Object.values(draft.serverErrors[props.network.id] ?? {}));
+function remove() {
+  draft.setNetwork(props.network.id, null);
+}
+function undo() {
+  if (props.mark === 'NEW') draft.setNetwork(props.network.id, null);
+  else draft.restoreNetwork(props.network.id);
+}
 
 const lan = computed(() => (props.network.config.type === 'lan' ? (props.network.config as LanNetwork) : undefined));
 const wg = computed(() => (props.network.config.type === 'wireguard' ? (props.network.config as WireGuardNetwork) : undefined));
@@ -41,10 +58,12 @@ const dns = computed(() => {
   if (d?.static_entries?.length) parts.push(`${d.static_entries.length} static ${d.static_entries.length === 1 ? 'entry' : 'entries'}`);
   return parts.join(' · ');
 });
+// the ports as the draft has them, each with what the gateway knows of it (a port the draft adds has no status yet)
 const ports = computed(() =>
-  (props.network.status.ports?.length ? props.network.status.ports : (lan.value?.interfaces ?? []).map((i) => ({ name: i.name ?? i.mac, present: undefined, link_up: undefined }))).map(
-    (p) => `${p.name ?? '?'}${p.present === false ? ' (missing)' : p.link_up === false ? ' (link down)' : p.link_up ? ' (link up)' : ''}`,
-  ),
+  (lan.value?.interfaces ?? []).map((i) => {
+    const p = props.network.status.ports?.find((x) => (i.name !== undefined && x.name === i.name) || (i.mac !== undefined && x.mac === i.mac));
+    return `${i.name ?? p?.name ?? i.mac ?? '?'}${p?.present === false ? ' (missing)' : p?.link_up === false ? ' (link down)' : p?.link_up ? ' (link up)' : ''}`;
+  }),
 );
 const peer = computed(() => props.network.status.link_peer);
 </script>
@@ -52,12 +71,37 @@ const peer = computed(() => props.network.status.link_peer);
 <template>
   <section class="card flex min-w-0 flex-col gap-3" aria-labelledby="network-settings-title" data-testid="network-settings">
     <div class="flex items-center justify-between gap-3">
-      <h2 id="network-settings-title" class="card-title">{{ title }}</h2>
+      <h2 id="network-settings-title" class="card-title" :class="mark === 'DELETED' ? 'line-through opacity-60' : ''">{{ title }}</h2>
+      <span class="flex-1" />
+      <span
+        v-if="mark"
+        class="rounded border px-1.5 text-[11px]"
+        :class="mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
+        data-testid="network-settings-mark"
+        >{{ mark }}</span
+      >
       <StatusDot
         :tone="network.status.state === 'ok' ? 'normal' : network.status.state === 'degraded' ? 'block' : 'unknown'"
         :label="network.status.state === 'ok' ? 'Applied' : network.status.state === 'degraded' ? 'Degraded: a port is missing' : 'Not applied yet'"
       />
     </div>
+    <div class="flex flex-wrap gap-1.5" data-testid="network-actions">
+      <template v-if="mark === 'DELETED'">
+        <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${name}`" @click="undo">Undo</button>
+      </template>
+      <template v-else>
+        <button type="button" class="btn btn-sm" :aria-label="`${refused.length ? 'Fix' : 'Edit'} ${name}`" @click="emit('edit')">{{ refused.length ? 'Fix' : 'Edit' }}</button>
+        <button type="button" class="btn btn-sm" :aria-label="`Delete ${name}`" @click="remove">Delete</button>
+        <button v-if="mark" type="button" class="btn btn-sm" :aria-label="`Undo the changes of ${name}`" @click="undo">Undo</button>
+      </template>
+    </div>
+    <p v-if="mark === 'DELETED'" class="m-0 text-[13px] text-fault-text" data-testid="network-pending">
+      Deleted when the changes are applied. What still refers to it (devices, rules, faults, the access matrix, routing) is listed by the preview.
+    </p>
+    <p v-else-if="mark" class="m-0 text-[13px] text-text-2" data-testid="network-pending">
+      {{ mark === 'NEW' ? 'Added' : 'Changed' }} in the draft: the settings below take effect when the changes are applied.
+    </p>
+    <p v-if="refused.length" class="m-0 text-[13px] text-block-text" role="alert" data-testid="network-refused">The gateway refused it: {{ refused.join(' ') }}</p>
     <dl v-if="lan" class="m-0 grid grid-cols-[130px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-sm">
       <dt class="text-text-2">Subnet</dt>
       <dd class="mono m-0 text-[13px]">{{ subnetText(lan.address) }}</dd>

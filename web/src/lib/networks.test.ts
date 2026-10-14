@@ -183,6 +183,9 @@ describe('the client actions (P3-M14-01)', () => {
     const c = { name: 'rA', address: '10.99.0.2', keepalive: '1s' };
     expect(withEnabled(c, false)).toEqual({ ...c, enabled: false });
     expect(withEnabled({ ...c, enabled: false }, true)).toEqual(c);
+    // a client the configuration has with an explicit enabled: true keeps it, so an enable after a disable is no change
+    expect(withEnabled({ ...c, enabled: false }, true, { ...c, enabled: true })).toEqual({ ...c, enabled: true });
+    expect(withEnabled(c, false, { ...c, enabled: true })).toEqual({ ...c, enabled: false });
   });
 
   it('rotates generated keys by the next generation, checked against the spec', () => {

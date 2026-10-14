@@ -110,9 +110,9 @@ describe('the fault dialog', () => {
     expect(formToOverlay({ ...f, duration: 'ttl:30m' }, now)).toEqual({ target: { device: 'd1' }, fault: { loss: '2%' }, ttl: '30m' });
     expect(previewSentence({ ...f, duration: 'ttl:30m' }, 'ESP32-42')).toMatch(/· expires after 30 min$/);
     // a TTL in seconds (set over the API) is shown in words
-    expect(durationChoices(faultToForm({ loss: '2%' }, { device: 'd1' }, { ttl: '1199s', expiresAt: '2026-10-14T12:19:59Z' }), '1199s', now)).toContainEqual({
-      value: 'ttl:1199s',
-      label: '19 min 59 s (its own TTL)',
+    expect(durationChoices(faultToForm({ loss: '2%' }, { device: 'd1' }, { ttl: '4530s', expiresAt: '2026-10-14T13:15:30Z' }), '4530s', now)).toContainEqual({
+      value: 'ttl:4530s',
+      label: '1 h 15 min 30 s (its own TTL)',
     });
     // without an expiry (an old answer) the own TTL is the choice, never 15 minutes
     expect(faultToForm({ loss: '2%' }, { device: 'd1' }, { ttl: '30m' }).duration).toBe('ttl:30m');

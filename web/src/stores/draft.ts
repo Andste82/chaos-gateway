@@ -13,11 +13,11 @@ import type {
   WireGuardNetwork,
 } from '../api/generated/model';
 import { faultChips, describeScope, type Names } from '../lib/faults';
-import { applyMergePatch, bothChanged, cloneJSON, createMergePatch, jsonEqual } from '../lib/mergePatch';
+import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
-/** The members compared as a whole when both sides changed an object: a scope or a destination is one choice. */
+/** The members compared and reapplied as a whole when both sides changed an object: a scope or a destination is one choice. */
 const atomicMembers = new Set(['source', 'target', 'destination']);
 
 /** The value of a member in words, for the fields both sides changed: "Reject", "no", "80, 443", "Network IoT". */
@@ -254,6 +254,11 @@ export const useDraftStore = defineStore('draft', () => {
   function toggleMatrix(from: string, to: string) {
     const next = toggleCell(effectiveMatrix.value, from, to, baseNetworks.value);
     matrix.value = matrixChanges(baseMatrix.value, next, baseNetworks.value).length === 0 ? undefined : next;
+  }
+
+  /** A client of a hub as the base revision has it (what the client actions and Undo start from). */
+  function baseClient(network: string, id: string): WireGuardClient | undefined {
+    return clientsIn(baseConfig.value, network)[id];
   }
 
   /** The name of a client of the base, wherever its hub is. */
@@ -503,7 +508,8 @@ export const useDraftStore = defineStore('draft', () => {
           out[id] = m;
           continue;
         }
-        const merged = applyMergePatch(now, createMergePatch(was, m));
+        // a scope or a destination both changed is mine as a whole, as the dialog says
+        const merged = reapplyMergePatch(was, now, m, atomicMembers);
         if (!jsonEqual(merged, now)) out[id] = merged;
       }
       return out;
@@ -609,6 +615,7 @@ export const useDraftStore = defineStore('draft', () => {
     effectiveFaults,
     effectiveMatrix,
     effectiveClients,
+    baseClient,
     invalid,
     track,
     setRule,

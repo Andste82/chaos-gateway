@@ -97,7 +97,7 @@ export function emptyForm(target = 'global'): FaultForm {
   };
 }
 
-/** A TTL in words: "30m" → "30 min", "1199s" (a kept remaining time) → "19 min 59 s". */
+/** A TTL in words: "30m" → "30 min", "4530s" (a TTL set over the API in seconds) → "1 h 15 min 30 s". */
 export function ttlText(ttl: string): string {
   const ms = durationMs(ttl);
   if (ms === undefined || ms < 1000) return formatDuration(ttl);

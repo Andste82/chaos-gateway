@@ -77,3 +77,25 @@ export function bothChanged(base: unknown, theirs: unknown, mine: unknown, atomi
   walk(createMergePatch(base, theirs), createMergePatch(base, mine), theirs, mine, []);
   return out;
 }
+
+/**
+ * My edit of a document (`base` changed into `mine`) reapplied on their version of it: my merge
+ * patch on `theirs`, so a member only they changed keeps their value and one both changed takes
+ * mine. A member named in `atomic` that my edit changed is replaced whole by mine (a scope is one
+ * choice: merged key by key, their `{device}` and my `{group}` would make a scope with two keys).
+ */
+export function reapplyMergePatch<T>(base: unknown, theirs: T, mine: unknown, atomic: ReadonlySet<string> = new Set()): T {
+  const at = (v: unknown, k: string) => (isObject(v) ? v[k] : undefined);
+  const apply = (doc: unknown, patch: unknown, m: unknown, key: string): unknown => {
+    if (!isObject(patch)) return cloneJSON(patch);
+    if (atomic.has(key)) return cloneJSON(m);
+    const out: Record<string, unknown> = isObject(doc) ? { ...doc } : {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null) delete out[k];
+      else out[k] = apply(out[k], v, at(m, k), k);
+    }
+    return out;
+  };
+  const patch = createMergePatch(base, mine);
+  return patch === undefined ? cloneJSON(theirs) : (apply(theirs, patch, mine, '') as T);
+}

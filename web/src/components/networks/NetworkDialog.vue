@@ -18,8 +18,10 @@ import { fetchAll, useGatewayState } from '../../composables/gateway';
 import { newId } from '../../lib/ids';
 import { createMergePatch } from '../../lib/mergePatch';
 import {
+  advancedFields,
   emptyNetworkForm,
   formFromNetwork,
+  hostPortKey,
   kindOf,
   networkFieldOf,
   networkFormErrors,
@@ -103,8 +105,8 @@ watch(open, (o) => {
   form.value = before.value ? formFromNetwork(before.value) : propose('lan');
   refused.value = (props.network && draft.serverErrors[props.network]) || {};
   refusedForm = JSON.stringify(form.value);
-  advanced.value = Object.keys(refused.value).some((k) => /^(dhcp\/(options|lease_time)|dns|routes|mtu|endpoint|peer\/(keepalive|key))/.test(k));
   tried.value = Object.keys(refused.value).length > 0;
+  advanced.value = hiddenErrors.value.length > 0;
   error.value = '';
 });
 
@@ -147,7 +149,17 @@ const valid = computed(() => Object.keys(formErrors.value).length === 0 && Objec
 function shown(f: NetworkField): string | undefined {
   return tried.value || f === 'address' ? errors.value[f] : undefined;
 }
+/** The messages shown for fields under "Advanced": they open it, so no check stays out of sight. */
+const hiddenErrors = computed(() => advancedFields(form.value.kind).filter((f) => shown(f)));
+watch(
+  () => hiddenErrors.value.length > 0,
+  (h) => {
+    if (h) advanced.value = true;
+  },
+);
 
+/** The ports of the network as the draft has it, by key (a MAC-only port by its MAC). */
+const had = computed(() => (before.value?.type === 'lan' ? before.value.interfaces.map(portKey) : []));
 /** The ports to choose from: the host's interfaces, and those the network has that the host does not show. */
 const portChoices = computed(() => {
   const hostList = hosts.data.value ?? [];
@@ -156,7 +168,7 @@ const portChoices = computed(() => {
     const other = others.value.find((o) => o.ports.includes(h.name) || o.ports.includes(h.mac));
     const notes = [h.link_up === false ? 'link down' : h.link_up ? 'link up' : '', h.os_managed ? 'configured by the OS' : ''].filter(Boolean);
     return {
-      key: h.name,
+      key: hostPortKey(h, form.value.ports, had.value),
       label: h.name,
       detail: [h.mac, h.driver, ...notes].filter(Boolean).join(' · '),
       disabled: reservedBy || !!other,
@@ -347,6 +359,8 @@ async function submit() {
         </template>
         <label class="flex items-center gap-2 text-sm"><input v-model="form.nat" type="checkbox" /> Masquerade towards the uplink</label>
       </div>
+
+      <p v-if="!advanced && hiddenErrors.length" class="field-error" role="alert" data-testid="network-form-advanced-errors">Fix the fields under Advanced.</p>
 
       <div class="rounded-md border border-border bg-surface-2 p-3 text-sm" data-testid="network-form-preview">
         <div class="mb-1 text-xs text-text-3">What changes</div>

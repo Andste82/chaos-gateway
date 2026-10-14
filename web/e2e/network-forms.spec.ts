@@ -9,6 +9,9 @@ import { ADMIN_HUB, BGP, HUB, IOT, LINK, MockGateway, TEST, toast, withNetworks,
 // checks under the fields, the gateway's messages under the fields, and what still refers to a deleted
 // network.
 
+const CAM = 'd0000000-0000-4000-8000-0000000000c1';
+const IOT_FAULT = 'c0f00000-0000-4000-8000-0000000000c2';
+
 async function open(page: Page, path = '/networks', gw = withNetworks(MockGateway.sample()), heading = 'Networks') {
   await gw.install(page);
   await page.goto(path);
@@ -109,6 +112,56 @@ test('network forms: edit a test network — a second port, a pool and DNS; the 
   expect((gw.config.networks![IOT] as LanNetwork).interfaces).toEqual([{ name: 'eth1' }, { name: 'eth3', mac: '52:54:00:00:00:04' }]);
 });
 
+test('network forms: a port the configuration names by MAC only is shown ticked on its host interface, once, and can be removed', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  // eth1 by its MAC only
+  gw.config.networks![IOT] = { ...(gw.config.networks![IOT] as LanNetwork), interfaces: [{ mac: '52:54:00:00:00:02' }] };
+  await open(page, `/networks/${IOT}`, gw);
+  await settings(page).getByRole('button', { name: 'Edit IoT' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit IoT' });
+  const ports = dialog.getByTestId('network-ports');
+  await expect(ports.getByRole('checkbox', { name: /^eth1 / })).toBeChecked();
+  await expect(ports.getByText('not present on the host')).toHaveCount(0);
+  await expect(ports.getByRole('checkbox')).toHaveCount(6);
+  // unticked and ticked again it stays one reference by MAC; eth3 joins it
+  await ports.getByRole('checkbox', { name: /^eth1 / }).uncheck();
+  await ports.getByRole('checkbox', { name: /^eth1 / }).check();
+  await ports.getByRole('checkbox', { name: /^eth3 / }).check();
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  expect((await lastPatch(page, gw)).networks).toEqual({ [IOT]: { interfaces: [{ mac: '52:54:00:00:00:02' }, { name: 'eth3', mac: '52:54:00:00:00:04' }] } });
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+
+  // the MAC-only port can be removed
+  await settings(page).getByRole('button', { name: 'Edit IoT' }).click();
+  await ports.getByRole('checkbox', { name: /^eth1 / }).uncheck();
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  expect((await lastPatch(page, gw)).networks).toEqual({ [IOT]: { interfaces: [{ name: 'eth3', mac: '52:54:00:00:00:04' }] } });
+});
+
+test('network forms: a check of a field under Advanced opens Advanced; hidden again, the form says where the problem is', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  gw.config.networks![IOT] = { ...(gw.config.networks![IOT] as LanNetwork), routes: [{ destination: '10.40.0.0/24', via: '10.10.0.254' }] };
+  await open(page, `/networks/${IOT}`, gw);
+  await settings(page).getByRole('button', { name: 'Edit IoT' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit IoT' });
+  const toggle = dialog.getByRole('button', { name: /^(Advanced|Hide advanced)/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // another subnet leaves the downstream route's router outside it
+  await dialog.getByLabel('Gateway address and subnet').fill('10.11.0.1/24');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(dialog.getByText('The router 10.10.0.254 must be a host of 10.11.0.0/24 other than the gateway.')).toBeVisible();
+  await expect(dialog.getByLabel(/^Downstream routes/)).toHaveAttribute('aria-invalid', 'true');
+  await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await toggle.click();
+  await expect(dialog.getByTestId('network-form-advanced-errors')).toHaveText('Fix the fields under Advanced.');
+  await toggle.click();
+  await dialog.getByLabel(/^Downstream routes/).fill('10.40.0.0/24 via 10.11.0.254');
+  await expect(dialog.getByTestId('network-form-advanced-errors')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  expect((await lastPatch(page, gw)).networks).toEqual({ [IOT]: { address: '10.11.0.1/24', routes: [{ destination: '10.40.0.0/24', via: '10.11.0.254' }] } });
+});
+
 test('network forms: delete a test network through the drawer; Undo before brings it back', async ({ page }) => {
   const gw = await open(page, `/networks/${TEST}`);
   await settings(page).getByRole('button', { name: 'Delete Test' }).click();
@@ -131,8 +184,14 @@ test('network forms: delete a test network through the drawer; Undo before bring
   await expect(page.getByTestId('load-error')).toHaveCount(0);
 });
 
-test('network forms: deleting a network that rules, the access matrix and the routing still refer to shows what the gateway reports', async ({ page }) => {
-  await open(page, `/networks/${IOT}`, withRules(withNetworks(MockGateway.sample())));
+test('network forms: deleting a network that a device, a fault, rules, the access matrix and the routing still refer to shows what the gateway reports', async ({ page }) => {
+  const gw = withRules(withNetworks(MockGateway.sample()));
+  gw.config = {
+    ...gw.config,
+    devices: { ...gw.config.devices, [CAM]: { name: 'Cam-1', identifiers: { macs: ['02:00:00:00:00:77'] }, network: IOT } },
+    faults: { ...gw.config.faults, [IOT_FAULT]: { name: 'iot-slow', source: { network: IOT }, download: { rate: '64kbit' }, enabled: true } },
+  };
+  await open(page, `/networks/${IOT}`, gw);
   await settings(page).getByRole('button', { name: 'Delete IoT' }).click();
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   const refused = page.getByTestId('preview-invalid');
@@ -141,6 +200,8 @@ test('network forms: deleting a network that rules, the access matrix and the ro
   await expect(refused).toContainText('Rule no-dot · source network: refers to IoT');
   await expect(refused).toContainText('Access between networks: refers to IoT');
   await expect(refused).toContainText('Routing protocol site-b-bgp · announce 0 network: refers to IoT');
+  await expect(refused).toContainText('Device Cam-1 · network: refers to IoT');
+  await expect(refused).toContainText('Fault iot-slow · source network: refers to IoT');
   await expect(page.getByRole('button', { name: /^Apply revision/ })).toHaveCount(0);
   await page.getByRole('button', { name: 'Back to editing' }).click();
   // the network stays until the references are gone or the deletion is undone
@@ -305,6 +366,45 @@ test('network forms: a management WireGuard network is lockout-relevant — the 
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   await expect(drawer(page)).toContainText('This change can cut you off from the gateway');
   expect((await lastPatch(page, gw)).networks).toEqual({ [ADMIN_HUB]: null });
+  await page.getByRole('button', { name: 'Apply revision 44' }).click();
+  await expect(toast(page, 'Revision 44 applied, waiting for confirmation')).toBeVisible();
+  // until it is confirmed, the hub is still there
+  await expect(card(page, 'admin')).toHaveCount(1);
+  await banner.getByRole('button', { name: 'Confirm' }).click();
+  await expect(toast(page, 'Revision 44 confirmed')).toBeVisible();
+  await expect(card(page, 'admin')).toHaveCount(0);
+  expect(gw.config.networks![ADMIN_HUB]).toBeUndefined();
+});
+
+test('network forms: deleting a WireGuard link its routing protocol runs on is refused with the protocol named; deleted with the protocol, the link is gone', async ({ page }) => {
+  const gw = await open(page, `/networks/${LINK}`);
+  await settings(page).getByRole('button', { name: 'Delete site-b' }).click();
+  await expect(card(page, 'site-b').getByTestId('network-mark')).toHaveText('DELETED');
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const refused = page.getByTestId('preview-invalid');
+  await expect(refused).toContainText('Routing protocol site-b-bgp · link: refers to site-b, which this change deletes');
+  await expect(page.getByRole('button', { name: /^Apply revision/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+
+  // the protocol goes with the link, in the same draft
+  await page.getByRole('link', { name: 'Routing', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Routing', exact: true })).toBeVisible();
+  const bgp = page.getByTestId('routing-config').getByTestId('protocol').filter({ hasText: 'site-b-bgp' });
+  await bgp.getByRole('button', { name: 'Delete site-b-bgp' }).click();
+  await expect(bar(page)).toContainText('2 changes');
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(drawer(page).getByTestId('preview-changes')).toContainText('network site-b removed');
+  const patch = await lastPatch(page, gw);
+  expect(patch.networks).toEqual({ [LINK]: null });
+  expect(patch.routing).toEqual({ protocols: { [BGP]: null } });
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.config.networks![LINK]).toBeUndefined();
+  expect(gw.config.routing?.protocols?.[BGP]).toBeUndefined();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Networks', exact: true })).toBeVisible();
+  await expect(card(page, 'site-b')).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(4);
 });
 
 test('network forms: a network changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change', async ({ page }) => {
@@ -414,6 +514,25 @@ test('routing forms: edit and delete a protocol and change the BIRD settings thr
   await expect(toast(page, 'Revision 45 applied and verified in 87 ms')).toBeVisible();
   await expect(config.getByTestId('protocol')).toHaveCount(0);
   await expect(config).toContainText('No routing protocol: static routes only.');
+});
+
+test('routing forms: the external mode switched off again takes its hidden fields out of the checks and keeps them out of the patch', async ({ page }) => {
+  const gw = await open(page, '/networks/routing', withNetworks(MockGateway.sample()), 'Routing');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const s = page.getByRole('dialog', { name: 'Routing settings' });
+  await s.getByLabel('Import the routes another daemon writes into a kernel table').check();
+  await s.getByRole('textbox', { name: 'Kernel table' }).fill('200');
+  await s.getByLabel(/^Allowed prefixes/).fill('10.80.0.0/33');
+  await s.getByLabel('Most prefixes taken').fill('many');
+  await s.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(s.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await expect(s.getByLabel(/^Allowed prefixes/)).toHaveAttribute('aria-invalid', 'true');
+  // switched off, the fields are hidden: they block nothing and are not sent
+  await s.getByLabel('Import the routes another daemon writes into a kernel table').uncheck();
+  await expect(s.getByRole('button', { name: 'Preview & apply' })).toBeEnabled();
+  await s.getByLabel('Router id').fill('10.10.0.254');
+  await s.getByRole('button', { name: 'Preview & apply' }).click();
+  expect((await lastPatch(page, gw)).routing).toEqual({ router_id: '10.10.0.254' });
 });
 
 test("routing forms: the checks stand under the fields; a protocol the gateway refuses opens again with the gateway's message under its field", async ({ page }) => {

@@ -59,6 +59,34 @@ func TestTheHolderWritesItsPIDAndStopsOnSIGTERM(t *testing.T) {
 	}
 }
 
+// A SIGTERM that arrives the moment the PID file appears (the executor or the API stops the holder at
+// once) ends the holder normally and removes the file: the handler is in place before the file is written.
+func TestTheHolderHandlesASIGTERMRightAfterItsPIDFileAppears(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "pid")
+	orig := writeHolderPID
+	t.Cleanup(func() { writeHolderPID = orig })
+	writeHolderPID = func(path string) error {
+		if err := orig(path); err != nil {
+			return err
+		}
+		return syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}
+	done := make(chan int, 1)
+	var stderr bytes.Buffer
+	go func() { done <- run([]string{"svcns", "--pid-file", file}, &bytes.Buffer{}, &stderr) }()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("exit %d: %s", code, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the holder does not stop")
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Error("the pid file stays")
+	}
+}
+
 func TestTheDNSHealthCheckNeedsAProxyThatAnswers(t *testing.T) {
 	l, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {

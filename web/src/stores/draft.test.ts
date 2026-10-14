@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { nextTick } from 'vue';
-import type { AccessRule, RevisionWithConfiguration } from '../api/generated/model';
+import type { AccessRule, ConfigFault, RevisionWithConfiguration } from '../api/generated/model';
 import { curlOf, httpOf, useApiPanelStore } from './apiPanel';
 import { useDraftStore } from './draft';
 
@@ -515,6 +515,71 @@ describe('WireGuard clients and the access matrix in the draft (M14)', () => {
     expect(d.overlaps(theirs.configuration)).toEqual([{ kind: 'profile', id: P, name: 'slow-lab', field: 'parts impairment latency', from: '25ms', to: '30ms' }]);
     d.rebase(theirs);
     expect(d.effectiveProfiles[P]).toEqual({ name: 'slow-lab', description: 'theirs', parts: { impairment: { latency: '30ms' } } });
+  });
+
+  it('a fault made "each its own" on mine, a flat loss added on theirs: the dialog names the parameters, reapplying takes mine whole (P3-M13-04)', () => {
+    const d = useDraftStore();
+    const was: ConfigFault = { name: 'slow', source: { global: true }, latency: '20ms' };
+    d.track(revision(42, { faults: { f1: was } }));
+    d.setFault('f1', { name: 'slow', source: { global: true }, upload: { latency: '20ms' }, download: { loss: '1%' } });
+    // theirs: a flat loss and a new description; no member both changed
+    const theirs = revision(43, { faults: { f1: { ...was, description: 'theirs', loss: '2%' } } });
+    expect(d.overlaps(theirs.configuration)).toEqual([{ kind: 'fault', id: 'f1', name: 'slow', field: 'parameters', from: '↑↓ 20 ms, 2 % loss', to: '↑ 20 ms, 1 % loss' }]);
+    d.rebase(theirs);
+    // no flat parameter next to upload/download (mixed_directions); their description stays
+    expect(d.effectiveFaults.f1).toEqual({ name: 'slow', description: 'theirs', source: { global: true }, upload: { latency: '20ms' }, download: { loss: '1%' } });
+  });
+
+  it('a profile loss changed on mine, burst loss on theirs: the dialog names the parameters, reapplying takes mine whole (P3-M13-03)', () => {
+    const d = useDraftStore();
+    const P = 'c0000000-0000-4000-8000-0000000000c2';
+    const lossy = { name: 'lossy', parts: { impairment: { latency: '20ms', loss: '1%' }, mtu: { size: 1280 } } };
+    d.track(revision(42, { profiles: { [P]: lossy } }));
+    d.setProfile(P, { ...lossy, parts: { ...lossy.parts, impairment: { latency: '20ms', loss: '3%' } } });
+    const theirs = revision(43, { profiles: { [P]: { ...lossy, parts: { impairment: { latency: '20ms', burst_loss: { p: '5%', r: '30%' } }, mtu: { size: 1400 } } } } });
+    expect(d.overlaps(theirs.configuration)).toEqual([
+      { kind: 'profile', id: P, name: 'lossy', field: 'parts impairment', from: '↑↓ 20 ms, burst loss 5 %/30 %', to: '↑↓ 20 ms, 3 % loss' },
+    ]);
+    d.rebase(theirs);
+    // not loss and burst loss together (mutually_exclusive); their MTU part stays
+    expect(d.effectiveProfiles[P]).toEqual({ name: 'lossy', parts: { impairment: { latency: '20ms', loss: '3%' }, mtu: { size: 1400 } } });
+  });
+
+  it('blackout on mine, flapping on theirs: the merged parameters would be refused, so mine is taken whole', () => {
+    const d = useDraftStore();
+    const was: ConfigFault = { name: 'down', source: { global: true }, latency: '20ms' };
+    d.track(revision(42, { faults: { f1: was } }));
+    d.setFault('f1', { ...was, blackout: true });
+    const theirs = revision(43, { faults: { f1: { ...was, flapping: { up: '20s', down: '10s' } } } });
+    expect(d.overlaps(theirs.configuration).map((c) => [c.field, c.from, c.to])).toEqual([['parameters', '↑↓ 20 ms, ↑↓ flapping 20s up / 10s down', '↑↓ blackout, ↑↓ 20 ms']]);
+    d.rebase(theirs);
+    expect(d.effectiveFaults.f1).toEqual({ ...was, blackout: true });
+  });
+
+  it('parameters that combine are still merged member by member: their loss and my latency', () => {
+    const d = useDraftStore();
+    const was: ConfigFault = { name: 'slow', source: { global: true }, latency: '20ms' };
+    d.track(revision(42, { faults: { f1: was } }));
+    d.setFault('f1', { ...was, latency: '30ms' });
+    const theirs = revision(43, { faults: { f1: { ...was, loss: '1%' } } });
+    expect(d.overlaps(theirs.configuration)).toEqual([]);
+    d.rebase(theirs);
+    expect(d.effectiveFaults.f1).toEqual({ ...was, latency: '30ms', loss: '1%' });
+  });
+
+  it('the merge patch of one fault or profile for the editors\' API panel: what changed against the base revision, a new one whole', () => {
+    const d = useDraftStore();
+    const P = 'c0000000-0000-4000-8000-0000000000c3';
+    d.track(revision(42, { faults: { f1: { name: 'slow', source: { global: true }, latency: '20ms', loss: '1%' } }, profiles: { [P]: { name: 'p', parts: { impairment: { loss: '1%' } } } } }));
+    expect(d.objectPatch('fault', 'f1', { name: 'slow', source: { global: true }, upload: { latency: '20ms', loss: '1%' }, download: { latency: '20ms', loss: '1%' } })).toEqual({
+      latency: null,
+      loss: null,
+      upload: { latency: '20ms', loss: '1%' },
+      download: { latency: '20ms', loss: '1%' },
+    });
+    expect(d.objectPatch('profile', P, { name: 'p', parts: { impairment: { burst_loss: { p: '5%', r: '30%' } } } })).toEqual({ parts: { impairment: { loss: null, burst_loss: { p: '5%', r: '30%' } } } });
+    expect(d.objectPatch('profile', P, { name: 'p', parts: { impairment: { loss: '1%' } } })).toEqual({});
+    expect(d.objectPatch('fault', 'new', { name: 'n', source: { global: true }, loss: '2%' })).toEqual({ name: 'n', source: { global: true }, loss: '2%' });
   });
 });
 

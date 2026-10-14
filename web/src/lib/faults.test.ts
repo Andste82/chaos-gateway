@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Overlay } from '../api/generated/model';
-import { describeMatch, describeOwner, describeScope, faultChips, overlayChips } from './faults';
+import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, withImpairment } from './faults';
 
 const names = { device: (id: string) => ({ d1: 'ESP32-42' })[id], network: (id: string) => ({ n1: 'IoT' })[id], group: () => 'Sensors' };
 
@@ -63,5 +63,24 @@ describe('selectors in words', () => {
     expect(describeOwner({ type: 'token', id: 't1', name: 'ci-runner' })).toBe('the token ci-runner');
     expect(describeOwner({ type: 'token', id: 't1' })).toBe('the token t1');
     expect(describeOwner({ type: 'run', id: 'r1' })).toBe('a scenario run');
+  });
+});
+
+describe('impairment parameter sets', () => {
+  it('takes the flat parameters and the directions out of a fault body, and puts another set in', () => {
+    const f = { name: 'x', source: { global: true }, family: 'impairment' as const, latency: '20ms', upload: { loss: '1%' } };
+    expect(impairmentOf(f)).toEqual({ latency: '20ms', upload: { loss: '1%' } });
+    expect(impairmentOf({ family: 'mtu', mtu: { size: 1280 } })).toBeUndefined();
+    expect(withImpairment(f, { loss: '2%' })).toEqual({ name: 'x', source: { global: true }, family: 'impairment', loss: '2%' });
+  });
+
+  it('says whether the gateway takes a combination: no flat parameters with directions, no exclusive pair, no jitter above the latency', () => {
+    expect(impairmentCombines(undefined)).toBe(true);
+    expect(impairmentCombines({ latency: '20ms', jitter: '5ms', loss: '1%' })).toBe(true);
+    expect(impairmentCombines({ upload: { latency: '20ms' }, download: { loss: '1%' } })).toBe(true);
+    expect(impairmentCombines({ loss: '2%', upload: { latency: '20ms' } })).toBe(false);
+    expect(impairmentCombines({ loss: '1%', burst_loss: { p: '5%', r: '30%' } })).toBe(false);
+    expect(impairmentCombines({ blackout: true, flapping: { up: '20s', down: '10s' } })).toBe(false);
+    expect(impairmentCombines({ download: { latency: '10ms', jitter: '20ms' } })).toBe(false);
   });
 });

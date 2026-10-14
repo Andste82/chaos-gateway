@@ -820,7 +820,14 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   "Remove them" (P3-M13-03)"; `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
   profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and
   names a field both changed (P3-M13-03)", "a profile edit of burst loss values or of a part the chips do not show is a
-  change (P3-M13-03)"
+  change (P3-M13-03)", "a profile loss changed on mine, burst loss on theirs: the dialog names the parameters,
+  reapplying takes mine whole (P3-M13-03)". Review follow-ups (2026-10-14): since the editor switches between flat and
+  per-direction parameters and between random and burst loss, "Reload and reapply mine" (P3-M13-07, still member by
+  member) takes the user's impairment part whole where the merged one would be refused (flat with upload/download, loss
+  with burst loss, blackout with flapping, a jitter above the latency; `impairmentCombines` in `src/lib/faults.ts`,
+  `reapplyObject` in `src/stores/draft.ts`) and the conflict dialog names it as "parts impairment: their chips → mine";
+  the `</> API` panel shows the merge patch the preview sends (`objectPatch`: against the base revision's profile, a
+  new profile whole) instead of the whole profile
 - Decision (2026-10-14): option (a) — a profile editor in the UI (create, edit, delete custom profiles with the impairment and MTU parts
   the API accepts) through the draft and the preview drawer; a Playwright test creates a profile through the drawer and
   activates it
@@ -855,7 +862,18 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   whose burst loss changed is a change: the bar counts it, the row is CHANGED, the revision message names it";
   `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)"; `src/stores/draft.test.ts` "names every
   fault field the dialog edits: burst loss values, keep order, any destination and the tunnel (P3-M13-04)" (the draft's
-  changes in words cover every field the dialog edits)
+  changes in words cover every field the dialog edits). Review follow-ups (2026-10-14): "Reload and reapply mine" takes
+  the user's parameter set of a configured fault (flat parameters with upload and download) whole where the member-by-
+  member merge would make one the gateway refuses (`mixed_directions`, `mutually_exclusive`, a jitter above the
+  latency), and the conflict dialog names it as "parameters: their chips → mine"; parameters that combine are still
+  merged member by member. The `</> API` panel of a configured fault shows the merge patch the preview sends
+  (`objectPatch`), so a flat fault made "Each its own" shows `"latency": null`. Tests `src/stores/draft.test.ts` "a
+  fault made "each its own" on mine, a flat loss added on theirs: the dialog names the parameters, reapplying takes mine
+  whole (P3-M13-04)", "blackout on mine, flapping on theirs: the merged parameters would be refused, so mine is taken
+  whole", "parameters that combine are still merged member by member: their loss and my latency", "the merge patch of
+  one fault or profile for the editors' API panel: what changed against the base revision, a new one whole";
+  `src/lib/faults.test.ts` "impairment parameter sets"; `fault-kinds.spec.ts` "the API panel of a configured fault
+  shows the merge patch the preview sends: a flat fault made "Each its own" deletes its flat parameters"
 - Decision (2026-10-14): option (a) — the dialog creates and edits every fault kind the API offers: MTU/PMTUD and tunnel faults (M10)
   and the advanced impairment parameters (burst loss, flapping, distributions, different parameters per direction); no
   more "saving would replace hidden parameters"; Playwright tests edit one of each new kind
@@ -942,7 +960,10 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a rule's From both changed, their scope →
   mine, and reapplying sends exactly mine (P3-M13-07)", `src/stores/draft.test.ts` "a scope or a destination both
   changed: the dialog names it, and reapplying takes mine whole (P3-M13-07)", `src/lib/mergePatch.test.ts` "reapplies
-  my edit on theirs: their fields stay, a scope I changed is mine as a whole"
+  my edit on theirs: their fields stay, a scope I changed is mine as a whole". With the editors of P3-M13-03 and
+  P3-M13-04 an impairment parameter set merged member by member could become one the gateway refuses where neither
+  side's was; such a set is now reapplied as the user's whole and listed as one field ("parameters", "parts
+  impairment"), see those items
 - Severity: low
 - Reason: needs-decision. Plan §2.17 says only "reload and reapply mine". Reapplying merges field by field: the user's
   change of an object (a merge patch against the old base) is applied to the other side's version, so their fields stay and

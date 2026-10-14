@@ -254,3 +254,32 @@ test('the advanced impairment parameters: burst loss, flapping, a distribution, 
   });
   expect(gw.overlays.filter((o) => o.target?.device === SENSOR).map((o) => o.id)).toEqual([ADV]);
 });
+
+test('the API panel of a configured fault shows the merge patch the preview sends: a flat fault made "Each its own" deletes its flat parameters', async ({ page }) => {
+  const FLAT = 'c0f00000-0000-4000-8000-0000000000a3';
+  const gw = MockGateway.sample();
+  gw.config = { ...gw.config, faults: { ...gw.config.faults, [FLAT]: { name: 'flat-lab', source: { device: ESP }, latency: '20ms', loss: '1%' } } };
+  await gw.install(page);
+  await page.goto('/faults');
+  await page.getByRole('button', { name: '</> API' }).click();
+  await page.getByTestId('fault-row').filter({ hasText: 'flat-lab' }).getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  const panel = page.getByTestId('api-panel');
+  // unchanged: an empty patch for the fault
+  await expect(panel).toContainText('application/merge-patch+json');
+  await expect(panel).not.toContainText('"latency"');
+  await d.getByRole('group', { name: 'Direction' }).getByRole('button', { name: 'Each its own' }).click();
+  // the flat parameters are deleted (null), upload carries them; the unchanged name is left out
+  await expect(panel).toContainText('"latency": null');
+  await expect(panel).toContainText('"loss": null');
+  await expect(panel).toContainText('"upload": {');
+  await expect(panel).not.toContainText('"name": "flat-lab"');
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(d).toBeHidden();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
+  const sent = (gw.requestsTo('POST', '/revisions')[0]!.body as { faults: Record<string, Record<string, unknown>> }).faults[FLAT]!;
+  expect(sent.latency).toBeNull();
+  expect(sent.loss).toBeNull();
+  expect(sent.upload).toEqual({ latency: '20ms', loss: '1%' });
+});

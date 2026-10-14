@@ -69,8 +69,17 @@ test('a configured fault through preview and apply, a conflict with an API chang
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Devices' }).click();
   const row = page.getByTestId('device-row').filter({ hasText: deviceMAC });
   await expect(row).toBeVisible({ timeout: 5 * 60_000 });
+  // the network's configured fault acts on A: the gateway reports it as A's winning fault (DeviceView.effective),
+  // so A's row shows it and "With faults" counts A
+  await expect(row.getByTestId('device-faults')).toContainText('↑↓ 30 ms', { timeout: 60_000 });
+  const filter = page.getByRole('group', { name: 'Filter' });
+  await filter.getByRole('button', { name: /^With faults/ }).click();
+  await expect(row).toBeVisible();
+  await filter.getByRole('button', { name: /^All/ }).click();
   await row.getByRole('link').first().click(); // the device's name; the second link is its network
   await expect(page.getByTestId('device-identity')).toContainText(deviceMAC);
+  // and A's page lists it among its active faults, as configured
+  await expect(page.getByTestId('active-fault').filter({ hasText: 'fault iot-delay' })).toContainText('↑↓ 30 ms');
   const name = (await page.getByRole('heading', { level: 1 }).textContent())?.trim() ?? '';
   await page.getByRole('button', { name: 'Add fault' }).click();
   const add = page.getByRole('dialog', { name: 'Add fault' });

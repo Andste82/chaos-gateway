@@ -27,8 +27,11 @@ describe('fault chips', () => {
   it('name the kind of other overlays', () => {
     const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1 } as const;
     expect(overlayChips({ ...base, kind: 'profile', profile: 'p1' } as Overlay, (r) => (r === 'p1' ? 'bad-lte' : undefined))).toEqual([
-      'profile bad-lte',
+      'profile Bad LTE',
     ]);
+    // the same label as on the faults and profiles screens, with or without a name lookup
+    expect(overlayChips({ ...base, kind: 'profile', profile: 'lte' } as Overlay)).toEqual(['profile LTE']);
+    expect(overlayChips({ ...base, kind: 'profile', profile: 'my-own' } as Overlay)).toEqual(['profile my-own']);
     expect(overlayChips({ ...base, kind: 'dhcp', dhcp: { action: 'silence' } } as Overlay)).toEqual(['DHCP silence']);
   });
 });

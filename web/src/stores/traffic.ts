@@ -12,6 +12,12 @@ export interface RatePoint {
 /** How long the chart looks back (plan §2.17: "uplink traffic · last 10 min"). */
 export const windowSeconds = 600;
 
+/** The chart's time range: the window up to the newest point, or up to now while there is none (not the epoch). */
+export function chartRange(max: number | null | undefined, now = Date.now()): [number, number] {
+  const end = typeof max === 'number' && Number.isFinite(max) ? max : Math.floor(now / 1000);
+  return [end - windowSeconds, end];
+}
+
 /**
  * The uplink's traffic since the page was opened, from the byte counters of `GET /uplink`. It is
  * a store, not component state, so the chart keeps its history when the user leaves the overview.

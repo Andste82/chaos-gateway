@@ -2,6 +2,7 @@
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
 import type { FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
 import { durationMs, formatDuration } from './format';
+import { profileTitle } from './profileNames';
 
 function pct(p: string | undefined): string {
   return p ? p.replace('%', ' %') : '';
@@ -104,7 +105,7 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
     case 'fault':
       return faultChips(o.fault);
     case 'profile':
-      return [`profile ${o.profile ? (profileName?.(o.profile) ?? o.profile) : ''}`.trim()];
+      return [`profile ${o.profile ? profileTitle(profileName?.(o.profile) ?? o.profile) : ''}`.trim()];
     case 'rule':
       return [`access: ${o.rule?.action ?? 'rule'}`];
     case 'dns':

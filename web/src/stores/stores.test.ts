@@ -5,7 +5,7 @@ import { useConnectionStore } from './connection';
 import { useEventStore } from './events';
 import { onLoggedOut, useSessionStore } from './session';
 import { useToastStore } from './toasts';
-import { useTrafficStore } from './traffic';
+import { chartRange, useTrafficStore } from './traffic';
 
 function respond(status: number, body: unknown): Response {
   return new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -140,6 +140,15 @@ describe('event store', () => {
     e.add({ id: '2', type: 'device_online', time: '' });
     e.add({ id: '1', type: 'applied', time: '' }); // replayed after a reconnect
     expect(e.recent.map((x) => x.id)).toEqual(['2', '1']);
+  });
+});
+
+describe('traffic chart range', () => {
+  it('ends at the newest point, or at now while there is none, never at the epoch', () => {
+    expect(chartRange(1_800_000_600)).toEqual([1_800_000_000, 1_800_000_600]);
+    const now = new Date(2026, 9, 14, 19, 40, 0).getTime();
+    expect(chartRange(null, now)).toEqual([now / 1000 - 600, now / 1000]);
+    expect(chartRange(undefined, now)[1]).toBe(now / 1000);
   });
 });
 

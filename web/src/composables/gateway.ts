@@ -12,6 +12,7 @@ import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generate
 import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
 import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
+import { scopeLink } from '../lib/links';
 import { useDraftStore } from '../stores/draft';
 
 interface PageOf<T> {
@@ -183,7 +184,9 @@ export interface ActiveFault {
   layer: 'overlay' | 'config';
   kind: string;
   target: string;
-  /** The device the fault targets, when it targets one (the row links to it). */
+  /** The page of the target (a device, a network, else the faults screen): the target links to it. */
+  link?: string;
+  /** The device the fault targets, when it targets one. */
   device?: string;
   destination: string;
   chips: string[];
@@ -217,6 +220,7 @@ export function useActiveFaults() {
         kind: o.kind,
         target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? describeTunnel(o.fault.tunnel, n) : 'Everything',
         device: o.target?.device,
+        link: scopeLink(o.target, o.fault?.tunnel),
         destination: describeMatch(o.fault, n),
         chips: overlayChips(o, n.profile),
         packets: o.counters?.packets,
@@ -233,6 +237,7 @@ export function useActiveFaults() {
         kind: 'fault',
         target: f.config.source ? describeScope(f.config.source, n) : describeTunnel(f.config.tunnel, n),
         device: f.config.source?.device,
+        link: scopeLink(f.config.source, f.config.tunnel),
         destination: describeMatch(f.config, n),
         chips: faultChips(f.config),
         packets: f.counters?.packets,

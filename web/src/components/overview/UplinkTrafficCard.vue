@@ -4,8 +4,10 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import uPlot from 'uplot';
 import { useGetUplink } from '../../api/generated/hooks/config/config';
-import { formatBitRate } from '../../lib/format';
-import { useTrafficStore, windowSeconds } from '../../stores/traffic';
+import { formatBitRate, formatHM } from '../../lib/format';
+import { firstError } from '../../composables/gateway';
+import LoadError from '../ui/LoadError.vue';
+import { chartRange, useTrafficStore } from '../../stores/traffic';
 import SectionCard from '../ui/SectionCard.vue';
 
 const uplink = useGetUplink(undefined, { query: { refetchInterval: 5_000 } });
@@ -22,6 +24,8 @@ watch(
   { immediate: true },
 );
 
+/** The uplink could not be read and nothing was read before: the chart must not look like an idle line. */
+const uplinkError = computed(() => firstError(uplink));
 const hasCounters = computed(() => uplink.data.value?.status.rx_bytes !== undefined);
 const latest = computed(() => traffic.points[traffic.points.length - 1]);
 const summary = computed(() =>
@@ -48,11 +52,19 @@ onMounted(() => {
       height: 160,
       legend: { show: false },
       cursor: { show: true, drag: { x: false, y: false } },
-      scales: { x: { time: true, range: (_u, _min, max) => [max - windowSeconds, max] } },
+      // the last 10 minutes up to the newest reading; before there is one, up to now (not the epoch)
+      scales: { x: { time: true, range: (_u, _min, max) => chartRange(max) } },
       axes: [
-        { stroke: '#7D8796', grid: { stroke: '#232A34' }, ticks: { stroke: '#232A34' }, font: '12px IBM Plex Mono' },
         {
-          stroke: '#7D8796',
+          stroke: '#848E9D',
+          grid: { stroke: '#232A34' },
+          ticks: { stroke: '#232A34' },
+          font: '12px IBM Plex Mono',
+          // the app's clock: 24-hour HH:MM, no date line (uPlot's default is en-US 12-hour with M/D/YY)
+          values: (_u, vals) => vals.map((v) => formatHM(new Date(v * 1000))),
+        },
+        {
+          stroke: '#848E9D',
           grid: { stroke: '#232A34' },
           ticks: { stroke: '#232A34' },
           font: '12px IBM Plex Mono',
@@ -73,6 +85,8 @@ onMounted(() => {
     observer = new ResizeObserver(() => plot?.setSize({ width: el.value?.clientWidth || width, height: 160 }));
     observer.observe(el.value);
   }
+  // the canvas draws the axes with IBM Plex Mono only once the font is loaded: draw them again then
+  void document.fonts?.ready.then(() => plot?.redraw(false, true));
 });
 
 watch(
@@ -100,10 +114,21 @@ onUnmounted(() => {
       The uplink reports no traffic counters.
     </p>
     <template v-else>
-      <div class="mono text-[13px] text-text-2" data-testid="uplink-rates">
+      <LoadError v-if="uplinkError" :error="uplinkError" what="The uplink counters are not loaded" :retry="uplink.refetch" />
+      <div v-else class="mono text-[13px] text-text-2" data-testid="uplink-rates">
         ↓ {{ formatBitRate(latest?.downBps) }} · ↑ {{ formatBitRate(latest?.upBps) }}
       </div>
-      <div ref="el" role="img" :aria-label="`Uplink throughput. ${summary}`" class="min-h-[160px] w-full" />
+      <div class="relative">
+        <div ref="el" role="img" :aria-label="`Uplink throughput. ${summary}`" class="min-h-[160px] w-full" />
+        <p
+          v-if="!latest && !uplinkError"
+          class="absolute inset-0 m-0 flex items-center justify-center text-[13px] text-text-2"
+          role="status"
+          data-testid="uplink-collecting"
+        >
+          Collecting the first readings…
+        </p>
+      </div>
     </template>
   </SectionCard>
 </template>

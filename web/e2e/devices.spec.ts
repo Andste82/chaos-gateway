@@ -46,7 +46,8 @@ test('the rows show identity, traffic, faults and status, and open the device', 
   await expect(esp).toContainText('02:00:00:00:00:2a');
   await expect(esp.getByRole('link', { name: 'IoT' })).toHaveAttribute('href', '/networks/0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21');
   await expect(esp).toContainText('3.1 KB/s / 2.4 KB/s');
-  await expect(esp).toContainText('upload 200 ms ± 50 ms');
+  await expect(esp.getByTestId('device-faults').locator('[title]')).toHaveText(['↑↓ 200 ms ±50', '5 % loss']);
+  await expect(page.getByTestId('device-row').filter({ hasText: 'Sensor-07' }).getByTestId('device-faults')).toHaveText('↓ 64 kbit/s');
   await expect(esp).toContainText('Online');
   await expect(page.getByTestId('device-row').filter({ hasText: 'Sensor-09' })).toContainText('Offline');
   await expect(page.getByTestId('device-row').filter({ hasText: 'Test-Phone' })).toContainText('Test');
@@ -60,7 +61,40 @@ test('empty: no devices yet', async ({ page }) => {
   const gw = new MockGateway();
   await gw.install(page);
   await page.goto('/devices');
-  await expect(page.getByTestId('empty-state')).toContainText('No devices yet.');
+  // one sentence and the primary action (plan §2.17 States)
+  await expect(page.getByTestId('empty-state')).toContainText('No devices yet: a device appears as soon as it gets a DHCP lease');
+  const action = page.getByTestId('empty-state').getByRole('link', { name: 'Check the test networks' });
+  await expect(action).toHaveAttribute('href', '/networks');
+  await expect(action).toHaveClass(/btn-primary/);
+});
+
+test('the search field shows the focus ring when it has the focus', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto('/devices');
+  await page.getByRole('searchbox', { name: 'Search devices' }).focus();
+  const box = page.getByTestId('device-search');
+  await expect(box).toHaveCSS('outline-style', 'solid');
+  await expect(box).toHaveCSS('outline-width', '2px');
+  await expect(box).toHaveCSS('outline-color', 'rgb(108, 178, 255)');
+});
+
+test('an adoption in the changes is marked in the list, Undo takes it back and keeps the focus there', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto('/devices');
+  await page.getByRole('button', { name: 'Adopt dev-3a-f1-9c-22-07-b4' }).click();
+  await page.getByRole('dialog', { name: 'Adopt device' }).getByLabel('Name').fill('Thermostat-A');
+  await page.getByRole('dialog', { name: 'Adopt device' }).getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('dialog', { name: 'Preview revision 43' }).getByRole('button', { name: 'Close' }).click();
+  const row = page.getByTestId('device-row').filter({ hasText: 'dev-3a-f1-9c-22-07-b4' });
+  await expect(row.getByTestId('device-adopted-mark')).toHaveText('ADOPTED as Thermostat-A · not applied yet');
+  await expect(row.getByRole('button', { name: /^Adopt / })).toHaveCount(0);
+  await row.getByRole('button', { name: 'Undo the adoption of dev-3a-f1-9c-22-07-b4' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(row.getByTestId('device-adopted-mark')).toHaveCount(0);
+  await expect(row.getByRole('button', { name: 'Adopt dev-3a-f1-9c-22-07-b4' })).toBeFocused();
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
 });
 
 test('adopting a discovered device: the name, what changes, then the preview drawer and the apply', async ({ page }) => {

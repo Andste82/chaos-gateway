@@ -89,7 +89,7 @@ const cols = props.showTarget
     </div>
     <div v-for="f in items" :key="f.id" role="row" class="data-row grid items-center gap-3 px-2.5 py-2" :class="cols" data-testid="active-fault">
       <span v-if="showTarget" role="cell" class="min-w-0 truncate">
-        <RouterLink v-if="f.device" :to="`/devices/${f.device}`" class="text-text no-underline hover:underline">{{ f.target }}</RouterLink>
+        <RouterLink v-if="f.link ?? f.device" :to="f.link ?? `/devices/${f.device}`" class="text-text no-underline hover:underline">{{ f.target }}</RouterLink>
         <span v-else>{{ f.target }}</span>
         <span v-if="f.destination" class="ml-1 text-text-3">{{ f.destination }}</span>
       </span>

@@ -25,13 +25,15 @@ test('the device detail shows identity, lease, faults and counters', async ({ pa
   expect(ttl).toMatch(/^4:\d\d$/);
   await expect(faults.nth(0).getByTestId('fault-expiry')).not.toHaveText(ttl!, { timeout: 3_000 }); // it counts down
   await expect(faults.nth(1)).toContainText('via Network IoT');
-  await expect(faults.nth(1)).toContainText('profile lte');
+  await expect(faults.nth(1)).toContainText('profile LTE');
 
   await expect(page.getByTestId('device-lease').getByRole('link', { name: 'IoT' })).toHaveAttribute('href', '/networks/0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21');
   await expect(page.getByTestId('device-lease')).toContainText('10.10.0.42 · active');
   await expect(page.getByTestId('device-lease')).toContainText(/5\d:\d\d left/);
   await expect(page.getByTestId('device-lease')).toContainText('host name esp32-42');
-  await expect(page.getByTestId('device-lease')).toContainText('10.10.0.1 (proxy)');
+  await expect(page.getByTestId('device-network')).toHaveText('IoT · 10.10.0.0/24');
+  await expect(page.getByTestId('device-gateway')).toHaveText('10.10.0.1');
+  await expect(page.getByTestId('device-dns')).toHaveText('10.10.0.1 (proxy)');
   await expect(page.getByTestId('device-counters')).toContainText('3.1 KB/s');
   await expect(page.getByTestId('device-counters')).toContainText('2.4 KB/s');
   await expect(page.getByTestId('device-counters')).toContainText('Active connections3');
@@ -75,6 +77,46 @@ test('faults cannot be removed while a revision waits for confirmation or the ga
   await page.evaluate(() => (window as unknown as { __sse: { fail: () => void } }).__sse.fail());
   await expect(page.getByTestId('banner-offline')).toBeVisible();
   await expect(remove).toBeDisabled();
+});
+
+test('a configured fault that wins for the device is listed with its compact chips', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto('/devices/a1b2c3d4-0000-4000-8000-000000000057');
+  // the network's profile (an overlay) and the device's configured fault
+  const faults = page.getByTestId('active-fault');
+  await expect(faults).toHaveCount(2);
+  const configured = faults.filter({ hasText: 'fault sensor7-slow' });
+  await expect(configured.locator('[title]')).toHaveText(['↓ 64 kbit/s']);
+  await expect(configured).toContainText('configuration');
+  await expect(configured).toContainText('2 104 pkts');
+});
+
+test('the router and the DNS servers are the ones the network hands out', async ({ page }) => {
+  const gw = MockGateway.sample();
+  const iot = gw.networks.find((n) => n.id === '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21')!;
+  iot.config = { ...iot.config, dhcp: { ...(iot.config as { dhcp?: object }).dhcp, options: { router: '10.10.0.254', dns_servers: ['1.1.1.1', '9.9.9.9'] } } } as typeof iot.config;
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  await expect(page.getByTestId('device-gateway')).toHaveText('10.10.0.254');
+  // not the gateway's DNS proxy
+  await expect(page.getByTestId('device-dns')).toHaveText('1.1.1.1, 9.9.9.9');
+});
+
+test('a device adopted in the changes is marked, and Undo takes the adoption back', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto('/devices/d15c0000-0000-4000-8000-3af19c2207b4');
+  await page.getByRole('button', { name: 'Adopt' }).click();
+  await page.getByRole('dialog', { name: 'Adopt device' }).getByLabel('Name').fill('Thermostat-A');
+  await page.getByRole('dialog', { name: 'Adopt device' }).getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('dialog', { name: 'Preview revision 43' }).getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByTestId('device-adopted-mark')).toHaveText('ADOPTED as Thermostat-A · not applied yet');
+  await expect(page.getByRole('button', { name: 'Adopt', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Undo the adoption of dev-3a-f1-9c-22-07-b4' }).click();
+  await expect(page.getByTestId('device-adopted-mark')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Adopt', exact: true })).toBeFocused();
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
 });
 
 test('a device without faults says its traffic is unimpaired', async ({ page }) => {

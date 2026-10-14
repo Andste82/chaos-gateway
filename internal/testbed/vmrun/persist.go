@@ -708,6 +708,7 @@ func RunInVM(ctx context.Context, dir VMDir, c Config) (Summary, error) {
 	}
 	summary, err := Collect(os.DirFS(runDir), units)
 	summary.AllowSkip = c.AllowSkip
+	summary.ExpectPass = c.ExpectPass
 	if err != nil {
 		return summary, err
 	}

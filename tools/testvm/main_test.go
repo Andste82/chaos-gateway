@@ -77,6 +77,32 @@ func TestRunDirectWithoutMatchingPackagesIsAnError(t *testing.T) {
 	}
 }
 
+// The testbed-ui CI job runs its browser flows in direct mode: a -run that no longer matches any
+// test (a renamed flow, a lost build tag) must fail the run, as it does in VM mode.
+func TestRunDirectFailsWhenNoTestRan(t *testing.T) {
+	t.Setenv("GOARCH", "")
+	t.Chdir("../..")
+	code, out, _ := runCLI(t, "run", "-mode", "direct", "-run", "NoSuchTest", fixture)
+	if code != 1 || !strings.Contains(out, "problem: no test ran") {
+		t.Fatalf("code %d\nstdout:\n%s", code, out)
+	}
+}
+
+func TestRunDirectFailsWhenAnExpectedTestDidNotPass(t *testing.T) {
+	t.Setenv("GOARCH", "")
+	t.Chdir("../..")
+	code, out, _ := runCLI(t, "run", "-mode", "direct", "-run", "TestPasses|TestWorkingDirectory",
+		"-expect-pass", "TestPasses,TestWorkingDirectoryIsThePackageDirectory", fixture)
+	if code != 0 {
+		t.Fatalf("both expected tests passed: code %d\nstdout:\n%s", code, out)
+	}
+	code, out, _ = runCLI(t, "run", "-mode", "direct", "-run", "TestPasses",
+		"-expect-pass", "TestPasses,TestWorkingDirectoryIsThePackageDirectory", fixture)
+	if code != 1 || !strings.Contains(out, "problem: TestWorkingDirectoryIsThePackageDirectory did not pass") {
+		t.Fatalf("code %d\nstdout:\n%s", code, out)
+	}
+}
+
 // fakeVNG installs a stand-in for vng that runs its given body instead of booting a real VM,
 // mirroring vmrun's own test helper of the same purpose (unexported there, so duplicated here).
 func fakeVNG(t *testing.T, body string) {
@@ -144,7 +170,8 @@ func TestParseRunFlags(t *testing.T) {
 	cfg, mode, err := parseRunFlags([]string{
 		"-mode", "vm", "-kernel", "1.2.3-generic", "-mem", "4G", "-cpus", "4",
 		"-tags", "testbed,extra", "-run", "TestFoo", "-test-timeout", "5s", "-vm-timeout", "10s",
-		"-work", "/tmp/work", "-keep", "-allow-skip", "-no-kvm", "-measurements", "/tmp/m.jsonl", "./a", "./b",
+		"-work", "/tmp/work", "-keep", "-allow-skip", "-no-kvm", "-measurements", "/tmp/m.jsonl",
+		"-expect-pass", "TestFoo,TestBar", "./a", "./b",
 	}, &errb)
 	if err != nil {
 		t.Fatalf("err = %v, stderr %q", err, errb.String())
@@ -156,7 +183,7 @@ func TestParseRunFlags(t *testing.T) {
 		Kernel: "1.2.3-generic", Memory: "4G", CPUs: 4,
 		Tags: []string{"testbed", "extra"}, Packages: []string{"./a", "./b"}, Run: "TestFoo",
 		TestTimeout: 5 * time.Second, VMTimeout: 10 * time.Second, WorkDir: "/tmp/work", Keep: true,
-		AllowSkip: true, NoKVM: true, Measurements: "/tmp/m.jsonl",
+		AllowSkip: true, NoKVM: true, Measurements: "/tmp/m.jsonl", ExpectPass: []string{"TestFoo", "TestBar"},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config = %+v\nwant   = %+v", cfg, want)

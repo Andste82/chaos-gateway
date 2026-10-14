@@ -86,6 +86,7 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 	work := fs.String("work", "", "work directory shared with the VM (default: a temporary one that is kept after a failure; a named one is never removed)")
 	keep := fs.Bool("keep", false, "also keep a created work directory after a successful run")
 	allowSkip := fs.Bool("allow-skip", false, "allow skipped tests; otherwise any skip fails the run")
+	expectPass := expectPassFlag(fs)
 	noKVM := fs.Bool("no-kvm", false, "force software emulation in VM mode even where /dev/kvm is available")
 	measurements := measurementsFlag(fs)
 	if err := fs.Parse(args); err != nil {
@@ -104,8 +105,22 @@ func parseRunFlags(args []string, stderr io.Writer) (vmrun.Config, string, error
 		Tags: strings.Split(*tags, ","), Packages: pkgs, Run: *runRE,
 		TestTimeout: *testTimeout, VMTimeout: *vmTimeout, WorkDir: *work, Keep: *keep,
 		AllowSkip: *allowSkip, NoKVM: *noKVM, Measurements: record,
+		ExpectPass: splitList(*expectPass),
 	}
 	return c, *mode, nil
+}
+
+// expectPassFlag registers -expect-pass, shared by "run" and "vm run".
+func expectPassFlag(fs *flag.FlagSet) *string {
+	return fs.String("expect-pass", "", "comma-separated names of tests that must pass; one that fails, is skipped or does not run at all fails the run")
+}
+
+// splitList splits a comma-separated flag value; empty gives nil.
+func splitList(v string) []string {
+	if v == "" {
+		return nil
+	}
+	return strings.Split(v, ",")
 }
 
 func runTests(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -159,7 +174,8 @@ func runTests(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 // runDirect runs the test binaries on the host (level 1). It always runs them with -test.v
 // (CC-04: the output must show every test, so a skip is never silently hidden) and fails unless
-// every skip is allowed, the same rule vmrun.Summary.OK applies to a VM run.
+// every skip is allowed, at least one test ran and every -expect-pass test passed: the same rules
+// vmrun.Summary.OK applies to a VM run (a -run or a build tag that matches no test must not pass).
 func runDirect(ctx context.Context, cfg vmrun.Config, stdout, stderr io.Writer) int {
 	tags := strings.Join(cfg.Tags, ",")
 	units, err := vmrun.TestbedPackages(ctx, ".", cfg.Tags, cfg.Packages)
@@ -201,8 +217,21 @@ func runDirect(ctx context.Context, cfg vmrun.Config, stdout, stderr io.Writer) 
 		code = ee.ExitCode()
 	}
 	counts := vmrun.ParseCounts(out.String())
+	var problems []string
+	if counts.Total() == 0 {
+		problems = append(problems, "no test ran: every package reported zero tests")
+	}
 	if counts.Skipped > 0 && !cfg.AllowSkip {
-		fmt.Fprintf(stdout, "\nproblem: %d tests skipped (pass -allow-skip to allow)\n", counts.Skipped)
+		problems = append(problems, fmt.Sprintf("%d tests skipped (pass -allow-skip to allow)", counts.Skipped))
+	}
+	for _, n := range vmrun.MissingPasses(out.String(), cfg.ExpectPass) {
+		problems = append(problems, fmt.Sprintf("%s did not pass (an expected test, -expect-pass)", n))
+	}
+	if len(problems) > 0 {
+		fmt.Fprintln(stdout)
+		for _, p := range problems {
+			fmt.Fprintln(stdout, "problem:", p)
+		}
 		if code == 0 {
 			code = 1
 		}

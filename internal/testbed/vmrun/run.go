@@ -47,6 +47,9 @@ type Config struct {
 	// AllowSkip allows skipped tests; otherwise Summary.OK reports a skip as a failure (CC-04:
 	// a skip must never pass silently).
 	AllowSkip bool
+	// ExpectPass names tests that must pass; a run in which one of them failed, was skipped or
+	// did not run at all is not OK (a renamed test or a lost build tag must not pass silently).
+	ExpectPass []string
 	// NoKVM forces software emulation even where /dev/kvm is available (M1-03: a weekly check
 	// that the emulated branches, which the development VPS always runs, still work elsewhere).
 	NoKVM bool
@@ -292,6 +295,7 @@ func run(ctx context.Context, c Config) (Summary, error) {
 	}
 	summary, err := Collect(os.DirFS(c.WorkDir), units)
 	summary.AllowSkip = c.AllowSkip
+	summary.ExpectPass = c.ExpectPass
 	if err != nil {
 		return summary, err
 	}

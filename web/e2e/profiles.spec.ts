@@ -111,3 +111,123 @@ test('activating waits while a revision waits for confirmation', async ({ page }
   await expect(card(page, 'Bad LTE').getByRole('button', { name: /^Activate on/ })).toBeDisabled();
 
 });
+
+// P3-M13-03: the profile editor — custom profiles are created, edited and deleted through the
+// draft, the unapplied-changes bar and the preview-and-apply drawer.
+
+const SLOW_LAB = 'c0000000-0000-4000-8000-0000000000c1';
+const editor = (page: Page) => page.getByRole('dialog', { name: /^(New|Edit) profile$/ });
+
+test('create a profile through the editor and the drawer, then activate it (P3-M13-03)', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto('/profiles');
+  await page.getByRole('button', { name: 'New profile' }).click();
+  const d = editor(page);
+  const add = d.getByRole('button', { name: 'Add to the changes' });
+  // the name is unique among all profiles, and a built-in profile's name is reserved
+  await d.getByLabel('Name').fill('LTE');
+  await expect(d.getByLabel('Name')).toHaveAccessibleDescription('This is the name of a built-in profile.');
+  await d.getByLabel('Name').fill('Slow-Lab');
+  await expect(d.getByLabel('Name')).toHaveAccessibleDescription('Another profile has this name.');
+  await expect(add).toBeDisabled();
+  await d.getByLabel('Name').fill('flaky-lte');
+  await d.getByLabel('Description').fill('LTE with loss in bursts');
+  // the impairment part has the fault dialog's fields
+  await d.getByLabel('Latency (ms)').fill('80');
+  await d.getByLabel('Jitter (ms)').fill('20');
+  await d.getByRole('button', { name: /^Advanced/ }).click();
+  await d.getByRole('group', { name: 'Loss model' }).getByRole('button', { name: 'Burst (Gilbert-Elliott)' }).click();
+  await expect(d.getByLabel('Good → bad (%)')).toHaveAccessibleDescription('Needed for burst loss.');
+  await d.getByLabel('Good → bad (%)').fill('2');
+  await d.getByLabel('Bad → good (%)').fill('40');
+  await d.getByLabel('MTU part').check();
+  await d.getByLabel('Packet size (bytes)').fill('1400');
+  await d.getByLabel('Mode', { exact: true }).selectOption('mss_clamp');
+  await expect(d.getByTestId('profile-preview')).toContainText('↑↓ 80 ms ±20');
+  await expect(d.getByTestId('profile-preview')).toContainText('burst loss');
+  await expect(d.getByTestId('profile-preview')).toContainText('MTU 1400 mss_clamp');
+  await add.click();
+  await expect(d).toBeHidden();
+
+  // in the draft: marked NEW, not activated before it is applied
+  const flaky = card(page, 'flaky-lte');
+  await expect(flaky.getByTestId('profile-mark')).toHaveText('NEW');
+  await expect(flaky.getByTestId('profile-pending')).toHaveText('Not applied yet: it can be activated after the changes are applied.');
+  await expect(flaky.getByRole('button', { name: 'Activate on Everything' })).toBeDisabled();
+  await expect(page.getByTestId('unapplied-bar')).toHaveText(/1 change in 1 profile · not applied yet/);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  await expect(drawer.getByTestId('preview-changes')).toContainText('profile flaky-lte added');
+  const body = gw.requestsTo('POST', '/revisions')[0]!.body as { profiles: Record<string, unknown> };
+  const [id] = Object.keys(body.profiles);
+  expect(Object.values(body.profiles)).toEqual([
+    {
+      name: 'flaky-lte',
+      description: 'LTE with loss in bursts',
+      parts: { impairment: { latency: '80ms', jitter: '20ms', burst_loss: { p: '2%', r: '40%' } }, mtu: { size: 1400, mode: 'mss_clamp' } },
+    },
+  ]);
+  await drawer.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+  await expect(flaky.getByTestId('profile-mark')).toHaveCount(0);
+
+  // applied: it is activated like any other profile
+  await flaky.getByRole('button', { name: 'Activate on Everything' }).click();
+  await expect(toast(page, 'flaky-lte active on Everything')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({ target: { global: true }, profile: id });
+  await expect(flaky.getByTestId('profile-active')).toContainText('Everything');
+});
+
+test('edit and delete a custom profile through the draft; a refused profile shows why (P3-M13-03)', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto('/profiles');
+  const slow = card(page, 'slow-lab');
+  // a built-in profile is not edited
+  await expect(card(page, 'LTE').getByRole('button', { name: /^(Edit|Delete) / })).toHaveCount(0);
+  await slow.getByRole('button', { name: 'Edit slow-lab' }).click();
+  const d = editor(page);
+  await expect(d.getByLabel('Name')).toHaveValue('slow-lab');
+  await expect(d.getByLabel('Latency (ms)')).toHaveValue('20');
+  await expect(d.getByLabel('MTU part')).toBeChecked();
+  await expect(d.getByLabel('Packet size (bytes)')).toHaveValue('1280');
+  // each direction its own: the download gets a loss of its own
+  await d.getByRole('group', { name: 'Direction' }).getByRole('button', { name: 'Each its own' }).click();
+  await d.getByRole('group', { name: 'Parameters of' }).getByRole('button', { name: 'Download' }).click();
+  await d.getByLabel('Loss (%)').fill('1');
+  await d.getByRole('button', { name: 'Save to the changes' }).click();
+  await expect(slow.getByTestId('profile-mark')).toHaveText('CHANGED');
+  await expect(slow.getByText('↑ 20 ms', { exact: true })).toBeVisible();
+  await expect(slow.getByText('1 % loss', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('unapplied-bar')).toHaveText(/1 change in 1 profile/);
+
+  // the gateway refuses it: the drawer names the field, the card and the editor show it
+  gw.rejectRevision = [{ path: `/profiles/${SLOW_LAB}/parts/impairment/download/loss`, code: 'invalid_value', message: 'the loss is not allowed here' }];
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Preview' });
+  await expect(drawer.getByTestId('preview-invalid')).toContainText('Profile slow-lab · parts impairment download loss: the loss is not allowed here');
+  await drawer.getByRole('button', { name: 'Back to editing' }).click();
+  await expect(slow).toContainText('NEEDS FIXING');
+  await expect(slow.getByTestId('profile-problem')).toHaveText('the loss is not allowed here');
+  await slow.getByRole('button', { name: 'Edit slow-lab' }).click();
+  await d.getByRole('group', { name: 'Parameters of' }).getByRole('button', { name: 'Download' }).click();
+  await expect(d.getByLabel('Loss (%)')).toHaveAccessibleDescription('the loss is not allowed here');
+  await d.getByRole('button', { name: 'Cancel' }).click();
+
+  // delete: struck through with Undo until applied; then it is gone
+  await slow.getByRole('button', { name: 'Delete slow-lab' }).click();
+  await expect(slow.getByTestId('profile-mark')).toHaveText('DELETED');
+  await slow.getByRole('button', { name: 'Undo the deletion of slow-lab' }).click();
+  await expect(slow.getByTestId('profile-mark')).toHaveCount(0);
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+  await slow.getByRole('button', { name: 'Delete slow-lab' }).click();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const preview = page.getByRole('dialog', { name: 'Preview revision 43' });
+  await expect(preview.getByTestId('preview-changes')).toContainText('profile slow-lab removed');
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { profiles: unknown }).profiles).toEqual({ [SLOW_LAB]: null });
+  await preview.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  await expect(page.getByTestId('profile-card')).toHaveCount(3);
+});

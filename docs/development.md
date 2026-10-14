@@ -3271,7 +3271,7 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 ### How it works
 
 - **The configuration draft** (`src/stores/draft.ts`). Every change of the configuration the UI makes — access rules and
-  their order, configured faults, an adopted device — goes into one draft, edited against the revision that was active when
+  their order, configured faults, custom profiles, an adopted device — goes into one draft, edited against the revision that was active when
   the first edit was made (`GET /revisions/active`; a clean draft follows the active revision, `track`, also when its last
   edit was undone by hand while another revision became active, so the screens show what is active). The draft holds the
   edited objects whole (`null` for a deleted one) and the order of the rules when it was touched; the changes in words are
@@ -3401,6 +3401,20 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   activation (`POST /overlays` with `profile` and `ttl`; another profile on the same scope replaces it, one profile per
   scope), "Deactivate on Network IoT" removes the activations of that scope. The device page's "Apply profile" opens the
   profiles with the device as the scope (`?scope=device:<id>`).
+- **Profile editor** (`src/components/profiles/ProfileDialog.vue`, `src/lib/profileForm.ts`; P3-M13-03). "New profile"
+  in the header, "Edit" and "Delete" on a custom profile's card (a built-in profile has neither). The editor has the
+  name (the pattern of the spec, unique among all profiles case-insensitively, never a built-in profile's name), the
+  description and the parts the editor makes: an impairment part with the fault dialog's impairment fields (direction
+  including each its own, presets, latency, jitter, loss and the advanced parameters, `ImpairmentFields.vue`) and an
+  MTU part (size and mode); a DNS or TLS part the profile already has (defined over the API) is kept as it is and said
+  so. A profile needs at least one part. The preview shows its chips, `</> API` the merge patch of `POST /revisions`.
+  A custom profile is an object of the configuration (`profiles`), so "Add to the changes" puts it into the draft
+  (`setProfile`, `restoreProfile`, the patch, the changes in words, `overlaps` and `rebase` like a configured fault):
+  the bar counts it ("1 change in 1 profile"), the card is marked NEW, CHANGED or DELETED (struck through, with Undo)
+  and says it can be activated after the changes are applied (Activate waits until then), and Preview & apply takes it
+  to the gateway. A profile the gateway refused in a candidate is marked NEEDS FIXING with the messages, and its editor
+  puts them under the fields the pointer names (`profileFieldOf`, a download parameter under the download set's
+  field). The screen reads the active revision (`useActiveConfig`) as the draft's base.
 - **Remote networks in the scope selectors** (`src/lib/scopes.ts`, `ScopeSelect.vue`; P3-M13-08). The fault dialog's
   target, the profiles' "Activate on" and the rule editor's From offer, after everything, the networks, groups and
   devices, the remote networks of plan §2.4: "Client networks · rA (10.50.0.0/24)" for each WireGuard client with client
@@ -3435,6 +3449,7 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 | Rules in words, ports, field changes, the effect in words, the editor's checks | `src/lib/rules.test.ts` |
 | Fault dialog: the request (checked against the generated Zod schema of `POST /overlays`), one direction, advanced, blackout, custom traffic, a configured fault, an existing fault read back, the checks (also a fault without any parameter), the preview sentence, presets, the gateway's pointers to the form's fields; every fault kind (P3-M13-04): an MTU fault, a tunnel fault, burst loss, flapping, a distribution, loss correlation, a queue limit, each direction its own, every destination, each read back and sent unchanged | `src/lib/faultForm.test.ts` ("every fault kind in the dialog (P3-M13-04)") |
 | Draft: base tracking (also after edits undone by hand), change counting, the merge patch with order and deletions, undoing a deletion, devices, invalid rules and the gateway's errors (a fault's by pointer), rebase on another revision; the API panel as HTTP and curl | `src/stores/draft.test.ts` |
+| Profile editor: the profile of the form (checked against the generated Zod schema of `POST /revisions`), read back unchanged, each direction its own, a kept DNS part, the checks (name, parts, fields), the gateway's pointers below a profile; the draft's profiles (changes, patch, delete and Undo, the gateway's problems, reapply and the fields both changed) | `src/lib/profileForm.test.ts`, `src/stores/draft.test.ts` "a custom profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and names a field both changed (P3-M13-03)" |
 | Owners in words | `src/lib/faults.test.ts` |
 | Overlays name what overrides them | `TestAFaultThatWinsOnlyAPartOfItsTrafficIsPartiallyOverridden` (`internal/api/overlays_test.go`) |
 | A rule's last match | `TestARulesCounterSaysWhenItLastMatched` (`internal/api/rules_test.go`) |
@@ -3444,7 +3459,9 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
 **The mocked API** (`web/e2e/mock.ts`) grew the active revision's configuration (`config`, `GET /revisions/active` with
 `created_by`), candidates with their base (an apply on a base that is not active is a 409), `applyFromApi` (someone else
 applies a revision, with the domain diff `GET /revisions/{id}/diff` answers), a preview of the candidate's patch, the rules
-with counters (`withRules`), `POST /overlays` with the replacement by key, profiles with their activations, `GET /explain`,
+with counters (`withRules`), `POST /overlays` with the replacement by key (a fault's family and tunnel in the key),
+profiles with their activations (custom profiles are the active configuration's, so a revision adds, changes and
+removes them, and the preview names them), `GET /explain`,
 and switches for a refused candidate (`rejectRevision`), a candidate that answers late (`revisionGate`), a refused overlay
 (`rejectOverlay`) and a failed apply (`failApply`); every recorded request has its query parameters.
 
@@ -3485,6 +3502,7 @@ branch with the M13 flow yet.
 | Every fault kind in the dialog (P3-M13-04) | `fault-kinds.spec.ts` "an MTU fault: created with the kind MTU / PMTUD, then edited on the faults screen", "a tunnel fault: edited with the parameters a tunnel takes, and one configured on a link through the draft", "the advanced impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own"; `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)" |
 | Scope: faults screen explain, edit, remove | `faults.spec.ts` "Explain names …" (with the query it sends), "edit a fault overlay on the faults screen …", "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", "an edit whose old overlay cannot be removed closes with the new fault active and says the old one is left", "removing: an overlay at once, a configured fault through the draft" (the deleted fault marked, Undo), "empty: no faults …" |
 | Scope: profile cards | `profiles.spec.ts` (cards, activate and deactivate on a scope with a duration, Apply profile from the device, disabled while a revision waits for confirmation) |
+| Custom profiles made in the UI (P3-M13-03) | `profiles.spec.ts` "create a profile through the editor and the drawer, then activate it (P3-M13-03)", "edit and delete a custom profile through the draft; a refused profile shows why (P3-M13-03)"; `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` (the two P3-M13-03 cases) |
 | Remote networks in the scope selectors (P3-M13-08) | `faults.spec.ts` "a fault on a WireGuard client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a prefix inside a remote network: the prefix is checked under the target, the gateway's refusal stands there too (P3-M13-08)" (also a configured fault on a link's prefixes), `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them (P3-M13-08)", `rules.spec.ts` "a rule from a prefix inside a WireGuard client's networks: From offers the remote networks and takes the prefix, the patch carries it (P3-M13-08)"; `src/lib/scopes.test.ts`, `src/lib/faultForm.test.ts` "keeps the choice "a prefix inside a remote network" while its prefix is still empty", `src/lib/rules.test.ts` "checks a rule before it can be applied", `src/lib/faults.test.ts` "names the source by its object" |
 | Scope: TTL display | `faults.spec.ts` "an expiring fault counts down on the faults screen and says so when it is gone", the TTLs in the add-fault and profile tests, "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)" (also the token's overlay taken over in "edit a fault overlay of an API token: …"); `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"; M12's `device-detail.spec.ts` |
 | Scope: `</> API` panel | `faults.spec.ts` (the `POST /api/v1/overlays` after Add fault; an open dialog's request in the panel and in the dialog after an action), `rules.spec.ts` (the candidate, preview and apply as HTTP and curl), `src/stores/draft.test.ts` (also an apostrophe in a body or header, quoted for the shell) |

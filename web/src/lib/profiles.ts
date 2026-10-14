@@ -15,6 +15,9 @@ const titles: Record<string, string> = {
   'tls-broken': 'TLS broken',
 };
 
+/** The names of the built-in profiles: reserved, a custom profile cannot have one (case-insensitive). */
+export const builtinProfileNames = Object.keys(titles);
+
 /** "bad-lte" → "Bad LTE"; a custom profile keeps its name. */
 export function profileTitle(name: string): string {
   return titles[name] ?? name;

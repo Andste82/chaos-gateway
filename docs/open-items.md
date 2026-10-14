@@ -806,7 +806,17 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-03 Custom profiles are not created or edited in the UI
 
-- Status: new
+- Status: closed (2026-10-14): decided — option (a): a profile editor on the profiles screen ("New profile"; "Edit" and
+  "Delete" on a custom profile's card) with the name (unique, never a built-in profile's), the description, an
+  impairment part with the fault dialog's impairment fields (each direction its own, burst loss, flapping, …) and an MTU
+  part (size and mode), the parts the API accepts; a DNS or TLS part a profile has is kept. The profile goes into the
+  draft (`profiles` in `src/stores/draft.ts`: changes in words, merge patch, Undo of a deletion, the gateway's problems,
+  reapply after a concurrent change), the card is marked NEW, CHANGED or DELETED and is activated after the apply
+  (`ProfileDialog.vue`, `src/lib/profileForm.ts`, `ProfilesView.vue`). Tests `profiles.spec.ts` "create a profile
+  through the editor and the drawer, then activate it (P3-M13-03)", "edit and delete a custom profile through the
+  draft; a refused profile shows why (P3-M13-03)"; `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
+  profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and
+  names a field both changed (P3-M13-03)"
 - Decision (2026-10-14): option (a) — a profile editor in the UI (create, edit, delete custom profiles with the impairment and MTU parts
   the API accepts) through the draft and the preview drawer; a Playwright test creates a profile through the drawer and
   activates it

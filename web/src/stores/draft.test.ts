@@ -424,6 +424,47 @@ describe('WireGuard clients and the access matrix in the draft (M14)', () => {
     const theirMatrix = { entries: [{ from: { network: IOT }, to: { uplink: true as const }, policy: 'deny' as const }] };
     expect(d.overlaps(revision(43, { networks: networks(), access_matrix: theirMatrix }).configuration)).toEqual([]);
   });
+
+  it('a custom profile is added, changed and deleted through the draft (P3-M13-03)', () => {
+    const d = useDraftStore();
+    const P = 'c0000000-0000-4000-8000-0000000000c1';
+    const slow = { name: 'slow-lab', parts: { impairment: { latency: '20ms' }, mtu: { size: 1280 } } };
+    d.track(revision(42, { profiles: { [P]: slow } }));
+    const NEW = 'c0000000-0000-4000-8000-0000000000c2';
+    d.setProfile(NEW, { name: 'flaky', parts: { impairment: { loss: '1%' } } });
+    d.setProfile(P, { ...slow, parts: { ...slow.parts, impairment: { latency: '30ms' } } });
+    expect(d.changes()).toEqual([
+      { kind: 'profile', id: NEW, name: 'flaky', field: 'profile', from: '—', to: 'added (1 % loss)' },
+      { kind: 'profile', id: P, name: 'slow-lab', field: 'parameters', from: '↑↓ 20 ms, MTU 1280', to: '↑↓ 30 ms, MTU 1280' },
+    ]);
+    expect(d.summary()).toBe('2 changes in 2 profiles');
+    expect(d.patch()).toEqual({ profiles: { [NEW]: { name: 'flaky', parts: { impairment: { loss: '1%' } } }, [P]: { parts: { impairment: { latency: '30ms' } } } } });
+    expect(Object.keys(d.effectiveProfiles)).toEqual([P, NEW]);
+    // deleted, then undone: back to the base, no change
+    d.setProfile(P, null);
+    expect(d.patch().profiles).toEqual({ [NEW]: { name: 'flaky', parts: { impairment: { loss: '1%' } } }, [P]: null });
+    d.restoreProfile(P);
+    expect(d.profiles).not.toHaveProperty(P);
+    // the gateway's problems of a profile keep the pointer below it, for the editor's fields
+    d.setServerErrors([{ path: `/profiles/${NEW}/parts/impairment/loss`, message: 'too much' }, { path: `/profiles/${NEW}`, message: 'whole' }]);
+    expect(d.serverErrors[NEW]).toEqual({ 'parts/impairment/loss': 'too much', profile: 'whole' });
+    d.setProfile(NEW, { name: 'flaky', parts: { impairment: { loss: '2%' } } });
+    expect(d.serverErrors[NEW]).toBeUndefined();
+    d.discard();
+    expect(d.dirty).toBe(false);
+  });
+
+  it('reapplies a profile on their revision and names a field both changed (P3-M13-03)', () => {
+    const d = useDraftStore();
+    const P = 'c0000000-0000-4000-8000-0000000000c1';
+    const slow = { name: 'slow-lab', description: 'old', parts: { impairment: { latency: '20ms' } } };
+    d.track(revision(42, { profiles: { [P]: slow } }));
+    d.setProfile(P, { ...slow, parts: { impairment: { latency: '30ms' } } });
+    const theirs = revision(43, { profiles: { [P]: { ...slow, description: 'theirs', parts: { impairment: { latency: '25ms' } } } } });
+    expect(d.overlaps(theirs.configuration)).toEqual([{ kind: 'profile', id: P, name: 'slow-lab', field: 'parts impairment latency', from: '25ms', to: '30ms' }]);
+    d.rebase(theirs);
+    expect(d.effectiveProfiles[P]).toEqual({ name: 'slow-lab', description: 'theirs', parts: { impairment: { latency: '30ms' } } });
+  });
 });
 
 describe('the API panel', () => {

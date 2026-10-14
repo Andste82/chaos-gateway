@@ -28,6 +28,11 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   // step 2: uplink suggested from the default route, management an addressed other interface
   await expect(page.getByLabel('Uplink (towards the Internet)')).toHaveValue('eth0');
   await expect(page.getByLabel('Management (where you reach the UI)')).toHaveValue('eth1');
+  // the options name the interface and its address, the part that decides; the MAC stands below
+  await expect(page.getByLabel('Uplink (towards the Internet)').locator('option:checked')).toHaveText('eth0 · 192.168.1.57/24');
+  await expect(page.getByTestId('uplink-detail')).toHaveText('MAC 52:54:00:00:00:01');
+  // the current step's number is readable on its tinted background (text-2, not text-3)
+  await expect(page.locator('li[aria-current="step"] .mono')).toHaveClass(/text-text-2/);
   // an uplink without the host's default route needs its router, in its network
   await page.getByLabel('Uplink (towards the Internet)').selectOption('eth3');
   await page.getByRole('button', { name: 'Next' }).click();

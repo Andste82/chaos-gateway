@@ -23,6 +23,8 @@ import {
   validateNetworks,
   validatePassword,
   type NetworkDraft,
+  interfaceDetail,
+  interfaceOption,
 } from '../lib/setup';
 import { useSessionStore } from '../stores/session';
 import { useToastStore } from '../stores/toasts';
@@ -266,8 +268,6 @@ function stopRollbackPoll() {
 onBeforeUnmount(stopRollbackPoll);
 
 const mgmtURL = computed(() => managementURL(byName(draft.management), window.location));
-const ifaceLabel = (i: HostInterface) =>
-  `${i.name} · ${i.mac}${i.addresses?.length ? ' · ' + i.addresses.join(', ') : ''}${i.link_up === false ? ' · no link' : ''}`;
 </script>
 
 <template>
@@ -280,7 +280,7 @@ const ifaceLabel = (i: HostInterface) =>
 
       <!-- after the apply: confirm, or the gateway rolls back -->
       <section v-if="result" class="card flex flex-col gap-4" aria-labelledby="confirm-title" data-testid="setup-confirm">
-        <h2 id="confirm-title" class="m-0 text-lg font-semibold">Revision {{ result.revision }} is applied</h2>
+        <h2 id="confirm-title" class="m-0 text-xl font-semibold">Revision {{ result.revision }} is applied</h2>
         <CountdownBanner
           v-if="result.confirm_deadline && confirmState !== 'expired'"
           :deadline="result.confirm_deadline"
@@ -324,7 +324,7 @@ const ifaceLabel = (i: HostInterface) =>
             :class="i === step ? 'border-accent-strong bg-accent-tint text-text' : 'border-border text-text-2'"
             :aria-current="i === step ? 'step' : undefined"
           >
-            <span class="mono text-text-3">{{ i + 1 }}</span> {{ s }}
+            <span class="mono" :class="i === step ? 'text-text-2' : 'text-text-3'">{{ i + 1 }}</span> {{ s }}
           </li>
         </ol>
 
@@ -378,8 +378,9 @@ const ifaceLabel = (i: HostInterface) =>
                   :aria-invalid="!!errors.uplink"
                   :aria-describedby="errors.uplink ? 'uplink-error' : undefined"
                 >
-                  <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ ifaceLabel(i) }}</option>
+                  <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ interfaceOption(i) }}</option>
                 </select>
+                <p class="mono mt-1 mb-0 text-xs text-text-2" data-testid="uplink-detail">{{ interfaceDetail(interfaces.find((i) => i.name === draft.uplink)) }}</p>
                 <p v-if="errors.uplink" id="uplink-error" class="field-error" role="alert">{{ errors.uplink }}</p>
                 <label class="label mt-3" for="gateway">Router on the uplink{{ uplinkHasDefault ? ' (optional)' : '' }}</label>
                 <input
@@ -401,8 +402,11 @@ const ifaceLabel = (i: HostInterface) =>
                   :aria-invalid="!!errors.management"
                   :aria-describedby="errors.management ? 'management-error' : undefined"
                 >
-                  <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ ifaceLabel(i) }}</option>
+                  <option v-for="i in interfaces" :key="i.name" :value="i.name">{{ interfaceOption(i) }}</option>
                 </select>
+                <p class="mono mt-1 mb-0 text-xs text-text-2" data-testid="management-detail">
+                  {{ interfaceDetail(interfaces.find((i) => i.name === draft.management)) }}
+                </p>
                 <p v-if="errors.management" id="management-error" class="field-error" role="alert">{{ errors.management }}</p>
               </div>
             </div>

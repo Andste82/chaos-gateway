@@ -57,17 +57,17 @@ test('activate on the chosen scope for a duration, then deactivate', async ({ pa
   await page.getByLabel('Activate on').selectOption({ label: 'Network · Test' });
   await page.getByLabel('For').selectOption({ label: '15 min' });
   const bad = card(page, 'Bad LTE');
-  await bad.getByRole('button', { name: 'Activate on Network Test' }).click();
+  await bad.getByRole('button', { name: 'Activate Bad LTE on Network Test' }).click();
   await expect(toast(page, 'Bad LTE active on Network Test')).toBeVisible();
   const post = gw.requestsTo('POST', '/overlays')[0]!;
   expect(post.body).toEqual({ target: { network: '2c9b8e7f-6a54-4e2f-9d1c-8b3a4f6ea1d7' }, profile: BAD_LTE, ttl: '15m' });
   await expect(bad.getByTestId('profile-active')).toContainText(/Network Test · 1[45]:\d\d left/);
-  await expect(bad.getByRole('button', { name: 'Deactivate on Network Test' })).toBeVisible();
+  await expect(bad.getByRole('button', { name: 'Deactivate Bad LTE on Network Test' })).toBeVisible();
 
   // on IoT, LTE is active: the card offers to deactivate it there, the others to switch
   await page.getByLabel('Activate on').selectOption({ label: 'Network · IoT' });
-  await expect(card(page, 'LTE').getByRole('button', { name: 'Deactivate on Network IoT' })).toBeVisible();
-  await card(page, 'LTE').getByRole('button', { name: 'Deactivate on Network IoT' }).click();
+  await expect(card(page, 'LTE').getByRole('button', { name: 'Deactivate LTE on Network IoT' })).toBeVisible();
+  await card(page, 'LTE').getByRole('button', { name: 'Deactivate LTE on Network IoT' }).click();
   await expect(toast(page, 'LTE deactivated on Network IoT')).toBeVisible();
   expect(gw.requestsTo('DELETE', '/overlays/f0000000-0000-4000-8000-000000000002')).toHaveLength(1);
   await expect(card(page, 'LTE').getByTestId('profile-active')).toHaveText('Not active');
@@ -79,7 +79,7 @@ test("activate on a link's remote networks or a prefix inside them (P3-M13-08)",
   await page.goto('/profiles');
   const scope = page.getByLabel('Activate on');
   await scope.selectOption({ label: 'Remote networks · link site-b (10.60.0.0/24, 10.70.0.0/24)' });
-  await card(page, 'Bad LTE').getByRole('button', { name: 'Activate on Remote networks of link site-b' }).click();
+  await card(page, 'Bad LTE').getByRole('button', { name: 'Activate Bad LTE on Remote networks of link site-b' }).click();
   await expect(toast(page, 'Bad LTE active on Remote networks of link site-b')).toBeVisible();
   expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({ target: { remote_network: { link: LINK } }, profile: BAD_LTE });
   await expect(card(page, 'Bad LTE').getByTestId('profile-active')).toContainText('Remote networks of link site-b');
@@ -87,9 +87,9 @@ test("activate on a link's remote networks or a prefix inside them (P3-M13-08)",
   // a prefix: Activate waits for a valid one
   await scope.selectOption({ label: 'Remote network · a prefix inside them…' });
   await expect(page.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeVisible();
-  await expect(card(page, 'LTE').getByRole('button', { name: /^Activate on/ })).toBeDisabled();
+  await expect(card(page, 'LTE').getByRole('button', { name: /^Activate LTE on/ })).toBeDisabled();
   await page.getByLabel('Prefix inside a remote network').fill('10.50.0.0/25');
-  await card(page, 'LTE').getByRole('button', { name: 'Activate on Remote network 10.50.0.0/25' }).click();
+  await card(page, 'LTE').getByRole('button', { name: 'Activate LTE on Remote network 10.50.0.0/25' }).click();
   await expect(toast(page, 'LTE active on Remote network 10.50.0.0/25')).toBeVisible();
   expect(gw.requestsTo('POST', '/overlays')[1]!.body).toEqual({ target: { remote_network: { cidr: '10.50.0.0/25' } }, profile: LTE });
 });
@@ -100,7 +100,7 @@ test("the device page's Apply profile opens the profiles with the device as the 
   await page.getByRole('link', { name: 'Apply profile' }).click();
   await expect(page).toHaveURL(/\/profiles\?scope=device/);
   await expect(page.getByLabel('Activate on')).toHaveValue(`device:${ESP}`);
-  await expect(card(page, 'LTE').getByRole('button', { name: 'Activate on ESP32-42' })).toBeVisible();
+  await expect(card(page, 'LTE').getByRole('button', { name: 'Activate LTE on ESP32-42' })).toBeVisible();
 });
 
 test('activating waits while a revision waits for confirmation', async ({ page }) => {
@@ -108,7 +108,7 @@ test('activating waits while a revision waits for confirmation', async ({ page }
   gw.state = { ...gw.state, pending_confirm: { revision: 42, deadline: new Date(Date.now() + 60_000).toISOString() } };
   await gw.install(page);
   await page.goto('/profiles');
-  await expect(card(page, 'Bad LTE').getByRole('button', { name: /^Activate on/ })).toBeDisabled();
+  await expect(card(page, 'Bad LTE').getByRole('button', { name: /^Activate Bad LTE on/ })).toBeDisabled();
 
 });
 
@@ -125,11 +125,20 @@ test('create a profile through the editor and the drawer, then activate it (P3-M
   await page.getByRole('button', { name: 'New profile' }).click();
   const d = editor(page);
   const add = d.getByRole('button', { name: 'Add to the changes' });
+  // a new editor opens without errors, and "no impairment" is no orange fault chip
+  await expect(d.locator('.field-error')).toHaveCount(0);
+  await expect(d.getByTestId('profile-no-impairment')).toHaveText('no impairment');
+  await expect(d.getByTestId('profile-preview').locator('.mono')).toHaveCount(0);
+  await expect(add).toBeEnabled();
   // the name is unique among all profiles, and a built-in profile's name is reserved
   await d.getByLabel('Name').fill('LTE');
   await expect(d.getByLabel('Name')).toHaveAccessibleDescription('This is the name of a built-in profile.');
   await d.getByLabel('Name').fill('Slow-Lab');
   await expect(d.getByLabel('Name')).toHaveAccessibleDescription('Another profile has this name.');
+  // pressed with errors: it stays open, says what is missing, and waits until they are fixed
+  await add.click();
+  await expect(d).toBeVisible();
+  await expect(d.getByText('Set at least one parameter', { exact: false })).toBeVisible();
   await expect(add).toBeDisabled();
   await d.getByLabel('Name').fill('flaky-lte');
   await d.getByLabel('Description').fill('LTE with loss in bursts');
@@ -154,7 +163,7 @@ test('create a profile through the editor and the drawer, then activate it (P3-M
   const flaky = card(page, 'flaky-lte');
   await expect(flaky.getByTestId('profile-mark')).toHaveText('NEW');
   await expect(flaky.getByTestId('profile-pending')).toHaveText('Not applied yet: it can be activated after the changes are applied.');
-  await expect(flaky.getByRole('button', { name: 'Activate on Everything' })).toBeDisabled();
+  await expect(flaky.getByRole('button', { name: 'Activate flaky-lte on Everything' })).toBeDisabled();
   await expect(page.getByTestId('unapplied-bar')).toHaveText(/1 change in 1 profile · not applied yet/);
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
@@ -174,7 +183,7 @@ test('create a profile through the editor and the drawer, then activate it (P3-M
   await expect(flaky.getByTestId('profile-mark')).toHaveCount(0);
 
   // applied: it is activated like any other profile
-  await flaky.getByRole('button', { name: 'Activate on Everything' }).click();
+  await flaky.getByRole('button', { name: 'Activate flaky-lte on Everything' }).click();
   await expect(toast(page, 'flaky-lte active on Everything')).toBeVisible();
   expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({ target: { global: true }, profile: id });
   await expect(flaky.getByTestId('profile-active')).toContainText('Everything');

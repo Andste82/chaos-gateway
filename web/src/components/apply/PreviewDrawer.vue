@@ -314,7 +314,7 @@ function value(v: unknown): string {
           </template>
           <p v-if="linuxParts.length === 0" class="m-0 text-[13px] text-text-2">The kernel's state does not change.</p>
           <div class="text-xs text-text-3">verify</div>
-          <pre class="mono m-0 rounded-lg border border-border bg-bg p-3 text-xs text-[#d9dee5]">read the nftables and tc state back and compare it with the target</pre>
+          <pre class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]" data-testid="preview-verify">read the nftables and tc state back and compare it with the target</pre>
         </div>
 
         <p class="m-0 text-[13px] leading-relaxed text-text-2">

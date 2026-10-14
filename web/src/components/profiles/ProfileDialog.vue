@@ -49,6 +49,7 @@ watch(open, (o) => {
   form.value = props.profile ? profileToForm(props.profile.config) : emptyProfileForm();
   openedForm = JSON.stringify(form.value);
   serverErrors.value = {};
+  tried.value = false;
   general.value = [];
   // what the gateway refused in the last candidate, until the profile is edited
   const refused = props.profile ? draft.serverErrors[props.profile.id] : undefined;
@@ -77,7 +78,19 @@ watch(
 const kept = computed(() => keptParts(props.profile?.config));
 const others = computed(() => props.names.filter((n) => n.toLowerCase() !== props.profile?.config.name.toLowerCase()));
 const clientErrors = computed(() => profileFormErrors(form.value, others.value, props.profile?.config));
-const errors = computed<Partial<Record<string, string>>>(() => ({ ...serverErrors.value, ...clientErrors.value }));
+// the form's own checks speak for a field once it was changed, and for all of them once "Add to the
+// changes" was pressed: a new dialog does not open full of errors (as the network form and the setup)
+const tried = ref(false);
+function touched(f: string): boolean {
+  const was = JSON.parse(openedForm || '{}') as Partial<ProfileForm>;
+  const differs = (k: keyof ProfileForm) => JSON.stringify(form.value[k]) !== JSON.stringify(was[k]);
+  if (f === 'name' || f === 'description' || f === 'mtuSize' || f === 'mtuMode') return differs(f);
+  return differs('impairment') || differs('impairmentOn') || differs('mtuOn');
+}
+const shownClientErrors = computed(() =>
+  tried.value ? clientErrors.value : Object.fromEntries(Object.entries(clientErrors.value).filter(([f]) => touched(f))),
+);
+const errors = computed<Partial<Record<string, string>>>(() => ({ ...serverErrors.value, ...shownClientErrors.value }));
 const valid = computed(() => Object.keys(clientErrors.value).length === 0);
 const result = computed(() => formToProfile(form.value, props.profile?.config));
 const chips = computed(() => profileChips(result.value.parts));
@@ -103,6 +116,7 @@ watch(
 );
 
 function submit() {
+  tried.value = true;
   if (!valid.value) return;
   // an unchanged profile is no change: writing the form's defaults back would only rewrite it
   if (props.profile && JSON.stringify(form.value) === openedForm) {
@@ -207,7 +221,9 @@ const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMo
       <div class="rounded-md border border-border bg-surface-2 p-3 text-sm" aria-live="polite" data-testid="profile-preview">
         <div class="mb-1 text-xs text-text-3">Preview</div>
         <span class="flex flex-wrap gap-1.5">
-          <FaultChip v-for="c in chips" :key="c" :text="c" />
+          <!-- orange chips only for what impairs traffic; "no impairment" is plain text -->
+          <FaultChip v-for="c in chips.filter((x) => x !== 'no impairment')" :key="c" :text="c" />
+          <span v-if="chips.includes('no impairment')" class="text-text-2" data-testid="profile-no-impairment">no impairment</span>
           <span v-if="chips.length === 0" class="text-text-3">no parameters yet</span>
         </span>
         <div class="mt-1.5 text-[13px] text-text-2">Goes into the configuration after preview and apply; then it can be activated on a scope.</div>
@@ -226,9 +242,9 @@ const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMo
 
       <p v-for="g in general" :key="g" class="field-error m-0" role="alert">{{ g }}</p>
 
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
-        <button type="submit" class="btn btn-primary" :disabled="!valid">{{ profile ? 'Save to the changes' : 'Add to the changes' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="tried && !valid">{{ profile ? 'Save to the changes' : 'Add to the changes' }}</button>
       </div>
     </form>
   </ModalDialog>

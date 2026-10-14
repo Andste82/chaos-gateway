@@ -196,11 +196,11 @@ watch(unknownNetwork, async (unknown) => {
       >
         <span class="flex items-center gap-2 text-base font-semibold text-text" :class="c.mark === 'DELETED' ? 'line-through opacity-60' : ''">
           <span data-testid="network-name">{{ c.name }}</span>
-          <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">{{ c.tag }}</span>
+          <span class="rounded border border-border-strong px-1.5 text-xs font-normal text-text-2">{{ c.tag }}</span>
         </span>
         <span
           v-if="c.mark"
-          class="rounded border px-1.5 text-[11px]"
+          class="rounded border px-1.5 text-xs"
           :class="c.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
           data-testid="network-mark"
           >{{ c.mark }}</span
@@ -211,7 +211,7 @@ watch(unknownNetwork, async (unknown) => {
       </RouterLink>
       <div class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5" data-testid="management-card">
         <span class="flex items-center gap-2 text-base font-semibold">
-          Management <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">OS</span>
+          Management <span class="rounded border border-border-strong px-1.5 text-xs font-normal text-text-2">OS</span>
         </span>
         <span v-if="active.isLoading.value" class="text-xs text-text-2">Loading…</span>
         <span v-else-if="firstError(active)" class="text-xs text-block-text" data-testid="management-error">
@@ -226,7 +226,7 @@ watch(unknownNetwork, async (unknown) => {
       </div>
       <div class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5" data-testid="uplink-card">
         <span class="flex items-center gap-2 text-base font-semibold">
-          Uplink <span class="rounded border border-border-strong px-1.5 text-[11px] font-normal text-text-2">OS</span>
+          Uplink <span class="rounded border border-border-strong px-1.5 text-xs font-normal text-text-2">OS</span>
         </span>
         <span v-if="uplink.isLoading.value" class="text-xs text-text-2">Loading…</span>
         <template v-else-if="firstError(uplink)">

@@ -372,6 +372,34 @@ test('removing: an overlay at once, a configured fault through the draft', async
   expect((gw.requestsTo('POST', '/revisions')[0]!.body as { faults: Record<string, unknown> }).faults).toEqual({ [IOT_SLOW]: null });
 });
 
+test('keyboard: Remove and Undo hand the focus to each other, and the drawer gives it back to the bar or the page', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto('/faults');
+  const slow = page.getByTestId('fault-row').filter({ hasText: 'iot-slow' });
+  await slow.getByRole('button', { name: /^Remove / }).focus();
+  await page.keyboard.press('Enter');
+  await expect(slow.getByRole('button', { name: /^Undo the removal of / })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(slow.getByRole('button', { name: /^Remove / })).toBeFocused();
+  // the drawer opened from the bar: Escape returns to the bar's button
+  await page.keyboard.press('Enter');
+  const previewApply = page.getByRole('region', { name: 'Unapplied changes' }).getByRole('button', { name: 'Preview & apply' });
+  await previewApply.focus();
+  await page.keyboard.press('Enter');
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(previewApply).toBeFocused();
+  // applied: the bar is gone, the focus goes to the page's heading, not to <body>
+  await previewApply.press('Enter');
+  const again = page.getByRole('dialog', { name: /^Preview revision / });
+  await again.getByRole('button', { name: /^Apply revision / }).press('Enter');
+  await expect(page.locator('[data-kind]').filter({ hasText: /applied and verified/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Faults', level: 1 })).toBeFocused();
+});
+
 test("edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so", async ({ page }) => {
   const gw = lab();
   const sensor = gw.devices[1]!;

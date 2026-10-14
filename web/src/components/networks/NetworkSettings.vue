@@ -8,6 +8,7 @@
 // gateway refused says why, and Fix opens the form with the messages under their fields.
 import { computed, ref, watch } from 'vue';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../../api/generated/model';
+import { useGetUplink } from '../../api/generated/hooks/config/config';
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
 import { effectivePools, hostOf, subnetText } from '../../lib/networks';
@@ -33,6 +34,9 @@ function undo() {
 
 const lan = computed(() => (props.network.config.type === 'lan' ? (props.network.config as LanNetwork) : undefined));
 const wg = computed(() => (props.network.config.type === 'wireguard' ? (props.network.config as WireGuardNetwork) : undefined));
+// the endpoint clients use when none is set: the uplink's address, as the exported client configuration says
+const uplink = useGetUplink();
+const uplinkHost = computed(() => uplink.data.value?.status.address?.split('/')[0]);
 const title = computed(() => `${(props.network.config as { name: string }).name} ${lan.value ? 'network' : wg.value?.kind === 'hub' ? 'WireGuard hub' : 'WireGuard link'}`);
 
 const linux = ref(false);
@@ -75,7 +79,7 @@ const peer = computed(() => props.network.status.link_peer);
       <span class="flex-1" />
       <span
         v-if="mark"
-        class="rounded border px-1.5 text-[11px]"
+        class="rounded border px-1.5 text-xs"
         :class="mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
         data-testid="network-settings-mark"
         >{{ mark }}</span
@@ -151,7 +155,13 @@ const peer = computed(() => props.network.status.link_peer);
       <dt class="text-text-2">Gateway</dt>
       <dd class="mono m-0 text-[13px]">{{ hostOf(wg.address) }}</dd>
       <dt class="text-text-2">Endpoint</dt>
-      <dd class="mono m-0 text-[13px]">{{ wg.endpoint ?? `uplink address:${wg.listen_port}` }}</dd>
+      <dd class="m-0 text-[13px]" data-testid="wg-endpoint">
+        <span v-if="wg.endpoint" class="mono">{{ wg.endpoint }}</span>
+        <template v-else-if="uplinkHost"
+          ><span class="mono">{{ uplinkHost }}:{{ wg.listen_port }}</span> <span class="text-text-2">(the uplink address)</span></template
+        >
+        <span v-else class="text-text-2">the uplink address, port <span class="mono">{{ wg.listen_port }}</span></span>
+      </dd>
       <dt class="text-text-2">MTU</dt>
       <dd class="mono m-0 text-[13px]">{{ wg.mtu ?? 1420 }}</dd>
       <dt class="text-text-2">Uplink</dt>

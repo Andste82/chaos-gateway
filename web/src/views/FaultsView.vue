@@ -29,6 +29,7 @@ import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
+import { refocusAfterSwap } from '../lib/focus';
 
 const active = useActiveConfig();
 const overlays = useOverlays();
@@ -317,13 +318,17 @@ const context = computed(() => `The most specific fault wins · an overlay beats
         <span role="cell" class="mono text-[13px]" :class="r.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{
           r.expiresAt ? formatRemaining(new Date(r.expiresAt).getTime() - now.getTime()) : r.layer === 'config' ? 'configured' : 'no TTL'
         }}</span>
-        <span role="cell" class="flex justify-end gap-1.5">
+        <span role="cell" class="flex justify-end gap-1.5" data-focus-group>
           <button
             v-if="r.deleted"
             type="button"
             class="btn btn-sm"
             :aria-label="`Undo the removal of ${r.chips.join(', ')} on ${r.target}`"
-            @click="draft.restoreFault(r.id)"
+            data-focus-swap
+            @click="
+              refocusAfterSwap($event);
+              draft.restoreFault(r.id);
+            "
           >
             Undo
           </button>
@@ -334,7 +339,11 @@ const context = computed(() => `The most specific fault wins · an overlay beats
             class="btn btn-sm"
             :aria-label="`Remove ${r.chips.join(', ')} on ${r.target}`"
             :disabled="r.layer === 'overlay' && (removeBlocked || removing === r.id)"
-            @click="remove(r)"
+            data-focus-swap
+            @click="
+              refocusAfterSwap($event);
+              remove(r);
+            "
           >
             Remove
           </button>

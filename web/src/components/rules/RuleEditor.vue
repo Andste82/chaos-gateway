@@ -245,17 +245,21 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
       <p v-if="errors.reject_with" :id="eid('reject')" class="field-error">{{ errors.reject_with }}</p>
     </div>
     <div v-if="blocking">
-      <label class="flex items-center gap-2 text-[13px]">
+      <label class="flex items-center gap-2 text-[13px]" :class="{ 'text-text-2': !cutPossible }">
         <input
           type="checkbox"
           :checked="!!rule.cut_existing"
           :disabled="!cutPossible"
           :aria-invalid="!!errors.cut_existing"
-          :aria-describedby="errors.cut_existing ? eid('cut') : undefined"
+          :aria-describedby="[eid('cut-hint'), errors.cut_existing ? eid('cut') : ''].filter(Boolean).join(' ')"
           @change="update({ cut_existing: ($event.target as HTMLInputElement).checked || undefined })"
         />
-        Also cut existing connections <span class="text-text-2">— otherwise only new connections are affected</span>
+        Also cut existing connections
       </label>
+      <!-- under the label, not beside it, and saying why when it is off -->
+      <p :id="eid('cut-hint')" class="m-0 mt-0.5 ml-6 text-[13px] text-text-2" data-testid="cut-hint">
+        {{ cutPossible ? 'Otherwise only new connections are affected.' : 'Only TCP connections can be cut; this rule matches another protocol.' }}
+      </p>
       <p v-if="errors.cut_existing" :id="eid('cut')" class="field-error">{{ errors.cut_existing }}</p>
     </div>
   </div>

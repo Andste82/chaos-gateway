@@ -16,7 +16,7 @@
   --color-border-strong: #2f3844;
   --color-text: #e7eaee;
   --color-text-2: #a3adba;
-  --color-text-3: #7d8796;
+  --color-text-3: #848e9d;
   --color-accent: #6cb2ff;
   --color-accent-strong: #3d6a99;
   --color-accent-tint: #1f3550;
@@ -40,6 +40,12 @@
 
 /* in the base layer, so that a component's utilities (a nav link's colour) win over these */
 @layer base {
+  /* native controls (checkboxes, select popups, scrollbars) dark and in the accent, not light and Chrome blue */
+  :root {
+    color-scheme: dark;
+    accent-color: var(--color-accent);
+  }
+
   html,
   body {
     background: var(--color-bg);
@@ -158,6 +164,20 @@
   }
   .data-row:hover {
     background: var(--color-surface-2);
+  }
+  /* the action row of a dialog: it stays at the dialog's bottom edge while the form above it scrolls,
+     so Cancel and Apply are always in view (a tall form at 1440 × 900) */
+  .dialog-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-bottom: -24px;
+    padding: 12px 0 24px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
   }
   /* live data of a page whose backend is unreachable (plan §2.17, offline state) */
   .stale {

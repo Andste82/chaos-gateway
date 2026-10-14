@@ -654,7 +654,7 @@ A modern developer tool / observability dashboard — dark, compact, live, with 
 | `sidebar` | `#0B0D11` | navigation |
 | `surface` / `surface-2` | `#151A21` / `#1B212A` | cards / raised items, selected rows |
 | `border` / `border-strong` | `#232A34` / `#2F3844` | card borders / inputs, secondary buttons |
-| `text` / `text-2` / `text-3` | `#E7EAEE` / `#A3ADBA` / `#7D8796` | primary / secondary / meta text (all ≥ 4.5:1 on surface) |
+| `text` / `text-2` / `text-3` | `#E7EAEE` / `#A3ADBA` / `#848E9D` | primary / secondary / meta text (all ≥ 4.5:1 on surface and surface-2; on the accent tint only `text` and `text-2` are) |
 | `accent` | `#6CB2FF` (strong `#3D6A99`, tint `#1F3550`, text `#8CC4FF`) | normal state, primary actions, selection, links |
 | `fault` | `#FFA24C` (border `#6B4420`, tint `#2A1C10`, text `#FFB870`) | anything that impairs traffic: fault chips, active profiles, countdowns |
 | `block` | border `#6B2E2E`, tint `#2B1717`, text `#FFB3B3` | drop/reject, failed checks, abort |

@@ -280,7 +280,7 @@ describe('the configuration draft', () => {
       faults: { f1: { name: 'slow', source: { global: true }, latency: '20ms', loss: '1%' } },
     }).configuration;
     expect(d.overlaps(theirs)).toEqual([
-      { kind: 'rule', id: A, name: 'a', field: 'action', from: 'TCP reset', to: 'Reject' },
+      { kind: 'rule', id: A, name: 'a', field: 'access', from: 'TCP reset', to: 'Reject' },
       { kind: 'rule', id: B, name: 'b', field: 'rule', from: 'changed', to: 'deleted' },
       { kind: 'fault', id: 'f1', name: 'slow', field: 'latency', from: '20ms', to: '50ms' },
     ]);
@@ -308,9 +308,9 @@ describe('the configuration draft', () => {
     });
     const names = { device: (id: string) => ({ d1: 'D1', d2: 'D2' })[id], group: (id: string) => ({ g1: 'G' })[id] };
     expect(d.overlaps(theirs.configuration, names).map((c) => [c.kind, c.field, c.from, c.to])).toEqual([
-      ['rule', 'source', 'D2', 'Group G'],
-      ['rule', 'destination', 'uplink', '10.9.0.0/24'],
-      ['fault', 'source', 'Remote networks of link l1', 'Client networks of c1'],
+      ['rule', 'from', 'D2', 'Group G'],
+      ['rule', 'to', 'uplink', '10.9.0.0/24'],
+      ['fault', 'target', 'Remote networks of link l1', 'Client networks of c1'],
     ]);
     d.rebase(theirs);
     // exactly mine: no scope with two keys, and the candidate is valid

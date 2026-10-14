@@ -29,6 +29,19 @@ export interface SetupDraft {
 
 export const minPassword = completeSetupBodyAdminPasswordMin;
 
+/**
+ * An interface as an option of the uplink and management selects: the name and the address, the
+ * parts that decide the choice, short enough not to be cut off in a half-width select.
+ */
+export function interfaceOption(i: HostInterface): string {
+  return [i.name, i.addresses?.join(', '), i.link_up === false ? 'no link' : ''].filter(Boolean).join(' · ');
+}
+
+/** The rest of an interface, shown below the select: its MAC address. */
+export function interfaceDetail(i: HostInterface | undefined): string {
+  return i ? `MAC ${i.mac}` : '';
+}
+
 /** The gateway address proposed for the i-th test network: 10.10.0.1/24, 10.20.0.1/24, … */
 export function suggestAddress(i: number): string {
   return `10.${(10 * (i + 1)) % 256}.0.1/24`;

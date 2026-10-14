@@ -461,7 +461,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         {{ connection.offline ? 'The gateway does not answer.' : 'A revision waits for confirmation; apply the fault after it is resolved.' }}
       </p>
 
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
         <button type="submit" class="btn btn-primary" :disabled="busy || blocked || !valid">
           {{ busy ? 'Applying…' : layer === 'config' ? 'Add to the changes' : 'Apply fault' }}

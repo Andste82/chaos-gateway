@@ -87,6 +87,18 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
   return String(v);
 }
 
+// a rule's members by the words the rule editor and the changes in words use (ruleFieldChanges):
+// the conflict dialog names a field both sides changed the same way as "your change" does
+const ruleFieldLabels: Record<string, string> = { source: 'from', destination: 'to', action: 'access', cut_existing: 'cut existing', port_ranges: 'ports' };
+
+/** The words for a member of an object, for the fields both sides changed: "access", "from", "dhcp lease time". */
+function fieldLabel(kind: string, path: string[]): string {
+  if (kind === 'rule' && path[0] && ruleFieldLabels[path[0]]) return ruleFieldLabels[path[0]]!;
+  // a fault's source is its target in the changes in words
+  if (kind === 'fault' && path.length === 1 && path[0] === 'source') return 'target';
+  return path.join(' ').replace(/_/g, ' ');
+}
+
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
   kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing';
@@ -684,7 +696,7 @@ export const useDraftStore = defineStore('draft', () => {
           const key = path.at(-1) ?? '';
           const t = get(now);
           const mv = get(m);
-          out.push({ kind, id, name, field: path.join(' ').replace(/_/g, ' '), from: valueText(key, t, names, mv), to: valueText(key, mv, names, t) });
+          out.push({ kind, id, name, field: fieldLabel(kind, path), from: valueText(key, t, names, mv), to: valueText(key, mv, names, t) });
         }
         if (whole) out.push({ kind, id, name, field: ps.field, from: parameterText(ps.get(now)), to: parameterText(ps.get(m)) });
       }

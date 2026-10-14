@@ -31,6 +31,7 @@ import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDraftStore } from '../stores/draft';
 import { useToastStore } from '../stores/toasts';
+import { refocusAfterSwap } from '../lib/focus';
 
 const profiles = useProfiles();
 const { names, devices, networks } = useNames();
@@ -251,30 +252,46 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
       <p v-if="pending(c)" class="m-0 text-[13px] text-text-2" data-testid="profile-pending">
         {{ c.deleted ? deletedText(c) : 'Not applied yet: it can be activated after the changes are applied.' }}
       </p>
-      <div class="mt-auto flex flex-wrap gap-2 pt-1">
+      <div class="mt-auto flex flex-wrap gap-2 pt-1" data-focus-group>
+        <!-- one button that changes its action, so the focus stays on it when the activation goes through -->
         <button
-          v-if="here(c.p).length"
           type="button"
           class="btn btn-sm"
-          :disabled="busy === c.p.id || blocked"
-          @click="deactivate(c.p)"
+          :class="{ 'btn-primary': !here(c.p).length }"
+          :disabled="here(c.p).length ? busy === c.p.id || blocked : busy === c.p.id || blocked || !c.p.available || !!scopeError || pending(c)"
+          :aria-label="`${here(c.p).length ? 'Deactivate' : 'Activate'} ${c.title} on ${scopeName}`"
+          @click="here(c.p).length ? deactivate(c.p) : activate(c.p)"
         >
-          Deactivate on {{ scopeName }}
-        </button>
-        <button
-          v-else
-          type="button"
-          class="btn btn-primary btn-sm"
-          :disabled="busy === c.p.id || blocked || !c.p.available || !!scopeError || pending(c)"
-          @click="activate(c.p)"
-        >
-          Activate on {{ scopeName }}
+          {{ here(c.p).length ? 'Deactivate' : 'Activate' }} on {{ scopeName }}
         </button>
         <template v-if="!c.p.builtin">
-          <button v-if="c.deleted" type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${c.title}`" @click="draft.restoreProfile(c.p.id)">Undo</button>
+          <button
+            v-if="c.deleted"
+            type="button"
+            class="btn btn-sm"
+            :aria-label="`Undo the deletion of ${c.title}`"
+            data-focus-swap
+            @click="
+              refocusAfterSwap($event);
+              draft.restoreProfile(c.p.id);
+            "
+          >
+            Undo
+          </button>
           <template v-else>
             <button type="button" class="btn btn-sm" :aria-label="`Edit ${c.title}`" @click="editProfile(c)">Edit</button>
-            <button type="button" class="btn btn-sm" :aria-label="`Delete ${c.title}`" @click="draft.setProfile(c.p.id, null)">Delete</button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :aria-label="`Delete ${c.title}`"
+              data-focus-swap
+              @click="
+                refocusAfterSwap($event);
+                draft.setProfile(c.p.id, null);
+              "
+            >
+              Delete
+            </button>
           </template>
         </template>
       </div>

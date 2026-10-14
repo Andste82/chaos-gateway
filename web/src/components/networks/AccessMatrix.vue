@@ -63,16 +63,17 @@ const linux = ref(false);
     <template #actions><span class="text-xs text-text-3">Click a cell to change it · applies through preview</span></template>
     <LoadError v-if="!ready && firstError(active)" :error="firstError(active)" what="The access matrix is not loaded" :retry="active.refetch" />
     <p v-else-if="!ready" class="m-0 text-sm text-text-2" role="status">Loading the access matrix…</p>
+    <!-- the columns keep a usable width; with many networks the matrix scrolls sideways inside the card -->
+    <div v-else class="overflow-x-auto pb-1" data-testid="access-matrix-scroll">
     <div
-      v-else
       class="grid items-center gap-2"
-      :style="{ gridTemplateColumns: `150px repeat(${cols.length}, minmax(0, 1fr))` }"
+      :style="{ gridTemplateColumns: `150px repeat(${cols.length}, minmax(96px, 1fr))` }"
       role="group"
       aria-label="Access matrix: from the row's network to the column's"
       data-testid="access-matrix"
     >
       <span class="text-xs text-text-3">From ↓ · to →</span>
-      <span v-for="c in cols" :key="c.key" class="text-center text-[13px] text-text-2">{{ c.name }}</span>
+      <span v-for="c in cols" :key="c.key" class="min-w-0 truncate text-center text-[13px] text-text-2" :title="c.name">{{ c.name }}</span>
       <template v-for="r in rows" :key="r.key">
         <span class="text-sm font-medium">{{ r.name }}</span>
         <template v-for="c in cols" :key="c.key">
@@ -91,10 +92,11 @@ const linux = ref(false);
             @click="draft.toggleMatrix(r.key, c.key)"
           >
             {{ cell(r.key, c.key).policy === 'allow' ? 'Allowed' : 'Blocked' }}
-            <span class="text-[11px] font-normal opacity-75">{{ cell(r.key, c.key).changed ? 'CHANGED' : cell(r.key, c.key).explicit ? '' : 'default' }}</span>
+            <span class="text-xs font-normal opacity-75">{{ cell(r.key, c.key).changed ? 'CHANGED' : cell(r.key, c.key).explicit ? '' : 'default' }}</span>
           </button>
         </template>
       </template>
+    </div>
     </div>
     <p v-if="clientEntries.length || reachable" class="m-0 text-[13px] text-text-2" data-testid="client-entries">
       <template v-if="clientEntries.length">Entries for single WireGuard clients (they win over the network's): {{ clientEntries.join('; ') }}.</template>

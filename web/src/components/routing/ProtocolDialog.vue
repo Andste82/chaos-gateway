@@ -233,7 +233,7 @@ async function submit() {
 
       <p v-if="server.general.length" class="field-error" role="alert" data-testid="protocol-form-refused">The gateway refused the protocol: {{ server.general.join(' ') }}</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
         <button type="submit" class="btn btn-primary" :disabled="busy || (tried && (!valid || needsAsn))">Preview &amp; apply</button>
       </div>

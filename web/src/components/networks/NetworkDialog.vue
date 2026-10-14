@@ -377,7 +377,7 @@ async function submit() {
       <p v-if="server.general.length" class="field-error" role="alert" data-testid="network-form-refused">The gateway refused the network: {{ server.general.join(' ') }}</p>
       <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text">Another revision waits for confirmation; change the network after it is resolved.</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
         <button type="submit" class="btn btn-primary" :disabled="busy || pendingConfirm || (tried && !valid)">Preview &amp; apply</button>
       </div>

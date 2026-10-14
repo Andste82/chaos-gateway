@@ -226,6 +226,9 @@ const removeBlocked = computed(() => !!state.data.value?.pending_confirm || conn
 // "Show Linux view" of one fault (plan §2.17 "Technical view", P3-M14-03): its mark chain, counters,
 // classification elements, tc classes and netem queues, below its row
 const linuxOpen = ref<string>();
+// the families the compiler puts into the kernel (a profile may have such parts); DNS, TLS, DHCP and
+// WireGuard faults are carried out by the gateway's services and have nothing there
+const kernelFamilies = new Set(['impairment', 'mtu', 'tunnel', 'profile']);
 const rowKey = (r: Row) => `${r.layer}:${r.id}`;
 
 const context = computed(() => `The most specific fault wins · an overlay beats the configuration · revision ${draft.base ?? state.data.value?.active_revision ?? '…'}`);
@@ -300,7 +303,7 @@ const context = computed(() => `The most specific fault wins · an overlay beats
           <span v-if="r.overriddenBy.length" class="text-xs text-fault-text" data-testid="overridden-by">overridden by {{ r.overriddenBy.join('; ') }}</span>
           <span v-for="p in r.problems" :key="p" class="text-xs text-block-text" data-testid="fault-problem">{{ p }}</span>
           <button
-            v-if="!r.isNew && !r.deleted"
+            v-if="!r.isNew && !r.deleted && kernelFamilies.has(r.family)"
             type="button"
             class="self-start border-0 bg-transparent p-0 text-xs text-accent-text"
             :aria-expanded="linuxOpen === rowKey(r)"

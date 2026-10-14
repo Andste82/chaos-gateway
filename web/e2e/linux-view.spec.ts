@@ -48,8 +48,21 @@ test('"Show Linux view" on a rule shows its compiled rule and counter; another r
   expect(gw.requestsTo('GET', '/state/linux/rule/system:anti_lockout').length).toBeGreaterThan(0);
 });
 
-test('"Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row (P3-M14-03)', async ({ page }) => {
+test('"Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row; a DNS fault has none (P3-M14-03)', async ({ page }) => {
   const gw = MockGateway.sample();
+  // a DNS fault is carried out by the DNS proxy: the kernel holds nothing of it, so its row offers no Linux view
+  const at = new Date().toISOString();
+  gw.overlays.push({
+    id: 'f0000000-0000-4000-8000-0000000000d1',
+    kind: 'dns',
+    owner: { type: 'user', id: 'admin' },
+    target: { device: ESP },
+    dns: { action: 'nxdomain' },
+    created_at: at,
+    updated_at: at,
+    generation: 43,
+    state: 'effective',
+  });
   gw.linuxObjects[`fault/${ESP_FAULT}`] = {
     keys: ['chain mark_7', 'class br-iot 1:1e', 'qdisc br-iot 1e:'],
     nftables: 'table inet chaosgw {\n  map cls_devdestport_1a {\n    elements = { 10.10.0.42 . 0.0.0.0/0 . tcp . 8883 : goto mark_7 }\n  }\n  chain mark_7 {\n    ct direction original counter name "fault_7_up"\n  }\n}\n',
@@ -59,6 +72,9 @@ test('"Show Linux view" on a fault shows its mark chain, classes and netem queue
   await page.goto('/faults');
   const row = page.getByTestId('fault-family-impairment').getByTestId('fault-row').nth(0);
   await expect(row).toContainText('ESP32-42');
+  const dnsRow = page.getByTestId('fault-family-dns').getByTestId('fault-row');
+  await expect(dnsRow).toContainText('DNS fault');
+  await expect(dnsRow.getByRole('button', { name: /Linux view/ })).toHaveCount(0);
   const show = row.getByRole('button', { name: /^Show the Linux view of .* on ESP32-42/ });
   await expect(show).toHaveAttribute('aria-expanded', 'false');
   await show.click();

@@ -62,7 +62,12 @@ func TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface(t *testing
 	if wan0 := cs["interface.wan0.os_config"]; wan0 == nil || wan0["status"] != "ok" || wan0["fix"] != nil {
 		t.Errorf("wan0 before the setup: %v", wan0)
 	}
-	if pf["status"] != "warn" {
+	// the suggested uplink is a candidate too (the user may make it a test interface) and is checked, but a
+	// candidate's warning is not the report's: before the setup the status is that of the host's checks
+	if mgmt0 := cs["interface.mgmt0.os_config"]; mgmt0 == nil || mgmt0["status"] != "warn" {
+		t.Errorf("mgmt0 before the setup: %v", mgmt0)
+	}
+	if pf["status"] != "ok" {
 		t.Errorf("status before the setup: %v", pf["status"])
 	}
 

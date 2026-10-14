@@ -14,7 +14,8 @@ import { ADMIN_HUB, CLIENT_RA, HUB, IOT, LINK, MockGateway, TEST, toast, withNet
 async function open(page: Page, path = '/networks', gw = withNetworks(MockGateway.sample()), heading = 'Networks') {
   await gw.install(page);
   await page.goto(path);
-  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  // the first render after a cold start can be slow under load
+  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible({ timeout: 15_000 });
   return gw;
 }
 

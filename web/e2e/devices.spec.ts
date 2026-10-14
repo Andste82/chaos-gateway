@@ -136,8 +136,16 @@ test('adopting while the draft is based on an older revision opens the conflict 
   await gw.install(page);
   // an edit of a rule, not applied yet: the draft is based on revision 42
   await page.goto('/rules');
-  await page.getByRole('switch', { name: 'Enable rule no-dot' }).click();
+  const ruleSwitch = page.getByRole('switch', { name: 'Enable rule no-dot' });
+  await expect(ruleSwitch).toHaveAttribute('aria-checked', 'true');
+  await ruleSwitch.click();
+  // the edit has landed in the draft before the page changes (under load the click on the link
+  // could otherwise come before the app is ready and leave the page on the rules)
+  await expect(ruleSwitch).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByTestId('unapplied-bar')).toBeVisible();
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Devices' }).click();
+  await expect(page).toHaveURL(/\/devices$/);
+  await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible();
   // a test applies a revision through the API meanwhile
   gw.applyFromApi({ groups: { 'c0a80001-0000-4000-8000-000000000002': { name: 'lab' } } }, { type: 'token', id: 't1', name: 'ci-runner' }, [
     { op: 'added', kind: 'group', path: '/groups/c0a80001-0000-4000-8000-000000000002', summary: 'group lab added' },

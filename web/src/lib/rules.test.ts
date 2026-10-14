@@ -48,6 +48,10 @@ describe('access rules in words', () => {
     expect(ruleErrors({ ...rule, protocol: 'any' }).ports).toBe('Ports need the protocol TCP or UDP.');
     expect(ruleErrors(rule, '53, x').ports).toMatch(/x is no port/);
     expect(ruleErrors({ ...rule, protocol: 'tcp', action: 'allow', cut_existing: true }).cut_existing).toMatch(/Only a rule that refuses/);
+    // a TCP reset needs TCP: any, UDP and ICMP are refused by the gateway (reset_requires_tcp)
+    expect(ruleErrors({ ...rule, action: 'reset' }).action).toBe('A TCP reset needs the protocol TCP.');
+    expect(ruleErrors({ ...rule, action: 'reset', protocol: 'any', ports: undefined }).action).toBe('A TCP reset needs the protocol TCP.');
+    expect(ruleErrors({ ...rule, action: 'reset', protocol: 'tcp' })).toEqual({});
     expect(ruleErrors({ ...rule, cut_existing: true }).cut_existing).toBe('Cutting connections needs the protocol TCP or any.');
     expect(ruleErrors({ ...rule, destination: { cidr: '10.0.0' } }).destination).toMatch(/IPv4 address or a prefix/);
     expect(ruleErrors({ ...rule, destination: { hostname: 'bad host' } }).destination).toMatch(/host name/);

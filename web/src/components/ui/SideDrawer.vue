@@ -6,7 +6,8 @@ import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPor
 import { useFocusReturn } from '../../lib/focus';
 import AppIcon from './AppIcon.vue';
 
-defineProps<{ title: string; badge?: string; description?: string }>();
+/** `busy`: an action runs that must finish here; the drawer cannot be closed until it has. */
+defineProps<{ title: string; badge?: string; description?: string; busy?: boolean }>();
 const open = defineModel<boolean>('open', { required: true });
 const focus = useFocusReturn();
 </script>
@@ -30,7 +31,7 @@ const focus = useFocusReturn();
             >
             <DialogDescription v-if="description" class="mt-1 text-[13px] text-text-2">{{ description }}</DialogDescription>
           </div>
-          <DialogClose class="btn btn-sm" aria-label="Close"><AppIcon name="close" /></DialogClose>
+          <DialogClose class="btn btn-sm" aria-label="Close" :disabled="busy"><AppIcon name="close" /></DialogClose>
         </div>
         <div class="flex-1"><slot /></div>
         <div v-if="$slots.footer" class="flex justify-end gap-2 border-t border-border pt-4"><slot name="footer" /></div>

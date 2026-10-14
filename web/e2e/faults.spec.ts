@@ -547,7 +547,8 @@ test('closing the drawer while the candidate is created discards it when it arri
 });
 
 test('Explain names the access verdict and the winning fault per family with the ones that lost', async ({ page }) => {
-  const gw = lab();
+  const gw = withNetworks(lab());
+  gw.devices = [...gw.devices, device({ id: CLIENT_RA, name: 'rA', origin: 'wireguard_client', network: HUB })];
   gw.explanation = {
     generation: 42,
     source: { ip: '10.10.0.42', device: { id: ESP, name: 'ESP32-42' } },
@@ -562,6 +563,9 @@ test('Explain names the access verdict and the winning fault per family with the
           { family: 'impairment', layer: 'overlay', id: LTE_ON_IOT, profile: { name: 'lte' }, level: 8, reason: 'level 2 beats level 8' },
         ],
       },
+      // a tunnel family is named by its tunnel, in names, not by the API's key
+      { family: 'tunnel', tunnel: `client:${CLIENT_RA}`, winner: { family: 'tunnel', layer: 'overlay', id: ESP_FAULT, level: 2, summary: 'tunnel ↑↓ 100 ms' } },
+      { family: 'tunnel', tunnel: `link:${LINK}`, winner: { family: 'tunnel', layer: 'config', id: IOT_SLOW, name: 'site-b-slow', level: 8 } },
     ],
   };
   await gw.install(page);
@@ -576,9 +580,14 @@ test('Explain names the access verdict and the winning fault per family with the
   const result = page.getByTestId('explain-result');
   await expect(result).toContainText('Allow');
   await expect(result).toContainText('by the access matrix — IoT → uplink: allow (default)');
-  await expect(result.getByTestId('explain-family')).toContainText('Impairment: an overlay (upload 200 ms ± 50 ms) wins (overlay, level 2)');
-  await expect(result.getByTestId('explain-family')).toContainText('fault iot-slow lost: level 2 beats level 8');
-  await expect(result.getByTestId('explain-family')).toContainText('profile LTE lost: level 2 beats level 8');
+  await expect(result.getByTestId('explain-family')).toHaveCount(3);
+  await expect(result.getByTestId('explain-family').first()).toContainText('Impairment: an overlay (upload 200 ms ± 50 ms) wins (overlay, level 2)');
+  await expect(result.getByTestId('explain-family').first()).toContainText('fault iot-slow lost: level 2 beats level 8');
+  await expect(result.getByTestId('explain-family').first()).toContainText('profile LTE lost: level 2 beats level 8');
+  await expect(result.getByTestId('explain-family').nth(1)).toContainText('Tunnel of rA: an overlay (tunnel ↑↓ 100 ms) wins');
+  await expect(result.getByTestId('explain-family').nth(2)).toContainText('Tunnel of link site-b: fault site-b-slow wins');
+  await expect(result).not.toContainText(`client:${CLIENT_RA}`);
+  await expect(result).not.toContainText(`link:${LINK}`);
   const reqs = gw.requestsTo('GET', '/explain');
   expect(reqs).toHaveLength(1);
   expect(reqs[0]!.query).toEqual({ device: ESP, dst: '203.0.113.10', protocol: 'tcp', port: '8883' });

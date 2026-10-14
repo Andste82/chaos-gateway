@@ -7,12 +7,14 @@ import { errorMessage } from '../../api/fetcher';
 import { explain } from '../../api/generated/hooks/observability/observability';
 import type { Explanation, ExplainParams, FaultRef, Protocol } from '../../api/generated/model';
 import { useNames } from '../../composables/gateway';
+import { tunnelOf } from '../../lib/faultForm';
+import { describeTunnel } from '../../lib/faults';
 import { profileTitle } from '../../lib/profiles';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import AccessChip from '../ui/AccessChip.vue';
 import SectionCard from '../ui/SectionCard.vue';
 
-const { devices } = useNames();
+const { devices, names } = useNames();
 const apiPanel = useApiPanelStore();
 const uid = useId();
 
@@ -40,6 +42,15 @@ const layers: Record<string, string> = {
 };
 
 const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', dhcp: 'DHCP', tunnel: 'Tunnel' };
+
+/**
+ * The family's heading: a tunnel family names its tunnel as every other place does ("Tunnel of rA",
+ * "Tunnel of link site-b"), not by the API's key `client:<id>` / `link:<id>`.
+ */
+function familyText(f: { family: string; tunnel?: string }): string {
+  if (f.tunnel) return describeTunnel(tunnelOf(f.tunnel), names.value);
+  return families[f.family] ?? f.family;
+}
 
 function refText(r: FaultRef): string {
   const what = r.profile?.name ? `profile ${profileTitle(r.profile.name)}` : r.name ? `fault ${r.name}` : r.layer === 'overlay' ? 'an overlay' : 'a configured fault';
@@ -115,7 +126,7 @@ async function run() {
       <p v-if="result.faults.length === 0" class="m-0 text-text-2">No fault applies: the traffic passes unimpaired.</p>
       <div v-for="(f, i) in result.faults" :key="i" class="rounded-md border border-border bg-surface-2 px-3 py-2" data-testid="explain-family">
         <div>
-          <span class="font-medium">{{ families[f.family] ?? f.family }}{{ f.tunnel ? ` · ${f.tunnel}` : '' }}:</span>
+          <span class="font-medium">{{ familyText(f) }}:</span>
           {{ ' ' + (f.winner ? `${refText(f.winner)} wins` : 'nothing wins') }}
           <span v-if="f.winner" class="text-text-2">{{ ` (${f.winner.layer === 'overlay' ? 'overlay' : 'configuration'}${f.winner.level ? `, level ${f.winner.level}` : ''})` }}</span>
         </div>

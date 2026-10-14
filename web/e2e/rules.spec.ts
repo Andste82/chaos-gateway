@@ -248,6 +248,18 @@ test('validation: the message stands under the field and Preview & apply waits u
   await expect(editor.getByText('An IPv4 address or a prefix like 203.0.113.0/24.')).toBeVisible();
   await editor.getByLabel('Address or prefix').fill('203.0.113.0/24');
   await expect(editor.getByText('An IPv4 address or a prefix like 203.0.113.0/24.')).toBeHidden();
+  // a TCP reset selects TCP: choosing it switches the protocol, and another protocol is refused
+  await editor.getByLabel('Protocol').selectOption('any');
+  await editor.getByLabel('Ports').fill('');
+  await editor.getByLabel('Ports').blur();
+  await editor.getByRole('group', { name: 'Access' }).getByRole('button', { name: 'TCP reset' }).click();
+  await expect(editor.getByLabel('Protocol')).toHaveValue('tcp');
+  await editor.getByLabel('Protocol').selectOption('udp');
+  await expect(editor.getByText('A TCP reset needs the protocol TCP.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await editor.getByLabel('Protocol').selectOption('tcp');
+  await expect(editor.getByText('A TCP reset needs the protocol TCP.')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeEnabled();
   // a host name gets the hint of DNS-derived matching
   await editor.getByLabel('To', { exact: true }).selectOption('hostname');
   await editor.getByLabel('Host name').fill('broker.example.com');
@@ -285,6 +297,27 @@ test('a failed apply says which step failed and which revision the gateway resto
   // the draft is kept for another try
   await drawer.getByRole('button', { name: 'Back to editing' }).click();
   await expect(bar(page)).toHaveText(/1 change in 1 rule/);
+});
+
+test('while the apply runs the drawer stays open, so a failed apply is still shown', async ({ page }) => {
+  const gw = await open(page);
+  await rows(page).nth(2).getByRole('switch', { name: 'Enable rule no-dot' }).click();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  let release!: () => void;
+  gw.applyGate = new Promise((r) => (release = r));
+  gw.failApply = 'verify';
+  await drawer.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(drawer.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+  await expect(drawer.getByRole('button', { name: 'Back to editing' })).toBeDisabled();
+  await expect(drawer.getByRole('button', { name: 'Close' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeVisible();
+  release();
+  await expect(drawer.getByTestId('apply-failed')).toContainText('Apply failed at the verify step.');
+  await expect(drawer.getByTestId('apply-failed')).toContainText('Revision 42 restored; nothing of revision 43 is active.');
+  await drawer.getByRole('button', { name: 'Back to editing' }).click();
+  await expect(drawer).toBeHidden();
 });
 
 test('a conflicting change made through the API opens the conflict dialog; reload and reapply mine', async ({ page }) => {

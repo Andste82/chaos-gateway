@@ -141,7 +141,7 @@ export function ruleEffectInWords(r: AccessRule, opts: { state?: string; overlay
   return parts.join(' ');
 }
 
-export type RuleField = 'name' | 'destination' | 'ports' | 'cut_existing' | 'source';
+export type RuleField = 'name' | 'destination' | 'ports' | 'action' | 'cut_existing' | 'source';
 
 /** The problems of a rule, by field (plan §2.17 "Validation": the message under the field). */
 export function ruleErrors(r: AccessRule, portsText?: string): Partial<Record<RuleField, string>> {
@@ -159,6 +159,8 @@ export function ruleErrors(r: AccessRule, portsText?: string): Partial<Record<Ru
     if (p.error) e.ports = p.error;
   }
   if (!e.ports && (r.ports?.length || r.port_ranges?.length) && r.protocol !== 'tcp' && r.protocol !== 'udp') e.ports = 'Ports need the protocol TCP or UDP.';
+  // the gateway's reset_requires_tcp: a reset is a TCP segment, so the rule must select TCP alone
+  if (r.action === 'reset' && r.protocol !== 'tcp') e.action = 'A TCP reset needs the protocol TCP.';
   if (r.cut_existing && r.action === 'allow') e.cut_existing = 'Only a rule that refuses traffic can cut connections.';
   if (r.cut_existing && r.protocol && r.protocol !== 'tcp' && r.protocol !== 'any') e.cut_existing = 'Cutting connections needs the protocol TCP or any.';
   return e;

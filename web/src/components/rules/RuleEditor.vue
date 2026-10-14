@@ -100,6 +100,8 @@ const action = computed({
       action: a as AccessAction,
       ...(a === 'allow' ? { cut_existing: undefined } : {}),
       ...(a !== 'reject' ? { reject_with: undefined } : {}),
+      // a TCP reset selects TCP alone (the gateway refuses it on any other protocol); ports stay valid
+      ...(a === 'reset' && props.rule.protocol !== 'tcp' ? { protocol: 'tcp' as Protocol } : {}),
     }),
 });
 

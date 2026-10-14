@@ -432,6 +432,8 @@ export class MockGateway {
   rejectRevision?: ValidationError[] | ((patch: unknown) => ValidationError[]);
   /** POST /revisions answers only after this settles (a candidate that takes its time). */
   revisionGate?: Promise<void>;
+  /** POST /revisions/{id}/apply answers only after this settles (an apply that takes its time). */
+  applyGate?: Promise<void>;
   /** The next apply fails at this step (`apply` or `verify`). */
   failApply?: 'apply' | 'verify';
   /** The next POST /overlays is refused with 422 and these errors. */
@@ -739,6 +741,7 @@ export class MockGateway {
     const apply = /^\/revisions\/(\d+)\/apply$/.exec(path);
     if (apply) {
       const id = Number(apply[1]);
+      await this.applyGate;
       if (this.failApply) {
         const step = this.failApply;
         this.failApply = undefined;

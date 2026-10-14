@@ -648,7 +648,9 @@ Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
 2026-10-14; an item that is decided but not yet done carries a "Decision (2026-10-14)" line and is closed when the
-decided option is implemented. P3-M12-05 waits for M27/M30.
+decided option is implemented. As of 2026-10-14 every Phase 3 item is closed except: P3-M12-05, which waits for M27/M30;
+P3-M14-01, whose client actions (part 1) are done while the network forms (part 2) and the routing forms (part 3) are
+not yet implemented; and P3-M12-04, which closes when the network form of P3-M14-01 edits several ports of a LAN network.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 

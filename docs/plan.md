@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete on the branch: M12, M13 and M14 complete (branch `phase-3-web-ui`, draft PR #56, to be merged to `main` as one PR) · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete on the branch: M12, M13 and M14 complete (branch `phase-3-web-ui`, draft PR #56, to be merged to `main` as one PR); the Phase 3 open items are closed except P3-M12-05 (waits for M27/M30), P3-M14-01 (network and routing forms still to do) and P3-M12-04 (closes with the network form of P3-M14-01) · October 2026
 
 ---
 

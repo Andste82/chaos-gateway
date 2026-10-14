@@ -1,7 +1,11 @@
 <script setup lang="ts">
-// The add/edit fault dialog (plan §2.17 "Add fault"): target, traffic, direction, presets to start
-// from, latency, jitter, loss and duration; rate, reorder, duplicate, corrupt and keep packet order
-// under Advanced; a live preview sentence. Each message stands under its field and Apply stays
+// The add/edit fault dialog (plan §2.17 "Add fault"): every fault kind the API offers (P3-M13-04) —
+// an impairment fault (target, traffic, direction, presets to start from, latency, jitter, loss and
+// duration; under Advanced the delay distribution, keep packet order, burst loss, loss correlation,
+// rate, queue limit, reorder, duplicate, corrupt and flapping; each direction with parameters of its
+// own), an MTU/PMTUD fault (target, traffic, size and mode) and a tunnel fault (the WireGuard client
+// or link whose encrypted traffic it impairs, with the parameters a tunnel takes); a live preview
+// sentence. A fault is edited with all its parameters: saving never drops one. Each message stands under its field and Apply stays
 // disabled until the form is valid; the gateway's refusal (422) is put under the fields it names.
 // An overlay is written at once (`POST /overlays`, the answer comes after the verify) and appears
 // with its TTL; on the faults screen a fault can instead go into the configuration, through the
@@ -29,16 +33,16 @@ import {
   fieldOf,
   formToConfigFault,
   formToOverlay,
-  hiddenParameters,
-  presets,
+  familyLabels,
+  mtuModes,
   previewSentence,
   trafficPresets,
   ttlText,
   type FaultField,
   type FaultForm,
 } from '../../lib/faultForm';
-import { describeOwner, describeScope } from '../../lib/faults';
-import { remoteScopeOptions } from '../../lib/scopes';
+import { describeOwner, describeScope, describeTunnel } from '../../lib/faults';
+import { remoteScopeOptions, tunnelOptions } from '../../lib/scopes';
 import { gatewayNow } from '../../lib/clock';
 import { formatHM } from '../../lib/format';
 import { useNow } from '../../composables/useNow';
@@ -50,6 +54,7 @@ import { useToastStore } from '../../stores/toasts';
 import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
+import ImpairmentFields from './ImpairmentFields.vue';
 
 const props = defineProps<{
   /** A fixed target (the device page): `device:<id>`. */
@@ -75,7 +80,6 @@ const uid = useId();
 
 const form = ref<FaultForm>(emptyForm());
 const layer = ref<'overlay' | 'config'>('overlay');
-const advanced = ref(false);
 const serverErrors = ref<Partial<Record<FaultField, string>>>({});
 const error = ref('');
 const busy = ref(false);
@@ -102,8 +106,6 @@ watch(open, (o) => {
     form.value.jitter = '50';
     layer.value = 'overlay';
   }
-  const f = form.value;
-  advanced.value = !!(f.rate || f.reorder || f.duplicate || f.corrupt || f.keepOrder);
   // what the gateway refused in the last candidate, until the fault is edited
   const refused = props.config ? draft.serverErrors[props.config.id] : undefined;
   if (refused) showRefusal(Object.entries(refused).map(([path, message]) => ({ path, message })));
@@ -111,7 +113,16 @@ watch(open, (o) => {
 
 const owner = computed(() => (props.overlay && props.overlay.owner.type !== 'user' ? describeOwner(props.overlay.owner) : undefined));
 
-const hidden = computed(() => hiddenParameters(props.overlay?.fault ?? props.config?.fault));
+const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
+/** The kinds a new fault can be: a tunnel fault has no target, so not on a device's page. */
+const families = computed(() =>
+  (['impairment', 'mtu', 'tunnel'] as const).filter((f) => f !== 'tunnel' || !props.fixedTarget).map((value) => ({ value, label: familyLabels[value] })),
+);
+/** Another kind of destination starts with its first network, or an empty address or name. */
+function destKindChanged() {
+  form.value.destination = form.value.destKind === 'network' ? (networks.data.value?.[0]?.id ?? '') : '';
+}
+const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMode)?.hint);
 
 const targets = computed(() => {
   const n = names.value;
@@ -130,12 +141,14 @@ const targets = computed(() => {
 
 const groupList = computed(() => (groups.data.value ?? []).map((g) => ({ id: g.id, name: g.config.name })));
 const scopeOfTarget = computed(() => formToOverlay(form.value).target);
-const targetName = computed(() => describeScope(scopeOfTarget.value, names.value));
+const targetName = computed(() =>
+  form.value.family === 'tunnel' ? describeTunnel(formToOverlay(form.value).fault?.tunnel, names.value) : describeScope(scopeOfTarget.value, names.value),
+);
 
 const clientErrors = computed(() => faultFormErrors(form.value, layer.value));
 const errors = computed<Partial<Record<FaultField, string>>>(() => ({ ...serverErrors.value, ...clientErrors.value }));
 const valid = computed(() => Object.keys(clientErrors.value).length === 0);
-const preview = computed(() => previewSentence(form.value, targetName.value, layer.value));
+const preview = computed(() => previewSentence(form.value, targetName.value, layer.value, names.value));
 const now = useNow();
 const durationOptions = computed(() => durationChoices(form.value, props.overlay?.ttl, now.value));
 // the request as it would be sent now (a kept remaining time shrinks with the clock)
@@ -170,19 +183,13 @@ function showRefusal(errors: { path?: string; message?: string }[]) {
   const out: Partial<Record<FaultField, string>> = {};
   const rest: string[] = [];
   for (const x of errors) {
-    const f = fieldOf(x.path);
+    const f = fieldOf(x.path, form.value.direction === 'each');
     if (f) out[f] = x.message ?? 'not valid';
     else rest.push(x.message ?? '');
   }
   serverErrors.value = out;
   refusedForm = JSON.stringify(form.value);
-  if (out.rate || out.reorder || out.duplicate || out.corrupt) advanced.value = true;
   error.value = rest.length ? rest.join(' ') : 'The gateway refused the fault; see the marked fields.';
-}
-
-function pick(values: Partial<FaultForm>) {
-  form.value = { ...form.value, ...values };
-  if (values.rate) advanced.value = true;
 }
 
 async function submit() {
@@ -265,7 +272,29 @@ const errId = (f: string) => `${uid}-${f}-error`;
         />
       </div>
 
-      <div class="grid grid-cols-2 gap-3">
+      <div v-if="!editing && families.length > 1">
+        <span class="label">Kind</span>
+        <SegmentedControl v-model="form.family" label="Kind" :options="families" />
+      </div>
+
+      <div v-if="form.family === 'tunnel'">
+        <label class="label" :for="fieldId('tunnel')">Tunnel</label>
+        <select
+          :id="fieldId('tunnel')"
+          v-model="form.tunnel"
+          class="input"
+          :disabled="!!overlay"
+          :aria-invalid="!!errors.tunnel"
+          :aria-describedby="errors.tunnel ? errId('tunnel') : undefined"
+        >
+          <option value="" disabled>Choose a WireGuard client or link</option>
+          <option v-for="t in tunnels" :key="t.value" :value="t.value">{{ t.label }}</option>
+          <option v-if="form.tunnel && !tunnels.some((t) => t.value === form.tunnel)" :value="form.tunnel">{{ targetName }}</option>
+        </select>
+        <p v-if="errors.tunnel" :id="errId('tunnel')" class="field-error">{{ errors.tunnel }}</p>
+        <p v-else class="m-0 mt-1 text-[13px] text-text-2">Impairs the encrypted traffic of the tunnel: everything inside it, and nothing else.</p>
+      </div>
+      <div v-else class="grid grid-cols-2 gap-3">
         <div>
           <label class="label" :for="fieldId('target')">Target</label>
           <ScopeSelect
@@ -288,7 +317,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         </div>
       </div>
 
-      <div v-if="form.traffic === 'custom'" class="grid grid-cols-3 gap-3">
+      <div v-if="form.family !== 'tunnel' && form.traffic === 'custom'" class="grid grid-cols-4 gap-3">
         <div>
           <label class="label" :for="fieldId('protocol')">Protocol</label>
           <select :id="fieldId('protocol')" v-model="form.protocol" class="input">
@@ -311,12 +340,33 @@ const errId = (f: string) => `${uid}-${f}-error`;
           <p v-if="errors.ports" :id="errId('ports')" class="field-error">{{ errors.ports }}</p>
         </div>
         <div>
-          <label class="label" :for="fieldId('destination')">Destination</label>
+          <label class="label" :for="fieldId('destKind')">Destination</label>
+          <select :id="fieldId('destKind')" v-model="form.destKind" class="input" @change="destKindChanged">
+            <option value="any">Anywhere</option>
+            <option value="uplink">Uplink (Internet)</option>
+            <option value="network">A network</option>
+            <option value="cidr">An address or prefix</option>
+            <option value="hostname">A host name</option>
+          </select>
+        </div>
+        <div v-if="form.destKind === 'network' || form.destKind === 'cidr' || form.destKind === 'hostname'">
+          <label class="label" :for="fieldId('destination')">{{ { network: 'Network', cidr: 'Address or prefix', hostname: 'Host name' }[form.destKind] }}</label>
+          <select
+            v-if="form.destKind === 'network'"
+            :id="fieldId('destination')"
+            v-model="form.destination"
+            class="input"
+            :aria-invalid="!!errors.destination"
+            :aria-describedby="errors.destination ? errId('destination') : undefined"
+          >
+            <option v-for="n in networks.data.value ?? []" :key="n.id" :value="n.id">{{ names.network?.(n.id) ?? n.id }}</option>
+          </select>
           <input
+            v-else
             :id="fieldId('destination')"
             v-model="form.destination"
             class="input mono"
-            placeholder="any"
+            :placeholder="form.destKind === 'cidr' ? '203.0.113.0/24' : 'broker.example.com'"
             :aria-invalid="!!errors.destination"
             :aria-describedby="errors.destination ? errId('destination') : undefined"
           />
@@ -324,38 +374,39 @@ const errId = (f: string) => `${uid}-${f}-error`;
         </div>
       </div>
 
-      <div class="flex flex-wrap items-center gap-4">
-        <div>
-          <span class="label">Direction</span>
-          <SegmentedControl
-            v-model="form.direction"
-            label="Direction"
-            :options="[
-              { value: 'both', label: 'Both' },
-              { value: 'upload', label: 'Upload' },
-              { value: 'download', label: 'Download' },
-            ]"
-          />
+      <template v-if="form.family === 'mtu'">
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="label" :for="fieldId('mtuSize')">Packet size (bytes)</label>
+            <input
+              :id="fieldId('mtuSize')"
+              v-model="form.mtuSize"
+              class="input mono"
+              inputmode="numeric"
+              :aria-invalid="!!errors.mtuSize"
+              :aria-describedby="errors.mtuSize ? errId('mtuSize') : undefined"
+            />
+            <p v-if="errors.mtuSize" :id="errId('mtuSize')" class="field-error">{{ errors.mtuSize }}</p>
+          </div>
+          <div class="col-span-2">
+            <label class="label" :for="fieldId('mtuMode')">Mode</label>
+            <select
+              :id="fieldId('mtuMode')"
+              v-model="form.mtuMode"
+              class="input"
+              :aria-invalid="!!errors.mtuMode"
+              :aria-describedby="errors.mtuMode ? errId('mtuMode') : undefined"
+            >
+              <option v-for="m in mtuModes" :key="m.value" :value="m.value">{{ m.label }}</option>
+            </select>
+            <p v-if="errors.mtuMode" :id="errId('mtuMode')" class="field-error">{{ errors.mtuMode }}</p>
+          </div>
         </div>
-        <div role="group" aria-label="Start from" class="flex flex-wrap items-center gap-1.5">
-          <span class="mr-1 text-[13px] text-text-2">Start from</span>
-          <button v-for="p in presets" :key="p.label" type="button" class="btn btn-sm" @click="pick(p.values)">{{ p.label }}</button>
-        </div>
-      </div>
+        <p class="m-0 text-[13px] text-text-2" data-testid="mtu-hint">{{ mtuHint }}</p>
+      </template>
+      <ImpairmentFields v-else v-model="form" :errors="errors" :tunnel="form.family === 'tunnel'" />
 
-      <div class="grid grid-cols-4 gap-3">
-        <div v-for="f in ['latency', 'jitter', 'loss'] as const" :key="f">
-          <label class="label" :for="fieldId(f)">{{ { latency: 'Latency (ms)', jitter: 'Jitter (ms)', loss: 'Loss (%)' }[f] }}</label>
-          <input
-            :id="fieldId(f)"
-            v-model="form[f]"
-            class="input mono"
-            inputmode="decimal"
-            :aria-invalid="!!errors[f]"
-            :aria-describedby="errors[f] ? errId(f) : undefined"
-          />
-          <p v-if="errors[f]" :id="errId(f)" class="field-error">{{ errors[f] }}</p>
-        </div>
+      <div class="grid grid-cols-3 gap-3">
         <div v-if="layer === 'overlay'">
           <label class="label" :for="fieldId('duration')">Duration</label>
           <select :id="fieldId('duration')" v-model="form.duration" class="input">
@@ -375,34 +426,6 @@ const errId = (f: string) => `${uid}-${f}-error`;
           <p v-if="errors.name" :id="errId('name')" class="field-error">{{ errors.name }}</p>
         </div>
       </div>
-
-      <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="advanced" @click="advanced = !advanced">
-        {{ advanced ? 'Hide advanced' : 'Advanced: rate, reorder, duplicate, corrupt' }}
-      </button>
-      <template v-if="advanced">
-        <div class="grid grid-cols-4 gap-3">
-          <div v-for="f in ['rate', 'reorder', 'duplicate', 'corrupt'] as const" :key="f">
-            <label class="label" :for="fieldId(f)">{{ { rate: 'Rate limit', reorder: 'Reorder (%)', duplicate: 'Duplicate (%)', corrupt: 'Corrupt (%)' }[f] }}</label>
-            <input
-              :id="fieldId(f)"
-              v-model="form[f]"
-              class="input mono"
-              :placeholder="f === 'rate' ? 'e.g. 2 Mbit/s' : ''"
-              :aria-invalid="!!errors[f]"
-              :aria-describedby="errors[f] ? errId(f) : undefined"
-            />
-            <p v-if="errors[f]" :id="errId(f)" class="field-error">{{ errors[f] }}</p>
-          </div>
-        </div>
-        <label class="flex items-center gap-2 text-[13px]">
-          <input v-model="form.keepOrder" type="checkbox" />
-          Keep packet order <span class="text-text-2">— jitter reorders packets unless this is on; it narrows the delay spread</span>
-        </label>
-      </template>
-
-      <p v-if="hidden.length" class="m-0 text-[13px] text-fault-text">
-        This fault has {{ hidden.join(', ') }}, which this dialog does not show; saving replaces them with the parameters above.
-      </p>
 
       <p v-if="owner" class="m-0 text-[13px] text-fault-text" data-testid="fault-owner">
         Set by {{ owner }}. Applying removes it and puts a fault of yours in its place.

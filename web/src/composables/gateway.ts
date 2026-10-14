@@ -11,7 +11,7 @@ import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
 import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
-import { describeMatch, describeScope, faultChips, overlayChips, type Names } from '../lib/faults';
+import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { useDraftStore } from '../stores/draft';
 
 interface PageOf<T> {
@@ -215,7 +215,7 @@ export function useActiveFaults() {
         id: o.id,
         layer: 'overlay',
         kind: o.kind,
-        target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? 'Tunnel' : 'Everything',
+        target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? describeTunnel(o.fault.tunnel, n) : 'Everything',
         device: o.target?.device,
         destination: describeMatch(o.fault, n),
         chips: overlayChips(o, n.profile),
@@ -231,7 +231,7 @@ export function useActiveFaults() {
         id: f.id,
         layer: 'config',
         kind: 'fault',
-        target: f.config.source ? describeScope(f.config.source, n) : 'Tunnel',
+        target: f.config.source ? describeScope(f.config.source, n) : describeTunnel(f.config.tunnel, n),
         device: f.config.source?.device,
         destination: describeMatch(f.config, n),
         chips: faultChips(f.config),

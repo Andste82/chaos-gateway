@@ -21,7 +21,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import { firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, useOverlays } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
-import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
+import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips } from '../lib/faults';
 import { formatCount, formatRemaining } from '../lib/format';
 import { profileTitle } from '../lib/profiles';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
@@ -118,7 +118,7 @@ const rows = computed<Row[]>(() => {
       layer: 'overlay',
       family,
       level: o.target ? levelOf(o.target) : 5,
-      target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? 'Tunnel' : 'Everything',
+      target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? describeTunnel(o.fault.tunnel, n) : 'Everything',
       device: o.target?.device,
       destination: describeMatch(o.fault ?? o.rule, n),
       chips: o.kind === 'profile' ? [`profile ${profileTitle(n.profile(o.profile ?? '') ?? o.profile ?? '')}`] : overlayChips(o, n.profile),
@@ -137,7 +137,7 @@ const rows = computed<Row[]>(() => {
       layer: 'config',
       family: f.family ?? 'impairment',
       level: f.source ? levelOf(f.source) : 5,
-      target: f.source ? describeScope(f.source, n) : 'Tunnel',
+      target: f.source ? describeScope(f.source, n) : describeTunnel(f.tunnel, n),
       name: f.name,
       device: f.source?.device,
       destination: describeMatch(f, n),
@@ -159,7 +159,7 @@ const rows = computed<Row[]>(() => {
       layer: 'config',
       family: before.family ?? 'impairment',
       level: before.source ? levelOf(before.source) : 5,
-      target: before.source ? describeScope(before.source, n) : 'Tunnel',
+      target: before.source ? describeScope(before.source, n) : describeTunnel(before.tunnel, n),
       name: before.name,
       device: before.source?.device,
       destination: describeMatch(before, n),
@@ -196,8 +196,8 @@ function edit(r: Row) {
   editConfig.value = r.config;
   dialogOpen.value = true;
 }
-const editable = (r: Row) =>
-  (r.overlay?.kind === 'fault' && (r.overlay.fault?.family ?? 'impairment') === 'impairment') || (r.config && (r.config.fault.family ?? 'impairment') === 'impairment');
+/** Every fault the dialog makes is edited in it (impairment, MTU, tunnel; P3-M13-04); a profile activation is not a fault. */
+const editable = (r: Row) => r.overlay?.kind === 'fault' || !!r.config;
 
 const apiPanel = useApiPanelStore();
 const removing = ref<string>();

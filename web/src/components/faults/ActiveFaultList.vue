@@ -38,10 +38,10 @@ function expiry(f: ActiveFault): string {
   return formatRemaining(new Date(f.expiresAt).getTime() - now.value.getTime());
 }
 
-/** The device's own impairment overlays can be edited where they are (a wider scope's on the faults screen). */
+/** The device's own fault overlays (impairment, MTU) can be edited where they are (a wider scope's on the faults screen). */
 function canEdit(f: ActiveFault): boolean {
   const o = f.overlay;
-  return !!props.editable && !f.widerScope && o?.kind === 'fault' && (o.fault?.family ?? 'impairment') === 'impairment';
+  return !!props.editable && !f.widerScope && o?.kind === 'fault';
 }
 
 function requestRemove(f: ActiveFault) {

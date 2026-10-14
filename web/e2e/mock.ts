@@ -917,7 +917,9 @@ export class MockGateway {
   /** POST /overlays: a new overlay, or the one with the same key replaced (it keeps its id). */
   putOverlay(req: OverlayRequest): { overlay: Overlay; created: boolean } {
     const kind = req.profile ? 'profile' : req.rule ? 'rule' : 'fault';
-    const sel = (o: OverlayRequest) => (kind === 'profile' ? '' : JSON.stringify([o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]));
+    // a fault's key has its family and its traffic, or its tunnel (a tunnel fault has no target)
+    const sel = (o: OverlayRequest) =>
+      kind === 'profile' ? '' : JSON.stringify([o.fault?.family ?? 'impairment', o.fault?.tunnel, o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]);
     const key = (o: OverlayRequest) => JSON.stringify([o.target ?? {}, sel(o)]);
     const old = this.overlays.find((o) => o.kind === kind && o.owner.id === 'admin' && key(o) === key(req));
     const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };

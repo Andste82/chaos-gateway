@@ -61,3 +61,19 @@ export function remoteCidrError(target: string): string | undefined {
   if (p.address !== p.network) return `The host bits must be zero, like ${subnetText(cidr)}.`;
   return undefined;
 }
+
+/**
+ * The tunnels a tunnel fault can impair (plan §2.2.1, M10): each WireGuard client of a hub and each
+ * link, as `client:<id>` and `link:<id>`.
+ */
+export function tunnelOptions(networks: NetworkView[]): ScopeOption[] {
+  const out: ScopeOption[] = [];
+  for (const n of networks) {
+    if (n.config.type !== 'wireguard') continue;
+    const w = n.config as WireGuardNetwork;
+    if (w.kind === 'hub') {
+      for (const [id, c] of Object.entries(w.clients ?? {})) out.push({ value: `client:${id}`, label: `Client · ${c.name} (${w.name})` });
+    } else out.push({ value: `link:${n.id}`, label: `Link · ${w.name}` });
+  }
+  return out;
+}

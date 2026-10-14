@@ -41,8 +41,10 @@ let calls: ApiCall[] = [];
 
 const open = computed({
   get: () => draft.drawerOpen,
+  // while the apply runs, the drawer stays open: its result (an apply that failed, the step and the
+  // revision restored) has nowhere else to show (plan §2.17 "Apply failed")
   set: (v) => {
-    if (!v) void back();
+    if (!v && phase.value !== 'applying') void back();
   },
 });
 
@@ -166,12 +168,13 @@ async function prepare() {
 }
 
 async function back() {
+  if (phase.value === 'applying') return;
   // a candidate still being created is discarded when it arrives (prepare)
   generation++;
   const id = candidate.value;
   candidate.value = undefined;
   draft.drawerOpen = false;
-  if (id !== undefined && phase.value !== 'applying') await discardRevision(id).catch(() => undefined);
+  if (id !== undefined) await discardRevision(id).catch(() => undefined);
 }
 
 function appliedTitle(res: ApplyResult): string {
@@ -256,6 +259,7 @@ function value(v: unknown): string {
     :title="candidate !== undefined ? `Preview revision ${candidate}` : 'Preview'"
     badge="dry run · nothing changed yet"
     :description="draft.base !== undefined ? `Based on revision ${draft.base}.` : undefined"
+    :busy="phase === 'applying'"
   >
     <div class="flex flex-col gap-4" data-testid="preview-drawer">
       <p v-if="phase === 'creating'" class="m-0 text-sm text-text-2" role="status">Asking the gateway for a dry run…</p>
@@ -334,7 +338,7 @@ function value(v: unknown): string {
       </p>
     </div>
     <template #footer>
-      <button type="button" class="btn" @click="back">Back to editing</button>
+      <button type="button" class="btn" :disabled="phase === 'applying'" @click="back">Back to editing</button>
       <button
         v-if="phase !== 'invalid' && phase !== 'failed'"
         type="button"

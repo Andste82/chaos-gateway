@@ -157,7 +157,8 @@ const durationOptions = computed(() => durationChoices(form.value, props.overlay
 // the request as it would be sent now (a kept remaining time shrinks with the clock)
 const request = computed<OverlayRequest>(() => formToOverlay(form.value, now.value));
 
-// what the dialog would send, for the `</> API` panel
+// what the dialog would send, for the `</> API` panel (a configured fault: the merge patch against the base revision's fault)
+const configId = computed(() => props.config?.id ?? '<new uuid>');
 watch(
   [open, request, layer],
   () => {
@@ -165,7 +166,7 @@ watch(
     apiPanel.draft =
       layer.value === 'overlay'
         ? { title: title.value, calls: [{ method: 'POST', path: '/overlays', body: request.value }] }
-        : { title: `${title.value} (configuration)`, calls: [{ method: 'POST', path: '/revisions', headers: { 'Content-Type': 'application/merge-patch+json', 'If-Match': `"${draft.base}"` }, body: { faults: { [props.config?.id ?? '<new uuid>']: formToConfigFault(form.value, props.config?.fault) } } }] };
+        : { title: `${title.value} (configuration)`, calls: [{ method: 'POST', path: '/revisions', headers: { 'Content-Type': 'application/merge-patch+json', 'If-Match': `"${draft.base}"` }, body: { faults: { [configId.value]: draft.objectPatch('fault', configId.value, formToConfigFault(form.value, props.config?.fault)) } } }] };
   },
   { deep: true, immediate: true },
 );

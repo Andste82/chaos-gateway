@@ -1,7 +1,7 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { FaultBody, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
-import { formatDuration } from './format';
+import type { FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
+import { durationMs, formatDuration } from './format';
 
 function pct(p: string | undefined): string {
   return p ? p.replace('%', ' %') : '';
@@ -55,6 +55,37 @@ const netemKeys: (keyof NetemParams)[] = [
   'blackout',
   'flapping',
 ];
+
+/** The members of an impairment parameter set: the flat netem parameters and the two directions. */
+export const impairmentKeys: ReadonlySet<string> = new Set<string>([...netemKeys, 'upload', 'download']);
+
+/** The impairment parameter set of a fault body (its flat netem parameters and its directions), or undefined when it has none. */
+export function impairmentOf(f: FaultBody | undefined): ImpairmentParams | undefined {
+  if (!f) return undefined;
+  const out = Object.fromEntries(Object.entries(f).filter(([k, v]) => impairmentKeys.has(k) && v !== undefined)) as ImpairmentParams;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** A fault body with its impairment parameter set replaced (the other members kept). */
+export function withImpairment<T extends FaultBody>(f: T, i: ImpairmentParams | undefined): T {
+  const out = Object.fromEntries(Object.entries(f).filter(([k]) => !impairmentKeys.has(k))) as T;
+  return { ...out, ...i };
+}
+
+/**
+ * Whether the gateway takes this combination of impairment parameters (internal/domain/validate_fault.go):
+ * flat parameters or upload/download, not both (`mixed_directions`); per set not loss and burst
+ * loss, not blackout and flapping (`mutually_exclusive`), no jitter larger than the latency. A
+ * parameter set merged member by member out of two edits can break one of these where neither edit did.
+ */
+export function impairmentCombines(i: ImpairmentParams | undefined): boolean {
+  if (!i) return true;
+  const one = (p: NetemParams) =>
+    !(p.loss !== undefined && p.burst_loss !== undefined) && !(p.blackout === true && p.flapping !== undefined) && (durationMs(p.jitter) ?? 0) <= (durationMs(p.latency) ?? 0);
+  const flat = netemKeys.some((k) => i[k] !== undefined);
+  if (i.upload !== undefined || i.download !== undefined) return !flat && [i.upload, i.download].every((p) => p === undefined || one(p));
+  return one(i);
+}
 
 /** The chips of a fault body: flat parameters for both directions, or upload and download apart. */
 export function faultChips(f: FaultBody | undefined): string[] {

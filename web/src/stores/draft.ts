@@ -6,6 +6,7 @@ import type {
   Configuration,
   ConfigurationPatch,
   Device,
+  ImpairmentParams,
   MatrixEntry,
   NetworkView,
   Profile,
@@ -13,7 +14,7 @@ import type {
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
-import { faultChips, describeScope, describeTunnel, type Names } from '../lib/faults';
+import { faultChips, describeScope, describeTunnel, impairmentCombines, impairmentKeys, impairmentOf, withImpairment, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { profileChips } from '../lib/profiles';
@@ -21,6 +22,48 @@ import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, format
 
 /** The members compared and reapplied as a whole when both sides changed an object: a scope or a destination is one choice. */
 const atomicMembers = new Set(['source', 'target', 'destination']);
+
+/**
+ * The impairment parameter set of a configured fault (its flat netem parameters and its directions)
+ * and of a custom profile (`parts.impairment`): where it is, how an object takes another one, and the
+ * field the concurrent-change dialog names for it.
+ */
+const parameterSets: Partial<Record<string, { get(o: unknown): ImpairmentParams | undefined; set<T>(o: T, i: ImpairmentParams | undefined): T; inside(path: string[]): boolean; field: string }>> = {
+  fault: {
+    get: (o) => impairmentOf(o as ConfigFault),
+    set: (o, i) => withImpairment(o as ConfigFault, cloneJSON(i)) as typeof o,
+    inside: (path) => impairmentKeys.has(path[0] ?? ''),
+    field: 'parameters',
+  },
+  profile: {
+    get: (o) => (o as Profile).parts?.impairment,
+    set: (o, i) => {
+      const parts = { ...(o as Profile).parts, impairment: cloneJSON(i) };
+      if (i === undefined) delete parts.impairment;
+      return { ...(o as Profile), parts } as typeof o;
+    },
+    inside: (path) => path[0] === 'parts' && path[1] === 'impairment',
+    field: 'parts impairment',
+  },
+};
+
+/**
+ * My edit of an object reapplied on their version (P3-M13-07): member by member, a scope or a
+ * destination whole. An impairment parameter set merged member by member can become one the gateway
+ * refuses where neither side's was (their flat loss with my upload/download, their burst loss with
+ * my loss): then my parameter set is taken whole (`whole`), and the dialog names it.
+ */
+function reapplyObject<T>(kind: string, was: T, now: T, mine: unknown): { merged: T; whole: boolean } {
+  const merged = reapplyMergePatch(was, now, mine, atomicMembers);
+  const ps = parameterSets[kind];
+  if (!ps || impairmentCombines(ps.get(merged))) return { merged, whole: false };
+  return { merged: ps.set(merged, ps.get(mine)), whole: true };
+}
+
+/** An impairment parameter set as chips: "↑↓ 20 ms, 2 % loss". */
+function parameterText(i: ImpairmentParams | undefined): string {
+  return (i ? faultChips(i) : []).join(', ') || '—';
+}
 
 /** The value of a member in words, for the fields both sides changed: "Reject", "no", "80, 443", "Network IoT". */
 function valueText(key: string, v: unknown, names: Names, other?: unknown): string {
@@ -437,6 +480,15 @@ export const useDraftStore = defineStore('draft', () => {
   });
 
   /** The JSON Merge Patch against the base: whole objects for what changed, null for what went. */
+  /**
+   * The merge patch the preview sends for one configured fault or custom profile edited into `value`
+   * (the whole object when it is new; `{}` when nothing changed), for the editors' `</> API` panel.
+   */
+  function objectPatch(kind: 'fault' | 'profile', id: string, value: ConfigFault | Profile): unknown {
+    const before = kind === 'fault' ? baseFaults.value[id] : baseProfiles.value[id];
+    return createMergePatch(before, value) ?? {};
+  }
+
   function patch(): ConfigurationPatch {
     const out: ConfigurationPatch = {};
     const rp: Record<string, unknown> = {};
@@ -500,13 +552,18 @@ export const useDraftStore = defineStore('draft', () => {
           if (!jsonEqual(was, m)) out.push({ kind, id, name, field: kind === 'client' ? 'client' : kind, from: 'deleted', to: 'kept with my change' });
           continue;
         }
+        const ps = parameterSets[kind];
+        const whole = ps !== undefined && reapplyObject(kind, was, now, m).whole;
         for (const path of bothChanged(was, now, m, atomicMembers)) {
+          // a parameter set taken whole is named once, as a whole
+          if (whole && ps.inside(path)) continue;
           const get = (o: unknown) => path.reduce<unknown>((v, k) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>)[k] : undefined), o);
           const key = path.at(-1) ?? '';
           const t = get(now);
           const mv = get(m);
           out.push({ kind, id, name, field: path.join(' ').replace(/_/g, ' '), from: valueText(key, t, names, mv), to: valueText(key, mv, names, t) });
         }
+        if (whole) out.push({ kind, id, name, field: ps.field, from: parameterText(ps.get(now)), to: parameterText(ps.get(m)) });
       }
     }
     const named = (o: { name?: string }) => o.name;
@@ -556,7 +613,7 @@ export const useDraftStore = defineStore('draft', () => {
     const myClients = clients.value;
     // the revision just fetched is the newest seen: a draft this leaves clean stays on it
     if (!latest || latest.id < rev.id) latest = rev;
-    function reapply<T>(edits: Record<string, T | null>, before: Record<string, T>, theirs: Record<string, T>): Record<string, T | null> {
+    function reapply<T>(kind: DraftChange['kind'], edits: Record<string, T | null>, before: Record<string, T>, theirs: Record<string, T>): Record<string, T | null> {
       const out: Record<string, T | null> = {};
       for (const [id, m] of Object.entries(edits)) {
         if (m === null) {
@@ -571,18 +628,19 @@ export const useDraftStore = defineStore('draft', () => {
           out[id] = m;
           continue;
         }
-        // a scope or a destination both changed is mine as a whole, as the dialog says
-        const merged = reapplyMergePatch(was, now, m, atomicMembers);
+        // a scope or a destination both changed is mine as a whole, as the dialog says, and so is a
+        // parameter set the member-by-member merge would make one the gateway refuses
+        const { merged } = reapplyObject(kind, was, now, m);
         if (!jsonEqual(merged, now)) out[id] = merged;
       }
       return out;
     }
     base.value = rev.id;
     baseConfig.value = rev.configuration;
-    rules.value = reapply(rules.value, old?.access_rules ?? {}, theirRules);
-    faults.value = reapply(faults.value, old?.faults ?? {}, theirFaults);
-    profiles.value = reapply(profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
-    devices.value = reapply(devices.value, old?.devices ?? {}, theirDevices);
+    rules.value = reapply('rule', rules.value, old?.access_rules ?? {}, theirRules);
+    faults.value = reapply('fault', faults.value, old?.faults ?? {}, theirFaults);
+    profiles.value = reapply('profile', profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
+    devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
     // clients hub by hub, like the other objects
     const nextClients: typeof clients.value = {};
     for (const net of new Set(Object.values(myClients).map((c) => c.network))) {
@@ -591,7 +649,7 @@ export const useDraftStore = defineStore('draft', () => {
           .filter(([, c]) => c.network === net)
           .map(([id, c]) => [id, c.client]),
       );
-      for (const [id, c] of Object.entries(reapply(edits, clientsIn(old, net), clientsIn(rev.configuration, net)))) nextClients[id] = { network: net, client: c };
+      for (const [id, c] of Object.entries(reapply('client', edits, clientsIn(old, net), clientsIn(rev.configuration, net)))) nextClients[id] = { network: net, client: c };
     }
     clients.value = nextClients;
     // the matrix pair by pair: each pair I changed gets my policy on their entries, the others stay theirs
@@ -703,6 +761,7 @@ export const useDraftStore = defineStore('draft', () => {
     changes,
     summary,
     patch,
+    objectPatch,
     overlaps,
     rebase,
     discard,

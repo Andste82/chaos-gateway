@@ -82,7 +82,7 @@ const valid = computed(() => Object.keys(clientErrors.value).length === 0);
 const result = computed(() => formToProfile(form.value, props.profile?.config));
 const chips = computed(() => profileChips(result.value.parts));
 
-// what the preview would send, for the `</> API` panel
+// what the preview would send, for the `</> API` panel: the merge patch against the base revision's profile
 watch(
   [open, result],
   () => {
@@ -94,7 +94,7 @@ watch(
           method: 'POST',
           path: '/revisions',
           headers: { 'Content-Type': 'application/merge-patch+json', 'If-Match': `"${draft.base}"` },
-          body: { profiles: { [id.value]: result.value } },
+          body: { profiles: { [id.value]: draft.objectPatch('profile', id.value, result.value) } },
         },
       ],
     };

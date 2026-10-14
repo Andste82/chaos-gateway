@@ -131,6 +131,7 @@ watch(
 );
 
 const formErrors = computed(() => networkFormErrors(form.value, { others: others.value, reserved: reserved.value }));
+const dhcpFields: NetworkField[] = ['leaseTime', 'pools', 'router', 'dhcpDns', 'domain', 'ntp', 'customOptions'];
 /** The gateway's messages while the form is the one it refused: by field, and those no field shows. */
 const server = computed(() => {
   const byField: Partial<Record<NetworkField, string>> = {};
@@ -138,8 +139,9 @@ const server = computed(() => {
   if (JSON.stringify(form.value) !== refusedForm) return { byField, general };
   for (const [pointer, message] of Object.entries(refused.value)) {
     const f = networkFieldOf(pointer);
-    if (f) byField[f] = message;
-    else general.push(message);
+    // the DHCP fields are hidden while DHCP is off: their messages stand with those no field shows
+    if (f && !(dhcpFields.includes(f) && !form.value.dhcpEnabled)) byField[f] = message;
+    else general.push(f ? `DHCP: ${message}` : message);
   }
   return { byField, general };
 });

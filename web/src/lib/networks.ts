@@ -50,6 +50,26 @@ export function inSubnet(ip: number, s: Subnet): boolean {
   return ip >= s.network && ip <= s.broadcast;
 }
 
+/** A network prefix with host bits set ("10.40.0.1/24"): the gateway's message for it, or undefined. */
+export function hostBitsError(cidr: string): string | undefined {
+  const s = parseSubnet(cidr.trim());
+  if (!s || s.address === s.network) return undefined;
+  return `${cidr.trim()} has host bits set; the network is ${formatIPv4(s.network)}/${s.len}.`;
+}
+
+/** The ranges no network, route or client network may touch (the gateway's `reserved_range`). */
+const reservedRanges = ['0.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16', '224.0.0.0/4', '240.0.0.0/4'];
+
+/** The reserved range a subnet touches ("127.0.0.0/8" for "127.1.0.1/24"), or undefined. */
+export function reservedRangeOf(cidr: string): string | undefined {
+  const s = parseSubnet(cidr.trim());
+  if (!s) return undefined;
+  return reservedRanges.find((r) => {
+    const x = parseSubnet(r)!;
+    return s.network <= x.broadcast && x.network <= s.broadcast;
+  });
+}
+
 /** "10.10.0.0/24" for "10.10.0.1/24". */
 export function subnetText(cidr: string | undefined): string {
   const s = parseSubnet(cidr);

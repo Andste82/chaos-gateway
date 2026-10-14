@@ -137,13 +137,34 @@ function editNetwork(id: string) {
 function saved(id: string) {
   if (id !== selected.value?.id) void router.push(`/networks/${id}`);
 }
-// a network deleted here and applied is gone: the page goes back to the list instead of saying "not found"
+// a network deleted here and applied is gone: the page goes back to the list instead of saying "not found";
+// so does a new network of the draft that was undone, deleted or discarded (once the networks of the
+// gateway, fetched again, do not have it either: an applied one is there)
 const deletedHere = new Set<string>();
-watch(marks, (m) => {
-  for (const [id, mark] of Object.entries(m)) if (mark === 'DELETED') deletedHere.add(id);
-});
-watch(unknownNetwork, (unknown) => {
-  if (unknown && props.id && deletedHere.has(props.id)) void router.replace('/networks');
+const newHere = new Set<string>();
+watch(
+  marks,
+  (m) => {
+    for (const [id, mark] of Object.entries(m)) {
+      if (mark === 'DELETED') deletedHere.add(id);
+      if (mark === 'NEW') newHere.add(id);
+    }
+  },
+  { immediate: true },
+);
+const checking = ref(false);
+watch(unknownNetwork, async (unknown) => {
+  const id = props.id;
+  if (!unknown || !id) return;
+  if (deletedHere.has(id)) return void router.replace('/networks');
+  if (!newHere.has(id)) return;
+  checking.value = true;
+  try {
+    await networks.refetch();
+  } finally {
+    checking.value = false;
+  }
+  if (unknownNetwork.value && props.id === id) void router.replace('/networks');
 });
 </script>
 
@@ -223,7 +244,7 @@ watch(unknownNetwork, (unknown) => {
       </div>
     </nav>
 
-    <LoadError v-if="unknownNetwork" :error="`no network ${route.params.id}`" what="Not found" />
+    <LoadError v-if="unknownNetwork && !checking" :error="`no network ${route.params.id}`" what="Not found" />
 
     <div v-if="selected" class="grid grid-cols-1 gap-5 xl:grid-cols-[440px_minmax(0,1fr)]">
       <NetworkSettings :network="selected" :mark="marks[selected.id]" @edit="editNetwork(selected.id)" />

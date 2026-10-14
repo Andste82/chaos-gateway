@@ -26,7 +26,8 @@ import {
   completeSetupBodyConfigurationOneNetworksTwoPeerOneKeyPublicKeyOneRegExp as keyRegExp,
 } from '../api/generated/zod/system/system';
 import { cloneJSON } from './mergePatch';
-import { formatIPv4, inSubnet, parseIPv4, parseSubnet, subnetText, type Subnet } from './networks';
+import { formatIPv4, hostBitsError, inSubnet, parseIPv4, parseSubnet, reservedRangeOf, subnetText, type Subnet } from './networks';
+import { seconds } from './routingForm';
 
 /** What a network is: a local test network, a WireGuard hub or a WireGuard link. */
 export type NetworkKind = 'lan' | 'hub' | 'link';
@@ -298,6 +299,23 @@ const isUnicast = (s: string) => {
   return ip !== undefined && ip !== 0 && ip >>> 28 !== 14 && ip !== 0xffffffff;
 };
 
+/** The DHCP option codes the gateway sets itself; no custom option may have them (the gateway's `reserved_option`). */
+export const reservedDHCPOptions = [1, 3, 6, 12, 15, 28, 42, 50, 51, 53, 54, 55, 58, 59, 61, 82, 255];
+
+/** The first problem of DHCP pools in the subnet `s` (the network's address `address`), or undefined. */
+function poolsError(pools: DhcpPool[], s: Subnet, address: string): string | undefined {
+  for (const [i, p] of pools.entries()) {
+    const a = parseIPv4(p.start);
+    const b = parseIPv4(p.end);
+    if (a === undefined || b === undefined) return `${p.start}-${p.end} is no range such as 10.30.0.100-10.30.0.199.`;
+    if (b < a) return `The end ${p.end} is before the start ${p.start}.`;
+    if (!inSubnet(a, s) || !inSubnet(b, s) || a === s.network || b === s.broadcast) return `${p.start}-${p.end} must lie inside ${subnetText(address)}, without its network and broadcast address.`;
+    if (s.address >= a && s.address <= b) return `${p.start}-${p.end} contains the gateway address ${formatIPv4(s.address)}.`;
+    if (pools.slice(0, i).some((q) => parseIPv4(q.start)! <= b && a <= parseIPv4(q.end)!)) return `${p.start}-${p.end} overlaps another pool.`;
+  }
+  return undefined;
+}
+
 /** The checks of the network form, each under its field (plan §2.17 "Validation"). */
 export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<Record<NetworkField, string>> {
   const e: Partial<Record<NetworkField, string>> = {};
@@ -313,6 +331,7 @@ export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<
   else if (f.kind === 'link' && s.len !== 31) e.address = 'A link needs a /31 transfer network, such as 10.255.0.0/31.';
   else if (f.kind !== 'link' && s.len > 30) e.address = `A ${f.kind === 'hub' ? 'hub' : 'test network'} needs a prefix length of at most 30.`;
   else if (f.kind !== 'link' && (s.address === s.network || s.address === s.broadcast)) e.address = 'That is the network or broadcast address; give the gateway a host address.';
+  else if (reservedRangeOf(f.address)) e.address = `${subnetText(f.address)} overlaps the reserved range ${reservedRangeOf(f.address)}.`;
   else {
     const other = ctx.others.find((o) => {
       const os = parseSubnet(o.address);
@@ -331,19 +350,12 @@ export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<
     }
     if (f.dhcpEnabled) {
       const lease = f.leaseTime.trim();
-      if (lease && !isDuration(lease)) e.leaseTime = 'A duration such as 1h or 30m; empty for the default of 1 h.';
+      if (lease && (!isDuration(lease) || seconds(lease)! < 1)) e.leaseTime = 'A duration of at least 1s, such as 1h or 30m; empty for the default of 1 h.';
       const { pools, bad } = parsePools(f.pools);
       if (bad) e.pools = `${bad} is no range such as 10.30.0.100-10.30.0.199.`;
       else if (s && !e.address) {
-        for (const [i, p] of pools.entries()) {
-          const a = parseIPv4(p.start)!;
-          const b = parseIPv4(p.end)!;
-          if (b < a) e.pools = `The end ${p.end} is before the start ${p.start}.`;
-          else if (!inSubnet(a, s) || !inSubnet(b, s) || a === s.network || b === s.broadcast) e.pools = `${p.start}-${p.end} must lie inside ${subnetText(f.address)}, without its network and broadcast address.`;
-          else if (s.address >= a && s.address <= b) e.pools = `${p.start}-${p.end} contains the gateway address ${formatIPv4(s.address)}.`;
-          else if (pools.slice(0, i).some((q) => parseIPv4(q.start)! <= b && a <= parseIPv4(q.end)!)) e.pools = `${p.start}-${p.end} overlaps another pool.`;
-          if (e.pools) break;
-        }
+        const p = poolsError(pools, s, f.address);
+        if (p) e.pools = p;
       }
       if (f.router.trim() && !isUnicast(f.router.trim())) e.router = 'An IPv4 address; empty for the gateway address.';
       if (list(f.dhcpDns).some((x) => !isUnicast(x))) e.dhcpDns = 'IPv4 addresses, separated by commas; empty for the gateway (the DNS proxy).';
@@ -354,7 +366,9 @@ export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<
       else {
         const codes = custom.options.map((o) => o.code);
         const out = custom.options.find((o) => o.code < 1 || o.code > 254);
+        const reserved = custom.options.find((o) => reservedDHCPOptions.includes(o.code));
         if (out) e.customOptions = `Option ${out.code}: the code is from 1 to 254.`;
+        else if (reserved) e.customOptions = `Option ${reserved.code} is set by the gateway (router, lease time, DNS and NTP servers, …); it cannot be a custom option.`;
         else if (codes.some((c, i) => codes.indexOf(c) !== i)) e.customOptions = 'Each option code once.';
       }
     }
@@ -372,6 +386,8 @@ export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<
       for (const r of rt.routes) {
         const via = parseIPv4(r.via);
         if (!new RegExp(cidrRegExp).test(r.destination)) e.routes = `${r.destination} is no IPv4 network such as 10.40.0.0/24.`;
+        else if (hostBitsError(r.destination)) e.routes = hostBitsError(r.destination);
+        else if (reservedRangeOf(r.destination)) e.routes = `${r.destination} overlaps the reserved range ${reservedRangeOf(r.destination)}.`;
         else if (via === undefined) e.routes = `${r.via} is no IPv4 address.`;
         else if (s && !e.address && (!inSubnet(via, s) || via === s.address || via === s.network || via === s.broadcast))
           e.routes = `The router ${r.via} must be a host of ${subnetText(f.address)} other than the gateway.`;
@@ -399,8 +415,12 @@ export function networkFormErrors(f: NetworkForm, ctx: NetworkContext): Partial<
     if (f.peerEndpoint.trim() && !new RegExp(endpointRegExp).test(f.peerEndpoint.trim())) e.peerEndpoint = 'Host and port, such as 203.0.113.40:51821; empty when the remote side connects.';
     if (f.peerKeepalive.trim() && !isDuration(f.peerKeepalive.trim())) e.peerKeepalive = 'A duration such as 25s; empty for the default of 25 s.';
     if (f.peerKeyMode === 'provided' && !new RegExp(keyRegExp).test(f.peerPublicKey.trim())) e.peerPublicKey = "The remote side's WireGuard public key (44 characters of base64).";
-    const bad = list(f.routes).find((r) => !new RegExp(cidrRegExp).test(r));
-    if (bad) e.routes = `${bad} is no IPv4 network such as 10.60.0.0/24.`;
+    for (const r of list(f.routes)) {
+      if (!new RegExp(cidrRegExp).test(r)) e.routes = `${r} is no IPv4 network such as 10.60.0.0/24.`;
+      else if (hostBitsError(r)) e.routes = hostBitsError(r);
+      else if (reservedRangeOf(r)) e.routes = `${r} overlaps the reserved range ${reservedRangeOf(r)}.`;
+      if (e.routes) break;
+    }
   }
   return e;
 }
@@ -452,6 +472,11 @@ export function networkFromForm(f: NetworkForm, before?: Network, hosts: HostInt
       put(o, 'ntp_servers', nonEmpty(list(f.ntp)));
       put(o, 'custom', nonEmpty(parseCustom(f.customOptions).options));
       put(dhcp, 'options', compact(o));
+    } else if (dhcp.pools?.length) {
+      // DHCP is off and the form hides the pools, but the gateway still checks them: pools that no longer
+      // fit the subnet (the address changed) go, and the default pools follow the subnet when DHCP is on again
+      const s = parseSubnet(n.address);
+      if (!s || poolsError(dhcp.pools, s, n.address)) delete dhcp.pools;
     }
     put(n, 'dhcp', compact(dhcp));
     const dns = { ...(n.dns ?? {}) };

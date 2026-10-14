@@ -42,6 +42,14 @@ function dnsText(n: LanNetwork): string {
   return parts.join(', ');
 }
 
+/** The key of a link's peer in words: "generated", "generated, generation 2", "provided AbCd…". */
+function peerKeyText(n: WireGuardNetwork): string {
+  const k = n.peer?.key;
+  if (!n.peer) return '';
+  if (k?.mode === 'provided') return `provided ${(k.public_key ?? '').slice(0, 8)}…`;
+  return k?.generation ? `generated, generation ${k.generation}` : 'generated';
+}
+
 /** The changes of one network in words: added, deleted, or field by field. */
 export function networkChanges(before: Network | undefined, after: Network | null): FieldChange[] {
   if (after === null) return before ? [{ field: 'network', from: 'present', to: 'deleted' }] : [];
@@ -68,6 +76,10 @@ export function networkChanges(before: Network | undefined, after: Network | nul
     add('MTU', String(a.mtu ?? 1420), String(b.mtu ?? 1420));
     add('endpoint', a.endpoint ?? '', b.endpoint ?? '');
     add('peer', a.peer ? `${a.peer.address}${a.peer.endpoint ? ` at ${a.peer.endpoint}` : ''}` : '', b.peer ? `${b.peer.address}${b.peer.endpoint ? ` at ${b.peer.endpoint}` : ''}` : '');
+    add('peer keepalive', a.peer?.keepalive ?? '', b.peer?.keepalive ?? '');
+    add('peer key', peerKeyText(a), peerKeyText(b));
+    add('preshared key', a.peer?.key?.preshared_key ? 'yes' : 'no', b.peer?.key?.preshared_key ? 'yes' : 'no');
+    if (a.peer || b.peer) add('peer enabled', a.peer?.enabled === false ? 'no' : 'yes', b.peer?.enabled === false ? 'no' : 'yes');
     add('routes', (a.routes ?? []).join(', '), (b.routes ?? []).join(', '));
   }
   // a change the words above do not show (setNetwork keeps no edit that equals the base)
@@ -116,8 +128,16 @@ export function protocolChanges(before: RoutingProtocol | undefined, after: Rout
   add('max prefixes', String(before.import?.max_prefixes ?? 100), String(after.import?.max_prefixes ?? 100));
   add('neighbor AS', String(before.bgp?.neighbor_asn ?? ''), String(after.bgp?.neighbor_asn ?? ''));
   add('neighbor', before.bgp?.neighbor_address ?? '', after.bgp?.neighbor_address ?? '');
+  add('hold time', before.bgp?.hold_time ?? '', after.bgp?.hold_time ?? '');
+  add('keepalive time', before.bgp?.keepalive_time ?? '', after.bgp?.keepalive_time ?? '');
+  if (before.bgp || after.bgp) add('passive', before.bgp?.passive ? 'yes' : 'no', after.bgp?.passive ? 'yes' : 'no');
   add('area', before.ospf?.area ?? '', after.ospf?.area ?? '');
+  add('hello interval', before.ospf?.hello_interval ?? before.babel?.hello_interval ?? '', after.ospf?.hello_interval ?? after.babel?.hello_interval ?? '');
+  add('dead interval', before.ospf?.dead_interval ?? '', after.ospf?.dead_interval ?? '');
+  add('cost', before.ospf?.cost !== undefined ? String(before.ospf.cost) : '', after.ospf?.cost !== undefined ? String(after.ospf.cost) : '');
+  add('rxcost', before.babel?.rxcost !== undefined ? String(before.babel.rxcost) : '', after.babel?.rxcost !== undefined ? String(after.babel.rxcost) : '');
   add('custom snippet', before.custom_snippet ? 'set' : '', after.custom_snippet ? (before.custom_snippet && before.custom_snippet !== after.custom_snippet ? 'changed' : 'set') : '');
-  if (out.length === 0) out.push({ field: 'timers', from: 'as before', to: 'changed' });
+  // a change the words above do not show
+  if (out.length === 0) out.push({ field: 'settings', from: 'as before', to: 'changed' });
   return out;
 }

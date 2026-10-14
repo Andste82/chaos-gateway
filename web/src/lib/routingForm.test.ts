@@ -74,6 +74,9 @@ describe('the routing forms (P3-M14-01)', () => {
     const ospf = { ...emptyProtocolForm(LINK), name: 'o', type: 'ospf' as const, helloInterval: '40s', area: 'backbone' };
     expect(protocolFormErrors(ospf, ctx)).toEqual({ area: 'An area such as 0 or 0.0.0.0.', deadInterval: 'The dead interval must be longer than the hello interval (40 s).' });
     expect(protocolFormErrors({ ...emptyProtocolForm(''), name: 'x' }, { links: [], others: [] }).link).toMatch(/add a link network first/);
+    // host bits set: the gateway refuses the prefix, so the form says it first
+    const hb = protocolFormErrors({ ...emptyProtocolForm(LINK), name: 'b3', type: 'babel', announceCidrs: '10.80.0.1/24', prefixes: '10.70.0.5/16' }, ctx);
+    expect(hb).toMatchObject({ announceCidrs: '10.80.0.1/24 has host bits set; the network is 10.80.0.0/24.', prefixes: '10.70.0.5/16 has host bits set; the network is 10.70.0.0/16.' });
   });
 
   it('opens a protocol again as its form and keeps what the form does not edit; another type drops the old settings', () => {
@@ -83,6 +86,24 @@ describe('the routing forms (P3-M14-01)', () => {
     expect(babel.bgp).toBeUndefined();
     expect(babel.babel).toEqual({ rxcost: 128 });
     expect(protocolChanges(p, { ...p, enabled: false })).toEqual([{ field: 'enabled', from: 'yes', to: 'no' }]);
+    // the timers and switches of each type are named, also next to another change
+    expect(protocolChanges(p, { ...p, bgp: { neighbor_asn: 65003, hold_time: '12s', keepalive_time: '4s', passive: true } })).toEqual([
+      { field: 'neighbor AS', from: '65002', to: '65003' },
+      { field: 'hold time', from: '9s', to: '12s' },
+      { field: 'keepalive time', from: '3s', to: '4s' },
+      { field: 'passive', from: 'no', to: 'yes' },
+    ]);
+    const o: RoutingProtocol = { name: 'o', type: 'ospf', link: LINK, ospf: { area: '0', hello_interval: '10s' } };
+    expect(protocolChanges(o, { ...o, ospf: { area: '0', hello_interval: '5s', dead_interval: '20s', cost: 20 } })).toEqual([
+      { field: 'hello interval', from: '10s', to: '5s' },
+      { field: 'dead interval', from: '—', to: '20s' },
+      { field: 'cost', from: '—', to: '20' },
+    ]);
+    const bab: RoutingProtocol = { name: 'b', type: 'babel', link: LINK };
+    expect(protocolChanges(bab, { ...bab, babel: { hello_interval: '2s', rxcost: 128 } })).toEqual([
+      { field: 'hello interval', from: '—', to: '2s' },
+      { field: 'rxcost', from: '—', to: '128' },
+    ]);
   });
 
   it('the BIRD settings: router id, AS and the external mode with its filter', () => {

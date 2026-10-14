@@ -184,6 +184,40 @@ test('network forms: delete a test network through the drawer; Undo before bring
   await expect(page.getByTestId('load-error')).toHaveCount(0);
 });
 
+test('network forms: a new network of the draft that is undone or deleted again goes back to the list, not to "not found"', async ({ page }) => {
+  await open(page);
+  for (const action of ['Undo the changes of cams', 'Delete cams']) {
+    await page.getByRole('button', { name: 'Add network' }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Add network' });
+    await dialog.getByLabel('Name').fill('cams');
+    await dialog.getByTestId('network-ports').getByRole('checkbox', { name: /^eth3 / }).check();
+    await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+    await expect(drawer(page).getByTestId('preview-changes')).toContainText('network cams added');
+    await page.getByRole('button', { name: 'Back to editing' }).click();
+    await expect(card(page, 'cams').getByTestId('network-mark')).toHaveText('NEW');
+    await expect(page).toHaveURL(/\/networks\/[0-9a-f-]{36}$/);
+    await settings(page).getByRole('button', { name: action }).click();
+    await expect(card(page, 'cams')).toHaveCount(0);
+    await expect(bar(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/networks$/);
+    await expect(page.getByTestId('load-error')).toHaveCount(0);
+  }
+});
+
+test('network forms: DHCP switched off and the subnet changed — the hidden pools that no longer fit leave the network, so the gateway does not refuse them', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  gw.config.networks![IOT] = { ...(gw.config.networks![IOT] as LanNetwork), dhcp: { enabled: true, pools: [{ start: '10.10.0.100', end: '10.10.0.199' }], options: { domain: 'lab' } } };
+  await open(page, `/networks/${IOT}`, gw);
+  await settings(page).getByRole('button', { name: 'Edit IoT' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit IoT' });
+  await dialog.getByLabel('The gateway hands out addresses (DHCP)').uncheck();
+  await expect(dialog.getByLabel('Pools')).toHaveCount(0);
+  await dialog.getByLabel('Gateway address and subnet').fill('10.11.0.1/24');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(drawer(page).getByTestId('preview-changes')).toContainText('network IoT changed');
+  expect((await lastPatch(page, gw)).networks).toEqual({ [IOT]: { address: '10.11.0.1/24', dhcp: { enabled: false, pools: null } } });
+});
+
 test('network forms: deleting a network that a device, a fault, rules, the access matrix and the routing still refer to shows what the gateway reports', async ({ page }) => {
   const gw = withRules(withNetworks(MockGateway.sample()));
   gw.config = {
@@ -480,7 +514,7 @@ test('routing forms: edit and delete a protocol and change the BIRD settings thr
   await page.getByRole('button', { name: 'Back to editing' }).click();
   await expect(bgp.getByTestId('protocol-mark')).toHaveText('CHANGED');
   await expect(bgp.getByTestId('protocol-settings')).toHaveText('neighbor AS 65003');
-  await expect(bar(page)).toContainText('1 change in the routing');
+  await expect(bar(page)).toContainText('3 changes in the routing');
   await bgp.getByRole('button', { name: 'Undo the changes of site-b-bgp' }).click();
   await expect(bar(page)).toHaveCount(0);
 

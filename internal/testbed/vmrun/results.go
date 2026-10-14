@@ -34,6 +34,20 @@ func ParseCounts(out string) Counts {
 	return c
 }
 
+// MissingPasses returns those of names that have no `--- PASS: <name> ` line in the `go test -v`
+// output out, in the order given. A test that failed, was skipped or never ran (a renamed test, a
+// lost build tag, a -run that no longer matches it) is missing.
+func MissingPasses(out string, names []string) []string {
+	var missing []string
+	for _, n := range names {
+		re := regexp.MustCompile(`(?m)^\s*--- PASS: ` + regexp.QuoteMeta(n) + ` \(`)
+		if !re.MatchString(out) {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
+
 // PackageResult is what the guest recorded for one package.
 type PackageResult struct {
 	Unit
@@ -55,6 +69,8 @@ type Summary struct {
 	// AllowSkip allows skipped tests; otherwise a skip fails OK, the same way a FAIL does (CC-04:
 	// a missing tool or a silent skip must never pass).
 	AllowSkip bool
+	// ExpectPass names tests that must have passed (in any package); a missing one fails OK.
+	ExpectPass []string
 }
 
 // OK reports whether every package passed, the guest finished, and (unless AllowSkip) nothing
@@ -64,6 +80,9 @@ func (s Summary) OK() bool {
 		return false
 	}
 	if !s.AllowSkip && s.Totals().Skipped > 0 {
+		return false
+	}
+	if len(s.missingPasses()) > 0 {
 		return false
 	}
 	for _, p := range s.Packages {
@@ -102,6 +121,9 @@ func (s Summary) Problems() []string {
 			out = append(out, fmt.Sprintf("%d tests skipped (pass -allow-skip to allow)", n))
 		}
 	}
+	for _, n := range s.missingPasses() {
+		out = append(out, fmt.Sprintf("%s did not pass (an expected test, -expect-pass)", n))
+	}
 	for _, p := range s.Packages {
 		switch {
 		case !p.Ran:
@@ -111,6 +133,16 @@ func (s Summary) Problems() []string {
 		}
 	}
 	return out
+}
+
+// missingPasses returns the expected tests that no package's output shows as passed.
+func (s Summary) missingPasses() []string {
+	var all strings.Builder
+	for _, p := range s.Packages {
+		all.WriteString(p.Output)
+		all.WriteString("\n")
+	}
+	return MissingPasses(all.String(), s.ExpectPass)
 }
 
 // Report formats the summary for a terminal.

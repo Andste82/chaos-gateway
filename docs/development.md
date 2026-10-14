@@ -73,7 +73,9 @@ create namespaces or lacks kernel modules. The tests carry the build tag `testbe
 tests do not and run at level 0 only. `tools/testvm run` enforces this at the runner level too
 (both `-mode direct` and `-mode vm`, CC-04): any `t.Skip` fails the run unless `-allow-skip` is
 given, so a missing tool cannot make CI pass without actually running the test it was supposed
-to gate.
+to gate. A run in which no test ran at all (a `-run` or a build tag that matches nothing) fails
+too, and `-expect-pass TestA,TestB` fails the run unless each named test passed; the CI job
+`testbed-ui` names its three browser flows this way, so a renamed flow cannot leave it green.
 
 ### Level 1b: the VM runner
 
@@ -205,7 +207,7 @@ make vm-down                                # power off; `-now` kills at once
 
 The same as `go run ./tools/testvm vm up|run|exec|status|down`. `vm up` takes `-kernel`, `-mem`,
 `-cpus` and `-no-kvm` (KVM is used where `/dev/kvm` exists); `vm run` takes the flags of `run`
-that make sense for a booted VM (`-run`, `-tags`, `-test-timeout`, `-keep`, `-allow-skip`, `-measurements`).
+that make sense for a booted VM (`-run`, `-tags`, `-test-timeout`, `-keep`, `-allow-skip`, `-expect-pass`, `-measurements`).
 `vm exec` takes `-timeout` and `-C <dir>` (default: the current directory; the guest sees the
 host's files at the same paths), and one argument is a shell command line, several are an
 argument vector.

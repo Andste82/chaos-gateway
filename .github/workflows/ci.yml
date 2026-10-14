@@ -156,11 +156,13 @@ jobs:
   # then measured on the wire (M13, TestAFaultCreatedInTheBrowserTakesEffectOnTheWire), and creates
   # a WireGuard client in the UI, scans its QR code, brings its tunnel up and sees an unconfirmed
   # change rolled back (M14, TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel); `-run
-  # InTheBrowser` selects all three. The 45 minutes leave room for the three flows (the M14 flow
-  # waits out a 90 s commit-confirm window; under software emulation in the VM it alone took 18
-  # minutes); the first CI run with M14 confirms it (open item P3-M14-04). Level 1 (a privileged
-  # container) like the job above; the tag browser keeps the tests out of the other testbed jobs,
-  # which have no web build and no browser.
+  # InTheBrowser` selects all three, and `-expect-pass` fails the job unless each of the three
+  # passed (a renamed flow or a lost build tag must not leave the job green with no flow run; the
+  # runner also fails a run in which no test ran at all). The 45 minutes leave room for the three
+  # flows (the M14 flow waits out a 90 s commit-confirm window; under software emulation in the VM
+  # it alone took 18 minutes); CI run 38447039664 ran the three flows within them (closed open item
+  # P3-M14-04). Level 1 (a privileged container) like the job above; the tag browser keeps the
+  # tests out of the other testbed jobs, which have no web build and no browser.
   testbed-ui:
     name: testbed UI flow (level 1, privileged container)
     runs-on: ubuntu-24.04
@@ -177,7 +179,9 @@ jobs:
       - run: >-
           docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev
           bash -c 'cd web && npm ci && npx playwright install chromium && npm run build && cd ..
-          && make test-privileged ARGS="-tags testbed,browser -run InTheBrowser -test-timeout 45m ./internal/api"'
+          && make test-privileged ARGS="-tags testbed,browser -run InTheBrowser -test-timeout 45m
+          -expect-pass TestFirstStartInTheBrowserUntilADiscoveredDevice,TestAFaultCreatedInTheBrowserTakesEffectOnTheWire,TestAWireGuardClientCreatedInTheBrowserBringsUpItsTunnel
+          ./internal/api"'
 
   # arm64: the image is built for both architectures, and the unit tests run as arm64 binaries
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).

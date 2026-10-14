@@ -26,6 +26,34 @@ func TestParseCountsIncludesSubtests(t *testing.T) {
 	}
 }
 
+func TestMissingPassesNamesEveryTestWithoutAPassLine(t *testing.T) {
+	// TestA passed, TestB failed, TestC was skipped, TestD never ran, and TestAB only shares a prefix
+	got := MissingPasses(goTestOutput, []string{"TestA", "TestB", "TestC", "TestD", "TestA/sub", "TestAB"})
+	want := []string{"TestB", "TestC", "TestD", "TestAB"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("missing = %v, want %v", got, want)
+	}
+}
+
+func TestCollectAnExpectedTestThatDidNotPassIsNotOK(t *testing.T) {
+	s, err := Collect(okFS(), twoUnits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AllowSkip = true
+	s.ExpectPass = []string{"TestA", "TestB"}
+	if !s.OK() {
+		t.Fatalf("both expected tests passed: %v", s.Problems())
+	}
+	s.ExpectPass = []string{"TestA", "TestRenamed"}
+	if s.OK() {
+		t.Fatal("an expected test that did not run must not count as success")
+	}
+	if probs := strings.Join(s.Problems(), "\n"); !strings.Contains(probs, "TestRenamed did not pass") {
+		t.Fatalf("problems = %s", probs)
+	}
+}
+
 func twoUnits() []Unit {
 	return []Unit{{Name: "a", ImportPath: "example.com/a"}, {Name: "b", ImportPath: "example.com/b"}}
 }

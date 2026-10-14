@@ -181,6 +181,41 @@ func TestTheEarlierOfTTLAndLeaseDecides(t *testing.T) {
 	}
 }
 
+func TestExpiresInKeepsTheRemainingTimeAndTheTTL(t *testing.T) {
+	f := newFixture(t)
+	ov := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, ttl: 30m}`).Overlay
+	f.clk.Advance(10 * time.Minute)
+	// an edit that keeps the remaining 20 minutes (P3-M13-06): the TTL stays 30m
+	again := f.put(admin, `{target: {device: esp32-42}, fault: {latency: 200ms}, ttl: 30m, expires_in: 1200s}`).Overlay
+	if again.Id != ov.Id || again.Ttl == nil || *again.Ttl != "30m" || again.ExpiresIn != nil {
+		t.Fatalf("overlay = %+v", again)
+	}
+	if !again.ExpiresAt.Equal(*ov.ExpiresAt) {
+		t.Fatalf("expires_at = %v, want %v as before", again.ExpiresAt, ov.ExpiresAt)
+	}
+	if got, _ := f.store.Get(ov.Id); got.ExpiresIn != nil || *got.Ttl != "30m" {
+		t.Fatalf("read back = %+v", got)
+	}
+	f.clk.Advance(20*time.Minute - time.Second)
+	if got := f.store.Expire(); len(got) != 0 {
+		t.Fatalf("expired too early: %v", ids(got))
+	}
+	f.clk.Advance(time.Second)
+	if got := f.store.Expire(); len(got) != 1 || got[0].Reason != ReasonTTL {
+		t.Fatalf("expired = %+v", got)
+	}
+	// expires_in needs a ttl at least as long (domain.ValidateOverlay says so first)
+	for name, req := range map[string]*model.OverlayRequest{
+		"no ttl":         withExpiresIn(f.request(`{target: {device: esp32-42}, fault: {latency: 1ms}}`), "1m"),
+		"beyond the ttl": withExpiresIn(f.request(`{target: {device: esp32-42}, fault: {latency: 1ms}, ttl: 1m}`), "2m"),
+		"garbage":        withExpiresIn(f.request(`{target: {device: esp32-42}, fault: {latency: 1ms}, ttl: 1m}`), "soon"),
+	} {
+		if _, err := f.store.Put(admin, req, PutOptions{}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
 func TestAReplacementStartsTheTimersOver(t *testing.T) {
 	f := newFixture(t)
 	f.put(admin, `{target: {device: esp32-42}, fault: {latency: 100ms}, ttl: 30s}`)
@@ -394,6 +429,11 @@ func TestAnInvalidWriteChangesNothing(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+func withExpiresIn(r *model.OverlayRequest, d string) *model.OverlayRequest {
+	r.ExpiresIn = &d
+	return r
+}
 
 func withTTL(r *model.OverlayRequest, d string) *model.OverlayRequest {
 	r.Ttl = &d

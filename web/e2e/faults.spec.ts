@@ -230,19 +230,21 @@ test('editing a fault keeps its expiry; a TTL the dialog does not list is shown 
   await d.getByRole('button', { name: 'Apply fault' }).click();
   await expect(toast(page, `Fault active on ${sensor.name}`)).toContainText(/Expires at \d\d:\d\d as before\./);
 
-  // the remaining time was sent as the TTL, so the expiry stays where it was
-  const sent = gw.requestsTo('POST', '/overlays')[0]!.body as { ttl: string };
-  expect(Number(/^(\d+)s$/.exec(sent.ttl)?.[1])).toBeGreaterThan(19 * 60);
-  expect(Number(/^(\d+)s$/.exec(sent.ttl)?.[1])).toBeLessThanOrEqual(20 * 60);
+  // the TTL was sent again and the remaining time as expires_in, so the expiry stays where it was
+  const sent = gw.requestsTo('POST', '/overlays')[0]!.body as { ttl: string; expires_in: string };
+  expect(sent.ttl).toBe('30m');
+  expect(Number(/^(\d+)s$/.exec(sent.expires_in)?.[1])).toBeGreaterThan(19 * 60);
+  expect(Number(/^(\d+)s$/.exec(sent.expires_in)?.[1])).toBeLessThanOrEqual(20 * 60);
   const kept = gw.overlays.find((o) => o.id === LONG)!;
   expect(kept.fault).toEqual({ loss: '3%' });
+  expect(kept.ttl).toBe('30m');
   expect(Math.abs(new Date(kept.expires_at!).getTime() - expiresAt.getTime())).toBeLessThan(5_000);
 
-  // the next edit still keeps the same expiry; the kept time is the overlay's TTL now, shown in words
+  // the next edit still keeps the same expiry, and the overlay's own TTL is still 30 minutes
   await page.getByTestId('fault-row').filter({ hasText: '3 % loss' }).getByRole('button', { name: /^Edit / }).click();
   await expect(duration).toHaveValue('keep');
-  await expect(duration.locator('option:checked')).toHaveText(/^Keep: (20:00|19:\d\d) left of (20 min|19 min \d+ s)$/);
-  await expect(duration.locator('option').last()).toHaveText(/^(20 min|19 min \d+ s) \(its own TTL\)$/);
+  await expect(duration.locator('option:checked')).toHaveText(/^Keep: (20:00|19:\d\d) left of 30 min$/);
+  await expect(duration.locator('option').last()).toHaveText('30 min (its own TTL)');
 });
 
 /** The sample lab with its WireGuard networks; the client rA is a device of its own too (plan §2.2.1). */
@@ -407,9 +409,9 @@ test("edit a fault overlay of an API token: the admin's fault replaces it, and t
   expect(gw.requestsTo('DELETE', `/overlays/${TOKEN_FAULT}`)).toHaveLength(1);
   const onSensor = gw.overlays.filter((o) => o.target?.device === sensor.id);
   expect(onSensor).toHaveLength(1);
-  expect(onSensor[0]).toMatchObject({ owner: { type: 'user' }, fault: { loss: '4%' } });
-  // the token's overlay had 50 of its 60 minutes left: the admin's keeps them (P3-M13-06)
-  expect(onSensor[0]!.ttl).toMatch(/^\d+s$/);
+  // the token's overlay had 50 of its 60 minutes left: the admin's keeps them and its TTL of 1 hour (P3-M13-06)
+  expect(onSensor[0]).toMatchObject({ owner: { type: 'user' }, fault: { loss: '4%' }, ttl: '1h' });
+  expect(onSensor[0]!.expires_in).toBeUndefined();
   expect(Math.abs(new Date(onSensor[0]!.expires_at!).getTime() - (Date.now() + 50 * 60_000))).toBeLessThan(30_000);
   await expect(page.getByTestId('fault-row').filter({ hasText: '4 % loss' })).toHaveCount(1);
   await expect(page.getByTestId('fault-row').filter({ hasText: '2 % loss' })).toHaveCount(0);

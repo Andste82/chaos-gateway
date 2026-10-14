@@ -412,7 +412,8 @@ export const useDraftStore = defineStore('draft', () => {
    * What both the draft and another revision changed, as the concurrent-change dialog names it before
    * reapplying (P3-M13-07): per object the fields both changed to different values, `from` their
    * value and `to` mine (which `rebase` takes); an object they changed that I delete, and one I
-   * changed that they removed (it comes back as mine). A pair of the access matrix has two
+   * changed that they removed (it comes back as mine); the rule order when both moved rules to
+   * different orders (mine wins, the rules they added stay where they put them). A pair of the access matrix has two
    * policies, so where both changed it they agree.
    */
   function overlaps(theirs: Configuration, names: Names = {}): DraftChange[] {
@@ -443,6 +444,17 @@ export const useDraftStore = defineStore('draft', () => {
     }
     const named = (o: { name?: string }) => o.name;
     compare('rule', rules.value, old?.access_rules ?? {}, theirs.access_rules ?? {}, named);
+    if (order.value) {
+      // the rules all three have, in each one's order: a move of theirs and one of mine meet here
+      const kept = (ids: string[]) => ids.filter((id) => id in (old?.access_rules ?? {}) && id in (theirs.access_rules ?? {}) && id in effectiveRules.value);
+      const was = kept(baseOrder.value);
+      const their = kept(theirs.access_rule_order ?? []);
+      const my = kept(effectiveOrder.value);
+      if (!jsonEqual(their, was) && !jsonEqual(my, was) && !jsonEqual(their, my)) {
+        const nameOf = (id: string) => effectiveRules.value[id]?.name ?? id;
+        out.push({ kind: 'rule', id: 'access_rule_order', name: 'order', field: '', from: their.map(nameOf).join(', '), to: my.map(nameOf).join(', ') });
+      }
+    }
     compare('fault', faults.value, old?.faults ?? {}, theirs.faults ?? {}, named);
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
     for (const net of new Set(Object.values(clients.value).map((c) => c.network))) {

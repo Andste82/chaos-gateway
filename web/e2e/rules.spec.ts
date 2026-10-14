@@ -170,7 +170,7 @@ test('add, move and delete rules: new rows, the order in the patch, a deleted ru
   expect(body.access_rule_order).toEqual([RULE_DOT, added, RULE_WEB]);
 });
 
-test("a rule from a WireGuard client's networks: From offers the remote networks, the patch carries the source (P3-M13-08)", async ({ page }) => {
+test("a rule from a prefix inside a WireGuard client's networks: From offers the remote networks and takes the prefix, the patch carries it (P3-M13-08)", async ({ page }) => {
   const gw = await open(page, withNetworks(withRules(MockGateway.sample())));
   await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
   const editor = page.getByTestId('rule-editor');
@@ -180,10 +180,13 @@ test("a rule from a WireGuard client's networks: From offers the remote networks
   await editor.getByLabel('From').selectOption({ label: 'Remote network · a prefix inside them…' });
   await expect(editor.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
-  await editor.getByLabel('From').selectOption({ label: 'Client networks · rA (10.50.0.0/24)' });
+  // the choice stays, and the prefix is typed beside it
+  await expect(editor.getByLabel('From')).toHaveValue('remote_network:cidr:');
+  await editor.getByLabel('Prefix inside a remote network').fill('10.50.0.0/25');
+  await expect(editor.getByText('Enter a prefix inside a client network or a route of a link, like 10.50.0.0/25.')).toBeHidden();
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
-  expect(gw.requestsTo('POST', '/revisions')[0]!.body).toEqual({ access_rules: { [RULE_DNS]: { source: { network: null, remote_network: { client: CLIENT_RA } } } } });
+  expect(gw.requestsTo('POST', '/revisions')[0]!.body).toEqual({ access_rules: { [RULE_DNS]: { source: { network: null, remote_network: { cidr: '10.50.0.0/25' } } } } });
 });
 
 test('a deleted rule is shown struck through at its place, and Undo brings it back there', async ({ page }) => {
@@ -365,6 +368,25 @@ test('the conflict dialog names a field both changed, their value → mine, and 
   await expect(toast(page, 'Revision 44 applied and verified in 87 ms')).toBeVisible();
   // their ports stay, my access wins
   expect(gw.config.access_rules?.[RULE_DNS]).toMatchObject({ name: 'no-dns-2', action: 'reject', protocol: 'tcp', ports: [53, 853] });
+});
+
+test('the conflict dialog names the rule order when both moved rules, and reapplying takes mine (P3-M13-07)', async ({ page }) => {
+  const gw = await open(page);
+  // mine: test-web to the top
+  await rows(page).nth(4).getByRole('button', { name: 'Edit rule test-web' }).click();
+  await page.getByRole('button', { name: 'Move up' }).click();
+  await page.getByRole('button', { name: 'Move up' }).click();
+  await expect(rows(page).nth(2)).toContainText('test-web');
+  // theirs: no-dns to the top
+  gw.applyFromApi({ access_rule_order: [RULE_DNS, RULE_DOT, RULE_WEB] }, { type: 'token', id: 't1', name: 'ci-runner' }, [
+    { op: 'changed', kind: 'access_rule', path: '/access_rule_order', summary: 'order of the access rules changed' },
+  ]);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
+  await expect(conflict.getByTestId('conflict-both').getByRole('listitem')).toHaveText(['Rule order: no-dns, no-dot, test-web → test-web, no-dot, no-dns']);
+  await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')[1]!.body).toEqual({ access_rule_order: [RULE_WEB, RULE_DOT, RULE_DNS] });
 });
 
 test('the conflict dialog lists no field when the two changes do not meet', async ({ page }) => {

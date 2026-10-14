@@ -37,6 +37,8 @@ export interface FaultForm {
   duration: string;
   /** the expiry of the edited overlay, which `keep` keeps; empty for a new fault or one without a TTL */
   keepUntil: string;
+  /** the edited overlay's own TTL, which `keep` keeps as its TTL (`expires_in` carries the remaining time) */
+  keepTtl: string;
   /** the name of a configured fault */
   name: string;
 }
@@ -90,6 +92,7 @@ export function emptyForm(target = 'global'): FaultForm {
     keepOrder: false,
     duration: '15m',
     keepUntil: '',
+    keepTtl: '',
     name: '',
   };
 }
@@ -132,9 +135,12 @@ export function durationChoices(f: FaultForm, ownTtl: string | undefined, now: D
   return out;
 }
 
-/** The remaining time of an expiry as a TTL in whole seconds, at least one. */
-export function remainingTtl(until: string, now: Date): string {
-  return `${Math.max(1, Math.ceil((new Date(until).getTime() - now.getTime()) / 1000))}s`;
+/** The remaining time of an expiry in whole seconds, at least one, and at most `max` (a TTL) when given. */
+export function remainingTtl(until: string, now: Date, max?: string): string {
+  let s = Math.max(1, Math.ceil((new Date(until).getTime() - now.getTime()) / 1000));
+  const maxMs = max ? durationMs(max) : undefined;
+  if (maxMs !== undefined && maxMs >= 1000) s = Math.min(s, Math.floor(maxMs / 1000));
+  return `${s}s`;
 }
 
 export function scopeOf(target: string): Scope {
@@ -158,7 +164,8 @@ export function targetOf(s: Scope | undefined): string {
   const r = s.remote_network;
   if (r?.client) return `remote_network:client:${r.client}`;
   if (r?.link) return `remote_network:link:${r.link}`;
-  if (r?.cidr) return `remote_network:cidr:${r.cidr}`;
+  // an empty prefix is the CIDR choice still waiting for its prefix (P3-M13-08), not "everything"
+  if (r?.cidr !== undefined) return `remote_network:cidr:${r.cidr}`;
   return 'global';
 }
 
@@ -280,12 +287,18 @@ export function formToFault(f: FaultForm): FaultBody {
 }
 
 /**
- * The overlay of the form. `keep` sends the remaining time of the edited overlay as its TTL (the
- * gateway starts a written overlay's TTL over), on the gateway's clock.
+ * The overlay of the form. `keep` sends the edited overlay's own TTL again and its remaining time on
+ * the gateway's clock as `expires_in` (P3-M13-06): the gateway removes it at the same time as before,
+ * and the overlay keeps its TTL (`30m` stays `30m`).
  */
 export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRequest {
-  const ttl = f.duration === 'keep' && f.keepUntil ? remainingTtl(f.keepUntil, now) : durationTtl(f.duration);
-  return { target: scopeOf(f.target), fault: formToFault(f), ...(ttl ? { ttl } : {}) };
+  const base = { target: scopeOf(f.target), fault: formToFault(f) };
+  if (f.duration === 'keep' && f.keepUntil) {
+    if (!f.keepTtl) return { ...base, ttl: remainingTtl(f.keepUntil, now) };
+    return { ...base, ttl: f.keepTtl, expires_in: remainingTtl(f.keepUntil, now, f.keepTtl) };
+  }
+  const ttl = durationTtl(f.duration);
+  return { ...base, ...(ttl ? { ttl } : {}) };
 }
 
 /** A configured fault from the form; the fields the form does not show are kept from `base`. */
@@ -335,6 +348,7 @@ export function faultToForm(fault: FaultBody | undefined, target: Scope | undefi
   // an overlay with a TTL keeps its remaining time unless another duration is chosen (P3-M13-06)
   const ttl = extra.ttl ? (durations.find((d) => d.ttl === extra.ttl)?.value ?? `ttl:${extra.ttl}`) : undefined;
   f.keepUntil = extra.expiresAt ?? '';
+  f.keepTtl = extra.ttl ?? '';
   f.duration = f.keepUntil ? 'keep' : (ttl ?? 'perm');
   f.name = extra.name ?? '';
   return f;

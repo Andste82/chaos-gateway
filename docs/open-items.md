@@ -860,10 +860,14 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 - Status: closed (2026-10-14): decided — options (a) and (d): an edit takes another owner's overlay over (as before) and
   keeps the overlay's remaining time unless the user chooses another duration. The dialog's first duration is "Keep:
-  4:12 left of 5 min"; Apply sends the remaining time on the gateway's clock as the TTL in whole seconds (no API field:
-  `ttl` is "remove after this time" and a written overlay's TTL starts over, which also covers the taken-over overlay, a
-  new one of the admin); a TTL that is not one of the choices (`30m`) is shown as "30 min (its own TTL)" and kept, never
-  turned into 15 minutes (`durationChoices`, `remainingTtl`, `ttlText` in `src/lib/faultForm.ts`). Tests
+  4:12 left of 5 min"; Apply sends the overlay's own TTL again and the remaining time on the gateway's clock in whole
+  seconds as the new write-only API field `expires_in` (`OverlayRequest`: only with a `ttl` at least as long; the first
+  removal comes after it, the overlay keeps `ttl` as written), which also covers the taken-over overlay, a new one of the
+  admin. So the expiry stays where it was and the TTL stays the overlay's own: a TTL that is not one of the choices
+  (`30m`) is shown as "30 min (its own TTL)" and kept, never turned into 15 minutes nor into the remaining seconds
+  (`durationChoices`, `remainingTtl`, `ttlText` in `src/lib/faultForm.ts`; `overlay.Store.Put`,
+  `domain.ValidateOverlay`). Tests `TestExpiresInKeepsTheRemainingTimeAndTheTTL` (`internal/overlay`),
+  `TestOverlayRequestRules` "expires_in …", `TestNewOverlayFillsKindOwnerAndTimes` (`internal/domain`),
   `faults.spec.ts` "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)",
   "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so" (the token's 50 minutes
   kept), `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen
@@ -895,7 +899,10 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   its text points at them as the fields where the user's value wins (`overlaps` in `src/stores/draft.ts`, `bothChanged`
   in `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a field both changed, their value →
   mine, and reapplying takes mine (P3-M13-07)", "the conflict dialog lists no field when the two changes do not meet",
+  "the conflict dialog names the rule order when both moved rules, and reapplying takes mine (P3-M13-07)" (the rule
+  order is listed as "Rule order: theirs → yours" when both moved rules to different orders),
   `src/stores/draft.test.ts` "names the fields both sides changed, their value and mine, before reapplying (P3-M13-07)",
+  "names the rule order when both moved rules to different orders (P3-M13-07)",
   "names a client field both sides changed; …", `src/lib/mergePatch.test.ts` "names the members both edits changed to
   different values, a scope as a whole"
 - Severity: low
@@ -922,8 +929,10 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `remote_network`; a remote prefix is an address or prefix there). Tests `faults.spec.ts` "a fault on a WireGuard
   client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a
   prefix inside a remote network: …", `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them
-  (P3-M13-08)", `rules.spec.ts` "a rule from a WireGuard client's networks: From offers the remote networks, the patch
-  carries the source (P3-M13-08)", `src/lib/scopes.test.ts`
+  (P3-M13-08)", `rules.spec.ts` "a rule from a prefix inside a WireGuard client's networks: From offers the remote
+  networks and takes the prefix, the patch carries it (P3-M13-08)" (the prefix choice stays while its prefix is empty),
+  `src/lib/scopes.test.ts`, `src/lib/faultForm.test.ts` "keeps the choice "a prefix inside a remote network" while its
+  prefix is still empty"
 - Severity: low
 - Reason: needs-decision. A fault, an overlay and an access rule can act on a `remote_network` (the client networks of a
   WireGuard client, the prefixes of a link, or a CIDR inside them; plan §2.4 puts it on the network level). The scope

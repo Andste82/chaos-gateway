@@ -22,16 +22,22 @@ func runSvcNS(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if err := writePID(*pidFile); err != nil {
+	// The handler is in place before the PID file appears: whoever reads the file may stop the holder
+	// at once, and a SIGTERM before signal.Notify would kill the process with the file left behind.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sig)
+	if err := writeHolderPID(*pidFile); err != nil {
 		fmt.Fprintf(stderr, "chaosgw svcns: %v\n", err)
 		return 1
 	}
 	defer func() { _ = os.Remove(*pidFile) }()
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	<-sig
 	return 0
 }
+
+// writeHolderPID is writePID; a test replaces it to send the signal the moment the file appears.
+var writeHolderPID = writePID
 
 // writePID writes this process's PID and its network namespace inode, space-separated, atomically:
 // the API reads the file at any time. The inode lets the executor refuse to attach to this PID once it

@@ -123,8 +123,13 @@ func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
 func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir } }
 
 // WithHostRoot tells the executor where the host's file system is mounted ("/host" in the executor's
-// container, which mounts the host's /etc/netplan and the NetworkManager connections there read-only):
-// ReadHostNet reads the host's network configuration from it. The default is the executor's own root.
+// container, which mounts the host's whole /etc read-only at /host/etc, deploy/compose.executor.yaml):
+// ReadHostNet reads the host's network configuration from it (preflight.NetplanDirs, NMDirs, NMConfFiles
+// and NMConfDirs; only those under etc/ are there in the shipped deployment). The whole /etc is mounted,
+// not those directories, because a bind mount needs its source: a host without netplan or NetworkManager
+// has no /etc/netplan or /etc/NetworkManager, and the executor must not create them on the host. The
+// executor is privileged anyway; nothing of the files but the entries leaves it (HostNetState). The
+// default is the executor's own root.
 func WithHostRoot(fsys fs.FS) Option { return func(e *Executor) { e.hostFS = fsys } }
 
 // WithClock sets the clock of the operation time stamps; the default is the system clock.

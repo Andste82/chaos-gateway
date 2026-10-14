@@ -36,12 +36,13 @@ func TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent(t *testin
 	if err := json.Unmarshal(res.Data[0], &st); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Entries) != 2 || st.Entries[0].ID != "enp2s0" || st.Entries[0].Section != "ethernets" || st.Entries[0].File != "/etc/netplan/50-cloud-init.yaml" {
+	// a device that cannot be read is still named by its id (Phase 3 audit), without its content
+	if len(st.Entries) != 3 || st.Entries[2].ID != "enp3s0" || st.Entries[0].ID != "enp2s0" || st.Entries[0].Section != "ethernets" || st.Entries[0].File != "/etc/netplan/50-cloud-init.yaml" {
 		t.Errorf("entries: %+v", st.Entries)
 	}
 	want := []string{
 		"/etc/netplan/bad.yaml: not valid netplan YAML (line 1)",
-		"/etc/netplan/mistyped.yaml: not valid netplan YAML (network.ethernets, line 4)",
+		"/etc/netplan/mistyped.yaml: not valid netplan YAML (network.ethernets.enp3s0, line 4)",
 		"/etc/netplan/not-a-map.yaml: not valid netplan YAML (line 1)",
 	}
 	if strings.Join(st.Errors, "\n") != strings.Join(want, "\n") {

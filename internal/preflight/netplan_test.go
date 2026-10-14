@@ -85,7 +85,7 @@ psk=another-secret
 		{"enp7s0", "52:54:00:00:00:07", []string{`delete the NetworkManager connection "by-mac"`}},
 		{"enp8s0", "52:54:00:00:00:08", nil},
 	} {
-		status, msg, fix := InterfaceCheck(c.name, c.mac, true, entries)
+		status, msg, fix := InterfaceCheck(c.name, c.mac, "", true, entries)
 		if c.want == nil {
 			if status != "ok" || fix != "" || msg != c.name+" carries no network configuration of the operating system" {
 				t.Errorf("%s: %s %q %q", c.name, status, msg, fix)
@@ -101,15 +101,15 @@ psk=another-secret
 			}
 		}
 		// a candidate is a warning, with the same fix
-		if st, m, f := InterfaceCheck(c.name, c.mac, false, entries); st != "warn" || f != fix || !strings.HasSuffix(m, "; a test interface must not be") {
+		if st, m, f := InterfaceCheck(c.name, c.mac, "", false, entries); st != "warn" || f != fix || !strings.HasSuffix(m, "; a test interface must not be") {
 			t.Errorf("%s as a candidate: %s %q %q", c.name, st, m, f)
 		}
 	}
 	// the message names the file and the entry
-	if _, msg, _ := InterfaceCheck("enp1s0", "", true, entries); !strings.Contains(msg, `netplan (/etc/netplan/50-cloud-init.yaml, "enp1s0" under "ethernets")`) {
+	if _, msg, _ := InterfaceCheck("enp1s0", "", "", true, entries); !strings.Contains(msg, `netplan (/etc/netplan/50-cloud-init.yaml, "enp1s0" under "ethernets")`) {
 		t.Errorf("message: %q", msg)
 	}
-	if _, msg, _ := InterfaceCheck("enp6s0", "", false, entries); !strings.Contains(msg, `NetworkManager (connection "Wired connection 1", /etc/NetworkManager/system-connections/Wired connection 1.nmconnection)`) {
+	if _, msg, _ := InterfaceCheck("enp6s0", "", "", false, entries); !strings.Contains(msg, `NetworkManager (connection "Wired connection 1", /etc/NetworkManager/system-connections/Wired connection 1.nmconnection)`) {
 		t.Errorf("message: %q", msg)
 	}
 	// a host without netplan and NetworkManager configures nothing
@@ -139,7 +139,7 @@ func TestThePreflightSeesNetworkManagerTakeEveryInterface(t *testing.T) {
 		t.Fatalf("errors: %v", errs)
 	}
 	// eth2: the renderer and the unbound connection, one fix
-	status, msg, fix := InterfaceCheck("eth2", "52:54:00:00:00:02", false, entries)
+	status, msg, fix := InterfaceCheck("eth2", "52:54:00:00:00:02", "", false, entries)
 	if status != "warn" ||
 		!strings.Contains(msg, `netplan (/etc/netplan/01-network-manager-all.yaml, renderer "NetworkManager" for all devices)`) ||
 		!strings.Contains(msg, `NetworkManager (connection "Wired", /etc/NetworkManager/system-connections/any.nmconnection, bound to no interface)`) ||
@@ -152,12 +152,12 @@ func TestThePreflightSeesNetworkManagerTakeEveryInterface(t *testing.T) {
 	}
 	// eth3 by name and eth5 by MAC are unmanaged: nothing configures them
 	for _, c := range [][2]string{{"eth3", "52:54:00:00:00:03"}, {"eth5", "52:54:00:00:00:09"}} {
-		if st, m, _ := InterfaceCheck(c[0], c[1], true, entries); st != "ok" {
+		if st, m, _ := InterfaceCheck(c[0], c[1], "", true, entries); st != "ok" {
 			t.Errorf("%s: %s %q", c[0], st, m)
 		}
 	}
 	// eth4 is unmanaged, but netplan's entry for it stays
-	if st, m, f := InterfaceCheck("eth4", "", true, entries); st != "fail" || strings.Contains(m, "NetworkManager (") ||
+	if st, m, f := InterfaceCheck("eth4", "", "", true, entries); st != "fail" || strings.Contains(m, "NetworkManager (") ||
 		f != `delete the entry "eth4:" under "ethernets" in /etc/netplan/50-lab.yaml, then run "sudo netplan apply"` {
 		t.Errorf("eth4: %s %q %q", st, m, f)
 	}
@@ -166,12 +166,99 @@ func TestThePreflightSeesNetworkManagerTakeEveryInterface(t *testing.T) {
 	host["lib/netplan/90-networkd.yaml"] = &fstest.MapFile{Data: []byte("network:\n  renderer: networkd\n")}
 	delete(host, "etc/NetworkManager/system-connections/any.nmconnection")
 	entries, _ = ReadOSConfig(host)
-	if st, m, _ := InterfaceCheck("eth2", "", false, entries); st != "ok" {
+	if st, m, _ := InterfaceCheck("eth2", "", "", false, entries); st != "ok" {
 		t.Errorf("eth2 under networkd: %s %q", st, m)
 	}
 	host["etc/netplan/90-networkd.yaml"] = &fstest.MapFile{Data: []byte("network:\n  version: 2\n")}
 	entries, _ = ReadOSConfig(host)
-	if st, _, _ := InterfaceCheck("eth2", "", false, entries); st != "warn" {
+	if st, _, _ := InterfaceCheck("eth2", "", "", false, entries); st != "warn" {
 		t.Errorf("eth2 with the networkd file hidden: %s", st)
+	}
+}
+
+// Phase 3 audit: netplan's renderer per device type (`ethernets: {renderer: networkd, ...}`) is no device;
+// it neither drops the file nor hides the section's devices, and a device that cannot be read is still
+// reported by its id while the file's other devices are kept.
+func TestThePreflightReadsANetplanFileWithARendererPerDeviceType(t *testing.T) {
+	host := fstest.MapFS{
+		"etc/netplan/a.yaml": {Data: []byte("network:\n  version: 2\n  ethernets:\n    renderer: networkd\n    enp2s0:\n      dhcp4: true\n")},
+		"etc/netplan/b.yaml": {Data: []byte("network:\n  ethernets:\n    enp3s0:\n      match: [odd]\n    enp4s0:\n      dhcp4: true\n")},
+	}
+	entries, errs := ReadOSConfig(host)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "/etc/netplan/b.yaml: not valid netplan YAML (network.ethernets.enp3s0") {
+		t.Errorf("errors: %v", errs)
+	}
+	for _, name := range []string{"enp2s0", "enp3s0", "enp4s0"} {
+		if st, m, _ := InterfaceCheck(name, "", "", true, entries); st != "fail" {
+			t.Errorf("%s: %s %q", name, st, m)
+		}
+	}
+	for _, e := range entries {
+		if e.ID == "renderer" {
+			t.Errorf("the renderer is an entry: %+v", e)
+		}
+	}
+}
+
+// Phase 3 audit: netplan takes one file per name, and /run shadows /etc, /etc shadows /lib; a shadowed
+// file's entries and renderer are not taken.
+func TestThePreflightTakesOnlyTheNetplanFileThatShadowsTheOthers(t *testing.T) {
+	host := fstest.MapFS{
+		"etc/netplan/a.yaml": {Data: []byte("network:\n  renderer: NetworkManager\n  ethernets:\n    enp2s0: {dhcp4: true}\n")},
+		"run/netplan/a.yaml": {Data: []byte("network:\n  renderer: networkd\n  ethernets:\n    enp3s0: {dhcp4: true}\n")},
+		"lib/netplan/b.yaml": {Data: []byte("network:\n  ethernets:\n    enp4s0: {dhcp4: true}\n")},
+		"etc/netplan/b.yaml": {Data: []byte("network:\n  ethernets:\n    enp5s0: {dhcp4: true}\n")},
+	}
+	entries, errs := ReadOSConfig(host)
+	if len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	for name, want := range map[string]string{"enp2s0": "ok", "enp3s0": "fail", "enp4s0": "ok", "enp5s0": "fail"} {
+		if st, m, _ := InterfaceCheck(name, "", "", true, entries); st != want {
+			t.Errorf("%s: %s %q, want %s", name, st, m, want)
+		}
+	}
+	if _, m, _ := InterfaceCheck("enp3s0", "", "", true, entries); !strings.Contains(m, "/run/netplan/a.yaml") {
+		t.Errorf("enp3s0: %q", m)
+	}
+}
+
+// Phase 3 audit: a netplan match by driver selects the interfaces with that kernel driver (a glob, or a
+// list of them); a match the preflight cannot evaluate (empty, or by another key) may select any interface.
+func TestThePreflightEvaluatesANetplanMatchByDriver(t *testing.T) {
+	host := fstest.MapFS{
+		"etc/netplan/a.yaml": {Data: []byte(`network:
+  ethernets:
+    all-virtio:
+      match: {driver: virtio_net}
+      dhcp4: true
+    intel:
+      match: {driver: ["e1000*", igb], name: "en*"}
+    usb-by-mac:
+      match: {driver: r8152, macaddress: "02:00:00:00:00:09"}
+`)},
+	}
+	entries, errs := ReadOSConfig(host)
+	if len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	for _, c := range []struct{ name, mac, driver, want string }{
+		{"enp2s0", "", "virtio_net", "fail"},
+		{"enp3s0", "", "e1000e", "fail"},
+		{"eth0", "", "igb", "ok"}, // the name does not match
+		{"enp4s0", "", "igb", "fail"},
+		{"enp5s0", "", "ixgbe", "ok"},
+		{"veth0", "", "", "ok"}, // no driver
+		{"enx0", "02:00:00:00:00:09", "r8152", "fail"},
+		{"enx1", "02:00:00:00:00:0a", "r8152", "ok"},
+	} {
+		if st, m, _ := InterfaceCheck(c.name, c.mac, c.driver, true, entries); st != c.want {
+			t.Errorf("%s (%s): %s %q, want %s", c.name, c.driver, st, m, c.want)
+		}
+	}
+	host["etc/netplan/b.yaml"] = &fstest.MapFile{Data: []byte("network:\n  ethernets:\n    by-path:\n      match: {path: \"pci-0000:00:1f.6\"}\n")}
+	entries, _ = ReadOSConfig(host)
+	if st, m, _ := InterfaceCheck("enp9s0", "", "ixgbe", true, entries); st != "fail" || !strings.Contains(m, `"by-path" under "ethernets"`) {
+		t.Errorf("a match by another key: %s %q", st, m)
 	}
 }

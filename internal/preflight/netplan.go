@@ -24,7 +24,8 @@ import (
 // nothing else: no address, no key, no Wi-Fi secret of the files leaves it.
 
 // Where netplan and NetworkManager keep their configuration, relative to the host's root. netplan reads
-// /etc, /run and /lib (a file in /etc overrides one of the same name in /run and /lib); NetworkManager's
+// /run, /etc and /lib and takes one file per name: a file in /run shadows one of the same name in /etc and
+// /lib, a file in /etc one in /lib (NetplanDirs is in that order); NetworkManager's
 // keyfiles are in /etc and, generated (also by netplan's NetworkManager renderer), in /run. A directory is
 // read only when it is there under the root: the shipped deployment (deploy/compose.executor.yaml) mounts
 // only the host's /etc, so there /run/netplan, /lib/netplan and /run/NetworkManager are not seen. The
@@ -36,7 +37,7 @@ import (
 // every ethernet port without netplan's NetworkManager renderer and without a keyfile (an auto-default
 // "Wired connection N" has no file) is not reported.
 var (
-	NetplanDirs = []string{"etc/netplan", "run/netplan", "lib/netplan"}
+	NetplanDirs = []string{"run/netplan", "etc/netplan", "lib/netplan"}
 	NMDirs      = []string{"etc/NetworkManager/system-connections", "run/NetworkManager/system-connections"}
 	NMConfFiles = []string{"etc/NetworkManager/NetworkManager.conf"}
 	NMConfDirs  = []string{"usr/lib/NetworkManager/conf.d", "run/NetworkManager/conf.d", "etc/NetworkManager/conf.d"}
@@ -58,12 +59,16 @@ type OSEntry struct {
 	// NetworkManager. ID is the entry's name in it, or the NetworkManager connection's id.
 	Section string `json:"section,omitempty"`
 	ID      string `json:"id"`
-	// Name (an interface name, a netplan glob) and MAC select the interface the entry configures; both empty
-	// selects none. Member is set when the entry names the interface as a part of another device (a port of
-	// a bridge or bond, the link of a VLAN): Name is then the part.
-	Name   string `json:"name,omitempty"`
-	MAC    string `json:"mac,omitempty"`
-	Member bool   `json:"member,omitempty"`
+	// Name (an interface name, a netplan glob), MAC and Driver (globs of the kernel driver's name, netplan's
+	// match.driver; one must match) select the interface the entry configures, all that are set must match;
+	// all empty selects none. A netplan match the preflight cannot evaluate (no name, MAC or driver: an
+	// empty match, or one by another key) has Name "*": it may select any interface, so it is reported for
+	// every one. Member is set when the entry names the interface as a part of another device (a port of a
+	// bridge or bond, the link of a VLAN): Name is then the part.
+	Name   string   `json:"name,omitempty"`
+	MAC    string   `json:"mac,omitempty"`
+	Driver []string `json:"driver,omitempty"`
+	Member bool     `json:"member,omitempty"`
 	// All is set when the entry hands every interface to NetworkManager: an ethernet connection of
 	// NetworkManager bound to no interface (it may come up on any ethernet port), or netplan's NetworkManager
 	// renderer for all devices (Section "renderer", ID the renderer; NetworkManager then manages every device
@@ -75,22 +80,28 @@ type OSEntry struct {
 	Unmanaged bool `json:"unmanaged,omitempty"`
 }
 
-// Matches reports whether the entry, on its own, configures the interface with this name and MAC address
-// (an Unmanaged entry configures nothing; Configuring takes it into account).
-func (e OSEntry) Matches(name, mac string) bool {
-	return !e.Unmanaged && e.selects(name, mac)
+// Matches reports whether the entry, on its own, configures the interface with this name, MAC address and
+// kernel driver (an Unmanaged entry configures nothing; Configuring takes it into account).
+func (e OSEntry) Matches(name, mac, driver string) bool {
+	return !e.Unmanaged && e.selects(name, mac, driver)
 }
 
-// selects reports whether the entry names the interface with this name and MAC address: by its name
-// glob and MAC, or All.
-func (e OSEntry) selects(name, mac string) bool {
+// selects reports whether the entry names the interface with this name, MAC address and driver: by its
+// name glob, MAC and driver globs, or All.
+func (e OSEntry) selects(name, mac, driver string) bool {
 	if e.All {
 		return true
 	}
-	if e.Name == "" && e.MAC == "" {
+	if e.Name == "" && e.MAC == "" && len(e.Driver) == 0 {
 		return false
 	}
 	if e.MAC != "" && !strings.EqualFold(e.MAC, mac) {
+		return false
+	}
+	if len(e.Driver) > 0 && !slices.ContainsFunc(e.Driver, func(g string) bool {
+		ok, err := path.Match(g, driver)
+		return driver != "" && err == nil && ok
+	}) {
 		return false
 	}
 	if e.Name != "" {
@@ -138,32 +149,31 @@ func (e OSEntry) Fix(iface string) string {
 // that cannot be read or parsed is reported in errs and the others are still read; a directory that does
 // not exist is no error (no netplan, no NetworkManager).
 func ReadOSConfig(fsys fs.FS) (entries []OSEntry, errs []error) {
-	// netplan's global renderer: the files are merged in the order of their names (a file in /etc hides
-	// one of the same name in /run and /lib), and a later "renderer" wins.
-	type rendered struct{ file, renderer string }
-	renderers := map[string]rendered{}
+	// netplan takes one file per name, the first of NetplanDirs that has it (/run shadows /etc, /etc
+	// shadows /lib), and merges those in the order of their names: a later global "renderer" wins.
+	winners := map[string]string{}
 	for _, dir := range NetplanDirs {
 		for _, f := range files(fsys, dir, ".yaml", ".yml") {
-			raw, err := fs.ReadFile(fsys, f)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			es, renderer, err := netplanEntries(raw, "/"+f)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("/%s: %w", f, err))
-				continue
-			}
-			entries = append(entries, es...)
-			if _, hidden := renderers[path.Base(f)]; !hidden {
-				renderers[path.Base(f)] = rendered{"/" + f, renderer}
+			if _, shadowed := winners[path.Base(f)]; !shadowed {
+				winners[path.Base(f)] = f
 			}
 		}
 	}
-	var global rendered
-	for _, name := range sortedKeys(renderers) {
-		if r := renderers[name]; r.renderer != "" {
-			global = r
+	var global struct{ file, renderer string }
+	for _, name := range sortedKeys(winners) {
+		f := winners[name]
+		raw, err := fs.ReadFile(fsys, f)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		es, renderer, ferrs := netplanEntries(raw, "/"+f)
+		for _, err := range ferrs {
+			errs = append(errs, fmt.Errorf("/%s: %w", f, err))
+		}
+		entries = append(entries, es...)
+		if renderer != "" {
+			global.file, global.renderer = "/"+f, renderer
 		}
 	}
 	if strings.EqualFold(global.renderer, ManagerNetworkManager) {
@@ -209,17 +219,17 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// Configuring returns the entries that configure the interface with this name and MAC address: those
-// that select it, without NetworkManager's entries and the All entries when a NetworkManager setting
-// leaves the interface alone (`unmanaged-devices`).
-func Configuring(entries []OSEntry, name, mac string) []OSEntry {
+// Configuring returns the entries that configure the interface with this name, MAC address and kernel
+// driver (empty when it has none): those that select it, without NetworkManager's entries and the All
+// entries when a NetworkManager setting leaves the interface alone (`unmanaged-devices`).
+func Configuring(entries []OSEntry, name, mac, driver string) []OSEntry {
 	unmanaged := false
 	for _, e := range entries {
-		unmanaged = unmanaged || (e.Unmanaged && e.selects(name, mac))
+		unmanaged = unmanaged || (e.Unmanaged && e.selects(name, mac, driver))
 	}
 	var out []OSEntry
 	for _, e := range entries {
-		if !e.Matches(name, mac) || (unmanaged && (e.All || e.Manager == ManagerNetworkManager)) {
+		if !e.Matches(name, mac, driver) || (unmanaged && (e.All || e.Manager == ManagerNetworkManager)) {
 			continue
 		}
 		out = append(out, e)
@@ -291,21 +301,20 @@ func files(fsys fs.FS, dir string, exts ...string) []string {
 }
 
 // netplanEntries reads the entries of one netplan file: every device of every section, the interface it
-// selects (its id, or its match by name or MAC), and the interfaces a bridge or a bond takes as ports and a
-// VLAN is on; renderer is the file's global renderer (`network.renderer`), empty without one.
-func netplanEntries(raw []byte, file string) (out []OSEntry, renderer string, err error) {
+// selects (its id, or its match by name, MAC or driver), and the interfaces a bridge or a bond takes as
+// ports and a VLAN is on; renderer is the file's global renderer (`network.renderer`), empty without one.
+// A section's own `renderer` (netplan's renderer per device type) is no device: the devices of the section
+// are entries anyway. Each device is read on its own: one that cannot be read is still reported by its id
+// (it may configure the interface of that name) and with an error, and the file's other devices are kept.
+// A file that is no netplan YAML at all gives an error and no entries.
+func netplanEntries(raw []byte, file string) (out []OSEntry, renderer string, errs []error) {
 	var doc struct {
 		Network map[string]yaml.Node `yaml:"network"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, "", notNetplan(err, "")
+		return nil, "", []error{notNetplan(err, "")}
 	}
-	var sections []string
-	for s := range doc.Network {
-		sections = append(sections, s)
-	}
-	sort.Strings(sections)
-	for _, section := range sections {
+	for _, section := range sortedKeys(doc.Network) {
 		node := doc.Network[section]
 		if section == "renderer" && node.Kind == yaml.ScalarNode {
 			renderer = node.Value
@@ -313,27 +322,42 @@ func netplanEntries(raw []byte, file string) (out []OSEntry, renderer string, er
 		if node.Kind != yaml.MappingNode {
 			continue // version, renderer
 		}
-		var devs map[string]struct {
-			Match *struct {
-				Name       string `yaml:"name"`
-				MACAddress string `yaml:"macaddress"`
-			} `yaml:"match"`
-			Interfaces []string `yaml:"interfaces"`
-			Link       string   `yaml:"link"`
-		}
+		var devs map[string]yaml.Node
 		if err := node.Decode(&devs); err != nil {
-			return nil, "", notNetplan(err, "network."+section)
+			errs = append(errs, notNetplan(err, "network."+section))
+			continue
 		}
-		var ids []string
-		for id := range devs {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			d := devs[id]
+		for _, id := range sortedKeys(devs) {
+			dn := devs[id]
+			if id == "renderer" && dn.Kind == yaml.ScalarNode {
+				continue // the renderer of the device type
+			}
 			e := OSEntry{Manager: ManagerNetplan, File: file, Section: section, ID: id, Name: id}
-			if d.Match != nil {
-				e.Name, e.MAC = d.Match.Name, d.Match.MACAddress
+			var d struct {
+				Match *struct {
+					Name       string    `yaml:"name"`
+					MACAddress string    `yaml:"macaddress"`
+					Driver     yaml.Node `yaml:"driver"`
+				} `yaml:"match"`
+				Interfaces []string `yaml:"interfaces"`
+				Link       string   `yaml:"link"`
+			}
+			if err := dn.Decode(&d); err != nil {
+				errs = append(errs, notNetplan(err, "network."+section+"."+id))
+				out = append(out, e)
+				continue
+			}
+			if m := d.Match; m != nil {
+				e.Name, e.MAC = m.Name, m.MACAddress
+				switch m.Driver.Kind {
+				case yaml.ScalarNode:
+					e.Driver = []string{m.Driver.Value}
+				case yaml.SequenceNode:
+					_ = m.Driver.Decode(&e.Driver)
+				}
+				if e.Name == "" && e.MAC == "" && len(e.Driver) == 0 {
+					e.Name = "*" // a match the preflight cannot evaluate may select any interface
+				}
 			}
 			out = append(out, e)
 			for _, port := range d.Interfaces {
@@ -344,7 +368,7 @@ func netplanEntries(raw []byte, file string) (out []OSEntry, renderer string, er
 			}
 		}
 	}
-	return out, renderer, nil
+	return out, renderer, errs
 }
 
 // yamlLine is where yaml.v3 says the problem is ("yaml: line 3: ...", "line 3: cannot unmarshal ...").
@@ -414,9 +438,9 @@ func nmEntry(raw []byte, file string) (OSEntry, bool) {
 // InterfaceCheck is the preflight's verdict on one host interface that is a test interface (assigned) or
 // may become one: "ok" when the operating system does not configure it, otherwise "fail" for an assigned
 // one and "warn" for a candidate, with the entries that configure it and what to remove (P3-M12-07).
-func InterfaceCheck(name, mac string, assigned bool, entries []OSEntry) (status, message, fix string) {
+func InterfaceCheck(name, mac, driver string, assigned bool, entries []OSEntry) (status, message, fix string) {
 	var where, fixes []string
-	for _, e := range Configuring(entries, name, mac) {
+	for _, e := range Configuring(entries, name, mac, driver) {
 		where = append(where, e.Where())
 		if f := e.Fix(name); !slices.Contains(fixes, f) {
 			fixes = append(fixes, f)

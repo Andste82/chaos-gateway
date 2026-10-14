@@ -12,7 +12,7 @@
 services:
   exec:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw/bird", "--allow-uid", "65532", "--socket-owner", "65532"]
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw/bird", "--allow-uid", "65532", "--socket-owner", "65532", "--host-root", "/host"]
     user: "0:0"
     privileged: true
     network_mode: host
@@ -49,6 +49,14 @@ services:
       - type: bind
         source: /lib/modules
         target: /lib/modules
+        read_only: true
+      # the host's /etc, read-only: the preflight reads where netplan and NetworkManager configure an
+      # interface (/etc/netplan, /etc/NetworkManager/system-connections; their files are root's), so the
+      # setup wizard can say which entry to remove from a test interface. Only the file, the entry and the
+      # interface it names leave the executor, never a file's content.
+      - type: bind
+        source: /etc
+        target: /host/etc
         read_only: true
     restart: unless-stopped
     stop_grace_period: 30s

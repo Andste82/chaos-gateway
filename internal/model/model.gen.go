@@ -4150,7 +4150,7 @@ type HostInterface struct {
 	Mac  MacAddress `json:"mac"`
 	Name string     `json:"name"`
 
-	// OsManaged Configured by netplan/NetworkManager (must be false for test interfaces).
+	// OsManaged Configured by netplan/NetworkManager (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
 	OsManaged *bool `json:"os_managed,omitempty"`
 	SpeedMbps *int  `json:"speed_mbps,omitempty"`
 }
@@ -4913,9 +4913,12 @@ type PreflightReport struct {
 		Fix *string `json:"fix,omitempty"`
 
 		// Id Example: module.sch_netem
-		Id      string                      `json:"id"`
-		Message string                      `json:"message"`
-		Status  PreflightReportChecksStatus `json:"status"`
+		Id string `json:"id"`
+
+		// Interface The host interface the check is about (the OS-configuration check of a test interface).
+		Interface *string                     `json:"interface,omitempty"`
+		Message   string                      `json:"message"`
+		Status    PreflightReportChecksStatus `json:"status"`
 	} `json:"checks"`
 	Status PreflightReportStatus `json:"status"`
 }

@@ -3153,8 +3153,9 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   interface with an address, or the uplink in the two-port case); then the test
   interfaces, each becoming a LAN test network with a proposed name and gateway address (10.10.0.1/24, 10.20.0.1/24, …;
   the first proposal whose name and prefix no other network of the draft, the uplink or the management network uses) and
-  DHCP; then the admin password. An interface the OS configures (`os_managed`) gets the netplan hint: delete its entry
-  (plan §3.4: a test interface has none). Each step is
+  DHCP; then the admin password. A chosen test interface that the OS configures shows the preflight's check of it
+  (P3-M12-07, below): the netplan file and entry or the NetworkManager connection, and what to remove (plan §3.4: a test
+  interface has no entry), with "Check again"; the wizard computes no hint of its own. Each step is
   validated under its fields (each error tied to its field with `aria-describedby` while it is shown) before the next (name pattern of the spec, address with prefix length, no network or
   broadcast address, no overlap with another test network or with the uplink's and management's prefixes, password of 12
   characters typed twice). Plan §2.17 "Validation": the messages appear once the step's Next was pressed (not while the
@@ -3198,6 +3199,25 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   (`role="switch"`), `SectionCard`, `EmptyState`, table rows (`.data-row`), `ToastHost`, `StickyActionBar`, `SideDrawer`,
   `ModalDialog` (Reka UI dialogs: focus trap, Escape, labelled by the title), `CountdownBanner`, `AppBanner`, `AppIcon`
   (16 px stroke icons). The focus ring is the accent (`--color-accent`) at 2 px on every control.
+- **The preflight's check of the test interfaces** (P3-M12-07, decided option (a)). Plan §3.4 wants the preflight to
+  check that the test interfaces carry no OS configuration. The executor reads where netplan (`/etc/netplan`,
+  `/run/netplan`, `/lib/netplan`) and NetworkManager (`system-connections` in `/etc` and `/run`) configure an interface
+  (`preflight.ReadOSConfig`: a netplan entry by its id or its `match` by name glob or MAC, a port of a netplan bridge or
+  bond, the link of a VLAN, a NetworkManager keyfile by `interface-name` or `mac-address`) from the host root it is given
+  (`chaosgw exec --host-root /host`; `deploy/compose.executor.yaml` mounts the host's `/etc` read-only at `/host/etc`,
+  since netplan's and NetworkManager's files are root's and the API container's user cannot read them). The read
+  operation `host_net` returns only the file, the section, the entry and what it selects (`executor.HostNetState`),
+  never a file's content (no address, no key, no Wi-Fi secret). The API (`preflightReport` in `internal/api/system.go`)
+  adds to the checks of the host made at start one check per interface that is or may become a test interface (every
+  interface but the uplink and the management interface), made at each `GET /setup` and `GET /system/preflight`:
+  `interface.<name>.os_config` with `interface`, `ok` when nothing configures it, otherwise `warn` for a candidate and
+  `fail` for an assigned test interface, the message naming the file and the entry ("eth3 is configured by netplan
+  (/etc/netplan/60-lab.yaml, "lab" under "ethernets")") and `fix` what to remove (`delete the entry "lab:" under
+  "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"`, `sudo nmcli connection delete "…"`); a file
+  that cannot be read or parsed is a warning of its own. `HostInterface.os_managed` comes from the same read. The wizard
+  shows the host's checks on its first step and the check of each chosen test interface where the test interfaces are
+  chosen; the client-side hint (`netplanHint`) is gone. No CLI command shows the preflight; every client reads it from
+  `GET /system/preflight`. `deploy/host-setup.sh` says to delete the entry too (it showed one that turns DHCP off).
 
 ### Tests
 
@@ -3206,7 +3226,9 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 | Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, reachability, ended session, 503 `unavailable` | `src/api/fetcher.test.ts` |
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
 | Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
-| Setup wizard rules, free proposals, the netplan hint and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
+| Setup wizard rules, free proposals and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
+| The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content, an unreadable file (P3-M12-07) | `TestThePreflightFindsTheOSConfigurationOfAnInterface` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
+| The preflight checks every candidate and test interface: a warning before the setup, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
 | Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
 | Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |

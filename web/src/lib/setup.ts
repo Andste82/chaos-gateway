@@ -153,21 +153,6 @@ export function validatePassword(password: string, repeat: string): Record<strin
   return e;
 }
 
-/**
- * The hint for an interface that the OS configures (netplan or NetworkManager): a test interface
- * must belong to Chaos Gateway alone (plan §3.4: it "simply has no entry there"; §3.8: the
- * host-setup script prints the netplan change), else both would configure it. An entry that only
- * turns the addressing off would still leave the port to systemd-networkd, so the only fix is to
- * remove the entry.
- */
-export function netplanHint(i: HostInterface | undefined): string | undefined {
-  if (!i?.os_managed) return undefined;
-  return (
-    `${i.name} is configured by the operating system. Delete its entry "${i.name}:" under "ethernets" ` +
-    `in /etc/netplan/*.yaml (or its NetworkManager connection) and run "sudo netplan apply" before the setup applies.`
-  );
-}
-
 function uuidV4(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   const b = new Uint8Array(16);

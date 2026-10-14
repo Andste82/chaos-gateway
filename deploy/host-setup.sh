@@ -141,18 +141,11 @@ fi
 cat <<'NOTES'
 
 host-setup: the test interfaces
-  Give each interface that Chaos Gateway will use for a test network no address and no DHCP in
-  netplan, and keep the uplink and the management interface as they are, for example:
-
-    network:
-      version: 2
-      ethernets:
-        enp3s0:            # a test network port
-          dhcp4: false
-          dhcp6: false
-          optional: true
-
-  Then run `sudo netplan apply`. Chaos Gateway assigns the port to its own bridge.
+  An interface that Chaos Gateway uses for a test network belongs to it alone: delete its entry
+  from /etc/netplan/*.yaml (and its NetworkManager connection, if there is one) and run
+  `sudo netplan apply`. An entry that only turns DHCP off still hands the port to the operating
+  system. Keep the uplink and the management interface as they are. The preflight of the setup
+  wizard names every entry it finds for an interface.
 NOTES
 
 exit "$status"

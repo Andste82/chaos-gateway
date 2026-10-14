@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 )
 
 // Outcome is the result of a request.
@@ -62,6 +64,9 @@ type Executor struct {
 	state   string // file holding the assigned interfaces, empty for none
 	keys    KeyProvider
 	birdDir string // where the BIRD configuration files and control sockets live
+	// hostFS is the host's root file system, read for its netplan and NetworkManager configuration
+	// (ReadHostNet); nil reads the executor's own root
+	hostFS fs.FS
 
 	// queue holds the requests that wait. Identity updates (incremental set elements, plan §2.3,
 	// §3.11) go before queued plans; within a class the order is the arrival order. One worker takes
@@ -116,6 +121,11 @@ func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
 // WithBirdDir tells the executor where BIRD's configuration files and control sockets are
 // (<dir>/<instance>.conf and .ctl): a directory shared with the BIRD container.
 func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir } }
+
+// WithHostRoot tells the executor where the host's file system is mounted ("/host" in the executor's
+// container, which mounts the host's /etc/netplan and the NetworkManager connections there read-only):
+// ReadHostNet reads the host's network configuration from it. The default is the executor's own root.
+func WithHostRoot(fsys fs.FS) Option { return func(e *Executor) { e.hostFS = fsys } }
 
 // WithClock sets the clock of the operation time stamps; the default is the system clock.
 func WithClock(c clock.Clock) Option { return func(e *Executor) { e.clock = c } }
@@ -754,6 +764,9 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	if o.What == ReadServiceNS {
 		return json.Marshal(e.serviceNSState(o.Service, o.PID))
 	}
+	if o.What == ReadHostNet {
+		return json.Marshal(e.hostNet())
+	}
 	if o.What == ReadBird {
 		st, err := e.readBird(ctx, o.Instance)
 		if err != nil {
@@ -1121,4 +1134,28 @@ func routeGetNoRoute(stderr string) bool {
 		}
 	}
 	return false
+}
+
+// HostNetState is the answer of ReadHostNet: where the operating system configures network interfaces
+// (netplan entries, NetworkManager connections, preflight.OSEntry) and the files that could not be read.
+// Only where an interface is named leaves the executor, never a file's content (P3-M12-07).
+type HostNetState struct {
+	Entries []preflight.OSEntry `json:"entries"`
+	Errors  []string            `json:"errors,omitempty"`
+}
+
+func (e *Executor) hostNet() HostNetState {
+	fsys := e.hostFS
+	if fsys == nil {
+		fsys = os.DirFS("/")
+	}
+	entries, errs := preflight.ReadOSConfig(fsys)
+	st := HostNetState{Entries: entries}
+	if st.Entries == nil {
+		st.Entries = []preflight.OSEntry{}
+	}
+	for _, err := range errs {
+		st.Errors = append(st.Errors, err.Error())
+	}
+	return st
 }

@@ -19,6 +19,8 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await expect(next).toBeDisabled();
   await expect(page.getByTestId('preflight')).toContainText('sch_netem is not loaded yet');
   await expect(page.getByTestId('preflight')).toContainText('modules-load.d');
+  // the checks of the interfaces are shown where the test interfaces are chosen, not here
+  await expect(page.getByTestId('preflight')).not.toContainText('eth0 is configured');
   await page.getByLabel('Setup token').fill('wrong-token');
   await expect(page.getByText('Enter the setup token from the container log.')).toHaveCount(0);
   await next.click();
@@ -43,14 +45,23 @@ test('first start: the wizard sets up the gateway and confirms the revision', as
   await expect(next).toBeDisabled();
   await page.getByRole('checkbox', { name: /eth2/ }).check();
   await page.getByRole('checkbox', { name: /eth3/ }).check();
-  // eth3 is configured by netplan: the hint says how to free it
-  await expect(page.getByTestId('netplan-hints')).toContainText('eth3 is configured by the operating system');
-  await expect(page.getByTestId('netplan-hints')).toContainText('sudo netplan apply');
-  // plan §3.4: a test interface has no entry there at all
-  await expect(page.getByTestId('netplan-hints')).toContainText('Delete its entry "eth3:"');
-  await expect(page.getByTestId('netplan-hints')).not.toContainText('dhcp4');
+  // eth3 is configured by netplan and NetworkManager: the preflight's check names the file, the entry and the
+  // connection, and says what to remove (P3-M12-07); the wizard shows its text, nothing of its own
+  const hints = page.getByTestId('netplan-hints');
+  await expect(hints).toContainText('eth3 is configured by netplan (/etc/netplan/60-lab.yaml, "lab" under "ethernets")');
+  await expect(hints).toContainText('delete the entry "lab:" under "ethernets" in /etc/netplan/60-lab.yaml, then run "sudo netplan apply"');
+  await expect(hints).toContainText('sudo nmcli connection delete "Wired connection 2"');
+  // plan §3.4: a test interface has no entry there at all; nothing offers to only turn the addressing off
+  await expect(hints).not.toContainText('dhcp4');
+  // eth2 carries none, and the uplink's check is not one of a test interface
+  await expect(hints).not.toContainText('eth2');
+  await expect(hints).not.toContainText('eth0');
+  // after the entry is gone, checking again reads the preflight anew
+  const before = gw.requestsTo('GET', '/setup').length;
+  await hints.getByRole('button', { name: 'Check again' }).click();
+  await expect.poll(() => gw.requestsTo('GET', '/setup').length).toBeGreaterThan(before);
   await page.getByRole('checkbox', { name: /eth3/ }).uncheck();
-  await expect(page.getByTestId('netplan-hints')).toHaveCount(0);
+  await expect(hints).toHaveCount(0);
   await page.getByRole('button', { name: 'Next' }).click();
 
   // step 3: validation under the field, the step does not advance until it is valid

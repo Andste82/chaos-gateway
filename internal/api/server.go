@@ -270,10 +270,11 @@ type PreflightReport struct {
 	Status string           `json:"status"`
 }
 
-// PreflightCheck is one line of it.
+// PreflightCheck is one line of it. Interface names the host interface a check is about.
 type PreflightCheck struct {
-	Fix     string `json:"fix,omitempty"`
-	ID      string `json:"id"`
-	Message string `json:"message"`
-	Status  string `json:"status"`
+	Fix       string `json:"fix,omitempty"`
+	ID        string `json:"id"`
+	Interface string `json:"interface,omitempty"`
+	Message   string `json:"message"`
+	Status    string `json:"status"`
 }

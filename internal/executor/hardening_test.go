@@ -77,7 +77,7 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "exec" {
 		t.Fatalf("command %v: the image's entrypoint is chaosgw, the command starts with the subcommand", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true, "--bird-dir": true}
+	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true, "--bird-dir": true, "--host-root": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw exec`", a)
@@ -103,19 +103,20 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			if err := v.Decode(&m); err != nil {
 				t.Fatal(err)
 			}
-			if (m.Target == "/lib/modules" || m.Target == "/var/lib/chaosgw/secrets") && !m.ReadOnly {
-				t.Error("/lib/modules must be mounted read-only")
+			if (m.Target == "/lib/modules" || m.Target == "/var/lib/chaosgw/secrets" || m.Target == "/host/etc") && !m.ReadOnly {
+				t.Errorf("%s must be mounted read-only", m.Target)
 			}
 			mounts = append(mounts, m.Source+":"+m.Target)
 		}
 	}
 	for _, m := range mounts {
-		if strings.Contains(m, "docker.sock") || strings.HasPrefix(m, "/:") || strings.HasPrefix(m, "/etc") || strings.HasPrefix(m, "/var/run:") {
+		// the host's /etc only read-only at /host/etc, for the netplan and NetworkManager files the preflight reads (P3-M12-07)
+		if strings.Contains(m, "docker.sock") || strings.HasPrefix(m, "/:") || (strings.HasPrefix(m, "/etc") && m != "/etc:/host/etc") || strings.HasPrefix(m, "/var/run:") {
 			t.Errorf("unexpected mount %q", m)
 		}
 	}
-	if len(mounts) != 6 {
-		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns and /lib/modules", mounts)
+	if len(mounts) != 7 || !contains(mounts, "/etc:/host/etc") || !contains(s.Command, "/host") {
+		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns, /lib/modules and the host's /etc (read by --host-root /host)", mounts)
 	}
 	if len(s.Tmpfs) != 2 || !strings.Contains(s.Tmpfs[0], "mode=0700") {
 		t.Errorf("tmpfs %v", s.Tmpfs)

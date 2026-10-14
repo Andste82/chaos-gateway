@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // First-start setup (plan §2.16, M12): the setup token from the container log, the uplink and the
 // management interface, the test interfaces and their networks, the admin password, the preflight
-// with its hints. The gateway applies revision 1 with commit-confirm; the wizard logs in with the
+// with its hints: for each chosen test interface the preflight's check names the netplan entry or the
+// NetworkManager connection to remove (P3-M12-07). The gateway applies revision 1 with commit-confirm; the wizard logs in with the
 // new password and asks for the confirmation, so a choice that cuts the browser off rolls back.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
@@ -17,7 +18,6 @@ import {
   buildSetupRequest,
   managementURL,
   minPassword,
-  netplanHint,
   proposeNetwork,
   validateInterfaces,
   validateNetworks,
@@ -34,6 +34,11 @@ const toasts = useToastStore();
 const setup = useQuery({ queryKey: ['setup'], queryFn: ({ signal }) => getSetup({ signal }) });
 const interfaces = computed<HostInterface[]>(() => setup.data.value?.interfaces ?? []);
 const preflight = computed(() => setup.data.value?.preflight);
+// the checks of the host (kernel, modules); the checks of the interfaces are shown where the test interfaces are chosen
+const hostChecks = computed(() => (preflight.value?.checks ?? []).filter((c) => !c.interface));
+const hostStatus = computed(() =>
+  hostChecks.value.some((c) => c.status === 'fail') ? 'fail' : hostChecks.value.some((c) => c.status === 'warn') ? 'warn' : 'ok',
+);
 
 const steps = ['Setup token', 'Interfaces', 'Test networks', 'Admin password', 'Review'] as const;
 const step = ref(0);
@@ -90,7 +95,13 @@ const uplinkHasDefault = computed(() => draft.uplink === setup.data.value?.sugge
 const takenPrefixes = computed(() =>
   [byName(draft.uplink), byName(draft.management)].flatMap((i) => i?.addresses ?? []),
 );
-const hints = computed(() => draft.tests.map((t) => netplanHint(byName(t))).filter((h): h is string => !!h));
+// the preflight's check of every chosen test interface the operating system configures: its text names the netplan
+// file and entry (or the NetworkManager connection) and what to remove (plan §3.4, P3-M12-07)
+const hints = computed(() =>
+  draft.tests
+    .map((t) => preflight.value?.checks.find((c) => c.interface === t && c.status !== 'ok'))
+    .filter((c): c is NonNullable<typeof c> => !!c),
+);
 
 /** The problems of a step's fields, by field. */
 function problems(s: number): Record<string, string> {
@@ -342,11 +353,11 @@ const ifaceLabel = (i: HostInterface) =>
             <div v-if="preflight" data-testid="preflight">
               <h2 class="card-title mb-2">Preflight</h2>
               <StatusDot
-                :tone="preflight.status === 'ok' ? 'normal' : preflight.status === 'warn' ? 'fault' : 'block'"
-                :label="preflight.status === 'ok' ? 'This host is ready' : preflight.status === 'warn' ? 'Warnings' : 'Problems found'"
+                :tone="hostStatus === 'ok' ? 'normal' : hostStatus === 'warn' ? 'fault' : 'block'"
+                :label="hostStatus === 'ok' ? 'This host is ready' : hostStatus === 'warn' ? 'Warnings' : 'Problems found'"
               />
               <ul class="mt-2 mb-0 flex list-none flex-col gap-2 p-0">
-                <li v-for="c in preflight.checks.filter((c) => c.status !== 'ok')" :key="c.id" class="text-sm">
+                <li v-for="c in hostChecks.filter((c) => c.status !== 'ok')" :key="c.id" class="text-sm">
                   <StatusDot :tone="c.status === 'warn' ? 'fault' : 'block'" :label="c.status === 'warn' ? 'Warning' : 'Failed'" />
                   {{ c.message }}
                   <pre v-if="c.fix" class="mono mt-1 mb-0 overflow-auto rounded bg-surface-2 p-2 text-xs whitespace-pre-wrap text-text-2">{{ c.fix }}</pre>
@@ -412,8 +423,13 @@ const ifaceLabel = (i: HostInterface) =>
               </label>
               <p v-if="errors.tests" id="tests-error" class="field-error" role="alert">{{ errors.tests }}</p>
             </fieldset>
-            <div v-if="hints.length" class="rounded-md border border-fault-border bg-fault-tint p-3 text-sm text-fault-text" data-testid="netplan-hints">
-              <p v-for="h in hints" :key="h" class="m-0">{{ h }}</p>
+            <div v-if="hints.length" class="flex flex-col gap-2 rounded-md border border-fault-border bg-fault-tint p-3 text-sm text-fault-text" data-testid="netplan-hints">
+              <p class="m-0">A test interface belongs to Chaos Gateway alone; the operating system must not configure it:</p>
+              <div v-for="h in hints" :key="h.id">
+                <p class="m-0">{{ h.message }}</p>
+                <pre v-if="h.fix" class="mono mt-1 mb-0 overflow-auto rounded bg-surface-2 p-2 text-xs whitespace-pre-wrap text-text-2">{{ h.fix }}</pre>
+              </div>
+              <button type="button" class="btn btn-sm self-start" :disabled="setup.isFetching.value" @click="setup.refetch()">Check again</button>
             </div>
           </template>
 

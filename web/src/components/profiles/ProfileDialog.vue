@@ -14,7 +14,7 @@ import { newId } from '../../lib/ids';
 import { emptyProfileForm, formToProfile, keptParts, profileFieldOf, profileFormErrors, profileToForm, type ProfileField, type ProfileForm } from '../../lib/profileForm';
 import { profileChips } from '../../lib/profiles';
 import { httpOf, useApiPanelStore } from '../../stores/apiPanel';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ImpairmentFields from '../faults/ImpairmentFields.vue';
 import FaultChip from '../ui/FaultChip.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -37,6 +37,8 @@ const general = ref<string[]>([]);
 let refusedForm = '';
 /** The form as the dialog opened it: saved unchanged, it records nothing (the defaults it fills in are no change). */
 let openedForm = '';
+/** The revision the form of a profile was built on (a revision applied meanwhile meets the edit in the conflict dialog). */
+let origin: EditOrigin | undefined;
 
 const title = computed(() => (props.profile ? 'Edit profile' : 'New profile'));
 const id = computed(() => props.profile?.id ?? '<new uuid>');
@@ -48,6 +50,7 @@ watch(open, (o) => {
   }
   form.value = props.profile ? profileToForm(props.profile.config) : emptyProfileForm();
   openedForm = JSON.stringify(form.value);
+  origin = props.profile ? draft.editOrigin() : undefined;
   serverErrors.value = {};
   tried.value = false;
   general.value = [];
@@ -123,7 +126,8 @@ function submit() {
     open.value = false;
     return;
   }
-  draft.setProfile(props.profile?.id ?? newId(), result.value);
+  const value = result.value;
+  draft.editFrom(origin, () => draft.setProfile(props.profile?.id ?? newId(), value));
   open.value = false;
 }
 

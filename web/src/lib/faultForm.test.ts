@@ -5,6 +5,7 @@ import {
   emptyForm,
   faultFormErrors,
   faultToForm,
+  keepError,
   fieldOf,
   formToConfigFault,
   formToFault,
@@ -100,6 +101,11 @@ describe('the fault dialog', () => {
     expect(formToOverlay({ ...f, duration: 'perm' }, now).ttl).toBeUndefined();
     // an expired overlay is written with the shortest time rather than none (which would be until removed)
     expect(formToOverlay(f, new Date('2026-10-14T13:00:00Z')).expires_in).toBe('1s');
+    // but the dialog does not send it: keeping an expiry that passed is an error, and Keep says it expired (Phase 3 audit)
+    expect(keepError(f, now)).toBeUndefined();
+    expect(keepError(f, new Date('2026-10-14T13:00:00Z'))).toMatch(/^The fault expired at \d\d:\d\d: choose how long it runs now\.$/);
+    expect(keepError({ ...f, duration: '15m' }, new Date('2026-10-14T13:00:00Z'))).toBeUndefined();
+    expect(durationChoices(f, '5m', new Date('2026-10-14T13:00:00Z'))[0]!.label).toMatch(/^Keep: expired at \d\d:\d\d$/);
     // a gateway clock read a little early never asks for more than the TTL
     expect(formToOverlay(f, new Date('2026-10-14T11:59:00Z')).expires_in).toBe('300s');
     // an expiry without a TTL (never sent by the gateway) is written as the TTL

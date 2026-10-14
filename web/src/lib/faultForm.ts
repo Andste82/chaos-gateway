@@ -139,12 +139,22 @@ export function durationTtl(value: string): string | undefined {
 export function durationChoices(f: FaultForm, ownTtl: string | undefined, now: Date): { value: string; label: string }[] {
   const out: { value: string; label: string }[] = [];
   if (f.keepUntil) {
-    const left = formatRemaining(new Date(f.keepUntil).getTime() - now.getTime());
-    out.push({ value: 'keep', label: `Keep: ${left} left${ownTtl ? ` of ${ttlText(ownTtl)}` : ''}` });
+    const ms = new Date(f.keepUntil).getTime() - now.getTime();
+    // an expiry that passed while the dialog was open keeps nothing (keepError says so)
+    out.push({ value: 'keep', label: ms > 0 ? `Keep: ${formatRemaining(ms)} left${ownTtl ? ` of ${ttlText(ownTtl)}` : ''}` : `Keep: expired at ${formatHM(f.keepUntil)}` });
   }
   out.push(...durations.map(({ value, label }) => ({ value, label })));
   if (ownTtl && !durations.some((d) => d.ttl === ownTtl)) out.push({ value: `ttl:${ownTtl}`, label: `${ttlText(ownTtl)} (its own TTL)` });
   return out;
+}
+
+/**
+ * The edited overlay expired while the dialog was open and the form still keeps its remaining time:
+ * there is none left, and sending it would write the ended fault again for a second (Phase 3 audit).
+ */
+export function keepError(f: FaultForm, now: Date): string | undefined {
+  if (f.duration !== 'keep' || !f.keepUntil || new Date(f.keepUntil).getTime() > now.getTime()) return undefined;
+  return `The fault expired at ${formatHM(f.keepUntil)}: choose how long it runs now.`;
 }
 
 /** The remaining time of an expiry in whole seconds, at least one, and at most `max` (a TTL) when given. */
@@ -194,7 +204,7 @@ export function tunnelValue(t: TunnelRef | undefined): string {
 }
 
 /** A problem of the form: a parameter (`download.<field>` of the download set), or a field of the fault. */
-export type FaultField = ImpairmentField | 'ports' | 'destination' | 'name' | 'target' | 'tunnel' | 'mtuSize' | 'mtuMode';
+export type FaultField = ImpairmentField | 'ports' | 'destination' | 'name' | 'target' | 'tunnel' | 'mtuSize' | 'mtuMode' | 'duration';
 
 /** The problems of the form, by field; empty when it can be applied. */
 export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'overlay'): Partial<Record<FaultField, string>> {

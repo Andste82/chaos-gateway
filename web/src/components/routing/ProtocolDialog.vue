@@ -23,7 +23,7 @@ import {
   type ProtocolForm,
 } from '../../lib/routingForm';
 import { useApiPanelStore } from '../../stores/apiPanel';
-import { useDraftStore } from '../../stores/draft';
+import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import TextField from '../ui/TextField.vue';
@@ -70,9 +70,13 @@ const announceChoices = computed(() => {
   return out;
 });
 
+/** The revision the form of a protocol was built on (a revision applied meanwhile meets the edit in the conflict dialog). */
+let origin: EditOrigin | undefined;
+
 watch(open, (o) => {
   if (!o) return;
   form.value = before.value ? formFromProtocol(before.value) : emptyProtocolForm(links.value[0]?.id ?? '');
+  origin = props.protocol ? draft.editOrigin() : undefined;
   if (!before.value) form.value.name = links.value[0] ? `${links.value[0].name}-bgp` : '';
   refused.value = (props.protocol && draft.serverErrors[props.protocol]) || {};
   refusedForm = JSON.stringify(form.value);
@@ -148,7 +152,9 @@ async function submit() {
   error.value = '';
   try {
     if (!draft.dirty) draft.track(await getActiveRevision());
-    draft.setProtocol(props.protocol ?? newId(), protocolFromForm(form.value, props.protocol ? draft.effectiveRouting.protocols?.[props.protocol] : undefined));
+    draft.editFrom(origin, () =>
+      draft.setProtocol(props.protocol ?? newId(), protocolFromForm(form.value, props.protocol ? draft.effectiveRouting.protocols?.[props.protocol] : undefined)),
+    );
     open.value = false;
     draft.drawerOpen = true;
   } catch (e) {

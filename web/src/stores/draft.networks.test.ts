@@ -163,4 +163,30 @@ describe('the networks and the routing in the draft (P3-M14-01)', () => {
     other.routing.protocols[BGP]!.bgp.neighbor_asn = 65004;
     expect(d.overlaps(other)).toEqual([{ kind: 'routing', id: 'routing', name: 'routing', field: 'protocol site-b-bgp bgp neighbor asn', from: '65004', to: '65003' }]);
   });
+
+  it('a client edit whose hub their revision deleted is named as dropped and leaves the draft, not a network of clients only (Phase 3 audit)', () => {
+    const d = useDraftStore();
+    d.track(revision(42));
+    d.setClient(HUB, RA, { name: 'rA', address: '10.99.0.2', enabled: false });
+    d.setClient(HUB, RC, { name: 'rC', address: '10.99.0.3' });
+    d.setNetwork(IOT, { ...lan, address: '10.11.0.1/24' });
+    const theirs: Configuration = config();
+    delete theirs.networks![HUB];
+    expect(d.overlaps(theirs, names)).toEqual([
+      { kind: 'client', id: RA, name: 'rA', field: 'client', from: 'hub lab-hub deleted', to: 'my change dropped' },
+      { kind: 'client', id: RC, name: 'rC', field: 'client', from: 'hub lab-hub deleted', to: 'my change dropped' },
+    ]);
+    d.rebase(revision(43, theirs));
+    expect(d.clients).toEqual({});
+    // the other edits stay
+    expect(d.patch()).toEqual({ networks: { [IOT]: { address: '10.11.0.1/24' } } });
+
+    // a hub the draft brings back itself (an edit of its settings) keeps its clients with it
+    d.discard();
+    d.track(revision(44));
+    d.setNetwork(HUB, { ...hub, listen_port: 51830 });
+    d.setClient(HUB, RA, { name: 'rA', address: '10.99.0.2', enabled: false });
+    d.rebase(revision(45, theirs));
+    expect(d.clients[RA]).toEqual({ network: HUB, client: { name: 'rA', address: '10.99.0.2', enabled: false } });
+  });
 });

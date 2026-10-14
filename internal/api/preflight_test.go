@@ -232,3 +232,69 @@ func TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce(t *testing.T) {
 		t.Errorf("a new failure, %d warnings in all", n)
 	}
 }
+
+// countingHostNet counts the executor's reads of the host's network configuration and fails them while
+// failing is set.
+type countingHostNet struct {
+	inner   apply.Exec
+	reads   *atomic.Int64
+	failing *atomic.Pointer[string]
+}
+
+func (f countingHostNet) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	for _, op := range ops {
+		if r, ok := op.(*executor.Read); ok && r.What == executor.ReadHostNet {
+			f.reads.Add(1)
+			if msg := f.failing.Load(); msg != nil {
+				return executor.Outcome{}, errors.New(*msg)
+			}
+		}
+	}
+	return f.inner.Do(ctx, ops...)
+}
+
+// Phase 3 audit: GET /setup needs no authentication, so, like the health check (M5-13), it must not give
+// every caller its own read through the executor: requests in a row share one read. Its report does not
+// quote the executor's error either (that is in the log), only that the configuration cannot be read.
+func TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration(t *testing.T) {
+	var reads atomic.Int64
+	var failing atomic.Pointer[string]
+	g := newGW(t, func(o *options) {
+		o.execWrap = func(e apply.Exec) apply.Exec {
+			return countingHostNet{inner: e, reads: &reads, failing: &failing}
+		}
+		o.hostFS = fstest.MapFS{"etc/netplan/50-lab.yaml": {Data: []byte("network:\n  ethernets:\n    lan0: {dhcp4: true}\n")}}
+	})
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if r := g.do("GET", "/setup", nil, nil, nil); r.Status != 200 {
+				t.Errorf("%d %s", r.Status, r.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	for range 10 {
+		if r := g.do("GET", "/setup", nil, nil, nil); !strings.Contains(string(r.Body), `\"lan0\" under \"ethernets\"`) {
+			t.Fatalf("the entry is not named: %s", r.Body)
+		}
+	}
+	if n := reads.Load(); n != 1 {
+		t.Errorf("20 requests made %d reads", n)
+	}
+
+	// a failing read (another gateway: the cache is per server) is named, its error is not
+	secret := "open /host/etc/netplan: permission denied (some detail)"
+	failing.Store(&secret)
+	g2 := newGW(t, func(o *options) {
+		o.execWrap = func(e apply.Exec) apply.Exec {
+			return countingHostNet{inner: e, reads: &reads, failing: &failing}
+		}
+	})
+	body := string(g2.do("GET", "/setup", nil, nil, nil).Body)
+	if strings.Contains(body, "permission denied") || !strings.Contains(body, "the network configuration of the operating system cannot be read") {
+		t.Errorf("GET /setup with a failing read: %s", body)
+	}
+}

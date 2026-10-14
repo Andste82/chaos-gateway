@@ -54,6 +54,34 @@ func (h *healthProbeCache) check(ctx context.Context, now time.Time, probe func(
 	return err
 }
 
+// osConfigCache de-duplicates and rate-limits the unauthenticated GET /setup's read of the host's network
+// configuration through the executor, as healthProbeCache does the health check's probe (M5-13, Phase 3
+// audit): at most one real read every 2 seconds, with concurrent callers sharing one in-flight one.
+type osConfigCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	osc   osConfig
+	group singleflight.Group
+}
+
+func (o *osConfigCache) get(ctx context.Context, now time.Time, read func(context.Context) osConfig) osConfig {
+	o.mu.Lock()
+	if !o.at.IsZero() && now.Sub(o.at) >= 0 && now.Sub(o.at) < 2*time.Second {
+		osc := o.osc
+		o.mu.Unlock()
+		return osc
+	}
+	o.mu.Unlock()
+	v, _, _ := o.group.Do("read", func() (any, error) {
+		osc := read(context.WithoutCancel(ctx))
+		o.mu.Lock()
+		o.at, o.osc = now, osc
+		o.mu.Unlock()
+		return osc, nil
+	})
+	return v.(osConfig)
+}
+
 type lastApply struct {
 	At         *time.Time `json:"at,omitempty"`
 	Error      string     `json:"error,omitempty"`
@@ -368,7 +396,7 @@ func (s *Server) GetHealth(c *gin.Context) {
 // the check of every interface that is or may become a test interface, made now (P3-M12-07).
 func (s *Server) GetPreflight(c *gin.Context) {
 	osc := s.readOSConfig(contextOf(c))
-	c.JSON(200, s.preflightReport(s.hostInterfaces(osc), osc, true))
+	c.JSON(200, s.preflightReport(s.hostInterfaces(osc), osc, true, false))
 }
 
 // ---- interfaces
@@ -592,9 +620,10 @@ func (s *Server) GetSetup(c *gin.Context) {
 		c.JSON(200, gin.H{"completed": true})
 		return
 	}
-	osc := s.readOSConfig(contextOf(c))
+	// an unauthenticated caller shares the executor's read with the others (setupOSConfig)
+	osc := s.setupOSConfig.get(contextOf(c), s.clk.Now(), s.readOSConfig)
 	ifaces := s.hostInterfaces(osc)
-	st := gin.H{"completed": false, "interfaces": ifaces, "preflight": s.preflightReport(ifaces, osc, false)}
+	st := gin.H{"completed": false, "interfaces": ifaces, "preflight": s.preflightReport(ifaces, osc, false, true)}
 	snap := s.cfg.Engine.Snapshot()
 	for _, d := range snap.Host.Defaults {
 		if l, ok := snap.Host.Link(d.Dev); ok {
@@ -612,8 +641,11 @@ func (s *Server) GetSetup(c *gin.Context) {
 // client show the same text. The report's status counts the checks of the host and of the assigned test
 // interfaces, not a candidate's warning. noRun adds a warning when no check of the host has run in this
 // process (Config.Preflight is nil or returns nil; a report without a time, such as a host that cannot be
-// inspected, is a check that ran).
-func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun bool) *PreflightReport {
+// inspected, is a check that ran). public is set for the unauthenticated GET /setup: the report then does not
+// quote why the executor could not read the configuration (that error is in the log). It still names the
+// files that cannot be read and the entries and connections that configure an interface, because the
+// wizard must say what to remove (plan §3.4, the Phase 3 audit).
+func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun, public bool) *PreflightReport {
 	r := &PreflightReport{Status: "ok"}
 	ran := false
 	if s.cfg.Preflight != nil {
@@ -630,6 +662,9 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun boo
 		r.Checks = append(r.Checks, c)
 	}
 	switch {
+	case osc.err != nil && public:
+		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "the network configuration of the operating system cannot be read (the reason is in the log of the gateway)",
+			Fix: "give the executor the host's /etc read-only at /host/etc (--host-root /host, deploy/compose.executor.yaml)"})
 	case osc.err != nil:
 		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "the network configuration of the operating system cannot be read: " + firstLine(osc.err.Error()),
 			Fix: "give the executor the host's /etc read-only at /host/etc (--host-root /host, deploy/compose.executor.yaml)"})

@@ -9,6 +9,8 @@ import {
   validateInterfaces,
   validateNetworks,
   validatePassword,
+  interfaceDetail,
+  interfaceOption,
 } from './setup';
 
 const ifaces: HostInterface[] = [
@@ -18,6 +20,14 @@ const ifaces: HostInterface[] = [
 ];
 
 describe('setup wizard', () => {
+  it('names an interface in a select by name and address, the MAC below it', () => {
+    const i: HostInterface = { name: 'eth0', mac: '52:54:00:00:00:01', addresses: ['192.168.1.57/24'] } as HostInterface;
+    expect(interfaceOption(i)).toBe('eth0 · 192.168.1.57/24');
+    expect(interfaceOption({ ...i, addresses: [], link_up: false })).toBe('eth0 · no link');
+    expect(interfaceDetail(i)).toBe('MAC 52:54:00:00:00:01');
+    expect(interfaceDetail(undefined)).toBe('');
+  });
+
   it('proposes distinct test networks', () => {
     expect(suggestAddress(0)).toBe('10.10.0.1/24');
     expect(suggestAddress(1)).toBe('10.20.0.1/24');

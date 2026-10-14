@@ -78,7 +78,7 @@ async function adopt() {
       </div>
       <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text">Another revision waits for confirmation; adopt after it is resolved.</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
         <button type="submit" class="btn btn-primary" :disabled="busy || !!nameError || pendingConfirm">Preview &amp; apply</button>
       </div>

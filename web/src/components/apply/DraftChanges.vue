@@ -7,6 +7,7 @@ import { computed, ref } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import { useGatewayState, useNames } from '../../composables/gateway';
+import { ruleFieldChanges } from '../../lib/rules';
 import { useConnectionStore } from '../../stores/connection';
 import type { Configuration } from '../../api/generated/model';
 import { useDraftStore, type DraftChange } from '../../stores/draft';
@@ -30,6 +31,14 @@ const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Devic
 const inWords = (c: DraftChange) => `${[kinds[c.kind], c.name, c.field].filter(Boolean).join(' ')}: ${c.from} → ${c.to}`;
 const yours = computed(() => draft.changes(names.value).map(inWords));
 const overlaps = (theirs: Configuration) => draft.overlaps(theirs, names.value).map(inWords);
+/** A rule they changed, field by field in the words of the rule editor ("Rule no-dns access: Drop → TCP reset"). */
+function theirWords(theirs: Configuration, path: string): string[] | undefined {
+  const id = /^\/access_rules\/([^/]+)$/.exec(path)?.[1];
+  const was = id ? draft.baseConfig?.access_rules?.[id] : undefined;
+  const now = id ? theirs.access_rules?.[id] : undefined;
+  if (!id || !was || !now) return undefined;
+  return ruleFieldChanges(was, now, names.value).map((c) => inWords({ kind: 'rule', id, name: now.name ?? id, ...c }));
+}
 
 const conflictOpen = computed({
   get: () => !!draft.conflict,
@@ -67,7 +76,8 @@ function discardMine() {
 </script>
 
 <template>
-  <StickyActionBar v-if="draft.dirty && !draft.drawerOpen" label="Unapplied changes">
+  <!-- hidden, not removed, while the drawer is open: its "Preview & apply" gets the focus back on close -->
+  <StickyActionBar v-if="draft.dirty" v-show="!draft.drawerOpen" label="Unapplied changes">
     <span class="inline-flex items-center gap-2.5" data-testid="unapplied-bar">
       <span class="inline-block h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
       {{ draft.summary(names) }} · not applied yet
@@ -93,6 +103,7 @@ function discardMine() {
     :base="draft.conflict.base"
     :yours="yours"
     :overlaps="overlaps"
+    :their-words="theirWords"
     :busy="reloading"
     :error="reloadError"
     @reapply="reapply"

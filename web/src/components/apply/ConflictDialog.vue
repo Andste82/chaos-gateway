@@ -20,6 +20,8 @@ const props = defineProps<{
   yours: string[];
   /** The fields both sides changed in words ("Rule no-dns access: TCP reset → Reject"), against their configuration. */
   overlaps?: (theirs: Configuration) => string[];
+  /** One of their changes (by its path) in the same words as "your change", or undefined to show the gateway's summary. */
+  theirWords?: (theirs: Configuration, path: string) => string[] | undefined;
   busy?: boolean;
   error?: string;
 }>();
@@ -46,6 +48,13 @@ function actor(by: Actor | undefined): string {
   return by.name ?? by.type;
 }
 const who = computed(() => actor(active.data.value?.created_by));
+/** Their changes, in the words of "your change" where the caller can say them (a rule's fields), else the gateway's summary. */
+const theirLines = computed(() =>
+  (theirs.data.value ?? []).flatMap((c) => {
+    const words = active.data.value && props.theirWords ? props.theirWords(active.data.value.configuration, c.path) : undefined;
+    return words?.length ? words.map((text) => ({ op: c.op, text })) : [{ op: c.op, text: c.summary }];
+  }),
+);
 const both = computed(() => (active.data.value && props.overlaps ? props.overlaps(active.data.value.configuration) : []));
 
 /** More than one revision may have come after the base: the diff covers them all, so all are named. */
@@ -90,8 +99,8 @@ const description = computed(() => {
       <p v-if="theirs.isLoading.value || active.isLoading.value" class="m-0 text-sm text-text-2">Loading what changed…</p>
       <LoadError v-else-if="active.error.value || theirs.error.value" :error="active.error.value ?? theirs.error.value" what="Their change is not loaded" />
       <ul v-else-if="theirs.data.value?.length" class="m-0 flex list-none flex-col gap-1.5 p-0">
-        <li v-for="(c, i) in theirs.data.value" :key="i" class="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">
-          <span class="mono mr-2 text-accent-text">{{ c.op === 'added' ? '+' : c.op === 'removed' ? '−' : '~' }}</span>{{ c.summary }}
+        <li v-for="(c, i) in theirLines" :key="i" class="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">
+          <span class="mono mr-2 text-accent-text">{{ c.op === 'added' ? '+' : c.op === 'removed' ? '−' : '~' }}</span>{{ c.text }}
         </li>
       </ul>
       <p v-else class="m-0 text-sm text-text-2">No change in the configuration's objects.</p>
@@ -105,7 +114,7 @@ const description = computed(() => {
     <div v-if="both.length" data-testid="conflict-both">
       <div class="mb-1.5 text-xs font-semibold tracking-[0.06em] text-text-2">CHANGED ON BOTH SIDES · THEIRS → YOURS</div>
       <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
-        <li v-for="(c, i) in both" :key="i" class="rounded-md border border-fault-border bg-fault-tint px-3 py-2 text-sm text-fault-text">{{ c }}</li>
+        <li v-for="(c, i) in both" :key="i" class="rounded-md border border-accent-strong bg-accent-tint px-3 py-2 text-sm text-text">{{ c }}</li>
       </ul>
     </div>
     <p class="m-0 text-[13px] text-text-2">

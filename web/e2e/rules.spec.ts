@@ -106,6 +106,10 @@ test('preview and apply: the drawer says what changes, Linux changes on request,
   await drawer.getByRole('button', { name: 'Show Linux changes' }).click();
   await expect(drawer.getByTestId('preview-linux')).toContainText('udp dport 53 counter drop');
   await expect(drawer.getByTestId('preview-linux')).toContainText('read the nftables and tc state back');
+  // the verify step wraps inside its box instead of running past its border
+  const verify = drawer.getByTestId('preview-verify');
+  await expect(verify).toHaveCSS('white-space', 'pre-wrap');
+  expect(await verify.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(drawer).toContainText('If verification fails, revision 42 is restored automatically.');
 
   // the candidate is a merge patch against the base, If-Match the base
@@ -297,7 +301,7 @@ test('a conflicting change made through the API opens the conflict dialog; reloa
 
   const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
   await expect(conflict).toContainText('Revision 43 was applied by token ci-runner while you were editing (your change is based on revision 42).');
-  await expect(conflict.getByTestId('conflict-theirs')).toContainText('access rule test-web: enabled true → false');
+  await expect(conflict.getByTestId('conflict-theirs')).toContainText('Rule test-web enabled: yes → no');
   await expect(conflict.getByTestId('conflict-yours')).toContainText('Rule no-dns access: Drop → Reject');
   // only reload-and-reapply and discard: their change is never overwritten blindly
   await expect(conflict.getByRole('button')).toHaveText(['', 'Discard mine', 'Reload and reapply mine']);
@@ -358,7 +362,12 @@ test('the conflict dialog names a field both changed, their value → mine, and 
   const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
   const both = conflict.getByTestId('conflict-both');
   await expect(both).toContainText('CHANGED ON BOTH SIDES · THEIRS → YOURS');
-  await expect(both.getByRole('listitem')).toHaveText(['Rule no-dns-2 action: TCP reset → Reject']);
+  await expect(both.getByRole('listitem')).toHaveText(['Rule no-dns-2 access: TCP reset → Reject']);
+  // their change in the same words as mine (not the gateway's "action drop → reset"), and the overlap
+  // not in the orange that means "traffic is impaired"
+  await expect(conflict.getByTestId('conflict-theirs')).toContainText('Rule no-dns access: Drop → TCP reset');
+  await expect(conflict.getByTestId('conflict-theirs')).toContainText('Rule no-dns protocol: udp → tcp');
+  await expect(both.getByRole('listitem').first()).not.toHaveClass(/fault/);
   await expect(conflict).toContainText('where both changed the same field of an object, yours wins (the fields above)');
   await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
   const drawer = page.getByRole('dialog', { name: 'Preview revision 44' });
@@ -380,7 +389,7 @@ test("the conflict dialog names a rule's From both changed, their scope → mine
   ]);
   await page.getByRole('button', { name: 'Preview & apply' }).click();
   const conflict = page.getByRole('dialog', { name: 'The configuration was changed' });
-  await expect(conflict.getByTestId('conflict-both').getByRole('listitem')).toHaveText(['Rule no-dns source: Everything → Client networks of rA']);
+  await expect(conflict.getByTestId('conflict-both').getByRole('listitem')).toHaveText(['Rule no-dns from: Everything → Client networks of rA']);
   await conflict.getByRole('button', { name: 'Reload and reapply mine' }).click();
   // mine as a whole: their global goes, no scope with two keys
   await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
@@ -443,4 +452,41 @@ test('Preview & apply waits while a revision waits for confirmation', async ({ p
   await open(page, gw);
   await rows(page).nth(2).getByRole('switch', { name: 'Enable rule no-dot' }).click();
   await expect(page.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+});
+
+test('the selected rule is marked for assistive technology too, not only by its colour', async ({ page }) => {
+  await open(page);
+  const edit = rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' });
+  await expect(edit).not.toHaveAttribute('aria-current', /.*/);
+  await edit.click();
+  await expect(edit).toHaveAttribute('aria-current', 'true');
+  await expect(rows(page).nth(0).getByRole('button', { name: 'Show rule Control plane access' })).not.toHaveAttribute('aria-current', /.*/);
+});
+
+test('the overlay rules not loaded: the list says so instead of leaving out the rules evaluated first', async ({ page }) => {
+  const gw = withRules(MockGateway.sample());
+  gw.failing['/overlays'] = 500;
+  await gw.install(page);
+  await page.goto('/rules');
+  await expect(page.getByTestId('load-error')).toContainText('The access rules are not loaded');
+  await expect(rows(page)).toHaveCount(0);
+  await expect(page.getByTestId('empty-state')).toHaveCount(0);
+});
+
+test('keyboard: deleting a rule puts the focus on its Undo, and Undo on the rule again', async ({ page }) => {
+  await open(page);
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Undo the deletion of rule no-dns' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Edit rule no-dns' })).toBeFocused();
+});
+
+test('a rule on UDP says why existing connections cannot be cut', async ({ page }) => {
+  await open(page);
+  await rows(page).nth(3).getByRole('button', { name: 'Edit rule no-dns' }).click();
+  const cut = page.getByTestId('rule-editor').getByRole('checkbox', { name: 'Also cut existing connections' });
+  await expect(cut).toBeDisabled();
+  await expect(cut).toHaveAccessibleDescription('Only TCP connections can be cut; this rule matches another protocol.');
 });

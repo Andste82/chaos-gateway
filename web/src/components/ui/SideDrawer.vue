@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // Side drawer (plan §2.17): a dialog that slides in from the right, e.g. the preview of a change
-// ("dry run · nothing changed yet"). Keyboard access as in every dialog: focus trap, Escape.
+// ("dry run · nothing changed yet"). Keyboard access as in every dialog: focus trap, Escape, and on
+// close the focus back on the control that opened it, or on the page's heading when that is gone.
 import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui';
+import { useFocusReturn } from '../../lib/focus';
 import AppIcon from './AppIcon.vue';
 
 defineProps<{ title: string; badge?: string; description?: string }>();
 const open = defineModel<boolean>('open', { required: true });
+const focus = useFocusReturn();
 </script>
 
 <template>
@@ -14,10 +17,12 @@ const open = defineModel<boolean>('open', { required: true });
       <DialogOverlay class="fixed inset-0 z-40 bg-black/50" />
       <DialogContent
         class="fixed top-0 right-0 z-50 flex h-full w-[520px] max-w-full flex-col gap-4 overflow-auto border-l border-border-strong bg-surface p-6 text-text shadow-2xl"
+        @open-auto-focus="focus.onOpen"
+        @close-auto-focus="focus.onClose"
       >
         <div class="flex items-start justify-between gap-4">
           <div>
-            <DialogTitle class="m-0 text-lg font-semibold">{{ title }}</DialogTitle>
+            <DialogTitle class="m-0 text-xl font-semibold">{{ title }}</DialogTitle>
             <span
               v-if="badge"
               class="mt-2 inline-block rounded border border-accent-strong bg-accent-tint px-2 py-0.5 text-xs text-accent-text"

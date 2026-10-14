@@ -59,7 +59,7 @@ function submit() {
         </div>
       </template>
       <p class="m-0 text-[13px] text-text-2">The rotation goes into the unapplied changes; nothing changes before the preview and the apply.</p>
-      <div class="flex justify-end gap-2">
+      <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
         <button type="submit" class="btn btn-primary">Rotate keys</button>
       </div>

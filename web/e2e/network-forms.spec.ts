@@ -31,6 +31,20 @@ async function lastPatch(page: Page, gw: MockGateway) {
   return gw.requestsTo('POST', '/revisions').at(-1)!.body as { networks?: Record<string, unknown>; routing?: Record<string, unknown> };
 }
 
+test('a tall form keeps its action row in view at 1440 × 900', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await page.getByRole('button', { name: 'Add network' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add network' });
+  // the form is taller than the dialog: Cancel and Preview & apply stay at its bottom edge, unscrolled
+  const content = await dialog.evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+  expect(content.scroll).toBeGreaterThan(content.client);
+  await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeInViewport({ ratio: 1 });
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeInViewport({ ratio: 1 });
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+});
+
 test('network forms: add a test network with several ports through the drawer; after the apply it is listed with both ports (P3-M12-04)', async ({ page }) => {
   const gw = await open(page);
   await page.getByRole('button', { name: 'Add network' }).first().click();

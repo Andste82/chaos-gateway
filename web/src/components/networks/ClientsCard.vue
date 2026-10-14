@@ -23,6 +23,7 @@ import StatusDot from '../ui/StatusDot.vue';
 import AddClientDialog from './AddClientDialog.vue';
 import ClientConfigDialog from './ClientConfigDialog.vue';
 import RotateKeysDialog from './RotateKeysDialog.vue';
+import { refocusAfterSwap } from '../../lib/focus';
 
 const props = defineProps<{ network: NetworkView }>();
 const clients = useWireGuardClients(() => props.network.id);
@@ -159,11 +160,11 @@ function handshake(v: WireGuardClientView | undefined): string {
             <span class="font-medium">{{ r.name }}</span>
             <span
               v-if="r.mark"
-              class="ml-2 rounded border px-1.5 text-[11px]"
+              class="ml-2 rounded border px-1.5 text-xs"
               :class="r.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
               >{{ r.mark }}</span
             >
-            <span v-if="r.errors" class="ml-2 rounded border border-block-border px-1.5 text-[11px] text-block-text">NEEDS FIXING</span>
+            <span v-if="r.errors" class="ml-2 rounded border border-block-border px-1.5 text-xs text-block-text">NEEDS FIXING</span>
             <span v-if="!r.enabled" class="ml-2 text-xs text-text-3" data-testid="client-disabled">disabled</span>
             <span v-if="r.rotated" class="mt-1 block text-[13px] text-fault-text" data-testid="client-rotated">
               New keys once applied: give the client its new configuration then.
@@ -185,10 +186,21 @@ function handshake(v: WireGuardClientView | undefined): string {
             <template v-else>—</template>
           </td>
           <td class="py-2.5 text-right">
-            <div class="flex flex-wrap justify-end gap-1.5">
+            <div class="flex flex-wrap justify-end gap-1.5" data-focus-group>
               <button v-if="r.errors" type="button" class="btn btn-sm" :aria-label="`Fix ${r.name}`" @click="fix(r.id)">Fix</button>
               <template v-else-if="r.view && r.mark === 'DELETED'">
-                <button type="button" class="btn btn-sm" :aria-label="`Undo the deletion of ${r.name}`" @click="undo(r)">Undo</button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :aria-label="`Undo the deletion of ${r.name}`"
+                  data-focus-swap
+                  @click="
+                    refocusAfterSwap($event);
+                    undo(r);
+                  "
+                >
+                  Undo
+                </button>
               </template>
               <template v-else-if="r.view && r.mark !== 'NEW'">
                 <button type="button" class="btn btn-sm" :aria-label="`Configuration and QR code of ${r.name}`" @click="showing = r.view">Configuration</button>
@@ -196,8 +208,29 @@ function handshake(v: WireGuardClientView | undefined): string {
                   {{ r.enabled ? 'Disable' : 'Enable' }}
                 </button>
                 <button type="button" class="btn btn-sm" :aria-label="`Rotate the keys of ${r.name}`" @click="rotating = r">Rotate keys</button>
-                <button type="button" class="btn btn-sm" :aria-label="`Delete ${r.name}`" @click="remove(r)">Delete</button>
-                <button v-if="r.mark === 'CHANGED'" type="button" class="btn btn-sm" :aria-label="`Undo the changes of ${r.name}`" @click="undo(r)">Undo</button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :aria-label="`Delete ${r.name}`"
+                  @click="
+                    refocusAfterSwap($event);
+                    remove(r);
+                  "
+                >
+                  Delete
+                </button>
+                <button
+                  v-if="r.mark === 'CHANGED'"
+                  type="button"
+                  class="btn btn-sm"
+                  :aria-label="`Undo the changes of ${r.name}`"
+                  @click="
+                    refocusAfterSwap($event);
+                    undo(r);
+                  "
+                >
+                  Undo
+                </button>
               </template>
             </div>
           </td>

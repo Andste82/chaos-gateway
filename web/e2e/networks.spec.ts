@@ -88,7 +88,7 @@ test('a WireGuard hub lists its clients with their status; a link shows its peer
   const settings = page.getByTestId('network-settings');
   await expect(settings.getByRole('heading', { name: 'lab-hub WireGuard hub' })).toBeVisible();
   await expect(settings).toContainText(/Tunnel subnet\s*10.99.0.0\/24/);
-  await expect(settings).toContainText(/Endpoint\s*uplink address:51820/);
+  await expect(settings.getByTestId('wg-endpoint')).toHaveText('192.168.1.57:51820 (the uplink address)');
   await expect(settings).toContainText('qU1BFDFDgsH5I7uGhzuhQjkMSw6bP8nXN6CN4AKxEF8=');
   await expect(settings).toContainText('1 of 1 online');
   await expect(clientRows(page)).toHaveCount(1);
@@ -687,6 +687,50 @@ test('the Linux view: the kernel state with its counters, by part and filtered',
   await page.getByLabel('Show only lines that name').fill('br-test');
   await expect(page.getByTestId('linux-routes')).toContainText('bridge br-test up');
   await expect(page.getByTestId('linux-routes')).not.toContainText('br-iot');
+});
+
+test('the Linux view read again fails: the old counters stay, greyed out, and it says they are not live', async ({ page }) => {
+  const gw = await open(page, '/linux', withNetworks(MockGateway.sample()), 'Linux view');
+  await expect(page.getByTestId('linux-nftables')).toContainText('counter packets 12 bytes 840 accept');
+  await expect(page.getByTestId('linux-stale')).toHaveCount(0);
+  gw.failing['/state/linux'] = 503;
+  await expect(page.getByTestId('linux-stale')).toContainText(/^Not updated: .+; last read \d\d:\d\d:\d\d\.$/, { timeout: 20_000 });
+  await expect(page.getByTestId('linux-nftables').locator('pre')).toHaveClass(/stale/);
+  delete gw.failing['/state/linux'];
+  await expect(page.getByTestId('linux-stale')).toHaveCount(0, { timeout: 20_000 });
+});
+
+test('the routing sessions say they are loading, not that there are none', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  let release = () => {};
+  gw.holding['/routing/status'] = new Promise<void>((r) => (release = r));
+  await open(page, '/networks/routing', gw, 'Routing');
+  await expect(page.getByTestId('sessions-loading')).toHaveText('Loading the sessions…');
+  await expect(page.getByText('No routing session.')).toHaveCount(0);
+  release();
+  await expect(page.getByTestId('session')).toHaveCount(1);
+});
+
+test('the access matrix keeps its columns readable and scrolls inside its card when there are many networks', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  for (let i = 0; i < 8; i++) {
+    const id = `5e000000-0000-4000-8000-00000000000${i}`;
+    gw.networks.push({
+      id,
+      config: { type: 'lan', name: `Lab-network-${i}`, interfaces: [{ name: `eth${10 + i}` }], address: `10.${80 + i}.0.1/24` },
+      status: { state: 'ok', interface: `br-lab${i}` },
+    } as (typeof gw.networks)[number]);
+    gw.config = { ...gw.config, networks: { ...gw.config.networks, [id]: gw.networks.at(-1)!.config } };
+  }
+  await open(page, '/networks', gw);
+  const scroll = page.getByTestId('access-matrix-scroll');
+  await expect(page.getByTestId('access-matrix')).toBeVisible();
+  // the grid is wider than the card and scrolls; nothing runs out of the card
+  const { scrollWidth, clientWidth, overflowX } = await scroll.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowX: getComputedStyle(el).overflowX }));
+  expect(overflowX).toBe('auto');
+  expect(scrollWidth).toBeGreaterThan(clientWidth);
+  const cell = await page.getByTestId('access-matrix').getByRole('button').first().boundingBox();
+  expect(cell!.width).toBeGreaterThanOrEqual(96);
 });
 
 test('empty and failed: no network yet, networks or leases the gateway did not deliver', async ({ page }) => {

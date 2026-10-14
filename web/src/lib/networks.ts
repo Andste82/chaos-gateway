@@ -237,6 +237,34 @@ export function rotatedKeyError(c: WireGuardClient, publicKey: string): string |
   return undefined;
 }
 
+export interface ReachChoice {
+  key: string;
+  label: string;
+}
+
+/**
+ * What a client of `hub` may reach (plan §2.2.1 "Create clients"): the internet through the uplink,
+ * the other networks, and the client networks of every other client that has some, of this hub and
+ * of the others (`clients(hub)`: a hub's clients as the draft has them; `except`: the client itself).
+ */
+export function reachChoices(hub: string, networks: NetworkView[], clients: (hub: string) => Record<string, WireGuardClient>, except?: string): ReachChoice[] {
+  const out: ReachChoice[] = [{ key: 'uplink', label: 'Internet through the uplink (full tunnel)' }];
+  for (const n of networks) {
+    if (n.id === hub) continue;
+    const c = n.config as { name: string; address: string };
+    out.push({ key: `network:${n.id}`, label: `${c.name} (${subnetText(c.address)})` });
+  }
+  for (const n of networks) {
+    const wg = n.config as WireGuardNetwork;
+    if (wg.type !== 'wireguard' || wg.kind === 'link') continue;
+    for (const [id, c] of Object.entries(clients(n.id))) {
+      if (id === except || !c.client_networks?.length) continue;
+      out.push({ key: `client:${id}`, label: `Client networks of ${c.name} (${c.client_networks.join(', ')})` });
+    }
+  }
+  return out;
+}
+
 /** The keys of a client in words, for the changes: "generation 2", "public key qU1BFDFD…". */
 export function keysText(c: WireGuardClient): string {
   if (generatesKeys(c)) return `generation ${c.key?.generation ?? 1}`;

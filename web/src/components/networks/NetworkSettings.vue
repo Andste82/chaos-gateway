@@ -5,7 +5,9 @@
 // its subnet in nftables, tc, the routes and WireGuard (plan §2.17 "Technical view").
 // Edit opens the network form and Delete takes the network out of the configuration draft (P3-M14-01);
 // a network of the draft says so (NEW, CHANGED, DELETED) and Undo takes the edit back. A network the
-// gateway refused says why, and Fix opens the form with the messages under their fields.
+// gateway refused says why, and Fix opens the form with the messages under their fields. A link of the
+// gateway exports its remote side's configuration and, when a routing protocol runs on it, the
+// matching BIRD snippet (plan §2.2.1 "Keys and export").
 import { computed, ref, watch } from 'vue';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../../api/generated/model';
 import { useGetUplink } from '../../api/generated/hooks/config/config';
@@ -14,6 +16,7 @@ import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
 import { effectivePools, hostOf, subnetText } from '../../lib/networks';
 import { useDraftStore } from '../../stores/draft';
 import StatusDot from '../ui/StatusDot.vue';
+import LinkExportDialog from './LinkExportDialog.vue';
 import LinuxExcerpt from './LinuxExcerpt.vue';
 
 const props = defineProps<{ network: NetworkView; mark?: 'NEW' | 'CHANGED' | 'DELETED' }>();
@@ -70,6 +73,20 @@ const ports = computed(() =>
   }),
 );
 const peer = computed(() => props.network.status.link_peer);
+
+// the export is of the active configuration: a link of the draft has none yet
+const exportable = computed(() => wg.value?.kind === 'link' && props.mark !== 'NEW');
+/** A routing protocol of the active configuration runs on this link (by id or name), so BIRD has a snippet for it. */
+const birdOnLink = computed(() =>
+  Object.values(draft.baseRouting.protocols ?? {}).some((p) => p.link === props.network.id || p.link === name.value),
+);
+const exporting = ref<'conf' | 'bird'>();
+const exportOpen = computed({
+  get: () => !!exporting.value,
+  set: (v) => {
+    if (!v) exporting.value = undefined;
+  },
+});
 </script>
 
 <template>
@@ -183,7 +200,10 @@ const peer = computed(() => props.network.status.link_peer);
             <StatusDot :tone="peer?.online ? 'normal' : 'offline'" :label="peer?.online ? 'Online' : 'Offline'" />
             <span class="text-[13px] text-text-2">
               · handshake {{ peer?.last_handshake ? formatAgo(peer.last_handshake, now) : 'never' }}
-              <template v-if="peer?.rx_bytes !== undefined"> · ↓ {{ formatBytes(peer.rx_bytes) }} ↑ {{ formatBytes(peer.tx_bytes) }}</template>
+              <!-- the gateway's rx is what the remote side sent: the arrows are the remote side's, as for a tunnel fault (plan §2.2.1) -->
+              <template v-if="peer?.rx_bytes !== undefined">
+                · <span data-testid="link-traffic">↓ {{ formatBytes(peer.tx_bytes) }} ↑ {{ formatBytes(peer.rx_bytes) }}</span> as the remote side sees it</template
+              >
             </span>
           </span>
         </dd>
@@ -193,6 +213,13 @@ const peer = computed(() => props.network.status.link_peer);
           <span v-for="r in peer?.learned_routes ?? []" :key="r" class="block">{{ r }} (learned)</span>
           <RouterLink class="font-sans text-[13px]" to="/networks/routing">Routing sessions →</RouterLink>
         </dd>
+        <template v-if="exportable">
+          <dt class="text-text-2">Export</dt>
+          <dd class="m-0 flex flex-wrap gap-1.5" data-testid="link-export-actions">
+            <button type="button" class="btn btn-sm" @click="exporting = 'conf'">Remote configuration</button>
+            <button v-if="birdOnLink" type="button" class="btn btn-sm" @click="exporting = 'bird'">BIRD snippet</button>
+          </dd>
+        </template>
       </template>
     </dl>
 
@@ -200,5 +227,6 @@ const peer = computed(() => props.network.status.link_peer);
       {{ linux ? 'Hide Linux view' : 'Show Linux view (compiled)' }}
     </button>
     <LinuxExcerpt v-if="linux" :terms="terms" />
+    <LinkExportDialog v-if="exportable" v-model:open="exportOpen" :network="network" :format="exporting ?? 'conf'" />
   </section>
 </template>

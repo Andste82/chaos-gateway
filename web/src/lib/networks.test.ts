@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { NetworkView } from '../api/generated/model';
+import type { NetworkView, WireGuardClient } from '../api/generated/model';
 import { CompleteSetupBody } from '../api/generated/zod/system/system';
 import {
   cellOf,
   clientFieldOf,
   clientFormErrors,
   clientFromForm,
+  reachChoices,
   effectivePools,
   emptyClientForm,
   formFromClient,
@@ -134,6 +135,23 @@ describe('the add-client form', () => {
       { ...emptyClientForm('10.99.0.5'), name: 'own-key', dns: 'none' as const, keyMode: 'provided' as const, publicKey: 'kso2jlxO7Hjdde1KFPmTsqV7PJV47Pqi3agv3NqKxiY=' },
     ];
     for (const f of forms) expect(formFromClient(clientFromForm(f))).toEqual(f);
+  });
+
+  it("offers the other clients' networks as what a client may reach, and sends them as client endpoints", () => {
+    const RA = '9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    const RB = '9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4e';
+    const clientsOf = (hub: string): Record<string, WireGuardClient> =>
+      hub === HUB
+        ? { [RA]: { name: 'rA', address: '10.99.0.2', client_networks: ['10.50.0.0/24'] }, [RB]: { name: 'rB', address: '10.99.0.3' } }
+        : {};
+    const keys = reachChoices(HUB, networks, clientsOf).map((c) => c.key);
+    expect(keys).toEqual(['uplink', ...networks.filter((n) => n.id !== HUB).map((n) => `network:${n.id}`), `client:${RA}`]);
+    expect(reachChoices(HUB, networks, clientsOf).at(-1)!.label).toBe('Client networks of rA (10.50.0.0/24)');
+    // the client itself is not offered
+    expect(reachChoices(HUB, networks, clientsOf, RA).map((c) => c.key)).not.toContain(`client:${RA}`);
+    const c = clientFromForm({ ...emptyClientForm('10.99.0.4'), name: 'rC', reachable: [`client:${RA}`] });
+    expect(c.reachable).toEqual([{ client: RA }]);
+    expect(formFromClient(c).reachable).toEqual([`client:${RA}`]);
   });
 
   it("puts the gateway's messages under the field they are about", () => {

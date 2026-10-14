@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,6 +179,40 @@ func TestACandidateThatIsInvalidAfterMergingIsRejected(t *testing.T) {
 			}
 			wantError(t, ve, tt.path, tt.code)
 		})
+	}
+}
+
+// The UI deletes a network with `{"networks": {"<id>": null}}` (P3-M14-01) and shows what the gateway
+// reports: every object that still refers to the network, at its own pointer, with the network's id in
+// the message (the UI names the network by it).
+func TestDeletingAReferencedNetworkNamesEveryReference(t *testing.T) {
+	base := stored(t)
+	_, err := NewCandidate(base, []byte(`{"networks":{"`+idIoT+`":null}}`), FormatJSON, CandidatePatch, t0)
+	var ve ValidationErrors
+	if !asValidation(err, &ve) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, path := range []string{
+		"/devices/" + idESP + "/network",
+		"/probes/" + idProbe + "/network",
+		"/access_rules/" + idRule + "/source/network",
+		"/faults/" + idFaultNet + "/source/network",
+		"/access_matrix/entries/0/to/network",
+		"/access_matrix/entries/1/to/network",
+		"/routing/protocols/" + idProtocol + "/announce/0/network",
+		"/networks/" + idHub + "/clients/" + idClient + "/reachable/0/network",
+	} {
+		wantError(t, ve, path, CodeUnknownReference)
+	}
+	for _, e := range ve {
+		if e.Code == CodeUnknownReference && !strings.Contains(e.Message, idIoT) {
+			t.Errorf("%s: the message does not name the network: %q", e.Path, e.Message)
+		}
+	}
+
+	// a network is deleted together with what refers to it: the tunnel fault, the protocol, the matrix entry
+	if _, err := NewCandidate(base, []byte(`{"networks":{"`+idLink+`":null},"faults":{"`+idFaultTun+`":null},"routing":{"protocols":{"`+idProtocol+`":null}},"access_matrix":{"entries":[{"from":{"network":"`+idHub+`"},"to":{"network":"`+idIoT+`"},"policy":"allow"}]}}`), FormatJSON, CandidatePatch, t0); err != nil {
+		t.Fatalf("deleting the link with what refers to it: %v", err)
 	}
 }
 

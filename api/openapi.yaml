@@ -657,7 +657,10 @@ paths:
         rollback the deadline would run: the previous revision is applied again and the overlays
         follow (see `applyRevision`); the event `revision_rolled_back` has `data.reason` `requested`
         and `data.restored`, the revision that is active again. Returns before the previous
-        revision is verified again, like the rollback at the deadline.
+        revision is verified again, like the rollback at the deadline. The audit log has one entry,
+        `revision.rollback`, with the caller as its actor. When the revision is the setup's first
+        one (nothing is committed before it), the setup is open again afterwards, as after its
+        deadline: a new setup token is written to the log.
       x-milestone: M14
       x-required-scope: full
       parameters:

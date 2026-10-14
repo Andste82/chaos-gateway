@@ -477,14 +477,37 @@ func TestARevisionWaitingForConfirmationIsRolledBackOnRequest(t *testing.T) {
 			t.Errorf("%s after the rollback: %d %s", op, r.Status, r.Body)
 		}
 	}
-	// the request is in the audit log with the admin as its actor
-	found := false
-	for _, i := range g.do("GET", "/audit", nil, nil, nil).json(t)["items"].([]any) {
-		if e := i.(map[string]any); e["action"] == "revision.rollback" && int64(e["revision"].(float64)) == id {
-			found = true
-		}
+	// the request is in the audit log once, with the admin as its actor, and not a second time as the
+	// system's (Phase 3 audit). The server audits the engine's events in order, so once the system's entry
+	// of a later rollback at the deadline is there, one for the requested rollback would be too.
+	id2 := g.mustPatch(map[string]any{"management": map[string]any{"allowed_sources": []any{"192.168.56.0/24", "192.168.0.0/16"}}})
+	if r := g.apply(id2); r.json(t)["status"] != "pending_confirm" {
+		t.Fatalf("%s", r.Body)
 	}
-	if !found {
-		t.Error("no audit entry for the requested rollback")
+	deadline = time.After(15 * time.Second)
+	for {
+		var entries []map[string]any
+		later := false
+		for _, i := range g.do("GET", "/audit", nil, nil, nil).json(t)["items"].([]any) {
+			e := i.(map[string]any)
+			rev, _ := e["revision"].(float64)
+			switch {
+			case int64(rev) == id && strings.HasPrefix(e["action"].(string), "revision.roll"):
+				entries = append(entries, e)
+			case int64(rev) == id2 && e["action"] == "revision.rolled_back":
+				later = true
+			}
+		}
+		if later {
+			if len(entries) != 1 || entries[0]["action"] != "revision.rollback" || entries[0]["actor"].(map[string]any)["type"] == "system" {
+				t.Errorf("the audit entries of the requested rollback: %v", entries)
+			}
+			break
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("no audit entry for the rollback at the deadline")
+		}
 	}
 }

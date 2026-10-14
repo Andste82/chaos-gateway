@@ -906,7 +906,11 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   published as `dhcp_lease` and makes the poller read at once.
 - **API.** `GET /devices`, `/devices/{id}` (configured, WireGuard clients, probes and discovered devices
   with their observed state), `GET /networks/{id}/leases`, `GET /flows` (from conntrack, with the device
-  of each flow). Adopting a discovered device and merging two devices are revisions (the spec's
+  of each flow). For the active revision a device also carries `effective`, the winning fault of each family
+  for its traffic without a destination (what `GET /explain` resolves for the device, the same `FaultRef`s),
+  and `overlays`, the overlays among the candidates, winning or overridden (`effectiveOf` in
+  `internal/api/devices.go`; the Phase 3 audit: the device list's Faults column and the device detail read
+  it). Adopting a discovered device and merging two devices are revisions (the spec's
   `Device`).
 - **Tests.** The tracker, the engine (with a fake DHCP server) and the API are unit-tested; the real
   Kea is exercised against the loopback (`internal/kea`, root and `kea-dhcp4` needed, otherwise skipped)
@@ -3117,7 +3121,8 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   the session, the connection, toasts, the events seen, the uplink's rate history.
 - **Live updates.** `startEventStream` (`src/composables/eventStream.ts`) opens `GET /api/v1/events` with the session cookie,
   listens to every `EventType` (the stream sends named events) and invalidates the queries the event changes (table
-  `invalidates`: a device event the devices and networks, an overlay event the overlays, faults and devices, …).
+  `invalidates`: a device event the devices and networks, an overlay event the overlays, faults and devices, an applied,
+  confirmed or rolled-back revision the configuration's views with the groups, whose names the pages show, …).
   `events_lost` and every reconnect refetch everything; the browser's own reconnect (after a network error) sends
   `Last-Event-ID`, so the gateway replays what was missed. An answer that is not a stream (a 503 when too many streams are
   open, a proxy's 502 while the gateway restarts) makes the browser give the `EventSource` up for good (`readyState`
@@ -3142,7 +3147,14 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   topology (networks; the path badge and the fault count say "faults unknown"), its recent events (the audit log), the
   device list, the device detail (any error but 404, which says the device does not exist) and its faults; the header's
   counter says "Faults unknown" (and "Loading faults…" before the first answer), never "No faults active". A query that
-  fails on a refetch keeps its last data (the offline state greys it out).
+  fails on a refetch keeps its last data (the offline state greys it out). Since the Phase 3 audit also: the access
+  rules need the overlay rules (they are evaluated first; without them the list is a load error, not a shorter list or
+  "No access rules yet"); the topology says "Loading the networks…" and the uplink "Loading…" or "Uplink not loaded"
+  rather than "No test network" or "up", the uplink traffic card has its own load error; the recent events and the
+  routing sessions say they are loading before "Nothing happened yet" and "No routing session". The Linux views
+  (`LinuxStateView`, `LinuxObjectExcerpt`, `LinuxExcerpt`) keep the last kernel state when a read again fails while
+  the gateway answers, greyed out under "Not updated: …; last read …" (`StaleNotice.vue`). The offline state greys
+  the page out without `aria-busy`, which would tell a screen reader to wait; the alert banner says it is offline.
 - **The gateway's clock.** Deadlines, TTLs, lease ends and "last seen" are times on the gateway's clock, and a Raspberry Pi
   without a real-time clock may be minutes off before NTP. Every countdown therefore runs on the gateway's clock as the
   browser estimates it (`src/lib/clock.ts`, used by `useNow`): each answer's `Date` header bounds the offset between the two
@@ -3150,7 +3162,8 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   answers are intersected, and an answer outside them (the gateway's clock was set) starts over.
 - **Login and setup.** The router asks the gateway first (`GET /setup`, then `GET /auth/session`): an open setup sends
   every page to the wizard, no session to the login. The wizard (`SetupWizard.vue`, logic in `src/lib/setup.ts`) asks for
-  the setup token and shows the preflight with its fixes; then uplink (proposed: the interface of the default route) with
+  the setup token and shows the preflight with its fixes; then uplink (proposed: the interface of the default route; the
+  selects name an interface by name and address, its MAC stands below) with
   its router (optional for the interface of the default route, required for any other, since the gateway refuses an uplink
   without a default route and without a gateway; it must lie in the uplink's network) and management (proposed: another
   interface with an address, or the uplink in the two-port case); then the test
@@ -3183,25 +3196,46 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
   "configured"), the uplink traffic of the last ten minutes (uPlot; rates from two readings of the uplink's byte counters,
   which `GET /uplink` reports since M12 as `status.rx_bytes`/`tx_bytes` from `/sys/class/net/<if>/statistics`) and the
-  recent events (the stream's, before that the audit log's last entries).
+  recent events (the stream's, before that the audit log's last entries). Every item links to its detail (plan §2.17;
+  `src/lib/links.ts`): a fault's target to the device or the network (a group or everything to the faults screen), an
+  event to the device, network, overlay (faults) or rule its subject or data names, the topology's networks to their
+  detail, the uplink to the networks and the gateway to the Linux view; "No test network" offers "Add a test
+  network". The chart's time axis is the app's 24-hour clock; before the second reading it ends at now (not at the
+  epoch) and says "Collecting the first readings…" visibly, and it is drawn again once the Plex Mono font is loaded.
 - **Devices.** All devices with name, IP, MAC, network, traffic rates, the winning faults as chips (a `normal` profile is
-  not one) and status with a label; search over name, addresses, MACs and the lease's host name (every word must match);
+  not one; `DeviceView.effective`, drawn from the overlay or configured fault it names in the overview's compact form,
+  "↑↓ 200 ms ±50", "profile LTE", the gateway's summary only when that is not at hand) and status with a label, Adopt in
+  a column of its own; search over name, addresses, MACs and the lease's host name (every word must match);
   the filter chips All / Online / With faults / Not adopted with their counts, as buttons with `aria-pressed`. A discovered
   device is adopted in a dialog: a name (proposed from the lease's host name), what changes in words, then a merge-patch
   candidate under the same UUID with the device's MACs (or addresses) and network, `If-Match` the active revision, applied
   and verified; the toast says "Revision N applied and verified in X ms". Since M13 the adoption goes through the
-  configuration draft, the preview drawer and the concurrent-change dialog (section "Web UI: faults, rules and profiles").
+  configuration draft, the preview drawer and the concurrent-change dialog (section "Web UI: faults, rules and profiles");
+  until it is applied the device's row and page mark it ("ADOPTED as … · not applied yet") with Undo instead of Adopt.
+  Without any device the list says so in one sentence with the primary action "Check the test networks".
 - **Device detail.** Identity (status, addresses, MACs, network, groups, origin, where it was seen, fixed IP, test CA),
   the DHCP lease with its remaining time, the active faults (the device's overlays and those of its network or group with
-  "via …", the winning configured faults), with parameters, affected packets and remaining TTL; an overlay can be removed,
-  one of the network or group only after a dialog that says it is lifted for every device there.
+  "via …", the winning configured faults from `DeviceView.effective` with their chips and counters), with parameters,
+  affected packets and remaining TTL; an overlay can be removed,
+  one of the network or group only after a dialog that says it is lifted for every device there. The network card shows
+  the router and the DNS servers the device is given (`deviceNetworkInfo` in `src/lib/devices.ts`): in a local network the
+  DHCP options `router` and `dns_servers`, each defaulting to the network's gateway address, "(proxy)" only when the DNS
+  server is that address; for a WireGuard client its configuration's DNS setting and no router.
   The traffic counters: rates, active connections, last seen.
 - **Visual system** (`src/styles.css`, `src/components/ui/`). The tokens of §2.17 as Tailwind theme variables; IBM Plex
   Sans and Mono are bundled (`@fontsource`), nothing is loaded from outside. Shared components: `FaultChip`,
   `AccessChip`, `StatusDot` (always with its label), `SegmentedControl` (also the filter chips), `SwitchToggle`
   (`role="switch"`), `SectionCard`, `EmptyState`, table rows (`.data-row`), `ToastHost`, `StickyActionBar`, `SideDrawer`,
   `ModalDialog` (Reka UI dialogs: focus trap, Escape, labelled by the title), `CountdownBanner`, `AppBanner`, `AppIcon`
-  (16 px stroke icons). The focus ring is the accent (`--color-accent`) at 2 px on every control.
+  (16 px stroke icons). The focus ring is the accent (`--color-accent`) at 2 px on every control (the device search's
+  box shows it for its borderless input). Since the Phase 3 audit: `text-3` is `#848E9D`, at least 4.5:1 on `surface` and
+  `surface-2` (selected and hovered rows); on the accent tint only `text` and `text-2` are used. Text sizes are the plan's
+  12 / 13 / 14 / 16 / 20–26 px (the prototype's 11 and 15 px badges and titles are 12 and 16 px, dialog titles 20 px).
+  `color-scheme: dark` and `accent-color` make native checkboxes, select popups and scrollbars dark and blue. A dialog's
+  action row (`.dialog-actions`) sticks to its bottom edge while a tall form scrolls. Focus (`src/lib/focus.ts`): a dialog
+  or drawer gives the focus back to the control that opened it, or to the page's heading when that control is gone (the
+  sticky bar is hidden, not removed, while the drawer is open); a Remove, Delete or Adopt that is replaced by Undo (and
+  back) hands the focus to the control that takes its place.
 - **The preflight's check of the test interfaces** (P3-M12-07, decided option (a)). Plan §3.4 wants the preflight to
   check that the test interfaces carry no OS configuration. The executor reads where netplan (`/run/netplan`,
   `/etc/netplan`, `/lib/netplan`, one file per name as netplan takes it: `/run` shadows `/etc`, `/etc` shadows `/lib`)
@@ -3252,12 +3286,14 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 |---|---|
 | Fetch wrapper: base path, CSRF on unsafe methods, JSON default, problem+json, `Retry-After`, reachability, ended session, 503 `unavailable` | `src/api/fetcher.test.ts` |
 | The gateway's clock from the `Date` headers: offset, narrowing, a clock that was set, learned by every request | `src/lib/clock.test.ts` |
-| Formatting, fault chips and selectors in words, the device list's filters, search, status and order | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
-| Setup wizard rules, free proposals and the request it builds (checked against the generated schema) | `src/lib/setup.test.ts` |
+| Formatting, fault chips and selectors in words, the device list's filters, search, status and order, its fault chips in the compact form of the other screens and a profile by its display name, the router and DNS servers a device is given (the Phase 3 audit) | `src/lib/format.test.ts`, `src/lib/faults.test.ts`, `src/lib/devices.test.ts` |
+| A device carries the winning fault of each family and the overlays among its candidates (`DeviceView.effective`, `overlays`; the Phase 3 audit) | `TestADeviceCarriesTheFaultsThatWinForIt` (`internal/api/devices_test.go`); in the testbed, device A's row, "With faults" and its page show the network's configured fault: `web/e2e-testbed/faults.spec.ts` |
+| The text colours reach 4.5:1 on the surfaces they are used on; native controls dark and in the accent (the Phase 3 audit) | `src/styles.test.ts` |
+| Setup wizard rules, free proposals and the request it builds (checked against the generated schema), an interface in a select by name and address | `src/lib/setup.test.ts` |
 | The OS configuration of an interface: netplan entries by id, match by name glob and MAC, bridge and bond ports, VLAN links, NetworkManager connections by name and MAC, what to remove, nothing of the files' content (not even the value a YAML error quotes), an unreadable file; netplan's NetworkManager renderer for all devices and an unbound ethernet connection for every interface, `unmanaged-devices` turning NetworkManager off for an interface (P3-M12-07); a renderer per device type, a device that cannot be read, `/run` shadowing `/etc` shadowing `/lib`, a match by driver or by a key the preflight cannot evaluate (the Phase 3 audit) | `TestThePreflightFindsTheOSConfigurationOfAnInterface`, `TestThePreflightSeesNetworkManagerTakeEveryInterface`, `TestThePreflightReadsANetplanFileWithARendererPerDeviceType`, `TestThePreflightTakesOnlyTheNetplanFileThatShadowsTheOthers`, `TestThePreflightEvaluatesANetplanMatchByDriver` (`internal/preflight/netplan_test.go`), `TestTheExecutorReadsTheHostsNetworkConfigurationWithoutItsContent` (`internal/executor/hostnet_test.go`) |
 | The preflight checks every candidate and test interface: a warning before the setup (the suggested uplink too) that the report's status does not count, a failure for an assigned test interface, the uplink and the management interface not checked, `os_managed`, an unreadable file, "no preflight check has run" only without a report, a failing read logged once (P3-M12-07) | `TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface`, `TestThePreflightSaysWhichOSConfigurationFileItCannotRead`, `TestThePreflightSaysNoCheckRanOnlyWhenNoneDid`, `TestAFailingReadOfTheHostsNetworkConfigurationIsLoggedOnce`, `TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration` (`internal/api/preflight_test.go`); the wizard shows the preflight's text: `setup.spec.ts` "first start: the wizard sets up the gateway and confirms the revision" |
-| Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback, a logout that drops what the session read), connection, toasts, events, uplink rates | `src/stores/stores.test.ts` |
-| Event stream: listeners, invalidation per type, `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
+| Stores: session (setup, login, logout with CSRF, one round trip, a setup reopened by a rollback, a logout that drops what the session read), connection, toasts, events, uplink rates and the chart's time range before the first rate (now, not the epoch) | `src/stores/stores.test.ts` |
+| Event stream: listeners, invalidation per type (the groups with every revision that becomes active), `events_lost`, toasts (the rollback of the setup's revision 1 in its own words), reconnect, a new stream with a growing pause after the browser gave one up | `src/composables/eventStream.test.ts` |
 | Shared components and their accessibility (labels, `aria-pressed`, `role="switch"`, countdown with its milestones for screen readers and on the gateway's clock, Escape in a dialog, toasts) | `src/components/ui/components.test.ts` |
 | Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
 | Serving the app: deep links, assets and their caching, CSP, 404s, nothing under `/api/` is the page, before the setup | `TestTheWebAppIsServedNextToTheAPI`, `TestWithoutAWebAppEveryOtherPathIsNotFound`, `TestCheckUIWantsAnIndexPage` (`internal/api/ui_test.go`), `TestWebUIComesFromTheDirectoryOrTheBinary` (`cmd/chaosgw`) |
@@ -3269,7 +3305,7 @@ DNS queries come with the flow view of M26 (P3-M12-02).
 with the generated model (a change of the spec breaks the fixtures at compile time; `npm run typecheck` checks the e2e code
 too), records every request with its headers and body, paginates like the gateway (so the device list must follow the
 cursor), refuses unsafe requests without the CSRF token, can be made unreachable (every request aborted) or answer a path
-with an error (`failing`), can run its clock
+with an error (`failing`) or only once a promise settles (`holding`, for the loading states), can run its clock
 off the browser's (`clockSkewMs`: a `Date` header and deadlines on that clock) and can roll the setup back (`rollBackSetup`). The browser's
 `EventSource` is replaced by a fake the test drives (`gw.emit`, `__sse.fail`, `__sse.reopen`), so a live update is
 asserted deterministically instead of by a poll.
@@ -3300,12 +3336,14 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 
 | Plan M12 Tests | Test |
 |---|---|
-| Playwright against a mocked API for every state: empty | `overview.spec.ts` "empty: no faults, no devices, no networks", `devices.spec.ts` "empty: no devices yet", `device-detail.spec.ts` "a device without faults says its traffic is unimpaired" |
+| Playwright against a mocked API for every state: empty | `overview.spec.ts` "empty: no faults, no devices, no networks", `devices.spec.ts` "empty: no devices yet" (one sentence, the primary action), `device-detail.spec.ts` "a device without faults says its traffic is unimpaired" |
+| … loading | `overview.spec.ts` "while the networks and the events load, the overview says so instead of "none"", "the uplink chart says visibly that it collects the first readings, until it has them"; `networks.spec.ts` "the routing sessions say they are loading, not that there are none" (the Phase 3 audit) |
 | … many devices | `devices.spec.ts` "many devices: all pages are listed, search and filter chips narrow them" (620 devices, two pages) |
-| … data that did not load | `states.spec.ts` "a list the gateway did not deliver says so and does not claim to be empty", "devices and a device the gateway did not deliver: an error, not an empty list or a blank page" |
+| … data that did not load | `states.spec.ts` "a list the gateway did not deliver says so and does not claim to be empty", "devices and a device the gateway did not deliver: an error, not an empty list or a blank page"; `overview.spec.ts` "the uplink is not claimed "up" while it is not known, and a failed read says so"; `rules.spec.ts` "the overlay rules not loaded: the list says so instead of leaving out the rules evaluated first"; `networks.spec.ts` "the Linux view read again fails: the old counters stay, greyed out, and it says they are not live" (the Phase 3 audit) |
 | … offline | `states.spec.ts` "offline: a banner, live data greyed out with the time it was last updated, and back", "offline from the start: the page says so and tries again", "offline from the start, then the setup is open: Try again leads to the wizard", "offline from the start, then no session: Try again leads to the login and back to the page"; `device-detail.spec.ts` "faults cannot be removed while a revision waits for confirmation or the gateway is offline" |
 | … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
-| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts` (a logout drops the draft and the data read, a locked-out login says how long to wait), `overview.spec.ts`, `devices.spec.ts` (rows, adopt, a refused base), `device-detail.spec.ts` (removing a network's fault asks first) |
+| … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts` (a logout drops the draft and the data read, a locked-out login says how long to wait), `overview.spec.ts` (every item links to its detail), `devices.spec.ts` (rows with the compact fault chips, adopt, an adoption marked until it is applied and its Undo, a refused base, the search field's focus ring), `device-detail.spec.ts` (removing a network's fault asks first, a configured fault that wins, the router and DNS servers the network hands out, an adoption marked) |
+| Keyboard focus and the visual system (plan §2.17 Accessibility, Visual system; the Phase 3 audit) | `faults.spec.ts` "keyboard: Remove and Undo hand the focus to each other, and the drawer gives it back to the bar or the page", `rules.spec.ts` "keyboard: deleting a rule puts the focus on its Undo, and Undo on the rule again", "the selected rule is marked for assistive technology too, not only by its colour", `devices.spec.ts` "an adoption in the changes is marked in the list, Undo takes it back and keeps the focus there", `network-forms.spec.ts` "a tall form keeps its action row in view at 1440 × 900", `networks.spec.ts` "the access matrix keeps its columns readable and scrolls inside its card when there are many networks", `src/styles.test.ts` |
 | An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
 
 ## Web UI: faults, rules and profiles (M13)
@@ -3368,7 +3406,8 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   Before that the dialog names what both sides changed, under "Changed on both sides · theirs → yours" (`overlaps`,
   P3-M13-07: per object the members both merge patches touch with different values, `bothChanged` in
   `src/lib/mergePatch.ts`, a scope or destination compared as a whole and reapplied as the user's whole, `reapplyMergePatch`,
-  so a From both changed is never merged into a scope with two choices — "Rule no-dns-2 action: TCP reset → Reject" —; an
+  so a From both changed is never merged into a scope with two choices — "Rule no-dns-2 access: TCP reset → Reject", a
+  rule's members named as in the editor and the user's change (from, to, access, cut existing) —; an
   impairment parameter set (a configured fault's flat parameters with upload and download, a profile's
   `parts.impairment`) merged member by member that the gateway would refuse where neither side's was (flat parameters
   next to upload/download, loss next to burst loss, blackout next to flapping, a jitter above the latency;
@@ -3378,7 +3417,10 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   rules to different orders — "Rule order: no-dns, no-dot, test-web → test-web, no-dot, no-dns", over the rules all
   three revisions have; the user's order wins and rules they added keep their place; a pair of the access matrix has two
   policies, so both changing it agree), and its text points at those fields as the ones where the user's value wins;
-  "Discard mine" drops the draft. There is no "overwrite theirs" (plan §2.17: the prototype's three-way dialog is
+  these rows are tinted in the accent, not in the fault colour, which means impaired traffic. Their change names a rule
+  they changed field by field in the same words as the user's ("Rule no-dns access: Drop → TCP reset", `theirWords` in
+  `DraftChanges.vue` from the base and their configuration), every other object with the gateway's summary (the Phase 3
+  audit). "Discard mine" drops the draft. There is no "overwrite theirs" (plan §2.17: the prototype's three-way dialog is
   superseded).
 - **Access rules** (`src/views/RulesView.vue`, `src/components/rules/RuleEditor.vue`, `src/lib/rules.ts`). The list in
   evaluation order: the system rule "Control plane access" locked at the top (SYSTEM, its hits, a switch that cannot be
@@ -3387,7 +3429,9 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   The selected rule opens in the editor: name and enabled; **IF** from (everything, a network, a group, a configured device),
   to (anywhere, the uplink, a network, an address or prefix, a host name — with the hint that host names are matched from
   DNS answers, best effort), protocol, ports ("80, 443, 1000-2000"); **THEN** Allow · Drop · Reject · TCP reset as a
-  segmented control (`aria-pressed`), the ICMP type of a reject, "also cut existing connections" for a refusing rule. The
+  segmented control (`aria-pressed`), the ICMP type of a reject, "also cut existing connections" for a refusing rule
+  (switched off for another protocol than TCP or any, with the hint why under it). The selected rule's button carries
+  `aria-current`, not only its colour. The
   matches box shows hits, bytes and the last match, and the effect in words ("Rejected for new connections with ICMP port
   unreachable, so the sender fails at once; existing connections are cut once. 1 overlay rule is checked first."). Add rule,
   Delete, Move up / Move down change the draft. The editor checks a rule as the spec does (the name pattern, ports only with
@@ -3478,14 +3522,17 @@ matrix, compiled state) follow in the next section; "Measure with probe" on the 
   device) and the duration (until removed, 1 min to 1 hour) apply to the buttons: "Activate on Network IoT" writes the
   activation (`POST /overlays` with `profile` and `ttl`; another profile on the same scope replaces it, one profile per
   scope), "Deactivate on Network IoT" removes the activations of that scope. The device page's "Apply profile" opens the
-  profiles with the device as the scope (`?scope=device:<id>`).
+  profiles with the device as the scope (`?scope=device:<id>`). The buttons name the profile for a screen reader
+  ("Activate Bad LTE on Network IoT"); one button changes its action, so the focus stays on it.
 - **Profile editor** (`src/components/profiles/ProfileDialog.vue`, `src/lib/profileForm.ts`; P3-M13-03). "New profile"
   in the header, "Edit" and "Delete" on a custom profile's card (a built-in profile has neither). The editor has the
   name (the pattern of the spec, unique among all profiles case-insensitively, never a built-in profile's name), the
   description and the parts the editor makes: an impairment part with the fault dialog's impairment fields (direction
   including each its own, presets, latency, jitter, loss and the advanced parameters, `ImpairmentFields.vue`) and an
   MTU part (size and mode); a DNS or TLS part the profile already has (defined over the API) is kept as it is and said
-  so. A profile needs at least one part. The preview shows its chips, `</> API` the merge patch of `POST /revisions` (`objectPatch`: what changed against the base revision's profile, `null` for a member the edit removes; a new profile whole).
+  so. A profile needs at least one part. The editor's own checks show once a field was changed or "Add to the changes"
+  was pressed, as in the network form and the setup (not in a dialog just opened). The preview shows its chips ("no
+  impairment" as plain text, not an orange chip), `</> API` the merge patch of `POST /revisions` (`objectPatch`: what changed against the base revision's profile, `null` for a member the edit removes; a new profile whole).
   A custom profile is an object of the configuration (`profiles`), so "Add to the changes" puts it into the draft
   (`setProfile`, `restoreProfile`, the patch, the changes in words, `overlaps` and `rebase` like a configured fault):
   the bar counts it ("1 change in 1 profile"), the card is marked NEW, CHANGED or DELETED (struck through, with Undo)
@@ -3612,7 +3659,7 @@ settings and the protocols on the links; part 3) go through the draft too.
   time, active leases, the pool — the configured one, or the spec's default, the second half of the subnet, computed by
   `effectivePools` — with the free addresses the gateway reports, router and DNS options), DNS (the proxy, redirected
   resolvers, DoT blocked, static entries), masquerade, downstream routes and "IPv6 blocked"; for a WireGuard network its
-  kind and role, tunnel subnet and gateway address, endpoint (the uplink address by default), MTU, public key and the clients
+  kind and role, tunnel subnet and gateway address, endpoint (by default the uplink's address from `GET /uplink` with the listen port, "192.168.1.57:51820 (the uplink address)"), MTU, public key and the clients
   online; for a link the remote side's address and endpoint, its online state with the last handshake and bytes, and the
   static and learned routes with a link to the routing view. The Linux names (bridges, WireGuard interfaces) appear only in
   the Linux view (D14). The leases of a local network (`LeasesCard.vue`, `GET /networks/{id}/leases`): address, MAC, host
@@ -3664,7 +3711,9 @@ settings and the protocols on the links; part 3) go through the draft too.
   the placeholder), and an answer no opening showed is kept in memory and shown by the next opening.
 - **Access matrix** (`AccessMatrix.vue`, logic in `src/lib/networks.ts`). Rows are the test and WireGuard networks, columns
   the Internet (uplink), the networks and the management network; a cell is Allowed or Blocked with a text label, "default"
-  when no entry exists (the spec's default: a local test network reaches the uplink, everything else is blocked), and a
+  when no entry exists (the spec's default: a local test network reaches the uplink, everything else is blocked; a column
+  is at least 96 px wide, its header truncated with the name as its title, and with many networks the matrix scrolls
+  sideways inside its card), and a
   button with `aria-pressed` and a label that says the pair, the state and whether it is the default or changed. A click
   changes the draft (`toggleMatrix`): the policy flips, and an entry that would only say what the default says is removed
   instead, so the configuration keeps the entries that matter; an entry may name a network by its name or UUID. The bar

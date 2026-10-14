@@ -9,7 +9,7 @@
 // keeps its id); whenever the gateway answers with another overlay — a changed target or traffic,
 // or an overlay of another owner (a token, a run), whose key includes its owner (§2.1.1) — the
 // old one is removed, so the edit replaces it. An edit keeps the overlay's remaining time unless
-// another duration is chosen (it is sent as the TTL; an own TTL the dialog does not list is offered
+// another duration is chosen (sent as `expires_in` beside its own TTL, which it keeps; an own TTL the dialog does not list is offered
 // as such; P3-M13-06). A configured fault the gateway refused in a
 // candidate opens with the refusal under its fields. The dialog's requests are shown in it under
 // `</> API`.

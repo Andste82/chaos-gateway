@@ -108,6 +108,20 @@ func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest, opts .
 			v.add(p.path, CodeInvalidDuration, "must be at least 1s")
 		}
 	}
+	// expires_in shortens the first TTL of this write: the rest of the TTL an edit keeps (P3-M13-06)
+	if out.ExpiresIn != nil {
+		in, ok := parseDuration(*out.ExpiresIn)
+		switch {
+		case !ok || in < time.Second:
+			v.add("/expires_in", CodeInvalidDuration, "must be at least 1s")
+		case out.Ttl == nil:
+			v.add("/ttl", CodeMissingField, "expires_in shortens the ttl and needs one")
+		default:
+			if ttl, ok := parseDuration(*out.Ttl); ok && in > ttl {
+				v.add("/expires_in", CodeInvalidDuration, "must be at most the ttl %s", *out.Ttl)
+			}
+		}
+	}
 	return &out, sortErrors(append(errs, v.errs...))
 }
 

@@ -4546,6 +4546,13 @@ type Overlay struct {
 	Dns       *DnsFault  `json:"dns,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
+	// ExpiresIn Only with `ttl`, at most `ttl`: this write removes the overlay after this time instead of
+	// after `ttl`; `ttl` stays the overlay's TTL (shown, and started over by a later write
+	// without `expires_in`). An edit keeps an overlay's remaining time this way, also when it
+	// takes over the overlay of another owner (the web UI's fault dialog, P3-M13-06). Write-only:
+	// an overlay as read has `ttl` and `expires_at`, never `expires_in`.
+	ExpiresIn *Duration `json:"expires_in,omitempty"`
+
 	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
 	// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
@@ -4702,6 +4709,13 @@ type OverlayRequest struct {
 
 	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
 	Dns *DnsFault `json:"dns,omitempty"`
+
+	// ExpiresIn Only with `ttl`, at most `ttl`: this write removes the overlay after this time instead of
+	// after `ttl`; `ttl` stays the overlay's TTL (shown, and started over by a later write
+	// without `expires_in`). An edit keeps an overlay's remaining time this way, also when it
+	// takes over the overlay of another owner (the web UI's fault dialog, P3-M13-06). Write-only:
+	// an overlay as read has `ttl` and `expires_at`, never `expires_in`.
+	ExpiresIn *Duration `json:"expires_in,omitempty"`
 
 	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
 	// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).

@@ -94,6 +94,9 @@ func TestOverlayRequestRules(t *testing.T) {
 		{"a wireguard action with client and link", `{wireguard: {client: lab-rA, link: site-b, action: disable}}`, "/wireguard", CodeInvalidOverlay},
 		{"a ttl of zero", `{target: {global: true}, fault: {blackout: true}, ttl: 0s}`, "/ttl", CodeInvalidDuration},
 		{"a lease below a second", `{target: {global: true}, fault: {blackout: true}, lease: 500ms}`, "/lease", CodeInvalidDuration},
+		{"expires_in without a ttl", `{target: {global: true}, fault: {blackout: true}, expires_in: 5m}`, "/ttl", CodeMissingField},
+		{"expires_in beyond the ttl", `{target: {global: true}, fault: {blackout: true}, ttl: 5m, expires_in: 301s}`, "/expires_in", CodeInvalidDuration},
+		{"expires_in below a second", `{target: {global: true}, fault: {blackout: true}, ttl: 5m, expires_in: 0s}`, "/expires_in", CodeInvalidDuration},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,12 +199,16 @@ func TestOverlayKeyDependsOnTheOwner(t *testing.T) {
 }
 
 func TestNewOverlayFillsKindOwnerAndTimes(t *testing.T) {
-	out, _ := validateOverlay(t, `{target: {device: esp32-42}, fault: {blackout: true}, ttl: 5m, lease: 30s}`)
+	out, errs := validateOverlay(t, `{target: {device: esp32-42}, fault: {blackout: true}, ttl: 5m, expires_in: 4m, lease: 30s}`)
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
 	o, err := NewOverlay(*out, admin, mustUUID("00000000-0000-4000-8000-000000000001"), t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Kind != "fault" || o.Owner != admin || !o.CreatedAt.Equal(t0) || !o.UpdatedAt.Equal(t0) || *o.Ttl != "5m" || *o.Lease != "30s" {
+	// expires_in is write-only: the overlay keeps the ttl as written (P3-M13-06)
+	if o.Kind != "fault" || o.Owner != admin || !o.CreatedAt.Equal(t0) || !o.UpdatedAt.Equal(t0) || *o.Ttl != "5m" || *o.Lease != "30s" || o.ExpiresIn != nil {
 		t.Fatalf("overlay = %+v", o)
 	}
 	if _, err := NewOverlay(model.OverlayRequest{}, admin, mustUUID("00000000-0000-4000-8000-000000000002"), t0); err == nil {

@@ -921,10 +921,13 @@ export class MockGateway {
     const key = (o: OverlayRequest) => JSON.stringify([o.target ?? {}, sel(o)]);
     const old = this.overlays.find((o) => o.kind === kind && o.owner.id === 'admin' && key(o) === key(req));
     const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };
-    const m = req.ttl ? /^(\d+)(s|m|h)$/.exec(req.ttl) : null;
+    // the first removal is after `expires_in` when the request has it, and the overlay keeps its `ttl`
+    const first = req.expires_in ?? req.ttl;
+    const m = first ? /^(\d+)(s|m|h)$/.exec(first) : null;
     const ttlMs = m ? Number(m[1]) * unit[m[2]!]! : 0;
+    const { expires_in: _writeOnly, ...body } = req;
     const overlay: Overlay = {
-      ...req,
+      ...body,
       id: old?.id ?? `f0000000-0000-4000-8000-${String(this.nextOverlay++).padStart(12, '0')}`,
       kind,
       owner: { type: 'user', id: 'admin', name: 'admin' },

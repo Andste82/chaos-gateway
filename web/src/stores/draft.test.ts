@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { nextTick } from 'vue';
-import type { RevisionWithConfiguration } from '../api/generated/model';
+import type { AccessRule, RevisionWithConfiguration } from '../api/generated/model';
 import { curlOf, httpOf, useApiPanelStore } from './apiPanel';
 import { useDraftStore } from './draft';
 
@@ -235,6 +235,23 @@ describe('the configuration draft', () => {
       { kind: 'fault', id: 'f1', name: 'slow', field: 'fault', from: 'deleted', to: 'kept with my change' },
     ]);
     expect(d.overlaps(revision(43).configuration)).toEqual([]);
+  });
+
+  it('names the rule order when both moved rules to different orders (P3-M13-07)', () => {
+    const C = 'c0000000-0000-4000-8000-00000000000c';
+    const rule = (name: string): AccessRule => ({ name, source: { global: true }, action: 'drop' });
+    const three = { [A]: rule('a'), [B]: rule('b'), [C]: rule('c') };
+    const d = useDraftStore();
+    d.track(revision(42, { access_rules: three, access_rule_order: [A, B, C] }));
+    d.setOrder([C, A, B]);
+    // they moved b to the top: the dialog says their order and mine, and reapplying takes mine
+    const theirs = revision(43, { access_rules: three, access_rule_order: [B, A, C] });
+    expect(d.overlaps(theirs.configuration)).toEqual([{ kind: 'rule', id: 'access_rule_order', name: 'order', field: '', from: 'b, a, c', to: 'c, a, b' }]);
+    // the same order on both sides, or theirs untouched (a rule they only added does not count), is no conflict
+    expect(d.overlaps(revision(43, { access_rules: three, access_rule_order: [C, A, B] }).configuration)).toEqual([]);
+    expect(d.overlaps(revision(43, { access_rules: { ...three, d: rule('d') }, access_rule_order: [A, 'd', B, C] }).configuration)).toEqual([]);
+    d.rebase(theirs);
+    expect(d.effectiveOrder).toEqual([C, A, B]);
   });
 
   it('reapplying drops an edit that their revision made already, and keeps a rule they removed as mine', () => {

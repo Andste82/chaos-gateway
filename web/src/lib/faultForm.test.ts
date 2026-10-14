@@ -16,6 +16,7 @@ import {
   targetOf,
   type FaultForm,
 } from './faultForm';
+import { CIDR_CHOICE } from './scopes';
 
 const form = (over: Partial<FaultForm>): FaultForm => ({ ...emptyForm('device:d1'), ...over });
 
@@ -31,6 +32,11 @@ describe('the fault dialog', () => {
       expect(formToConfigFault(f).source).toEqual(target);
     }
     expect(targetOf({ remote_network: { cidr: '10.9.0.0/24' } })).not.toBe(targetOf({ global: true }));
+  });
+
+  it('keeps the choice "a prefix inside a remote network" while its prefix is still empty', () => {
+    expect(scopeOf(CIDR_CHOICE)).toEqual({ remote_network: { cidr: '' } });
+    expect(targetOf(scopeOf(CIDR_CHOICE))).toBe(CIDR_CHOICE);
   });
 
   it('turns the form into the overlay request, checked against the spec', () => {
@@ -73,17 +79,22 @@ describe('the fault dialog', () => {
     const now = new Date('2026-10-14T12:00:00Z');
     const expiresAt = '2026-10-14T12:04:12.300Z';
     const f = faultToForm({ loss: '2%' }, { device: 'd1' }, { ttl: '5m', expiresAt });
-    expect(f).toMatchObject({ duration: 'keep', keepUntil: expiresAt });
-    // the remaining time in whole seconds, rounded up, is the TTL the gateway starts again
-    expect(formToOverlay(f, now).ttl).toBe('253s');
+    expect(f).toMatchObject({ duration: 'keep', keepUntil: expiresAt, keepTtl: '5m' });
+    // the overlay's own TTL again, and the remaining time in whole seconds, rounded up, as expires_in
+    expect(formToOverlay(f, now)).toMatchObject({ ttl: '5m', expires_in: '253s' });
     expect(CreateOverlayBody.safeParse(formToOverlay(f, now)).success).toBe(true);
     expect(durationChoices(f, '5m', now).map((d) => d.label)).toEqual(['Keep: 4:13 left of 5 min', '1 min', '5 min', '15 min', '1 hour', 'Until removed']);
     expect(previewSentence(f, 'ESP32-42')).toMatch(/· expires at \d\d:\d\d as before$/);
     // another choice starts a TTL of its own
-    expect(formToOverlay({ ...f, duration: '15m' }, now).ttl).toBe('15m');
+    expect(formToOverlay({ ...f, duration: '15m' }, now)).toMatchObject({ ttl: '15m' });
+    expect(formToOverlay({ ...f, duration: '15m' }, now).expires_in).toBeUndefined();
     expect(formToOverlay({ ...f, duration: 'perm' }, now).ttl).toBeUndefined();
-    // an expired overlay is written with the shortest TTL rather than none (which would be until removed)
-    expect(formToOverlay(f, new Date('2026-10-14T13:00:00Z')).ttl).toBe('1s');
+    // an expired overlay is written with the shortest time rather than none (which would be until removed)
+    expect(formToOverlay(f, new Date('2026-10-14T13:00:00Z')).expires_in).toBe('1s');
+    // a gateway clock read a little early never asks for more than the TTL
+    expect(formToOverlay(f, new Date('2026-10-14T11:59:00Z')).expires_in).toBe('300s');
+    // an expiry without a TTL (never sent by the gateway) is written as the TTL
+    expect(formToOverlay({ ...f, keepTtl: '' }, now)).toEqual({ target: { device: 'd1' }, fault: { loss: '2%' }, ttl: '253s' });
   });
 
   it('a TTL that is not one of the choices is shown as such and kept (P3-M13-06)', () => {
@@ -92,11 +103,13 @@ describe('the fault dialog', () => {
     const choices = durationChoices(f, '30m', now);
     expect(choices[0]).toEqual({ value: 'keep', label: 'Keep: 20:00 left of 30 min' });
     expect(choices.at(-1)).toEqual({ value: 'ttl:30m', label: '30 min (its own TTL)' });
-    expect(formToOverlay(f, now).ttl).toBe('1200s');
+    // kept: the TTL stays 30m, the expiry where it was
+    expect(formToOverlay(f, now)).toMatchObject({ ttl: '30m', expires_in: '1200s' });
+    expect(CreateOverlayBody.safeParse(formToOverlay(f, now)).success).toBe(true);
     // its own TTL again starts it over
-    expect(formToOverlay({ ...f, duration: 'ttl:30m' }, now).ttl).toBe('30m');
+    expect(formToOverlay({ ...f, duration: 'ttl:30m' }, now)).toEqual({ target: { device: 'd1' }, fault: { loss: '2%' }, ttl: '30m' });
     expect(previewSentence({ ...f, duration: 'ttl:30m' }, 'ESP32-42')).toMatch(/· expires after 30 min$/);
-    // a kept remaining time is the overlay's TTL from then on, shown in words
+    // a TTL in seconds (set over the API) is shown in words
     expect(durationChoices(faultToForm({ loss: '2%' }, { device: 'd1' }, { ttl: '1199s', expiresAt: '2026-10-14T12:19:59Z' }), '1199s', now)).toContainEqual({
       value: 'ttl:1199s',
       label: '19 min 59 s (its own TTL)',

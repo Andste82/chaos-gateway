@@ -3539,6 +3539,14 @@ components:
         ttl:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           description: Remove the overlay after this time.
+        expires_in:
+          allOf: [{$ref: '#/components/schemas/Duration'}]
+          description: |
+            Only with `ttl`, at most `ttl`: this write removes the overlay after this time instead of
+            after `ttl`; `ttl` stays the overlay's TTL (shown, and started over by a later write
+            without `expires_in`). An edit keeps an overlay's remaining time this way, also when it
+            takes over the overlay of another owner (the web UI's fault dialog, P3-M13-06). Write-only:
+            an overlay as read has `ttl` and `expires_at`, never `expires_in`.
         lease:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           description: The owner must renew the overlay within this interval (`POST /overlays/{id}/renew`).

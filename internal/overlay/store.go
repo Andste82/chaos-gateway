@@ -199,8 +199,9 @@ func (s *Store) viewLocked(e *entry) model.Overlay { return e.view(s.clk.Monoton
 
 // Put writes an overlay for an owner. The request must have passed domain.ValidateOverlay (its
 // references are UUIDs). An overlay with the same key (domain.OverlayKey) is replaced: it keeps
-// its id and CreatedAt, takes the new body, and its TTL and lease start over; the change is
-// Updated. Otherwise a new overlay is created. The returned change carries the overlay.
+// its id and CreatedAt, takes the new body, and its TTL and lease start over (the first TTL runs
+// for ExpiresIn when the request has it); the change is Updated. Otherwise a new overlay is
+// created. The returned change carries the overlay.
 func (s *Store) Put(owner model.Owner, req *model.OverlayRequest, opt PutOptions) (Change, error) {
 	if opt.Run != nil && (owner.Type != "run" || owner.Id != opt.Run.Id.String()) {
 		return Change{}, fmt.Errorf("overlay: an overlay of run %s is owned by that run, not by %s %q", opt.Run.Id, owner.Type, owner.Id)
@@ -217,7 +218,20 @@ func (s *Store) Put(owner model.Owner, req *model.OverlayRequest, opt PutOptions
 	if err != nil {
 		return Change{}, err
 	}
+	// expires_in shortens this write's first TTL (the rest of the TTL an edit keeps, P3-M13-06);
+	// the overlay keeps the ttl as written
+	first, err := parseInterval("expires_in", req.ExpiresIn)
+	if err != nil {
+		return Change{}, err
+	}
+	if first > 0 && (ttl == 0 || first > ttl) {
+		return Change{}, fmt.Errorf("overlay: expires_in %q needs a ttl of at least that time", *req.ExpiresIn)
+	}
+	if first == 0 {
+		first = ttl
+	}
 	body := domain.CloneOverlayRequest(req)
+	body.ExpiresIn = nil
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -250,7 +264,7 @@ func (s *Store) Put(owner model.Owner, req *model.OverlayRequest, opt PutOptions
 		ct, reason = Updated, ReasonReplaced
 	}
 	mono := s.clk.Monotonic()
-	e := &entry{ov: ov, key: key, ttl: ttl, lease: lease, ttlAt: mono + ttl, leaseAt: mono + lease}
+	e := &entry{ov: ov, key: key, ttl: ttl, lease: lease, ttlAt: mono + first, leaseAt: mono + lease}
 	s.byID[id] = e
 	s.byKey[key] = e
 	return Change{Type: ct, Overlay: s.viewLocked(e), Reason: reason}, nil

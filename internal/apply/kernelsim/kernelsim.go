@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 
@@ -74,6 +75,9 @@ type nftChain struct {
 type nftRule struct {
 	expr    []any
 	comment string
+	// hasLast says whether the rule has a `last` statement; lastAt is when it last matched (zero: never)
+	hasLast bool
+	lastAt  time.Time
 }
 
 type nftTable struct {
@@ -389,11 +393,23 @@ func (k *Kernel) DockerOursLast() {
 	k.docker = append(other, ours...)
 }
 
-// BumpCounter adds to a named counter, as traffic would.
+// BumpCounter adds to a named counter, as traffic would: the rules that count into it and have a `last`
+// statement have matched now.
 func (k *Kernel) BumpCounter(name string, n int64) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nft.counters[name] += n
+	if n <= 0 {
+		return
+	}
+	now := simClock.Now()
+	for _, c := range k.nft.chains {
+		for i := range c.rules {
+			if c.rules[i].hasLast && counterOf(c.rules[i].expr) == name {
+				c.rules[i].lastAt = now
+			}
+		}
+	}
 }
 
 // Counter returns a named counter's value.

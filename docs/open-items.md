@@ -769,10 +769,17 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-01 The last match of an access rule is the time the gateway first read the counter higher
 
-- Status: new
-- Decision (2026-10-14): option (b) — the nftables `last` statement on every access rule's counter (kernel 5.17+, target 6.8), compiled
-  with the rule and read from the ruleset listing, replaces the read-based time of `internal/api/matches.go`; unit tests for
-  the compiler and the normalizer/parser, the kernel gates, and a testbed test that asserts the time
+- Status: closed (2026-10-14): decided — option (b): every access rule (in both hooks) and the anti-lockout rule carry
+  the nftables `last` statement after their named counter (`compiler.lastStmt`); an apply carries the time of the
+  kernel's rule of the same chain and counter over to the rule that replaces it (`Nft.Transaction`, `withLast`; late by
+  at most the length of the apply), `Engine.ReadCounters` reads it from the ruleset listing (`linux.Ruleset.LastUsed`)
+  and `Counter.last_match` is counted back from the read; `internal/api/matches.go` and its read-based time are gone.
+  The technical view prints `last used …`. Tests `TestEveryAccessRuleAndTheAntiLockoutRuleNoteTheirLastMatch`,
+  `TestATransactionCarriesTheLastMatchOverToTheRuleThatReplacesIt` (with `nft -c`), `TestTheLastStatementOfARuleIsReadByItsNamedCounter`,
+  `TestRenderNftPrintsTheLastStatementAsNftDoes`, `TestARulesCounterSaysWhenItLastMatched`; on the real kernel (testbed)
+  `TestTheKernelListsTheLastMatchAndTakesItOverFromTheRuleItReplaces` and `TestARulesLastMatchIsTheKernelsAndAnApplyKeepsIt`,
+  which passed in the emulated VM (kernel 6.8.0-142, 2026-10-14) together with the kernel gates
+  `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` and the access rules' kernel tests
 - Severity: low
 - Reason: needs-decision. Plan §2.17 asks for "hits, bytes, last match" in the rule editor. nftables counters keep no
   time; the API now gives `Counter.last_match`, the time of the first read that found a rule's counter higher than the read

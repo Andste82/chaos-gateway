@@ -22,7 +22,7 @@ set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
   jump cut_input
   ct state { established, related } accept
   meta iifname lo accept
-  meta iifname != @ifs_test_bf4feb ip saddr @mgmt_src_8743d6 tcp dport { 22, 443 } counter "anti_lockout" accept
+  meta iifname != @ifs_test_bf4feb ip saddr @mgmt_src_8743d6 tcp dport { 22, 443 } counter "anti_lockout" last accept
   tcp dport 443 counter "input_drop" drop
   jump access_input
   meta iifname @ifs_test_bf4feb ip protocol icmp icmp type echo-request accept
@@ -31,12 +31,12 @@ set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
   meta iifname @ifs_test_bf4feb tcp dport 53 accept
   meta iifname @ifs_test_bf4feb counter "input_drop" drop
 # chain access_forward
-  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
-  ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" accept
-  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" last reject with tcp reset
+  ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" last accept
+  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" last reject with icmpx port-unreachable
 # chain access_input
-  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" reject with tcp reset
-  ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" accept
-  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" reject with icmpx port-unreachable
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" last reject with tcp reset
+  ct original ip saddr @classify_nets_8743d6 meta l4proto udp ct original proto-dst 123 counter "rule_add048cda1" last accept
+  ct original ip saddr @asrc_00074ad1ca56d1cfa1658f32_8743d6 counter "rule_a41eb09061" last reject with icmpx port-unreachable
 # chain cut_forward
 # chain cut_input

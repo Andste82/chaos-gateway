@@ -3139,11 +3139,11 @@ type Counter struct {
 	// Epoch Changes when counters restart (reboot, recreated object).
 	Epoch int64 `json:"epoch"`
 
-	// LastMatch Access rules only (configured, overlay and system rules): when the gateway first read the
-	// counter higher than at the read before. The kernel keeps no time of the last match, so
-	// the time lies between two reads of the counter (every list or view of the rules reads it;
-	// the UI does so every 5 s while the rules are shown). Absent until a read has seen the
-	// counter grow since the gateway started.
+	// LastMatch Access rules only (configured, overlay and system rules): when the rule last matched a new
+	// connection, as the kernel notes it (the nftables `last` statement of the rule, kernel 5.17
+	// or newer). An apply that makes the rule anew carries the time over (late by at most the
+	// length of the apply). Absent while the rule has not matched since it was created (a new
+	// rule, or a table made anew, e.g. after a reboot).
 	LastMatch *time.Time `json:"last_match,omitempty"`
 	Packets   int64      `json:"packets"`
 }

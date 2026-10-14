@@ -97,7 +97,7 @@ const selSystem = computed(() => system.value.find((s) => s.key === selected.val
 
 function lastMatch(at: string | undefined, applied: boolean): string {
   if (!applied) return 'not applied yet';
-  return at ? formatAgo(at, now.value) : 'none seen since the gateway started';
+  return at ? formatAgo(at, now.value) : 'never since the rule was applied';
 }
 
 function setEnabled(id: string, rule: AccessRule, on: boolean) {

@@ -787,7 +787,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "b4ebb59174d7",
+          "comment": "a80c413183cf",
           "expr": [
             {
               "match": {
@@ -845,6 +845,9 @@
               "counter": "rule_8e9ca98e27"
             },
             {
+              "last": null
+            },
+            {
               "drop": null
             }
           ],
@@ -857,7 +860,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "efb7212b3557",
+          "comment": "6469e9cb5c9f",
           "expr": [
             {
               "match": {
@@ -898,6 +901,9 @@
               "counter": "rule_add048cda1"
             },
             {
+              "last": null
+            },
+            {
               "reject": {
                 "expr": "port-unreachable",
                 "type": "icmpx"
@@ -913,7 +919,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "dc8c9f826d8a",
+          "comment": "3fea8039f1de",
           "expr": [
             {
               "match": {
@@ -958,6 +964,9 @@
               "counter": "rule_a41eb09061"
             },
             {
+              "last": null
+            },
+            {
               "accept": null
             }
           ],
@@ -970,7 +979,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "a38964f4580d",
+          "comment": "5e13cfd7694f",
           "expr": [
             {
               "match": {
@@ -1033,6 +1042,9 @@
               "counter": "rule_6bfa3b0050"
             },
             {
+              "last": null
+            },
+            {
               "drop": null
             }
           ],
@@ -1045,7 +1057,7 @@
       "add": {
         "rule": {
           "chain": "access_forward",
-          "comment": "6cab4953d1bf",
+          "comment": "0f2a4fb27428",
           "expr": [
             {
               "match": {
@@ -1084,6 +1096,9 @@
             },
             {
               "counter": "rule_5670a37936"
+            },
+            {
+              "last": null
             },
             {
               "reject": {
@@ -1100,7 +1115,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "b4ebb59174d7",
+          "comment": "a80c413183cf",
           "expr": [
             {
               "match": {
@@ -1158,6 +1173,9 @@
               "counter": "rule_8e9ca98e27"
             },
             {
+              "last": null
+            },
+            {
               "drop": null
             }
           ],
@@ -1170,7 +1188,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "efb7212b3557",
+          "comment": "6469e9cb5c9f",
           "expr": [
             {
               "match": {
@@ -1211,6 +1229,9 @@
               "counter": "rule_add048cda1"
             },
             {
+              "last": null
+            },
+            {
               "reject": {
                 "expr": "port-unreachable",
                 "type": "icmpx"
@@ -1226,7 +1247,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "dc8c9f826d8a",
+          "comment": "3fea8039f1de",
           "expr": [
             {
               "match": {
@@ -1271,6 +1292,9 @@
               "counter": "rule_a41eb09061"
             },
             {
+              "last": null
+            },
+            {
               "accept": null
             }
           ],
@@ -1283,7 +1307,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "a38964f4580d",
+          "comment": "5e13cfd7694f",
           "expr": [
             {
               "match": {
@@ -1346,6 +1370,9 @@
               "counter": "rule_6bfa3b0050"
             },
             {
+              "last": null
+            },
+            {
               "drop": null
             }
           ],
@@ -1358,7 +1385,7 @@
       "add": {
         "rule": {
           "chain": "access_input",
-          "comment": "6cab4953d1bf",
+          "comment": "0f2a4fb27428",
           "expr": [
             {
               "match": {
@@ -1397,6 +1424,9 @@
             },
             {
               "counter": "rule_5670a37936"
+            },
+            {
+              "last": null
             },
             {
               "reject": {
@@ -2102,7 +2132,7 @@
       "add": {
         "rule": {
           "chain": "input",
-          "comment": "c5eebee2c8c7",
+          "comment": "dd0a9572388a",
           "expr": [
             {
               "match": {
@@ -2146,6 +2176,9 @@
             },
             {
               "counter": "anti_lockout"
+            },
+            {
+              "last": null
             },
             {
               "accept": null

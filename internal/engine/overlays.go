@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -824,19 +825,28 @@ func WGActionKey(overlay string) string { return "wireguard:" + strings.ToLower(
 // CounterValue is the reading of one named nft counter.
 type CounterValue struct {
 	Packets, Bytes int64
+	// LastUsed is how long before the read a rule with a `last` statement that counts into the counter last
+	// matched (the access rules and the anti-lockout rule, P3-M13-01); nil when no such rule has matched.
+	LastUsed *time.Duration
 }
 
 // ReadCounters reads the named counters of the kernel's table: the per-fault counters of the
-// classified packets, by counter name.
+// classified packets and the counters of the access rules with the time their rules last matched, by
+// counter name.
 func (e *Engine) ReadCounters(ctx context.Context) (map[string]CounterValue, error) {
 	rs, err := apply.ReadSets(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]CounterValue{}
+	lasts := rs.LastUsed()
 	for _, obj := range rs.Objects {
 		if c := obj.Counter; c != nil {
-			out[c.Name] = CounterValue{Packets: c.Packets, Bytes: c.Bytes}
+			v := CounterValue{Packets: c.Packets, Bytes: c.Bytes}
+			if d, ok := lasts[c.Name]; ok {
+				v.LastUsed = &d
+			}
+			out[c.Name] = v
 		}
 	}
 	// the packets from a peer are counted by tc, not by nft: the redirect action of the ingress filter of

@@ -28,10 +28,15 @@ func anon(vals ...any) any      { return map[string]any{"set": vals} }
 func setRef(name string) string { return "@" + name }
 func counter(name string) any   { return map[string]any{"counter": name} }
 func verdict(v string) any      { return map[string]any{v: nil} }
-func iifname(name string) any   { return eq(meta("iifname"), name) }
-func oifname(name string) any   { return eq(meta("oifname"), name) }
-func iifSet(set string) any     { return eq(meta("iifname"), setRef(set)) }
-func oifSet(set string) any     { return eq(meta("oifname"), setRef(set)) }
+
+// lastStmt is the `last` statement (kernel 5.17+): the kernel notes when the rule last matched and
+// lists it as `last used <ms>` (plan §2.17, the rule editor's "last match", P3-M13-01). It is compiled
+// as "never used"; a transaction carries the time of the rule it replaces over (Nft.Transaction).
+func lastStmt() any           { return map[string]any{"last": nil} }
+func iifname(name string) any { return eq(meta("iifname"), name) }
+func oifname(name string) any { return eq(meta("oifname"), name) }
+func iifSet(set string) any   { return eq(meta("iifname"), setRef(set)) }
+func oifSet(set string) any   { return eq(meta("oifname"), setRef(set)) }
 func ctState(states ...string) any {
 	list := make([]any, len(states))
 	for i, s := range states {
@@ -149,7 +154,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	// before the UI port rule below)
 	input.Rules = append(input.Rules, t.serviceInput()...)
 	antiLockoutMatch := []any{match(meta("iifname"), "!=", setRef(ifsTest.Name)), eq(payload("ip", "saddr"), setRef(mgmtSrc.Name)), eq(payload("tcp", "dport"), controlPorts(t.Management.UIPort))}
-	antiLockout := newRule(append(append([]any(nil), antiLockoutMatch...), counter(AntiLockoutCounter), verdict("accept"))...)
+	antiLockout := newRule(append(append([]any(nil), antiLockoutMatch...), counter(AntiLockoutCounter), lastStmt(), verdict("accept"))...)
 	if t.Access != nil {
 		t.Access.guard = antiLockoutMatch
 		t.Access.describePath(t)

@@ -58,9 +58,8 @@ type overlayContext struct {
 	flaps map[string]engine.FlapState
 	// world resolves the precedence of the snapshot (who overrides a fault); nil without an active revision
 	world *domain.World
-	// matched notes a reading of a rule's counter and returns when it was last seen growing (nil: not
-	// since the gateway started); nil when no counters were read
-	matched func(counter string, packets, epoch int64) *time.Time
+	// readAt is when the counters were read; the time a rule last matched is counted back from it
+	readAt time.Time
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -81,11 +80,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 			return oc
 		}
 		oc.counters = cs
-		now := s.clk.Now()
-		s.matches.prune(func(name string) bool { _, ok := cs[name]; return ok }, now)
-		oc.matched = func(counter string, packets, epoch int64) *time.Time {
-			return s.matches.observe(counter, packets, epoch, now)
-		}
+		oc.readAt = s.clk.Now()
 		if len(oc.snap.TCDevs) > 0 {
 			qs, err := s.cfg.Engine.ReadQueues(ctx)
 			if err != nil {

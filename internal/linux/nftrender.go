@@ -191,6 +191,16 @@ func renderStatement(v any) string {
 			case nil:
 				return "counter"
 			}
+		case "last":
+			// nft prints how long ago the rule last matched, or never (P3-M13-01)
+			if a, ok := arg.(map[string]any); ok {
+				if used, ok := a["used"].(float64); ok && used >= 0 {
+					return "last used " + nftTime(int64(used))
+				}
+			}
+			if arg == nil {
+				return "last used never"
+			}
 		case "reject":
 			a, _ := arg.(map[string]any)
 			if a == nil {
@@ -391,6 +401,25 @@ func renderValue(v any, quote bool) string {
 		}
 	}
 	return compactJSON(v)
+}
+
+// nftTime renders milliseconds the way nft prints a time: days, hours, minutes, seconds and
+// milliseconds, the parts that are not zero ("1h2s", "350ms", "0ms").
+func nftTime(ms int64) string {
+	if ms <= 0 {
+		return "0ms"
+	}
+	var b strings.Builder
+	for _, u := range []struct {
+		n    int64
+		name string
+	}{{86_400_000, "d"}, {3_600_000, "h"}, {60_000, "m"}, {1000, "s"}, {1, "ms"}} {
+		if v := ms / u.n; v > 0 {
+			fmt.Fprintf(&b, "%d%s", v, u.name)
+			ms -= v * u.n
+		}
+	}
+	return b.String()
 }
 
 func compactJSON(v any) string {

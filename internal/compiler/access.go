@@ -697,12 +697,13 @@ func verdictFor(r AccessRule) any {
 	}
 }
 
-// chain builds the access chain of a hook.
+// chain builds the access chain of a hook. Every rule counts into its named counter and notes when it
+// last matched (the `last` statement, P3-M13-01): the rule editor's "hits, bytes, last match" (plan §2.17).
 func (p *AccessPlan) chain(name string) Chain {
 	c := Chain{Name: name}
 	for _, r := range p.Rules {
 		expr := p.matchExpr(r)
-		expr = append(expr, counter(r.Counter), verdictFor(r))
+		expr = append(expr, counter(r.Counter), lastStmt(), verdictFor(r))
 		c.Rules = append(c.Rules, newRule(expr...))
 	}
 	return c

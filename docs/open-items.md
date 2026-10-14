@@ -1,6 +1,6 @@
 # Audits and open items
 
-This file holds the audits of two phases of `docs/plan.md` §5, what they left open, and the open items of the phase in progress:
+This file holds the audits of the phases of `docs/plan.md` §5, what they left open, and the open items of each phase:
 
 - **Phase 1** (M1–M6b): audited on 2026-10-04, closed on 2026-10-05. The result, the decisions and the
   per-milestone verdicts follow directly below.
@@ -9,8 +9,11 @@ This file holds the audits of two phases of `docs/plan.md` §5, what they left o
   found, P2-AUDIT-01 to P2-AUDIT-16, and P2-AUDIT-17, which the work on them found, are closed (table
   "Closed after the audit (2026-10-12)" under [Phase 2 open items](#phase-2-open-items)). One Phase 2 item
   stays open: P2-M9-06, a hardware measurement for H1.
-- **Phase 3** (M12–M14): in progress. What the implementation of a milestone could not settle is under
-  [Phase 3 open items](#phase-3-open-items), at the end of the file.
+- **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. What the
+  implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
+  file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
+  instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
+  items ("Phase 3 audit: choices made in …").
 
 ## Phase 1 audit result
 
@@ -647,8 +650,9 @@ stayed open".
 Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below were found while implementing M12, M13
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
-2026-10-14; an item that is decided but not yet done carries a "Decision (2026-10-14)" line and is closed when the
-decided option is implemented. As of 2026-10-14 every Phase 3 item is closed except P3-M12-05, which waits for M27/M30.
+2026-10-14; a "Decision (2026-10-14)" line records what was decided, and the item's Status line says whether it is closed
+and how the decision was implemented. As of 2026-10-14 every Phase 3 item is closed except P3-M12-05, which waits for
+M27/M30.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 

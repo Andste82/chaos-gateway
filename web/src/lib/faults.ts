@@ -22,9 +22,14 @@ export function netemChips(p: NetemParams | undefined, arrow: string): string[] 
     out.push(`${arrow} ${formatDuration(p.latency)}${jitter}`);
   }
   if (p.distribution && p.distribution !== 'uniform') out.push(`${p.distribution} delay`);
+  if (p.keep_order) out.push('keep order');
   if (p.loss) out.push(`${pct(p.loss)} loss`);
   if (p.loss_correlation) out.push(`loss correlation ${pct(p.loss_correlation)}`);
-  if (p.burst_loss) out.push('burst loss');
+  if (p.burst_loss) {
+    // Gilbert-Elliott: good → bad / bad → good, and the delivery in each state when set
+    const b = p.burst_loss;
+    out.push(`burst loss ${pct(b.p)}/${pct(b.r)}${b.h ? ` h ${pct(b.h)}` : ''}${b.k ? ` k ${pct(b.k)}` : ''}`);
+  }
   if (p.rate) out.push(`${arrow} ${rate(p.rate)}`);
   if (p.queue_limit) out.push(`queue ${p.queue_limit} pkts`);
   if (p.duplicate) out.push(`${pct(p.duplicate)} duplicate`);
@@ -38,6 +43,7 @@ const netemKeys: (keyof NetemParams)[] = [
   'latency',
   'jitter',
   'distribution',
+  'keep_order',
   'loss',
   'loss_correlation',
   'burst_loss',

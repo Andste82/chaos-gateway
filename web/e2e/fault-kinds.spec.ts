@@ -118,6 +118,33 @@ test('a configured fault saved without a change is no change; an edit of an MTU 
   expect((gw.requestsTo('POST', '/revisions')[0]!.body as { faults: unknown }).faults).toEqual({ [SMALL]: { mtu: { size: 1400 } } });
 });
 
+test('a configured fault whose burst loss changed is a change: the bar counts it, the row is CHANGED, the revision message names it', async ({ page }) => {
+  const BURSTY = 'c0f00000-0000-4000-8000-0000000000a3';
+  const gw = MockGateway.sample();
+  gw.config = {
+    ...gw.config,
+    faults: { ...gw.config.faults, [BURSTY]: { name: 'bursty', source: { device: ESP }, burst_loss: { p: '5%', r: '30%' } } },
+  };
+  await gw.install(page);
+  await page.goto('/faults');
+  const row = page.getByTestId('fault-row').filter({ hasText: 'bursty' });
+  await expect(row).toContainText('burst loss 5 %/30 %');
+  await row.getByRole('button', { name: /^Edit / }).click();
+  const d = dialog(page);
+  await expect(d.getByLabel('Good → bad (%)')).toHaveValue('5');
+  await d.getByLabel('Good → bad (%)').fill('10');
+  await d.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(d).toBeHidden();
+  await expect(row).toContainText('CHANGED');
+  await expect(row).toContainText('burst loss 10 %/30 %');
+  await expect(page.getByTestId('unapplied-bar')).toHaveText(/1 change in 1 fault · not applied yet/);
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 43' })).toBeVisible();
+  const req = gw.requestsTo('POST', '/revisions')[0]!;
+  expect(req.query.message).toBe('1 change in 1 fault');
+  expect((req.body as { faults: unknown }).faults).toEqual({ [BURSTY]: { burst_loss: { p: '10%' } } });
+});
+
 test('a tunnel fault: edited with the parameters a tunnel takes, and one configured on a link through the draft', async ({ page }) => {
   const TUN = 'f0000000-0000-4000-8000-0000000000d1';
   const gw = withNetworks(MockGateway.sample());
@@ -215,7 +242,7 @@ test('the advanced impairment parameters: burst loss, flapping, a distribution, 
   await side.getByRole('button', { name: 'Download' }).click();
   await d.getByLabel('Jitter (ms)').fill('');
 
-  await expect(d.getByTestId('fault-preview')).toContainText('upload and download apart → ↑ 100 ms ±20, normal delay, burst loss, 2 % loss, ↓ 64 kbit/s, queue 20 pkts, ↓ flapping 20s up / 5s down');
+  await expect(d.getByTestId('fault-preview')).toContainText('upload and download apart → ↑ 100 ms ±20, normal delay, burst loss 1 %/30 % k 99 %, 2 % loss, ↓ 64 kbit/s, queue 20 pkts, ↓ flapping 20s up / 5s down');
   await d.getByRole('button', { name: 'Apply fault' }).click();
   await expect(toast(page, 'Fault active on Sensor-07')).toBeVisible();
   expect(gw.requestsTo('POST', '/overlays')[0]!.body).toEqual({

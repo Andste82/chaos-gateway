@@ -93,6 +93,44 @@ describe('the configuration draft', () => {
     expect(d.changes().find((c) => c.kind === 'fault')).toMatchObject({ field: 'parameters', from: '↑↓ 10 ms', to: '↑↓ 20 ms' });
   });
 
+  it('names every fault field the dialog edits: burst loss values, keep order, any destination and the tunnel (P3-M13-04)', () => {
+    const d = useDraftStore();
+    const NET = 'b0000000-0000-4000-8000-0000000000b1';
+    const CL = 'b0000000-0000-4000-8000-0000000000c1';
+    const LK = 'b0000000-0000-4000-8000-0000000000d1';
+    const burst = { name: 'bursty', source: { global: true as const }, burst_loss: { p: '5%', r: '30%' } };
+    const host = { name: 'host', source: { global: true as const }, protocol: 'tcp' as const, ports: [443], destination: { hostname: 'a.example.com' }, latency: '10ms' };
+    const tun = { name: 'tun', family: 'tunnel' as const, tunnel: { client: CL }, latency: '50ms' };
+    d.track(revision(42, { faults: { burst, host, tun } }));
+    const names = { device: (id: string) => (id === CL ? 'rA' : undefined), network: (id: string) => ({ [NET]: 'IoT', [LK]: 'site-b' })[id] };
+
+    d.setFault('burst', { ...burst, burst_loss: { p: '10%', r: '30%' } });
+    expect(d.changes(names)).toEqual([{ kind: 'fault', id: 'burst', name: 'bursty', field: 'parameters', from: 'burst loss 5 %/30 %', to: 'burst loss 10 %/30 %' }]);
+    expect(d.summary(names)).toBe('1 change in 1 fault');
+    d.setFault('burst', { ...burst, burst_loss: { p: '5%', r: '30%', h: '10%', k: '90%' }, keep_order: true });
+    expect(d.changes(names)).toMatchObject([{ field: 'parameters', from: 'burst loss 5 %/30 %', to: 'keep order, burst loss 5 %/30 % h 10 % k 90 %' }]);
+    d.setFault('burst', burst);
+    expect(d.dirty).toBe(false);
+
+    d.setFault('host', { ...host, destination: { hostname: 'b.example.com' } });
+    expect(d.changes(names)).toEqual([{ kind: 'fault', id: 'host', name: 'host', field: 'traffic', from: 'tcp 443 a.example.com', to: 'tcp 443 b.example.com' }]);
+    d.setFault('host', { ...host, destination: { network: NET } });
+    expect(d.changes(names)).toMatchObject([{ field: 'traffic', to: 'tcp 443 network IoT' }]);
+    d.setFault('host', { ...host, destination: { uplink: true } });
+    expect(d.changes(names)).toMatchObject([{ field: 'traffic', to: 'tcp 443 uplink' }]);
+    d.setFault('host', host);
+
+    d.setFault('tun', { ...tun, tunnel: { link: LK } });
+    expect(d.changes(names)).toEqual([{ kind: 'fault', id: 'tun', name: 'tun', field: 'tunnel', from: 'Tunnel of rA', to: 'Tunnel of link site-b' }]);
+    expect(d.summary(names)).toBe('1 change in 1 fault');
+    d.setFault('tun', tun);
+
+    // a change the words do not show is still one: settings as before → changed
+    d.setFault('host', { ...host, latency: '10ms', created_at: '2026-10-14T00:00:00Z' });
+    expect(d.changes(names)).toEqual([{ kind: 'fault', id: 'host', name: 'host', field: 'settings', from: 'as before', to: 'changed' }]);
+    expect(d.summary(names)).toBe('1 change in 1 fault');
+  });
+
   it('builds the merge patch: changed fields, new rules whole, deleted ones null, the order when it changed', () => {
     const d = useDraftStore();
     d.track(revision(42));
@@ -452,6 +490,19 @@ describe('WireGuard clients and the access matrix in the draft (M14)', () => {
     expect(d.serverErrors[NEW]).toBeUndefined();
     d.discard();
     expect(d.dirty).toBe(false);
+  });
+
+  it('a profile edit of burst loss values or of a part the chips do not show is a change (P3-M13-03)', () => {
+    const d = useDraftStore();
+    const P = 'c0000000-0000-4000-8000-0000000000c1';
+    const lossy = { name: 'lossy', parts: { impairment: { burst_loss: { p: '5%', r: '30%' } } } };
+    d.track(revision(42, { profiles: { [P]: lossy } }));
+    d.setProfile(P, { name: 'lossy', parts: { impairment: { burst_loss: { p: '9%', r: '30%' } } } });
+    expect(d.changes()).toEqual([{ kind: 'profile', id: P, name: 'lossy', field: 'parameters', from: 'burst loss 5 %/30 %', to: 'burst loss 9 %/30 %' }]);
+    expect(d.summary()).toBe('1 change in 1 profile');
+    d.setProfile(P, { name: 'lossy', parts: { impairment: { burst_loss: { p: '5%', r: '30%' }, distribution: 'uniform' } } });
+    expect(d.changes()).toEqual([{ kind: 'profile', id: P, name: 'lossy', field: 'settings', from: 'as before', to: 'changed' }]);
+    expect(d.summary()).toBe('1 change in 1 profile');
   });
 
   it('reapplies a profile on their revision and names a field both changed (P3-M13-03)', () => {

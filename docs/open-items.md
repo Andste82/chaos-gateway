@@ -816,9 +816,11 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   through the editor and the drawer, then activate it (P3-M13-03)", "edit and delete a custom profile through the
   draft; a refused profile shows why (P3-M13-03)" (also: saved unchanged it records nothing, the edit's merge patch),
   "a custom profile saved without a change is no change, also where the editor reads it in another form (P3-M13-03)";
-  `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
+  "delete an active custom profile: the card says its activations end, the drawer lists them and Apply waits for
+  "Remove them" (P3-M13-03)"; `src/lib/profileForm.test.ts`; `src/stores/draft.test.ts` "a custom
   profile is added, changed and deleted through the draft (P3-M13-03)", "reapplies a profile on their revision and
-  names a field both changed (P3-M13-03)"
+  names a field both changed (P3-M13-03)", "a profile edit of burst loss values or of a part the chips do not show is a
+  change (P3-M13-03)"
 - Decision (2026-10-14): option (a) — a profile editor in the UI (create, edit, delete custom profiles with the impairment and MTU parts
   the API accepts) through the draft and the preview drawer; a Playwright test creates a profile through the drawer and
   activates it
@@ -849,8 +851,11 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
   `fault-kinds.spec.ts` "an MTU fault: created with the kind MTU / PMTUD, then edited on the faults screen", "a tunnel
   fault: edited with the parameters a tunnel takes, and one configured on a link through the draft", "the advanced
   impairment parameters: burst loss, flapping, a distribution, a queue limit and each direction its own", "a configured
-  fault saved without a change is no change; an edit of an MTU fault writes only what changed";
-  `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)"
+  fault saved without a change is no change; an edit of an MTU fault writes only what changed", "a configured fault
+  whose burst loss changed is a change: the bar counts it, the row is CHANGED, the revision message names it";
+  `src/lib/faultForm.test.ts` "every fault kind in the dialog (P3-M13-04)"; `src/stores/draft.test.ts` "names every
+  fault field the dialog edits: burst loss values, keep order, any destination and the tunnel (P3-M13-04)" (the draft's
+  changes in words cover every field the dialog edits)
 - Decision (2026-10-14): option (a) — the dialog creates and edits every fault kind the API offers: MTU/PMTUD and tunnel faults (M10)
   and the advanced impairment parameters (burst loss, flapping, distributions, different parameters per direction); no
   more "saving would replace hidden parameters"; Playwright tests edit one of each new kind

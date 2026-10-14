@@ -9,6 +9,7 @@ import type {
   Actor,
   ApplyResult,
   AuditEntry,
+  BlockingReference,
   Configuration,
   DhcpLease,
   DomainChange,
@@ -693,6 +694,12 @@ export class MockGateway {
       if (this.revisionBase(id) !== this.state.active_revision) return problem(409, 'revision_conflict', `the candidate's base is not the active revision`);
       if (this.state.pending_confirm) return problem(409, 'confirm_pending', `revision ${this.state.pending_confirm.revision} waits for confirmation`);
       const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
+      // a deletion that orphans active overlays needs force=true, which removes them
+      const references = this.referencesOf(patch);
+      if (references.length && url.searchParams.get('force') !== 'true') {
+        return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: 'the revision orphans active overlays', references });
+      }
+      this.overlays = this.overlays.filter((o) => !references.some((r) => r.id === o.id));
       if (this.requiresConfirm(patch)) {
         this.pending = { config: applyMergePatch(this.config, patch), revision: id };
         const deadline = new Date(this.now() + this.confirmWindowMs).toISOString();
@@ -869,7 +876,21 @@ export class MockGateway {
     if ((patch as { access_matrix?: unknown }).access_matrix) {
       domain.push({ op: 'changed', kind: 'access_matrix', path: '/access_matrix', summary: 'access between networks changed' });
     }
-    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: this.requiresConfirm(patch) };
+    const references = this.referencesOf(patch);
+    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: this.requiresConfirm(patch), ...(references.length ? { references } : {}) };
+  }
+
+  /** The active overlays a candidate would orphan: the activations of a custom profile it deletes. */
+  referencesOf(patch: unknown): BlockingReference[] {
+    const deleted = Object.entries((patch as { profiles?: Record<string, unknown> } | undefined)?.profiles ?? {})
+      .filter(([, v]) => v === null)
+      .map(([key]) => key);
+    return this.overlays
+      .filter((o) => o.kind === 'profile' && deleted.some((key) => o.profile === key || o.profile === this.config.profiles?.[key]?.name))
+      .map((o) => {
+        const key = deleted.find((k) => o.profile === k || o.profile === this.config.profiles?.[k]?.name)!;
+        return { kind: 'overlay' as const, id: o.id, owner: o.owner, object: `/profiles/${key}` };
+      });
   }
 
   /** The network views, their configuration as the active revision has it (a client added by an apply is there). */

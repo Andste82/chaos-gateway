@@ -15,6 +15,10 @@ import {
   subnetText,
   toggleCell,
   formatIPv4,
+  keysText,
+  rotatedKeyError,
+  withEnabled,
+  withRotatedKeys,
 } from './networks';
 
 const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
@@ -168,5 +172,40 @@ describe('the access matrix', () => {
       { field: 'IoT → Internet', from: 'allowed', to: 'blocked' },
       { field: 'Test → lab-hub', from: 'blocked', to: 'allowed' },
     ]);
+  });
+});
+
+describe('the client actions (P3-M14-01)', () => {
+  const KEY = 'qU1BFDFDgsH5I7uGhzuhQjkMSw6bP8nXN6CN4AKxEF8=';
+  const NEW_KEY = 'FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=';
+
+  it('disables a client with enabled false and enables it by leaving the default', () => {
+    const c = { name: 'rA', address: '10.99.0.2', keepalive: '1s' };
+    expect(withEnabled(c, false)).toEqual({ ...c, enabled: false });
+    expect(withEnabled({ ...c, enabled: false }, true)).toEqual(c);
+  });
+
+  it('rotates generated keys by the next generation, checked against the spec', () => {
+    const c = { name: 'rA', address: '10.99.0.2', key: { mode: 'generated' as const, preshared_key: true } };
+    const r = withRotatedKeys(c);
+    expect(r.key).toEqual({ mode: 'generated', preshared_key: true, generation: 2 });
+    expect(withRotatedKeys(r).key?.generation).toBe(3);
+    // a client without key settings has generated keys of generation 1
+    expect(withRotatedKeys({ name: 'rB', address: '10.99.0.3' }).key).toEqual({ generation: 2 });
+    expect(keysText(c)).toBe('generation 1');
+    expect(keysText(r)).toBe('generation 2');
+    const cfg = { schema_version: 1, uplink: { interface: { name: 'eth0' } }, management: { interface: { name: 'eth1' } } };
+    const net = { type: 'wireguard', kind: 'hub', name: 'lab-hub', address: '10.99.0.1/24', listen_port: 51820, clients: { 'c1000000-0000-4000-8000-000000000001': r } };
+    expect(CompleteSetupBody.safeParse({ admin_password: 'correct horse battery staple', configuration: { ...cfg, networks: { 'd1000000-0000-4000-8000-000000000001': net } } }).success).toBe(true);
+  });
+
+  it("rotates the client's own key by its new public key, which must be a key and a new one", () => {
+    const c = { name: 'rP', address: '10.99.0.5', key: { mode: 'provided' as const, public_key: KEY } };
+    expect(rotatedKeyError(c, 'abc')).toBe("The client's new WireGuard public key (44 characters of base64).");
+    expect(rotatedKeyError(c, KEY)).toBe('This is the key the client has now.');
+    expect(rotatedKeyError(c, ` ${NEW_KEY} `)).toBeUndefined();
+    // no generation: the gateway refuses one for a client's own key
+    expect(withRotatedKeys(c, NEW_KEY).key).toEqual({ mode: 'provided', public_key: NEW_KEY });
+    expect(keysText(c)).toBe('public key qU1BFDFD…');
   });
 });

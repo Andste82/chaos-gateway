@@ -179,6 +179,45 @@ export function clientFromForm(f: ClientForm): WireGuardClient {
   return c;
 }
 
+// ---- client actions (plan §2.2.1: enable/disable, rotate keys, delete; P3-M14-01) -----------------
+
+/** The client enabled or disabled; enabled is the default, so it carries no `enabled` then. */
+export function withEnabled(c: WireGuardClient, enabled: boolean): WireGuardClient {
+  const { enabled: _was, ...rest } = c;
+  return enabled ? rest : { ...rest, enabled: false };
+}
+
+/** Whether the gateway generates the client's keys (and so rotates them itself). */
+export function generatesKeys(c: WireGuardClient): boolean {
+  return (c.key?.mode ?? 'generated') === 'generated';
+}
+
+/**
+ * The client with new keys: with generated keys the next key generation (the gateway makes a new key
+ * pair, and a new preshared key, when the revision is applied); with the client's own key its new
+ * public key.
+ */
+export function withRotatedKeys(c: WireGuardClient, publicKey?: string): WireGuardClient {
+  const key = { ...(c.key ?? {}) };
+  if (generatesKeys(c)) key.generation = (key.generation ?? 1) + 1;
+  else key.public_key = (publicKey ?? '').trim();
+  return { ...c, key };
+}
+
+/** The problem of a new public key for a client with its own key, or undefined. */
+export function rotatedKeyError(c: WireGuardClient, publicKey: string): string | undefined {
+  const k = publicKey.trim();
+  if (!new RegExp(keyRegExp).test(k)) return "The client's new WireGuard public key (44 characters of base64).";
+  if (k === c.key?.public_key) return 'This is the key the client has now.';
+  return undefined;
+}
+
+/** The keys of a client in words, for the changes: "generation 2", "public key qU1BFDFD…". */
+export function keysText(c: WireGuardClient): string {
+  if (generatesKeys(c)) return `generation ${c.key?.generation ?? 1}`;
+  return c.key?.public_key ? `public key ${c.key.public_key.slice(0, 8)}…` : 'public key —';
+}
+
 /** The form of a client of the draft, to edit it again (the reverse of `clientFromForm`). */
 export function formFromClient(c: WireGuardClient): ClientForm {
   return {

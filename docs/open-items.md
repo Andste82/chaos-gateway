@@ -859,15 +859,15 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 ### P3-M13-06 Editing an overlay of another owner replaces it with the admin's
 
 - Status: closed (2026-10-14): decided — options (a) and (d): an edit takes another owner's overlay over (as before) and
-  keeps the overlay's remaining time unless the user chooses another duration. The dialog's first duration is "Keep: 4:12
-  left of 5 min"; Apply sends the remaining time on the gateway's clock as the TTL in whole seconds (no API field: `ttl` is
-  "remove after this time" and a written overlay's TTL starts over, which also covers the taken-over overlay, a new one of
-  the admin); a TTL that is not one of the choices (`30m`) is shown as "30 min (its own TTL)" and kept, never turned into
-  15 minutes (`durationChoices`, `remainingTtl`, `ttlText` in `src/lib/faultForm.ts`). Tests `faults.spec.ts` "editing a
-  fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)", "edit a fault overlay of an API
-  token: the admin's fault replaces it, and the dialog says so" (the token's 50 minutes kept), `src/lib/faultForm.test.ts`
-  "an edited overlay keeps its remaining time unless another duration is chosen (P3-M13-06)", "a TTL that is not one of
-  the choices is shown as such and kept (P3-M13-06)"
+  keeps the overlay's remaining time unless the user chooses another duration. The dialog's first duration is "Keep:
+  4:12 left of 5 min"; Apply sends the remaining time on the gateway's clock as the TTL in whole seconds (no API field:
+  `ttl` is "remove after this time" and a written overlay's TTL starts over, which also covers the taken-over overlay, a
+  new one of the admin); a TTL that is not one of the choices (`30m`) is shown as "30 min (its own TTL)" and kept, never
+  turned into 15 minutes (`durationChoices`, `remainingTtl`, `ttlText` in `src/lib/faultForm.ts`). Tests
+  `faults.spec.ts` "editing a fault keeps its expiry; a TTL the dialog does not list is shown and kept (P3-M13-06)",
+  "edit a fault overlay of an API token: the admin's fault replaces it, and the dialog says so" (the token's 50 minutes
+  kept), `src/lib/faultForm.test.ts` "an edited overlay keeps its remaining time unless another duration is chosen
+  (P3-M13-06)", "a TTL that is not one of the choices is shown as such and kept (P3-M13-06)"
 - Severity: low
 - Reason: needs-decision. Plan §2.1.1 keys an overlay by *(owner, kind, target, selector)*, and a UI action's owner is the
   admin user (§2.15). Writing an edited overlay of an API token or a scenario run from the browser therefore creates a
@@ -889,12 +889,12 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M13-07 "Reload and reapply mine" takes the user's value of a field both sides changed
 
-- Status: closed (2026-10-14): decided — the per-field merge stays, with option (b): the conflict dialog lists the fields
-  both sides changed under "Changed on both sides · theirs → yours" ("Rule no-dns-2 action: TCP reset → Reject"; also an
-  object they changed that the user deletes and one the user changed that they removed) before reapplying, and its text
-  points at them as the fields where the user's value wins (`overlaps` in `src/stores/draft.ts`, `bothChanged` in
-  `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a field both changed, their value → mine, and
-  reapplying takes mine (P3-M13-07)", "the conflict dialog lists no field when the two changes do not meet",
+- Status: closed (2026-10-14): decided — the per-field merge stays, with option (b): the conflict dialog lists the
+  fields both sides changed under "Changed on both sides · theirs → yours" ("Rule no-dns-2 action: TCP reset → Reject";
+  also an object they changed that the user deletes and one the user changed that they removed) before reapplying, and
+  its text points at them as the fields where the user's value wins (`overlaps` in `src/stores/draft.ts`, `bothChanged`
+  in `src/lib/mergePatch.ts`); tests `rules.spec.ts` "the conflict dialog names a field both changed, their value →
+  mine, and reapplying takes mine (P3-M13-07)", "the conflict dialog lists no field when the two changes do not meet",
   `src/stores/draft.test.ts` "names the fields both sides changed, their value and mine, before reapplying (P3-M13-07)",
   "names a client field both sides changed; …", `src/lib/mergePatch.test.ts` "names the members both edits changed to
   different values, a scope as a whole"
@@ -917,11 +917,11 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 - Status: closed (2026-10-14): decided — option (a): the fault dialog's target, the profiles' "Activate on" and the rule
   editor's From offer each WireGuard client with client networks ("Client networks · rA (10.50.0.0/24)"), each link with
   its prefixes and "Remote network · a prefix inside them…" with a field for the prefix, sent as `remote_network`
-  (`src/lib/scopes.ts`, `src/components/ui/ScopeSelect.vue`); the prefix is checked under the selector, and the gateway's
-  `unknown_remote_network` stands there too. A rule's To keeps the model's destinations (`Destination` has no
-  `remote_network`; a remote prefix is an address or prefix there). Tests `faults.spec.ts` "a fault on a WireGuard client's
-  networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a prefix
-  inside a remote network: …", `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them
+  (`src/lib/scopes.ts`, `src/components/ui/ScopeSelect.vue`); the prefix is checked under the selector, and the
+  gateway's `unknown_remote_network` stands there too. A rule's To keeps the model's destinations (`Destination` has no
+  `remote_network`; a remote prefix is an address or prefix there). Tests `faults.spec.ts` "a fault on a WireGuard
+  client's networks: the target offers the remote networks and the request carries the scope (P3-M13-08)", "a fault on a
+  prefix inside a remote network: …", `profiles.spec.ts` "activate on a link's remote networks or a prefix inside them
   (P3-M13-08)", `rules.spec.ts` "a rule from a WireGuard client's networks: From offers the remote networks, the patch
   carries the source (P3-M13-08)", `src/lib/scopes.test.ts`
 - Severity: low
@@ -944,7 +944,14 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M14-01 Networks, clients after they were added and the routing configuration are not edited in the UI
 
-- Status: new
+- Status: in progress (2026-10-14): part 1, the client actions, is done — a WireGuard client of the gateway has
+  Disable/Enable, Rotate keys (the next key generation for generated keys, the new public key for a client's own key)
+  and Delete, each an edit of the configuration draft with Undo, through the preview drawer, the concurrent-change
+  dialog and commit-confirm for a client of a management hub (`ClientsCard.vue`, `RotateKeysDialog.vue`,
+  `src/lib/networks.ts`); tests `networks.spec.ts` "client actions: …" (five tests), `src/lib/networks.test.ts` "the
+  client actions (P3-M14-01)", `src/stores/draft.test.ts` "the client actions are changes in words and a merge patch of
+  their fields (P3-M14-01)". The network forms (part 2) and the routing forms (part 3) follow; the item closes with
+  them.
 - Decision (2026-10-14): option (a) in full — client actions (disable/enable, rotate keys, delete), network forms (create, edit,
   delete LAN networks with subnet, several ports, DHCP, DNS, and WireGuard networks with kind, role, endpoint, …, as the
   model allows) and routing forms (the protocols of plan §2.2.2), each through the draft, the preview drawer, the conflict

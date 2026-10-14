@@ -1069,7 +1069,8 @@ decided option is implemented. As of 2026-10-14 every Phase 3 item is closed exc
   `setProtocol`): BGP, OSPF or Babel on a link with what it announces, its import filter, the settings of its type and a
   custom snippet. Everything goes through the draft, the preview drawer, the concurrent-change dialog and commit-confirm,
   which the gateway asks for when a WireGuard network with the role management is added, changed or deleted. Tests
-  `network-forms.spec.ts` (seventeen tests: create, edit and delete a test network through the drawer; create and edit a
+  `network-forms.spec.ts` (nineteen tests: create, edit and delete a test network through the drawer; a new network
+  undone or deleted again goes back to the list; DHCP off with a changed subnet drops the hidden pools that no longer fit; create and edit a
   hub and a link; the management hub admin deleted and confirmed; the link site-b deleted, first refused with its BGP
   protocol named, then together with the protocol; validation errors under the fields, also under Advanced, which opens
   for them; a port the configuration names by MAC only; a refused network fixed; the references of a deleted network — a

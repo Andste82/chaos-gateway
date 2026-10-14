@@ -11,7 +11,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   stays open: P2-M9-06, a hardware measurement for H1.
 - **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. The result is
   in [Phase 3 audit result](#phase-3-audit-result), right before the Phase 3 open items; its items P3-AUDIT-01 to
-  P3-AUDIT-36 are fixed, P3-AUDIT-37 (the device detail's path view) and P3-AUDIT-38 (a management hub in the overview
+  P3-AUDIT-36 are fixed (CI run 38646886557 on `aeeeed3` green), P3-AUDIT-37 (the device detail's path view) and P3-AUDIT-38 (a management hub in the overview
   topology) wait for a maintainer decision, and four choices the fixes made are listed there to confirm. What the implementation of a milestone could not settle is under [Phase 3 open items](#phase-3-open-items), at the end of the
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
@@ -662,11 +662,10 @@ P3-AUDIT-35 and P3-AUDIT-36. Fixed: 2026-10-14 (P3-AUDIT-01 to P3-AUDIT-36), on 
 (level 0 locally; the Playwright suite against the mocked API; the three testbed browser flows in CI on `3a120ad`), and
 every item this audit found is fixed, each with a test or the corrected document, except two that need a maintainer
 decision and change no behavior (P3-AUDIT-37, the device detail's path view without a milestone, and P3-AUDIT-38, a
-management hub drawn among the test networks). One check is still due: the fixes added
-assertions to the testbed browser flow of M13 (`web/e2e-testbed/faults.spec.ts`, in `0b95142`: the device row shows
-"↑↓ 30 ms", the "With faults" filter, the active fault on the device page), which depend on the gateway's new
-`DeviceView.effective` and run only in CI or `make test-vm`; they have not run yet. "Complete" holds once the `testbed-ui`
-job passes with them (see "CI after the fixes" below); if it fails, this verdict is corrected. Of the Phase 3 open items
+management hub drawn among the test networks). The fixes' new assertions in the testbed browser flow of M13
+(`web/e2e-testbed/faults.spec.ts`, in `0b95142`: the device row shows "↑↓ 30 ms", the "With faults" filter, the active
+fault on the device page), which depend on the gateway's new `DeviceView.effective`, passed in the `testbed-ui` job of
+CI run 38646886557 on `aeeeed3`. Of the Phase 3 open items
 only P3-M12-05 stays open; it waits for M27/M30.
 
 No fix was blocked on a maintainer decision; where a fix had to choose, it took the option closest to the plan, and each
@@ -704,9 +703,9 @@ draft with other revisions (P3-AUDIT-26 to P3-AUDIT-29) is cross-cutting.
   and the `testbed-ui` job with the browser flows of M12, M13 and M14).
 - **Local, after the fixes:** `make test`, `make lint`, `make check-spec`, `make check-generated`, `make check-clients`,
   `npm run build` and `make test-e2e` pass.
-- **CI after the fixes:** not run yet. The final run of the close-phase-3 round on PR #56 is recorded here (run id and
-  commit) once the round has pushed; it is the first run of the changed `web/e2e-testbed/faults.spec.ts` (`0b95142`) in the
-  `testbed-ui` job.
+- **CI after the fixes:** CI run 38646886557 on `aeeeed3` (branch head after the audit's fixes), conclusion success: level0, e2e, arm64,
+  testbed level 1, testbed level 1b (VM) and the `testbed-ui` job with the three browser flows, among them the changed
+  `web/e2e-testbed/faults.spec.ts` (`0b95142`).
 
 ### Items
 

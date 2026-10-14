@@ -111,6 +111,32 @@ describe('the network form (P3-M14-01)', () => {
     expect(networkFormErrors({ ...ok, ports: ['eth3'], pools: '', routes: '10.40.0.0/24 via 10.99.0.1' }, ctx).routes).toBe('The router 10.99.0.1 must be a host of 10.30.0.0/24 other than the gateway.');
   });
 
+  it('makes the checks of the gateway the browser can make: reserved ranges and option codes, host bits, the shortest lease', () => {
+    const f = { ...emptyNetworkForm('lan', '10.30.0.1/24'), name: 'cams', ports: ['eth3'] };
+    expect(networkFormErrors(f, ctx)).toEqual({});
+    expect(networkFormErrors({ ...f, address: '127.1.0.1/24' }, ctx).address).toBe('127.1.0.0/24 overlaps the reserved range 127.0.0.0/8.');
+    expect(networkFormErrors({ ...f, address: '169.254.10.1/24' }, ctx).address).toMatch(/reserved range 169.254.0.0\/16/);
+    expect(networkFormErrors({ ...f, customOptions: '66 tftp.lab\n6 10.0.0.53' }, ctx).customOptions).toMatch(/^Option 6 is set by the gateway/);
+    expect(networkFormErrors({ ...f, leaseTime: '0s' }, ctx).leaseTime).toMatch(/at least 1s/);
+    expect(networkFormErrors({ ...f, leaseTime: '500ms' }, ctx).leaseTime).toMatch(/at least 1s/);
+    expect(networkFormErrors({ ...f, leaseTime: '1s' }, ctx).leaseTime).toBeUndefined();
+    expect(networkFormErrors({ ...f, routes: '10.40.0.1/24 via 10.30.0.254' }, ctx).routes).toBe('10.40.0.1/24 has host bits set; the network is 10.40.0.0/24.');
+    expect(networkFormErrors({ ...f, routes: '224.1.0.0/16 via 10.30.0.254' }, ctx).routes).toMatch(/reserved range 224.0.0.0\/4/);
+    const link = { ...emptyNetworkForm('link', '10.255.0.2/31', '51831'), name: 'site-c' };
+    expect(networkFormErrors({ ...link, routes: '10.61.0.0/24, 10.62.0.9/24' }, ctx).routes).toBe('10.62.0.9/24 has host bits set; the network is 10.62.0.0/24.');
+  });
+
+  it('DHCP off: the hidden pools that no longer fit a changed subnet go, those that fit stay', () => {
+    const lan: LanNetwork = { type: 'lan', name: 'IoT', address: '10.10.0.1/24', interfaces: [{ name: 'eth1' }], dhcp: { pools: [{ start: '10.10.0.100', end: '10.10.0.199' }], options: { domain: 'lab' } } };
+    const off = { ...formFromNetwork(lan), dhcpEnabled: false };
+    expect((networkFromForm(off, lan) as LanNetwork).dhcp).toEqual({ ...lan.dhcp, enabled: false });
+    const moved = networkFromForm({ ...off, address: '10.11.0.1/24' }, lan) as LanNetwork;
+    expect(moved.dhcp).toEqual({ enabled: false, options: { domain: 'lab' } });
+    expect(acceptedBySpec('e1000000-0000-4000-8000-000000000003', moved)).toBeUndefined();
+    // the hidden fields are not checked while DHCP is off
+    expect(networkFormErrors({ ...off, name: 'cams', ports: ['eth3'], address: '10.11.0.1/24' }, ctx)).toEqual({});
+  });
+
   it('a WireGuard hub and a link: role, port, MTU, endpoint, the peer of a link', () => {
     const hub = { ...emptyNetworkForm('hub', '10.98.0.1/24', '51830'), name: 'admin', role: 'management' as const, mtu: '1380', endpoint: 'gw.example.org:51830' };
     expect(networkFormErrors(hub, ctx)).toEqual({});
@@ -162,6 +188,13 @@ describe('the network form (P3-M14-01)', () => {
     expect(networkFromForm(formFromNetwork(link), link)).toEqual(link);
     expect(networkChanges(link, networkFromForm({ ...formFromNetwork(link), peerEndpoint: '203.0.113.40:51821' }, link))).toEqual([
       { field: 'peer', from: '10.255.0.1', to: '10.255.0.1 at 203.0.113.40:51821' },
+    ]);
+    // each setting of the peer is named, also next to another change
+    expect(networkChanges(link, networkFromForm({ ...formFromNetwork(link), mtu: '1380', peerKeepalive: '15s', peerPresharedKey: false, peerEnabled: false }, link))).toEqual([
+      { field: 'MTU', from: '1420', to: '1380' },
+      { field: 'peer keepalive', from: '—', to: '15s' },
+      { field: 'preshared key', from: 'yes', to: 'no' },
+      { field: 'peer enabled', from: 'yes', to: 'no' },
     ]);
   });
 

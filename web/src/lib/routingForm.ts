@@ -12,7 +12,7 @@ import {
   completeSetupBodyConfigurationOneRoutingProtocolsOspfAreaRegExp as areaRegExp,
 } from '../api/generated/zod/system/system';
 import { cloneJSON } from './mergePatch';
-import { parseIPv4, parseSubnet, subnetText } from './networks';
+import { hostBitsError, parseIPv4, parseSubnet, subnetText } from './networks';
 
 const lines = (text: string) =>
   text
@@ -51,6 +51,8 @@ function prefixesError(text: string): string | undefined {
   if (bad) return `${bad}: one prefix per line, such as 10.70.0.0/16 or 10.70.0.0/16 le 24.`;
   for (const e of entries) {
     const len = Number(e.prefix.split('/')[1]);
+    const hostBits = hostBitsError(e.prefix);
+    if (hostBits) return hostBits;
     if (e.max_length !== undefined && (e.max_length > 32 || e.max_length < len)) return `${e.prefix} le ${e.max_length}: the longest length is from /${len} to /32.`;
   }
   return undefined;
@@ -312,7 +314,9 @@ export function protocolFormErrors(f: ProtocolForm, ctx: ProtocolContext): Parti
     if (dup) e.type = `${link.name} already runs a ${f.type.toUpperCase()} protocol (${dup.name}).`;
   }
   const bad = lines(f.announceCidrs).find((c) => !new RegExp(cidrRegExp).test(c));
+  const hostBits = lines(f.announceCidrs).map(hostBitsError).find(Boolean);
   if (bad) e.announceCidrs = `${bad} is no IPv4 network such as 10.80.0.0/24.`;
+  else if (hostBits) e.announceCidrs = hostBits;
   const p = prefixesError(f.prefixes);
   if (p) e.prefixes = p;
   const m = maxPrefixesError(f.maxPrefixes);

@@ -25,7 +25,8 @@ test('"Show Linux view" on a rule shows its compiled rule and counter; another r
   gw.linuxObjects[`rule/${RULE_DOT}`] = { keys: ['counter rule_a41eb09061'], nftables: ruleNft, tc: '' };
   await gw.install(page);
   await page.goto('/rules');
-  await expect(page.getByRole('heading', { name: 'no-dot' })).toBeVisible();
+  // the first page of a worker may start cold while the whole suite runs
+  await expect(page.getByRole('heading', { name: 'no-dot' })).toBeVisible({ timeout: 15_000 });
 
   await page.getByRole('button', { name: 'Show Linux view (compiled rule and counter)' }).click();
   const nft = page.getByTestId('linux-object-nftables');

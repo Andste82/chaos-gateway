@@ -270,6 +270,9 @@ type ServerInterface interface {
 	// GetLinuxState The kernel state Chaos Gateway owns, as text, with its live counters (technical view)
 	// (GET /state/linux)
 	GetLinuxState(c *gin.Context)
+	// GetLinuxObject What the kernel holds for one device, access rule or fault (technical view, "Show Linux view")
+	// (GET /state/linux/{kind}/{objectId})
+	GetLinuxObject(c *gin.Context, kind GetLinuxObjectParamsKind, objectId Ref)
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(c *gin.Context)
@@ -3037,6 +3040,40 @@ func (siw *ServerInterfaceWrapper) GetLinuxState(c *gin.Context) {
 	siw.Handler.GetLinuxState(c)
 }
 
+// GetLinuxObject operation middleware
+func (siw *ServerInterfaceWrapper) GetLinuxObject(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind GetLinuxObjectParamsKind
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", c.Param("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter kind: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "objectId" -------------
+	var objectId Ref
+
+	err = runtime.BindStyledParameterWithOptions("simple", "objectId", c.Param("objectId"), &objectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter objectId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetLinuxObject(c, kind, objectId)
+}
+
 // GetBusy operation middleware
 func (siw *ServerInterfaceWrapper) GetBusy(c *gin.Context) {
 
@@ -3234,6 +3271,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/setup", wrapper.CompleteSetup)
 	router.GET(options.BaseURL+"/state", wrapper.GetState)
 	router.GET(options.BaseURL+"/state/linux", wrapper.GetLinuxState)
+	router.GET(options.BaseURL+"/state/linux/:kind/:objectId", wrapper.GetLinuxObject)
 	router.GET(options.BaseURL+"/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/system/info", wrapper.GetSystemInfo)
 	router.GET(options.BaseURL+"/system/health", wrapper.GetHealth)
@@ -6941,6 +6979,46 @@ func (response GetLinuxStatedefaultApplicationProblemPlusJSONResponse) VisitGetL
 	return err
 }
 
+type GetLinuxObjectRequestObject struct {
+	Kind     GetLinuxObjectParamsKind `json:"kind"`
+	ObjectId Ref                      `json:"objectId"`
+}
+
+type GetLinuxObjectResponseObject interface {
+	VisitGetLinuxObjectResponse(w http.ResponseWriter) error
+}
+
+type GetLinuxObject200JSONResponse LinuxObjectState
+
+func (response GetLinuxObject200JSONResponse) VisitGetLinuxObjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLinuxObjectdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetLinuxObjectdefaultApplicationProblemPlusJSONResponse) VisitGetLinuxObjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetBusyRequestObject struct {
 }
 
@@ -7594,6 +7672,9 @@ type StrictServerInterface interface {
 	// GetLinuxState The kernel state Chaos Gateway owns, as text, with its live counters (technical view)
 	// (GET /state/linux)
 	GetLinuxState(ctx context.Context, request GetLinuxStateRequestObject) (GetLinuxStateResponseObject, error)
+	// GetLinuxObject What the kernel holds for one device, access rule or fault (technical view, "Show Linux view")
+	// (GET /state/linux/{kind}/{objectId})
+	GetLinuxObject(ctx context.Context, request GetLinuxObjectRequestObject) (GetLinuxObjectResponseObject, error)
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(ctx context.Context, request GetBusyRequestObject) (GetBusyResponseObject, error)
@@ -9940,6 +10021,33 @@ func (sh *strictHandler) GetLinuxState(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(GetLinuxStateResponseObject); ok {
 		if err := validResponse.VisitGetLinuxStateResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetLinuxObject operation middleware
+func (sh *strictHandler) GetLinuxObject(ctx *gin.Context, kind GetLinuxObjectParamsKind, objectId Ref) {
+	var request GetLinuxObjectRequestObject
+
+	request.Kind = kind
+	request.ObjectId = objectId
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLinuxObject(ctx, request.(GetLinuxObjectRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLinuxObject")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetLinuxObjectResponseObject); ok {
+		if err := validResponse.VisitGetLinuxObjectResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

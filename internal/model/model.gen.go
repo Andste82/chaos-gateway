@@ -1368,6 +1368,27 @@ func (e LanNetworkType) Valid() bool {
 	}
 }
 
+// Defines values for LinuxObjectStateKind.
+const (
+	LinuxObjectStateKindDevice LinuxObjectStateKind = "device"
+	LinuxObjectStateKindFault  LinuxObjectStateKind = "fault"
+	LinuxObjectStateKindRule   LinuxObjectStateKind = "rule"
+)
+
+// Valid indicates whether the value is a known member of the LinuxObjectStateKind enum.
+func (e LinuxObjectStateKind) Valid() bool {
+	switch e {
+	case LinuxObjectStateKindDevice:
+		return true
+	case LinuxObjectStateKindFault:
+		return true
+	case LinuxObjectStateKindRule:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoginRequestUsername.
 const (
 	LoginRequestUsernameAdmin LoginRequestUsername = "admin"
@@ -2445,6 +2466,27 @@ func (e ExportRevisionParamsFormat) Valid() bool {
 	case Json:
 		return true
 	case Yaml:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetLinuxObjectParamsKind.
+const (
+	GetLinuxObjectParamsKindDevice GetLinuxObjectParamsKind = "device"
+	GetLinuxObjectParamsKindFault  GetLinuxObjectParamsKind = "fault"
+	GetLinuxObjectParamsKindRule   GetLinuxObjectParamsKind = "rule"
+)
+
+// Valid indicates whether the value is a known member of the GetLinuxObjectParamsKind enum.
+func (e GetLinuxObjectParamsKind) Valid() bool {
+	switch e {
+	case GetLinuxObjectParamsKindDevice:
+		return true
+	case GetLinuxObjectParamsKindFault:
+		return true
+	case GetLinuxObjectParamsKindRule:
 		return true
 	default:
 		return false
@@ -4313,6 +4355,32 @@ type LanNetwork struct {
 
 // LanNetworkType defines model for LanNetwork.Type.
 type LanNetworkType string
+
+// LinuxObjectState defines model for LinuxObjectState.
+type LinuxObjectState struct {
+	// Generation The generation of the desired state when the kernel was read.
+	Generation int64 `json:"generation"`
+
+	// Id The object as asked for.
+	Id string `json:"id"`
+
+	// Keys One entry per kernel object found for the object, by the name the compiler gave it (`counter rule_8e9ca98e27`, `chain mark_7`, `map ident4_4c1a7e 10.10.0.5`, `class br-iot 1:1e`); empty when the kernel holds nothing of it.
+	Keys []string             `json:"keys"`
+	Kind LinuxObjectStateKind `json:"kind"`
+
+	// Nftables Those objects of the table `inet chaosgw` in nft syntax (rules with `counter` and `last used`), empty when there is none.
+	Nftables string    `json:"nftables"`
+	ReadAt   time.Time `json:"read_at"`
+
+	// Revision The active revision.
+	Revision int64 `json:"revision"`
+
+	// Tc Its tc classes, netem queues and filters, one line each led by the interface, each followed by its counters; empty when there is none.
+	Tc string `json:"tc"`
+}
+
+// LinuxObjectStateKind defines model for LinuxObjectState.Kind.
+type LinuxObjectStateKind string
 
 // LinuxState defines model for LinuxState.
 type LinuxState struct {
@@ -6524,6 +6592,9 @@ type RunScenarioParams struct {
 	Queue          *Queue          `form:"queue,omitempty" json:"queue,omitempty"`
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
+
+// GetLinuxObjectParamsKind defines parameters for GetLinuxObject.
+type GetLinuxObjectParamsKind string
 
 // ListHostInterfacesParams defines parameters for ListHostInterfaces.
 type ListHostInterfacesParams struct {

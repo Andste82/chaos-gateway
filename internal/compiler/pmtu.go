@@ -346,7 +346,7 @@ func (t *Target) pmtuClassify() (Rule, bool) {
 	look := Chain{Name: PMTUClassifyChain}
 	for i, lv := range classifyLevels {
 		md := t.pmtuBuild.maps[i]
-		md.Name = hashMapName("pmtu_"+lv.field, md.KeyType, md.ValueType, md.Flags)
+		md.Name = hashMapName(PMTUMapBase+lv.field, md.KeyType, md.ValueType, md.Flags)
 		t.Nft.Maps = append(t.Nft.Maps, md)
 		t.PMTUMaps[lv.field] = md.Name
 	}

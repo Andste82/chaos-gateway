@@ -1077,10 +1077,19 @@ decided option is implemented. P3-M12-05 waits for M27/M30.
 
 ### P3-M14-03 The technical view shows the kernel state per network and as a whole, not per device, rule or fault
 
-- Status: new
-- Decision (2026-10-14): option (a) — "Show Linux view" on a device (identity map elements, classification), an access rule (its rule
-  and counter) and a fault (its classes and netem queues), by the keys the compiler gives them, with backend support and
-  Go tests; a Playwright test opens the Linux view of a rule and of a fault
+- Status: closed (2026-10-14): decided — option (a): `GET /state/linux/{kind}/{id}` (`engine.LinuxObjectView`,
+  `apply.RenderObject`) cuts the kernel state down to what the compiler made for one device (the identity map element
+  with its numeral, the classification elements whose source covers its addresses, the queues of its own), access
+  rule (its rule in both hooks with counter and `last`, the named counter, the source set; also an overlay rule and
+  `system:anti_lockout`) or fault (its `mark_<id>` chains with counters, the elements that go to them, its tc classes,
+  netem queues and filters, a tunnel fault's ingress filter, an MTU fault's chain and elements), found by the names and
+  keys of the applied target; "Show Linux view" on the device detail, in the rule editor and on a fault's row
+  (`LinuxObjectExcerpt.vue`). Tests `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt`,
+  `TestRenderObjectShowsOnlyWhatTheSelectionNames`, `TestTheLinuxViewSelectsAnObjectByTheNamesTheCompilerGaveIt`,
+  `TestAMapKeyCoversAnAddressAsAnAddressPrefixOrRange`; `linux-view.spec.ts` ""Show Linux view" on a rule shows its
+  compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on
+  a fault shows its mark chain, classes and netem queues with their counters below its row (P3-M14-03)", ""Show Linux
+  view" on a device shows its identity element and the classification of its address (P3-M14-03)"
 - Severity: low
 - Reason: deferred. Plan §2.17 "Technical view": "Per object, the compiled configuration next to the domain view …
   Reached from 'Show Linux view' / 'Show Linux changes' links". M14 Scope names the "compiled-state view (nftables, tc,

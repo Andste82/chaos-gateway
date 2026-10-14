@@ -142,6 +142,53 @@ func (s *Server) GetLinuxState(c *gin.Context) {
 	})
 }
 
+// GetLinuxObject implements GET /state/linux/{kind}/{objectId}: the technical view of one device, access
+// rule or fault ("Show Linux view", plan §2.17, docs/open-items.md P3-M14-03), the kernel objects the
+// compiler made for it, read back now.
+func (s *Server) GetLinuxObject(c *gin.Context, kind model.GetLinuxObjectParamsKind, objectId model.Ref) {
+	if !kind.Valid() {
+		s.write(c, newProblem(model.ErrorCodeValidationFailed, "the kind of object is device, rule or fault"))
+		return
+	}
+	id := objectId
+	if cfg := s.cfg.Engine.Snapshot().Config; cfg != nil {
+		switch kind {
+		case model.GetLinuxObjectParamsKindDevice:
+			// a device by its id or its name, as GET /devices/{deviceId} finds it
+			if d, ok := findDevice(s.deviceViews(cfg, true), objectId); ok {
+				id = d.ID
+			}
+		case model.GetLinuxObjectParamsKindRule:
+			if cfg.AccessRules != nil {
+				for rid, r := range *cfg.AccessRules {
+					if r.Name != nil && strings.EqualFold(*r.Name, objectId) {
+						id = rid
+					}
+				}
+			}
+		}
+	}
+	v, err := s.cfg.Engine.LinuxObjectView(contextOf(c), string(kind), id)
+	if err != nil {
+		s.fail(c, err)
+		return
+	}
+	keys := v.Keys
+	if keys == nil {
+		keys = []string{}
+	}
+	c.JSON(200, model.LinuxObjectState{
+		Kind:       model.LinuxObjectStateKind(kind),
+		Id:         objectId,
+		Revision:   v.Revision,
+		Generation: int64(v.Generation),
+		ReadAt:     v.At.UTC(),
+		Keys:       keys,
+		Nftables:   v.Nftables,
+		Tc:         v.TC,
+	})
+}
+
 // GetCapabilities implements GET /capabilities.
 func (s *Server) GetCapabilities(c *gin.Context) {
 	caps := model.Capabilities{

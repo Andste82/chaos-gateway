@@ -124,7 +124,7 @@ func (t *Target) compileClassify() {
 		if i < len(fb.maps) {
 			md.Elements = fb.maps[i].Elements
 		}
-		md.Name = hashMapName("cls_"+lv.field, md.KeyType, md.ValueType, md.Flags)
+		md.Name = hashMapName(ClassifyMapBase+lv.field, md.KeyType, md.ValueType, md.Flags)
 		t.Nft.Maps = append(t.Nft.Maps, md)
 		t.ClassifyMaps[lv.field] = md.Name
 	}
@@ -244,3 +244,13 @@ func (t *Target) classifyNets() []string {
 	sort.Strings(out)
 	return out
 }
+
+// The bases of the names of the maps that say who a packet is and which fault it gets (plan §3.3): the
+// identity map (an address to the device's numeral), the classification maps of the impairment family and
+// those of the MTU family, one per lookup level. A map's name is the base, the level and a short hash of
+// its definition; the technical view of a device finds its elements by them (P3-M14-03).
+const (
+	IdentityMapBase = "ident4"
+	ClassifyMapBase = "cls_"
+	PMTUMapBase     = "pmtu_"
+)

@@ -166,7 +166,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 64 { // 62 until M14 added the rollback and the Linux state
+	if len(m5) != 65 { // 62 until M14 added the rollback and the Linux state, 64 until P3-M14-03 added the Linux view of one object
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body

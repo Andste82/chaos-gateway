@@ -199,6 +199,50 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/LinuxState'}
         default: {$ref: '#/components/responses/Problem'}
+  /state/linux/{kind}/{objectId}:
+    get:
+      tags: [system]
+      operationId: getLinuxObject
+      summary: What the kernel holds for one device, access rule or fault (technical view, "Show Linux view")
+      description: |
+        The kernel state of `GET /state/linux` cut down to the kernel objects the compiler made for one
+        object (plan §2.17 "Technical view"), found by the names and keys the applied target gave them and
+        read now, with live counters:
+
+        - `device` (a device id or name): the elements of the identity map with the device's numeral
+          (an address to the device), the elements of the classification maps whose source covers one
+          of its addresses (which fault its traffic gets), and the tc classes and netem queues of the
+          faults that have a queue of their own for it;
+        - `rule` (the id of a configured access rule or of a rule overlay, or `system:anti_lockout`):
+          the rule in the forward and the input hook with its counter and its `last` statement, the
+          named counter and the set of its sources;
+        - `fault` (the id of a configured fault or of an overlay): the chains that write its fault ids
+          into the mark with their counters, the classification elements that go to them, and the tc
+          classes, netem queues and filters of its queues (a tunnel fault's ingress filter too); for an
+          MTU fault its chain, counters and elements.
+
+        An object the applied target gives nothing in the kernel (an unknown id, a disabled rule, a
+        fault that is overridden everywhere) is answered with empty `keys` and texts.
+      x-milestone: M14
+      x-required-scope: read
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [device, rule, fault]
+        - name: objectId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+      responses:
+        '200':
+          description: The kernel objects of the object
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LinuxObjectState'}
+        default: {$ref: '#/components/responses/Problem'}
   /capabilities:
     get:
       tags: [system]
@@ -4001,6 +4045,33 @@ components:
         wireguard:
           type: string
           description: The WireGuard interfaces with address, MTU, port and peers (public key, allowed IPs, endpoint, last handshake, bytes); without keys.
+    LinuxObjectState:
+      type: object
+      required: [kind, id, revision, generation, read_at, keys, nftables, tc]
+      properties:
+        kind:
+          type: string
+          enum: [device, rule, fault]
+        id: {type: string, description: The object as asked for.}
+        revision:
+          type: integer
+          format: int64
+          description: The active revision.
+        generation:
+          type: integer
+          format: int64
+          description: The generation of the desired state when the kernel was read.
+        read_at: {type: string, format: date-time}
+        keys:
+          type: array
+          description: One entry per kernel object found for the object, by the name the compiler gave it (`counter rule_8e9ca98e27`, `chain mark_7`, `map ident4_4c1a7e 10.10.0.5`, `class br-iot 1:1e`); empty when the kernel holds nothing of it.
+          items: {type: string}
+        nftables:
+          type: string
+          description: Those objects of the table `inet chaosgw` in nft syntax (rules with `counter` and `last used`), empty when there is none.
+        tc:
+          type: string
+          description: Its tc classes, netem queues and filters, one line each led by the interface, each followed by its counters; empty when there is none.
     Capabilities:
       type: object
       required: [version, features, overlay_kinds, fault_families, step_types, check_types]

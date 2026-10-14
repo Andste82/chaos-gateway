@@ -15,6 +15,7 @@ import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
+import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
@@ -28,6 +29,10 @@ import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 
 const props = defineProps<{ id: string }>();
+
+// "Show Linux view" (plan §2.17 "Technical view", P3-M14-03): the device's identity map elements and the
+// classification of its addresses, as the kernel holds them
+const linuxOpen = ref(false);
 
 const device = useGetDevice(() => props.id, undefined, { query: { refetchInterval: 5_000 } });
 const overlays = useQuery({
@@ -229,6 +234,15 @@ useApiScreen('this device', () => [
               <dd class="m-0">{{ d.config.trusts_test_ca ? 'trusted' : 'not trusted' }}</dd>
             </template>
           </dl>
+          <button
+            type="button"
+            class="mt-3 self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
+            :aria-expanded="linuxOpen"
+            @click="linuxOpen = !linuxOpen"
+          >
+            {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (identity and classification)' }}
+          </button>
+          <LinuxObjectExcerpt v-if="linuxOpen" kind="device" :id="d.id" class="mt-2" />
         </SectionCard>
       </aside>
     </div>

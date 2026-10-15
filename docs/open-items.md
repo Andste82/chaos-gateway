@@ -13,7 +13,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   in [Phase 3 audit result](#phase-3-audit-result), right before the Phase 3 open items; its items P3-AUDIT-01 to
   P3-AUDIT-36 are fixed (CI run 38646886557 on `aeeeed3` green), P3-AUDIT-37 (the device detail's path view, → M26)
   and P3-AUDIT-38 (a management hub in the overview topology, fixed) were decided by the maintainer on 2026-10-15, and
-  four choices the fixes made are listed there to confirm. What the implementation of a milestone could not settle is
+  the four choices the fixes made, listed there, were confirmed on 2026-10-15. What the implementation of a milestone could not settle is
   under [Phase 3 open items](#phase-3-open-items), at the end of the
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
@@ -671,8 +671,7 @@ CI run 38646886557 on `aeeeed3`. Of the Phase 3 open items
 only P3-M12-05 stays open; it waits for M27/M30.
 
 No fix was blocked on a maintainer decision; where a fix had to choose, it took the option closest to the plan, and each
-choice is recorded below under "Phase 3 audit: choices made in …". The maintainer may revisit any of them; these four
-are open to confirm (to confirm, not yet confirmed):
+choice is recorded below under "Phase 3 audit: choices made in …". The maintainer confirmed these four on 2026-10-15:
 
 1. **The setup's OS-configuration details without a token.** The unauthenticated `GET /setup` still names the files it
    cannot read and the netplan entries and NetworkManager connections (ids included) that configure an interface, as
@@ -1344,8 +1343,8 @@ the option closest to the plan, recorded here:
   quote the executor's error (the log has it), but it still names the files that cannot be read and the netplan entries
   and NetworkManager connections (ids included) that configure an interface: plan §3.4 wants the wizard to show the
   entry to remove before the setup. Sending these details only with a valid `X-Setup-Token` (the wizard asks for the
-  token first, but only `POST /setup` checks it today) would need a change of the spec; open to confirm (Phase 3 audit
-  result, item 1 of the choices to confirm).
+  token first, but only `POST /setup` checks it today) would need a change of the spec; confirmed by the maintainer on
+  2026-10-15 (Phase 3 audit result, item 1 of the confirmed choices).
 - A logout clears the query cache and the draft. An export-once WireGuard configuration that no dialog has shown yet
   (`ClientConfigDialog`'s module-level `unseen`) is kept: it is the only copy of the client's private key, there is a
   single admin, and dropping it would force a key rotation. An ended session (401) clears the cache, as before, and

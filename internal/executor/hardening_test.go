@@ -362,3 +362,78 @@ func TestDNSContainersHardeningProfile(t *testing.T) {
 		t.Errorf("volumes: the proxy %d, the holder %d", len(dns.Volumes), len(holder.Volumes))
 	}
 }
+
+// Issue #57: the API container runs as 65532, and a named volume that is still empty takes its owner and
+// mode from the image's directory. Every named volume the API mounts writable must therefore exist in the
+// image with that owner, or the API cannot write to it on a fresh host and does not start. The two
+// volumes another container prepares at its start are the exception: the executor's socket directory and
+// Kea's control socket directory (deploy/kea-start.sh gives it to the API's group).
+func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.api.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	preparedByOthers := map[string]bool{"/run/chaosgw": true, "/run/kea": true}
+	var writable []string
+	for _, v := range doc.Services["api"].Volumes {
+		typ, target, readOnly := "volume", "", false
+		switch v.Kind {
+		case yaml.ScalarNode: // source:target[:ro]
+			parts := strings.Split(v.Value, ":")
+			if strings.HasPrefix(parts[0], "/") || strings.HasPrefix(parts[0], ".") {
+				typ = "bind"
+			}
+			if len(parts) > 1 {
+				target = parts[1]
+			}
+			readOnly = len(parts) > 2 && parts[2] == "ro"
+		case yaml.MappingNode:
+			var m struct {
+				Type     string `yaml:"type"`
+				Target   string `yaml:"target"`
+				ReadOnly bool   `yaml:"read_only"`
+			}
+			if err := v.Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			typ, target, readOnly = m.Type, m.Target, m.ReadOnly
+		}
+		if typ == "volume" && !readOnly && !preparedByOthers[target] {
+			writable = append(writable, target)
+		}
+	}
+	if len(writable) != 4 {
+		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log and the service token", writable)
+	}
+
+	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the arguments of every `chown 65532:65532` of a RUN instruction, continuation lines joined
+	owned := map[string]bool{}
+	for _, cmd := range strings.Split(strings.ReplaceAll(string(dockerfile), "\\\n", " "), "&&") {
+		f := strings.Fields(cmd)
+		for i := 0; i+1 < len(f); i++ {
+			if f[i] == "chown" && f[i+1] == "65532:65532" {
+				for _, p := range f[i+2:] {
+					owned[p] = true
+				}
+			}
+		}
+	}
+	for _, target := range writable {
+		if !owned[target] {
+			t.Errorf("deploy/Dockerfile does not create %s owned by 65532:65532: on a fresh host the API cannot write to it", target)
+		}
+	}
+	if !strings.Contains(string(dockerfile), "chmod 0700 /var/lib/chaosgw/secrets") {
+		t.Error("deploy/Dockerfile does not keep the secrets directory 0700")
+	}
+}

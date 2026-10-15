@@ -202,5 +202,28 @@ jobs:
           push: false
           cache-from: type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
+      # issue #57: on a fresh host the API container (user 65532) must be able to write every named
+      # volume it mounts writable; the amd64 image comes from the cache of the build above
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: chaos-gateway:ci
+          cache-from: type=gha,scope=image
+      - name: the API container writes its fresh volumes
+        run: |
+          for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service; do
+            vol="ci-$(basename "$dir")"
+            docker volume rm -f "$vol" >/dev/null
+            docker volume create "$vol" >/dev/null
+            docker run --rm --user 65532:65532 -v "$vol:$dir" --entrypoint sh chaos-gateway:ci \
+              -c "mkdir $dir/probe && touch $dir/probe/file" || { echo "user 65532 cannot write $dir on a fresh volume"; exit 1; }
+            docker volume rm "$vol" >/dev/null
+          done
+          mode=$(docker run --rm -v ci-secrets-mode:/var/lib/chaosgw/secrets --entrypoint stat chaos-gateway:ci -c '%u:%g %a' /var/lib/chaosgw/secrets)
+          docker volume rm ci-secrets-mode >/dev/null
+          test "$mode" = "65532:65532 700" || { echo "the secrets volume is $mode, want 65532:65532 700"; exit 1; }
       - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - run: make test-arm64

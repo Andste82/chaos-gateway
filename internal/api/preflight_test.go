@@ -301,6 +301,12 @@ func TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration(t *t
 		t.Errorf("3 requests after the cache's lifetime: %d reads in all, want 2", n)
 	}
 
+	// a caller that found the cache stale and reaches the shared read only after another one filled the
+	// cache takes the cached read (CI run 38717037140 on main: under load 20 requests made 3 reads)
+	if n := api.OSConfigCacheReadsOfALateCaller(); n != 1 {
+		t.Errorf("a late caller after a fresh read: %d reads, want 1", n)
+	}
+
 	// a failing read (another gateway: the cache is per server) is named, its error is not
 	secret := "open /host/etc/netplan: permission denied (some detail)"
 	failing.Store(&secret)

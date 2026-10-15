@@ -65,14 +65,30 @@ type osConfigCache struct {
 }
 
 func (o *osConfigCache) get(ctx context.Context, now time.Time, read func(context.Context) osConfig) osConfig {
-	o.mu.Lock()
-	if !o.at.IsZero() && now.Sub(o.at) >= 0 && now.Sub(o.at) < 2*time.Second {
-		osc := o.osc
-		o.mu.Unlock()
+	if osc, ok := o.fresh(now); ok {
 		return osc
 	}
-	o.mu.Unlock()
+	return o.load(ctx, now, read)
+}
+
+// fresh returns the cached read while it is younger than 2 seconds.
+func (o *osConfigCache) fresh(now time.Time) (osConfig, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.at.IsZero() && now.Sub(o.at) >= 0 && now.Sub(o.at) < 2*time.Second {
+		return o.osc, true
+	}
+	return osConfig{}, false
+}
+
+// load reads, shared with the callers already waiting for a read. It looks at the cache again first: a
+// caller that found it stale may reach the group only after another caller's read has finished and filled
+// it, and the group shares only a read that is still in flight.
+func (o *osConfigCache) load(ctx context.Context, now time.Time, read func(context.Context) osConfig) osConfig {
 	v, _, _ := o.group.Do("read", func() (any, error) {
+		if osc, ok := o.fresh(now); ok {
+			return osc, nil
+		}
 		osc := read(context.WithoutCancel(ctx))
 		o.mu.Lock()
 		o.at, o.osc = now, osc

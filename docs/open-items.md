@@ -9,7 +9,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   found, P2-AUDIT-01 to P2-AUDIT-16, and P2-AUDIT-17, which the work on them found, are closed (table
   "Closed after the audit (2026-10-12)" under [Phase 2 open items](#phase-2-open-items)). One Phase 2 item
   stays open: P2-M9-06, a hardware measurement for H1.
-- **Phase 3** (M12–M14): complete on the branch `phase-3-web-ui` (draft PR #56), audited on 2026-10-14. The result is
+- **Phase 3** (M12–M14): audited on 2026-10-14, its items closed on 2026-10-15, merged to `main` on 2026-10-15 (PR #56,
+  with the follow-up PR #58; CI run 38744189903 on `16824f8` green). Phase 3 is complete. The result is
   in [Phase 3 audit result](#phase-3-audit-result), right before the Phase 3 open items; its items P3-AUDIT-01 to
   P3-AUDIT-36 are fixed (CI run 38646886557 on `aeeeed3` green), P3-AUDIT-37 (the device detail's path view, → M26)
   and P3-AUDIT-38 (a management hub in the overview topology, fixed) were decided by the maintainer on 2026-10-15, and
@@ -651,7 +652,7 @@ stayed open".
 
 ## Phase 3 audit result
 
-Date: 2026-10-14. Audited on the branch `phase-3-web-ui` (draft PR #56) at `3a120ad`, after the Phase 3 open items were
+Date: 2026-10-14. Audited on the branch `phase-3-web-ui` (PR #56) at `3a120ad`, after the Phase 3 open items were
 decided and implemented, against `docs/plan.md` §5 Phase 3 (M12, M13, M14), the behavior sections the milestones refer to
 (§2.1–§2.17, especially §2.16 and §2.17, and §3.x), `api/openapi.yaml`, the web UI's sections and acceptance maps in
 `docs/development.md`, the reference design `docs/ui/prototype/*.dc.html` (the plan wins where they disagree) and the code.
@@ -660,7 +661,9 @@ states of §2.17 and the visual system (M12), the faults, rules and profiles scr
 (M14), the interplay of the draft with other revisions, and the tests and CI. A re-review of the fixes on 2026-10-14 added
 P3-AUDIT-35 and P3-AUDIT-36. Fixed: 2026-10-14 (P3-AUDIT-01 to P3-AUDIT-36), on the same branch, in the commits named below (the "close-phase-3" round).
 
-**Phase 3 is complete on the branch.** Every milestone delivers its scope, every test the plan lists exists and passes
+**Phase 3 is complete** (merged to `main` on 2026-10-15, PR #56; the commit ids in this section and in the Phase 3
+open items are those of the branch: PR #56 was merged by rebase, so on `main` the same commits have other ids and the
+same subjects). Every milestone delivers its scope, every test the plan lists exists and passes
 (level 0 locally; the Playwright suite against the mocked API; the three testbed browser flows in CI on `3a120ad`), and
 every item this audit found is closed, each with a test or the corrected document. Two needed a maintainer decision,
 made on 2026-10-15: P3-AUDIT-37 (the device detail's path view) belongs to M26, and P3-AUDIT-38 (a management hub drawn
@@ -805,7 +808,7 @@ was a duplicate of an item above); they are not recorded as items.
 
 ## Phase 3 open items
 
-Phase 3 (M12 to M14) is complete on the branch `phase-3-web-ui`. The items below were found while implementing M12, M13
+Phase 3 (M12 to M14) is complete and merged to `main` (PR #56, 2026-10-15). The items below were found while implementing M12, M13
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
 2026-10-14; a "Decision (2026-10-14)" line records what was decided, and the item's Status line says whether it is closed

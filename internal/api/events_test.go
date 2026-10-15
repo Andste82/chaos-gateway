@@ -274,7 +274,11 @@ func TestAKeepaliveCommentIsSentWhenIdle(t *testing.T) {
 }
 
 func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testing.T) {
-	defer api.SetStreamTimings(500*time.Millisecond, time.Minute)()
+	// The write timeout applies to the fast subscriber too: it must be well above any pause of a
+	// reader that does read, or a loaded CI host (the testbed job runs beside the kernel tests)
+	// stalls the fast one's scanner on a 256 KiB line for longer and the server drops it as well.
+	// 2 s is still far below the 2 s + 20 s the slow connection gets to be closed below.
+	defer api.SetStreamTimings(2*time.Second, time.Minute)()
 	g := ready(t)
 
 	// the slow one: sends the request and never reads

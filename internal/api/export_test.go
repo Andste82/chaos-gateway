@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SetStreamTimings shortens the write timeout and the keepalive of the event stream for tests and
 // returns a function that restores them.
@@ -24,4 +27,17 @@ func SetSysClassNet(dir string) (restore func()) {
 	old := sysClassNet
 	sysClassNet = dir
 	return func() { sysClassNet = old }
+}
+
+// OSConfigCacheReadsOfALateCaller fills the cache of GET /setup's read of the host's network configuration,
+// then loads as a caller does that found the cache stale just before that read filled it, and returns how
+// many reads were made (the Phase 3 audit's cache: one).
+func OSConfigCacheReadsOfALateCaller() int {
+	var c osConfigCache
+	reads := 0
+	read := func(context.Context) osConfig { reads++; return osConfig{} }
+	now := time.Now()
+	c.get(context.Background(), now, read)
+	c.load(context.Background(), now, read)
+	return reads
 }

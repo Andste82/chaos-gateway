@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // The network topology of the overview (plan §2.17): test networks → gateway → uplink, left to
-// right like the traffic, with a fault badge on the path while faults are active.
+// right like the traffic, with a fault badge on the path while faults are active. Management
+// networks (a WireGuard hub of role management) are no test networks and faults never apply to
+// them: they get a row of their own below the gateway, off the faulted path (P3-AUDIT-38).
 import { computed } from 'vue';
 import { useGetUplink } from '../../api/generated/hooks/config/config';
 import type { NetworkView } from '../../api/generated/model';
@@ -30,24 +32,29 @@ interface Box {
   detail: string;
   meta: string;
   degraded: boolean;
+  management: boolean;
 }
 
-const boxes = computed<Box[]>(() =>
+const allBoxes = computed<Box[]>(() =>
   props.networks.map((n) => {
     const c = n.config as { type: string; name: string; address?: string; dhcp?: { enabled?: boolean }; role?: string };
+    const management = c.type === 'wireguard' && c.role === 'management';
     const devices = props.deviceCounts.get(n.id) ?? 0;
-    const tags = [`${devices} ${devices === 1 ? 'device' : 'devices'}`];
+    const tags = management ? [] : [`${devices} ${devices === 1 ? 'device' : 'devices'}`];
     if (c.type === 'lan' && c.dhcp?.enabled !== false) tags.push('DHCP');
-    if (c.type === 'wireguard') tags.push(`WireGuard${c.role === 'management' ? ' · management' : ''}`);
+    if (c.type === 'wireguard') tags.push(`WireGuard${management ? ' · management' : ''}`);
     return {
       id: n.id,
       name: c.name,
       detail: [subnetOf(c.address), n.status.interface].filter(Boolean).join(' · '),
       meta: tags.join(' · '),
       degraded: n.status.state === 'degraded',
+      management,
     };
   }),
 );
+const boxes = computed(() => allBoxes.value.filter((b) => !b.management));
+const managementBoxes = computed(() => allBoxes.value.filter((b) => b.management));
 
 const profiles = computed(() => props.faults.filter((f) => f.kind === 'profile'));
 const faultCount = computed(() => props.faults.length);
@@ -113,7 +120,10 @@ const uplinkDot = computed<{ tone: DotTone; label: string }>(() => {
         <div class="mt-1.5 text-[13px] leading-relaxed text-text-2">
           <template v-if="networksError && !networks.length">networks unknown</template>
           <template v-else-if="networksLoading && !networks.length">networks loading</template>
-          <template v-else>{{ networks.length }} {{ networks.length === 1 ? 'network' : 'networks' }}</template>
+          <template v-else
+            >{{ boxes.length }} test {{ boxes.length === 1 ? 'network' : 'networks'
+            }}<template v-if="managementBoxes.length"> · {{ managementBoxes.length }} management</template></template
+          >
           ·
           <template v-if="faultsError">faults unknown</template>
           <template v-else>{{ faultCount }} {{ faultCount === 1 ? 'fault' : 'faults' }}</template>
@@ -125,6 +135,18 @@ const uplinkDot = computed<{ tone: DotTone; label: string }>(() => {
         <RouterLink to="/networks" class="block text-base font-semibold text-text no-underline hover:underline">Uplink</RouterLink>
         <div class="mono mt-0.5 text-xs text-text-2">{{ [up?.address, up?.interface].filter(Boolean).join(' · ') || '—' }}</div>
         <StatusDot class="mt-1.5" v-bind="uplinkDot" />
+      </div>
+    </div>
+    <!-- management access: below the gateway, off the faulted path, no fault badge -->
+    <div v-if="managementBoxes.length" class="mt-4 flex items-start gap-3 border-t border-border pt-3" data-testid="topology-management">
+      <div class="w-[210px] pt-3 text-xs text-text-2">Management access · no faults apply</div>
+      <div class="flex flex-wrap gap-2.5">
+        <div v-for="b in managementBoxes" :key="b.id" class="w-[210px] rounded-lg border border-dashed border-border-strong bg-surface-2 px-3.5 py-3" data-testid="topology-management-network">
+          <RouterLink :to="`/networks/${b.id}`" class="block text-base font-semibold text-text no-underline hover:underline">{{ b.name }}</RouterLink>
+          <div class="mono mt-0.5 text-xs text-text-2">{{ b.detail }}</div>
+          <div class="mt-1.5 text-[13px] text-text-2">{{ b.meta }}</div>
+          <StatusDot v-if="b.degraded" class="mt-1" tone="block" label="degraded: a port is missing" />
+        </div>
       </div>
     </div>
   </SectionCard>

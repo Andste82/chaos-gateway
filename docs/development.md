@@ -3103,7 +3103,8 @@ setup wizard, the overview, the device list and the device detail, live updates 
 offline and safe-mode states. The screens of M13 (faults, rules, profiles, the preview-and-apply drawer, the `</> API`
 panel) and of M14 (networks, routing, technical view) follow in their own sections below; panels whose backend comes
 later (running scenario, captures, diagnostics, DHCP and TLS test actions) are left out, and a device's flows and recent
-DNS queries come with the flow view of M26 (P3-M12-02).
+DNS queries come with the flow view of M26 (P3-M12-02), and so does the path view of §2.17 (device → gateway → uplink →
+destination with the fault badge), which is drawn from those flows (P3-AUDIT-37).
 
 ### How it works
 
@@ -3195,7 +3196,9 @@ DNS queries come with the flow view of M26 (P3-M12-02).
   token is in the container log. The rollback toast of revision 1 says that the setup is open again, not that a previous
   revision is active.
 - **Overview.** Topology (test networks → gateway → uplink, devices per network, the fault badge on the path while faults
-  are active, profiles and where they are active), the active faults (impairing overlays and enabled configured faults:
+  are active, profiles and where they are active; a management network, a WireGuard hub of role `management`, is no test
+  network: it has a row of its own below the gateway, off the faulted path and without a fault badge, and the gateway
+  counts test and management networks apart, P3-AUDIT-38), the active faults (impairing overlays and enabled configured faults:
   target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
   "configured"), the uplink traffic of the last ten minutes (uPlot; rates from two readings of the uplink's byte counters,
   which `GET /uplink` reports since M12 as `status.rx_bytes`/`tx_bytes` from `/sys/class/net/<if>/statistics`) and the
@@ -3353,6 +3356,7 @@ leave through the chosen uplink. The privileged-container job of CI has not run 
 | … safe mode | `states.spec.ts` "safe mode: a full-width red banner with the reason and the way to recovery" |
 | … the other states of §2.17 that M12 brings: commit-confirm, expiring overlays, live updates, validation, login, setup | `states.spec.ts` (commit-confirm, its timeout, live updates, expiring overlays), `setup.spec.ts` (the wizard with its validation and Next disabled until a step is valid, free proposals, errors tied to their fields, the request, the confirmation, a countdown on the gateway's clock, Confirm until the gateway rolled back, Start again after a rollback, the session store following it, a rollback while the browser is in the shell), `login.spec.ts` (a logout drops the draft and the data read, a locked-out login says how long to wait, its alert announced once while the countdown beside it ticks), `overview.spec.ts` (every item links to its detail), `devices.spec.ts` (rows with the compact fault chips, adopt, an adoption marked until it is applied and its Undo, a refused base, the search field's focus ring), `device-detail.spec.ts` (removing a network's fault asks first, a configured fault that wins, the router and DNS servers the network hands out, an adoption marked) |
 | Keyboard focus and the visual system (plan §2.17 Accessibility, Visual system; the Phase 3 audit) | `faults.spec.ts` "keyboard: Remove and Undo hand the focus to each other, and the drawer gives it back to the bar or the page", `rules.spec.ts` "keyboard: deleting a rule puts the focus on its Undo, and Undo on the rule again", "the selected rule is marked for assistive technology too, not only by its colour", `devices.spec.ts` "an adoption in the changes is marked in the list, Undo takes it back and keeps the focus there", `network-forms.spec.ts` "a tall form keeps its action row in view at 1440 × 900", `networks.spec.ts` "the access matrix keeps its columns readable and scrolls inside its card when there are many networks", `src/styles.test.ts` |
+| The overview topology draws a management network apart from the test networks (plan §2.17 Overview; P3-AUDIT-38) | `overview.spec.ts` "a management network is drawn apart from the test networks, off the faulted path (P3-AUDIT-38)" |
 | An E2E flow in the testbed: first start with setup token → assign interfaces → see a discovered device | `TestFirstStartInTheBrowserUntilADiscoveredDevice` + `web/e2e-testbed/first-start.spec.ts` (CI job `testbed-ui`) |
 
 ## Web UI: faults, rules and profiles (M13)

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { IOT, MockGateway } from './mock';
+import { IOT, MockGateway, withNetworks } from './mock';
 
 // M12: the overview with data, and empty.
 test('the overview shows topology, active faults, uplink traffic and events', async ({ page }) => {
@@ -124,6 +124,34 @@ test('empty: no faults, no devices, no networks', async ({ page }) => {
   await expect(page.getByTestId('topology').getByRole('link', { name: 'Add a test network' })).toHaveAttribute('href', '/networks');
   await expect(page.getByTestId('path-fault-badge')).toHaveCount(0);
   await expect(page.getByText('Nothing happened yet.')).toBeVisible();
+});
+
+test('a management network is drawn apart from the test networks, off the faulted path (P3-AUDIT-38)', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  await gw.install(page);
+  await page.goto('/');
+
+  // the test networks stay on the path with the fault badge; the management hub is not among them
+  const testNetworks = page.getByTestId('topology-network');
+  await expect(testNetworks.filter({ hasText: 'lab-hub' })).toHaveCount(1);
+  await expect(testNetworks.filter({ hasText: 'admin' })).toHaveCount(0);
+  await expect(page.getByTestId('path-fault-badge')).toHaveText('↑↓ 3 faults on the path');
+
+  // it has a row of its own below the gateway, without a fault badge, and links to its network
+  const management = page.getByTestId('topology-management');
+  await expect(management).toContainText('Management access · no faults apply');
+  const admin = management.getByTestId('topology-management-network');
+  await expect(admin).toHaveCount(1);
+  await expect(admin).toContainText('admin');
+  await expect(admin).toContainText('10.98.0.0/24');
+  await expect(admin).toContainText('WireGuard · management');
+  await expect(admin).not.toContainText('device');
+  await expect(management.getByTestId('path-fault-badge')).toHaveCount(0);
+  await expect(management.getByRole('link', { name: 'admin' })).toHaveAttribute('href', /^\/networks\//);
+
+  // the gateway counts the test networks and the management networks apart
+  const count = await testNetworks.count();
+  await expect(page.getByTestId('topology-gateway')).toContainText(`${count} test networks · 1 management`);
 });
 
 test('an uplink without counters says so instead of drawing nothing', async ({ page }) => {

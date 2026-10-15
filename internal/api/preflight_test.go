@@ -11,9 +11,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/api"
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
@@ -256,14 +258,18 @@ func (f countingHostNet) Do(ctx context.Context, ops ...executor.Operation) (exe
 // Phase 3 audit: GET /setup needs no authentication, so, like the health check (M5-13), it must not give
 // every caller its own read through the executor: requests in a row share one read. Its report does not
 // quote the executor's error either (that is in the log), only that the configuration cannot be read.
+// The server's clock stands still while the 20 requests run: on a slow machine (level 1b under emulation)
+// they took longer than the cache's 2 s, and a second read was the cache working, not a failure.
 func TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration(t *testing.T) {
 	var reads atomic.Int64
 	var failing atomic.Pointer[string]
+	clk := clock.NewFake(time.Now())
 	g := newGW(t, func(o *options) {
 		o.execWrap = func(e apply.Exec) apply.Exec {
 			return countingHostNet{inner: e, reads: &reads, failing: &failing}
 		}
 		o.hostFS = fstest.MapFS{"etc/netplan/50-lab.yaml": {Data: []byte("network:\n  ethernets:\n    lan0: {dhcp4: true}\n")}}
+		o.apiClock = clk
 	})
 	var wg sync.WaitGroup
 	for range 10 {
@@ -283,6 +289,16 @@ func TestTheUnauthenticatedSetupSharesOneReadOfTheHostsNetworkConfiguration(t *t
 	}
 	if n := reads.Load(); n != 1 {
 		t.Errorf("20 requests made %d reads", n)
+	}
+	// after the cache's 2 s the next request reads again, once
+	clk.Advance(2 * time.Second)
+	for range 3 {
+		if r := g.do("GET", "/setup", nil, nil, nil); r.Status != 200 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+	}
+	if n := reads.Load(); n != 2 {
+		t.Errorf("3 requests after the cache's lifetime: %d reads in all, want 2", n)
 	}
 
 	// a failing read (another gateway: the cache is per server) is named, its error is not

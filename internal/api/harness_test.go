@@ -109,6 +109,9 @@ type options struct {
 	// preflight is the report of the checks made at start (nil: none was made); log the server's logger
 	preflight func() *api.PreflightReport
 	log       *slog.Logger
+	// apiClock is the API server's clock (nil: the real one), for a test whose result must not depend on
+	// how fast the machine runs, e.g. a cache with a lifetime
+	apiClock clock.Clock
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -185,7 +188,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	}
 	t.Cleanup(e.Close)
 	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log,
+		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers

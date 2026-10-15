@@ -38,9 +38,17 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `web/` | the web app (M12): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed) |
-| `deploy/` | the container image (multi-arch); `compose.executor.yaml`, the executor's hardening profile |
+| `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
 
 ## Setup
+
+Start the devcontainer from the host with `.devcontainer/start.sh`: it builds the image `chaos-gateway-dev` from
+`.devcontainer/Dockerfile` when it is missing (`start.sh rebuild` builds it again and replaces the container),
+mounts the checkout at `/workspace` and attaches a shell; a second call attaches to the running container. Copy
+`.devcontainer/.env.example` to `.devcontainer/.env` first and fill in `GITHUB_TOKEN` for `gh` and git over HTTPS
+(the file is gitignored). The container is unprivileged; on a host with `/dev/kvm` the script passes it through,
+so level 1b runs with KVM instead of software emulation. (The image is not `chaos-gateway`: that name is the
+gateway's own image, which the compose files start.)
 
 The devcontainer has all system tools. The Python tooling (`.venv`) and the web dependencies
 (`web/node_modules`) are installed on demand: the make targets that need them depend on stamp

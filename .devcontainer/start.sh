@@ -8,8 +8,9 @@ if [[ "${1:-}" == "rebuild" ]]; then
   REBUILD=1
 fi
 
-# Define the container image name
-IMAGE_NAME="chaos-gateway"
+# The devcontainer's image. Not "chaos-gateway": that is the gateway's own image (chaos-gateway:latest),
+# which the compose files in deploy/ start; building this one under that name would replace it (issue #57).
+IMAGE_NAME="chaos-gateway-dev"
 
 # Resolve this script's directory so it works regardless of the caller's cwd.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,10 +18,18 @@ ENV_FILE="$SCRIPT_DIR/.env"
 CLAUDE_CONFIG_DIR="$SCRIPT_DIR/.claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 
-# Derive container name from parent folder, e.g. <image-name>-<project-folder>
+# Derive container name from parent folder, e.g. chaos-gateway-<project-folder> (unchanged by the image's
+# rename, so an existing container is still found)
 PROJECT_NAME="$(basename "$(dirname "$SCRIPT_DIR")")"
-CONTAINER_NAME="${IMAGE_NAME}-${PROJECT_NAME}"
+CONTAINER_NAME="chaos-gateway-${PROJECT_NAME}"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# KVM, when the host has it: level 1b (make test-vm) then runs with hardware virtualization instead of
+# software emulation (.devcontainer/Dockerfile)
+device_args=()
+if [[ -e /dev/kvm ]]; then
+  device_args=(--device /dev/kvm)
+fi
 
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
@@ -67,6 +76,7 @@ fi
 echo "Running new container '$CONTAINER_NAME'..."
 docker run -it --rm --name "$CONTAINER_NAME" \
   "${env_args[@]}" \
+  "${device_args[@]}" \
   -e CLAUDE_CONFIG_DIR=/root/.claude \
   -v "$PROJECT_ROOT":/workspace \
   -v "$CLAUDE_CONFIG_DIR":/root/.claude \

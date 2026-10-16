@@ -73,7 +73,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	if oc.snap.Config != nil {
 		oc.world, _ = domain.NewWorld(oc.snap.Config, oc.snap.Overlays)
 	}
-	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0) {
+	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0 || len(oc.snap.Forwards) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
 			s.log.Warn("cannot read the fault counters", "error", err)

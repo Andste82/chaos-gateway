@@ -251,6 +251,12 @@ type Target struct {
 	// is no rule.
 	Access     *AccessPlan `json:"access,omitempty"`
 	accessSets []SetDef
+	// Forwards are the port forwards in the packet path (plan §2.2 layer 4, M35a), sorted by name and id;
+	// ForwardMap is the name of their DNAT map, whose elements send each forwarded port to the target's
+	// current address (forward.go). Both are empty without a forward.
+	Forwards   []PortForward `json:"forwards,omitempty"`
+	ForwardMap string        `json:"forward_map,omitempty"`
+	forwardMap MapDef
 	// ClassifyNets is the nftables set of test, WireGuard and remote-network prefixes that guards
 	// the classification chain (plan §3.3): classification never reads or writes the mark of
 	// anything outside it.
@@ -374,6 +380,7 @@ func Compile(in Input) *Target {
 
 	t.finishManagementSources()
 	t.compileHostState()
+	t.compileForwards(in)
 	t.compileRouting(cfg, idx)
 	t.compileBird(cfg, idx)
 	t.compileKea(cfg, idx)
@@ -551,7 +558,9 @@ func (t *Target) compileHostState() {
 
 	// DOCKER-USER accepts what comes from or goes to the bridges of test networks: traffic to and
 	// from the uplink is covered by it (a packet between a bridge and the uplink has the bridge on
-	// one side), and Docker's own bridges keep their isolation
+	// one side), and so is the path of a port forward from its entry side (the uplink or the
+	// management interface) to a test network (M35a, plan §3.4); Docker's own bridges keep their
+	// isolation
 	du := map[string]bool{}
 	for _, b := range t.Bridges {
 		du[b.Name] = true
@@ -602,6 +611,11 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 		if t.Uplink.Gateway.IsValid() {
 			add(executor.Route{Dst: "default", Via: t.Uplink.Gateway.String(), Dev: t.Uplink.Name})
 		}
+	}
+	// the replies of a forward from the management side go back to its peers in the management
+	// network (M35a): a device's packets are looked up in this table, whose default is the uplink
+	if t.Management.Subnet.IsValid() && t.Management.Name != t.Uplink.Name && t.forwardsFrom(domain.EntryManagement) {
+		add(executor.Route{Dst: t.Management.Subnet.String(), Dev: t.Management.Name})
 	}
 	for i := range t.Bridges {
 		b := &t.Bridges[i]

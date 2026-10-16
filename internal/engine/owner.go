@@ -630,6 +630,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.trackCounters(r.plan, r.d.Generation)
 		o.trackFaults(r.target, r.d.Generation, r.plan)
 		o.trackRules(r.target, r.d.Generation)
+		o.trackForwards(r.target, r.d.Generation)
 		o.trackQueues(r.target, r.plan, r.d.Generation, false)
 		o.problemEvents(r.target)
 		if o.lastApp != nil && o.lastApp.Uplink != r.target.Uplink {

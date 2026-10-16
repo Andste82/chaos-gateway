@@ -144,6 +144,12 @@ type Snapshot struct {
 	// appeared: the epoch of its counter (it restarts when a rule is new or the table was made anew).
 	Access     *compiler.AccessPlan
 	RuleEpochs map[string]int64
+	// Forwards are the port forwards of the last applied target (M35a), with the address each sends its
+	// connections to and the name of its counter; ForwardEpochs is the generation in which each forward,
+	// by id, first appeared: the epoch of its counter (it restarts when a forward is new or the table was
+	// made anew).
+	Forwards      []compiler.PortForward
+	ForwardEpochs map[string]int64
 	// Management is the management interface and the sources that reach the control plane in the
 	// last applied target (`explain` judges traffic to the gateway with it).
 	Management  compiler.Management

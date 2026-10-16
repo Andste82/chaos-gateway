@@ -130,4 +130,13 @@ func (o *owner) trackCounters(plan *apply.Plan, gen uint64) {
 	if o.snap.RuleEpochs != nil {
 		o.snap.RuleEpochs = rborn
 	}
+	// and for the counters of the port forwards
+	fborn := make(map[string]int64, len(o.ov.fwdBorn))
+	for k := range o.ov.fwdBorn {
+		fborn[k] = int64(gen)
+	}
+	o.ov.fwdBorn = fborn
+	if o.snap.ForwardEpochs != nil {
+		o.snap.ForwardEpochs = fborn
+	}
 }

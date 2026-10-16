@@ -172,3 +172,35 @@ func TestACutLeavesGatewayOriginatedAndSwitchedConnectionsAlone(t *testing.T) {
 		t.Errorf("cut source ports %v, want 40004 40005 40006", ports)
 	}
 }
+
+// A forwarded connection (M35a) is cut by a rule on its target: the rules match it with the reply's
+// source, the forward's target, as responder and the reply's source port, the target port, as its port.
+// The tracked flow is deleted by its original tuple (the peer to the entry address). Without a forward
+// in the packet path the rules do not match as responder, in the kernel and here.
+func TestACutTakesTheForwardedConnectionsOfItsTarget(t *testing.T) {
+	forwarded := func(peer string, sport int, entry string, port int, target string, tport int) linux.Conntrack {
+		return linux.Conntrack{Proto: "tcp", State: "ESTABLISHED",
+			Original: linux.Tuple{Src: peer, Dst: entry, SPort: sport, DPort: port},
+			Reply:    linux.Tuple{Src: target, Dst: peer, SPort: tport, DPort: sport}}
+	}
+	flows := []linux.Conntrack{
+		forwarded("198.51.100.7", 50001, "203.0.113.1", 8080, "10.10.0.5", 80), // to the device's port 80
+		forwarded("198.51.100.7", 50002, "203.0.113.1", 2222, "10.10.0.5", 22), // another port of the device
+		forwarded("198.51.100.7", 50003, "203.0.113.1", 8081, "10.20.0.9", 80), // another device
+		forwarded("192.168.56.9", 50004, "203.0.113.1", 8080, "10.10.0.5", 80), // a management source: still the device's
+	}
+	p := plan(rule("config:web", "drop", true, "10.10.0.5/32", "tcp", 80))
+	p.Responder = true
+	tg := target(p) // its UI port is 8080: a management source to it is no control plane when it is forwarded
+	got := cutFlows(target(plan()), tg, flows)
+	if keysOf(got) != "config:web:tcp/192.168.56.9:50004,config:web:tcp/198.51.100.7:50001" {
+		t.Fatalf("%s", keysOf(got))
+	}
+	if f := got[1].flow; f.Dst != "203.0.113.1" || f.DPort != 8080 || !got[1].tcp {
+		t.Errorf("the flow is deleted by its original tuple: %+v", f)
+	}
+	p.Responder = false
+	if got := cutFlows(target(plan()), target(p), flows); len(got) != 0 {
+		t.Errorf("without a forward the rules matched as responder: %s", keysOf(got))
+	}
+}

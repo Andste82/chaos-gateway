@@ -248,6 +248,11 @@ func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 			if t.Port == 0 || flow.SPort == 0 {
 				continue
 			}
+			if rs, err := netip.ParseAddr(c.Reply.Src); err == nil && rs.Is4() && rs != dst {
+				// the destination was translated (a port forward, M35a): the rules match the connection
+				// with the reply's source, the forward's target, as responder
+				t.Responder, t.RespPort = rs, c.Reply.SPort
+			}
 		case "icmp":
 			if c.Original.ICMPType == nil || c.Original.ICMPCode == nil || c.Original.ICMPID == nil {
 				continue
@@ -270,8 +275,8 @@ func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 		if o := old.Access.Winner(t); o != nil && o.Key == w.Key && o.Action == w.Action && o.Cuts() {
 			continue // this rule has cut it already
 		}
-		if controlPlane(next, t) {
-			continue
+		if !t.Responder.IsValid() && controlPlane(next, t) {
+			continue // a forwarded connection goes to a device, never to the control plane
 		}
 		out = append(out, cutFlow{flow: flow, rule: w.Key, tcp: c.Proto == "tcp" && c.State == "ESTABLISHED"})
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
@@ -296,5 +297,45 @@ func TestTheCapabilitiesNamePortForwarding(t *testing.T) {
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	if !strings.Contains(fmt.Sprint(caps["features"]), "port_forwards") {
 		t.Errorf("%v", caps["features"])
+	}
+}
+
+// The counter of a forward is the counter of its accept rule in the kernel: the new connections it let
+// through, with the epoch of the forward and the time it last matched. Only the revision the kernel runs
+// has counters, and only for the forwards in its packet path (a disabled one is not).
+func TestAForwardHasTheCounterOfItsAcceptRule(t *testing.T) {
+	g := dhcpGateway(t)
+	if r := g.apply(g.mustPatch(forwardsPatch())); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.observe()
+	g.k.BumpCounter(compiler.ForwardCounterName(fwdRange), 3)
+	items := g.do("GET", "/port-forwards", nil, nil, nil).json(t)["items"].([]any)
+	counters := map[string]map[string]any{}
+	for _, it := range items {
+		m := it.(map[string]any)
+		if c, ok := m["counters"].(map[string]any); ok {
+			counters[m["config"].(map[string]any)["name"].(string)] = c
+		}
+	}
+	if c := counters["range"]; c == nil || c["packets"] != float64(3) || c["bytes"] != float64(300) || c["epoch"] == nil || c["last_match"] == nil {
+		t.Errorf("range %v", c)
+	}
+	// the device of web has no address yet: its forward is in the kernel, inactive, and counts
+	if c := counters["web"]; c == nil || c["packets"] != float64(0) || c["last_match"] != nil {
+		t.Errorf("web %v", c)
+	}
+	if c, ok := counters["off"]; ok {
+		t.Errorf("a disabled forward has a counter: %v", c)
+	}
+	// a candidate revision has none
+	cand := g.mustPatch(map[string]any{"port_forwards": map[string]any{fwdOff: nil}})
+	for _, it := range g.do("GET", "/port-forwards?revision="+itoa(cand), nil, nil, nil).json(t)["items"].([]any) {
+		if c, ok := it.(map[string]any)["counters"]; ok {
+			t.Errorf("a candidate's forward has a counter: %v", c)
+		}
+	}
+	if r := g.do("GET", "/port-forwards/range", nil, nil, nil).json(t); r["counters"].(map[string]any)["packets"] != float64(3) {
+		t.Errorf("by name %v", r["counters"])
 	}
 }

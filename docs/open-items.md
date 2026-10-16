@@ -1498,3 +1498,73 @@ want to decide.
 - Recommendation: (a): the plan says "never", and it keeps a forward from shadowing the control plane whatever the topology.
 - Needs maintainer: yes
 - Effort: S
+
+### P31-M35a-04 A connection through a forward that is disabled or deleted lives on until it ends
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "a disabled or deleted forward leaves no DNAT and closes the path". The forward
+  chain accepts established traffic before anything else (D11, spike S3), and the translation of a tracked connection is in
+  its conntrack entry: a forwarded connection that exists when its forward goes keeps working until it ends, as a connection
+  does when an access matrix entry that allowed it goes.
+- Evidence: `internal/compiler/forward.go`, `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (a new connection to
+  a deleted forward's port reaches the gateway itself, not the device), `TestADisabledForwardLeavesTheKernel`.
+- Task: implemented (a) — the forward leaves the kernel (no DNAT element, no accept rule, no counter); new connections are
+  not translated. Options: (a) as implemented, like every other change of the access path (D11); (b) after the apply that
+  removes a forward, delete the tracked connections it translated (the engine knows them by their reply source and port, as
+  the cut of an access rule does), so the device's next packet meets no translation.
+- Recommendation: (a): it is what a matrix change does, and a forward that should cut its connections can be paired with a
+  rule with "also cut existing connections".
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-05 The replies of a forward from the management side go to the management subnet only
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. A device's packets are looked up in the policy table 100 (§2.2), whose default route is the
+  uplink. A forward from the management network (three-port topology) needs its replies to go back through the management
+  interface, which table 100 did not know.
+- Evidence: `internal/compiler/compile.go` (`compileRouting`), `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`,
+  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`.
+- Task: implemented (a) — while a forward from the management side is compiled, table 100 has the management interface's
+  connected subnet (a device's traffic to that subnet then leaves through the management interface, where the forward chain's
+  default drops it unless the access matrix allows it). A peer of the management side that is not in that subnet (an allowed
+  source reached through a router of the management network) gets no answer. Options: (a) as implemented; (b) also route the
+  `allowed_sources` outside the subnet through the management interface's default gateway; (c) route the replies by the
+  connection (a conntrack mark set by the DNAT and a policy rule for it), independent of the peer's address.
+- Recommendation: (a) for M35a: the management network is the management interface's subnet in the shipped topologies; (c)
+  if forwards from routed management networks are needed.
+- Needs maintainer: yes
+- Effort: M
+
+### P31-M35a-06 A forwarded port range is one DNAT element per port
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. nftables has no expression that shifts a port by an offset (the kernel's shifted port ranges are not
+  in nft 1.0.9 or 1.1.6), so a range shifted one to one (8000-8010 to 9000-9010) needs one map element per port.
+- Evidence: `internal/compiler/forward.go` (`compileForwards`), `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`.
+- Task: implemented (a) — every forwarded port is one element of the DNAT map; ranges are not limited beyond 1-65535, so a
+  forward of all ports is 65535 elements, and a device's address change moves all of them in one element transaction.
+  Options: (a) as implemented; (b) limit the length of a range in the validation (e.g. 1024 ports); (c) an unshifted range
+  (target port = external port) as one interval element without a port in its value.
+- Recommendation: (a), with (b) if large ranges turn out to be slow on the smallest hardware (H1).
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-07 The entry address is every address of the entry interface
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "entry only on the chosen interface and its current address, which is followed through
+  netlink like masquerade". The DNAT rule matches a packet that comes in on the entry interface and is addressed to an address
+  of that interface (`fib daddr . iif type local`): the kernel follows a new address at once, without an apply, as masquerade
+  does. An interface with more than one IPv4 address forwards on each of them.
+- Evidence: `internal/compiler/forward.go` (`forwardDNAT`), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel`,
+  `TestAForwardFollowsANewUplinkAddress`.
+- Task: implemented (a). Options: (a) as implemented; (b) match the one address the engine reads (the interface's first IPv4
+  address, as the status and `explain` show it), compiled into the rule, so an address change takes a full apply.
+- Recommendation: (a): it follows a DHCP renewal within the kernel, and a second address on the uplink is the operator's own.
+- Needs maintainer: yes
+- Effort: S

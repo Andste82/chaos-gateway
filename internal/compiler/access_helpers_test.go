@@ -174,6 +174,31 @@ func renderExpr(e any) string {
 				return fmt.Sprintf("%v-%v", l[0], l[1])
 			case "counter":
 				return fmt.Sprintf("counter %q", v)
+			case "concat":
+				l := v.([]any)
+				parts := make([]string, len(l))
+				for i, p := range l {
+					parts[i] = renderExpr(p)
+				}
+				return strings.Join(parts, " . ")
+			case "fib":
+				m := v.(map[string]any)
+				flags := m["flags"].([]any)
+				parts := make([]string, len(flags))
+				for i, f := range flags {
+					parts[i] = renderExpr(f)
+				}
+				return "fib " + strings.Join(parts, " . ") + " " + m["result"].(string)
+			case "map":
+				m := v.(map[string]any)
+				return renderExpr(m["key"]) + " map " + renderExpr(m["data"])
+			case "dnat":
+				m := v.(map[string]any)
+				s := "dnat " + renderExpr(m["family"])
+				if f, ok := m["type_flags"]; ok {
+					s += " " + renderExpr(f)
+				}
+				return s + " to " + renderExpr(m["addr"])
 			case "jump", "goto":
 				return k + " " + v.(map[string]any)["target"].(string)
 			case "reject":

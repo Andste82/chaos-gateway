@@ -42,7 +42,9 @@ const ForwardMapBase = "fwd_dnat"
 // CodeForwardRefused is the warning for a forward the compiler leaves out although the configuration has
 // it: one the validation refuses (it took a port of the gateway, overlaps another or goes outside the
 // local test networks). The compiler is the backstop of the validation, so a configuration that did not
-// pass it (an old revision, a file applied with `chaosgw apply`) never takes the control plane's ports.
+// pass it (an old revision) never takes the control plane's ports: `management.ui_port`, else the port
+// the caller names (Input.DefaultUIPort: the API's --port, or the --ui-port of `chaosgw apply`, which
+// validates a file against it, too).
 const CodeForwardRefused = "forward_refused"
 
 // forwardMapKey and forwardMapValue are the types of the DNAT map: the entry interface, the protocol and
@@ -241,8 +243,9 @@ func (t *Target) forwardDNAT() []Rule {
 // forwardAccepts are the accept rules of the forwards in the forward chain, after the access rules and
 // in front of the access matrix: a connection the DNAT of a forward translated (`ct status dnat`), in on
 // its entry interface, out to a local test network, with its protocol and an external port of its range.
-// Each counts into the forward's counter, so the counter is the new connections the forward let through,
-// and notes when it last matched (the `last` statement, like the access rules).
+// Each counts into the forward's counter and notes when it last matched (the `last` statement, like the
+// access rules). The counter counts the packets of connections not yet established: one per connection,
+// more for a retransmitted SYN or an unanswered UDP packet, which is why the UI calls them hits.
 func (t *Target) forwardAccepts(lanSet string) []Rule {
 	var out []Rule
 	for _, f := range t.Forwards {

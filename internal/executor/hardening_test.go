@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -158,7 +159,7 @@ func TestBirdContainerHardeningProfile(t *testing.T) {
 		}
 	}
 	// BIRD starts from the file the executor keeps and listens where the executor reconfigures it
-	if !contains(s.Command, "/run/chaosgw/bird/chaosgw.conf") || !contains(s.Command, "/run/chaosgw/bird/chaosgw.ctl") {
+	if !contains(s.Command, "/run/chaosgw-bird/chaosgw.conf") || !contains(s.Command, "/run/chaosgw-bird/chaosgw.ctl") {
 		t.Errorf("command %v", s.Command)
 	}
 	if len(s.Volumes) != 1 {
@@ -436,4 +437,59 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 	if !strings.Contains(string(dockerfile), "chmod 0700 /var/lib/chaosgw/secrets") {
 		t.Error("deploy/Dockerfile does not keep the secrets directory 0700")
 	}
+}
+
+// Issue #57 (F4): no container mounts a volume or bind inside another of its volumes or binds. The
+// executor shares /run/netns with the host (rshared), and a volume mounted inside another volume then
+// propagated into the host's mount table: BIRD's directory inside the executor's socket volume stayed
+// mounted on the host and `docker compose down -v` failed. The CI job `mounts` checks the real mounts.
+func TestNoContainerMountsAVolumeInsideAnother(t *testing.T) {
+	files, err := filepath.Glob("../../deploy/compose.*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("compose files %v: %v", files, err)
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Services map[string]service `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for name, s := range doc.Services {
+			var targets []string
+			for _, v := range s.Volumes {
+				targets = append(targets, volumeTarget(t, v))
+			}
+			for _, outer := range targets {
+				for _, inner := range targets {
+					if inner != outer && strings.HasPrefix(inner, strings.TrimSuffix(outer, "/")+"/") {
+						t.Errorf("%s: service %s mounts %s inside %s", filepath.Base(f), name, inner, outer)
+					}
+				}
+			}
+		}
+	}
+}
+
+// volumeTarget is the path in the container of a compose volume entry, short (source:target[:mode]) or long.
+func volumeTarget(t *testing.T, v yaml.Node) string {
+	t.Helper()
+	if v.Kind == yaml.ScalarNode {
+		parts := strings.Split(v.Value, ":")
+		if len(parts) < 2 {
+			return parts[0] // an anonymous volume: the target alone
+		}
+		return parts[1]
+	}
+	var m struct {
+		Target string `yaml:"target"`
+	}
+	if err := v.Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.Target
 }

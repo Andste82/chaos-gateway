@@ -137,6 +137,18 @@ function editFault(o: Overlay) {
 }
 /** The port forwards to this device, as the draft has them. */
 const forwards = computed(() => forwardRows(draft.baseForwards, draft.forwards, forwardViews.data.value ?? []).filter((r) => r.p.target.device === d.value?.id));
+/**
+ * A forward can go to the device: it is configured (or adopted in the draft) and in a local test network.
+ * The gateway refuses a forward to a discovered device; the hint says what to do instead.
+ */
+const forwardBlocked = computed(() => {
+  const v = d.value;
+  if (!v) return undefined;
+  if (!isAdopted(v) && !draft.devices[v.id]) return 'Adopt the device to forward to it, or forward to its address on the networks page.';
+  // the networks not loaded yet: the dialog and the gateway check
+  if (networks.data.value && network.value?.config.type !== 'lan') return 'A port forward goes to a device in a local test network.';
+  return undefined;
+});
 const forwardDevice = (id: string) => (id === d.value?.id ? d.value.name : names.value.device?.(id));
 const changeBlocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
 
@@ -257,7 +269,7 @@ useApiScreen('this device', () => [
 
         <SectionCard title="Port forwards">
           <template #actions>
-            <RouterLink class="btn btn-sm" :to="{ path: '/networks', query: { forward: 'new', device: d.id } }" :aria-label="`Add a port forward to ${d.name}`">Add</RouterLink>
+            <RouterLink v-if="!forwardBlocked" class="btn btn-sm" :to="{ path: '/networks', query: { forward: 'new', device: d.id } }" :aria-label="`Add a port forward to ${d.name}`">Add</RouterLink>
           </template>
           <LoadError v-if="firstError(forwardViews)" :error="firstError(forwardViews)" what="The status of the port forwards is not loaded" :retry="forwardViews.refetch" />
           <p v-if="forwards.length === 0" class="m-0 text-sm text-text-2" data-testid="device-forwards-empty">No port forward leads to this device.</p>
@@ -281,6 +293,7 @@ useApiScreen('this device', () => [
               </div>
             </li>
           </ul>
+          <p v-if="forwardBlocked" class="mt-2 mb-0 text-xs text-text-2" data-testid="device-forwards-blocked">{{ forwardBlocked }}</p>
           <p class="mt-2 mb-0 text-xs text-text-3">Faults do not apply to forwarded connections; the access rules do.</p>
         </SectionCard>
 

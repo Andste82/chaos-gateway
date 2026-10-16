@@ -168,7 +168,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
   1. **Gateway protection (input):** from test networks and *test*-role WireGuard networks the gateway itself answers only DHCP, DNS, ICMP echo and the ports of active redirects (TLS cases, DNS redirect); everything else, including UI/API and SSH, is dropped. The UI/API is reachable only from the management network and *management*-role WireGuard networks; SSH is left to the OS on the management interface. Active from M4 on, not only after setup (§2.16).
   2. **Access matrix** between networks (default policy per network pair).
   3. **Access rules** (§2.4): evaluated in the forward **and** input path on the conntrack original tuple, so they also apply to connections redirected to gateway services (e.g. "drop TCP 8883" beats a TLS case on 8883; "drop UDP 53" blocks the DNS proxy for that device); ordered, first match wins, per device, group, network or any source towards IP/CIDR, hostname, network or uplink, with protocol and ports; allow, drop, reject (ICMP, the type chosen per rule), TCP reset; optionally cutting existing connections; counters per rule; usable as overlays in scenarios.
-  4. **NAT:** masquerade towards the uplink per network (on by default for test networks, off between test and WireGuard networks). Port forwarding is M35.
+  4. **NAT:** masquerade towards the uplink per network (on by default for test networks, off between test and WireGuard networks). **Port forwarding** from the uplink to a device or address in a local test network (DNAT, M35a, pulled forward on 2026-10-16, D34): the forward itself opens the path through the access matrix, access rules apply to the forwarded connections with the device as responder, faults do not apply to them before M35b.
 - A management network or interface for the UI and API, separated from test networks (see §2.16).
 - **Supported topologies:** three ports (uplink, test network, management) or two ports with management on the uplink side — the common case on a Raspberry Pi with one built-in port plus a USB adapter. In the two-port topology uplink and management are the same OS-owned interface; Chaos Gateway never changes its address. Both are covered by the level-2 tests (§4.5).
 - **Policy routing:** traffic entering from test networks and WireGuard networks and the gateway's own service traffic (DNS proxy, TLS proxy upstream) use routing table 100, owned by Chaos Gateway. It contains the connected routes of all test and WireGuard networks, the client networks, static downstream routes, routes learned by BIRD, the uplink subnet and the default route via the uplink gateway. The PMTU mirror tables (§2.5) contain the same routes. The rules match on the test-network bridges (`iif`) and on `svc0`, the gateway side of the service namespace (§3.3, D29). The OS-owned management interface keeps its own default route in the main table; other host processes (package updates, SSH) keep using it. Spike S12: without the policy route, forwarded test traffic left through the management interface; with it, forwarded traffic and traffic of the service namespace took the uplink and nothing leaked.
@@ -178,7 +178,7 @@ Every overlay has an **owner** (a user session, an API token or a run), an optio
 
 - VLANs (multiple networks on one trunk port).
 - IPv6: router advertisements, SLAAC, DHCPv6, IPv6 firewalling and faults.
-- Port forwarding (DNAT).
+- Faults on forwarded connections: matching a device as responder (M35b).
 
 ### 2.2.1 WireGuard Networks
 
@@ -323,7 +323,7 @@ A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a c
 
 **What faults apply to**
 
-- **Initiator semantics:** a device fault applies to connections the device *initiates*, in both directions (upload = packets in the connection's original direction, download = replies). Connections initiated towards the device by another device or by the server are matched by the initiator's scope, not by the responder's. Matching a device as responder is a later extension (§8).
+- **Initiator semantics:** a device fault applies to connections the device *initiates*, in both directions (upload = packets in the connection's original direction, download = replies). Connections initiated towards the device by another device or by the server are matched by the initiator's scope, not by the responder's. Matching a device as responder is a later extension (M35b): until then a connection that reaches a device through a port forward (M35a) is not impaired by any fault, the device's and the global ones included; the preview and `explain` say so.
 - **Global** means: packets whose original source is in a test network, a WireGuard network or a remote network. The gateway's own traffic (management, package updates, BIRD sessions, WireGuard underlay unless a tunnel fault targets it) is never impaired, so a global "Offline" cannot lock the admin out.
 - DHCP and ARP are never impaired by impairment faults; the DHCP family ("silence") exists for that.
 - Connections that end on the gateway (DNS proxy, TLS responder, TLS proxy) **are** impaired like forwarded traffic, because the device experiences them as its path to the server (service namespace, §3.3).
@@ -1197,7 +1197,7 @@ Link events are simulated by setting one end of a veth pair down; the other end 
 | Feature | Level |
 |---|---|
 | Compiler output, precedence resolution, validation | 0 |
-| Routing, NAT, access rules, connection behavior | 1 |
+| Routing, NAT, port forwarding, access rules, connection behavior | 1 |
 | Faults: function (effect, isolation, direction, live changes) | 1 |
 | Faults: accuracy measurements, scenario timing | 1 or 1b on a machine with KVM (x86-64); 3 for ARM64 hardware |
 | DNS proxy, DNS faults, hostname selectors | 1 |
@@ -1428,6 +1428,16 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 *After Phase 3: usable interactively. First release candidate for internal use.*
 
+## Pulled forward — Port forwarding
+
+**M35a — Port forwarding (DNAT)** (M)
+- Why here: pulled forward from "After V1" on 2026-10-16 (D34), because tests need devices that are reachable from behind the uplink before the automation phase. It builds only on milestones that are done; the second half of the former M35, faults on forwarded connections, stays after V1 as M35b.
+- Scope: `port_forwards` in the configuration, revisioned like the access rules, with its API resource in `api/openapi.yaml` and the generated clients: protocol (tcp or udp), external port or port range on the uplink, target (a device, or an IPv4 address in a local test network), target port (default: the external port), enabled, description, a counter per forward. Entry only on the uplink interface and its current address, which is followed through netlink like masquerade (§2.2). A device target follows the device's address: the DNAT target is an element of a map that identity updates change incrementally, like the identity maps (M7); a device without a known address leaves its forward inactive, and the forward's status says why. nftables: DNAT in the `prerouting` NAT chain (priority -100, next to the service redirect of M6b); in `forward`, a forwarded connection (`ct status dnat`, in from the uplink, out to the target's network) is accepted after the access rules and in front of the access matrix, so the forward itself is the allowance and the matrix default "uplink → test network: deny" holds for everything else. Access rules (D34): a rule whose source is a device, group or network also matches forwarded connections towards it, with the device as responder: its source is matched against the conntrack reply source, its destination against the external peer (the destination `uplink` matches every peer behind the uplink), its ports against the target port; "also cut existing connections" works for them too. Faults do not apply to forwarded connections (M35b); the preview and `explain` say so. Validation (`validation_failed` with the pointer): no two forwards on the same protocol and external port; the external port is never the UI/API port, nor a listen port of the gateway's WireGuard networks (udp), nor 22/tcp in the two-port topology; the target lies in a local test network, never on the gateway itself or in the management network. Hairpin access (a device using the uplink address of a forward) is not supported in M35a. The `DOCKER-USER` accept rule covers the path from the uplink to the test-network bridges (§3.4). UI: the uplink card of the networks view lists the forwards with their counters and edits them through the draft, the preview and commit-confirm; the device detail lists the forwards to the device.
+- Tests: golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder); level 1 — a server namespace behind the uplink reaches a TCP and a UDP listener of a test-network client through a forward, and without a forward its connection is dropped and counted; a forward to a device follows the device's new address within 1 s of an address change; a drop, reject and reset rule on the device stops forwarded connections, and "also cut existing connections" resets an established one; a device fault does not impair a forwarded connection, and the preview says so; a forward on the UI/API port, on a WireGuard listen port or overlapping another forward is rejected with its pointer; a disabled or deleted forward leaves no DNAT and closes the path; Playwright against the mocked API for the forward list and form; level 2 — a forward in the two-port topology, next to a port published by a Docker container.
+- Depends on: M4, M5, M6a, M9, M14.
+
+*After M35a: devices in test networks are reachable from behind the uplink, under the access rules.*
+
 ## Phase 4 — Automation
 
 **M15 — Scenario engine and runs** (L)
@@ -1527,14 +1537,14 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 | M31 VLANs | multiple networks on a trunk (VLAN ports on the network bridges), access matrix between them |
 | M32 IPv6 | RA/SLAAC, DHCPv6, IPv6 rules and faults (lifts the V1 IPv6 block); IPv6 inside WireGuard tunnels and as underlay; IPv6 in BIRD |
 | M34 NTP time faults | see §8 |
-| M35 Port forwarding | DNAT for inbound test traffic; matching a device as responder |
+| M35b Faults on forwarded connections | matching a device as responder, so faults apply to connections that reach it through a port forward (the DNAT itself is M35a, pulled forward, D34) |
 | M36 Further proposals | features from §8 by priority |
 | M38 Deferred from V1 | three-way merge of concurrent revisions; rule captures via NFLOG and live streaming to Wireshark; traceroute, path MTU and iperf3 diagnostics; continuous drift detection with reconcile; native .deb package |
 | M39 Persistent faults for all families | persistent (configuration) DNS faults, TLS cases and DHCP states, and persistent profile activations (`profile_activations`); "permanent" as the default in the add-fault dialog; a run precondition that warns about persistent faults on its target (D31) |
 
 ## V1 Scope Summary
 
-V1 = Phases 1–4 (incl. M4b WireGuard, M4c dynamic routing and M5b), plus M20, M21, M24, M25, M27, M28, M29, M30 — deployed as containers on Ubuntu 24.04/26.04, x86-64 and ARM64.
+V1 = Phases 1–4 (incl. M4b WireGuard, M4c dynamic routing and M5b), plus M35a (port forwarding, pulled forward, D34), M20, M21, M24, M25, M27, M28, M29, M30 — deployed as containers on Ubuntu 24.04/26.04, x86-64 and ARM64.
 
 M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optional for V1. H1 runs when hardware is available; V1 can be released without it, with the ARM64 performance targets marked as unvalidated. No further features from §8 are in V1 (D27).
 
@@ -1622,6 +1632,7 @@ M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optio
 | D30 | API and domain model | `api/openapi.yaml` (OpenAPI 3.0.3 for oapi-codegen/kin-openapi) is normative for the model and API shape; model conventions in §2.15 (maps keyed by UUID, read-only resource views, unit strings, shared overlay/step bodies, one device namespace, strict decoding, internal service API); configured faults only for impairment/MTU/tunnel, everything else as overlays | spec draft 1, independent review 2026-10-02 |
 | D31 | Persistent faults | **V1: only the impairment, MTU and tunnel families are persistent** (configuration); DNS faults, TLS cases, DHCP actions and profile activations exist only as overlays. **After V1 (M39):** every family and profile activations can be persistent. Reason: persistent faults serve a permanent test environment, not the CI use case, and they weaken the clean baseline (`reset` does not remove them; D27 keeps V1 small) | maintainer |
 | D32 | Concurrency model | one state-owner goroutine with immutable snapshots, one coalescing apply loop, executor as single writer with priorities (DNS-set updates, identity updates, plans), non-blocking event bus with bounded subscriber buffers, `context` everywhere, `-race` and goleak in CI (§3.11) | maintainer request 2026-10-03 |
+| D34 | Port forwarding before V1 | **M35a (DNAT from the uplink) is pulled forward** ahead of Phase 4; targets are a device (follows its address) or an IPv4 address in a local test network; entry only on the uplink; access rules apply to forwarded connections with the device as responder; faults on them stay with M35b after V1 (decided 2026-10-16) | maintainer |
 
 ## 7.2 Open
 

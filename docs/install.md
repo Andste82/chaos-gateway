@@ -73,7 +73,7 @@ countdown ends and the setup opens again, with a new token in the log.
 A device in a test network can be made reachable from behind the uplink, or from the management network
 when it has a port of its own: the uplink or management card of the **Networks** page lists the port forwards
 and adds them (protocol, external port or range, a device or an address as the target, target port). A
-forward answers on the entry interface's current address, follows a device's new address by itself, and
+forward answers on the entry interface's addresses (every IPv4 address of it), follows a device's new address by itself, and
 goes through preview and apply like every other change. Things to know:
 
 - The access rules apply to forwarded connections, with the device as the responder: a rule "device →

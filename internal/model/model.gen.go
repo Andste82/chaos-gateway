@@ -3870,10 +3870,11 @@ type Explanation struct {
 			Name *string `json:"name,omitempty"`
 		} `json:"device,omitempty"`
 
-		// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
-		// `management` - on the management interface and its current address, in the three-port topology only
-		// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
-		// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+		// Entry Where the forwarded connections come in: `uplink` - on the uplink interface, on every IPv4 address of
+		// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
+		// topology only (in the two-port topology both are one interface, so `management` is refused as a
+		// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
+		// (plan §2.2).
 		Entry PortForwardEntry `json:"entry"`
 		Id    Uuid             `json:"id"`
 		Name  *string          `json:"name,omitempty"`
@@ -5039,8 +5040,8 @@ type PasswordChange struct {
 // Percentage Example: 0.5%
 type Percentage = string
 
-// PortForward A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on the entry side's
-// address with the protocol and an external port are sent (DNAT) to the target and the target port.
+// PortForward A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on an address of the entry side
+// with the protocol and an external port are sent (DNAT) to the target and the target port.
 // A port range is shifted one to one: `external_port` 8000 to `external_port_end` 8010 with
 // `target_port` 9000 forwards 8000 to 9000, 8001 to 9001, ..., 8010 to 9010.
 //
@@ -5051,8 +5052,8 @@ type Percentage = string
 //
 // Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
 // external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
-// length (`port_range_length`) or a range that ends before it starts (`invalid_port_range`); an
-// external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+// length (`port_range_length`), a range that ends before it starts or a target range that would end
+// past 65535 (`invalid_port_range`); an external port that is the UI/API port (`management.ui_port`, by default the port the API listens
 // on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
 // on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
 // configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a
@@ -5063,10 +5064,11 @@ type PortForward struct {
 	Description *Description `json:"description,omitempty"`
 	Enabled     *bool        `json:"enabled,omitempty"`
 
-	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
-	// `management` - on the management interface and its current address, in the three-port topology only
-	// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
-	// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface, on every IPv4 address of
+	// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
+	// topology only (in the two-port topology both are one interface, so `management` is refused as a
+	// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
+	// (plan §2.2).
 	Entry PortForwardEntry `json:"entry"`
 
 	// ExternalPort The external port, or the first port of the external range.
@@ -5093,10 +5095,11 @@ type PortForward struct {
 	TargetPortEnd *int `json:"target_port_end,omitempty"`
 }
 
-// PortForwardEntry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
-// `management` - on the management interface and its current address, in the three-port topology only
-// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
-// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+// PortForwardEntry Where the forwarded connections come in: `uplink` - on the uplink interface, on every IPv4 address of
+// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
+// topology only (in the two-port topology both are one interface, so `management` is refused as a
+// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
+// (plan §2.2).
 type PortForwardEntry string
 
 // PortForwardPage defines model for PortForwardPage.
@@ -5146,8 +5149,8 @@ type PortForwardTarget struct {
 
 // PortForwardView defines model for PortForwardView.
 type PortForwardView struct {
-	// Config A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on the entry side's
-	// address with the protocol and an external port are sent (DNAT) to the target and the target port.
+	// Config A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on an address of the entry side
+	// with the protocol and an external port are sent (DNAT) to the target and the target port.
 	// A port range is shifted one to one: `external_port` 8000 to `external_port_end` 8010 with
 	// `target_port` 9000 forwards 8000 to 9000, 8001 to 9001, ..., 8010 to 9010.
 	//
@@ -5158,8 +5161,8 @@ type PortForwardView struct {
 	//
 	// Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
 	// external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
-	// length (`port_range_length`) or a range that ends before it starts (`invalid_port_range`); an
-	// external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+	// length (`port_range_length`), a range that ends before it starts or a target range that would end
+	// past 65535 (`invalid_port_range`); an external port that is the UI/API port (`management.ui_port`, by default the port the API listens
 	// on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
 	// on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
 	// configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a
@@ -5327,10 +5330,11 @@ type PreviewFaultLayer string
 
 // PreviewPortForward defines model for PreviewPortForward.
 type PreviewPortForward struct {
-	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
-	// `management` - on the management interface and its current address, in the three-port topology only
-	// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
-	// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface, on every IPv4 address of
+	// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
+	// topology only (in the two-port topology both are one interface, so `management` is refused as a
+	// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
+	// (plan §2.2).
 	Entry PortForwardEntry `json:"entry"`
 
 	// ExternalPorts A port or a range `from-to`.

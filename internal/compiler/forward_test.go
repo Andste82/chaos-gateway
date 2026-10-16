@@ -338,17 +338,78 @@ func TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer(t *testing
 	w.addConfigRule(ruleC, `{name: sensors-mgmt, source: {group: sensors}, destination: {cidr: 192.168.56.0/24}, protocol: tcp, action: reset}`)
 	w.addConfigRule(ruleD, `{name: ssh, source: {global: true}, protocol: tcp, ports: [22], action: allow}`)
 	w.ruleOverlay(`{target: {device: esp32-43}, rule: {action: drop, protocol: tcp, ports: [443]}}`, time.Second)
-	tg := w.compile(nil)
+	checked, matched := forwardedGrid(t, w, w.compile(nil))
+	if matched < 5 || matched == checked {
+		t.Fatalf("the grid is not useful: %d of %d matched", matched, checked)
+	}
+}
+
+// A peer in the management network is not "uplink" for the responder form (plan §2.4), also when
+// allowed_sources is unset (the default: the interface's subnet) or names less than the subnet: a
+// device's "offline" rule (device → uplink: drop) leaves the management side's forward alone, in the
+// kernel's set as in the domain layer that explain asks.
+func TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection(t *testing.T) {
+	for name, sources := range map[string]*[]string{"unset": nil, "narrower": ptr([]string{"192.168.56.5/32"})} {
+		t.Run(name, func(t *testing.T) {
+			w := forwardWorld(t)
+			w.cfg.Management.AllowedSources = sources
+			w.addConfigRule(ruleA, `{name: offline, source: {device: esp32-43}, destination: {uplink: true}, action: drop}`)
+			w.addConfigRule(ruleB, `{name: web-offline, source: {device: esp32-42}, destination: {uplink: true}, protocol: tcp, action: drop}`)
+			tg := w.compile(nil)
+			if tg.HasErrors() {
+				t.Fatalf("problems: %+v", tg.Problems)
+			}
+			if r := tg.Access.Winner(ForwardedTuple(netip.MustParseAddr("192.168.56.20"), netip.MustParseAddr("192.168.56.1"), "tcp", 8443, netip.MustParseAddr("10.10.0.43"), 443)); r != nil {
+				t.Errorf("the rule %s (%s) matches a forwarded connection from the management network", r.Name, r.ID)
+			}
+			if r := tg.Access.Winner(ForwardedTuple(netip.MustParseAddr("198.51.100.7"), netip.MustParseAddr("203.0.113.1"), "tcp", 8080, netip.MustParseAddr("10.10.0.42"), 80)); r == nil || r.ID != ruleB {
+				t.Errorf("a forwarded connection from behind the uplink: %+v, want %s", r, ruleB)
+			}
+			if !slices.Contains(tg.Access.PeerNonUplink, pfx("192.168.56.0/24")) {
+				t.Errorf("the responder form's exclusion %v lacks the management subnet", tg.Access.PeerNonUplink)
+			}
+			var set *SetDef
+			for i := range tg.Nft.Sets {
+				if tg.Nft.Sets[i].Name == peerNonUplinkSetName() {
+					set = &tg.Nft.Sets[i]
+				}
+			}
+			if set == nil || !slices.Contains(set.Elements, "192.168.56.0/24") {
+				t.Fatalf("the set %s: %+v", peerNonUplinkSetName(), set)
+			}
+			ref, orig := 0, 0
+			for _, r := range renderRules(chainOf(t, tg, AccessForwardChain)) {
+				if strings.Contains(r, "ct status dnat") && strings.Contains(r, "@"+peerNonUplinkSetName()) {
+					ref++
+				}
+				if !strings.Contains(r, "ct status dnat") && strings.Contains(r, "@"+peerNonUplinkSetName()) {
+					orig++
+				}
+			}
+			if ref == 0 || orig != 0 {
+				t.Errorf("responder forms on the peer set: %d, original forms: %d\n%s", ref, orig, strings.Join(renderRules(chainOf(t, tg, AccessForwardChain)), "\n"))
+			}
+			if checked, matched := forwardedGrid(t, w, tg); matched == 0 || matched == checked {
+				t.Fatalf("the grid is not useful: %d of %d matched", matched, checked)
+			}
+		})
+	}
+}
+
+// forwardedGrid compares the compiled rules with the domain layer for every enabled forward, a few
+// peers and every external port, with the management facts the engine passes explain (the sources and
+// the interface's subnet). It returns how many tuples it checked and how many a rule decided.
+func forwardedGrid(t *testing.T, w *faultWorld, tg *Target) (checked, matched int) {
+	t.Helper()
 	world, err := domain.NewWorld(w.cfg, w.overlays)
 	if err != nil {
 		t.Fatal(err)
 	}
 	idx, _ := domain.BuildIndex(w.cfg)
 	facts := domain.ForwardFacts{Identity: w.id}
-	mgmt := []netip.Prefix{pfx("192.168.56.0/24")}
+	mgmt := append(append([]netip.Prefix(nil), tg.Management.Sources...), tg.Management.Subnet)
 	entries := map[string]netip.Addr{domain.EntryUplink: netip.MustParseAddr("203.0.113.1"), domain.EntryManagement: netip.MustParseAddr("192.168.56.1")}
-	peers := []string{"198.51.100.7", "203.0.113.50", "8.8.8.8", "192.168.56.20"}
-	checked, matched := 0, 0
+	peers := []string{"198.51.100.7", "203.0.113.50", "8.8.8.8", "192.168.56.20", "192.168.56.5"}
 	for _, f := range domain.Forwards(w.cfg) {
 		if !f.Enabled {
 			continue
@@ -373,9 +434,7 @@ func TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer(t *testing
 			}
 		}
 	}
-	if matched < 5 || matched == checked {
-		t.Fatalf("the grid is not useful: %d of %d matched", matched, checked)
-	}
+	return checked, matched
 }
 
 // A configuration without a forward compiles exactly what it compiled before M35a: no DNAT map, no

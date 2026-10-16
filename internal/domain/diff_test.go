@@ -253,7 +253,7 @@ func TestDiffIsSortedByKind(t *testing.T) {
 			order = append(order, k)
 		}
 	}
-	want := []string{"uplink", "management", "network", "client", "link_peer", "routing", "routing_protocol", "access_matrix", "device", "group", "probe", "access_rule", "fault", "profile", "scenario", "settings"}
+	want := []string{"uplink", "management", "network", "client", "link_peer", "routing", "routing_protocol", "access_matrix", "device", "group", "probe", "access_rule", "port_forward", "fault", "profile", "scenario", "settings"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("order = %v", order)
 	}

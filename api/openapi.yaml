@@ -1179,6 +1179,47 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/AccessRuleView'}
         default: {$ref: '#/components/responses/Problem'}
+  /port-forwards:
+    get:
+      tags: [config]
+      operationId: listPortForwards
+      summary: Configured port forwards with their status and counters
+      description: |
+        The port forwards of the revision (plan §2.2 layer 4, M35a): DNAT from the uplink or the management
+        network to a device or an address in a local test network. Sorted by name, then id.
+      x-milestone: M35a
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Port forwards
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PortForwardPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /port-forwards/{forwardId}:
+    get:
+      tags: [config]
+      operationId: getPortForward
+      summary: One port forward
+      x-milestone: M35a
+      x-required-scope: read
+      parameters:
+        - name: forwardId
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Ref'}
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '200':
+          description: Port forward
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PortForwardView'}
+        default: {$ref: '#/components/responses/Problem'}
   /faults:
     get:
       tags: [config]
@@ -2344,6 +2385,10 @@ components:
           type: array
           description: Evaluation order of `access_rules` (first match wins). Must contain each key of `access_rules` exactly once.
           items: {$ref: '#/components/schemas/Uuid'}
+        port_forwards:
+          type: object
+          description: Port forwards (DNAT from the uplink or the management network, M35a), keyed by UUID; unordered.
+          additionalProperties: {$ref: '#/components/schemas/PortForward'}
         faults:
           type: object
           additionalProperties: {$ref: '#/components/schemas/ConfigFault'}
@@ -3071,6 +3116,17 @@ components:
         a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
         Only an explicit entry of the access matrix from the device's network to the management network
         opens it. Decided by the maintainer on 2026-10-11.
+
+        **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
+        the management network towards a device, so a rule whose source is a device, group or network matches
+        them **with the device as responder**: its source is matched against the conntrack reply source (the
+        forward's target), its destination against the external peer (the destination `uplink` matches every
+        peer behind the uplink; a peer in the management network, which `uplink` excludes, is matched by a
+        `cidr` destination or by a rule without a destination), its ports against the target port. This holds
+        for every rule, configured and overlay, including rules that exist before the forward is added: a rule
+        "device X → uplink: drop" also stops the forwarded connections to X, and `cut_existing` cuts them too.
+        A forwarded connection that no rule decides is accepted by the forward itself, in front of the access
+        matrix. `explain` names the rule that decided a forwarded connection (plan §2.4, D34).
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object
@@ -3115,6 +3171,121 @@ components:
         name: {type: string, example: Control plane access}
         description: {type: string}
         counters: {$ref: '#/components/schemas/Counter'}
+
+    # ============================================================ port forwards (plan §2.2, M35a)
+    PortForwardProtocol:
+      type: string
+      enum: [tcp, udp]
+    PortForwardEntry:
+      type: string
+      enum: [uplink, management]
+      description: |
+        Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
+        `management` - on the management interface and its current address, in the three-port topology only
+        (in the two-port topology both are one interface, so `management` is refused as a duplicate of
+        `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+    PortForwardTarget:
+      type: object
+      description: |
+        Exactly one property. `device` - a device in a local test network (a configured device or a probe;
+        a WireGuard client is refused): the forward follows the device's current address, and while the
+        device has no known address in a local test network the forward is inactive. `address` - an IPv4
+        address in a local test network, never the gateway's own address there.
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        device: {$ref: '#/components/schemas/Ref'}
+        address: {$ref: '#/components/schemas/Ipv4'}
+    PortForward:
+      type: object
+      description: |
+        A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on the entry side's
+        address with the protocol and an external port are sent (DNAT) to the target and the target port.
+        A port range is shifted one to one: `external_port` 8000 to `external_port_end` 8010 with
+        `target_port` 9000 forwards 8000 to 9000, 8001 to 9001, ..., 8010 to 9010.
+
+        The forward itself opens the path through the access matrix; the access rules apply to the
+        forwarded connections with the device as responder (see `AccessRuleBody`). Faults do not apply to
+        forwarded connections (M35b); the preview and `explain` say so. Hairpin access (a device in a test
+        network using the entry address of a forward) is not supported.
+
+        Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
+        external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
+        length (`port_range_length`) or a range that ends before it starts (`invalid_port_range`); an
+        external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+        on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
+        on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
+        configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a
+        target outside the local test networks, on the gateway or in the management network
+        (`invalid_target`). A forward is not lockout-relevant: the ports of the control plane are refused,
+        so applying one never waits for commit-confirm.
+      required: [protocol, entry, external_port, target]
+      properties:
+        name: {$ref: '#/components/schemas/Name'}
+        description: {$ref: '#/components/schemas/Description'}
+        protocol: {$ref: '#/components/schemas/PortForwardProtocol'}
+        entry: {$ref: '#/components/schemas/PortForwardEntry'}
+        external_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: The external port, or the first port of the external range.
+        external_port_end:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: The last port of the external range (inclusive). Absent - a single port.
+        target: {$ref: '#/components/schemas/PortForwardTarget'}
+        target_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: The target port, or the first port of the target range. Default - `external_port`.
+        target_port_end:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: |
+            The last port of the target range (inclusive). Default - the target range is as long as the
+            external one; when given, it must make it so (`port_range_length` otherwise).
+        enabled:
+          type: boolean
+          default: true
+    PortForwardStatus:
+      type: object
+      description: Whether the forward is in effect, and why not.
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [active, inactive]
+        reason:
+          type: string
+          enum: [disabled, device_without_address, device_outside_test_network, management_is_uplink, entry_without_address]
+          description: |
+            Only with `inactive`. `disabled` - `enabled: false`. `device_without_address` - the target device has
+            no known address. `device_outside_test_network` - the device's addresses lie in no local test network.
+            `management_is_uplink` - the management interface is the uplink interface (two-port topology).
+            `entry_without_address` - the entry interface has no IPv4 address now.
+        message:
+          type: string
+          description: 'The reason in words, e.g. "inactive: the device has no address".'
+        target_address:
+          allOf: [{$ref: '#/components/schemas/Ipv4'}]
+          description: The address the connections are sent to now (the device's current address for a device target).
+    PortForwardView:
+      type: object
+      required: [id, config, status]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        config: {$ref: '#/components/schemas/PortForward'}
+        status: {$ref: '#/components/schemas/PortForwardStatus'}
+        counters:
+          allOf: [{$ref: '#/components/schemas/Counter'}]
+          description: |
+            Packets and bytes of the **new connections** the forward sent to its target. Monotonic across
+            applies; `epoch` changes on a restart. Only for the revision the kernel runs; absent while the
+            forward is not in the kernel.
 
     # ============================================================ faults (plan §2.4, §2.5)
     FaultFamily:
@@ -3824,7 +3995,7 @@ components:
           enum: [added, removed, changed]
         kind:
           type: string
-          enum: [uplink, management, network, client, link_peer, routing, routing_protocol, device, group, probe, access_rule, access_matrix, fault, profile, scenario, settings]
+          enum: [uplink, management, network, client, link_peer, routing, routing_protocol, device, group, probe, access_rule, access_matrix, port_forward, fault, profile, scenario, settings]
         id: {type: string}
         name: {type: string}
         path:
@@ -3925,6 +4096,13 @@ components:
             the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
             `warnings` say so. Absent when there is no rule.
           items: {$ref: '#/components/schemas/PreviewRule'}
+        port_forwards:
+          type: array
+          description: |
+            The enabled port forwards after the change (M35a), sorted by name and id. Faults do not apply to
+            forwarded connections (M35b): when a fault would select a forward's target, the `warnings` say so
+            (`faults_not_on_forwards`, with the forward's path). Absent when there is none.
+          items: {$ref: '#/components/schemas/PreviewPortForward'}
         faults:
           type: array
           description: |
@@ -3975,6 +4153,23 @@ components:
         new:
           type: boolean
           description: The rule is not in the kernel yet (a new rule, or one that comes with this revision).
+    PreviewPortForward:
+      type: object
+      required: [id, protocol, entry, external_ports, target, target_ports, faults_apply]
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        name: {type: string}
+        protocol: {$ref: '#/components/schemas/PortForwardProtocol'}
+        entry: {$ref: '#/components/schemas/PortForwardEntry'}
+        external_ports: {type: string, example: '8000-8010', description: 'A port or a range `from-to`.'}
+        target: {type: string, description: 'The target in words (`device esp32-42`, `10.10.0.20`).'}
+        target_ports: {type: string, example: '9000-9010'}
+        faults_apply:
+          type: boolean
+          description: Always false - faults do not apply to forwarded connections (M35b).
+        new:
+          type: boolean
+          description: The forward is not in the active revision, or it changed.
     ApplyResult:
       type: object
       required: [revision, status, generation]
@@ -4091,7 +4286,7 @@ components:
         version: {type: string}
         features:
           type: array
-          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
+          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
           items: {type: string}
         overlay_kinds:
           type: array
@@ -4735,13 +4930,39 @@ components:
             verdict: {$ref: '#/components/schemas/AccessAction'}
             layer:
               type: string
-              enum: [gateway_protection, overlay_rule, config_rule, access_matrix]
+              enum: [gateway_protection, overlay_rule, config_rule, access_matrix, port_forward]
+              description: '`port_forward` - a forwarded connection that no access rule decided is accepted by the forward itself (M35a).'
             rule:
               allOf: [{$ref: '#/components/schemas/Uuid'}]
-              description: The overlay or configured rule that decided; absent for `gateway_protection` and `access_matrix`.
+              description: The overlay or configured rule that decided; absent for `gateway_protection`, `access_matrix` and `port_forward`.
             reason:
               type: string
               description: Which entry or default decided, in words.
+        forward:
+          type: object
+          description: |
+            Set when the traffic is a forwarded connection (M35a): `src` is a peer behind the entry side, `dst`
+            the entry side's address and `port` an external port of an enabled forward. The access verdict is
+            then decided with the forward's target as responder (see `AccessRuleBody`), and `faults` is empty:
+            faults do not apply to forwarded connections (M35b), which `note` says.
+          required: [id, entry, target_port, note]
+          properties:
+            id: {$ref: '#/components/schemas/Uuid'}
+            name: {type: string}
+            entry: {$ref: '#/components/schemas/PortForwardEntry'}
+            target_ip:
+              allOf: [{$ref: '#/components/schemas/Ipv4'}]
+              description: Absent while the forward is inactive (its target device has no address).
+            target_port: {type: integer}
+            device:
+              type: object
+              properties:
+                id: {$ref: '#/components/schemas/Uuid'}
+                name: {type: string}
+            status: {$ref: '#/components/schemas/PortForwardStatus'}
+            note:
+              type: string
+              example: faults do not apply to forwarded connections (M35b)
         faults:
           type: array
           description: |
@@ -5322,6 +5543,14 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/GroupView'}
+        next_cursor: {type: string}
+    PortForwardPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/PortForwardView'}
         next_cursor: {type: string}
     AccessRulePage:
       type: object

@@ -78,6 +78,10 @@ const (
 	CodeDuplicateRoutingKind   = "duplicate_protocol"
 	CodeUnknownRoutingSettings = "missing_routing_settings"
 	CodeReservedOption         = "reserved_option"
+	CodeReservedPort           = "reserved_port"
+	CodeOverlappingForward     = "overlapping_forward"
+	CodePortRangeLength        = "port_range_length"
+	CodeManagementIsUplink     = "management_is_uplink"
 )
 
 // reservedDHCPOptions are the DHCPv4 option codes Kea or the compiler already manage (router,
@@ -114,7 +118,7 @@ func Validate(cfg *model.Configuration, opts ...Option) []model.ValidationError 
 	// resolveRefs rewrote the references inside the configuration; the index must see them
 	idx, _ = newIndex(&work, o)
 
-	v := &validator{cfg: &work, idx: idx}
+	v := &validator{cfg: &work, idx: idx, opts: o}
 	v.run()
 	errs = append(errs, v.errs...)
 	return sortErrors(errs)
@@ -141,6 +145,7 @@ func sortErrors(errs []model.ValidationError) []model.ValidationError {
 type validator struct {
 	cfg  *model.Configuration
 	idx  *Index
+	opts options
 	errs []model.ValidationError
 	// prefixes of all networks, client networks and routes, for the overlap check
 	registry []prefixOwner
@@ -166,6 +171,7 @@ func (v *validator) run() {
 	v.accessMatrix()
 	v.routing()
 	v.accessRules()
+	v.portForwards()
 	v.faults()
 	v.profiles()
 	v.scenarios()

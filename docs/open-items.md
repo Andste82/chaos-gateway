@@ -1443,3 +1443,58 @@ plan:
 - Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
   plan describes the target and `docs/install.md` plus the manual cleanup apply.
 - Needs maintainer: no (decided 2026-10-16).
+
+## Phase 3.1 open items
+
+Phase 3.1 (M35a, port forwarding) is being implemented on the branch `phase-3-1-port-forwarding`. The items below were found
+while implementing it; each records the option that was implemented so the work was not blocked, and what the maintainer may
+want to decide.
+
+### P31-M35a-01 When does a BGP neighbor sit on a forward's entry side?
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a refuses 179/tcp "while a BGP protocol of the routing configuration has a neighbor on
+  the entry side". The BGP protocols of the routing configuration run on WireGuard links (M4c), and a link's neighbor must be
+  the peer in the link's transfer network, so the BGP session itself never arrives on the uplink or the management interface;
+  the link's encrypted traffic does, through whichever of them leads to the peer's endpoint, and that is a matter of the host's
+  routes, not of the configuration.
+- Evidence: `internal/domain/validate_forward.go` (`bgpRuns`), `TestAForwardLeavesTheBGPPortWhileBGPRuns`.
+- Task: implemented (a) — 179/tcp is refused on both entry sides while an enabled BGP protocol is configured (a disabled one,
+  or an OSPF or Babel protocol, leaves the port free). Options: (a) as implemented; (b) refuse it only on the uplink side
+  (WireGuard runs over the uplink in the shipped topologies), so a three-port gateway may forward 179/tcp from the management
+  network; (c) refuse it only when a link's peer endpoint is an address of the entry side's network (needs the host's
+  addresses at validation time, which only the compiler has).
+- Recommendation: (a): it is the safe reading of the plan sentence, and forwarding BGP into a test network is rare.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-02 Forwards overlap whatever their entry side and whether they are enabled
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "no two forwards on the same protocol and external port". A forward on the uplink and
+  one on the management interface (three-port topology) could share a port, since they come in on different interfaces, and
+  a disabled forward does not use its port.
+- Evidence: `internal/domain/validate_forward.go` (`portForwards`), `TestTwoForwardsOnTheSameProtocolMustNotOverlap`.
+- Task: implemented (a) — two forwards on the same protocol whose external ranges overlap are refused
+  (`overlapping_forward`), whatever their entry side and whether they are enabled. Options: (a) as implemented, the plan's
+  wording; (b) compare only forwards of the same entry side; (c) compare only enabled forwards (enabling one may then fail).
+- Recommendation: (a): one external port means one target, which keeps the UI's list and `explain` unambiguous, and enabling a
+  forward never fails.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-03 The UI/API port is refused for udp and on both entry sides
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "the external port is never the UI/API port". The UI and the API listen on TCP only,
+  and in the three-port topology the uplink is not the management interface.
+- Evidence: `internal/domain/validate_forward.go`, `TestAForwardNeverTakesTheUIPort`.
+- Task: implemented (a) — the UI/API port (`management.ui_port`, else the port the API listens on, else the compiler's default
+  443) is refused for tcp and udp on both entry sides. Options: (a) as implemented; (b) refuse it for tcp only; (c) refuse it
+  only on the management side and on the two-port topology's shared interface, like 22/tcp.
+- Recommendation: (a): the plan says "never", and it keeps a forward from shadowing the control plane whatever the topology.
+- Needs maintainer: yes
+- Effort: S

@@ -405,6 +405,9 @@ type CreateOptions struct {
 	Message string
 	By      model.Actor
 	Now     time.Time
+	// Validate are the options of the validation that only the caller knows (the API's listen port,
+	// domain.WithUIPort).
+	Validate []domain.Option
 }
 
 // Create stores a configuration as a new candidate revision. The configuration is validated
@@ -415,7 +418,7 @@ func (s *Store) Create(cfg *model.Configuration, o CreateOptions) (model.Revisio
 	}
 	// stored configurations contain UUIDs only: a rename must not change what a revision means
 	stored, errs := domain.Normalize(cfg)
-	errs = append(errs, domain.Validate(stored)...)
+	errs = append(errs, domain.Validate(stored, o.Validate...)...)
 	if len(errs) > 0 {
 		return model.Revision{}, domain.ValidationErrors(errs)
 	}

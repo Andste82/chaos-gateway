@@ -37,6 +37,9 @@ const (
 	AccessMatrix            = "access_matrix"
 	AccessOverlayRule       = "overlay_rule"
 	AccessConfigRule        = "config_rule"
+	// AccessPortForward is a forwarded connection that no access rule decided: the forward accepts it
+	// in front of the access matrix (M35a).
+	AccessPortForward = "port_forward"
 )
 
 // AccessExplanation is the verdict and what decided it.

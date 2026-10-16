@@ -7,6 +7,7 @@ type Option func(*options)
 
 type options struct {
 	discovered []string
+	uiPort     int
 }
 
 // WithDiscovered tells the validation which devices have been discovered but are not configured.
@@ -15,6 +16,13 @@ type options struct {
 // an unknown_reference.
 func WithDiscovered(ids ...string) Option {
 	return func(o *options) { o.discovered = append(o.discovered, ids...) }
+}
+
+// WithUIPort tells the validation the port the API listens on: the UI/API port when the configuration
+// names no `management.ui_port`, which a port forward must not take (M35a). Without the option, and
+// without `ui_port`, that check is left to the caller that knows the port.
+func WithUIPort(port int) Option {
+	return func(o *options) { o.uiPort = port }
 }
 
 func collectOptions(opts []Option) options {

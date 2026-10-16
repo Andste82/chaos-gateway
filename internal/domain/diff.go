@@ -31,7 +31,7 @@ func Diff(base, next *model.Configuration) []model.DomainChange {
 
 	for _, c := range []struct{ key, kind string }{
 		{"networks", "network"}, {"devices", "device"}, {"groups", "group"}, {"probes", "probe"},
-		{"access_rules", "access_rule"}, {"faults", "fault"}, {"profiles", "profile"}, {"scenarios", "scenario"},
+		{"access_rules", "access_rule"}, {"port_forwards", "port_forward"}, {"faults", "fault"}, {"profiles", "profile"}, {"scenarios", "scenario"},
 	} {
 		d.collection("/"+c.key, c.kind, asMap(a[c.key]), asMap(b[c.key]))
 	}
@@ -68,8 +68,8 @@ func Diff(base, next *model.Configuration) []model.DomainChange {
 
 var kindOrder = map[model.DomainChangeKind]int{
 	"uplink": 0, "management": 1, "network": 2, "client": 3, "link_peer": 4, "routing": 5, "routing_protocol": 6,
-	"access_matrix": 7, "device": 8, "group": 9, "probe": 10, "access_rule": 11, "fault": 12, "profile": 13,
-	"scenario": 14, "settings": 15,
+	"access_matrix": 7, "device": 8, "group": 9, "probe": 10, "access_rule": 11, "port_forward": 12, "fault": 13,
+	"profile": 14, "scenario": 15, "settings": 16,
 }
 
 type field struct {
@@ -108,6 +108,11 @@ func (d *differ) collectNames(cfg *model.Configuration) {
 		}
 	}
 	for id, f := range deref(cfg.Faults) {
+		if f.Name != nil {
+			d.names[id] = *f.Name
+		}
+	}
+	for id, f := range deref(cfg.PortForwards) {
 		if f.Name != nil {
 			d.names[id] = *f.Name
 		}
@@ -251,6 +256,22 @@ func (d *differ) describe(kind, name string, obj any) string {
 				label += " (" + k + " " + d.render(v) + ")"
 			}
 		}
+	}
+	if kind == "port_forward" {
+		// `port forward "web" (tcp/8080 from the uplink to device esp32-42)`
+		m := asMap(obj)
+		ports := d.render(m["external_port"])
+		if end, ok := m["external_port_end"]; ok {
+			ports += "-" + d.render(end)
+		}
+		to := ""
+		for k, v := range asMap(m["target"]) {
+			to = d.render(v)
+			if k == "device" {
+				to = "device " + to
+			}
+		}
+		label += fmt.Sprintf(" (%s/%s from the %s to %s)", d.render(m["protocol"]), ports, d.render(m["entry"]), to)
 	}
 	return label
 }

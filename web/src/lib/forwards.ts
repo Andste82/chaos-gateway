@@ -118,6 +118,11 @@ export interface ForwardContext {
   networks: { name: string; address: string }[];
   /** The management interface is the uplink interface (two-port topology): `management` is refused. */
   twoPort: boolean;
+  /**
+   * The devices a forward can go to (configured ones in a local test network, and the target the forward
+   * edited has), once they are known: another device is refused, as the gateway refuses it.
+   */
+  devices?: string[];
 }
 
 const portHint = 'A port from 1 to 65535, or a range such as 8000-8010.';
@@ -146,6 +151,8 @@ export function forwardFormErrors(f: ForwardForm, ctx: ForwardContext): Partial<
 
   if (f.targetKind === 'device') {
     if (!f.device) e.target = 'Choose the device the connections go to.';
+    else if (ctx.devices && !ctx.devices.includes(f.device))
+      e.target = 'A forward goes to a configured device in a local test network: adopt a discovered device first, or forward to its address.';
   } else {
     const ip = parseIPv4(f.address);
     if (!f.address.trim()) e.target = 'The target address is required.';
@@ -295,14 +302,20 @@ export function forwardRows(base: Record<string, PortForward>, edits: Record<str
   return rows.sort((a, b) => a.p.entry.localeCompare(b.p.entry) || a.p.protocol.localeCompare(b.p.protocol) || a.p.external_port - b.p.external_port);
 }
 
-/** The status of a row in words and its tone: active, inactive and why, or not applied yet. */
+/**
+ * The status of a row in words and its tone: active, inactive and why, or not applied yet. The gateway's
+ * status describes the applied forward, so a changed one says that its change is not applied yet.
+ */
 export function rowStatus(r: ForwardRow): { tone: 'normal' | 'fault' | 'offline'; label: string } {
   if (r.mark === 'NEW') return { tone: 'offline', label: 'not applied yet' };
-  if (r.p.enabled === false && r.mark !== 'DELETED') return { tone: 'offline', label: r.mark ? 'disabled · not applied yet' : 'disabled' };
+  const changed = r.mark === 'CHANGED';
+  if (r.p.enabled === false && r.mark !== 'DELETED') return { tone: 'offline', label: changed ? 'disabled · not applied yet' : 'disabled' };
   const s = r.view?.status;
-  if (!s) return { tone: 'offline', label: 'status unknown' };
+  if (!s) return { tone: 'offline', label: changed ? 'status unknown · not applied yet' : 'status unknown' };
+  if (s.reason === 'disabled') return { tone: 'offline', label: changed ? 'enabled · not applied yet' : 'disabled' };
+  // the applied forward's target address is not the changed one's
+  if (changed) return { tone: s.state === 'active' ? 'normal' : 'fault', label: `${s.state === 'active' ? 'active' : 'inactive'} · change not applied yet` };
   if (s.state === 'active') return { tone: 'normal', label: s.target_address ? `active · to ${s.target_address}` : 'active' };
-  if (s.reason === 'disabled') return { tone: 'offline', label: 'disabled' };
   return { tone: 'fault', label: s.message ?? `inactive: ${s.reason ?? 'unknown reason'}` };
 }
 

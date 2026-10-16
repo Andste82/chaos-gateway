@@ -310,7 +310,10 @@ function value(v: unknown): string {
           <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
             <li v-for="f in preview.port_forwards" :key="f.id" class="rounded-md border border-[#2a323d] bg-surface-2 px-3 py-2 text-[13px]">
               <span class="font-medium">{{ f.name ?? `${f.protocol.toUpperCase()} ${f.external_ports}` }}</span>
-              <span v-if="f.new" class="ml-1.5 rounded border border-accent-strong px-1.5 text-xs text-accent-text">NEW</span>
+              <!-- `new` is set for a changed forward too: the cards call that CHANGED -->
+              <span v-if="f.new" class="ml-1.5 rounded border border-accent-strong px-1.5 text-xs text-accent-text" data-testid="preview-forward-mark">{{
+                draft.baseForwards[f.id] ? 'CHANGED' : 'NEW'
+              }}</span>
               <span class="mono ml-1.5 text-text-2">{{ f.protocol.toUpperCase() }} {{ f.external_ports }} from the {{ entryLabels[f.entry] }} → {{ f.target }}:{{ f.target_ports }}</span>
             </li>
           </ul>

@@ -166,4 +166,30 @@ describe('the port forward form (M35a)', () => {
     expect(counterText({ ...rows[1]!, view: { ...rows[1]!.view!, counters: { ...rows[1]!.view!.counters!, packets: 1 } } })).toBe('1 hit');
     expect(counterText(rows[0]!)).toBe('');
   });
+
+  it("a changed row says that the gateway's status is the applied forward's: enabled, a new target, unknown", () => {
+    const disabled: PortForwardView = { id: WEB, config: { ...web, enabled: false }, status: { state: 'inactive', reason: 'disabled' } };
+    // enabling a disabled forward: it is not enabled until the apply
+    const [enabled] = forwardRows({ [WEB]: { ...web, enabled: false } }, { [WEB]: web }, [disabled]);
+    expect(enabled!.mark).toBe('CHANGED');
+    expect(rowStatus(enabled!)).toEqual({ tone: 'offline', label: 'enabled · not applied yet' });
+    expect(rowStatus({ id: WEB, p: { ...web, enabled: false }, view: disabled })).toEqual({ tone: 'offline', label: 'disabled' });
+    // a new target: the address the gateway forwards to is the old target's, so it is not shown
+    const active: PortForwardView = { id: WEB, config: web, status: { state: 'active', target_address: '10.10.0.42' } };
+    const [moved] = forwardRows({ [WEB]: web }, { [WEB]: { ...web, target: { address: '10.20.0.60' } } }, [active]);
+    expect(rowStatus(moved!)).toEqual({ tone: 'normal', label: 'active · change not applied yet' });
+    const inactive: PortForwardView = { id: WEB, config: web, status: { state: 'inactive', reason: 'device_without_address', message: 'inactive: the device has no address' } };
+    expect(rowStatus({ ...moved!, view: inactive })).toEqual({ tone: 'fault', label: 'inactive · change not applied yet' });
+    expect(rowStatus({ ...moved!, view: undefined })).toEqual({ tone: 'offline', label: 'status unknown · not applied yet' });
+  });
+
+  it('a device target the gateway would refuse is refused under the field: a discovered device, or one outside a test network', () => {
+    const known = { ...ctx, devices: [ESP] };
+    expect(forwardFormErrors(form({}), known).target).toBeUndefined();
+    expect(forwardFormErrors(form({ device: 'd15c0000-0000-4000-8000-3af19c2207b4' }), known).target).toBe(
+      'A forward goes to a configured device in a local test network: adopt a discovered device first, or forward to its address.',
+    );
+    // the devices not loaded yet: the gateway checks
+    expect(forwardFormErrors(form({ device: 'd15c0000-0000-4000-8000-3af19c2207b4' }), ctx).target).toBeUndefined();
+  });
 });

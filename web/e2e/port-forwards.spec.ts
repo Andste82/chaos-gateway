@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FWD_RANGE, FWD_SENSOR, FWD_WEB, MockGateway, toast, withForwards, withNetworks } from './mock';
+import { FWD_ADMIN, FWD_RANGE, FWD_SENSOR, FWD_WEB, MockGateway, toast, withForwards, withNetworks } from './mock';
 
 // M35a, the UI of port forwarding (plan §2.17 "Networks" and "Device detail"): the uplink card and the
 // management card list their forwards with counter and status; add, edit, disable and delete go through
@@ -10,6 +10,7 @@ import { FWD_RANGE, FWD_SENSOR, FWD_WEB, MockGateway, toast, withForwards, withN
 
 const ESP = 'a1b2c3d4-0000-4000-8000-000000000042';
 const SENSOR9 = 'a1b2c3d4-0000-4000-8000-000000000059';
+const DISCOVERED = 'd15c0000-0000-4000-8000-3af19c2207b4';
 
 async function open(page: Page, path = '/networks', gw = withForwards(withNetworks(MockGateway.sample()))) {
   await gw.install(page);
@@ -102,6 +103,7 @@ test('port forwards: a range to an address is shifted one to one; ranges of diff
     target_port: 9100,
   });
   await expect(drawer(page).getByTestId('preview-forwards')).toContainText('UDP 7000-7010 from the uplink → 10.20.0.60:9100-9110');
+  await expect(drawer(page).getByTestId('preview-forward-mark')).toHaveText('NEW');
   await page.getByRole('button', { name: 'Apply revision 43' }).click();
   await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
   await expect(forward(page, 'UDP 7000-7010').getByTestId('forward-summary')).toHaveText('UDP 7000-7010 → 10.20.0.60:9100-9110');
@@ -188,6 +190,8 @@ test('port forwards: the preview says that faults do not apply to forwarded conn
   const forwards = drawer(page).getByTestId('preview-forwards');
   await expect(forwards).toContainText('esp-web');
   await expect(forwards).toContainText('TCP 8080 from the uplink → device ESP32-42:8080');
+  // a changed forward is CHANGED in the preview too, as on the cards
+  await expect(forwards.getByTestId('preview-forward-mark')).toHaveText('CHANGED');
   await expect(drawer(page).getByTestId('preview-forwards-note')).toContainText('Faults do not apply to forwarded connections');
   await expect(drawer(page).getByTestId('preview-warnings')).toContainText(
     'faults do not apply to forwarded connections (M35b): the impairment fault f0000000-0000-4000-8000-000000000001 of device ESP32-42 does not impair the connections through the forward esp-web',
@@ -252,6 +256,7 @@ test('port forwards: in the two-port topology the management card offers no forw
   const dialog = page.getByRole('dialog', { name: 'Add port forward' });
   await expect(dialog.getByRole('group', { name: 'Entry' }).getByRole('button')).toHaveText(['Uplink']);
   await expect(dialog.getByText('Two-port topology: the management network is the uplink.')).toBeVisible();
+  await expect(dialog.getByRole('group', { name: 'Entry' })).toHaveAttribute('aria-describedby', 'forward-entry-hint');
 });
 
 test('port forwards: from the management network in the three-port topology', async ({ page }) => {
@@ -302,4 +307,85 @@ test("port forwards: explain shows a forwarded connection's forward, the access 
   await expect(result.getByTestId('explain-forward')).toContainText('port forward esp-web from the uplink to ESP32-42:80');
   await expect(result.getByTestId('explain-forward')).toContainText('faults do not apply to forwarded connections (M35b)');
   await expect(result).toContainText('No fault applies');
+});
+
+test('port forwards: enabling a disabled forward and changing a target say that the change is not applied yet', async ({ page }) => {
+  const gw = await open(page);
+  const admin = forward(page, 'esp-admin');
+  await admin.getByRole('button', { name: 'Enable esp-admin' }).click();
+  await expect(admin.getByTestId('forward-mark')).toHaveText('CHANGED');
+  await expect(admin.getByTestId('forward-status')).toHaveText('enabled · not applied yet');
+  await expect(admin.getByRole('button', { name: 'Disable esp-admin' })).toBeVisible();
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  expect(await lastPatch(page, gw)).toEqual({ [FWD_ADMIN]: { enabled: null } });
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+  await admin.getByRole('button', { name: 'Undo the changes of esp-admin' }).click();
+
+  // a new target: the gateway's status is the old target's, so its address is not shown
+  const web = forward(page, 'esp-web');
+  await web.getByRole('button', { name: 'Edit esp-web' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit esp-web' });
+  await dialog.getByRole('button', { name: 'Address', exact: true }).click();
+  await dialog.getByLabel('Address', { exact: true }).fill('10.20.0.60');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+  await expect(web.getByTestId('forward-summary')).toHaveText('TCP 8080 → 10.20.0.60:80');
+  await expect(web.getByTestId('forward-status')).toHaveText('active · change not applied yet');
+});
+
+test('port forwards: the status not loaded says so with Try again on the cards and the device detail; the forwards stay listed', async ({ page }) => {
+  const gw = withForwards(withNetworks(MockGateway.sample()));
+  gw.failing['/port-forwards'] = 500;
+  await open(page, '/networks', gw);
+  const error = uplinkCard(page).getByTestId('load-error');
+  await expect(error).toContainText('The status of the port forwards is not loaded: the gateway failed to read /port-forwards');
+  // the configuration lists the forwards; their status is unknown
+  await expect(forward(page, 'esp-web').getByTestId('forward-status')).toHaveText('status unknown');
+  await expect(forward(page, 'esp-web').getByTestId('forward-counter')).toHaveCount(0);
+  delete gw.failing['/port-forwards'];
+  await error.getByRole('button', { name: 'Try again' }).click();
+  await expect(uplinkCard(page).getByTestId('load-error')).toHaveCount(0);
+  await expect(forward(page, 'esp-web').getByTestId('forward-status')).toHaveText('active · to 10.10.0.42');
+
+  gw.failing['/port-forwards'] = 500;
+  await page.goto(`/devices/${ESP}`);
+  const deviceError = page.getByTestId('load-error').filter({ hasText: 'The status of the port forwards is not loaded' });
+  await expect(deviceError).toBeVisible();
+  await expect(page.getByTestId('device-forward').filter({ hasText: 'TCP 8080' })).toContainText('status unknown');
+  delete gw.failing['/port-forwards'];
+  await deviceError.getByRole('button', { name: 'Try again' }).click();
+  await expect(deviceError).toHaveCount(0);
+  await expect(page.getByTestId('device-forward').filter({ hasText: 'TCP 8080' })).toContainText('active · to 10.10.0.42');
+});
+
+test('port forwards: without forwards the cards list none and offer Add', async ({ page }) => {
+  const gw = withForwards(withNetworks(MockGateway.sample()));
+  gw.config = { ...gw.config, port_forwards: {} };
+  await open(page, '/networks', gw);
+  await expect(uplinkCard(page).getByRole('button', { name: 'Add a port forward from the uplink' })).toBeEnabled();
+  await expect(managementCard(page).getByRole('button', { name: 'Add a port forward from the management network' })).toBeEnabled();
+  await expect(page.getByTestId('forwards')).toHaveCount(0);
+  await expect(page.getByTestId('forward')).toHaveCount(0);
+});
+
+test('port forwards: a discovered device is offered no forward; it is adopted first, and the form refuses it as the gateway does', async ({ page }) => {
+  const gw = await open(page, `/devices/${DISCOVERED}`);
+  await expect(page.getByTestId('device-forwards-empty')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Add a port forward to/ })).toHaveCount(0);
+  await expect(page.getByTestId('device-forwards-blocked')).toHaveText('Adopt the device to forward to it, or forward to its address on the networks page.');
+
+  // a link made by hand: the form does not offer the device and says why under the field
+  await page.goto(`/networks?forward=new&device=${DISCOVERED}`);
+  const dialog = page.getByRole('dialog', { name: 'Add port forward' });
+  const select = dialog.getByLabel('Device', { exact: true });
+  await expect(select.locator('option', { hasText: 'dev-3a-f1-9c-22-07-b4' })).toHaveCount(0);
+  await expect(select).toHaveAttribute('aria-describedby', 'forward-device-hint');
+  await dialog.getByLabel('External port').fill('9191');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(select).toHaveAttribute('aria-invalid', 'true');
+  await expect(select).toHaveAttribute('aria-describedby', 'forward-device-error');
+  await expect(dialog.locator('#forward-device-error')).toHaveText(
+    'A forward goes to a configured device in a local test network: adopt a discovered device first, or forward to its address.',
+  );
+  expect(gw.requestsTo('POST', '/revisions')).toHaveLength(0);
 });

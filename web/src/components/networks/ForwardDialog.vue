@@ -62,14 +62,15 @@ const lans = computed(() =>
 );
 /**
  * The devices a forward can go to: the configured ones in a local test network (a discovered device is
- * adopted first, or its address is the target), and the target of the forward edited whatever it is.
+ * adopted first, or its address is the target), and the target the forward edited has whatever it is. A
+ * new forward offers no other device: the gateway refuses a forward to it.
  */
 const deviceChoices = computed(() => {
   const lanIds = new Set(lans.value.map((n) => n.id));
   const out = (devices.data.value ?? [])
     .filter((d) => (d.origin !== 'discovered' || draft.devices[d.id]) && !!d.network && lanIds.has(d.network))
     .map((d) => ({ id: d.id, label: `${draft.devices[d.id]?.name ?? d.name}${d.observed.addresses?.length ? ` (${d.observed.addresses[0]})` : ' (no address)'}` }));
-  const current = form.value.device;
+  const current = before.value?.target.device;
   if (current && !out.some((d) => d.id === current)) out.push({ id: current, label: (devices.data.value ?? []).find((d) => d.id === current)?.name ?? current });
   return out;
 });
@@ -109,7 +110,14 @@ const protocol = computed({ get: () => form.value.protocol, set: (v: string) => 
 const entry = computed({ get: () => form.value.entry, set: (v: string) => (form.value.entry = v as ForwardForm['entry']) });
 const targetKind = computed({ get: () => form.value.targetKind, set: (v: string) => (form.value.targetKind = v as ForwardForm['targetKind']) });
 
-const formErrors = computed(() => forwardFormErrors(form.value, { others: others.value, networks: lans.value, twoPort: !!props.twoPort }));
+const formErrors = computed(() =>
+  forwardFormErrors(form.value, {
+    others: others.value,
+    networks: lans.value,
+    twoPort: !!props.twoPort,
+    devices: devices.data.value ? deviceChoices.value.map((d) => d.id) : undefined,
+  }),
+);
 const server = computed(() => {
   const byField: Partial<Record<ForwardField, string>> = {};
   const general: string[] = [];
@@ -184,9 +192,9 @@ async function submit() {
         </div>
         <div>
           <span class="label">Entry</span>
-          <SegmentedControl v-model="entry" :options="entries" label="Entry" />
-          <p v-if="shown('entry')" class="field-error" role="alert">{{ shown('entry') }}</p>
-          <p v-else-if="twoPort" class="m-0 mt-1 text-xs text-text-3">Two-port topology: the management network is the uplink.</p>
+          <SegmentedControl v-model="entry" :options="entries" label="Entry" :described-by="shown('entry') ? 'forward-entry-error' : twoPort ? 'forward-entry-hint' : undefined" />
+          <p v-if="shown('entry')" id="forward-entry-error" class="field-error" role="alert">{{ shown('entry') }}</p>
+          <p v-else-if="twoPort" id="forward-entry-hint" class="m-0 mt-1 text-xs text-text-3">Two-port topology: the management network is the uplink.</p>
         </div>
       </div>
       <TextField v-model="form.external" label="External port" mono placeholder="8080 or 8000-8010" :error="shown('external')" hint="On the entry side's current address." />
@@ -196,12 +204,20 @@ async function submit() {
         <SegmentedControl v-model="targetKind" :options="targetKinds" label="Target" />
         <div v-if="form.targetKind === 'device'">
           <label class="label" for="forward-device">Device</label>
-          <select id="forward-device" v-model="form.device" class="input" :aria-invalid="!!shown('target')">
+          <select
+            id="forward-device"
+            v-model="form.device"
+            class="input"
+            :aria-invalid="!!shown('target')"
+            :aria-describedby="shown('target') ? 'forward-device-error' : 'forward-device-hint'"
+          >
             <option value="" disabled>Choose a device</option>
             <option v-for="d in deviceChoices" :key="d.id" :value="d.id">{{ d.label }}</option>
           </select>
-          <p v-if="shown('target')" class="field-error">{{ shown('target') }}</p>
-          <p v-else class="m-0 mt-1 text-xs text-text-3">The forward follows the device's address; a discovered device is adopted first.</p>
+          <p v-if="shown('target')" id="forward-device-error" class="field-error">{{ shown('target') }}</p>
+          <p v-else id="forward-device-hint" class="m-0 mt-1 text-xs text-text-3">
+            The forward follows the device's address. A discovered device is adopted first, on its page.
+          </p>
         </div>
         <TextField
           v-else

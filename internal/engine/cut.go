@@ -83,7 +83,7 @@ func sameRules(a, b *compiler.AccessPlan) bool {
 	case a == nil || b == nil:
 		return false
 	}
-	return reflect.DeepEqual(a.Rules, b.Rules) && reflect.DeepEqual(a.GlobalSources, b.GlobalSources) && reflect.DeepEqual(a.NonUplink, b.NonUplink)
+	return reflect.DeepEqual(a.Rules, b.Rules) && reflect.DeepEqual(a.GlobalSources, b.GlobalSources) && reflect.DeepEqual(a.NonUplink, b.NonUplink) && reflect.DeepEqual(a.PeerNonUplink, b.PeerNonUplink)
 }
 
 // cutFlow is a tracked connection a cutting rule owns.

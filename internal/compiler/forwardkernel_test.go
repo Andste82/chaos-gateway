@@ -103,7 +103,7 @@ func TestAForwardReachesTheListenersOfADeviceOnTheRealKernel(t *testing.T) {
 // A drop, reject and reset rule on the device stops forwarded connections to it, counted by the rule; a
 // rule for another port does not. An existing rule "device -> uplink: drop" stops a forwarded connection
 // from behind the uplink once the forward exists, but not one from the management network (which the
-// destination `uplink` excludes).
+// destination `uplink` excludes, whatever allowed_sources says).
 func TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel(t *testing.T) {
 	b := newForwardBed(t)
 	b.w.addForward(fwdWeb, `{name: web, protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}, target_port: 8883}`)
@@ -137,6 +137,20 @@ func TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel(t *testing.T)
 	b.expect(b.srv, "tcp", "203.0.113.1", 8080, "timeout")
 	b.expect(b.srv, "tcp", "203.0.113.1", 8022, "timeout")
 	b.expect(b.m, "tcp", "192.168.56.1", 8443, "ok")
+	// also with allowed_sources unset (the default) or narrower than the management subnet: the
+	// management network is still not "uplink" (the responder form's own exclusion set)
+	allowed := b.w.cfg.Management.AllowedSources
+	for _, sources := range []*[]string{nil, ptr([]string{"192.168.56.2/32"})} {
+		cfg := *b.w.cfg
+		cfg.Management.AllowedSources = sources
+		b.w.cfg = &cfg
+		b.apply()
+		b.expect(b.srv, "tcp", "203.0.113.1", 8080, "timeout")
+		b.expect(b.m, "tcp", "192.168.56.1", 8443, "ok")
+	}
+	cfg := *b.w.cfg
+	cfg.Management.AllowedSources = allowed
+	b.w.cfg = &cfg
 	// an allow rule in front of it opens the forward again
 	b.w.ruleOverlay(`{target: {device: esp32-42}, rule: {action: allow, protocol: tcp, ports: [22]}}`, time.Second)
 	b.apply()

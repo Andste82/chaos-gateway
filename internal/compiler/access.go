@@ -154,6 +154,11 @@ type AccessPlan struct {
 	// responder (plan §2.4, D34): set while a port forward is in the packet path, so a configuration
 	// without one compiles exactly the rules it compiled before M35a.
 	Responder bool `json:"responder,omitempty"`
+	// PeerNonUplink are the prefixes the destination "uplink" excludes in the responder form, where it
+	// is matched against the peer of a forwarded connection: NonUplink and the management network (its
+	// sources and its own subnet, plan §2.4), so a peer in the management network is not "uplink" even
+	// when allowed_sources is unset or narrower. Nil when it adds nothing to NonUplink.
+	PeerNonUplink []netip.Prefix `json:"peer_non_uplink,omitempty"`
 }
 
 // describePath records which traffic the packet path never lets a rule judge: what is switched
@@ -252,13 +257,29 @@ func inPrefixes(ps []netip.Prefix, a netip.Addr) bool {
 // selector with the reply source as the source, the original source as the destination and the reply's
 // source port as the port.
 func (p *AccessPlan) Matches(r *AccessRule, t Tuple) bool {
-	if p.matches(r, t.Src, t.Dst, t.Proto, t.Port) {
+	if p.matches(r, t.Src, t.Dst, t.Proto, t.Port, p.NonUplink) {
 		return true
 	}
-	return p.Responder && t.Responder.IsValid() && respondsTo(r) && p.matches(r, t.Responder, t.Src, t.Proto, t.RespPort)
+	return p.Responder && t.Responder.IsValid() && respondsTo(r) && p.matches(r, t.Responder, t.Src, t.Proto, t.RespPort, p.peerNonUplink())
 }
 
-func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, port int) bool {
+// peerNonUplink is what the destination "uplink" excludes in the responder form (PeerNonUplink).
+func (p *AccessPlan) peerNonUplink() []netip.Prefix {
+	if p.PeerNonUplink != nil {
+		return p.PeerNonUplink
+	}
+	return p.NonUplink
+}
+
+// peerNonUplinkSet is the set the responder form of an "uplink" rule tests the peer against.
+func (p *AccessPlan) peerNonUplinkSet() string {
+	if p.PeerNonUplink != nil {
+		return peerNonUplinkSetName()
+	}
+	return nonUplinkSetName()
+}
+
+func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, port int, nonUplink []netip.Prefix) bool {
 	if r.AnySource {
 		if !inPrefixes(p.GlobalSources, src) {
 			return false
@@ -272,7 +293,7 @@ func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, p
 			return false
 		}
 	case "uplink":
-		if inPrefixes(p.NonUplink, dst) {
+		if inPrefixes(nonUplink, dst) {
 			return false
 		}
 	}
@@ -361,6 +382,12 @@ func scopeSetName(sc model.Scope) string {
 // nonUplinkSetName is the set of destinations a rule with the destination "uplink" excludes.
 func nonUplinkSetName() string {
 	return hashName("anon_uplink", "ipv4_addr", []string{"interval"})
+}
+
+// peerNonUplinkSetName is the set of peers the responder form of a rule with the destination "uplink"
+// excludes (AccessPlan.PeerNonUplink).
+func peerNonUplinkSetName() string {
+	return hashName("anon_uplink_peer", "ipv4_addr", []string{"interval"})
 }
 
 // mergePorts turns the ports and ranges of a selector into sorted disjoint ranges (an nftables
@@ -580,6 +607,15 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 		return
 	}
 	plan.Responder = len(t.Forwards) > 0
+	if plan.Responder {
+		peers := append(append([]netip.Prefix(nil), plan.NonUplink...), t.Management.Sources...)
+		if t.Management.Subnet.IsValid() {
+			peers = append(peers, t.Management.Subnet)
+		}
+		if peers = domain.CollapsePrefixes(peers); !slices.Equal(peers, plan.NonUplink) {
+			plan.PeerNonUplink = peers
+		}
+	}
 	t.Access = plan
 	names := make([]string, 0, len(sets))
 	for n := range sets {
@@ -591,12 +627,16 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 	}
 	for _, r := range plan.Rules {
 		if r.DestKind == "uplink" {
-			s := SetDef{Name: nonUplinkSetName(), Type: "ipv4_addr", Flags: []string{"interval"}}
-			for _, p := range plan.NonUplink {
-				s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
-			}
-			t.accessSets = append(t.accessSets, s)
+			t.accessSets = append(t.accessSets, prefixSet(nonUplinkSetName(), plan.NonUplink))
 			break
+		}
+	}
+	if plan.PeerNonUplink != nil {
+		for _, r := range plan.Rules {
+			if r.DestKind == "uplink" && respondsTo(&r) {
+				t.accessSets = append(t.accessSets, prefixSet(peerNonUplinkSetName(), plan.PeerNonUplink))
+				break
+			}
 		}
 	}
 }
@@ -687,7 +727,7 @@ func (p *AccessPlan) responderExpr(r AccessRule) []any {
 	case "prefixes":
 		e = append(e, eq(ctOriginalIP("saddr"), prefixes(r.Dest)))
 	case "uplink":
-		e = append(e, match(ctOriginalIP("saddr"), "!=", setRef(nonUplinkSetName())))
+		e = append(e, match(ctOriginalIP("saddr"), "!=", setRef(p.peerNonUplinkSet())))
 	}
 	if r.Protocol != "any" {
 		e = append(e, eq(meta("l4proto"), r.Protocol))
@@ -863,4 +903,13 @@ func (p *AccessPlan) CutTransaction(keys []string) ([]byte, error) {
 		}
 	}
 	return json.Marshal(map[string]any{"nftables": cmds})
+}
+
+// prefixSet is an interval set of the prefixes.
+func prefixSet(name string, ps []netip.Prefix) SetDef {
+	s := SetDef{Name: name, Type: "ipv4_addr", Flags: []string{"interval"}}
+	for _, p := range ps {
+		s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
+	}
+	return s
 }

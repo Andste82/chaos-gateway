@@ -204,3 +204,33 @@ jobs:
           cache-to: type=gha,scope=image,mode=max
       - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - run: make test-arm64
+
+  # issue #57 (F4): the executor container mounts nothing into the host. It shares /run/netns with the
+  # host (rshared); a volume mounted inside another volume of the container then propagated into the
+  # host's mount table, and `docker compose down -v` failed with "device or resource busy". The executor
+  # is started from its real compose file (privileged, its volumes and binds), with `sleep` instead of the
+  # executor, since the mounts are made before the process runs.
+  mounts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: chaos-gateway:latest
+          cache-from: type=gha,scope=image
+      - name: the executor's volumes do not leak into the host's mounts
+        working-directory: deploy
+        run: |
+          compose="docker compose -p ci-mounts -f compose.executor.yaml"
+          $compose run -d --name ci-mounts-exec --entrypoint sleep exec infinity
+          sleep 2
+          leaked=$(findmnt -rn -o TARGET | grep '/var/lib/docker/volumes/ci-mounts_' || true)
+          docker rm -f ci-mounts-exec >/dev/null
+          if [ -n "$leaked" ]; then echo "mounts of the executor container in the host's mount table:"; echo "$leaked"; fail=1; fi
+          $compose down -v || { echo "docker compose down -v failed"; fail=1; }
+          exit ${fail:-0}

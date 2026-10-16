@@ -141,9 +141,9 @@ type Kernel struct {
 	holders   map[int]uint64
 	nextInode uint64
 
-	// Fail is consulted before every command; a non-nil result is returned as the command's
-	// outcome (an injected failure). It receives the command with the tool name first.
-	Fail func(argv []string, stdin string) *executor.Result
+	// fail is consulted before every command; a non-nil result is returned as the command's
+	// outcome (an injected failure). It receives the command with the tool name first. SetFail sets it.
+	fail func(argv []string, stdin string) *executor.Result
 	// after is called after every command that was run (not after an injected failure), outside the
 	// simulator's lock: it may run commands of its own, to change the kernel behind the caller's back
 	// (a drift that verify has to find). SetAfter sets it.
@@ -489,6 +489,15 @@ func (k *Kernel) ClearLog() {
 
 // ---- executor.Runner -------------------------------------------------------------------------
 
+// SetFail sets the function consulted before every command (nil removes it): a non-nil result is returned
+// as the command's outcome, an injected failure. It takes the simulator's lock, so a test may change it
+// while the engine's goroutines run commands.
+func (k *Kernel) SetFail(f func(argv []string, stdin string) *executor.Result) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.fail = f
+}
+
 // SetAfter sets the function that is called after every command that was run (nil removes it). It is
 // called outside the simulator's lock and may run commands of its own, to change the kernel behind the
 // caller's back (a drift that verify has to find).
@@ -518,8 +527,8 @@ func (k *Kernel) run(ctx context.Context, c executor.Command) (res executor.Resu
 	defer k.mu.Unlock()
 	argv := append([]string{string(c.Tool)}, c.Args...)
 	k.Log = append(k.Log, strings.Join(argv, " "))
-	if k.Fail != nil {
-		if r := k.Fail(argv, c.Stdin); r != nil {
+	if k.fail != nil {
+		if r := k.fail(argv, c.Stdin); r != nil {
 			return *r, false, nil
 		}
 	}

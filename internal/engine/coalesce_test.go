@@ -243,12 +243,12 @@ func TestAFailedApplyRevertsTheWholeBatchAndEveryWriterGetsApplyFailed(t *testin
 	events, cancel := h.e.Subscribe()
 	defer cancel()
 	// every transaction that has more than the one fault chain that is there fails
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && len(addsAFaultChain.FindAllString(stdin, -1)) > 1 {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	const n = 30
 	bodies := make([]string, n)
 	for i := range bodies {
@@ -270,7 +270,7 @@ func TestAFailedApplyRevertsTheWholeBatchAndEveryWriterGetsApplyFailed(t *testin
 		}
 	}
 	s := h.barrier()
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
 		t.Fatalf("overlays after the failed batch: %+v", s.Overlays)
 	}

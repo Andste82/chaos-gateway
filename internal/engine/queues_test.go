@@ -202,18 +202,18 @@ func TestAFailedApplyStartsNewEpochsForTheQueuesThatWereThere(t *testing.T) {
 	f := h.e.Snapshot().Faults[0]
 	before := h.queueEpoch("br-iot", f.ID, compiler.Upload)
 	var failed atomic.Int32
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && strings.Contains(strings.Join(argv, " "), "-batch") && strings.Contains(stdin, "delay 777ms") {
 			failed.Add(1)
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}
 		}
 		return nil
-	}
+	})
 	if _, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 777ms}"); err == nil {
 		t.Fatal("the write succeeded")
 	}
 	h.barrier()
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if failed.Load() == 0 {
 		t.Fatal("the injected failure never ran")
 	}

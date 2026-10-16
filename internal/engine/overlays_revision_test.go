@@ -164,20 +164,20 @@ func TestAForcedRevisionThatFailsToApplyBringsTheOrphanedOverlaysBack(t *testing
 	defer cancel()
 	rev := h.revision(withoutDevice)
 
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		// only the transaction that removes the fault's chain fails; the restore does not
 		if argv[0] == "nft" && strings.Contains(stdin, "delete") && strings.Contains(stdin, chain) {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.apply(rev, engine.ApplyOptions{Force: true})
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) {
 		t.Fatalf("got %v", err)
 	}
 	s := h.barrier()
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != onDevice.Overlay.Id {
 		t.Fatalf("the overlay of the failed apply is gone: %+v", s.Overlays)
 	}
@@ -442,12 +442,12 @@ func TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved(t *testing.T) {
 	defer cancel()
 
 	// the transaction that removes the fault's chain fails, again and again
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(stdin, "delete") && strings.Contains(stdin, chain) {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelCtx()
 	if err := h.e.Rollback(ctx, r2); err != nil {
@@ -467,7 +467,7 @@ func TestARollbackWhoseApplyFailsStillLeavesTheOrphanRemoved(t *testing.T) {
 	}
 
 	// the retry applies the restore without it
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.clk.Advance(11 * time.Second)
 	// (the observation the rollback triggers may converge the identity once more meanwhile: wait until
 	// nothing moves any more)
@@ -529,12 +529,12 @@ func rollbackDuringAnOverlayWrite(t *testing.T, before func(h *harness), write f
 	}
 	h.e = e
 	t.Cleanup(e.Close)
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if be.failing.Load() && argv[0] == "nft" && stdin != "" {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	h.mustApply(h.revision(nil))
 	h.observe()
 	r2 := h.revision(func(c *model.Configuration) { withDHCPAndDevice(c); lockoutChange(c) })

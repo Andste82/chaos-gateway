@@ -317,14 +317,14 @@ func TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRest
 		t.Fatalf("the candidate has no keys: %v", err)
 	}
 	// the nftables transaction fails: the active revision is restored with its own keys
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.apply(cand)
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if err == nil {
 		t.Fatal("must fail")
 	}

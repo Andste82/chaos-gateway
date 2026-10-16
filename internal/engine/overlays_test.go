@@ -392,20 +392,20 @@ func TestAnOverlayThatCannotBeAppliedIsTakenBackAndItsWriterGetsApplyFailed(t *t
 	before := h.e.Snapshot()
 	ch, cancel := h.e.Subscribe()
 	defer cancel()
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		// only the transaction that creates the second fault's chain fails; the restore does not
 		if argv[0] == "nft" && strings.Contains(stdin, "mark_2") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 20ms}")
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) || !strings.Contains(err.Error(), "injected") {
 		t.Fatalf("got %v", err)
 	}
 	s := h.barrier()
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
 		t.Fatalf("the failed write is still active: %+v", s.Overlays)
 	}
@@ -723,18 +723,18 @@ func TestARenewedLeaseSurvivesAFailedApplyOfAnotherWrite(t *testing.T) {
 	if _, err := h.e.RenewOverlay(context.Background(), res.Overlay.Id, &alice); err != nil { // runs out at 18 s
 		t.Fatal(err)
 	}
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(stdin, "mark_2") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 20ms}")
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) {
 		t.Fatalf("got %v", err)
 	}
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.clk.Advance(3 * time.Second) // 11 s after the write: the first lease would have run out
 	if s := h.barrier(); len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {
 		t.Fatalf("the renewal was undone by the failed apply of another write: %+v", s.Overlays)
@@ -784,20 +784,20 @@ func TestAReplacementThatFailsToApplyKeepsTheRenewalOfTheOverlayItReplaced(t *te
 		t.Fatal(err)
 	}
 	failed := false
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && stdin != "" && !failed { // the transaction of the replacement, not the restore
 			failed = true
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	// the same key with other parameters: a replacement, which restarts the lease, then fails
 	_, err := h.put(alice, "target: {network: IoT}\nfault: {latency: 250ms}\nlease: 4s")
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) {
 		t.Fatalf("got %v", err)
 	}
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.clk.Advance(3 * time.Second) // 11 s: only the renewal keeps the original overlay
 	s := h.barrier()
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {

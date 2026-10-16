@@ -167,13 +167,13 @@ func TestAFailureOfATCOperationRevertsTheOverlayWrite(t *testing.T) {
 	h := startedWithRevision(t)
 	keep := h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 30ms}")
 	var failed atomic.Int32
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && strings.Contains(strings.Join(argv, " "), "-batch") && strings.Contains(stdin, "netem") && strings.Contains(stdin, "delay 777ms") {
 			failed.Add(1)
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.put(bob, "target: {network: Lab}\nfault: {latency: 777ms}")
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) {
@@ -183,7 +183,7 @@ func TestAFailureOfATCOperationRevertsTheOverlayWrite(t *testing.T) {
 		t.Fatal("the injected failure never ran")
 	}
 	s := h.barrier()
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	if len(s.Overlays) != 1 || s.Overlays[0].Id != keep.Overlay.Id {
 		t.Fatalf("overlays after the failure: %+v", s.Overlays)
 	}

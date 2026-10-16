@@ -57,12 +57,12 @@ func newTCEnv(t *testing.T) *tcEnv {
 
 // logTC makes the simulated kernel record the tc batches it gets, and fail nothing.
 func (x *tcEnv) logTC() {
-	x.k.Fail = func(argv []string, stdin string) *executor.Result {
+	x.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && len(argv) > 1 && strings.Contains(strings.Join(argv, " "), "-batch") {
 			x.log = append(x.log, strings.TrimSpace(stdin))
 		}
 		return nil
-	}
+	})
 }
 
 func (x *tcEnv) overlay(body string) model.Overlay {
@@ -627,18 +627,18 @@ func TestATCFailureFailsTheApplyAndNothingIsHandedToTheRetirer(t *testing.T) {
 	pending := len(x.ret.Pending())
 	tgNew := x.compileWith(x.overlay(fmt.Sprintf(devLat, "30ms")))
 	nftsBefore := len(x.k.Commands())
-	x.k.Fail = func(argv []string, stdin string) *executor.Result {
+	x.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && strings.Contains(strings.Join(argv, " "), "-batch") && strings.Contains(stdin, "class replace") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}
 		}
 		return nil
-	}
+	})
 	_, err := apply.ApplyWith(context.Background(), x.exec(), "", tgNew, x.ret)
 	var ae *apply.Error
 	if !asError(err, &ae) || ae.Stage != "execute" {
 		t.Fatalf("%v", err)
 	}
-	x.k.Fail = nil
+	x.k.SetFail(nil)
 	if len(x.ret.Pending()) != pending {
 		t.Errorf("a failed apply changed what is pending")
 	}
@@ -1003,12 +1003,12 @@ func TestAFailedApplyLeavesTheTablesUnknownSoTheRestoreMakesTheLeavesAgain(t *te
 	n := x.overlay(normal)
 	o.Target, o.Fault = n.Target, n.Fault
 	tgNormal := x.compileWith(o)
-	x.k.Fail = func(argv []string, stdin string) *executor.Result {
+	x.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := apply.ApplyWith(context.Background(), x.exec(), "", tgNormal, x.ret)
 	var ae *apply.Error
 	if !asError(err, &ae) || ae.Stage != "execute" {

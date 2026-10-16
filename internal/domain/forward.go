@@ -126,7 +126,7 @@ type ForwardState struct {
 	// Reason is one of the Forward… reasons when the forward is inactive; Message says it in words.
 	Reason, Message string
 	// Target is the address the connections are sent to now: the configured address, or the device's
-	// current address in a local test network. Invalid when there is none.
+	// most current address in a local test network (Identity.Current). Invalid when there is none.
 	Target netip.Addr
 	// Network is the local test network the target lies in, empty when it lies in none.
 	Network string
@@ -138,7 +138,12 @@ func (x *Index) ForwardStatus(f Forward, facts ForwardFacts) ForwardState {
 	st := ForwardState{Target: f.Address}
 	if f.Device != "" {
 		st.Target = netip.Addr{}
-		addrs := facts.Identity.Addresses[f.Device]
+		// the most current address first: an old one that only lingers on with a connection of the device
+		// is no target while the device has a newer one
+		addrs := facts.Identity.Current[f.Device]
+		if addrs == nil {
+			addrs = facts.Identity.Addresses[f.Device]
+		}
 		for _, a := range addrs {
 			if n, ok := x.lanOf(a); ok {
 				st.Target, st.Network = a, n

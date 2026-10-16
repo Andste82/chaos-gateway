@@ -670,3 +670,21 @@ func TestAForwardTheValidationRefusesIsLeftOutWithAWarning(t *testing.T) {
 		})
 	}
 }
+
+// A device with an old address that lingers on next to its new one (Identity.Current puts the new one
+// first) gets its forwarded connections at the new address, even when the old one sorts lower.
+func TestTheDNATMapSendsToTheDevicesMostCurrentAddress(t *testing.T) {
+	w := forwardWorld(t)
+	w.setAddrs(map[string][]string{devESP42: {"10.10.0.11", "10.10.0.61"}, devESP43: {"10.10.0.43"}, devLab: {"10.20.0.50"}})
+	w.id.Current = map[string][]netip.Addr{devESP42: {netip.MustParseAddr("10.10.0.61"), netip.MustParseAddr("10.10.0.11")}}
+	tg := w.compile(nil)
+	if tg.HasErrors() {
+		t.Fatalf("problems: %+v", tg.Problems)
+	}
+	if got := elementsOf(forwardMap(t, tg)); !slices.Contains(got, "wan0 . tcp . 8080 : 10.10.0.61 . 80") {
+		t.Fatalf("the DNAT map: %v", got)
+	}
+	if f := forwardOf(t, tg, fwdWeb); f.Target != netip.MustParseAddr("10.10.0.61") {
+		t.Errorf("the forward's target: %+v", f)
+	}
+}

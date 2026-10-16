@@ -198,12 +198,12 @@ func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 // so, instead of staying silently healthy.
 func TestHealthDegradesWhenObservationFails(t *testing.T) {
 	g := dhcpGateway(t)
-	g.k.Fail = func(argv []string, stdin string) *executor.Result {
+	g.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "conntrack" {
 			return &executor.Result{Exit: 1, Stderr: "conntrack: netlink error\n"}
 		}
 		return nil
-	}
+	})
 	g.observe()
 	hb := g.do("GET", "/system/health", nil, nil, nil).json(t)
 	if hb["status"] != "degraded" {

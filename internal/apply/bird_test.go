@@ -76,16 +76,16 @@ func TestAFailedApplyRestoresThePreviousBirdConfiguration(t *testing.T) {
 	if next.Bird.Text == before.Bird.Text {
 		t.Fatal("the change does not touch the bird configuration")
 	}
-	e.k.Fail = func(argv []string, _ string) *executor.Result {
+	e.k.SetFail(func(argv []string, _ string) *executor.Result {
 		if len(argv) > 0 && argv[0] == "birdc" && strings.Contains(strings.Join(argv, " "), "configure") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	if _, err := apply.Apply(context.Background(), e.exec(), "", next); err == nil {
 		t.Fatal("the injected failure did not surface")
 	}
-	e.k.Fail = nil
+	e.k.SetFail(nil)
 
 	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(next))
 	if err != nil {

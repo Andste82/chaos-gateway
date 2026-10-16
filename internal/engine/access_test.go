@@ -465,12 +465,12 @@ func TestAFailureOfTheCutDoesNotFailTheApplyAndTheWindowIsClosed(t *testing.T) {
 	h.startWith(engine.Config{CutWindow: -1})
 	h.mustApply(h.revision(nil))
 	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "conntrack" && argv[1] == "-D" {
 			return &executor.Result{Exit: 1, Stderr: "conntrack v1.4.8 (conntrack-tools): Operation failed: Operation not permitted\n"}
 		}
 		return nil
-	}
+	})
 	ch, cancel := h.e.Subscribe()
 	defer cancel()
 	res, err := h.put(alice, ruleIoTCut)
@@ -521,13 +521,13 @@ func TestAFailedCloseOfTheCutWindowIsRetriedBeforeItIsReported(t *testing.T) {
 	h.mustApply(h.revision(nil))
 	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
 	var failed int
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if closingTransaction(argv, stdin) && failed < engine.CloseAttempts-1 {
 			failed++
 			return &executor.Result{Exit: 1, Stderr: "netlink: Error: Could not process rule: Device or resource busy\n"}
 		}
 		return nil
-	}
+	})
 	ch, cancel := h.e.Subscribe()
 	defer cancel()
 	if err := h.putAdvancing(alice, ruleIoTCut); err != nil {
@@ -557,12 +557,12 @@ func TestAWindowThatStaysOpenIsReportedAndClosedByTheNextApply(t *testing.T) {
 	h.mustApply(h.revision(nil))
 	h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", conntrackIP, 40001, "203.0.113.10", 8883)))
 	broken := true
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if broken && closingTransaction(argv, stdin) {
 			return &executor.Result{Exit: 1, Stderr: "netlink: Error: Could not process rule: Device or resource busy\n"}
 		}
 		return nil
-	}
+	})
 	ch, cancel := h.e.Subscribe()
 	defer cancel()
 	if err := h.putAdvancing(alice, ruleIoTCut); err != nil {

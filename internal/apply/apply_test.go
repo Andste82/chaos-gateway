@@ -441,12 +441,12 @@ func TestAnInjectedFailureIsAnErrorAndTheNftTransactionIsAtomic(t *testing.T) {
 	hashBefore := e.nftJSON()
 	e.cfg.Uplink.Gateway = ptr("203.0.113.20")
 	next := e.compile()
-	e.k.Fail = func(argv []string, stdin string) *executor.Result {
+	e.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	res, err := apply.Apply(context.Background(), e.exec(), "", next)
 	var ae *apply.Error
 	if !asError(err, &ae) || ae.Stage != "execute" || !strings.Contains(err.Error(), "injected") {
@@ -459,7 +459,7 @@ func TestAnInjectedFailureIsAnErrorAndTheNftTransactionIsAtomic(t *testing.T) {
 		t.Error("a failed transaction changed the table")
 	}
 	// the half-applied routes (executed before nft) are what the engine restores by re-applying
-	e.k.Fail = nil
+	e.k.SetFail(nil)
 	res = e.apply(good)
 	if len(res.Mismatches) != 0 {
 		t.Fatal(res.Mismatches)

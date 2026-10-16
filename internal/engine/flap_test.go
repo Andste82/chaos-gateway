@@ -213,12 +213,12 @@ func TestAFailedFlappingToggleIsTriedAgain(t *testing.T) {
 	h.mustPut(alice, flapBody)
 	f := h.e.Snapshot().Faults[0]
 	var failures atomic.Int32
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "tc" && strings.Contains(stdin, "loss random 100%") && failures.Add(1) == 1 {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\nCommand failed -:1\n"}
 		}
 		return nil
-	}
+	})
 	h.clk.Advance(20 * time.Second)
 	h.wait(func() bool { return failures.Load() >= 1 }, "the toggle never ran")
 	time.Sleep(50 * time.Millisecond)
@@ -227,7 +227,7 @@ func TestAFailedFlappingToggleIsTriedAgain(t *testing.T) {
 	}
 	h.clk.Advance(time.Second)
 	h.waitLoss("br-iot", f.ID, compiler.Upload, 1, "the retry did not toggle")
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.verifyKernelWithOverlays()
 	// two directions, each toggled by the retry, a second after the boundary
 	if log := h.e.FlapLog(); len(log) != 2 || log[0].Late() != time.Second || log[1].Late() != time.Second {

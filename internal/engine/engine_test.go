@@ -272,12 +272,12 @@ func TestAFailedApplyRestoresThePreviousRevision(t *testing.T) {
 		_ = n.FromLanNetwork(lan)
 		(*c.Networks)["1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32"] = n
 	})
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(stdin, "br-extra") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.apply(r2)
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) || !af.Restored || af.Revision != r2 || !strings.Contains(err.Error(), "injected") {
@@ -297,7 +297,7 @@ func TestAFailedApplyRestoresThePreviousRevision(t *testing.T) {
 	if _, exists := h.exLinks()["br-extra"]; exists {
 		t.Error("the bridge of the failed revision is still there")
 	}
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.verifyKernel()
 	ev := events(ch)
 	if !has(ev, engine.EventApplyFailed) || !has(ev, engine.EventApplied) {
@@ -599,12 +599,12 @@ func TestAnObserverEventDuringAnApplyIsContainedInTheNextApply(t *testing.T) {
 	block := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			once.Do(func() { close(entered); <-block })
 		}
 		return nil
-	}
+	})
 	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
 	done := make(chan error, 1)
 	go func() { _, err := h.apply(r2); done <- err }()
@@ -646,7 +646,7 @@ func TestABurstOfObservationsIsCoalesced(t *testing.T) {
 	block := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			mu.Lock()
 			nfts++
@@ -654,7 +654,7 @@ func TestABurstOfObservationsIsCoalesced(t *testing.T) {
 			once.Do(func() { close(entered); <-block })
 		}
 		return nil
-	}
+	})
 	// the first observation starts an apply that blocks; the others arrive meanwhile
 	obs := func(addr string) {
 		host := base.Host
@@ -915,12 +915,12 @@ func TestStartAppliesTheActiveRevisionAndRollsBackAnUnconfirmedOne(t *testing.T)
 func TestFirstApplyFailureWithoutAPreviousRevisionIsReported(t *testing.T) {
 	h := newHarness(t)
 	h.start()
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	_, err := h.apply(h.revision(nil))
 	var af *engine.ErrApplyFailed
 	if !errors.As(err, &af) || af.Restored {
@@ -939,12 +939,12 @@ func TestARestoreThatFailsTooIsReportedAndRetried(t *testing.T) {
 	h.start()
 	r1 := h.mustApply(h.revision(nil)).Revision
 
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
 	_, err := h.apply(r2)
 	var af *engine.ErrApplyFailed
@@ -959,7 +959,7 @@ func TestARestoreThatFailsTooIsReportedAndRetried(t *testing.T) {
 	}
 
 	// nobody is waiting any more; the owner retries on its own after retryDelay (10s)
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	h.clk.Advance(11 * time.Second)
 	s := h.barrier()
 	for i := 0; i < 100 && s.LastError != ""; i++ {
@@ -996,12 +996,12 @@ func TestCloseWakesWaiters(t *testing.T) {
 	block := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			once.Do(func() { close(entered); <-block })
 		}
 		return nil
-	}
+	})
 	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
 	res := make(chan error, 1)
 	go func() { _, err := h.e.Apply(context.Background(), r2, engine.ApplyOptions{}); res <- err }()
@@ -1145,7 +1145,7 @@ func TestAFailedApplyWithAnObservationInBetweenIsRestoredAndReportedRight(t *tes
 	block := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") && strings.Contains(stdin, "203.0.113.20") == false {
 			// the first transaction after the revision starts blocks, then fails
 			var first bool
@@ -1155,7 +1155,7 @@ func TestAFailedApplyWithAnObservationInBetweenIsRestoredAndReportedRight(t *tes
 			}
 		}
 		return nil
-	}
+	})
 	r2 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
 	done := make(chan error, 1)
 	go func() { _, err := h.apply(r2); done <- err }()
@@ -1181,7 +1181,7 @@ func TestAFailedApplyWithAnObservationInBetweenIsRestoredAndReportedRight(t *tes
 	if s.Revision == r2 || h.st.ActiveID() == r2 {
 		t.Error("the failed revision became active")
 	}
-	h.k.Fail = nil
+	h.k.SetFail(nil)
 	// the kernel runs the committed revision with the observed address
 	if s.Applied.Uplink.Addr.String() != "198.51.100.5/24" || s.LastError != "" || s.Applied.Revision != s.Revision {
 		t.Errorf("applied %+v, error %q", s.Applied, s.LastError)
@@ -1195,7 +1195,7 @@ func TestAFailedApplyWithoutAWaiterIsRetried(t *testing.T) {
 	h.mustApply(h.revision(nil))
 	var fails int
 	var mu sync.Mutex
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			mu.Lock()
 			defer mu.Unlock()
@@ -1205,7 +1205,7 @@ func TestAFailedApplyWithoutAWaiterIsRetried(t *testing.T) {
 			}
 		}
 		return nil
-	}
+	})
 	base := h.e.Snapshot()
 	host := base.Host
 	links := append([]compiler.HostLink(nil), host.Links...)
@@ -1239,12 +1239,12 @@ func TestAFailedApplyWithoutAWaiterIsRetried(t *testing.T) {
 func TestAFirstRevisionThatFailedIsNotAppliedAgainByLaterObservations(t *testing.T) {
 	h := newHarness(t)
 	h.start()
-	h.k.Fail = func(argv []string, stdin string) *executor.Result {
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
 		if argv[0] == "nft" && strings.Contains(strings.Join(argv, " "), "-f") {
 			return &executor.Result{Exit: 1, Stderr: "Error: injected\n"}
 		}
 		return nil
-	}
+	})
 	if _, err := h.apply(h.revision(nil)); err == nil {
 		t.Fatal("must fail")
 	}

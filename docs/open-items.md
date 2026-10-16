@@ -1568,3 +1568,20 @@ want to decide.
 - Recommendation: (a): it follows a DHCP renewal within the kernel, and a second address on the uplink is the operator's own.
 - Needs maintainer: yes
 - Effort: S
+
+### P31-M35a-08 The explain card of the faults screen asks for a device as the source
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "the preview and `explain` say that faults do not apply to forwarded connections".
+  `GET /explain` answers a forwarded connection when `src` is a peer behind the entry side and `dst` the entry side's address
+  (step 1). The explain card of the faults screen (M12) takes a device of the lab as the source, so it never asks for such a
+  connection; it shows the forward, the access layer `port_forward` and the note when the gateway's answer has them.
+- Evidence: `web/src/components/faults/ExplainCard.vue`, `web/e2e/port-forwards.spec.ts` ("explain shows a forwarded
+  connection's forward …").
+- Task: implemented (a) — the card renders the forward of an answer; a forwarded connection is explained through the API
+  (`chaosctl` or `GET /explain?src=…&dst=…&protocol=…&port=…`). Options: (a) as implemented; (b) a source choice "an address
+  behind the uplink or the management network" in the card, whose destination defaults to the entry side's address.
+- Recommendation: (b) with the flow view (M26), where a forwarded connection can be picked and explained.
+- Needs maintainer: yes
+- Effort: S

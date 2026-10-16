@@ -10,6 +10,7 @@ import type {
   MatrixEntry,
   Network,
   NetworkView,
+  PortForward,
   Profile,
   RevisionWithConfiguration,
   Routing,
@@ -17,6 +18,7 @@ import type {
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
+import { forwardChanges, forwardTitle } from '../lib/forwards';
 import { faultChips, describeScope, describeTunnel, impairmentCombines, impairmentKeys, impairmentOf, withImpairment, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { networkChanges, protocolChanges, routingSettingsChanges, withoutClients } from '../lib/networkChanges';
@@ -75,6 +77,8 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
   // a switch that is not set is off (the other side's value says it is a switch)
   if (v === undefined || v === null) return typeof other === 'boolean' ? 'no' : '—';
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  // a forward's target is a device or an address
+  if (key === 'target' && typeof v === 'object' && 'address' in v) return String((v as { address: string }).address);
   if (key === 'source' || key === 'target') return describeScope(v as Parameters<typeof describeScope>[0], names);
   if (key === 'destination') return describeDestination(v as Parameters<typeof describeDestination>[0], names);
   if (key === 'action') return accessLabels[v as keyof typeof accessLabels] ?? String(v);
@@ -107,7 +111,7 @@ export interface EditOrigin {
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing';
+  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -116,7 +120,7 @@ export interface DraftChange extends FieldChange {
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
  * access rules, their order, configured faults, custom profiles, adopted devices, networks (P3-M14-01), WireGuard clients, the access
- * matrix and the routing (P3-M14-01), edited
+ * matrix, the routing (P3-M14-01) and the port forwards (M35a), edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -147,6 +151,8 @@ export const useDraftStore = defineStore('draft', () => {
   const networks = ref<Record<string, Network | null>>({});
   /** The routing (plan §2.2.2: the BIRD settings and the protocols), when it was edited (P3-M14-01). */
   const routing = ref<Routing>();
+  /** Port forwards added, changed or deleted (`null`), by id (M35a). */
+  const forwards = ref<Record<string, PortForward | null>>({});
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
@@ -160,6 +166,7 @@ export const useDraftStore = defineStore('draft', () => {
       Object.keys(clients.value).length > 0 ||
       Object.keys(networks.value).length > 0 ||
       routing.value !== undefined ||
+      Object.keys(forwards.value).length > 0 ||
       matrix.value !== undefined,
   );
 
@@ -481,6 +488,35 @@ export const useDraftStore = defineStore('draft', () => {
     if (before) setProtocol(id, before);
   }
 
+  const baseForwards = computed<Record<string, PortForward>>(() => baseConfig.value?.port_forwards ?? {});
+  /** The port forwards as the draft has them: base with the edits. */
+  const effectiveForwards = computed<Record<string, PortForward>>(() => {
+    const out: Record<string, PortForward> = { ...baseForwards.value };
+    for (const [id, f] of Object.entries(forwards.value)) {
+      if (f === null) delete out[id];
+      else out[id] = f;
+    }
+    return out;
+  });
+
+  /** A port forward added, changed or deleted (`null`); a forward back at its base is no change. */
+  function setForward(id: string, forward: PortForward | null) {
+    clearServerErrors(id);
+    const before = baseForwards.value[id];
+    if ((forward === null && before === undefined) || (forward !== null && before !== undefined && jsonEqual(before, forward))) {
+      const { [id]: _drop, ...rest } = forwards.value;
+      forwards.value = rest;
+    } else {
+      forwards.value = { ...forwards.value, [id]: forward === null ? null : cloneJSON(forward) };
+    }
+  }
+
+  /** Undoes the edit or the deletion of a forward of the base. */
+  function restoreForward(id: string) {
+    const before = baseForwards.value[id];
+    if (before) setForward(id, before);
+  }
+
   /** Flips the policy of one pair of the matrix (`toggleCell`); a matrix back at its base is no change. */
   function toggleMatrix(from: string, to: string) {
     const next = toggleCell(effectiveMatrix.value, from, to, baseNetworks.value);
@@ -611,6 +647,11 @@ export const useDraftStore = defineStore('draft', () => {
         for (const c of protocolChanges(a, b, label)) out.push({ kind: 'routing', id: pid, name: `protocol ${b?.name ?? a?.name ?? pid}`, ...c });
       }
     }
+    for (const [id, f] of Object.entries(forwards.value)) {
+      const before = baseForwards.value[id];
+      const name = forwardTitle(f ?? before!);
+      for (const c of forwardChanges(before, f, names.device)) out.push({ kind: 'forward', id, name, ...c });
+    }
     if (matrix.value) {
       for (const c of matrixChanges(baseMatrix.value, matrix.value, baseNetworks.value, { network: netName, client: clientName })) {
         out.push({ kind: 'matrix', id: c.field, name: 'Access between networks', ...c });
@@ -628,6 +669,7 @@ export const useDraftStore = defineStore('draft', () => {
     const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
     const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
     const networkIds = new Set(cs.filter((c) => c.kind === 'network').map((c) => c.id));
+    const forwardIds = new Set(cs.filter((c) => c.kind === 'forward').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
@@ -635,6 +677,7 @@ export const useDraftStore = defineStore('draft', () => {
       deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
       networkIds.size ? `${networkIds.size} ${networkIds.size === 1 ? 'network' : 'networks'}` : '',
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
+      forwardIds.size ? `${forwardIds.size} port ${forwardIds.size === 1 ? 'forward' : 'forwards'}` : '',
       cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
       cs.some((c) => c.kind === 'routing') ? 'the routing' : '',
     ].filter(Boolean);
@@ -703,6 +746,12 @@ export const useDraftStore = defineStore('draft', () => {
       ((n.clients ??= {}) as Record<string, unknown>)[id] = p;
     }
     if (Object.keys(np).length) out.networks = np;
+    const wp: Record<string, unknown> = {};
+    for (const [id, f] of Object.entries(forwards.value)) {
+      const p = createMergePatch(baseForwards.value[id], f);
+      if (p !== undefined) wp[id] = p;
+    }
+    if (Object.keys(wp).length) out.port_forwards = wp;
     if (routing.value) {
       const p = createMergePatch(baseConfig.value?.routing, routing.value);
       if (p !== undefined) out.routing = p as ConfigurationPatch;
@@ -768,6 +817,7 @@ export const useDraftStore = defineStore('draft', () => {
     compare('profile', profiles.value, old?.profiles ?? {}, theirs.profiles ?? {}, named);
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
     compare('network', networks.value, networkSettings(old), networkSettings(theirs), named);
+    compare('forward', forwards.value, old?.port_forwards ?? {}, theirs.port_forwards ?? {}, forwardTitle);
     if (routing.value) {
       const count = out.length;
       compare('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: theirs.routing ?? {} }, () => 'routing');
@@ -854,6 +904,7 @@ export const useDraftStore = defineStore('draft', () => {
     profiles.value = reapply('profile', profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
     devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
     networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
+    forwards.value = reapply('forward', forwards.value, old?.port_forwards ?? {}, rev.configuration.port_forwards ?? {});
     if (routing.value) {
       const r = reapply('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: rev.configuration.routing ?? {} }).routing;
       routing.value = r && !jsonEqual(r, rev.configuration.routing ?? {}) ? r : undefined;
@@ -905,6 +956,7 @@ export const useDraftStore = defineStore('draft', () => {
     clients.value = {};
     networks.value = {};
     routing.value = undefined;
+    forwards.value = {};
     matrix.value = undefined;
     portsText.value = {};
     serverErrors.value = {};
@@ -949,6 +1001,12 @@ export const useDraftStore = defineStore('draft', () => {
         (out[n[1]!] ??= {})[n[2] ?? 'network'] = e.message ?? 'not valid';
         continue;
       }
+      // a port forward keeps the pointer below it (its dialog maps it to its fields; `forward` for the forward as a whole)
+      const f = /^\/port_forwards\/([^/]+)(?:\/(.+))?$/.exec(e.path ?? '');
+      if (f) {
+        (out[f[1]!] ??= {})[f[2] ?? 'forward'] = e.message ?? 'not valid';
+        continue;
+      }
       const r = /^\/routing(?:\/protocols\/([^/]+))?(?:\/(.+))?$/.exec(e.path ?? '');
       if (r) {
         (out[r[1] ?? 'routing'] ??= {})[r[2] ?? (r[1] ? 'protocol' : 'routing')] = e.message ?? 'not valid';
@@ -983,6 +1041,7 @@ export const useDraftStore = defineStore('draft', () => {
     clients,
     networks,
     routing,
+    forwards,
     matrix,
     portsText,
     dirty,
@@ -994,6 +1053,8 @@ export const useDraftStore = defineStore('draft', () => {
     effectiveClients,
     effectiveNetworks,
     effectiveRouting,
+    effectiveForwards,
+    baseForwards,
     baseNetwork,
     baseRouting,
     baseClient,
@@ -1017,6 +1078,8 @@ export const useDraftStore = defineStore('draft', () => {
     setRouting,
     setProtocol,
     restoreProtocol,
+    setForward,
+    restoreForward,
     toggleMatrix,
     clientName,
     setPortsText,

@@ -26,6 +26,9 @@ import type {
   NetworkView,
   Overlay,
   OverlayRequest,
+  PortForward,
+  PortForwardView,
+  PreviewPortForward,
   PreflightReport,
   Preview,
   ValidationError,
@@ -203,6 +206,30 @@ export function withRules(m: MockGateway, now = Date.now()): MockGateway {
       state: 'effective',
     },
   ];
+  return m;
+}
+
+export const FWD_WEB = 'e1000000-0000-4000-8000-000000000001';
+export const FWD_RANGE = 'e1000000-0000-4000-8000-000000000002';
+export const FWD_SENSOR = 'e1000000-0000-4000-8000-000000000003';
+export const FWD_ADMIN = 'e1000000-0000-4000-8000-000000000004';
+
+/**
+ * Port forwards of the sample lab (M35a): from the uplink TCP 8080 to ESP32-42:80 (active, counted), a UDP
+ * range 8000-8010 to 10.20.0.50:9000-9010, TCP 2222 to Sensor-09 (it has no address: inactive), and from
+ * the management network TCP 8443 to ESP32-42:443 (disabled).
+ */
+export function withForwards(m: MockGateway): MockGateway {
+  m.config = {
+    ...m.config,
+    port_forwards: {
+      [FWD_WEB]: { name: 'esp-web', protocol: 'tcp', entry: 'uplink', external_port: 8080, target: { device: 'a1b2c3d4-0000-4000-8000-000000000042' }, target_port: 80 },
+      [FWD_RANGE]: { protocol: 'udp', entry: 'uplink', external_port: 8000, external_port_end: 8010, target: { address: '10.20.0.50' }, target_port: 9000 },
+      [FWD_SENSOR]: { name: 'sensor-ssh', protocol: 'tcp', entry: 'uplink', external_port: 2222, target: { device: 'a1b2c3d4-0000-4000-8000-000000000059' }, target_port: 22 },
+      [FWD_ADMIN]: { name: 'esp-admin', protocol: 'tcp', entry: 'management', external_port: 8443, target: { device: 'a1b2c3d4-0000-4000-8000-000000000042' }, target_port: 443, enabled: false },
+    },
+  };
+  m.forwardViews = { [FWD_WEB]: { counters: { packets: 12, bytes: 720, epoch: 1 } }, [FWD_RANGE]: { counters: { packets: 3, bytes: 240, epoch: 1 } } };
   return m;
 }
 
@@ -438,6 +465,8 @@ export class MockGateway {
   failApply?: 'apply' | 'verify';
   /** The next POST /overlays is refused with 422 and these errors. */
   rejectOverlay?: ValidationError[];
+  /** What GET /port-forwards adds to a forward of the configuration (its counter, a status), by id. */
+  forwardViews: Record<string, Partial<PortForwardView>> = {};
   /** The answer of GET /explain. */
   explanation?: Explanation;
   /** DHCP leases by network id (GET /networks/{id}/leases). */
@@ -677,6 +706,12 @@ export class MockGateway {
         body = ['[Interface]', `PrivateKey = ${key(`remote ${netExp[1]}`)}`, `Address = ${n.peer?.address ?? ''}/31`, '', '[Peer]', `PublicKey = ${key(`link ${netExp[1]}`)}`, `AllowedIPs = ${n.address}`, `Endpoint = 192.168.1.57:${n.listen_port}`, ''].join('\n');
       }
       return route.fulfill({ status: 200, headers: { ...headers, 'Content-Disposition': `attachment; filename="${n.name}.${format === 'bird' ? 'bird' : 'conf'}"` }, contentType: 'text/plain; charset=utf-8', body });
+    }
+    if (path === '/port-forwards') return json(200, this.page(this.forwardList(), url));
+    const fwd = /^\/port-forwards\/([^/]+)$/.exec(path);
+    if (fwd) {
+      const f = this.forwardList().find((x) => x.id === fwd[1] || x.config.name === decodeURIComponent(fwd[1]!));
+      return f ? json(200, f) : problem(404, 'not_found', 'no such port forward');
     }
     if (path === '/routing') return json(200, this.config.routing ?? this.routing);
     if (path === '/system/interfaces') return json(200, this.page(this.hostInterfaces, url));
@@ -968,8 +1003,89 @@ export class MockGateway {
     if ((patch as { access_matrix?: unknown }).access_matrix) {
       domain.push({ op: 'changed', kind: 'access_matrix', path: '/access_matrix', summary: 'access between networks changed' });
     }
+    const fwds = (patch as { port_forwards?: Record<string, Record<string, unknown> | null> }).port_forwards ?? {};
+    for (const [key, v] of Object.entries(fwds)) {
+      const before = this.config.port_forwards?.[key];
+      const name = String(v?.['name'] ?? before?.name ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'port_forward', id: key, name, path: `/port_forwards/${key}`, summary: `port forward ${name} ${op}` });
+    }
+    const { port_forwards, warnings } = this.previewForwards(patch);
     const references = this.referencesOf(patch);
-    return { revision: id, base: this.revisionBase(id), domain, linux: this.previewLinux, requires_confirm: this.requiresConfirm(patch), ...(references.length ? { references } : {}) };
+    return {
+      revision: id,
+      base: this.revisionBase(id),
+      domain,
+      linux: this.previewLinux,
+      requires_confirm: this.requiresConfirm(patch),
+      ...(references.length ? { references } : {}),
+      ...(port_forwards.length ? { port_forwards } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+
+  /** The forward's target in words, as the gateway says it: "device ESP32-42", "10.20.0.50". */
+  private forwardTarget(f: PortForward): string {
+    if (f.target.device) return `device ${this.devices.find((d) => d.id === f.target.device)?.name ?? f.target.device}`;
+    return f.target.address ?? '';
+  }
+
+  /** The port forwards of the active configuration with their status (like the gateway's) and counter. */
+  forwardList(): PortForwardView[] {
+    return Object.entries(this.config.port_forwards ?? {}).map(([id, config]) => {
+      let status: PortForwardView['status'];
+      const dev = config.target.device ? this.devices.find((d) => d.id === config.target.device) : undefined;
+      const address = config.target.device ? dev?.observed.addresses?.[0] : config.target.address;
+      if (config.enabled === false) status = { state: 'inactive', reason: 'disabled', message: 'inactive: the forward is disabled' };
+      else if (!address) status = { state: 'inactive', reason: 'device_without_address', message: 'inactive: the device has no address' };
+      else status = { state: 'active', target_address: address };
+      return { id, config, status, ...this.forwardViews[id] };
+    });
+  }
+
+  /**
+   * The enabled forwards after the candidate, and a warning for each fault that selects a forward's target
+   * device (a configured fault or a fault overlay of the device), as the gateway's preview has them.
+   */
+  previewForwards(patch: unknown): { port_forwards: PreviewPortForward[]; warnings: { code: string; message: string; path: string }[] } {
+    const cfg = applyMergePatch(this.config, patch);
+    const port_forwards: PreviewPortForward[] = [];
+    const warnings: { code: string; message: string; path: string }[] = [];
+    const range = (from: number, to?: number) => (to !== undefined && to !== from ? `${from}-${to}` : String(from));
+    for (const [id, f] of Object.entries(cfg.port_forwards ?? {})) {
+      if (f.enabled === false) continue;
+      const tp = f.target_port ?? f.external_port;
+      const tEnd = f.target_port_end ?? tp + ((f.external_port_end ?? f.external_port) - f.external_port);
+      const before = this.config.port_forwards?.[id];
+      port_forwards.push({
+        id,
+        ...(f.name ? { name: f.name } : {}),
+        protocol: f.protocol,
+        entry: f.entry,
+        external_ports: range(f.external_port, f.external_port_end),
+        target: this.forwardTarget(f),
+        target_ports: range(tp, tEnd),
+        faults_apply: false,
+        ...(!before || JSON.stringify(before) !== JSON.stringify(f) ? { new: true } : {}),
+      });
+      const dev = f.target.device;
+      if (!dev) continue;
+      const faults = [
+        ...Object.entries(cfg.faults ?? {})
+          .filter(([, x]) => x.source?.device === dev && x.enabled !== false)
+          .map(([fid, x]) => x.name ?? fid),
+        ...this.overlays.filter((o) => o.kind === 'fault' && o.target?.device === dev).map((o) => o.id),
+      ];
+      for (const fault of faults) {
+        warnings.push({
+          code: 'faults_not_on_forwards',
+          path: `/port_forwards/${id}`,
+          message: `faults do not apply to forwarded connections (M35b): the impairment fault ${fault} of ${this.forwardTarget(f)} does not impair the connections through the forward ${f.name ?? id}`,
+        });
+      }
+    }
+    port_forwards.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id));
+    return { port_forwards, warnings };
   }
 
   /**

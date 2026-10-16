@@ -6,11 +6,11 @@ import { useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
 import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
-import { listAccessRules, listFaults, listGroups, listNetworks, listProfiles } from '../api/generated/hooks/config/config';
+import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles } from '../api/generated/hooks/config/config';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, PortForwardView, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { useDraftStore } from '../stores/draft';
@@ -71,6 +71,16 @@ export function useWireGuardClients(network: () => string | undefined) {
     queryFn: ({ signal }) => fetchAll<WireGuardClientView>((cursor) => listWireGuardClients(network()!, { limit: 500, cursor }, { signal }), signal),
     enabled: computed(() => !!network()),
     // the handshakes and the bytes change without an event
+    refetchInterval: 5_000,
+  });
+}
+
+/** The port forwards of the active revision with their status and counter (M35a). */
+export function usePortForwards() {
+  return useQuery({
+    queryKey: ['port-forwards', 'all'],
+    queryFn: ({ signal }) => fetchAll<PortForwardView>((cursor) => listPortForwards({ limit: 500, cursor }, { signal }), signal),
+    // the counters grow and a device target's address changes without an event of the forward
     refetchInterval: 5_000,
   });
 }

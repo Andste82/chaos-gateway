@@ -33,7 +33,9 @@ jobs:
           if-no-files-found: ignore
 
   # Level 2 (plan §4.5, M5b): the gateway in a QEMU VM from the Ubuntu cloud image, host setup, Docker
-  # and the executor container inside, traffic from a client namespace through the VM. Hosted
+  # and the executor container inside, traffic from a client namespace through the VM, and a port forward
+  # (M35a) to the client namespace next to a port a container publishes (the go toolchain above builds the
+  # test's listener). Hosted
   # runners offer /dev/kvm (plan Q1). Run it by hand on a branch with
   # `gh workflow run nightly.yml --ref <branch>`.
   appliance:

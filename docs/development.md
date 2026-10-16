@@ -463,7 +463,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `management_overlaps_network` | The management network's sources overlap a test network's subnet. |
 | `rule_order` | An access control rule is listed twice, or `access_rule_order` omits one that exists. |
 | `ports_require_protocol` | `ports`/`port_ranges` are set without `protocol` being `tcp` or `udp`. |
-| `invalid_port_range` | A port range's end comes before its start. |
+| `invalid_port_range` | A port range's end comes before its start; a port forward's target range would end past 65535. |
 | `reset_requires_tcp` | An access rule's action `reset` is used with a protocol other than `tcp`. |
 | `cut_existing_requires_tcp` | `cut_existing` is set on a rule whose protocol is neither `tcp` nor `any`. |
 | `duplicate_public_key` | A WireGuard public key (provided or generated) is already used by another peer. |
@@ -476,7 +476,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `unknown_remote_network` | A remote network scope's CIDR is not inside a client network or a route via a link. |
 | `invalid_step_reference` | A scenario step's `remove` names a step that does not exist, created no overlay, or runs later. |
 | `target_widened` | A step's `target` is broader than the scenario's own target. |
-| `invalid_target` | A scope is not valid where it is used (wrong kind for that context). |
+| `invalid_target` | A scope is not valid where it is used (wrong kind for that context); a port forward's target is not a host in a local test network (a WireGuard client, a device of a WireGuard network, the management network, a gateway address, a network or broadcast address). |
 | `tunnel_outside_target` | A tunnel fault or WireGuard action's target is not that WireGuard network or client. |
 | `reserved_id` | A step uses the reserved id `start`. |
 | `invalid_step` | A step or check names more than one, or none, of its mutually exclusive kinds. |
@@ -501,6 +501,11 @@ problem). The codes are stable; new ones are added, never renamed.
 | `invalid_name` | Reserved; not produced yet. |
 | `duplicate_protocol` | A link already runs a routing protocol of the same type. |
 | `missing_routing_settings` | Reserved; not produced yet. |
+| `reserved_option` | A custom DHCP option has a code the gateway manages itself (router, lease time, DNS servers, ...). |
+| `reserved_port` | A port forward's external ports take a port of the gateway: the UI/API port, a WireGuard listen port (udp), 22/tcp on the management side or the two-port topology's shared interface, 179/tcp while BGP runs (M35a). |
+| `overlapping_forward` | Two port forwards of the same protocol share an external port (ranges included). |
+| `port_range_length` | A port forward's target range is not as long as its external range. |
+| `management_is_uplink` | A port forward enters on `management` in the two-port topology, where it is the uplink's interface. |
 
 `TestEveryValidationCodeIsDocumented` in `internal/domain` checks that every `Code*` constant's
 value appears somewhere on this page.
@@ -836,15 +841,23 @@ two ports:    the management network lives behind the uplink interface; there is
   a configuration with `chaosgw apply --file` through the executor's socket, checks the rule in
   `DOCKER-USER`, and passes ping and HTTP from the client namespace through the VM to the server
   namespace (the server sees the gateway's uplink address: NAT). The same in the two-port topology.
-  Logs (cloud-init, journal, Docker, nftables, console, QEMU) are collected into the artifacts
-  directory even when the test fails.
+  Then the port forwards (M35a, `portForwards`): the configuration (`appliance.GatewayConfig`) has a
+  forward tcp 8088 on the uplink to the client namespace's port 9000, and with three ports one more,
+  tcp 8090 on the management network; a container in the VM's Docker publishes 8089. The server
+  namespace reaches the device through the forward (the device sees the server's own address: DNAT
+  only) and the container through the published port on the same uplink address, the host reaches the
+  device through the management forward, and every forward's counter counted. The listener on both
+  ends is `testdata/echo`, a static Go binary the test builds (`appliance.BuildEcho`), so it runs in
+  the gateway's own image without anything to pull. Logs (cloud-init, journal, Docker, nftables,
+  console, QEMU) are collected into the artifacts directory even when the test fails.
 - **Running it.** It needs root (taps, bridges, namespaces; the harness uses `sudo -n`), QEMU, `/dev/kvm`
   (without it the tests skip; `CHAOSGW_APPLIANCE_ALLOW_TCG=1` runs them emulated and very slowly) and
   the image as `docker save | gzip` in `CHAOSGW_APPLIANCE_IMAGE_TAR`. The nightly workflow's job
   `appliance` does all of that on a hosted runner (plan D33: they offer `/dev/kvm`); run it on a branch
   with `gh workflow run nightly.yml --ref <branch>`. `make test-appliance` is the same on a machine
   that has the prerequisites. The development VPS has no KVM: everything that needs none is unit-tested
-  there (image verification, the cloud-init documents, the QEMU arguments, the topology plan).
+  there (image verification, the cloud-init documents, the QEMU arguments, the topology plan, the
+  configuration the test applies with its forwards, the echo helper).
 - **Host setup.** `deploy/host-setup.sh` is shipped in the image
   (`/usr/local/share/chaosgw/host-setup.sh`): it installs Docker and the compose plugin when missing
   (Ubuntu's packages), writes `/etc/modules-load.d/chaos-gateway.conf` and
@@ -3982,6 +3995,150 @@ not run on this branch with the M14 flow yet.
 | Scope: compiled-state view (nftables, tc, routes, WireGuard) | `networks.spec.ts` "the Linux view: the kernel state with its counters, by part and filtered", the Linux view of a network and of the matrix; `src/lib/linuxView.test.ts`; backend `TestTheLinuxStateShowsTheKernelWithItsCounters`, `internal/linux/nftrender_test.go` |
 | "Show Linux view" on a device, an access rule and a fault (plan §2.17 "Technical view", P3-M14-03) | `linux-view.spec.ts` ""Show Linux view" on a rule shows its compiled rule and counter; another rule closes it, one the kernel lacks says so (P3-M14-03)", ""Show Linux view" on a fault shows its mark chain, classes and netem queues with their counters below its row; a DNS fault has none (P3-M14-03)", ""Show Linux view" on a device shows its identity element and the classification of its address (P3-M14-03)"; backend `TestTheLinuxViewOfOneRuleFaultOrDeviceShowsWhatTheCompilerMadeForIt` |
 
+## Port forwarding (M35a)
+
+Phase 3.1, pulled forward ahead of Phase 4 (plan D34): a device in a local test network is reachable
+from behind the uplink or, in the three-port topology, from the management network, through a DNAT
+on the entry side's address. The access rules decide forwarded connections with the device as
+responder; faults do not apply to them before M35b. Decisions left to the maintainer are
+P31-M35a-01 to P31-M35a-08 in `docs/open-items.md`, each with the option that is implemented.
+
+### How it works
+
+- **Configuration and API.** `port_forwards` is a map keyed by UUID next to the access rules, without
+  an order (`internal/domain/forward.go`). A forward has `protocol` (tcp, udp), `entry` (`uplink`,
+  `management`), `external_port` and optionally `external_port_end`, a `target` with exactly one of
+  `device` and `address`, `target_port` (default: the external port) and optionally `target_port_end`,
+  `enabled`, `name`, `description`. A range is shifted one to one (`Forward.TargetPortOf`); one target
+  start port is enough. It is revisioned, merge-patched, diffed (kind `port_forward`) and resolved
+  (device names to UUIDs) like the access rules, and a device a forward targets cannot be deleted
+  (`unknown_reference`). `GET /port-forwards` and `/port-forwards/{forwardId}` (id or name,
+  `?revision=`, paging) return each forward with its configuration, its `status` (`active`, or
+  `inactive` with `disabled`, `device_without_address`, `device_outside_test_network`,
+  `management_is_uplink`, `entry_without_address`; its message; the target address now) and, for the
+  revision the kernel runs, the counter of its accept rule. The status comes from
+  `Index.ForwardStatus` with the facts the engine observes (`Engine.ForwardFacts`: the devices'
+  addresses, whether management and uplink are one interface, whether each entry side has an
+  address); the entry sides are judged once the host has been observed. The capability
+  `port_forwards` is listed.
+- **Validation** (`internal/domain/validate_forward.go`, every refusal `validation_failed` with the
+  pointer into the forward):
+
+  | Refused | Code | Pointer |
+  |---|---|---|
+  | two forwards of a protocol sharing an external port (ranges too, whatever the entry side, disabled ones too: P31-M35a-02) | `overlapping_forward` | `/external_port` |
+  | a range that ends before it starts | `invalid_port_range` | `/external_port_end`, `/target_port_end` |
+  | a target range past 65535 | `invalid_port_range` | `/target_port` |
+  | ranges of different length | `port_range_length` | `/target_port_end` |
+  | the UI/API port (`management.ui_port`, else the port the API listens on, passed as `domain.WithUIPort`; P31-M35a-03), a WireGuard listen port (udp), 22/tcp on the management side or the two-port topology's shared interface, 179/tcp while an enabled BGP protocol exists (P31-M35a-01) | `reserved_port` | `/external_port` |
+  | `management` in the two-port topology | `management_is_uplink` | `/entry` |
+  | a target that is a WireGuard client, a device of a WireGuard network, in the management network, a gateway address, a network or broadcast address, or outside the local test networks | `invalid_target` | `/target/device`, `/target/address` |
+
+  A forward is never lockout-relevant: the ports of the control plane are refused, so it never waits
+  for commit-confirm. The compiler is the backstop: a forward the validation would refuse (an old
+  revision, a file of `chaosgw apply --file`, which does not run the validation) is left out with
+  the warning `forward_refused`, the others are compiled.
+- **The packet path** (`internal/compiler/forward.go`, the overview at its top):
+  - *DNAT.* One rule in the `prerouting` NAT chain (priority -100, after the service redirect of
+    M6b): in on an entry interface, to an address of that interface (`fib daddr . iif type local`),
+    `dnat ip to` the element of the map `fwd_dnat_<hash>` keyed on interface, protocol and port. The
+    kernel's lookup follows a new entry address at once, like masquerade: no apply, no element
+    changes (P31-M35a-07: every address of the interface answers). The map's value is the target's
+    address and port; it has one element per forwarded port (nft cannot shift a range, P31-M35a-06).
+  - *A device target follows its address.* The element holds the device's address now; an address
+    change is an element update through the identity path of M7 (`internal/engine/forward.go`,
+    `owner.go`), never a full apply. A device without an address keeps its forward compiled, with no
+    elements and the status `device_without_address`.
+  - *Accept.* One rule per forward in `forward`, after `jump access_forward` and before the matrix:
+    `ct status dnat`, in on the forward's entry interface, out to a local test network, its protocol
+    and `ct original proto-dst` in its external ports, a named counter `fwd_<hash of the id>` and
+    `last`. The forward is the allowance; the matrix default keeps everything else from the uplink
+    out of the test networks.
+  - *Management side.* While a forward from the management network is compiled, the policy table
+    (100) gets a route to the management subnet, so the device's replies go back the way they came
+    and not to the uplink's default (P31-M35a-05: a peer behind a router of the management network
+    gets no answer).
+  - *DOCKER-USER.* The existing per-bridge accept rules (`-o <bridge>`) already cover the path from
+    the entry side to a test-network bridge (plan §3.4); no new rule.
+  - *Hairpin* (a device using the entry address) is not supported: the DNAT matches the entry
+    interfaces only.
+  - *Without an enabled forward the output is byte-identical* to before M35a: no map, no DNAT, no
+    accept, no responder form, the same hash (`TestWithoutAForwardInThePacketPathNothingChanges`; the
+    golden files of every other scenario are unchanged).
+- **Access rules with the device as responder** (plan §2.4, D34; `internal/compiler/access.go`). While
+  a forward is compiled, every rule, configured and overlay, gets a second form right after its own,
+  with the same counter and verdict: `ct status dnat`, the rule's source against `ct reply ip saddr`
+  (the target), its destination against `ct original ip saddr` (the peer; `uplink` matches every peer
+  behind the uplink and excludes the management network), its ports against `ct reply proto-src` (the
+  target port). An ICMP rule has no responder form, and the input chain never sees a forwarded
+  connection. "Also cut existing connections" has these forms in its cut window too (the reset goes
+  to the peer), and the engine's conntrack cut finds forwarded flows by their reply source
+  (`internal/engine/cut.go`). The domain mirror is `World.ForwardedDecision`: the first matching rule
+  decides, overlays first; none decides, the forward accepts (access layer `port_forward`).
+  `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer` holds the two together. A
+  connection through a forward that is disabled or deleted lives on until it ends; new ones are not
+  translated (P31-M35a-04).
+- **Faults do not apply** (M35b): the classification runs on the conntrack original tuple, whose ends
+  (the peer and the entry address) lie in no test network, so it never marks a forwarded connection.
+  The preview lists the forwards (`port_forwards`, each with `faults_apply: false`) and warns
+  `faults_not_on_forwards` at a forward whose target a fault selects; `explain` of a connection from
+  an outside address to an entry address on a forwarded port names the forward (target, port, device,
+  status, the note), the deciding rule or `port_forward`, and no fault.
+- **UI** (on the screens of M14 and M12): `web/src/lib/forwards.ts` (parsing, the checks under the
+  fields, the forward the form builds, the server's pointers to fields, the rows),
+  `components/networks/ForwardList.vue` on the uplink and management cards of the networks view
+  (protocol, external port or range, target, target port, name, counter, status; NEW, CHANGED,
+  DELETED; Edit or Fix, Disable/Enable, Delete, Undo), `components/networks/ForwardDialog.vue` (a
+  device or an address as the target; in the two-port topology only the uplink and no Add on the
+  management card). Forwards go through the draft (`stores/draft.ts`), the unapplied-changes bar, the
+  preview-and-apply drawer (a "PORT FORWARDS" section with the note on faults) and the concurrent-change
+  dialog like every other change. The device detail has a "Port forwards" card with the forwards to
+  the device; Edit links to `/networks?forward=<id>`, Add to `?forward=new&device=<id>`.
+  `usePortForwards()` reads `/port-forwards` and is refreshed by the revision, apply, identity, DHCP
+  and `uplink_changed` events. The explain card shows the forward when the answer has one
+  (P31-M35a-08: it cannot ask about a forwarded connection itself yet).
+
+### Tests
+
+The compiler's unit and golden tests (`internal/compiler/forward_test.go`, `testdata/forward.golden.txt`,
+`forward.nft.golden.json`), the domain's (`internal/domain/forward_test.go`), the API's
+(`internal/api/forwards_test.go`, every response checked against the spec) and the engine's
+(`internal/engine/forward_test.go`, `cut_internal_test.go`) run at level 0. At level 1,
+`internal/compiler/forwardkernel_test.go` runs the packet path on the bed of the access rules, and
+`internal/engine/integration_forward_test.go` the engine in the three-port topology; both CI testbed
+jobs name these tests and the Docker test of `internal/apply` with `-expect-pass $M35A_LEVEL1`
+(`.github/workflows/ci.yml`), so a renamed or vanished one fails the job. The "within 1 s" of the plan
+is recorded in the measurement record against the 3 s bound of P2-M7-03 where timing is accurate (KVM);
+under software emulation it is recorded without the bound. Level 2 is the port forward part of the
+appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/forwards.test.ts`,
+`web/src/stores/draft.forwards.test.ts` and `web/e2e/port-forwards.spec.ts` against the mocked API
+(`withForwards()` in `web/e2e/mock.ts`).
+
+### Acceptance map (plan M35a "Tests")
+
+| Plan M35a Tests | Test |
+|---|---|
+| golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder) | `TestGoldenForwards`, `TestGoldenForwardNftTransaction` (`forward.golden.txt`, `forward.nft.golden.json`); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder`, `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer`, `TestWithoutAForwardInThePacketPathNothingChanges`, `TestMapElementsWithInterfaceNamesAndConcatenatedValues`; the kernel takes the ruleset and its cut windows: `TestEveryTransactionIsAcceptedByNftsParser`, `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` (scenario `forward`) |
+| level 1 — a server namespace behind the uplink reaches a TCP and a UDP listener of a test-network client through a forward, and without a forward its connection is dropped and counted | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`; through the engine `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` |
+| a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements` |
+| a drop, reject and reset rule on the device stops forwarded connections, and "also cut existing connections" resets an established one | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`, `TestACutWindowResetsAnEstablishedForwardedConnectionOnTheRealKernel`, `TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection`; `TestACutWindowAlsoResetsForwardedConnections`, `TestACutTakesTheForwardedConnectionsOfItsTarget` |
+| a device fault does not impair a forwarded connection, and the preview says so | `TestADeviceFaultDoesNotImpairAForwardedConnection`; `TestThePreviewListsTheForwardsAndSaysThatFaultsDoNotApply`, `TestThePreviewNotesTheFaultsThatDoNotApplyToAForward`; `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target" |
+| an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network); `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
+| a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` |
+| a port range is forwarded one to one | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (tcp 9049-9050 → 7049-7050); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`; `port-forwards.spec.ts` "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field" |
+| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
+| a forward follows a new uplink address (DHCP) within 1 s | `TestAForwardFollowsANewUplinkAddress` (the address replaced as a new lease does, measured, and the status follows), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` |
+| a device without a known address leaves its forward inactive with its reason in the status | `TestAForwardFollowsItsDeviceAndSaysWhyItIsInactive`, `TestPortForwardsAreListedWithTheirStatus`, `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestAForwardOfAnEntryWithoutAddressIsInactive`; `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status" |
+| the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; `TestAForwardHasTheCounterOfItsAcceptRule`; level 2 `TestSmokeOnCleanUbuntuHosts` |
+| a disabled or deleted forward leaves no DNAT and closes the path | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (deleted), `TestADisabledForwardLeavesTheKernel`, `TestWithoutAForwardInThePacketPathNothingChanges` (disabled), `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress` |
+| Playwright against the mocked API for the forward list | `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status"; `src/lib/forwards.test.ts` "the rows: …" |
+| the form (add, edit, disable, delete through the drawer, a refused port shown at its field, a range) | `port-forwards.spec.ts` "port forwards: add a forward to a device through the drawer — no commit-confirm, and it is listed after the apply", "port forwards: edit, disable and delete through the draft and the drawer; Undo takes each back", "port forwards: a port the gateway refuses is shown at its field, and Fix opens the forward again with the gateway's message", "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field", "port forwards: a forward changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change"; `src/lib/forwards.test.ts` "the port forward form (M35a)"; `src/stores/draft.forwards.test.ts` "the port forwards in the draft (M35a)" |
+| the device detail's list | `port-forwards.spec.ts` "port forwards: the device detail lists the forwards to the device, and Edit opens the forward on the networks page" |
+| the preview's note on faults | `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target"; explain: "port forwards: explain shows a forwarded connection's forward, the access layer of the forward and its note on faults" |
+| level 2 — a forward in the two-port topology, next to a port published by a Docker container | `TestSmokeOnCleanUbuntuHosts/<release>/two-ports` (`portForwards` in `internal/appliance/appliance_test.go`, nightly job `appliance`); at level 0 `TestTheLevel2ConfigurationIsValidWithItsPortForwards`, `TestTheEchoHelperAnswersWithItsTagAndThePeer` |
+| Scope: the `DOCKER-USER` accept rule covers the path from the entry side to the test-network bridges | `TestAForwardPassesDockersForwardPolicyThroughDockerUser`, `TestDockerUserCoversThePathOfAForward`; level 2 |
+| Scope: the API resource, revisioned like the access rules | `TestPortForwardsAreListedWithTheirStatus`, `TestTheCapabilitiesNamePortForwarding`, `TestForwardsAreChangedThroughAMergePatchLikeAccessRules`, `TestForwardNamesAreUniqueAndTheKeysAreUUIDs`, `TestAForwardIsOfTcpOrUdpWithAKnownEntrySide`, `TestTheExampleForwardIsValidAndFillsItsDefaults`, `TestMatchForwardFindsTheEnabledForwardOfAPort` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -4007,6 +4164,8 @@ it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
 (`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem would
 fail it visibly.
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1` (the workflow's environment): the level 1 tests of port
+forwarding must each pass, so one that is renamed or no longer built fails the job.
 Its `go test` timeout is 60 minutes (`ARGS='-test-timeout 60m'`): the first run of M10 stopped
 the engine package at the default 20 minutes with every test up to then passing (234 of 256 tests
 had started), so the limit, not a test, was the failure.

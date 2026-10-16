@@ -1420,3 +1420,25 @@ plan:
   `enabled` and key generation).
 - Plan §5 M14 Scope and the §2.17 Networks and Profiles rows now name what P3-M14-01, P3-M14-03 and P3-M13-08 added; M30's
   Scope names the recovery instructions and the safe-mode banner's link (P3-M12-05).
+
+## Shutdown and host cleanup (decided 2026-10-16)
+
+- Decision: **variant A.** When the service stops, the executor removes every kernel object Chaos Gateway created
+  (the `inet chaosgw` nftables table, its policy rules and routing tables 100 and 102, the test bridges with their
+  addresses, the service veth pair `svc0`/`svc1` and the namespace `cgsvc`). The volumes stay, so `compose up` rebuilds
+  the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
+  paragraph) now say the same.
+- Why: after the stop, the test network's DNS was redirected to a proxy that no longer ran, and port 8443 stayed
+  closed for non-management addresses. Found in the install test on 2026-10-16 (report
+  `shutdown-report.md`, scratch). Variant B (keep bridge and veth, remove only the redirecting parts) was the other
+  option; it was not chosen because a gateway that is stopped should leave nothing behind.
+- Consequence: while the gateway is stopped, devices of a test network have no gateway. This replaces the plan's
+  earlier sentence that they keep their normal connectivity.
+- Not part of this decision: the networkd rule `/etc/systemd/network/10-chaosgw-eth0.network` and the netplan entry of
+  the test interface. Both are host changes made by hand during the install test. Open: the executor or host-setup
+  should write and remove them (needs `/etc` access, see the hardening profile in `compose.executor.yaml`).
+- Open: `chaosgw teardown` (M27) does not exist yet; the cleanup above is what it has to do. Until then the cleanup
+  is manual (see `docs/install.md`, Uninstall).
+- Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
+  plan describes the target and `docs/install.md` plus the manual cleanup apply.
+- Needs maintainer: no (decided 2026-10-16).

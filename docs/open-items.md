@@ -1425,7 +1425,8 @@ plan:
 
 - Decision: **variant A.** When the service stops, the executor removes every kernel object Chaos Gateway created
   (the `inet chaosgw` nftables table, its policy rules and routing tables 100 and 102, the test bridges with their
-  addresses, the service veth pair `svc0`/`svc1` and the namespace `cgsvc`). The volumes stay, so `compose up` rebuilds
+  addresses, the service veth pair `svc0`/`svc1` and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
+  `svcns` holder container and ends with it). Recorded as D35 in plan §7.1. The volumes stay, so `compose up` rebuilds
   the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
   paragraph) now say the same.
 - Why: after the stop, the test network's DNS was redirected to a proxy that no longer ran, and port 8443 stayed

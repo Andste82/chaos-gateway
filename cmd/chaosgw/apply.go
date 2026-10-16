@@ -36,11 +36,16 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "show what would change and change nothing")
 	execUID := fs.Int("executor-uid", 0, "uid the executor runs as (it must be root or this user)")
 	timeout := fs.Duration("timeout", 2*time.Minute, "give up after this long")
+	uiPort := fs.Int("ui-port", compiler.DefaultUIPort, "port the API listens on (chaosgw api --port) when the configuration names no management.ui_port: no port forward may take it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *execUID < 0 {
 		fmt.Fprintln(stderr, "chaosgw apply: --executor-uid must not be negative")
+		return 2
+	}
+	if *uiPort < 1 || *uiPort > 65535 {
+		fmt.Fprintln(stderr, "chaosgw apply: --ui-port must be a port (1-65535)")
 		return 2
 	}
 	if *file == "" || fs.NArg() != 0 {
@@ -77,6 +82,16 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	cfg, nerrs := domain.Normalize(cfg)
 	if len(nerrs) > 0 {
 		fmt.Fprintf(stderr, "chaosgw apply: %s: %s\n", *file, nerrs[0].Message)
+		return 1
+	}
+	// what only the caller knows: the API's port, which no forward may take (the API checks the same
+	// with its own --port)
+	validate := []domain.Option{domain.WithUIPort(*uiPort)}
+	if verrs := domain.Validate(cfg, validate...); len(verrs) > 0 {
+		fmt.Fprintf(stderr, "chaosgw apply: %s is not a valid configuration:\n", *file)
+		for _, e := range verrs {
+			fmt.Fprintf(stderr, "  %s: %s (%s)\n", e.Path, e.Message, e.Code)
+		}
 		return 1
 	}
 	var sec *secrets.Store
@@ -116,18 +131,18 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	defer func() { _ = c.Close() }()
 
 	if *stateDir != "" {
-		return applyThroughStore(ctx, c, *namespace, *stateDir, cfg, sec, stdout, stderr)
+		return applyThroughStore(ctx, c, *namespace, *stateDir, cfg, sec, *uiPort, stdout, stderr)
 	}
-	return applyDirect(ctx, c, *namespace, cfg, sec, *dryRun, stdout, stderr)
+	return applyDirect(ctx, c, *namespace, cfg, sec, *uiPort, *dryRun, stdout, stderr)
 }
 
-func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Configuration, sec *secrets.Store, dryRun bool, stdout, stderr io.Writer) int {
+func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Configuration, sec *secrets.Store, uiPort int, dryRun bool, stdout, stderr io.Writer) int {
 	host, err := apply.ReadHost(ctx, ex, ns)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1
 	}
-	in := compiler.Input{Config: cfg, Host: host, Generation: compiler.Generation{Seq: 1}}
+	in := compiler.Input{Config: cfg, Host: host, Generation: compiler.Generation{Seq: 1}, DefaultUIPort: uiPort}
 	if sec != nil {
 		in.Keys, _ = wireguard.InterfaceKeys(cfg, sec)
 	}
@@ -171,14 +186,14 @@ func applyDirect(ctx context.Context, ex apply.Exec, ns string, cfg *model.Confi
 	return 0
 }
 
-func applyThroughStore(ctx context.Context, ex apply.Exec, ns, dir string, cfg *model.Configuration, sec *secrets.Store, stdout, stderr io.Writer) int {
+func applyThroughStore(ctx context.Context, ex apply.Exec, ns, dir string, cfg *model.Configuration, sec *secrets.Store, uiPort int, stdout, stderr io.Writer) int {
 	st, err := store.Open(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
-	e, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: ns, Secrets: sec})
+	e, err := engine.New(engine.Config{Store: st, Exec: ex, Namespace: ns, Secrets: sec, DefaultUIPort: uiPort})
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1
@@ -188,7 +203,7 @@ func applyThroughStore(ctx context.Context, ex apply.Exec, ns, dir string, cfg *
 		return 1
 	}
 	defer e.Close()
-	rev, err := st.Create(cfg, store.CreateOptions{IfMatch: st.ActiveID(), Now: time.Now(), By: model.Actor{Id: "system", Type: "system"}, Message: "chaosgw apply --file"})
+	rev, err := st.Create(cfg, store.CreateOptions{IfMatch: st.ActiveID(), Now: time.Now(), By: model.Actor{Id: "system", Type: "system"}, Message: "chaosgw apply --file", Validate: []domain.Option{domain.WithUIPort(uiPort)}})
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw apply: %v\n", err)
 		return 1

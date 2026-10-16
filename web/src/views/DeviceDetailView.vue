@@ -22,7 +22,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
 import { fetchAll, firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, usePortForwards, type ActiveFault } from '../composables/gateway';
-import { counterText, entryLabels, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
+import { counterHint, counterText, entryLabels, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
 import { useNow } from '../composables/useNow';
 import { deviceNetworkInfo, deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
@@ -270,7 +270,7 @@ useApiScreen('this device', () => [
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <StatusDot v-bind="rowStatus(r)" />
-                <span v-if="counterText(r)" class="mono text-xs text-text-2">{{ counterText(r) }}</span>
+                <span v-if="counterText(r)" class="mono text-xs text-text-2" :title="counterHint">{{ counterText(r) }}</span>
                 <RouterLink
                   v-if="r.mark !== 'DELETED'"
                   :to="{ path: '/networks', query: { forward: r.id } }"

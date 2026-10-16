@@ -5,7 +5,7 @@
 // applied. Edit opens the form; Disable, Enable and Delete change the draft, which goes through the
 // unapplied-changes bar and the preview-and-apply drawer; Undo takes the edit back.
 import { refocusAfterSwap } from '../../lib/focus';
-import { counterText, forwardSummary, forwardTitle, rowStatus, type DeviceName, type ForwardRow } from '../../lib/forwards';
+import { counterHint, counterText, forwardSummary, forwardTitle, rowStatus, type DeviceName, type ForwardRow } from '../../lib/forwards';
 import { useDraftStore } from '../../stores/draft';
 import StatusDot from '../ui/StatusDot.vue';
 
@@ -49,7 +49,7 @@ function setEnabled(r: ForwardRow, on: boolean) {
       </div>
       <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
         <StatusDot v-bind="rowStatus(r)" data-testid="forward-status" />
-        <span v-if="counterText(r)" class="mono text-xs text-text-2" data-testid="forward-counter">{{ counterText(r) }}</span>
+        <span v-if="counterText(r)" class="mono text-xs text-text-2" :title="counterHint" data-testid="forward-counter">{{ counterText(r) }}</span>
       </div>
       <p v-if="draft.serverErrors[r.id]" class="m-0 mt-1 text-[13px] text-block-text" role="alert" data-testid="forward-refused">
         The gateway refused it: {{ Object.values(draft.serverErrors[r.id]!).join(' ') }}

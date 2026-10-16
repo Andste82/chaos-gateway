@@ -5168,9 +5168,11 @@ type PortForwardView struct {
 	// so applying one never waits for commit-confirm.
 	Config PortForward `json:"config"`
 
-	// Counters Packets and bytes of the **new connections** the forward sent to its target. Monotonic across
-	// applies; `epoch` changes on a restart. Only for the revision the kernel runs; absent while the
-	// forward is not in the kernel.
+	// Counters Packets and bytes the forward sent to its target before their connection was established (the
+	// hits of its accept rule; established traffic is accepted before it, like for the access rules):
+	// one packet per connection, more when a TCP SYN is retransmitted or a UDP packet gets no answer,
+	// so it is no exact count of connections. Monotonic across applies; `epoch` changes on a restart.
+	// Only for the revision the kernel runs; absent while the forward is not in the kernel.
 	Counters *Counter `json:"counters,omitempty"`
 	Id       Uuid     `json:"id"`
 

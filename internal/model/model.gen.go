@@ -650,6 +650,7 @@ const (
 	DomainChangeKindLinkPeer        DomainChangeKind = "link_peer"
 	DomainChangeKindManagement      DomainChangeKind = "management"
 	DomainChangeKindNetwork         DomainChangeKind = "network"
+	DomainChangeKindPortForward     DomainChangeKind = "port_forward"
 	DomainChangeKindProbe           DomainChangeKind = "probe"
 	DomainChangeKindProfile         DomainChangeKind = "profile"
 	DomainChangeKindRouting         DomainChangeKind = "routing"
@@ -679,6 +680,8 @@ func (e DomainChangeKind) Valid() bool {
 	case DomainChangeKindManagement:
 		return true
 	case DomainChangeKindNetwork:
+		return true
+	case DomainChangeKindPortForward:
 		return true
 	case DomainChangeKindProbe:
 		return true
@@ -966,6 +969,7 @@ const (
 	ExplanationAccessLayerConfigRule        ExplanationAccessLayer = "config_rule"
 	ExplanationAccessLayerGatewayProtection ExplanationAccessLayer = "gateway_protection"
 	ExplanationAccessLayerOverlayRule       ExplanationAccessLayer = "overlay_rule"
+	ExplanationAccessLayerPortForward       ExplanationAccessLayer = "port_forward"
 )
 
 // Valid indicates whether the value is a known member of the ExplanationAccessLayer enum.
@@ -978,6 +982,8 @@ func (e ExplanationAccessLayer) Valid() bool {
 	case ExplanationAccessLayerGatewayProtection:
 		return true
 	case ExplanationAccessLayerOverlayRule:
+		return true
+	case ExplanationAccessLayerPortForward:
 		return true
 	default:
 		return false
@@ -1539,6 +1545,87 @@ func (e OverlayKind) Valid() bool {
 	case OverlayKindTls:
 		return true
 	case OverlayKindWireguard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PortForwardEntry.
+const (
+	PortForwardEntryManagement PortForwardEntry = "management"
+	PortForwardEntryUplink     PortForwardEntry = "uplink"
+)
+
+// Valid indicates whether the value is a known member of the PortForwardEntry enum.
+func (e PortForwardEntry) Valid() bool {
+	switch e {
+	case PortForwardEntryManagement:
+		return true
+	case PortForwardEntryUplink:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PortForwardProtocol.
+const (
+	PortForwardProtocolTcp PortForwardProtocol = "tcp"
+	PortForwardProtocolUdp PortForwardProtocol = "udp"
+)
+
+// Valid indicates whether the value is a known member of the PortForwardProtocol enum.
+func (e PortForwardProtocol) Valid() bool {
+	switch e {
+	case PortForwardProtocolTcp:
+		return true
+	case PortForwardProtocolUdp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PortForwardStatusReason.
+const (
+	PortForwardStatusReasonDeviceOutsideTestNetwork PortForwardStatusReason = "device_outside_test_network"
+	PortForwardStatusReasonDeviceWithoutAddress     PortForwardStatusReason = "device_without_address"
+	PortForwardStatusReasonDisabled                 PortForwardStatusReason = "disabled"
+	PortForwardStatusReasonEntryWithoutAddress      PortForwardStatusReason = "entry_without_address"
+	PortForwardStatusReasonManagementIsUplink       PortForwardStatusReason = "management_is_uplink"
+)
+
+// Valid indicates whether the value is a known member of the PortForwardStatusReason enum.
+func (e PortForwardStatusReason) Valid() bool {
+	switch e {
+	case PortForwardStatusReasonDeviceOutsideTestNetwork:
+		return true
+	case PortForwardStatusReasonDeviceWithoutAddress:
+		return true
+	case PortForwardStatusReasonDisabled:
+		return true
+	case PortForwardStatusReasonEntryWithoutAddress:
+		return true
+	case PortForwardStatusReasonManagementIsUplink:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PortForwardStatusState.
+const (
+	PortForwardStatusStateActive   PortForwardStatusState = "active"
+	PortForwardStatusStateInactive PortForwardStatusState = "inactive"
+)
+
+// Valid indicates whether the value is a known member of the PortForwardStatusState enum.
+func (e PortForwardStatusState) Valid() bool {
+	switch e {
+	case PortForwardStatusStateActive:
+		return true
+	case PortForwardStatusStateInactive:
 		return true
 	default:
 		return false
@@ -2569,6 +2656,17 @@ type AccessRule struct {
 // a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
 // Only an explicit entry of the access matrix from the device's network to the management network
 // opens it. Decided by the maintainer on 2026-10-11.
+//
+// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
+// the management network towards a device, so a rule whose source is a device, group or network matches
+// them **with the device as responder**: its source is matched against the conntrack reply source (the
+// forward's target), its destination against the external peer (the destination `uplink` matches every
+// peer behind the uplink; a peer in the management network, which `uplink` excludes, is matched by a
+// `cidr` destination or by a rule without a destination), its ports against the target port. This holds
+// for every rule, configured and overlay, including rules that exist before the forward is added: a rule
+// "device X → uplink: drop" also stops the forwarded connections to X, and `cut_existing` cuts them too.
+// A forwarded connection that no rule decides is accepted by the forward itself, in front of the access
+// matrix. `explain` names the rule that decided a forwarded connection (plan §2.4, D34).
 type AccessRuleBody struct {
 	// Action `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
 	// IPv6), port unreachable unless the rule's `reject_with` names another type, so the sender
@@ -2837,7 +2935,7 @@ type Capabilities struct {
 	DiagnosticTypes *[]string     `json:"diagnostic_types,omitempty"`
 	FaultFamilies   []FaultFamily `json:"fault_families"`
 
-	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`.
+	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
 	Features []string `json:"features"`
 
 	// Limits The capacity limits of this gateway (plan §3.3); a change above one is `capacity_exceeded`.
@@ -3135,8 +3233,11 @@ type Configuration struct {
 	Groups          *map[string]Group       `json:"groups,omitempty"`
 	Management      Management              `json:"management"`
 	Networks        *map[string]Network     `json:"networks,omitempty"`
-	Probes          *map[string]Probe       `json:"probes,omitempty"`
-	Profiles        *map[string]Profile     `json:"profiles,omitempty"`
+
+	// PortForwards Port forwards (DNAT from the uplink or the management network, M35a), keyed by UUID; unordered.
+	PortForwards *map[string]PortForward `json:"port_forwards,omitempty"`
+	Probes       *map[string]Probe       `json:"probes,omitempty"`
+	Profiles     *map[string]Profile     `json:"profiles,omitempty"`
 
 	// Routing The managed BIRD 2 instance (plan §2.2.2). Learned routes only enter Chaos Gateway's
 	// tables. Static routes live with their network - `LanNetwork.routes` (downstream
@@ -3719,12 +3820,13 @@ type EventType string
 // Explanation defines model for Explanation.
 type Explanation struct {
 	Access struct {
+		// Layer `port_forward` - a forwarded connection that no access rule decided is accepted by the forward itself (M35a).
 		Layer ExplanationAccessLayer `json:"layer"`
 
 		// Reason Which entry or default decided, in words.
 		Reason *string `json:"reason,omitempty"`
 
-		// Rule The overlay or configured rule that decided; absent for `gateway_protection` and `access_matrix`.
+		// Rule The overlay or configured rule that decided; absent for `gateway_protection`, `access_matrix` and `port_forward`.
 		Rule *Uuid `json:"rule,omitempty"`
 
 		// Verdict `allow` - accept. `drop` - discard silently. `reject` - answer with an ICMP error (ICMPv6 for
@@ -3757,6 +3859,35 @@ type Explanation struct {
 		// Winner A fault or profile part as a candidate in precedence resolution.
 		Winner *FaultRef `json:"winner,omitempty"`
 	} `json:"faults"`
+
+	// Forward Set when the traffic is a forwarded connection (M35a): `src` is a peer behind the entry side, `dst`
+	// the entry side's address and `port` an external port of an enabled forward. The access verdict is
+	// then decided with the forward's target as responder (see `AccessRuleBody`), and `faults` is empty:
+	// faults do not apply to forwarded connections (M35b), which `note` says.
+	Forward *struct {
+		Device *struct {
+			Id   *Uuid   `json:"id,omitempty"`
+			Name *string `json:"name,omitempty"`
+		} `json:"device,omitempty"`
+
+		// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
+		// `management` - on the management interface and its current address, in the three-port topology only
+		// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
+		// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+		Entry PortForwardEntry `json:"entry"`
+		Id    Uuid             `json:"id"`
+		Name  *string          `json:"name,omitempty"`
+
+		// Note Example: faults do not apply to forwarded connections (M35b)
+		Note string `json:"note"`
+
+		// Status Whether the forward is in effect, and why not.
+		Status *PortForwardStatus `json:"status,omitempty"`
+
+		// TargetIp Absent while the forward is inactive (its target device has no address).
+		TargetIp   *Ipv4 `json:"target_ip,omitempty"`
+		TargetPort int   `json:"target_port"`
+	} `json:"forward,omitempty"`
 	Generation int64 `json:"generation"`
 
 	// Kernel Classification as compiled (plan §3.3).
@@ -3818,7 +3949,7 @@ type Explanation struct {
 	} `json:"source"`
 }
 
-// ExplanationAccessLayer defines model for Explanation.Access.Layer.
+// ExplanationAccessLayer `port_forward` - a forwarded connection that no access rule decided is accepted by the forward itself (M35a).
 type ExplanationAccessLayer string
 
 // ExplanationService Whether the connection is redirected into the service namespace.
@@ -4682,6 +4813,17 @@ type Overlay struct {
 	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
 	// Only an explicit entry of the access matrix from the device's network to the management network
 	// opens it. Decided by the maintainer on 2026-10-11.
+	//
+	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
+	// the management network towards a device, so a rule whose source is a device, group or network matches
+	// them **with the device as responder**: its source is matched against the conntrack reply source (the
+	// forward's target), its destination against the external peer (the destination `uplink` matches every
+	// peer behind the uplink; a peer in the management network, which `uplink` excludes, is matched by a
+	// `cidr` destination or by a rule without a destination), its ports against the target port. This holds
+	// for every rule, configured and overlay, including rules that exist before the forward is added: a rule
+	// "device X → uplink: drop" also stops the forwarded connections to X, and `cut_existing` cuts them too.
+	// A forwarded connection that no rule decides is accepted by the forward itself, in front of the access
+	// matrix. `explain` names the rule that decided a forwarded connection (plan §2.4, D34).
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Run Set when a run owns the overlay.
@@ -4828,6 +4970,17 @@ type OverlayRequest struct {
 	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
 	// Only an explicit entry of the access matrix from the device's network to the management network
 	// opens it. Decided by the maintainer on 2026-10-11.
+	//
+	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
+	// the management network towards a device, so a rule whose source is a device, group or network matches
+	// them **with the device as responder**: its source is matched against the conntrack reply source (the
+	// forward's target), its destination against the external peer (the destination `uplink` matches every
+	// peer behind the uplink; a peer in the management network, which `uplink` excludes, is matched by a
+	// `cidr` destination or by a rule without a destination), its ports against the target port. This holds
+	// for every rule, configured and overlay, including rules that exist before the forward is added: a rule
+	// "device X → uplink: drop" also stops the forwarded connections to X, and `cut_existing` cuts them too.
+	// A forwarded connection that no rule decides is accepted by the forward itself, in front of the access
+	// matrix. `explain` names the rule that decided a forwarded connection (plan §2.4, D34).
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target The source part of a selector (`source` in the configuration, `target` in overlays
@@ -4885,6 +5038,145 @@ type PasswordChange struct {
 
 // Percentage Example: 0.5%
 type Percentage = string
+
+// PortForward A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on the entry side's
+// address with the protocol and an external port are sent (DNAT) to the target and the target port.
+// A port range is shifted one to one: `external_port` 8000 to `external_port_end` 8010 with
+// `target_port` 9000 forwards 8000 to 9000, 8001 to 9001, ..., 8010 to 9010.
+//
+// The forward itself opens the path through the access matrix; the access rules apply to the
+// forwarded connections with the device as responder (see `AccessRuleBody`). Faults do not apply to
+// forwarded connections (M35b); the preview and `explain` say so. Hairpin access (a device in a test
+// network using the entry address of a forward) is not supported.
+//
+// Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
+// external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
+// length (`port_range_length`) or a range that ends before it starts (`invalid_port_range`); an
+// external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+// on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
+// on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
+// configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a
+// target outside the local test networks, on the gateway or in the management network
+// (`invalid_target`). A forward is not lockout-relevant: the ports of the control plane are refused,
+// so applying one never waits for commit-confirm.
+type PortForward struct {
+	Description *Description `json:"description,omitempty"`
+	Enabled     *bool        `json:"enabled,omitempty"`
+
+	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
+	// `management` - on the management interface and its current address, in the three-port topology only
+	// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
+	// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+	Entry PortForwardEntry `json:"entry"`
+
+	// ExternalPort The external port, or the first port of the external range.
+	ExternalPort int `json:"external_port"`
+
+	// ExternalPortEnd The last port of the external range (inclusive). Absent - a single port.
+	ExternalPortEnd *int `json:"external_port_end,omitempty"`
+
+	// Name Unique per object type (case-insensitive); must not have the form of a UUID.
+	Name     *Name               `json:"name,omitempty"`
+	Protocol PortForwardProtocol `json:"protocol"`
+
+	// Target Exactly one property. `device` - a device in a local test network (a configured device or a probe;
+	// a WireGuard client is refused): the forward follows the device's current address, and while the
+	// device has no known address in a local test network the forward is inactive. `address` - an IPv4
+	// address in a local test network, never the gateway's own address there.
+	Target PortForwardTarget `json:"target"`
+
+	// TargetPort The target port, or the first port of the target range. Default - `external_port`.
+	TargetPort *int `json:"target_port,omitempty"`
+
+	// TargetPortEnd The last port of the target range (inclusive). Default - the target range is as long as the
+	// external one; when given, it must make it so (`port_range_length` otherwise).
+	TargetPortEnd *int `json:"target_port_end,omitempty"`
+}
+
+// PortForwardEntry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
+// `management` - on the management interface and its current address, in the three-port topology only
+// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
+// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+type PortForwardEntry string
+
+// PortForwardPage defines model for PortForwardPage.
+type PortForwardPage struct {
+	Items      []PortForwardView `json:"items"`
+	NextCursor *string           `json:"next_cursor,omitempty"`
+}
+
+// PortForwardProtocol defines model for PortForwardProtocol.
+type PortForwardProtocol string
+
+// PortForwardStatus Whether the forward is in effect, and why not.
+type PortForwardStatus struct {
+	// Message The reason in words, e.g. "inactive: the device has no address".
+	Message *string `json:"message,omitempty"`
+
+	// Reason Only with `inactive`. `disabled` - `enabled: false`. `device_without_address` - the target device has
+	// no known address. `device_outside_test_network` - the device's addresses lie in no local test network.
+	// `management_is_uplink` - the management interface is the uplink interface (two-port topology).
+	// `entry_without_address` - the entry interface has no IPv4 address now.
+	Reason *PortForwardStatusReason `json:"reason,omitempty"`
+	State  PortForwardStatusState   `json:"state"`
+
+	// TargetAddress The address the connections are sent to now (the device's current address for a device target).
+	TargetAddress *Ipv4 `json:"target_address,omitempty"`
+}
+
+// PortForwardStatusReason Only with `inactive`. `disabled` - `enabled: false`. `device_without_address` - the target device has
+// no known address. `device_outside_test_network` - the device's addresses lie in no local test network.
+// `management_is_uplink` - the management interface is the uplink interface (two-port topology).
+// `entry_without_address` - the entry interface has no IPv4 address now.
+type PortForwardStatusReason string
+
+// PortForwardStatusState defines model for PortForwardStatus.State.
+type PortForwardStatusState string
+
+// PortForwardTarget Exactly one property. `device` - a device in a local test network (a configured device or a probe;
+// a WireGuard client is refused): the forward follows the device's current address, and while the
+// device has no known address in a local test network the forward is inactive. `address` - an IPv4
+// address in a local test network, never the gateway's own address there.
+type PortForwardTarget struct {
+	Address *Ipv4 `json:"address,omitempty"`
+
+	// Device UUID or name of an object. Stored configurations contain UUIDs only.
+	Device *Ref `json:"device,omitempty"`
+}
+
+// PortForwardView defines model for PortForwardView.
+type PortForwardView struct {
+	// Config A port forward (plan §2.2 layer 4, M35a, D34): connections that come in on the entry side's
+	// address with the protocol and an external port are sent (DNAT) to the target and the target port.
+	// A port range is shifted one to one: `external_port` 8000 to `external_port_end` 8010 with
+	// `target_port` 9000 forwards 8000 to 9000, 8001 to 9001, ..., 8010 to 9010.
+	//
+	// The forward itself opens the path through the access matrix; the access rules apply to the
+	// forwarded connections with the device as responder (see `AccessRuleBody`). Faults do not apply to
+	// forwarded connections (M35b); the preview and `explain` say so. Hairpin access (a device in a test
+	// network using the entry address of a forward) is not supported.
+	//
+	// Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
+	// external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
+	// length (`port_range_length`) or a range that ends before it starts (`invalid_port_range`); an
+	// external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+	// on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
+	// on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
+	// configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a
+	// target outside the local test networks, on the gateway or in the management network
+	// (`invalid_target`). A forward is not lockout-relevant: the ports of the control plane are refused,
+	// so applying one never waits for commit-confirm.
+	Config PortForward `json:"config"`
+
+	// Counters Packets and bytes of the **new connections** the forward sent to its target. Monotonic across
+	// applies; `epoch` changes on a restart. Only for the revision the kernel runs; absent while the
+	// forward is not in the kernel.
+	Counters *Counter `json:"counters,omitempty"`
+	Id       Uuid     `json:"id"`
+
+	// Status Whether the forward is in effect, and why not.
+	Status PortForwardStatus `json:"status"`
+}
 
 // PortRange defines model for PortRange.
 type PortRange struct {
@@ -4968,6 +5260,11 @@ type Preview struct {
 		Wireguard *string `json:"wireguard,omitempty"`
 	} `json:"linux"`
 
+	// PortForwards The enabled port forwards after the change (M35a), sorted by name and id. Faults do not apply to
+	// forwarded connections (M35b): when a fault would select a forward's target, the `warnings` say so
+	// (`faults_not_on_forwards`, with the forward's path). Absent when there is none.
+	PortForwards *[]PreviewPortForward `json:"port_forwards,omitempty"`
+
 	// Queues The queues each winning fault (or part of an activated profile) creates after the change (plan §2.4, D18): with a
 	// rate, an explicit queue limit or keep order one per matched device plus one that the addresses no device owns
 	// share, otherwise one. Each has a class in every direction the fault impairs. Absent when no fault needs a class.
@@ -5025,6 +5322,35 @@ type PreviewFault struct {
 
 // PreviewFaultLayer defines model for PreviewFault.Layer.
 type PreviewFaultLayer string
+
+// PreviewPortForward defines model for PreviewPortForward.
+type PreviewPortForward struct {
+	// Entry Where the forwarded connections come in: `uplink` - on the uplink interface and its current address;
+	// `management` - on the management interface and its current address, in the three-port topology only
+	// (in the two-port topology both are one interface, so `management` is refused as a duplicate of
+	// `uplink`: `management_is_uplink`). The address is followed like the masquerade's (plan §2.2).
+	Entry PortForwardEntry `json:"entry"`
+
+	// ExternalPorts A port or a range `from-to`.
+	//
+	// Example: 8000-8010
+	ExternalPorts string `json:"external_ports"`
+
+	// FaultsApply Always false - faults do not apply to forwarded connections (M35b).
+	FaultsApply bool    `json:"faults_apply"`
+	Id          Uuid    `json:"id"`
+	Name        *string `json:"name,omitempty"`
+
+	// New The forward is not in the active revision, or it changed.
+	New      *bool               `json:"new,omitempty"`
+	Protocol PortForwardProtocol `json:"protocol"`
+
+	// Target The target in words (`device esp32-42`, `10.10.0.20`).
+	Target string `json:"target"`
+
+	// TargetPorts Example: 9000-9010
+	TargetPorts string `json:"target_ports"`
+}
 
 // PreviewRule defines model for PreviewRule.
 type PreviewRule struct {
@@ -5780,6 +6106,17 @@ type Step struct {
 	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
 	// Only an explicit entry of the access matrix from the device's network to the management network
 	// opens it. Decided by the maintainer on 2026-10-11.
+	//
+	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
+	// the management network towards a device, so a rule whose source is a device, group or network matches
+	// them **with the device as responder**: its source is matched against the conntrack reply source (the
+	// forward's target), its destination against the external peer (the destination `uplink` matches every
+	// peer behind the uplink; a peer in the management network, which `uplink` excludes, is matched by a
+	// `cidr` destination or by a rule without a destination), its ports against the target port. This holds
+	// for every rule, configured and overlay, including rules that exist before the forward is added: a rule
+	// "device X → uplink: drop" also stops the forwarded connections to X, and `cut_existing` cuts them too.
+	// A forwarded connection that no rule decides is accepted by the forward itself, in front of the access
+	// matrix. `explain` names the rule that decided a forwarded connection (plan §2.4, D34).
 	Rule *AccessRuleBody `json:"rule,omitempty"`
 
 	// Target Narrows the scenario target (e.g. one device of the target group).
@@ -6458,6 +6795,20 @@ type ListOverlaysParams struct {
 // CreateOverlayParams defines parameters for CreateOverlay.
 type CreateOverlayParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ListPortForwardsParams defines parameters for ListPortForwards.
+type ListPortForwardsParams struct {
+	// Revision Read a candidate or older revision instead of the active one.
+	Revision *RevisionQuery `form:"revision,omitempty" json:"revision,omitempty"`
+	Cursor   *Cursor        `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit    *Limit         `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetPortForwardParams defines parameters for GetPortForward.
+type GetPortForwardParams struct {
+	// Revision Read a candidate or older revision instead of the active one.
+	Revision *RevisionQuery `form:"revision,omitempty" json:"revision,omitempty"`
 }
 
 // ListProbesParams defines parameters for ListProbes.

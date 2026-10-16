@@ -150,6 +150,10 @@ type Query struct {
 	// DNSName is the name being resolved (DNS family); SNI the server name of a TLS handshake.
 	DNSName string
 	SNI     string
+	// NotUplink are prefixes the destination `uplink` does not match besides the configured networks
+	// and the management sources: the management interface's subnet, which only the host knows (a
+	// forwarded connection's peer there is not behind the uplink, plan §2.4).
+	NotUplink []netip.Prefix
 }
 
 // Candidate is a fault, a part of an activated profile or a DHCP action that competes in a
@@ -509,6 +513,11 @@ func (w *World) destinationMatches(d *model.Destination, q Query) bool {
 	case !q.DestIP.IsValid():
 		return false
 	case d.Uplink != nil:
+		for _, p := range q.NotUplink {
+			if p.Contains(q.DestIP) {
+				return false
+			}
+		}
 		return w.viaUplink(q.DestIP)
 	case d.Network != nil:
 		for _, p := range w.prefixes[lower(*d.Network)] {

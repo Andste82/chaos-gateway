@@ -3,8 +3,10 @@ package domain
 import (
 	"encoding/json"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -436,5 +438,48 @@ func TestThePreviewNotesTheFaultsThatDoNotApplyToAForward(t *testing.T) {
 	f.Enabled = false
 	if notes := w.ForwardFaultNotes([]Forward{f}, known); len(notes) != 0 {
 		t.Fatalf("disabled: %+v", notes)
+	}
+}
+
+// A device that moved to a new address keeps its old one while a connection of its own still comes from
+// it (a stale neighbor entry, the address it had before); the forward sends to the new address all the
+// same, also when the old one sorts lower. Of two leases the newer one wins, and a reservation counts
+// less than a lease the device has.
+func TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn(t *testing.T) {
+	w, f := forwardWorld(t, nil)
+	cfg := stored(t) // esp32-42: reservation 10.10.0.42
+	before := ResolveIdentity(cfg, Observed{Leases: []model.DhcpLease{lease("10.10.0.11", espMAC, time.Hour)}}, nil)
+	if st := w.Index.ForwardStatus(f, ForwardFacts{Identity: before}); st.Target != ip("10.10.0.11") {
+		t.Fatalf("before the move: %+v (current %v)", st, before.Current[idESP])
+	}
+	cases := map[string]struct {
+		obs     Observed
+		prev    *Identity
+		current []netip.Addr
+	}{
+		"carried over": {Observed{
+			Leases:        []model.DhcpLease{lease("10.10.0.61", espMAC, 2*time.Hour)},
+			ActiveSources: map[netip.Addr]bool{ip("10.10.0.11"): true},
+		}, &before, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.42"), ip("10.10.0.11")}},
+		"stale neighbor": {Observed{
+			Leases:        []model.DhcpLease{lease("10.10.0.61", espMAC, 2*time.Hour)},
+			Neighbors:     []Neighbor{{IP: ip("10.10.0.11"), MAC: espMAC, Stale: true}},
+			ActiveSources: map[netip.Addr]bool{ip("10.10.0.11"): true},
+		}, nil, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.42"), ip("10.10.0.11")}},
+		"two leases": {Observed{
+			Leases: []model.DhcpLease{lease("10.10.0.11", espMAC, time.Hour), lease("10.10.0.61", espMAC, 2*time.Hour)},
+		}, nil, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.11"), ip("10.10.0.42")}},
+	}
+	for name, c := range cases {
+		id := ResolveIdentity(cfg, c.obs, c.prev)
+		if id.Owner[ip("10.10.0.11")] != idESP {
+			t.Errorf("%s: the old address is not the device's any more: %v", name, id.Owner)
+		}
+		if !reflect.DeepEqual(id.Current[idESP], c.current) {
+			t.Errorf("%s: current = %v, want %v", name, id.Current[idESP], c.current)
+		}
+		if st := w.Index.ForwardStatus(f, ForwardFacts{Identity: id}); !st.Active || st.Target != ip("10.10.0.61") {
+			t.Errorf("%s: status = %+v", name, st)
+		}
 	}
 }

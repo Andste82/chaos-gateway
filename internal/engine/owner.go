@@ -947,13 +947,18 @@ func (o *owner) observed(obs observation) {
 // another change the kernel does not have yet (desired.Changed) converge at once.
 const identityConvergeWindow = 2 * time.Second
 
-// sameIdentity compares what the compiler uses: the addresses of every device.
+// sameIdentity compares what the compiler uses: the addresses of every device, and which of them is
+// the most current (a forward's target).
 func sameIdentity(a, b domain.Identity) bool {
-	if len(a.Addresses) != len(b.Addresses) {
+	return sameAddrMap(a.Addresses, b.Addresses) && sameAddrMap(a.Current, b.Current)
+}
+
+func sameAddrMap(a, b map[string][]netip.Addr) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for dev, x := range a.Addresses {
-		y, ok := b.Addresses[dev]
+	for dev, x := range a {
+		y, ok := b[dev]
 		if !ok || !sameAddrs(x, y) {
 			return false
 		}

@@ -22,7 +22,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
 import { fetchAll, firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, usePortForwards, type ActiveFault } from '../composables/gateway';
-import { counterHint, counterText, entryLabels, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
+import { counterHint, counterText, entryLabels, forwardDeviceProblem, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
 import { useNow } from '../composables/useNow';
 import { deviceNetworkInfo, deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
@@ -138,15 +138,17 @@ function editFault(o: Overlay) {
 /** The port forwards to this device, as the draft has them. */
 const forwards = computed(() => forwardRows(draft.baseForwards, draft.forwards, forwardViews.data.value ?? []).filter((r) => r.p.target.device === d.value?.id));
 /**
- * A forward can go to the device: it is configured (or adopted in the draft) and in a local test network.
- * The gateway refuses a forward to a discovered device; the hint says what to do instead.
+ * A forward can go to the device: it is configured (or adopted in the draft), not a WireGuard client and
+ * not configured in another kind of network (one without a network is a target). The gateway refuses a
+ * forward to another device; the hint says what to do instead.
  */
 const forwardBlocked = computed(() => {
   const v = d.value;
   if (!v) return undefined;
-  if (!isAdopted(v) && !draft.devices[v.id]) return 'Adopt the device to forward to it, or forward to its address on the networks page.';
   // the networks not loaded yet: the dialog and the gateway check
-  if (networks.data.value && network.value?.config.type !== 'lan') return 'A port forward goes to a device in a local test network.';
+  const problem = forwardDeviceProblem(v, draft.devices[v.id], (id) => networks.data.value?.find((n) => n.id === id)?.config.type);
+  if (problem === 'discovered') return 'Adopt the device to forward to it, or forward to its address on the networks page.';
+  if (problem === 'not_lan') return 'A port forward goes to a device in a local test network.';
   return undefined;
 });
 const forwardDevice = (id: string) => (id === d.value?.id ? d.value.name : names.value.device?.(id));

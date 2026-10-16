@@ -3,7 +3,7 @@
 // checks under the fields, the forward as the configuration stores it, the gateway's messages by field,
 // the forward in words for the cards, the device detail and the unapplied-changes bar, and the rows the
 // lists show: the forwards of the draft with the status and the counter the gateway reads for them.
-import type { PortForward, PortForwardEntry, PortForwardProtocol, PortForwardView } from '../api/generated/model';
+import type { Device, DeviceView, PortForward, PortForwardEntry, PortForwardProtocol, PortForwardView } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { cloneJSON, jsonEqual } from './mergePatch';
 import { parseIPv4, parseSubnet, subnetText } from './networks';
@@ -110,6 +110,26 @@ export function formFromForward(p: PortForward): ForwardForm {
   };
 }
 
+/**
+ * Why a forward cannot go to the device, as the gateway checks it (plan §2.2 layer 4): a discovered device
+ * is adopted first, a WireGuard client is no target, nor a device configured in a network that is no local
+ * test network. A device without a configured network is a target: the forward follows its address in
+ * whichever local test network it has one. `adopted` is the device's configuration in the draft (a
+ * discovered device adopted there); `networkType` gives the type of a network, undefined while unknown.
+ */
+export function forwardDeviceProblem(
+  d: DeviceView,
+  adopted: Device | null | undefined,
+  networkType: (id: string) => string | undefined,
+): 'discovered' | 'not_lan' | undefined {
+  if (d.origin === 'discovered' && !adopted) return 'discovered';
+  if (d.origin === 'wireguard_client') return 'not_lan';
+  const network = adopted ? adopted.network : d.network;
+  const type = network ? networkType(network) : undefined;
+  if (type && type !== 'lan') return 'not_lan';
+  return undefined;
+}
+
 /** What the checks of the form need to know of the rest of the configuration. */
 export interface ForwardContext {
   /** The other forwards of the draft (not the one edited). */
@@ -119,8 +139,8 @@ export interface ForwardContext {
   /** The management interface is the uplink interface (two-port topology): `management` is refused. */
   twoPort: boolean;
   /**
-   * The devices a forward can go to (configured ones in a local test network, and the target the forward
-   * edited has), once they are known: another device is refused, as the gateway refuses it.
+   * The devices a forward can go to (see forwardDeviceProblem, and the target the forward edited has),
+   * once they are known: another device is refused, as the gateway refuses it.
    */
   devices?: string[];
 }

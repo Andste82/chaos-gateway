@@ -64,6 +64,14 @@ func ctOriginalIP(key string) any {
 	return map[string]any{"ct": map[string]any{"key": "ip " + key, "dir": "original"}}
 }
 
+// ctReply and ctReplyIP are ctOriginal and ctOriginalIP in the reply direction: for a connection whose
+// destination was translated, the reply comes from the translated address and port (a port forward's
+// target, M35a).
+func ctReply(key string) any { return map[string]any{"ct": map[string]any{"key": key, "dir": "reply"}} }
+func ctReplyIP(key string) any {
+	return map[string]any{"ct": map[string]any{"key": "ip " + key, "dir": "reply"}}
+}
+
 func bitAnd(a, b any) any { return map[string]any{"&": []any{a, b}} }
 func bitOr(a, b any) any  { return map[string]any{"|": []any{a, b}} }
 func lshift(a, b any) any { return map[string]any{"<<": []any{a, b}} }
@@ -132,12 +140,18 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	if t.identityMap.Name != "" {
 		t.Nft.Maps = append(t.Nft.Maps, t.identityMap)
 	}
+	if t.ForwardMap != "" {
+		t.Nft.Maps = append(t.Nft.Maps, t.forwardMap)
+	}
 	sort.Slice(t.Nft.Sets, func(i, j int) bool { return t.Nft.Sets[i].Name < t.Nft.Sets[j].Name })
 	t.Nft.Counters = []string{"forward_drop", "input_drop", "ipv6_drop", AntiLockoutCounter}
 	if t.Access != nil {
 		for _, r := range t.Access.Rules {
 			t.Nft.Counters = append(t.Nft.Counters, r.Counter)
 		}
+	}
+	for _, f := range t.Forwards {
+		t.Nft.Counters = append(t.Nft.Counters, f.Counter)
 	}
 
 	// ---- input: gateway protection (plan §2.2 layer 1) -------------------------------------
@@ -241,6 +255,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	if t.Access != nil {
 		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": AccessForwardChain}}))
 	}
+	// the port forwards (forward.go): a forwarded connection that no access rule decided is accepted
+	// here, in front of the access matrix, so the forward itself is the allowance (plan §2.2 layer 4)
+	forward.Rules = append(forward.Rules, t.forwardAccepts(ifsLan.Name)...)
 	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
 	forward.Rules = append(forward.Rules, implicit...)
@@ -281,7 +298,8 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 			t.Nft.Chains = append(t.Nft.Chains, Chain{Name: CutForwardChain}, Chain{Name: CutInputChain})
 		}
 	}
-	if c := t.serviceRedirect(tp); c != nil {
+	// the prerouting NAT chain: the service redirect (M6b) and the DNAT of the port forwards (M35a)
+	if c := t.prerouting(tp); c != nil {
 		t.Nft.Chains = append(t.Nft.Chains, *c)
 	}
 

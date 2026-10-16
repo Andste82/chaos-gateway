@@ -81,7 +81,9 @@ func TestEveryCompiledRulesetIsAcceptedByTheKernel(t *testing.T) {
 // the windows are checked with `nft -c`.
 func TestEveryCutWindowIsAcceptedByTheKernel(t *testing.T) {
 	bed := testbed.New(t)
-	for name, tg := range accessScenarios(t) {
+	scenarios := accessScenarios(t)
+	scenarios["access-forward"] = scenarioForward(t) // the responder forms of the rules (M35a)
+	for name, tg := range scenarios {
 		if !tg.Access.HasCuts() {
 			continue
 		}

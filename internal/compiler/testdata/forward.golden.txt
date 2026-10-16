@@ -1,0 +1,83 @@
+# forwards
+f1000000-0000-4000-8000-000000000003  addr  tcp/2222-2222 on wan0 (uplink) -> 10.10.0.77:22-22  active true   counter fwd_74f89ac51f
+f1000000-0000-4000-8000-000000000004  mgmt  tcp/8443-8443 on mgmt0 (management) -> 10.10.0.43:443-443  active true   counter fwd_e1e1f5dfd8
+f1000000-0000-4000-8000-000000000002  range  udp/8000-8003 on wan0 (uplink) -> 10.20.0.50:9000-9003  active true   counter fwd_adc7fa6ad9
+f1000000-0000-4000-8000-000000000001  web  tcp/8080-8080 on wan0 (uplink) -> 10.10.0.42:80-80  active true   counter fwd_e1fe2665fa
+# map fwd_dnat_bdf066
+  mgmt0 . tcp . 8443 : 10.10.0.43 . 443
+  wan0 . tcp . 2222 : 10.10.0.77 . 22
+  wan0 . tcp . 8080 : 10.10.0.42 . 80
+  wan0 . udp . 8000 : 10.20.0.50 . 9000
+  wan0 . udp . 8001 : 10.20.0.50 . 9001
+  wan0 . udp . 8002 : 10.20.0.50 . 9002
+  wan0 . udp . 8003 : 10.20.0.50 . 9003
+# chain prerouting
+  meta iifname br-iot ip daddr 10.10.0.1 udp dport 53 dnat ip to 169.254.100.2
+  meta iifname br-iot ip daddr 10.10.0.1 tcp dport 53 dnat ip to 169.254.100.2
+  meta iifname br-lab ip daddr 10.20.0.1 udp dport 53 dnat ip to 169.254.100.2
+  meta iifname br-lab ip daddr 10.20.0.1 tcp dport 53 dnat ip to 169.254.100.2
+  meta iifname { mgmt0, wan0 } meta l4proto { tcp, udp } fib daddr . iif type local dnat ip concat to meta iifname . meta l4proto . th dport map @fwd_dnat_bdf066
+# rules
+0  overlay:00000000-0000-4000-8000-000000000001    drop  scope "group sensors"  dest ""  proto udp  counter rule_8e9ca98e27
+1  config:a1000000-0000-4000-8000-000000000001  web-down  reset  cut  scope "device esp32-42"  dest "uplink"  proto tcp  counter rule_add048cda1
+2  config:a1000000-0000-4000-8000-000000000002  lab-office  reject  scope "network Lab"  dest "198.51.100.0/24"  proto any  counter rule_a41eb09061
+# sets
+set anon_uplink_8743d6 { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24, 192.168.56.0/24 }
+set asrc_32ea59bcd142051d86b1c9ec_8743d6 { 10.10.0.42, 10.10.0.43 }
+set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
+set asrc_be61152c2009e2fc3b2690cd_8743d6 { 10.20.0.0/24 }
+# chain forward
+  jump cut_forward
+  ct state { established, related } accept
+  ip daddr 169.254.100.0/30 meta oifname != svc0 counter "forward_drop" drop
+  meta iifname br-iot meta oifname br-iot accept
+  meta iifname br-lab meta oifname br-lab accept
+  meta iifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta oifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  jump access_forward
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 2222 counter "fwd_74f89ac51f" last accept
+  meta iifname mgmt0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8443 counter "fwd_e1e1f5dfd8" last accept
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto udp ct original proto-dst 8000-8003 counter "fwd_adc7fa6ad9" last accept
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8080 counter "fwd_e1fe2665fa" last accept
+  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 53 accept
+  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 53 accept
+  meta iifname svc0 meta oifname wan0 accept
+  meta iifname @ifs_lan_bf4feb meta oifname wan0 accept
+  meta iifname @ifs_cg_bf4feb counter "forward_drop" drop
+  meta oifname @ifs_cg_bf4feb counter "forward_drop" drop
+# chain input
+  jump cut_input
+  ct state { established, related } accept
+  meta iifname lo accept
+  meta iifname svc0 ip saddr 169.254.100.2 tcp dport 443 accept
+  meta iifname svc0 counter "input_drop" drop
+  meta iifname != @ifs_test_bf4feb ip saddr @mgmt_src_8743d6 tcp dport { 22, 443 } counter "anti_lockout" last accept
+  tcp dport 443 counter "input_drop" drop
+  jump access_input
+  meta iifname @ifs_test_bf4feb ip protocol icmp icmp type echo-request accept
+  meta iifname @ifs_test_bf4feb udp dport 67 accept
+  meta iifname @ifs_test_bf4feb udp dport 53 accept
+  meta iifname @ifs_test_bf4feb tcp dport 53 accept
+  meta iifname @ifs_test_bf4feb counter "input_drop" drop
+# chain access_forward
+  ct original ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp counter "rule_8e9ca98e27" last drop
+  ct status dnat ct reply ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp counter "rule_8e9ca98e27" last drop
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 ct original ip daddr != @anon_uplink_8743d6 meta l4proto tcp ct original proto-dst 80 counter "rule_add048cda1" last reject with tcp reset
+  ct status dnat ct reply ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 ct original ip saddr != @anon_uplink_8743d6 meta l4proto tcp ct reply proto-src 80 counter "rule_add048cda1" last reject with tcp reset
+  ct original ip saddr @asrc_be61152c2009e2fc3b2690cd_8743d6 ct original ip daddr 198.51.100.0/24 counter "rule_a41eb09061" last reject with icmpx port-unreachable
+  ct status dnat ct reply ip saddr @asrc_be61152c2009e2fc3b2690cd_8743d6 ct original ip saddr 198.51.100.0/24 counter "rule_a41eb09061" last reject with icmpx port-unreachable
+# chain access_input
+  ct original ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp counter "rule_8e9ca98e27" last drop
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 ct original ip daddr != @anon_uplink_8743d6 meta l4proto tcp ct original proto-dst 80 counter "rule_add048cda1" last reject with tcp reset
+  ct original ip saddr @asrc_be61152c2009e2fc3b2690cd_8743d6 ct original ip daddr 198.51.100.0/24 counter "rule_a41eb09061" last reject with icmpx port-unreachable
+# chain cut_forward
+# chain cut_input
+# cut_forward window of web-down
+  meta iifname br-iot meta oifname br-iot return
+  meta iifname br-lab meta oifname br-lab return
+  ct original ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp return
+  ct status dnat ct reply ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp return
+  ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 ct original ip daddr != @anon_uplink_8743d6 meta l4proto tcp ct original proto-dst 80 ct state { established } ct direction original reject with tcp reset
+  ct status dnat ct reply ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 ct original ip saddr != @anon_uplink_8743d6 meta l4proto tcp ct reply proto-src 80 ct state { established } ct direction original reject with tcp reset

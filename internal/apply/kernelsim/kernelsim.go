@@ -61,8 +61,10 @@ type nftSet struct {
 // ("mark" for a plain integer, "verdict" for an element that goes to a chain). Elements are the
 // raw `{"elem":{"key":...,"val":...}}` objects nft itself uses.
 type nftMap struct {
-	keyType   json.RawMessage
-	valueType string
+	keyType json.RawMessage
+	// valueType is the map's data type as the JSON names it: one type, or the list of a concatenated
+	// value (the DNAT map of the port forwards)
+	valueType json.RawMessage
 	flags     []string
 	elems     []json.RawMessage
 }

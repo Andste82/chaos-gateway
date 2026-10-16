@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -12,20 +13,47 @@ import (
 
 // forwardViews builds the views of the port forwards of a revision (M35a), sorted by name and id: the
 // configuration with the status the observed state gives it (a device target follows the device's
-// address; a forward of a device without one is inactive and says why).
-func (s *Server) forwardViews(v view) []model.PortForwardView {
+// address; a forward of a device without one is inactive and says why). Only the revision the kernel
+// runs has counters: those of the forwards that are in its packet path.
+func (s *Server) forwardViews(ctx context.Context, v view) []model.PortForwardView {
 	facts, _ := s.cfg.Engine.ForwardFacts(v.cfg)
 	idx, _ := domain.BuildIndex(v.cfg)
 	fwds := deref(v.cfg.PortForwards)
+	var oc overlayContext
+	if v.active && len(deref(v.cfg.PortForwards)) > 0 {
+		oc = s.readOverlayContext(ctx, true)
+	}
 	var out []model.PortForwardView
 	for _, f := range domain.Forwards(v.cfg) {
 		id, err := uuid.Parse(f.ID)
 		if err != nil {
 			continue // a key the validation refuses
 		}
-		out = append(out, model.PortForwardView{Id: id, Config: fwds[f.ID], Status: forwardStatus(idx.ForwardStatus(f, facts))})
+		fv := model.PortForwardView{Id: id, Config: fwds[f.ID], Status: forwardStatus(idx.ForwardStatus(f, facts))}
+		fv.Counters = oc.forwardCounter(f.ID)
+		out = append(out, fv)
 	}
 	return out
+}
+
+// forwardCounter is the counter of a forward in the kernel's packet path: the packets and bytes of the
+// new connections it let through to its target. Nil when the forward is not in the kernel or the
+// counters could not be read.
+func (oc overlayContext) forwardCounter(id string) *model.Counter {
+	if oc.counters == nil || oc.snap == nil {
+		return nil
+	}
+	for _, f := range oc.snap.Forwards {
+		if f.ID != id {
+			continue
+		}
+		v, ok := oc.counters[f.Counter]
+		if !ok {
+			return nil
+		}
+		return &model.Counter{Packets: v.Packets, Bytes: v.Bytes, Epoch: oc.snap.ForwardEpochs[f.ID], LastMatch: oc.lastMatch(v)}
+	}
+	return nil
 }
 
 // forwardStatus is the spec's PortForwardStatus of a domain.ForwardState.
@@ -52,7 +80,7 @@ func (s *Server) ListPortForwards(c *gin.Context, params model.ListPortForwardsP
 	if !ok {
 		return
 	}
-	items, next, err := page(s.forwardViews(v), forwardSortKey, params.Cursor, params.Limit)
+	items, next, err := page(s.forwardViews(contextOf(c), v), forwardSortKey, params.Cursor, params.Limit)
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeBadRequest, "%v", err))
 		return
@@ -69,7 +97,7 @@ func (s *Server) GetPortForward(c *gin.Context, forwardId model.Ref, params mode
 	if !ok {
 		return
 	}
-	for _, fv := range s.forwardViews(v) {
+	for _, fv := range s.forwardViews(contextOf(c), v) {
 		if strings.EqualFold(fv.Id.String(), forwardId) || (fv.Config.Name != nil && strings.EqualFold(*fv.Config.Name, forwardId)) {
 			c.JSON(200, fv)
 			return

@@ -133,8 +133,9 @@ func NormalizeElement(e string) string { return strings.TrimSuffix(e, "/32") }
 
 // Pairs returns the key/value elements of a map, normalized like Elements: the key as an address,
 // a prefix, a range "first-last" or a concatenation joined with " . ", the value as a decimal number (a "mark" map, such
-// as the identity map) or the name of the chain a "verdict" element (a classification map) goes
-// to. A map element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array
+// as the identity map), the name of the chain a "verdict" element (a classification map) goes
+// to, or the parts of a concatenated value joined with " . " (the DNAT map of the port forwards).
+// A map element is a [key, value] pair (libnftables-json's SET_ELEM: "for mappings, an array
 // of arrays with exactly two elements is expected"), confirmed against a real captured `nft -j
 // list map` ("elem": [[9001, {"drop": null}], ...]).
 func (s *NftSet) Pairs() map[string]string {
@@ -202,6 +203,10 @@ func mapValueString(v any) string {
 					return t
 				}
 			}
+		}
+		if _, ok := x["concat"]; ok {
+			// a concatenated value (the DNAT map's address . port): joined like a key
+			return elemString(x)
 		}
 	}
 	return ""

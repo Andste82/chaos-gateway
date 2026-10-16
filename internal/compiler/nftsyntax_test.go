@@ -68,5 +68,8 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	}
 	// the two-port guard in front of the access rules (P2-M9-11)
 	out["access-twoport"] = scenarioAccessTwoPort(t)
+	// the port forwards (M35a): the DNAT map with its concatenated value, the DNAT through it next to the
+	// service redirect, the accept rules with `ct status dnat`, the responder forms of the access rules
+	out["forward"] = scenarioForward(t)
 	return out
 }

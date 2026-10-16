@@ -579,7 +579,10 @@ What M4 deliberately leaves to later milestones, and where it is weaker than it 
 
 `chaosgw apply --file config.yaml --socket /run/chaosgw/exec.sock` applies a configuration without
 the API; `--dry-run` shows the plan and the diffs, `--state-dir` also stores the configuration as the
-active revision. In the testbed `--namespace` points it at the gateway namespace.
+active revision. In the testbed `--namespace` points it at the gateway namespace. `--ui-port` (default
+443) is the port the API listens on (`chaosgw api --port`) when the configuration names no
+`management.ui_port`: the file is validated against it (no port forward may take it) and the
+anti-lockout rule and the compiler's backstop use it.
 
 ### Revision retention
 
@@ -4036,8 +4039,10 @@ P31-M35a-01 to P31-M35a-08 in `docs/open-items.md`, each with the option that is
 
   A forward is never lockout-relevant: the ports of the control plane are refused, so it never waits
   for commit-confirm. The compiler is the backstop: a forward the validation would refuse (an old
-  revision, a file of `chaosgw apply --file`, which does not run the validation) is left out with
-  the warning `forward_refused`, the others are compiled.
+  revision) is left out with the warning `forward_refused`, the others are compiled. `chaosgw apply
+  --file` validates the file against the API's port it is given (`--ui-port`, default 443) and
+  compiles with it, so a file cannot take the port of an API that listens elsewhere either
+  (`TestApplyFileRefusesAForwardOnTheAPIsPort`).
 - **The packet path** (`internal/compiler/forward.go`, the overview at its top):
   - *DNAT.* One rule in the `prerouting` NAT chain (priority -100, after the service redirect of
     M6b): in on an entry interface, to an address of that interface (`fib daddr . iif type local`),
@@ -4045,8 +4050,12 @@ P31-M35a-01 to P31-M35a-08 in `docs/open-items.md`, each with the option that is
     kernel's lookup follows a new entry address at once, like masquerade: no apply, no element
     changes (P31-M35a-07: every address of the interface answers). The map's value is the target's
     address and port; it has one element per forwarded port (nft cannot shift a range, P31-M35a-06).
-  - *A device target follows its address.* The element holds the device's address now; an address
-    change is an element update through the identity path of M7 (`internal/engine/forward.go`,
+  - *A device target follows its address.* The element holds the device's address now: of its
+    addresses in a local test network the most current one (`Identity.Current`: an explicit address,
+    then leases, the newest first, then the neighbor table, a reservation, and last an address that
+    stays mapped only because a connection of the device still comes from it), so an old address
+    that lingers on with a long-lived connection is no target while the device has a newer one. An
+    address change is an element update through the identity path of M7 (`internal/engine/forward.go`,
     `owner.go`), never a full apply. A device without an address keeps its forward compiled, with no
     elements and the status `device_without_address`.
   - *Accept.* One rule per forward in `forward`, after `jump access_forward` and before the matrix:
@@ -4070,7 +4079,12 @@ P31-M35a-01 to P31-M35a-08 in `docs/open-items.md`, each with the option that is
   with the same counter and verdict: `ct status dnat`, the rule's source against `ct reply ip saddr`
   (the target), its destination against `ct original ip saddr` (the peer; `uplink` matches every peer
   behind the uplink and excludes the management network), its ports against `ct reply proto-src` (the
-  target port). An ICMP rule has no responder form, and the input chain never sees a forwarded
+  target port). The management network a peer is excluded from is its `allowed_sources` and the
+  interface's own subnet, as `explain` has it: when `allowed_sources` is unset or narrower than the
+  subnet, the responder forms test the peer against a set of their own (`anon_uplink_peer`,
+  `AccessPlan.PeerNonUplink`), so a device's "offline" rule (device → uplink: drop) does not stop a
+  forward from the management side in a default installation; otherwise they share `anon_uplink`
+  (`TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection`). An ICMP rule has no responder form, and the input chain never sees a forwarded
   connection. "Also cut existing connections" has these forms in its cut window too (the reset goes
   to the peer), and the engine's conntrack cut finds forwarded flows by their reply source
   (`internal/engine/cut.go`). The domain mirror is `World.ForwardedDecision`: the first matching rule
@@ -4120,21 +4134,21 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 |---|---|
 | golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder) | `TestGoldenForwards`, `TestGoldenForwardNftTransaction` (`forward.golden.txt`, `forward.nft.golden.json`); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder`, `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer`, `TestWithoutAForwardInThePacketPathNothingChanges`, `TestMapElementsWithInterfaceNamesAndConcatenatedValues`; the kernel takes the ruleset and its cut windows: `TestEveryTransactionIsAcceptedByNftsParser`, `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` (scenario `forward`) |
 | level 1 — a server namespace behind the uplink reaches a TCP and a UDP listener of a test-network client through a forward, and without a forward its connection is dropped and counted | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`; through the engine `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` |
-| a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements` |
+| a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); the new address also while the old one lingers on with a connection of the device: `TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn`, `TestTheDNATMapSendsToTheDevicesMostCurrentAddress`; `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements` |
 | a drop, reject and reset rule on the device stops forwarded connections, and "also cut existing connections" resets an established one | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`, `TestACutWindowResetsAnEstablishedForwardedConnectionOnTheRealKernel`, `TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection`; `TestACutWindowAlsoResetsForwardedConnections`, `TestACutTakesTheForwardedConnectionsOfItsTarget` |
 | a device fault does not impair a forwarded connection, and the preview says so | `TestADeviceFaultDoesNotImpairAForwardedConnection`; `TestThePreviewListsTheForwardsAndSaysThatFaultsDoNotApply`, `TestThePreviewNotesTheFaultsThatDoNotApplyToAForward`; `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target" |
-| an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network); `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
+| an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network, also with `allowed_sources` unset or narrower); `TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection`, `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
 | a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` |
 | a port range is forwarded one to one | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (tcp 9049-9050 → 7049-7050); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`; `port-forwards.spec.ts` "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field" |
 | a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
 | a forward follows a new uplink address (DHCP) within 1 s | `TestAForwardFollowsANewUplinkAddress` (the address replaced as a new lease does, measured, and the status follows), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` |
 | a device without a known address leaves its forward inactive with its reason in the status | `TestAForwardFollowsItsDeviceAndSaysWhyItIsInactive`, `TestPortForwardsAreListedWithTheirStatus`, `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestAForwardOfAnEntryWithoutAddressIsInactive`; `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status" |
-| the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; `TestAForwardHasTheCounterOfItsAcceptRule`; level 2 `TestSmokeOnCleanUbuntuHosts` |
+| the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; `TestAForwardHasTheCounterOfItsAcceptRule`; level 2 `TestSmokeOnCleanUbuntuHosts`. The counter counts the packets of connections not yet established (one per connection, more for a retransmitted SYN or an unanswered UDP packet), so the UI shows it as hits, like the access rules' counters: `src/lib/forwards.test.ts` "the rows: …", `port-forwards.spec.ts` "port forwards: the uplink and the management card list …" |
 | a disabled or deleted forward leaves no DNAT and closes the path | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (deleted), `TestADisabledForwardLeavesTheKernel`, `TestWithoutAForwardInThePacketPathNothingChanges` (disabled), `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress` |
 | Playwright against the mocked API for the forward list | `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status"; `src/lib/forwards.test.ts` "the rows: …" |
 | the form (add, edit, disable, delete through the drawer, a refused port shown at its field, a range) | `port-forwards.spec.ts` "port forwards: add a forward to a device through the drawer — no commit-confirm, and it is listed after the apply", "port forwards: edit, disable and delete through the draft and the drawer; Undo takes each back", "port forwards: a port the gateway refuses is shown at its field, and Fix opens the forward again with the gateway's message", "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field", "port forwards: a forward changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change"; `src/lib/forwards.test.ts` "the port forward form (M35a)"; `src/stores/draft.forwards.test.ts` "the port forwards in the draft (M35a)" |
 | the device detail's list | `port-forwards.spec.ts` "port forwards: the device detail lists the forwards to the device, and Edit opens the forward on the networks page" |
-| the preview's note on faults | `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target"; explain: "port forwards: explain shows a forwarded connection's forward, the access layer of the forward and its note on faults" |
+| the preview's note on faults | `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target"; explain through the API only: `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` (the explain card cannot ask about a forwarded connection, P31-M35a-08; "port forwards: explain shows a forwarded connection's forward, the access layer of the forward and its note on faults" only renders such an answer) |
 | level 2 — a forward in the two-port topology, next to a port published by a Docker container | `TestSmokeOnCleanUbuntuHosts/<release>/two-ports` (`portForwards` in `internal/appliance/appliance_test.go`, nightly job `appliance`); at level 0 `TestTheLevel2ConfigurationIsValidWithItsPortForwards`, `TestTheEchoHelperAnswersWithItsTagAndThePeer` |
 | Scope: the `DOCKER-USER` accept rule covers the path from the entry side to the test-network bridges | `TestAForwardPassesDockersForwardPolicyThroughDockerUser`, `TestDockerUserCoversThePathOfAForward`; level 2 |
 | Scope: the API resource, revisioned like the access rules | `TestPortForwardsAreListedWithTheirStatus`, `TestTheCapabilitiesNamePortForwarding`, `TestForwardsAreChangedThroughAMergePatchLikeAccessRules`, `TestForwardNamesAreUniqueAndTheKeysAreUUIDs`, `TestAForwardIsOfTcpOrUdpWithAKnownEntrySide`, `TestTheExampleForwardIsValidAndFillsItsDefaults`, `TestMatchForwardFindsTheEnabledForwardOfAPort` |

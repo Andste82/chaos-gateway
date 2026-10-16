@@ -39,6 +39,7 @@ const layers: Record<string, string> = {
   overlay_rule: 'an overlay rule',
   config_rule: 'a configured rule',
   access_matrix: 'the access matrix',
+  port_forward: 'the port forward (no rule decided)',
 };
 
 const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', dhcp: 'DHCP', tunnel: 'Tunnel' };
@@ -122,6 +123,12 @@ async function run() {
         <AccessChip :action="result.access.verdict" />
         <span>by {{ layers[result.access.layer] ?? result.access.layer }}<template v-if="result.access.reason"> — {{ result.access.reason }}</template></span>
       </div>
+      <p v-if="result.forward" class="m-0 rounded-md border border-border bg-surface-2 px-3 py-2 text-[13px]" data-testid="explain-forward">
+        A forwarded connection: port forward {{ result.forward.name ?? result.forward.id }} from the
+        {{ result.forward.entry === 'management' ? 'management network' : 'uplink' }} to
+        <span class="mono">{{ result.forward.device?.name ?? result.forward.target_ip ?? 'its device' }}:{{ result.forward.target_port }}</span>.
+        {{ result.forward.note }}
+      </p>
       <p v-if="result.access.verdict !== 'allow'" class="m-0 text-[13px] text-text-2">The faults below take effect only for traffic that is allowed.</p>
       <p v-if="result.faults.length === 0" class="m-0 text-text-2">No fault applies: the traffic passes unimpaired.</p>
       <div v-for="(f, i) in result.faults" :key="i" class="rounded-md border border-border bg-surface-2 px-3 py-2" data-testid="explain-family">

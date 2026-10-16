@@ -7,22 +7,28 @@
 // any other (commit-confirm only when the gateway says the change could lock the admin out). Add network
 // opens the network form, and the selected network is edited and deleted through the draft (P3-M14-01): a
 // network of the draft is marked NEW, CHANGED or DELETED until it is applied, and Undo takes the edit back.
-// The routing view and the technical view are pages of their own.
+// The routing view and the technical view are pages of their own. The uplink card and the management
+// card list the port forwards of their side (M35a) with their counter and status; a forward is added,
+// edited, disabled and deleted through the draft as well (`?forward=<id>` opens one for editing, the
+// link of the device detail; `?forward=new&device=<id>` adds one to a device).
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { errorMessage } from '../api/fetcher';
 import { useGetUplink } from '../api/generated/hooks/config/config';
-import type { LanNetwork, NetworkView, WireGuardNetwork } from '../api/generated/model';
+import type { InterfaceRef, LanNetwork, NetworkView, PortForwardEntry, WireGuardNetwork } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
 import AccessMatrix from '../components/networks/AccessMatrix.vue';
 import ClientsCard from '../components/networks/ClientsCard.vue';
+import ForwardDialog from '../components/networks/ForwardDialog.vue';
+import ForwardList from '../components/networks/ForwardList.vue';
 import LeasesCard from '../components/networks/LeasesCard.vue';
 import NetworkDialog from '../components/networks/NetworkDialog.vue';
 import NetworkSettings from '../components/networks/NetworkSettings.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { firstError, useActiveConfig, useDevices, useNetworks } from '../composables/gateway';
+import { firstError, useActiveConfig, useDevices, useNetworks, usePortForwards } from '../composables/gateway';
+import { forwardRows } from '../lib/forwards';
 import { subnetText } from '../lib/networks';
 import { useApiScreen } from '../stores/apiPanel';
 import { useDraftStore } from '../stores/draft';
@@ -32,6 +38,7 @@ const props = defineProps<{ id?: string }>();
 const networks = useNetworks();
 const devices = useDevices();
 const uplink = useGetUplink();
+const forwardViews = usePortForwards();
 const active = useActiveConfig();
 const route = useRoute();
 const router = useRouter();
@@ -71,6 +78,7 @@ useApiScreen('the networks', () => {
     { method: 'GET' as const, path: '/networks', note: 'local test networks and WireGuard networks with their status' },
     { method: 'GET' as const, path: '/uplink' },
     { method: 'GET' as const, path: '/revisions/active', note: 'the access matrix of the active revision' },
+    { method: 'GET' as const, path: '/port-forwards', note: 'the port forwards with their status and counters' },
   ];
   const n = selected.value;
   if (n?.config.type === 'lan' && n.status.state !== 'pending') calls.push({ method: 'GET', path: `/networks/${n.id}/leases`, note: 'the DHCP leases' });
@@ -116,6 +124,39 @@ const cards = computed<Card[]>(() =>
 );
 
 const management = computed(() => active.data.value?.configuration.management);
+
+// ---- the port forwards of the uplink and the management card (M35a)
+const rows = computed(() => forwardRows(draft.baseForwards, draft.forwards, forwardViews.data.value ?? []));
+const forwardsOf = (entry: PortForwardEntry) => rows.value.filter((r) => r.p.entry === entry);
+const deviceName = (id: string) => draft.devices[id]?.name ?? devices.data.value?.find((d) => d.id === id)?.name;
+const sameInterface = (a?: InterfaceRef, b?: InterfaceRef) => !!a && !!b && ((!!a.name && a.name === b.name) || (!!a.mac && a.mac.toLowerCase() === b.mac?.toLowerCase()));
+/** The management interface is the uplink interface (two-port topology): forwards come in on the uplink only. */
+const twoPort = computed(() => sameInterface(management.value?.interface, active.data.value?.configuration.uplink?.interface));
+const forwardOpen = ref(false);
+const forwardEditing = ref<string>();
+const forwardEntry = ref<PortForwardEntry>('uplink');
+const forwardDevice = ref<string>();
+function addForward(entry: PortForwardEntry, device?: string) {
+  forwardEditing.value = undefined;
+  forwardEntry.value = entry;
+  forwardDevice.value = device;
+  forwardOpen.value = true;
+}
+function editForward(id: string) {
+  forwardEditing.value = id;
+  forwardOpen.value = true;
+}
+// the device detail's links: ?forward=<id> edits a forward, ?forward=new&device=<id> adds one to the device
+watch(
+  () => [route.query.forward, draft.baseConfig !== undefined] as const,
+  ([f, loaded]) => {
+    if (typeof f !== 'string' || !loaded) return;
+    if (f === 'new') addForward('uplink', typeof route.query.device === 'string' ? route.query.device : undefined);
+    else if (draft.effectiveForwards[f]) editForward(f);
+    void router.replace({ query: {} });
+  },
+  { immediate: true },
+);
 const up = computed(() => uplink.data.value);
 const unknownNetwork = computed(() => !!props.id && list.value.length > 0 && !selected.value);
 const hub = computed(() => {
@@ -209,7 +250,11 @@ watch(unknownNetwork, async (unknown) => {
         <span class="text-[13px] text-text-2">{{ c.meta }}</span>
         <StatusDot v-if="c.degraded" tone="block" label="degraded: a port is missing" />
       </RouterLink>
-      <div class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5" data-testid="management-card">
+      <div
+        class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5"
+        :class="forwardsOf('management').length ? 'xl:col-span-2' : ''"
+        data-testid="management-card"
+      >
         <span class="flex items-center gap-2 text-base font-semibold">
           Management <span class="rounded border border-border-strong px-1.5 text-xs font-normal text-text-2">OS</span>
         </span>
@@ -223,8 +268,12 @@ watch(unknownNetwork, async (unknown) => {
           >
         </span>
         <span class="text-[13px] text-text-2">UI, API, SSH · owned by the OS</span>
+        <ForwardList v-if="forwardsOf('management').length" :rows="forwardsOf('management')" :device-name="deviceName" label="Port forwards from the management network" @edit="editForward" />
+        <button v-if="!twoPort" type="button" class="btn btn-sm" :disabled="!draft.baseConfig" aria-label="Add a port forward from the management network" @click="addForward('management')">
+          Add port forward
+        </button>
       </div>
-      <div class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5" data-testid="uplink-card">
+      <div class="card flex flex-col items-start gap-1.5 !px-4 !py-3.5" :class="forwardsOf('uplink').length ? 'xl:col-span-2' : ''" data-testid="uplink-card">
         <span class="flex items-center gap-2 text-base font-semibold">
           Uplink <span class="rounded border border-border-strong px-1.5 text-xs font-normal text-text-2">OS</span>
         </span>
@@ -241,6 +290,9 @@ watch(unknownNetwork, async (unknown) => {
             >
           </span>
         </template>
+        <ForwardList v-if="forwardsOf('uplink').length" :rows="forwardsOf('uplink')" :device-name="deviceName" label="Port forwards from the uplink" @edit="editForward" />
+        <button type="button" class="btn btn-sm" :disabled="!draft.baseConfig" aria-label="Add a port forward from the uplink" @click="addForward('uplink')">Add port forward</button>
+        <LoadError v-if="firstError(forwardViews)" :error="firstError(forwardViews)" what="The status of the port forwards is not loaded" :retry="forwardViews.refetch" />
       </div>
     </nav>
 
@@ -256,4 +308,5 @@ watch(unknownNetwork, async (unknown) => {
     <ClientsCard v-if="hub" :network="hub" />
   </template>
   <NetworkDialog v-model:open="formOpen" :network="editing" @saved="saved" />
+  <ForwardDialog v-model:open="forwardOpen" :forward="forwardEditing" :entry="forwardEntry" :device="forwardDevice" :two-port="twoPort" />
 </template>

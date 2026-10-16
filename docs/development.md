@@ -2055,7 +2055,9 @@ forward   jump cut_forward*
   connection the gateway redirected is judged by what the device meant (plan §2.2, E11), and a reply
   is judged like the packet that opened the connection. A rule on `udp/53` therefore covers queries to
   the gateway's DNS address (redirected into the service namespace in forward) and queries sent
-  directly to `169.254.100.2`.
+  directly to `169.254.100.2`. Since M35a, while a port forward is compiled, each rule also has a second,
+  responder form for forwarded connections that matches the device by `ct reply ip saddr` and the port by
+  `ct reply proto-src`; see [Port forwarding (M35a)](#port-forwarding-m35a).
 
 ### The compiled list
 
@@ -2219,7 +2221,9 @@ and LAST_ACK.
   (the engine does not know what the kernel ran before). A connection that an earlier rule owns, and
   one an allow rule owns, is left alone; connections that are over (TIME_WAIT, CLOSE, LAST_ACK) and the
   control plane (a management source towards SSH or the UI port, the anti-lockout rule's match) are
-  never taken, whatever a rule says.
+  never taken, whatever a rule says. Since M35a the cut also finds forwarded connections by their reply
+  source (the device behind the forward), as the responder form of the rules matches them; see
+  [Port forwarding (M35a)](#port-forwarding-m35a).
   Then, for established TCP connections only, `cutWindowRun` opens the window (`CutTransaction(keys)`
   through `NftApply`), waits `Config.CutWindow` on the engine's clock (500 ms; a negative value is
   no wait, for tests), and closes it (`CutTransaction(nil)`, also when the wait or the opening failed, with
@@ -4178,9 +4182,7 @@ it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
 (`make test-privileged`); it does not fall back to a VM, so a hosted kernel without netem would
 fail it visibly.
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1` (the workflow's environment): the level 1 tests of port
-forwarding must each pass, so one that is renamed or no longer built fails the job.
-Its `go test` timeout is 60 minutes (`ARGS='-test-timeout 60m'`): the first run of M10 stopped
+The privileged job's `go test` timeout is 60 minutes (`ARGS='-test-timeout 60m'`): the first run of M10 stopped
 the engine package at the default 20 minutes with every test up to then passing (234 of 256 tests
 had started), so the limit, not a test, was the failure.
 The VM job gives the package 100 minutes (`-test-timeout 100m -vm-timeout 3h`): under KVM the first
@@ -4189,6 +4191,9 @@ of a limit: `parallel` of the iperf3 rate test called `t.Fatalf` from goroutines
 without the signal the wait is for, so an iperf3 that failed at the end of an upload through a 2 Mbit/s
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
+
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1` (the workflow's environment): the level 1 tests of port
+forwarding must each pass, so one that is renamed or no longer built fails the job.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

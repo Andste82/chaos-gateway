@@ -368,6 +368,29 @@ test('port forwards: without forwards the cards list none and offer Add', async 
   await expect(page.getByTestId('forward')).toHaveCount(0);
 });
 
+test('port forwards: a configured device without a network (identified by MAC) is offered a forward, and the gateway takes it', async ({ page }) => {
+  const SENSOR7 = 'a1b2c3d4-0000-4000-8000-000000000057';
+  const gw = withForwards(withNetworks(MockGateway.sample()));
+  gw.devices = gw.devices.map((d) => {
+    if (d.id !== SENSOR7) return d;
+    const { network: _, ...rest } = d;
+    return rest;
+  });
+  await open(page, `/devices/${SENSOR7}`, gw);
+  await expect(page.getByTestId('device-forwards-blocked')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Add a port forward to Sensor-07' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add port forward' });
+  const select = dialog.getByLabel('Device', { exact: true });
+  await expect(select).toHaveValue(SENSOR7);
+  await expect(select.locator('option', { hasText: 'Sensor-07 (10.10.0.57)' })).toHaveCount(1);
+  await expect(dialog.getByText("On the entry side's addresses.")).toBeVisible();
+  await dialog.getByLabel('External port').fill('9292');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(dialog.locator('#forward-device-error')).toHaveCount(0);
+  const [, p] = Object.entries((await lastPatch(page, gw))!)[0]!;
+  expect(p).toEqual({ protocol: 'tcp', entry: 'uplink', external_port: 9292, target: { device: SENSOR7 } });
+});
+
 test('port forwards: a discovered device is offered no forward; it is adopted first, and the form refuses it as the gateway does', async ({ page }) => {
   const gw = await open(page, `/devices/${DISCOVERED}`);
   await expect(page.getByTestId('device-forwards-empty')).toBeVisible();

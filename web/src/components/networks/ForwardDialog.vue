@@ -15,6 +15,7 @@ import { useDevices, useGatewayState } from '../../composables/gateway';
 import {
   emptyForwardForm,
   formFromForward,
+  forwardDeviceProblem,
   forwardFieldOf,
   forwardFormErrors,
   forwardFromForm,
@@ -61,14 +62,14 @@ const lans = computed(() =>
     .map(([id, n]) => ({ id, name: n.name, address: (n as LanNetwork).address })),
 );
 /**
- * The devices a forward can go to: the configured ones in a local test network (a discovered device is
- * adopted first, or its address is the target), and the target the forward edited has whatever it is. A
- * new forward offers no other device: the gateway refuses a forward to it.
+ * The devices a forward can go to: the configured ones not in another kind of network, a configured
+ * device without a network included (a discovered device is adopted first, or its address is the target),
+ * and the target the forward edited has whatever it is. A new forward offers no other device: the gateway
+ * refuses a forward to it.
  */
 const deviceChoices = computed(() => {
-  const lanIds = new Set(lans.value.map((n) => n.id));
   const out = (devices.data.value ?? [])
-    .filter((d) => (d.origin !== 'discovered' || draft.devices[d.id]) && !!d.network && lanIds.has(d.network))
+    .filter((d) => !forwardDeviceProblem(d, draft.devices[d.id], (id) => draft.effectiveNetworks[id]?.type))
     .map((d) => ({ id: d.id, label: `${draft.devices[d.id]?.name ?? d.name}${d.observed.addresses?.length ? ` (${d.observed.addresses[0]})` : ' (no address)'}` }));
   const current = before.value?.target.device;
   if (current && !out.some((d) => d.id === current)) out.push({ id: current, label: (devices.data.value ?? []).find((d) => d.id === current)?.name ?? current });
@@ -197,7 +198,7 @@ async function submit() {
           <p v-else-if="twoPort" id="forward-entry-hint" class="m-0 mt-1 text-xs text-text-3">Two-port topology: the management network is the uplink.</p>
         </div>
       </div>
-      <TextField v-model="form.external" label="External port" mono placeholder="8080 or 8000-8010" :error="shown('external')" hint="On the entry side's current address." />
+      <TextField v-model="form.external" label="External port" mono placeholder="8080 or 8000-8010" :error="shown('external')" hint="On the entry side's addresses." />
 
       <fieldset class="m-0 flex flex-col gap-2 border-0 p-0">
         <legend class="label">Target</legend>

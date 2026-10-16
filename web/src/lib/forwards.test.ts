@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { PortForward, PortForwardView } from '../api/generated/model';
+import type { DeviceView, PortForward, PortForwardView } from '../api/generated/model';
 import { CompleteSetupBody } from '../api/generated/zod/system/system';
 import {
   counterText,
   emptyForwardForm,
   formFromForward,
   forwardChanges,
+  forwardDeviceProblem,
   forwardFieldOf,
   forwardFormErrors,
   forwardFromForm,
@@ -191,5 +192,31 @@ describe('the port forward form (M35a)', () => {
     );
     // the devices not loaded yet: the gateway checks
     expect(forwardFormErrors(form({ device: 'd15c0000-0000-4000-8000-3af19c2207b4' }), ctx).target).toBeUndefined();
+  });
+});
+
+describe('forwardDeviceProblem', () => {
+  const LAN = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
+  const WG = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';
+  const types = (id: string) => ({ [LAN]: 'lan', [WG]: 'wireguard' })[id];
+  const view = (over: Partial<DeviceView>): DeviceView => ({ id: ESP, name: 'ESP32-42', origin: 'configured', observed: { online: true }, ...over });
+
+  it('accepts what the gateway accepts: a configured device or a probe in a local test network, or a configured device without a network', () => {
+    expect(forwardDeviceProblem(view({ network: LAN }), undefined, types)).toBeUndefined();
+    expect(forwardDeviceProblem(view({ origin: 'probe', network: LAN }), undefined, types)).toBeUndefined();
+    // identified by MAC, no network configured: the forward follows its address in any local test network
+    expect(forwardDeviceProblem(view({}), undefined, types)).toBeUndefined();
+    // the networks not known yet: the gateway checks
+    expect(forwardDeviceProblem(view({ network: WG }), undefined, () => undefined)).toBeUndefined();
+    // a discovered device adopted in the draft, without a network
+    expect(forwardDeviceProblem(view({ origin: 'discovered' }), { name: 'adopted', identifiers: { macs: ['02:00:00:00:00:2a'] } }, types)).toBeUndefined();
+  });
+
+  it('refuses what the gateway refuses: a discovered device, a WireGuard client, a device configured in another kind of network', () => {
+    expect(forwardDeviceProblem(view({ origin: 'discovered', network: LAN }), undefined, types)).toBe('discovered');
+    expect(forwardDeviceProblem(view({ origin: 'wireguard_client', network: WG }), undefined, types)).toBe('not_lan');
+    expect(forwardDeviceProblem(view({ network: WG }), undefined, types)).toBe('not_lan');
+    // the draft moves the device into the WireGuard network
+    expect(forwardDeviceProblem(view({ network: LAN }), { name: 'ESP32-42', network: WG }, types)).toBe('not_lan');
   });
 });

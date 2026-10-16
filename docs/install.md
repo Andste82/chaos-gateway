@@ -68,6 +68,24 @@ Applying the setup configures the host's real interfaces and restricts the UI an
 Revision 1 waits for confirmation: if the browser cannot reach the gateway afterwards, it is rolled back when the
 countdown ends and the setup opens again, with a new token in the log.
 
+## Port forwarding
+
+A device in a test network can be made reachable from behind the uplink, or from the management network
+when it has a port of its own: the uplink or management card of the **Networks** page lists the port forwards
+and adds them (protocol, external port or range, a device or an address as the target, target port). A
+forward answers on the entry interface's current address, follows a device's new address by itself, and
+goes through preview and apply like every other change. Things to know:
+
+- The access rules apply to forwarded connections, with the device as the responder: a rule "device →
+  uplink: drop" also stops connections forwarded to it. Faults do not apply to them yet; the preview says so.
+- The gateway refuses the ports it needs itself: the UI/API port (8443 with the compose files above), the
+  WireGuard listen ports (udp), 22/tcp on the management side or when uplink and management share one
+  interface, and 179/tcp while BGP runs. With uplink and management on one interface, forwards enter on the
+  uplink only.
+- Docker's published ports live on the same addresses: do not forward a port a container on the host
+  publishes, the two would compete for it.
+- The status of each forward says why it is inactive, for example "the device has no address".
+
 ## Upgrading an installation made before issue #57 was fixed
 
 Images built before the fix of issue #57 created the API's volumes owned by root, and the API container (user

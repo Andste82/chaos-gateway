@@ -220,10 +220,10 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	waitHealthy(t, ctx, vm, compose, "bird")
 
 	// BIRD came up on the idle configuration the executor writes when there is none yet
-	if out := must(compose + " exec -T bird birdc -s /run/chaosgw/bird/chaosgw.ctl show status"); !strings.Contains(out, "BIRD") {
+	if out := must(compose + " exec -T bird birdc -s /run/chaosgw-bird/chaosgw.ctl show status"); !strings.Contains(out, "BIRD") {
 		t.Errorf("birdc show status did not answer:\n%s", out)
 	}
-	if out := must(compose + " exec -T bird cat /run/chaosgw/bird/chaosgw.conf"); strings.TrimSpace(out) != strings.TrimSpace(bird.Idle(compiler.PolicyTable)) {
+	if out := must(compose + " exec -T bird cat /run/chaosgw-bird/chaosgw.conf"); strings.TrimSpace(out) != strings.TrimSpace(bird.Idle(compiler.PolicyTable)) {
 		t.Errorf("chaosgw.conf is not the idle configuration:\n%s", out)
 	}
 

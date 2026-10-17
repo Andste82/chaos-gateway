@@ -301,10 +301,10 @@ paths:
       description: |
         The checks of the host made when the API started (kernel, modules), and one check per host
         interface that is assigned to a test network or may become one (every interface but the uplink
-        and the management interface), made at the request: whether netplan or NetworkManager configures
+        and the management interface), made at the request: whether netplan, NetworkManager or systemd-networkd configures
         it (`interface.<name>.os_config`, with `interface`). A test interface must carry no OS
-        configuration (plan §3.4): the message names the file and the entry (or the NetworkManager
-        connection), `fix` says what to remove; the status is `fail` for an assigned interface and
+        configuration (plan §3.4): the message names the file and the entry (the NetworkManager
+        connection, the systemd-networkd file that selects it), `fix` says what to remove; the status is `fail` for an assigned interface and
         `warn` for a candidate. The executor reads the files; nothing of their content but where an
         interface is named is reported. `GET /setup` carries the same report for the setup wizard.
       x-milestone: M5
@@ -2515,7 +2515,7 @@ components:
         description: {$ref: '#/components/schemas/Description'}
         interfaces:
           type: array
-          description: Physical ports of the network's bridge. Must not be configured by netplan/NetworkManager.
+          description: Physical ports of the network's bridge. Must not be configured by netplan/NetworkManager/systemd-networkd.
           minItems: 1
           items: {$ref: '#/components/schemas/InterfaceRef'}
         address: {$ref: '#/components/schemas/Ipv4Interface'}
@@ -4446,7 +4446,7 @@ components:
           items: {$ref: '#/components/schemas/Ipv4Interface'}
         os_managed:
           type: boolean
-          description: Configured by netplan/NetworkManager (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
+          description: Configured by netplan, NetworkManager or systemd-networkd (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
         assigned:
           type: object
           properties:

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // First-start setup (plan §2.16, M12): the setup token from the container log, the uplink and the
 // management interface, the test interfaces and their networks, the admin password, the preflight
-// with its hints: for each chosen test interface the preflight's check names the netplan entry or the
-// NetworkManager connection to remove (P3-M12-07). The gateway applies revision 1 with commit-confirm; the wizard logs in with the
+// with its hints: for each chosen test interface the preflight's check names the netplan entry, the
+// NetworkManager connection or the systemd-networkd file to remove (P3-M12-07, issue #64). The gateway applies revision 1 with commit-confirm; the wizard logs in with the
 // new password and asks for the confirmation, so a choice that cuts the browser off rolls back.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
@@ -98,7 +98,7 @@ const takenPrefixes = computed(() =>
   [byName(draft.uplink), byName(draft.management)].flatMap((i) => i?.addresses ?? []),
 );
 // the preflight's check of every chosen test interface the operating system configures: its text names the netplan
-// file and entry (or the NetworkManager connection) and what to remove (plan §3.4, P3-M12-07)
+// file and entry (or the NetworkManager connection, the systemd-networkd file) and what to remove (plan §3.4, P3-M12-07)
 const hints = computed(() =>
   draft.tests
     .map((t) => preflight.value?.checks.find((c) => c.interface === t && c.status !== 'ok'))

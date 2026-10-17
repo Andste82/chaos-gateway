@@ -20,7 +20,7 @@ import (
 // wizard shows the netplan snippet to remove if one exists"). An entry that only turns the addressing off
 // still hands the port to systemd-networkd or NetworkManager, so the fix is always to remove the entry
 // (docs/open-items.md P3-M12-07). This file finds the entries: netplan's YAML files and NetworkManager's
-// keyfile connections, read from the host's file system. It reports where an interface is named and
+// keyfile connections, read from the host's file system; networkd.go adds systemd-networkd's .network files. It reports where an interface is named and
 // nothing else: no address, no key, no Wi-Fi secret of the files leaves it.
 
 // Where netplan and NetworkManager keep their configuration, relative to the host's root. netplan reads
@@ -69,6 +69,10 @@ type OSEntry struct {
 	MAC    string   `json:"mac,omitempty"`
 	Driver []string `json:"driver,omitempty"`
 	Member bool     `json:"member,omitempty"`
+	// Match is the [Match] section of a systemd-networkd file (Manager ManagerNetworkd, ID the file's name): its
+	// conditions by key, the items of a negated list with "!"; a condition the preflight does not evaluate has
+	// no items. networkd takes the first file that selects an interface (Configuring).
+	Match map[string][]string `json:"match,omitempty"`
 	// All is set when the entry hands every interface to NetworkManager: an ethernet connection of
 	// NetworkManager bound to no interface (it may come up on any ethernet port), or netplan's NetworkManager
 	// renderer for all devices (Section "renderer", ID the renderer; NetworkManager then manages every device
@@ -76,7 +80,8 @@ type OSEntry struct {
 	All bool `json:"all,omitempty"`
 	// Unmanaged is set for a NetworkManager setting (`unmanaged-devices` under [keyfile], File the
 	// configuration file) that leaves the interfaces Name or MAC selects alone: it configures nothing, and
-	// for those interfaces Configuring leaves out NetworkManager's entries and the All entries.
+	// for those interfaces Configuring leaves out NetworkManager's entries and the All entries. On a
+	// systemd-networkd file it is its [Link] Unmanaged=yes: networkd leaves the interfaces it selects alone.
 	Unmanaged bool `json:"unmanaged,omitempty"`
 }
 
@@ -89,6 +94,9 @@ func (e OSEntry) Matches(name, mac, driver string) bool {
 // selects reports whether the entry names the interface with this name, MAC address and driver: by its
 // name glob, MAC and driver globs, or All.
 func (e OSEntry) selects(name, mac, driver string) bool {
+	if e.Manager == ManagerNetworkd {
+		return networkdSelects(e.Match, name, mac, driver)
+	}
 	if e.All {
 		return true
 	}
@@ -123,6 +131,8 @@ func (e OSEntry) Where() string {
 		return fmt.Sprintf("netplan (%s, renderer %q for all devices)", e.File, e.ID)
 	case e.Manager == ManagerNetworkManager:
 		return fmt.Sprintf("NetworkManager (connection %q, %s)", e.ID, e.File)
+	case e.Manager == ManagerNetworkd:
+		return fmt.Sprintf("systemd-networkd (%s)", e.File)
 	}
 	return fmt.Sprintf("netplan (%s, %q under %q)", e.File, e.ID, e.Section)
 }
@@ -134,6 +144,8 @@ func (e OSEntry) Fix(iface string) string {
 		return fmt.Sprintf(`keep NetworkManager off %s: add "interface-name:%s" to "unmanaged-devices=" under "[keyfile]" in /etc/NetworkManager/conf.d/99-chaos-gateway.conf (entries separated by ";"), then run "sudo systemctl reload NetworkManager"`, iface, iface)
 	case e.Manager == ManagerNetworkManager:
 		return fmt.Sprintf("delete the NetworkManager connection %q (sudo nmcli connection delete %q)", e.ID, e.ID)
+	case e.Manager == ManagerNetworkd:
+		return networkdFix(e, iface)
 	}
 	apply := `, then run "sudo netplan apply"`
 	switch {
@@ -206,7 +218,8 @@ func ReadOSConfig(fsys fs.FS) (entries []OSEntry, errs []error) {
 		}
 		entries = append(entries, nmUnmanaged(raw, "/"+f)...)
 	}
-	return entries, errs
+	nd, nerrs := readNetworkd(fsys)
+	return append(entries, nd...), append(errs, nerrs...)
 }
 
 // sortedKeys returns the keys of m in order.
@@ -221,15 +234,28 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // Configuring returns the entries that configure the interface with this name, MAC address and kernel
 // driver (empty when it has none): those that select it, without NetworkManager's entries and the All
-// entries when a NetworkManager setting leaves the interface alone (`unmanaged-devices`).
+// entries when a NetworkManager setting leaves the interface alone (`unmanaged-devices`), and of
+// systemd-networkd's files only the first that selects it, unless that one leaves it alone.
 func Configuring(entries []OSEntry, name, mac, driver string) []OSEntry {
-	unmanaged := false
-	for _, e := range entries {
-		unmanaged = unmanaged || (e.Unmanaged && e.selects(name, mac, driver))
+	unmanaged, networkd := false, -1
+	for i, e := range entries {
+		switch {
+		case e.Manager == ManagerNetworkd:
+			if networkd < 0 && e.selects(name, mac, driver) {
+				networkd = i
+			}
+		case e.Unmanaged && e.selects(name, mac, driver):
+			unmanaged = true
+		}
 	}
 	var out []OSEntry
-	for _, e := range entries {
-		if !e.Matches(name, mac, driver) || (unmanaged && (e.All || e.Manager == ManagerNetworkManager)) {
+	for i, e := range entries {
+		switch {
+		case e.Manager == ManagerNetworkd:
+			if i != networkd || e.Unmanaged {
+				continue
+			}
+		case !e.Matches(name, mac, driver) || (unmanaged && (e.All || e.Manager == ManagerNetworkManager)):
 			continue
 		}
 		out = append(out, e)

@@ -93,6 +93,39 @@ func TestThePreflightNamesTheNetplanEntryOrConnectionOfATestInterface(t *testing
 	}
 }
 
+// Issue #64 item 2: the setup wizard's preflight names the systemd-networkd file that configures a test
+// interface (a distribution's default for every ethernet port) before the setup, and a rule of the host setup
+// that leaves the interface alone clears the check.
+func TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup(t *testing.T) {
+	host := fstest.MapFS{
+		"etc/systemd/network/zzzz-default.network":    {Data: []byte("[Match]\nKind=!*\nType=!loopback\n\n[Network]\nDHCP=yes\n")},
+		"etc/systemd/network/10-chaosgw-lan1.network": {Data: []byte("[Match]\nName=lan1\n\n[Link]\nUnmanaged=yes\n")},
+	}
+	g := newGW(t, func(o *options) { o.hostFS = host })
+	setup := g.do("GET", "/setup", nil, nil, nil).json(t)
+	checks := map[string]map[string]any{}
+	for _, c := range setup["preflight"].(map[string]any)["checks"].([]any) {
+		m := c.(map[string]any)
+		checks[m["id"].(string)] = m
+	}
+	if lan0 := checks["interface.lan0.os_config"]; lan0 == nil || lan0["status"] != "warn" ||
+		lan0["message"] != "lan0 is configured by systemd-networkd (/etc/systemd/network/zzzz-default.network); a test interface must not be" ||
+		!strings.Contains(lan0["fix"].(string), "write /etc/systemd/network/10-chaosgw-lan0.network") {
+		t.Errorf("lan0: %v", lan0)
+	}
+	if lan1 := checks["interface.lan1.os_config"]; lan1 == nil || lan1["status"] != "ok" {
+		t.Errorf("lan1: %v", lan1)
+	}
+	managed := map[string]any{}
+	for _, i := range setup["interfaces"].([]any) {
+		m := i.(map[string]any)
+		managed[m["name"].(string)] = m["os_managed"]
+	}
+	if managed["lan0"] != true || managed["lan1"] != false {
+		t.Errorf("os_managed: %v", managed)
+	}
+}
+
 // A configuration file the executor cannot read or parse is a warning of its own; the others are still checked.
 func TestThePreflightSaysWhichOSConfigurationFileItCannotRead(t *testing.T) {
 	g := newGW(t, func(o *options) {

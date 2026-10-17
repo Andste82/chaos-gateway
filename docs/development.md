@@ -877,6 +877,30 @@ two ports:    the management network lives behind the uplink interface; there is
   `linux-modules-extra` when modules are missing, and prints the netplan hints. It never touches the
   uplink or management configuration. `internal/preflight` tests that its module list equals the
   preflight's.
+- **The test interfaces before the wizard (issue #64).** `host-setup.sh --test-interface IF` also writes
+  `/etc/systemd/network/10-chaosgw-IF.network` (`[Match] Name=IF`, `[Link] Unmanaged=yes`; it sorts
+  before netplan's generated `10-netplan-*` and every distribution default such as dracut's
+  `zzzz-dracut-default.network`), reloads systemd-networkd and then checks the interface;
+  `--remove-test-interface IF` removes the file again, only when its first line is the host setup's mark.
+  `--check IF` changes nothing: the link (exists; no carrier is a warning), the netplan files that name the
+  interface or its MAC (file and line; `/run` hides `/etc`, `/etc` hides `/lib`), the NetworkManager
+  connections bound to it, and the first systemd-networkd `.network` file in networkd's order (`/etc`,
+  `/run`, `/usr/local/lib`, `/usr/lib`, `/lib`; a name in an earlier directory hides the others) whose
+  `[Match]` selects it; without `--prefix` also what NetworkManager and `networkctl` say of the running
+  interface. It exits 1 while a step is missing, with the fix for each. The preflight of the setup wizard
+  reads the `.network` files too (`internal/preflight/networkd.go`, entries with Manager
+  `systemd-networkd` and their `[Match]` conditions; `Configuring` takes only the first file that selects an
+  interface, and none when that one is `Unmanaged`), but only those under the host's `/etc` the executor
+  mounts (docs/open-items.md I64-02). Both evaluate `[Match]` alike: lists of globs (a list that starts with
+  `!` is negated item by item, an empty setting clears it), MAC addresses, the driver, Type `ether` and no
+  Kind (a physical port); a WLAN condition never holds, any other condition (Path, Property,
+  Virtualization, ...) is taken to hold, and a file without a condition is ignored, as networkd ignores it.
+  Tests: `TestThePreflightFindsTheNetworkdFileThatConfiguresAnInterface`,
+  `TestThePreflightEvaluatesANetworkdMatch`, `TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup`
+  (API, `GET /setup`), `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`,
+  `TestHostSetupTestInterfaceOptions` and `TestHostSetupEvaluatesNetworkdLikeThePreflight` (the same table of
+  `[Match]` cases through the script, against a fake sysfs and root under `--prefix`); the appliance test
+  runs `--check` on its test port, which cloud-init's netplan entry keeps failing.
 
 ## DHCP and devices (M6a)
 

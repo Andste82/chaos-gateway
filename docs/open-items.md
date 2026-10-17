@@ -1442,8 +1442,9 @@ plan:
 - Consequence: while the gateway is stopped, devices of a test network have no gateway. This replaces the plan's
   earlier sentence that they keep their normal connectivity.
 - Not part of this decision: the networkd rule `/etc/systemd/network/10-chaosgw-eth0.network` and the netplan entry of
-  the test interface. Both are host changes made by hand during the install test. Open: the executor or host-setup
-  should write and remove them (needs `/etc` access, see the hardening profile in `compose.executor.yaml`).
+  the test interface. Both are host changes made by hand during the install test. The host setup now writes and removes
+  the networkd rule (`host-setup.sh --test-interface`, `--remove-test-interface`, issue #64); whether the executor should
+  do it is I64-03. The netplan entry stays the operator's to remove.
 - Open: `chaosgw teardown` (M27) does not exist yet; the cleanup above is what it has to do. Until then the cleanup
   is manual (see `docs/install.md`, Uninstall).
 - Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
@@ -1729,3 +1730,47 @@ work was not blocked.
 - Recommendation: (a) until a lost socket is seen with another cause; (b) as a diagnostic in the health detail if it is.
 - Needs maintainer: yes
 - Effort: S ((b)), M ((c))
+
+### I64-02 The wizard's preflight sees only the systemd-networkd files under /etc
+
+- Status: open
+- Severity: low
+- Reason: needs-decision. Issue #64 item 2: a distribution's default `.network` file (dracut's
+  `/run/systemd/network/zzzz-dracut-default.network` on a Raspberry Pi) ran DHCP on the test port. The preflight now reads
+  systemd-networkd's files (`internal/preflight/networkd.go`) from every directory networkd reads, but the executor mounts
+  only the host's `/etc` (`deploy/compose.executor.yaml`), so the setup wizard names a file in `/etc/systemd/network` and
+  not one in `/run/systemd/network` or `/usr/lib/systemd/network`. The host setup's check (`host-setup.sh --check`, run on
+  the host before the wizard, docs/install.md step 2) reads all of them, and its rule in `/etc` keeps networkd off the port
+  whatever the defaults are.
+- Evidence: `deploy/compose.executor.yaml` (the `/host/etc` mount and why it is the whole `/etc`),
+  `TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup`, `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`.
+- Task: implemented (a). Options: (a) as implemented: the wizard sees `/etc`, the host setup's check sees everything; (b)
+  mount the host's `/run/systemd/network` and `/usr/lib/systemd/network` read-only at `/host/run/...` and `/host/usr/lib/...`
+  (the preflight then reads them without a code change; but a bind mount needs its source, and `/run/systemd/network`
+  exists only while systemd-networkd or netplan has written to it, so the executor would fail to start on a host without
+  it unless `create_host_path` creates it on the host); (c) mount the host's whole `/run` and `/usr` read-only (always
+  there, but much more of the host in the privileged container, including the sockets under `/run`).
+- Recommendation: (a); (b) for `/usr/lib/systemd/network` only, if a default there is ever seen to take a test port.
+- Needs maintainer: yes
+- Effort: S
+
+### I64-03 The executor writing the systemd-networkd rule of a test interface itself
+
+- Status: open
+- Severity: low
+- Reason: needs-decision. Issue #64 proposes that the executor writes `10-chaosgw-<interface>.network` when an interface is
+  assigned to a test network and removes it on release. The executor sees the host's `/etc` read-only, so this changes its
+  hardening profile (`compose.executor.yaml`). Implemented instead: the host setup, which runs as root on the host, writes
+  the rule (`host-setup.sh --test-interface IF`) and removes it (`--remove-test-interface IF`), and its check and the
+  wizard's preflight say when it is missing (docs/install.md step 2).
+- Evidence: `deploy/host-setup.sh`, `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`; docs/open-items.md "Shutdown and
+  host cleanup" (the rule was a host change made by hand).
+- Task: implemented (a). Options: (a) as implemented: the host setup writes and removes the rule, the preflight reports a
+  missing one; (b) the executor writes and removes it on assignment and release (mount `/etc/systemd/network` writable,
+  a new executor operation scoped to `10-chaosgw-*.network`, a `networkctl reload` from the container through D-Bus or
+  `nsenter`, and the removal joins M27's stop cleanup and `teardown`); (c) like (b), but the executor only writes it in the
+  setup and never removes it.
+- Recommendation: (a): the rule is a host change made once per port, like the netplan entry the operator removes; (b)
+  only if interfaces are reassigned often.
+- Needs maintainer: yes
+- Effort: M ((b))

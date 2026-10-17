@@ -182,6 +182,12 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	if out := must("sudo sh /opt/chaosgw/host-setup.sh 2>&1"); strings.Count(out, "is up to date") != 2 {
 		t.Errorf("the host setup is not idempotent:\n%s", out)
 	}
+	// its check of the test port (issue #64) finds the netplan entry cloud-init wrote for it and fails
+	if r, err := vm.Run(ctx, "sudo sh /opt/chaosgw/host-setup.sh --check lan0 2>&1", nil); err != nil || r.Exit != 1 ||
+		!strings.Contains(r.Stdout, "FAIL  netplan: /etc/netplan/") || !strings.Contains(r.Stdout, "names lan0") ||
+		!strings.Contains(r.Stdout, "link: lan0") {
+		t.Errorf("the check of the test port: %v (exit %d)\n%s", err, r.Exit, r.Stdout)
+	}
 
 	// the image, the executor and the BIRD container (plan §3.8; M4c-07: BIRD depends on the
 	// executor's health, since it crash-loops until the executor has written chaosgw.conf)

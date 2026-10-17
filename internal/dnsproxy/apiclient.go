@@ -165,10 +165,13 @@ func (c *APIClient) Post(ctx context.Context, entries []model.DnsQueryLogEntry) 
 
 // Follow registers with the API and follows its configuration until ctx ends: the first request
 // asks for any configuration, every later one for a newer generation. A failure is retried with a
-// growing pause; the configuration in use stays.
+// growing pause; the configuration in use stays. A failure is logged as a warning once, with a hint,
+// and again only when the error changes; the attempts in between are logged at debug level (issue
+// #57 F6: before the setup is applied the API cannot be reached, and every attempt was a warning).
 func (s *Server) Follow(ctx context.Context, c *APIClient, log *slog.Logger) {
 	var after int64
 	pause := time.Second
+	warned := ""
 	for ctx.Err() == nil {
 		cfg, err := c.Config(ctx, after)
 		switch {
@@ -176,8 +179,14 @@ func (s *Server) Follow(ctx context.Context, c *APIClient, log *slog.Logger) {
 			if ctx.Err() != nil {
 				return
 			}
-			if !errors.Is(err, context.DeadlineExceeded) {
-				log.Warn("cannot fetch the DNS configuration", "error", err)
+			switch msg := err.Error(); {
+			case errors.Is(err, context.DeadlineExceeded): // a poll that took too long: not a failure
+			case msg != warned:
+				warned = msg
+				log.Warn("cannot fetch the DNS configuration: retrying, and logging it again only when the error changes",
+					"error", err, "hint", "normal until the setup has been applied (the gateway makes the link to this namespace at the first apply); after it, check the API container")
+			default:
+				log.Debug("cannot fetch the DNS configuration", "error", err)
 			}
 			select {
 			case <-ctx.Done():
@@ -192,6 +201,10 @@ func (s *Server) Follow(ctx context.Context, c *APIClient, log *slog.Logger) {
 			s.SetConfig(cfg)
 			after = cfg.Generation
 			log.Info("the DNS configuration is in use", "generation", cfg.Generation, "networks", len(cfg.Networks), "upstream", cfg.Upstream)
+		}
+		if warned != "" {
+			log.Info("the DNS configuration can be fetched again")
+			warned = ""
 		}
 		pause = time.Second
 	}

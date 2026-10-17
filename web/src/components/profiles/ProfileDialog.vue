@@ -16,6 +16,7 @@ import { profileChips } from '../../lib/profiles';
 import { httpOf, useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ImpairmentFields from '../faults/ImpairmentFields.vue';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import FaultChip from '../ui/FaultChip.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
@@ -30,6 +31,8 @@ const open = defineModel<boolean>('open', { required: true });
 const draft = useDraftStore();
 const apiPanel = useApiPanelStore();
 const uid = useId();
+/** The `</> API` part: what the preview sends. */
+const apiOpen = ref(false);
 
 const form = ref<ProfileForm>(emptyProfileForm());
 const serverErrors = ref<Partial<Record<ProfileField, string>>>({});
@@ -233,16 +236,18 @@ const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMo
         <div class="mt-1.5 text-[13px] text-text-2">Goes into the configuration after preview and apply; then it can be activated on a scope.</div>
       </div>
 
-      <details v-if="apiPanel.draft" class="text-[13px]" data-testid="profile-api">
-        <summary class="cursor-pointer text-text-2">&lt;/&gt; API · what the preview sends</summary>
-        <pre
-          v-for="(c, i) in apiPanel.draft.calls"
-          :key="i"
-          class="mono m-0 mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]"
-          data-testid="api-call"
-          >{{ httpOf(c) }}</pre
-        >
-      </details>
+      <div v-if="apiPanel.draft" class="flex flex-col" data-testid="profile-api">
+        <DisclosureButton v-model:open="apiOpen" :controls="`${uid}-api`">&lt;/&gt; API · what the preview sends</DisclosureButton>
+        <div v-if="apiOpen" :id="`${uid}-api`">
+          <pre
+            v-for="(c, i) in apiPanel.draft.calls"
+            :key="i"
+            class="mono m-0 mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]"
+            data-testid="api-call"
+            >{{ httpOf(c) }}</pre
+          >
+        </div>
+      </div>
 
       <p v-for="g in general" :key="g" class="field-error m-0" role="alert">{{ g }}</p>
 

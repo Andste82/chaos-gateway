@@ -9,7 +9,7 @@
 // lockout-relevant, so the apply waits for confirmation. A network of the draft the gateway refused opens
 // again here with the gateway's messages under the fields they are about, until the form is changed.
 import { useQuery } from '@tanstack/vue-query';
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import { getListHostInterfacesQueryKey, listHostInterfaces } from '../../api/generated/hooks/system/system';
@@ -37,6 +37,7 @@ import {
 import { subnetText } from '../../lib/networks';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import TextField from '../ui/TextField.vue';
@@ -62,6 +63,7 @@ const tried = ref(false);
 const error = ref('');
 const busy = ref(false);
 const advanced = ref(false);
+const advancedId = `${useId()}-advanced`;
 /** What the gateway refused of the network being fixed, by the pointer below the network, and the form it refused. */
 const refused = ref<Record<string, string>>({});
 let refusedForm = '';
@@ -318,10 +320,10 @@ async function submit() {
         </div>
       </template>
 
-      <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="advanced" @click="advanced = !advanced">
+      <DisclosureButton v-model:open="advanced" :controls="advancedId">
         {{ advanced ? 'Hide advanced' : form.kind === 'lan' ? 'Advanced: DHCP options, static DNS entries, routes, masquerade' : 'Advanced: endpoint, MTU, keys, masquerade' }}
-      </button>
-      <div v-if="advanced" class="flex flex-col gap-4">
+      </DisclosureButton>
+      <div v-if="advanced" :id="advancedId" class="flex flex-col gap-4">
         <TextField v-model="form.description" label="Description" :error="shown('description')" />
         <template v-if="form.kind === 'lan'">
           <div v-if="form.dhcpEnabled" class="grid grid-cols-2 gap-4">

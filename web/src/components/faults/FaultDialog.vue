@@ -52,6 +52,7 @@ import { httpOf, useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
@@ -78,6 +79,8 @@ const queryClient = useQueryClient();
 const toasts = useToastStore();
 const apiPanel = useApiPanelStore();
 const uid = useId();
+/** The `</> API` part: what Apply (or the preview) sends. */
+const apiOpen = ref(false);
 
 const form = ref<FaultForm>(emptyForm());
 const layer = ref<'overlay' | 'config'>('overlay');
@@ -460,16 +463,18 @@ const errId = (f: string) => `${uid}-${f}-error`;
         {{ preview }}
       </div>
 
-      <details v-if="apiPanel.draft" class="text-[13px]" data-testid="fault-api">
-        <summary class="cursor-pointer text-text-2">&lt;/&gt; API · what {{ layer === 'config' ? 'the preview' : 'Apply' }} sends</summary>
-        <pre
-          v-for="(c, i) in apiPanel.draft.calls"
-          :key="i"
-          class="mono m-0 mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]"
-          data-testid="api-call"
-          >{{ httpOf(c) }}</pre
-        >
-      </details>
+      <div v-if="apiPanel.draft" class="flex flex-col" data-testid="fault-api">
+        <DisclosureButton v-model:open="apiOpen" :controls="`${uid}-api`">&lt;/&gt; API · what {{ layer === 'config' ? 'the preview' : 'Apply' }} sends</DisclosureButton>
+        <div v-if="apiOpen" :id="`${uid}-api`">
+          <pre
+            v-for="(c, i) in apiPanel.draft.calls"
+            :key="i"
+            class="mono m-0 mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]"
+            data-testid="api-call"
+            >{{ httpOf(c) }}</pre
+          >
+        </div>
+      </div>
 
       <p v-if="error" class="field-error m-0" role="alert">{{ error }}</p>
       <p v-if="blocked" class="m-0 text-[13px] text-fault-text">

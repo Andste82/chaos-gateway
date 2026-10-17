@@ -9,6 +9,7 @@ import { useToastStore } from '../../stores/toasts';
 import AccessChip from './AccessChip.vue';
 import AppBanner from './AppBanner.vue';
 import CountdownBanner from './CountdownBanner.vue';
+import DisclosureButton from './DisclosureButton.vue';
 import EmptyState from './EmptyState.vue';
 import FaultChip from './FaultChip.vue';
 import ModalDialog from './ModalDialog.vue';
@@ -95,6 +96,33 @@ describe('controls', () => {
     await sw.trigger('click');
     expect(on.value).toBe(false);
     expect(w.get('[role="switch"]').attributes('aria-checked')).toBe('false');
+  });
+
+  // issue #63: a toggle that shows more options says so with a triangle, ▸ collapsed and ▾ expanded
+  it('a disclosure button toggles its region, with aria-expanded, aria-controls and a decorative triangle', async () => {
+    const open = ref(false);
+    const w = mount(
+      defineComponent(
+        () => () =>
+          h(DisclosureButton, { open: open.value, 'onUpdate:open': (v: boolean) => (open.value = v), controls: 'more' }, () => (open.value ? 'Hide advanced' : 'Advanced')),
+      ),
+    );
+    const b = w.get('button');
+    expect(b.attributes('type')).toBe('button');
+    expect(b.attributes('aria-expanded')).toBe('false');
+    expect(b.attributes('aria-controls')).toBe('more');
+    const mark = b.get('[data-testid="disclosure-mark"]');
+    expect(mark.text()).toBe('▸');
+    expect(mark.attributes('aria-hidden')).toBe('true');
+    expect(b.text()).toBe('▸Advanced');
+    await b.trigger('click');
+    expect(open.value).toBe(true);
+    expect(w.get('button').attributes('aria-expanded')).toBe('true');
+    expect(w.get('[data-testid="disclosure-mark"]').text()).toBe('▾');
+    expect(w.get('button').text()).toBe('▾Hide advanced');
+    await w.get('button').trigger('click');
+    expect(open.value).toBe(false);
+    expect(w.get('[data-testid="disclosure-mark"]').text()).toBe('▸');
   });
 });
 

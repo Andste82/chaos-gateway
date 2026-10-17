@@ -3295,7 +3295,9 @@ destination with the fault badge), which is drawn from those flows (P3-AUDIT-37)
   `AccessChip`, `StatusDot` (always with its label), `SegmentedControl` (also the filter chips), `SwitchToggle`
   (`role="switch"`), `SectionCard`, `EmptyState`, table rows (`.data-row`), `ToastHost`, `StickyActionBar`, `SideDrawer`,
   `ModalDialog` (Reka UI dialogs: focus trap, Escape, labelled by the title), `CountdownBanner`, `AppBanner`, `AppIcon`
-  (16 px stroke icons). The focus ring is the accent (`--color-accent`) at 2 px on every control (the device search's
+  (16 px stroke icons), `DisclosureButton` (issue #63: every toggle that shows more options — "Advanced", "Show Linux
+  view"/"Show Linux changes", the configuration text, the dialogs' `</> API` part — has a triangle in front of its text,
+  ▸ collapsed and ▾ expanded, decorative and not animated, with `aria-expanded` and `aria-controls` on the region it opens). The focus ring is the accent (`--color-accent`) at 2 px on every control (the device search's
   box shows it for its borderless input). Since the Phase 3 audit: `text-3` is `#848E9D`, at least 4.5:1 on `surface` and
   `surface-2` (selected and hovered rows); on the accent tint only `text` and `text-2` are used. Text sizes are the plan's
   12 / 13 / 14 / 16 / 20–26 px (the prototype's 11 and 15 px badges and titles are 12 and 16 px, dialog titles 20 px).
@@ -3366,6 +3368,8 @@ destination with the fault badge), which is drawn from those flows (P3-AUDIT-37)
 | Router: setup first, login with `next`, no login or setup with a session, an unreachable gateway | `src/router.test.ts` |
 | Serving the app: deep links, assets and their caching, CSP, 404s, nothing under `/api/` is the page, before the setup | `TestTheWebAppIsServedNextToTheAPI`, `TestWithoutAWebAppEveryOtherPathIsNotFound`, `TestCheckUIWantsAnIndexPage` (`internal/api/ui_test.go`), `TestWebUIComesFromTheDirectoryOrTheBinary` (`cmd/chaosgw`) |
 | The uplink's byte counters | `TestTheUplinkReportsItsByteCounters` |
+| The uplink traffic history (issue #63): rates from two readings, none for a reset or wrapped counter, another uplink or a reading without counters, eviction after the period by the monotonic clock, `since`; the API samples every interval on its clock; the chart draws the history at once after a reload and appends the live samples, none twice | `TestTheUplinkTrafficHistoryTurnsReadingsIntoRates`, `TestTheUplinkTrafficHistoryEvictsByTheMonotonicClock` (`traffic_internal_test.go`), `TestTheUplinkTrafficIsSampledByTheAPIAndKeptForThePeriod`; `src/stores/stores.test.ts` "appends the gateway samples newer than its newest point, over the last ten minutes"; `overview.spec.ts` "the uplink chart draws the gateway history at once after a reload, then appends the live samples" |
+| Disclosure toggles with a triangle, `aria-expanded` and `aria-controls` (issue #63) | `src/components/ui/components.test.ts` "a disclosure button toggles its region, with aria-expanded, aria-controls and a decorative triangle"; `network-forms.spec.ts` "network forms: a check of a field under Advanced opens Advanced; …", `linux-view.spec.ts` ""Show Linux view" on a rule …" |
 | Screens against a mocked API (Playwright, `make test-e2e`) | `web/e2e/*.spec.ts` (table below) |
 | The browser flow against the real stack | `TestFirstStartInTheBrowserUntilADiscoveredDevice` (`internal/api/e2e_ui_test.go`, tags `testbed,browser`) with `web/e2e-testbed/first-start.spec.ts` |
 

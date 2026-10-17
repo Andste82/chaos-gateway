@@ -8,7 +8,7 @@
 // refused in a candidate is marked with its problems. "Explain" names the winner per family for a
 // device and a destination.
 import { useQueryClient } from '@tanstack/vue-query';
-import { computed, ref } from 'vue';
+import { computed, ref, useId } from 'vue';
 import { errorMessage } from '../api/fetcher';
 import { deleteOverlay } from '../api/generated/hooks/overlays/overlays';
 import type { ConfigFault, FaultRef, FaultView, Overlay, Scope } from '../api/generated/model';
@@ -16,6 +16,7 @@ import ExplainCard from '../components/faults/ExplainCard.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
+import DisclosureButton from '../components/ui/DisclosureButton.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
@@ -231,6 +232,8 @@ const linuxOpen = ref<string>();
 // WireGuard faults are carried out by the gateway's services and have nothing there
 const kernelFamilies = new Set(['impairment', 'mtu', 'tunnel', 'profile']);
 const rowKey = (r: Row) => `${r.layer}:${r.id}`;
+const uid = useId();
+const linuxId = (r: Row) => `${uid}-linux-${r.layer}-${r.id}`;
 
 const context = computed(() => `The most specific fault wins · an overlay beats the configuration · revision ${draft.base ?? state.data.value?.active_revision ?? '…'}`);
 </script>
@@ -303,16 +306,16 @@ const context = computed(() => `The most specific fault wins · an overlay beats
           </span>
           <span v-if="r.overriddenBy.length" class="text-xs text-fault-text" data-testid="overridden-by">overridden by {{ r.overriddenBy.join('; ') }}</span>
           <span v-for="p in r.problems" :key="p" class="text-xs text-block-text" data-testid="fault-problem">{{ p }}</span>
-          <button
+          <DisclosureButton
             v-if="!r.isNew && !r.deleted && kernelFamilies.has(r.family)"
-            type="button"
-            class="self-start border-0 bg-transparent p-0 text-xs text-accent-text"
-            :aria-expanded="linuxOpen === rowKey(r)"
+            small
+            :open="linuxOpen === rowKey(r)"
+            :controls="linuxId(r)"
             :aria-label="`${linuxOpen === rowKey(r) ? 'Hide' : 'Show'} the Linux view of ${r.chips.join(', ')} on ${r.target}`"
-            @click="linuxOpen = linuxOpen === rowKey(r) ? undefined : rowKey(r)"
+            @update:open="(o: boolean) => (linuxOpen = o ? rowKey(r) : undefined)"
           >
             {{ linuxOpen === rowKey(r) ? 'Hide Linux view' : 'Show Linux view (classes and queues)' }}
-          </button>
+          </DisclosureButton>
         </span>
         <span role="cell" class="mono text-[13px] text-text-2">{{ r.packets !== undefined ? `${formatCount(r.packets)} pkts` : '—' }}</span>
         <span role="cell" class="mono text-[13px]" :class="r.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{
@@ -349,7 +352,7 @@ const context = computed(() => `The most specific fault wins · an overlay beats
           </button>
         </span>
       </div>
-      <div v-if="linuxOpen === rowKey(r)" class="border-b border-border px-2.5 pt-1 pb-3">
+      <div v-if="linuxOpen === rowKey(r)" :id="linuxId(r)" class="border-b border-border px-2.5 pt-1 pb-3">
         <LinuxObjectExcerpt kind="fault" :id="r.id" />
       </div>
       </template>

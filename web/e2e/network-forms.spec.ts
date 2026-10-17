@@ -161,10 +161,16 @@ test('network forms: a check of a field under Advanced opens Advanced; hidden ag
   const dialog = page.getByRole('dialog', { name: 'Edit IoT' });
   const toggle = dialog.getByRole('button', { name: /^(Advanced|Hide advanced)/ });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // issue #63: the triangle says that the toggle shows more, ▸ while collapsed, ▾ while expanded
+  await expect(toggle.getByTestId('disclosure-mark')).toHaveText('▸');
+  const region = await toggle.getAttribute('aria-controls');
+  expect(region).toBeTruthy();
   // another subnet leaves the downstream route's router outside it
   await dialog.getByLabel('Gateway address and subnet').fill('10.11.0.1/24');
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle.getByTestId('disclosure-mark')).toHaveText('▾');
+  await expect(page.locator(`[id="${region}"]`)).toContainText('Downstream routes');
   await expect(dialog.getByText('The router 10.10.0.254 must be a host of 10.11.0.0/24 other than the gateway.')).toBeVisible();
   await expect(dialog.getByLabel(/^Downstream routes/)).toHaveAttribute('aria-invalid', 'true');
   await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();

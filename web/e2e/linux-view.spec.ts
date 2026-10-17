@@ -28,7 +28,12 @@ test('"Show Linux view" on a rule shows its compiled rule and counter; another r
   // the first page of a worker may start cold while the whole suite runs
   await expect(page.getByRole('heading', { name: 'no-dot' })).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole('button', { name: 'Show Linux view (compiled rule and counter)' }).click();
+  const show = page.getByRole('button', { name: 'Show Linux view (compiled rule and counter)' });
+  await expect(show.getByTestId('disclosure-mark')).toHaveText('▸'); // issue #63
+  await show.click();
+  const hide = page.getByRole('button', { name: 'Hide Linux view' });
+  await expect(hide.getByTestId('disclosure-mark')).toHaveText('▾');
+  await expect(page.locator(`[id="${await hide.getAttribute('aria-controls')}"]`).getByTestId('linux-object')).toBeVisible();
   const nft = page.getByTestId('linux-object-nftables');
   await expect(nft).toContainText('counter rule_a41eb09061 { packets 18342 bytes 12400000 }');
   await expect(nft).toContainText('counter name "rule_a41eb09061" last used 2s reject with icmpx port-unreachable');

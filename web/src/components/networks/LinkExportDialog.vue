@@ -5,11 +5,12 @@
 // `format=bird` the BIRD snippet of the protocol that runs on the link. The configuration holds the
 // remote side's private key when the gateway generated it: the dialog says so and shows the text only
 // on request. Each opening exports once; an answer for an opening that is over is dropped.
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { exportWireGuardNetwork } from '../../api/generated/hooks/wireguard/wireguard';
 import type { NetworkView, WireGuardNetwork } from '../../api/generated/model';
 import { useApiPanelStore } from '../../stores/apiPanel';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
 const props = defineProps<{ network: NetworkView; format: 'conf' | 'bird' }>();
@@ -20,6 +21,7 @@ const text = ref<string>();
 const error = ref('');
 const loading = ref(false);
 const showText = ref(false);
+const textId = `${useId()}-text`;
 let opening = 0;
 
 const wg = computed(() => props.network.config as WireGuardNetwork);
@@ -86,16 +88,10 @@ function download() {
           </template>
           <template v-else>This configuration contains the remote side's private key: whoever has the file can join the tunnel as {{ wg.name }}'s remote side.</template>
         </div>
-        <button
-          v-if="conf"
-          type="button"
-          class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
-          :aria-expanded="showText"
-          @click="showText = !showText"
-        >
+        <DisclosureButton v-if="conf" v-model:open="showText" :controls="textId">
           {{ showText ? 'Hide the configuration text' : 'Show the configuration text' }}
-        </button>
-        <pre v-if="showText" class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed text-[#d9dee5]" data-testid="link-export-text">{{ text }}</pre>
+        </DisclosureButton>
+        <pre v-if="showText" :id="textId" class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed text-[#d9dee5]" data-testid="link-export-text">{{ text }}</pre>
       </template>
     </div>
     <template #footer>

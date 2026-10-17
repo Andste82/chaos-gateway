@@ -7,11 +7,12 @@
 // the apply waits for confirmation only when the gateway says the change could lock the admin out. Its
 // entries come from the active revision: until it is loaded the matrix says so instead of showing the
 // defaults as if they were the policy.
-import { computed, ref } from 'vue';
+import { computed, ref, useId } from 'vue';
 import type { NetworkView, WireGuardNetwork } from '../../api/generated/model';
 import { firstError, useActiveConfig, useNames } from '../../composables/gateway';
 import { cellOf, describeEndpoint, entryKey } from '../../lib/networks';
 import { useDraftStore } from '../../stores/draft';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
 import LinuxExcerpt from './LinuxExcerpt.vue';
@@ -56,6 +57,7 @@ function label(from: { name: string }, to: { name: string }, c: ReturnType<typeo
 }
 
 const linux = ref(false);
+const linuxId = `${useId()}-linux`;
 </script>
 
 <template>
@@ -106,9 +108,9 @@ const linux = ref(false);
       The matrix sets the default for traffic between networks. Access rules are evaluated first and can override it for single devices or ports. Access
       from Management to the gateway itself is always allowed.
     </div>
-    <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="linux" @click="linux = !linux">
+    <DisclosureButton v-model:open="linux" :controls="linuxId">
       {{ linux ? 'Hide Linux view' : 'Show Linux view (compiled forward chain)' }}
-    </button>
-    <LinuxExcerpt v-if="linux" :chains="['forward']" />
+    </DisclosureButton>
+    <LinuxExcerpt v-if="linux" :id="linuxId" :chains="['forward']" />
   </SectionCard>
 </template>

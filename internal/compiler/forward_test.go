@@ -240,7 +240,11 @@ func TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT(t *testing
 		if f.ExtTo != f.ExtFrom {
 			ports = fmt.Sprintf("%d-%d", f.ExtFrom, f.ExtTo)
 		}
-		want := fmt.Sprintf(`meta iifname %s meta l4proto %s fib daddr . iif type local th dport %s counter %q last`, f.Iface, f.Protocol, ports, f.Counter)
+		mark := ""
+		if f.Entry == domain.EntryManagement {
+			mark = "ct mark set ct mark | 0x400000 "
+		}
+		want := fmt.Sprintf(`meta iifname %s meta l4proto %s fib daddr . iif type local th dport %s %scounter %q last`, f.Iface, f.Protocol, ports, mark, f.Counter)
 		i := slices.Index(rules, want)
 		if i < 0 || i > dnat {
 			t.Errorf("the counting rule of %s (at %d, the DNAT at %d):\nwant %s\n%s", f.Name, i, dnat, want, strings.Join(rules, "\n"))
@@ -605,12 +609,41 @@ func describeForwards(tg *Target) string {
 		chains = append(chains, c.Name)
 	}
 	sort.Strings(chains)
-	b.WriteString("# chain prerouting\n")
-	for _, c := range tg.Nft.Chains {
-		if c.Name == "prerouting" {
-			for _, r := range c.Rules {
-				fmt.Fprintf(&b, "  %s\n", renderRule(r))
+	for _, name := range []string{"prerouting", ForwardReplyChain} {
+		fmt.Fprintf(&b, "# chain %s\n", name)
+		for _, c := range tg.Nft.Chains {
+			if c.Name == name {
+				for _, r := range c.Rules {
+					fmt.Fprintf(&b, "  %s\n", renderRule(r))
+				}
 			}
+		}
+	}
+	// the routing of the replies of a management-side forward, and the policy table without the
+	// management network
+	for _, table := range []int{PolicyTable, ForwardReplyTable} {
+		fmt.Fprintf(&b, "# table %d\n", table)
+		for _, r := range routesOfTable(tg, table) {
+			s := r.Dst
+			if r.Type != "" {
+				s = r.Type + " " + s
+			}
+			if r.Via != "" {
+				s += " via " + r.Via
+			}
+			if r.Dev != "" {
+				s += " dev " + r.Dev
+			}
+			if r.Metric != nil {
+				s += fmt.Sprintf(" metric %d", *r.Metric)
+			}
+			fmt.Fprintf(&b, "  %s\n", s)
+		}
+	}
+	b.WriteString("# fwmark rules\n")
+	for _, r := range tg.Rules {
+		if r.Fwmark != "" {
+			fmt.Fprintf(&b, "  %d fwmark %s lookup %d\n", r.Priority, r.Fwmark, r.Table)
 		}
 	}
 	b.WriteString(describeAccess(tg))
@@ -640,22 +673,129 @@ func TestGoldenForwardNftTransaction(t *testing.T) {
 	golden(t, "forward.nft", pretty)
 }
 
-// The replies of a forward from the management side go back to the management network: the policy
-// table, which a device's packets are looked up in, gets the management subnet while such a forward is
-// compiled. Without one the table is what it was (its default is the uplink).
+// The replies of a forward from the management side go back through the management interface by their
+// mark, not by a route of the policy table (P31-M35a-05 and -10, option (c)). Table 100, which every
+// packet of a device is looked up in, never has the management subnet, so a device cannot open a
+// connection into the management network whatever the access rules allow. The counting rule of the
+// management forward sets bit 22 of the conntrack mark, the chain fwd_reply (prerouting, -140) copies it
+// onto the packet mark of the replies from the test networks, and the rule `fwmark 0x400000/0x400000
+// lookup 101` (priority 925, before table 100's rules) sends them to table 101: the management subnet,
+// the default gateway of the management interface (a peer behind a router of the management network)
+// and a prohibit fallback, so such a reply never takes the uplink. Without a forward from the management
+// side none of it is compiled; without a default route of the management interface table 101 has the
+// subnet and the fallback.
 func TestAManagementForwardRoutesItsRepliesToTheManagementNetwork(t *testing.T) {
-	route := executor.Route{Action: "replace", Family: 4, Table: PolicyTable, Dst: "192.168.56.0/24", Dev: "mgmt0"}
 	tg := forwardWorld(t).compile(nil)
-	if !slices.Contains(tg.Routes, route) {
-		t.Fatalf("no route back to the management network: %+v", tg.Routes)
-	}
-	w := accessWorld(t)
-	w.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
-	for _, r := range w.compile(nil).Routes {
-		if r.Dev == "mgmt0" {
-			t.Errorf("a route to the management network without a forward from there: %+v", r)
+	for _, r := range tg.Routes {
+		if r.Table == PolicyTable && (r.Dev == "mgmt0" || r.Dst == "192.168.56.0/24") {
+			t.Errorf("the policy table routes to the management network: %+v", r)
 		}
 	}
+	zero, prohibit := 0, 4096
+	want := []executor.Route{
+		{Action: "replace", Family: 4, Table: 101, Dst: "192.168.56.0/24", Dev: "mgmt0"},
+		{Action: "replace", Family: 4, Table: 101, Dst: "default", Via: "192.168.56.254", Dev: "mgmt0", Metric: &zero},
+		{Action: "replace", Family: 4, Table: 101, Dst: "default", Type: "prohibit", Metric: &prohibit},
+	}
+	if got := routesOfTable(tg, 101); !reflect.DeepEqual(got, want) {
+		t.Errorf("table 101: %+v, want %+v", got, want)
+	}
+	rule := executor.Rule{Action: "add", Family: 4, Priority: 925, Fwmark: "0x400000/0x400000", Table: 101}
+	if !slices.Contains(tg.Rules, rule) {
+		t.Errorf("no policy rule for the marked replies: %+v", tg.Rules)
+	}
+	c := chainOf(t, tg, ForwardReplyChain)
+	if c.Base == nil || c.Base.Type != "filter" || c.Base.Hook != "prerouting" || c.Base.Prio != -140 {
+		t.Errorf("the chain %s: %+v", ForwardReplyChain, c.Base)
+	}
+	restore := fmt.Sprintf("meta iifname @%s ct direction reply ct mark & 0x400000 0x400000 meta mark set meta mark | 0x400000", setName(t, tg, "ifs_lan"))
+	if got := renderRules(c); !slices.Equal(got, []string{restore}) {
+		t.Errorf("the chain %s:\n%s\nwant\n%s", ForwardReplyChain, strings.Join(got, "\n"), restore)
+	}
+	// the conntrack mark is set by the management forward's rule alone
+	var marking []string
+	for _, r := range renderRules(chainOf(t, tg, "prerouting")) {
+		if strings.Contains(r, "ct mark set") {
+			marking = append(marking, r)
+		}
+	}
+	if len(marking) != 1 || !strings.HasPrefix(marking[0], "meta iifname mgmt0 meta l4proto tcp fib daddr . iif type local th dport 8443 ct mark set ct mark | 0x400000") {
+		t.Errorf("the rules that set the conntrack mark: %v", marking)
+	}
+
+	// without a default route of the management interface: the subnet and the fallback
+	noGW := forwardWorld(t).compile(func(in *Input) {
+		var kept []HostRoute
+		for _, r := range in.Host.Defaults {
+			if r.Dev != "mgmt0" {
+				kept = append(kept, r)
+			}
+		}
+		in.Host.Defaults = kept
+	})
+	if got := routesOfTable(noGW, 101); !reflect.DeepEqual(got, []executor.Route{want[0], want[2]}) {
+		t.Errorf("table 101 without a management gateway: %+v", got)
+	}
+
+	// without a forward from the management side (none, or a disabled one): nothing of it
+	w := accessWorld(t)
+	w.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
+	w.addForward(fwdMgmt, `{protocol: tcp, entry: management, external_port: 8443, target: {device: esp32-43}, enabled: false}`)
+	plain := w.compile(nil)
+	for _, r := range plain.Routes {
+		if r.Dev == "mgmt0" || r.Table == 101 {
+			t.Errorf("a route of the management side without a forward from there: %+v", r)
+		}
+	}
+	for _, r := range plain.Rules {
+		if r.Fwmark == ForwardReplyMark || r.Table == 101 {
+			t.Errorf("a rule of the management side without a forward from there: %+v", r)
+		}
+	}
+	for _, ch := range plain.Nft.Chains {
+		if ch.Name == ForwardReplyChain || indexOfRule(ch, "ct mark") >= 0 {
+			t.Errorf("the chain %s has the mark of the management side without a forward from there", ch.Name)
+		}
+	}
+}
+
+// The bit of the replies of a management-side forward is bit 22 of the mark layout (plan §3.3, bits 22-23
+// reserved for further routing marks): no fault id, direction, PMTU index, service or duplication bit,
+// and outside the bits left to other software. The classification keeps it when it writes the id or the
+// direction, and the policy rule's mark is the bit under a mask of the bit alone.
+func TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit(t *testing.T) {
+	bit := ForwardReplyMarkBit
+	if bit != 0x400000 {
+		t.Fatalf("the bit is %#x, want bit 22", bit)
+	}
+	taken := markIDMaskBits | markDirMaskBits | PMTUMarkMask | 0x100000 | MarkDupBit
+	if bit&taken != 0 || bit&0xff00000f != 0 {
+		t.Errorf("the bit %#x collides with %#x or with the bits of other software", bit, taken)
+	}
+	if MarkKeepOnIDWrite&bit == 0 || MarkKeepOnDirectionWrite&bit == 0 {
+		t.Error("the classification clears the bit")
+	}
+	if ForwardReplyMark != fmt.Sprintf("%#x/%#x", bit, bit) || ServiceMark == ForwardReplyMark {
+		t.Errorf("the fwmark %s", ForwardReplyMark)
+	}
+	if ForwardReplyTable != 101 || ForwardReplyTable == ServiceTable || ForwardReplyTable >= PMTUTableFirst ||
+		ForwardReplyTable < executor.OwnTableFirst || ForwardReplyTable > executor.OwnTableLast {
+		t.Errorf("the table %d", ForwardReplyTable)
+	}
+	if ForwardReplyRulePriority <= ServiceRulePriority || ForwardReplyRulePriority >= PMTURulePriority || PMTURulePriority >= PolicyRulePriority {
+		t.Errorf("the priority %d", ForwardReplyRulePriority)
+	}
+}
+
+// routesOfTable returns the routes of a routing table, in the target's order.
+func routesOfTable(tg *Target, table int) []executor.Route {
+	var out []executor.Route
+	for _, r := range tg.Routes {
+		if r.Table == table {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // The compiler is the backstop of the validation: a forward the validation refuses (here written into the

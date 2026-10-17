@@ -298,8 +298,13 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 			t.Nft.Chains = append(t.Nft.Chains, Chain{Name: CutForwardChain}, Chain{Name: CutInputChain})
 		}
 	}
-	// the prerouting NAT chain: the service redirect (M6b) and the DNAT of the port forwards (M35a)
+	// the prerouting NAT chain: the service redirect (M6b), the counting rules and the DNAT of the port
+	// forwards (M35a)
 	if c := t.prerouting(tp); c != nil {
+		t.Nft.Chains = append(t.Nft.Chains, *c)
+	}
+	// the mark of the replies of a forward from the management side (forward.go)
+	if c := t.forwardReplyChain(ifsLan.Name); c != nil {
 		t.Nft.Chains = append(t.Nft.Chains, *c)
 	}
 

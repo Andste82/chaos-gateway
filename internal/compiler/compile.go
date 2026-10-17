@@ -174,6 +174,10 @@ type Management struct {
 	Subnet  netip.Prefix   `json:"subnet,omitempty"`
 	Sources []netip.Prefix `json:"sources"`
 	UIPort  int            `json:"ui_port"`
+	// gateway is the gateway of the management interface's default route in the main table, when it
+	// has one: the replies of a forward from the management side to a peer outside the subnet go
+	// through it (forward.go). It is part of the target through those routes only.
+	gateway netip.Addr
 }
 
 // Target is the compiled state of the gateway.
@@ -466,6 +470,9 @@ func (t *Target) compileManagement(cfg *model.Configuration, h Host, defaultPort
 		m.Name = l.Name
 		if a, ok := l.FirstV4(); ok {
 			m.Subnet = a.Masked()
+			if g, ok := h.DefaultGateway(l.Name); ok {
+				m.gateway = g
+			}
 			if cfg.Management.AllowedSources == nil {
 				// default: the management interface's connected subnet
 				sources = append(sources, a.Masked())
@@ -612,11 +619,8 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 			add(executor.Route{Dst: "default", Via: t.Uplink.Gateway.String(), Dev: t.Uplink.Name})
 		}
 	}
-	// the replies of a forward from the management side go back to its peers in the management
-	// network (M35a): a device's packets are looked up in this table, whose default is the uplink
-	if t.Management.Subnet.IsValid() && t.Management.Name != t.Uplink.Name && t.forwardsFrom(domain.EntryManagement) {
-		add(executor.Route{Dst: t.Management.Subnet.String(), Dev: t.Management.Name})
-	}
+	// the management network is never in this table: the replies of a forward from the management
+	// side go back through a table of their own, by their mark (forward.go, P31-M35a-10)
 	for i := range t.Bridges {
 		b := &t.Bridges[i]
 		n := idx.Networks[b.NetworkID]
@@ -634,6 +638,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 		}
 	}
 	t.serviceRouting(add)
+	t.forwardReplyRouting()
 	sort.SliceStable(t.Routes, func(i, j int) bool {
 		// stable, readable order: connected routes first, then downstream, the default last
 		ri, rj := routeRank(t.Routes[i]), routeRank(t.Routes[j])

@@ -17,10 +17,26 @@ f1000000-0000-4000-8000-000000000001  web  tcp/8080-8080 on wan0 (uplink) -> 10.
   meta iifname br-lab ip daddr 10.20.0.1 udp dport 53 dnat ip to 169.254.100.2
   meta iifname br-lab ip daddr 10.20.0.1 tcp dport 53 dnat ip to 169.254.100.2
   meta iifname wan0 meta l4proto tcp fib daddr . iif type local th dport 2222 counter "fwd_74f89ac51f" last
-  meta iifname mgmt0 meta l4proto tcp fib daddr . iif type local th dport 8443 counter "fwd_e1e1f5dfd8" last
+  meta iifname mgmt0 meta l4proto tcp fib daddr . iif type local th dport 8443 ct mark set ct mark | 0x400000 counter "fwd_e1e1f5dfd8" last
   meta iifname wan0 meta l4proto udp fib daddr . iif type local th dport 8000-8003 counter "fwd_adc7fa6ad9" last
   meta iifname wan0 meta l4proto tcp fib daddr . iif type local th dport 8080 counter "fwd_e1fe2665fa" last
   meta iifname { mgmt0, wan0 } meta l4proto { tcp, udp } fib daddr . iif type local dnat ip concat to meta iifname . meta l4proto . th dport map @fwd_dnat_bdf066
+# chain fwd_reply
+  meta iifname @ifs_lan_bf4feb ct direction reply ct mark & 0x400000 0x400000 meta mark set meta mark | 0x400000
+# table 100
+  10.10.0.0/24 dev br-iot
+  10.20.0.0/24 dev br-lab
+  169.254.100.0/30 dev svc0
+  203.0.113.0/24 dev wan0
+  10.30.0.0/24 via 10.10.0.2 dev br-iot
+  default via 203.0.113.10 dev wan0
+# table 101
+  192.168.56.0/24 dev mgmt0
+  default via 192.168.56.254 dev mgmt0 metric 0
+  prohibit default metric 4096
+# fwmark rules
+  900 fwmark 0x100000/0x100000 lookup 102
+  925 fwmark 0x400000/0x400000 lookup 101
 # rules
 0  overlay:00000000-0000-4000-8000-000000000001    drop  scope "group sensors"  dest ""  proto udp  counter rule_8e9ca98e27
 1  config:a1000000-0000-4000-8000-000000000001  web-down  reset  cut  scope "device esp32-42"  dest "uplink"  proto tcp  counter rule_add048cda1

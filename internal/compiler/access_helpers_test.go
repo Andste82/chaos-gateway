@@ -149,6 +149,11 @@ func renderExpr(e any) string {
 					op += " "
 				}
 				right := renderExpr(m["right"])
+				if l, ok := m["left"].(map[string]any); ok && l["&"] != nil {
+					if n, ok := m["right"].(int64); ok {
+						right = fmt.Sprintf("0x%x", n)
+					}
+				}
 				if l, ok := m["right"].([]any); ok {
 					right = "{ " + renderExpr(l) + " }"
 				}
@@ -192,6 +197,17 @@ func renderExpr(e any) string {
 			case "map":
 				m := v.(map[string]any)
 				return renderExpr(m["key"]) + " map " + renderExpr(m["data"])
+			case "&", "|":
+				// a mark's bits read best in hex
+				l := v.([]any)
+				right := renderExpr(l[1])
+				if n, ok := l[1].(int64); ok {
+					right = fmt.Sprintf("0x%x", n)
+				}
+				return renderExpr(l[0]) + " " + k + " " + right
+			case "mangle":
+				m := v.(map[string]any)
+				return renderExpr(m["key"]) + " set " + renderExpr(m["value"])
 			case "dnat":
 				m := v.(map[string]any)
 				s := "dnat " + renderExpr(m["family"])

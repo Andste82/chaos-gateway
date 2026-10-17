@@ -174,6 +174,10 @@ type Management struct {
 	Subnet  netip.Prefix   `json:"subnet,omitempty"`
 	Sources []netip.Prefix `json:"sources"`
 	UIPort  int            `json:"ui_port"`
+	// gateway is the gateway of the management interface's default route in the main table, when it
+	// has one: the replies of a forward from the management side to a peer outside the subnet go
+	// through it (forward.go). It is part of the target through those routes only.
+	gateway netip.Addr
 }
 
 // Target is the compiled state of the gateway.
@@ -251,6 +255,12 @@ type Target struct {
 	// is no rule.
 	Access     *AccessPlan `json:"access,omitempty"`
 	accessSets []SetDef
+	// Forwards are the port forwards in the packet path (plan §2.2 layer 4, M35a), sorted by name and id;
+	// ForwardMap is the name of their DNAT map, whose elements send each forwarded port to the target's
+	// current address (forward.go). Both are empty without a forward.
+	Forwards   []PortForward `json:"forwards,omitempty"`
+	ForwardMap string        `json:"forward_map,omitempty"`
+	forwardMap MapDef
 	// ClassifyNets is the nftables set of test, WireGuard and remote-network prefixes that guards
 	// the classification chain (plan §3.3): classification never reads or writes the mark of
 	// anything outside it.
@@ -374,6 +384,7 @@ func Compile(in Input) *Target {
 
 	t.finishManagementSources()
 	t.compileHostState()
+	t.compileForwards(in)
 	t.compileRouting(cfg, idx)
 	t.compileBird(cfg, idx)
 	t.compileKea(cfg, idx)
@@ -459,6 +470,9 @@ func (t *Target) compileManagement(cfg *model.Configuration, h Host, defaultPort
 		m.Name = l.Name
 		if a, ok := l.FirstV4(); ok {
 			m.Subnet = a.Masked()
+			if g, ok := h.DefaultGateway(l.Name); ok {
+				m.gateway = g
+			}
 			if cfg.Management.AllowedSources == nil {
 				// default: the management interface's connected subnet
 				sources = append(sources, a.Masked())
@@ -551,7 +565,9 @@ func (t *Target) compileHostState() {
 
 	// DOCKER-USER accepts what comes from or goes to the bridges of test networks: traffic to and
 	// from the uplink is covered by it (a packet between a bridge and the uplink has the bridge on
-	// one side), and Docker's own bridges keep their isolation
+	// one side), and so is the path of a port forward from its entry side (the uplink or the
+	// management interface) to a test network (M35a, plan §3.4); Docker's own bridges keep their
+	// isolation
 	du := map[string]bool{}
 	for _, b := range t.Bridges {
 		du[b.Name] = true
@@ -603,6 +619,8 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 			add(executor.Route{Dst: "default", Via: t.Uplink.Gateway.String(), Dev: t.Uplink.Name})
 		}
 	}
+	// the management network is never in this table: the replies of a forward from the management
+	// side go back through a table of their own, by their mark (forward.go, P31-M35a-10)
 	for i := range t.Bridges {
 		b := &t.Bridges[i]
 		n := idx.Networks[b.NetworkID]
@@ -620,6 +638,7 @@ func (t *Target) compileRouting(cfg *model.Configuration, idx *domain.Index) {
 		}
 	}
 	t.serviceRouting(add)
+	t.forwardReplyRouting()
 	sort.SliceStable(t.Routes, func(i, j int) bool {
 		// stable, readable order: connected routes first, then downstream, the default last
 		ri, rj := routeRank(t.Routes[i]), routeRank(t.Routes[j])

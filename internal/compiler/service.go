@@ -118,18 +118,28 @@ func (t *Target) serviceForward(ifsCG string, uplink string) []Rule {
 	return out
 }
 
+// prerouting is the NAT chain of the prerouting hook: the service redirect, then the counting rules and
+// the DNAT of the port forwards (forward.go). Nil when there is neither.
+func (t *Target) prerouting(tp *topo) *Chain {
+	rules := append(append(t.serviceRedirect(tp), t.forwardCounts()...), t.forwardDNAT()...)
+	if len(rules) == 0 {
+		return nil
+	}
+	return &Chain{Name: "prerouting", Base: &BaseChain{Type: "nat", Hook: "prerouting", Prio: -100, Policy: "accept"}, Rules: rules}
+}
+
 // serviceRedirect sends the queries to a network's gateway address (UDP and TCP port 53) to the DNS
 // proxy in the namespace. The packets keep the client's source address, so the proxy sees the device.
-func (t *Target) serviceRedirect(tp *topo) *Chain {
+func (t *Target) serviceRedirect(tp *topo) []Rule {
 	if t.Service == nil {
 		return nil
 	}
 	peer := t.Service.PeerCIDR.Addr().String()
-	c := &Chain{Name: "prerouting", Base: &BaseChain{Type: "nat", Hook: "prerouting", Prio: -100, Policy: "accept"}}
+	var rules []Rule
 	dnat := map[string]any{"dnat": map[string]any{"family": "ip", "addr": peer, "port": ServiceDNSPort}}
 	add := func(dev string, gw netip.Addr) {
 		for _, proto := range []string{"udp", "tcp"} {
-			c.Rules = append(c.Rules, newRule(iifname(dev), eq(payload("ip", "daddr"), gw.String()), eq(payload(proto, "dport"), 53), dnat))
+			rules = append(rules, newRule(iifname(dev), eq(payload("ip", "daddr"), gw.String()), eq(payload(proto, "dport"), 53), dnat))
 		}
 	}
 	for _, b := range t.Bridges {
@@ -139,7 +149,7 @@ func (t *Target) serviceRedirect(tp *topo) *Chain {
 		add(w.Name, w.Address.Addr())
 	}
 	_ = tp
-	return c
+	return rules
 }
 
 // serviceMasquerade lets the services reach the upstream resolver with the uplink's address.

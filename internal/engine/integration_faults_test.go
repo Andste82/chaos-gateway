@@ -342,21 +342,12 @@ func baseline(t *testing.T, f flow) testbed.ProbeResult {
 // expectUnaffected measures a flow the fault does not name (isolation, plan §4.3): it loses nothing and
 // its delay is what it was before. Under emulation "what it was" has noise of tens of milliseconds, so
 // there the assertion is that it did not grow by more than 25 ms, which is far below every delay the
-// tests configure on the flows they impair.
+// tests configure on the flows they impair. Both are statistical assertions: a packet lost to the host's
+// scheduling fails the first attempt, which is repeated once (testbed.Statistically, plan §4.3).
 func expectUnaffected(t *testing.T, f flow, before testbed.ProbeResult) {
 	t.Helper()
 	res := f.run(t, quietRun())
 	t.Logf("%s, unaffected: %s", f.name, res)
-	if res.UpLoss() != 0 || res.DownLoss() != 0 {
-		t.Errorf("%s: a flow the fault does not name lost packets: %s", f.name, res)
-	}
-	limit := 25 * time.Millisecond
-	if res.UpMedian() > before.UpMedian()+limit || res.DownMedian() > before.DownMedian()+limit {
-		t.Errorf("%s: the flow is slower since the fault: %s (before: %s)", f.name, res, before)
-	}
-	if !testbed.Accurate() {
-		return
-	}
 	fresh := &res
 	testbed.Statistically(t, f.name+" isolation", func() error {
 		cur := fresh
@@ -366,6 +357,17 @@ func expectUnaffected(t *testing.T, f flow, before testbed.ProbeResult) {
 			cur = &again
 		}
 		fresh = nil
+		if !testbed.Accurate() {
+			var errs []error
+			if cur.UpLoss() != 0 || cur.DownLoss() != 0 {
+				errs = append(errs, fmt.Errorf("a flow the fault does not name lost packets: %s", cur))
+			}
+			limit := 25 * time.Millisecond
+			if cur.UpMedian() > before.UpMedian()+limit || cur.DownMedian() > before.DownMedian()+limit {
+				errs = append(errs, fmt.Errorf("the flow is slower since the fault: %s (before: %s)", cur, before))
+			}
+			return joinErrs(errs...)
+		}
 		// the median within the latency tolerance of what it was before the fault, and no loss (the
 		// interval of a rate of 0 is no packet)
 		m := testbed.Measure(t, f.name)

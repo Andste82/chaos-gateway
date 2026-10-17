@@ -51,7 +51,7 @@ const (
 	AccessInputChain   = "access_input"
 	CutForwardChain    = "cut_forward"
 	CutInputChain      = "cut_input"
-	// MgmtGuardChain is the two-port guard (plan §2.16): in front of the jump to the access rules.
+	// MgmtGuardChain is the management guard (plan §2.16): in front of the jump to the access rules.
 	MgmtGuardChain = "mgmt_guard"
 	// AntiLockoutCounter counts the packets the anti-lockout rule lets in.
 	AntiLockoutCounter = "anti_lockout"
@@ -150,6 +150,15 @@ type AccessPlan struct {
 	// GatewayAddrs are the addresses of the gateway itself: a connection it opened is not a
 	// device's, and no rule cuts it.
 	GatewayAddrs []netip.Addr `json:"gateway_addrs,omitempty"`
+	// Responder reports that the rules also match forwarded connections with the forward's target as
+	// responder (plan §2.4, D34): set while a port forward is in the packet path, so a configuration
+	// without one compiles exactly the rules it compiled before M35a.
+	Responder bool `json:"responder,omitempty"`
+	// PeerNonUplink are the prefixes the destination "uplink" excludes in the responder form, where it
+	// is matched against the peer of a forwarded connection: NonUplink and the management network (its
+	// sources and its own subnet, plan §2.4), so a peer in the management network is not "uplink" even
+	// when allowed_sources is unset or narrower. Nil when it adds nothing to NonUplink.
+	PeerNonUplink []netip.Prefix `json:"peer_non_uplink,omitempty"`
 }
 
 // describePath records which traffic the packet path never lets a rule judge: what is switched
@@ -221,6 +230,17 @@ type Tuple struct {
 	Proto string
 	// Port is the original destination port; 0 for protocols without ports.
 	Port int
+	// Responder is the reply source of a connection whose destination was translated (`ct status
+	// dnat`), invalid for any other: for a forwarded connection the forward's target, which the rules
+	// match as responder; RespPort is its port (the target port).
+	Responder netip.Addr
+	RespPort  int
+}
+
+// ForwardedTuple is the tuple of a forwarded connection: from the peer to the entry address and the
+// external port, answered by the target on the target port.
+func ForwardedTuple(peer, entry netip.Addr, proto string, port int, target netip.Addr, targetPort int) Tuple {
+	return Tuple{Src: peer, Dst: entry, Proto: proto, Port: port, Responder: target, RespPort: targetPort}
 }
 
 func inPrefixes(ps []netip.Prefix, a netip.Addr) bool {
@@ -232,32 +252,58 @@ func inPrefixes(ps []netip.Prefix, a netip.Addr) bool {
 	return false
 }
 
-// Matches reports whether the rule selects the tuple. It is the Go mirror of the nftables rule.
+// Matches reports whether the rule selects the tuple. It is the Go mirror of the nftables rule: the
+// selector on the original tuple, and, while the rules match forwarded connections (Responder), the same
+// selector with the reply source as the source, the original source as the destination and the reply's
+// source port as the port.
 func (p *AccessPlan) Matches(r *AccessRule, t Tuple) bool {
+	if p.matches(r, t.Src, t.Dst, t.Proto, t.Port, p.NonUplink) {
+		return true
+	}
+	return p.Responder && t.Responder.IsValid() && respondsTo(r) && p.matches(r, t.Responder, t.Src, t.Proto, t.RespPort, p.peerNonUplink())
+}
+
+// peerNonUplink is what the destination "uplink" excludes in the responder form (PeerNonUplink).
+func (p *AccessPlan) peerNonUplink() []netip.Prefix {
+	if p.PeerNonUplink != nil {
+		return p.PeerNonUplink
+	}
+	return p.NonUplink
+}
+
+// peerNonUplinkSet is the set the responder form of an "uplink" rule tests the peer against.
+func (p *AccessPlan) peerNonUplinkSet() string {
+	if p.PeerNonUplink != nil {
+		return peerNonUplinkSetName()
+	}
+	return nonUplinkSetName()
+}
+
+func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, port int, nonUplink []netip.Prefix) bool {
 	if r.AnySource {
-		if !inPrefixes(p.GlobalSources, t.Src) {
+		if !inPrefixes(p.GlobalSources, src) {
 			return false
 		}
-	} else if !inPrefixes(r.Sources, t.Src) {
+	} else if !inPrefixes(r.Sources, src) {
 		return false
 	}
 	switch r.DestKind {
 	case "prefixes":
-		if !inPrefixes(r.Dest, t.Dst) {
+		if !inPrefixes(r.Dest, dst) {
 			return false
 		}
 	case "uplink":
-		if inPrefixes(p.NonUplink, t.Dst) {
+		if inPrefixes(nonUplink, dst) {
 			return false
 		}
 	}
-	if r.Protocol != "any" && t.Proto != r.Protocol {
+	if r.Protocol != "any" && proto != r.Protocol {
 		return false
 	}
 	if len(r.Ports) > 0 {
 		ok := false
 		for _, pr := range r.Ports {
-			if t.Port >= pr.From && t.Port <= pr.To && t.Port != 0 {
+			if port >= pr.From && port <= pr.To && port != 0 {
 				ok = true
 				break
 			}
@@ -267,6 +313,12 @@ func (p *AccessPlan) Matches(r *AccessRule, t Tuple) bool {
 		}
 	}
 	return true
+}
+
+// respondsTo reports whether a rule can select a forwarded connection: a forward carries TCP or UDP, so
+// a rule for another protocol never does and gets no responder form.
+func respondsTo(r *AccessRule) bool {
+	return r.Protocol == "any" || r.Protocol == "tcp" || r.Protocol == "udp"
 }
 
 // Winner returns the first rule that selects the tuple, nil when none does (the access matrix
@@ -330,6 +382,12 @@ func scopeSetName(sc model.Scope) string {
 // nonUplinkSetName is the set of destinations a rule with the destination "uplink" excludes.
 func nonUplinkSetName() string {
 	return hashName("anon_uplink", "ipv4_addr", []string{"interval"})
+}
+
+// peerNonUplinkSetName is the set of peers the responder form of a rule with the destination "uplink"
+// excludes (AccessPlan.PeerNonUplink).
+func peerNonUplinkSetName() string {
+	return hashName("anon_uplink_peer", "ipv4_addr", []string{"interval"})
 }
 
 // mergePorts turns the ports and ranges of a selector into sorted disjoint ranges (an nftables
@@ -548,6 +606,16 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 	if len(plan.Rules) == 0 {
 		return
 	}
+	plan.Responder = len(t.Forwards) > 0
+	if plan.Responder {
+		peers := append(append([]netip.Prefix(nil), plan.NonUplink...), t.Management.Sources...)
+		if t.Management.Subnet.IsValid() {
+			peers = append(peers, t.Management.Subnet)
+		}
+		if peers = domain.CollapsePrefixes(peers); !slices.Equal(peers, plan.NonUplink) {
+			plan.PeerNonUplink = peers
+		}
+	}
 	t.Access = plan
 	names := make([]string, 0, len(sets))
 	for n := range sets {
@@ -559,12 +627,16 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 	}
 	for _, r := range plan.Rules {
 		if r.DestKind == "uplink" {
-			s := SetDef{Name: nonUplinkSetName(), Type: "ipv4_addr", Flags: []string{"interval"}}
-			for _, p := range plan.NonUplink {
-				s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
-			}
-			t.accessSets = append(t.accessSets, s)
+			t.accessSets = append(t.accessSets, prefixSet(nonUplinkSetName(), plan.NonUplink))
 			break
+		}
+	}
+	if plan.PeerNonUplink != nil {
+		for _, r := range plan.Rules {
+			if r.DestKind == "uplink" && respondsTo(&r) {
+				t.accessSets = append(t.accessSets, prefixSet(peerNonUplinkSetName(), plan.PeerNonUplink))
+				break
+			}
 		}
 	}
 }
@@ -642,6 +714,30 @@ func (p *AccessPlan) matchExpr(r AccessRule) []any {
 	return e
 }
 
+// responderExpr is the selector of a rule for a forwarded connection (plan §2.4, D34): a connection
+// whose destination was translated, answered by the rule's source (the conntrack reply source: the
+// forward's target), from the rule's destination (the original source: the peer), on the rule's ports
+// (the reply's source port: the target port). Nil for a rule that cannot select one (respondsTo).
+func (p *AccessPlan) responderExpr(r AccessRule) []any {
+	if !p.Responder || !respondsTo(&r) {
+		return nil
+	}
+	e := []any{ctStatusDNAT(), eq(ctReplyIP("saddr"), setRef(r.SourceSet))}
+	switch r.DestKind {
+	case "prefixes":
+		e = append(e, eq(ctOriginalIP("saddr"), prefixes(r.Dest)))
+	case "uplink":
+		e = append(e, match(ctOriginalIP("saddr"), "!=", setRef(p.peerNonUplinkSet())))
+	}
+	if r.Protocol != "any" {
+		e = append(e, eq(meta("l4proto"), r.Protocol))
+	}
+	if len(r.Ports) > 0 {
+		e = append(e, eq(ctReply("proto-src"), portValue(r.Ports)))
+	}
+	return e
+}
+
 func portValue(ports []PortRange) any {
 	item := func(p PortRange) any {
 		if p.From == p.To {
@@ -699,12 +795,20 @@ func verdictFor(r AccessRule) any {
 
 // chain builds the access chain of a hook. Every rule counts into its named counter and notes when it
 // last matched (the `last` statement, P3-M13-01): the rule editor's "hits, bytes, last match" (plan §2.17).
+//
+// In the forward chain each rule is followed by its responder form (responderExpr) while a port forward
+// is in the packet path: the same counter and the same verdict, so a rule decides the connections it
+// initiates and those forwarded to it in one place of the order. The input chain never sees a forwarded
+// connection.
 func (p *AccessPlan) chain(name string) Chain {
 	c := Chain{Name: name}
 	for _, r := range p.Rules {
 		expr := p.matchExpr(r)
 		expr = append(expr, counter(r.Counter), lastStmt(), verdictFor(r))
 		c.Rules = append(c.Rules, newRule(expr...))
+		if resp := p.responderExpr(r); name == AccessForwardChain && resp != nil {
+			c.Rules = append(c.Rules, newRule(append(resp, counter(r.Counter), lastStmt(), verdictFor(r))...))
+		}
 	}
 	return c
 }
@@ -742,33 +846,45 @@ func (p *AccessPlan) CutRules(keys []string) (forward, input []Rule) {
 	if last < 0 {
 		return nil, nil
 	}
-	var body []Rule
+	// the forward chain also has the responder forms of the rules (chain): a forwarded connection is cut
+	// by a rule on its target, and the reset goes to the peer that opened it
+	var fbody, ibody []Rule
 	for i, r := range p.Rules {
 		if i > last {
 			break
 		}
-		expr := p.matchExpr(r)
-		if want[r.Key] && r.Cuts() && (r.Protocol == "tcp" || r.Protocol == "any") {
-			cut := append([]any(nil), expr...)
-			if r.Protocol == "any" {
-				cut = append(cut, eq(meta("l4proto"), "tcp"))
-			}
-			cut = append(cut, ctState("established"), eq(ctKey("direction"), "original"), rejectTCPReset())
-			body = append(body, newRule(cut...))
+		forms := [][]any{p.matchExpr(r)}
+		if resp := p.responderExpr(r); resp != nil {
+			forms = append(forms, resp)
 		}
-		if i < last {
-			body = append(body, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+		for n, expr := range forms {
+			var rules []Rule
+			if want[r.Key] && r.Cuts() && (r.Protocol == "tcp" || r.Protocol == "any") {
+				cut := append([]any(nil), expr...)
+				if r.Protocol == "any" {
+					cut = append(cut, eq(meta("l4proto"), "tcp"))
+				}
+				cut = append(cut, ctState("established"), eq(ctKey("direction"), "original"), rejectTCPReset())
+				rules = append(rules, newRule(cut...))
+			}
+			if i < last {
+				rules = append(rules, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+			}
+			fbody = append(fbody, rules...)
+			if n == 0 {
+				ibody = append(ibody, rules...)
+			}
 		}
 	}
 	for _, b := range p.Switched {
 		forward = append(forward, newRule(iifname(b), oifname(b), verdict("return")))
 	}
-	forward = append(forward, body...)
+	forward = append(forward, fbody...)
 	input = append(input, newRule(iifname("lo"), verdict("return")))
 	if p.guard != nil {
 		input = append(input, newRule(append(append([]any(nil), p.guard...), verdict("return"))...))
 	}
-	input = append(input, body...)
+	input = append(input, ibody...)
 	return forward, input
 }
 
@@ -787,4 +903,13 @@ func (p *AccessPlan) CutTransaction(keys []string) ([]byte, error) {
 		}
 	}
 	return json.Marshal(map[string]any{"nftables": cmds})
+}
+
+// prefixSet is an interval set of the prefixes.
+func prefixSet(name string, ps []netip.Prefix) SetDef {
+	s := SetDef{Name: name, Type: "ipv4_addr", Flags: []string{"interval"}}
+	for _, p := range ps {
+		s.Elements = append(s.Elements, linux.NormalizeElement(p.String()))
+	}
+	return s
 }

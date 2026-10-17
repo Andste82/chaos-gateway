@@ -187,3 +187,32 @@ func TestApplyFileThroughTheStoreCreatesTheActiveRevision(t *testing.T) {
 		t.Error("the gateway is not configured")
 	}
 }
+
+// A forward on the API's port is refused by `chaosgw apply` when the API listens on a port of its own
+// (--ui-port) and the configuration names no ui_port, directly and through the store; on another port
+// it is applied.
+func TestApplyFileRefusesAForwardOnTheAPIsPort(t *testing.T) {
+	_, sock, _ := startExecutor(t)
+	raw, err := os.ReadFile(configFile(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "forward.yaml")
+	fwd := "port_forwards:\n  f1000000-0000-4000-8000-000000000001: {protocol: tcp, entry: uplink, external_port: 8443, target: {address: 10.10.0.77}}\n"
+	if err := os.WriteFile(p, append(raw, []byte(fwd)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{nil, {"--state-dir", t.TempDir()}} {
+		args := append([]string{"apply", "--file", p, "--socket", sock, "--executor-uid", uid(), "--ui-port", "8443"}, extra...)
+		code, _, errOut := runCmd(args...)
+		if code != 1 || !strings.Contains(errOut, "/port_forwards/f1000000-0000-4000-8000-000000000001/external_port") || !strings.Contains(errOut, "reserved_port") {
+			t.Errorf("%v: code %d: %s", extra, code, errOut)
+		}
+	}
+	if code, out, errOut := runCmd("apply", "--file", p, "--socket", sock, "--executor-uid", uid(), "--dry-run"); code != 0 {
+		t.Fatalf("on the default port 443: code %d\n%s\n%s", code, out, errOut)
+	}
+	if code, _, errOut := runCmd("apply", "--file", p, "--ui-port", "0"); code != 2 || !strings.Contains(errOut, "--ui-port") {
+		t.Errorf("--ui-port 0: code %d: %s", code, errOut)
+	}
+}

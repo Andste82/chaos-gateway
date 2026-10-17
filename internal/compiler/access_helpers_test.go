@@ -149,6 +149,11 @@ func renderExpr(e any) string {
 					op += " "
 				}
 				right := renderExpr(m["right"])
+				if l, ok := m["left"].(map[string]any); ok && l["&"] != nil {
+					if n, ok := m["right"].(int64); ok {
+						right = fmt.Sprintf("0x%x", n)
+					}
+				}
 				if l, ok := m["right"].([]any); ok {
 					right = "{ " + renderExpr(l) + " }"
 				}
@@ -174,6 +179,42 @@ func renderExpr(e any) string {
 				return fmt.Sprintf("%v-%v", l[0], l[1])
 			case "counter":
 				return fmt.Sprintf("counter %q", v)
+			case "concat":
+				l := v.([]any)
+				parts := make([]string, len(l))
+				for i, p := range l {
+					parts[i] = renderExpr(p)
+				}
+				return strings.Join(parts, " . ")
+			case "fib":
+				m := v.(map[string]any)
+				flags := m["flags"].([]any)
+				parts := make([]string, len(flags))
+				for i, f := range flags {
+					parts[i] = renderExpr(f)
+				}
+				return "fib " + strings.Join(parts, " . ") + " " + m["result"].(string)
+			case "map":
+				m := v.(map[string]any)
+				return renderExpr(m["key"]) + " map " + renderExpr(m["data"])
+			case "&", "|":
+				// a mark's bits read best in hex
+				l := v.([]any)
+				right := renderExpr(l[1])
+				if n, ok := l[1].(int64); ok {
+					right = fmt.Sprintf("0x%x", n)
+				}
+				return renderExpr(l[0]) + " " + k + " " + right
+			case "mangle":
+				m := v.(map[string]any)
+				return renderExpr(m["key"]) + " set " + renderExpr(m["value"])
+			case "dnat":
+				m := v.(map[string]any)
+				s := "dnat " + renderExpr(m["family"])
+				if f, ok := m["type_flags"]; ok {
+					s += " " + renderExpr(f)
+				}
+				return s + " to " + renderExpr(m["addr"])
 			case "jump", "goto":
 				return k + " " + v.(map[string]any)["target"].(string)
 			case "reject":
@@ -222,7 +263,7 @@ func describeAccess(tg *Target) string {
 	for _, s := range sets {
 		fmt.Fprintf(&b, "set %s { %s }\n", s.Name, strings.Join(s.Elements, ", "))
 	}
-	for _, name := range []string{"forward", "input", AccessForwardChain, AccessInputChain, CutForwardChain, CutInputChain} {
+	for _, name := range []string{"forward", "input", MgmtGuardChain, AccessForwardChain, AccessInputChain, CutForwardChain, CutInputChain} {
 		if !hasChain(tg, name) {
 			continue
 		}

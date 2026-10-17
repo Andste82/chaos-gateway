@@ -8,9 +8,10 @@ export interface Segment {
 
 <script setup lang="ts">
 // Segmented control (plan §2.17): one choice of a few, each a real button with aria-pressed. The
-// `chips` variant is the row of filter chips of the device list.
+// `chips` variant is the row of filter chips of the device list. `describedBy` ties the group to the
+// error or hint under it.
 
-defineProps<{ options: Segment[]; label: string; variant?: 'segments' | 'chips' }>();
+defineProps<{ options: Segment[]; label: string; variant?: 'segments' | 'chips'; describedBy?: string }>();
 const model = defineModel<string>({ required: true });
 </script>
 
@@ -18,6 +19,7 @@ const model = defineModel<string>({ required: true });
   <div
     role="group"
     :aria-label="label"
+    :aria-describedby="describedBy"
     class="flex"
     :class="variant === 'chips' ? 'gap-1.5' : 'rounded-md border border-border-strong p-0.5'"
   >

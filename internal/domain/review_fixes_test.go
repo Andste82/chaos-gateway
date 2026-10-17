@@ -434,6 +434,8 @@ func TestEveryValidationCodeIsDocumented(t *testing.T) {
 		CodeMixedFamily, CodeEmptyFault, CodeInvalidMTU, CodeCutWithAllow, CodeTunnelParameter,
 		CodeInvalidDNSFault, CodeInvalidTLSCase, CodeInvalidDHCPAction, CodeInvalidOverlay,
 		CodeInvalidFlapping, CodeRejectTypeNeedsReject, CodeInvalidName, CodeDuplicateRoutingKind, CodeUnknownRoutingSettings,
+		CodeInvalidRate, CodeReservedOption,
+		CodeReservedPort, CodeOverlappingForward, CodePortRangeLength, CodeManagementIsUplink, // M35a
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "development.md"))
 	if err != nil {

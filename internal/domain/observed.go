@@ -22,6 +22,10 @@ type Neighbor struct {
 	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, FAILED). It
 	// only counts while the address still carries connections.
 	Stale bool
+	// Seen is when the engine first saw the address with this MAC: of two confirmed entries of a
+	// device, the one seen later is its more current address (a device that moved keeps its old
+	// entry REACHABLE for a while). Zero when unknown.
+	Seen time.Time
 }
 
 // ProbeObservation is what is known about a probe: the MAC of its veth and its addresses.
@@ -79,6 +83,11 @@ type IdentityConflict struct {
 type Identity struct {
 	// Addresses are the current addresses of each device of the device namespace, sorted.
 	Addresses map[string][]netip.Addr
+	// Current are the same addresses, the most current claim first: an explicit address, then leases
+	// (the newest first), what the neighbor table confirms (the entry seen last first), a reservation, and last an address that
+	// stays mapped only because it still carries connections (a stale neighbor entry, an address the
+	// device had before). A forward sends its connections to the first one (ForwardStatus).
+	Current map[string][]netip.Addr
 	// Owner maps an address to its device.
 	Owner map[netip.Addr]string
 	// Ranges are devices identified by prefixes.
@@ -117,6 +126,23 @@ type claim struct {
 	device   string
 	strength int
 	stamp    time.Time // for leases: when they expire; a later expiry is a newer lease
+	// lingering marks a claim that only stands because the address still carries connections (a
+	// stale neighbor entry): it decides the owner like any neighbor claim, but is the least current.
+	lingering bool
+	// seen is when the neighbor entry behind a neighbor claim was first seen (Neighbor.Seen).
+	seen time.Time
+}
+
+// current reports whether the claim says more about the device's address now than o does
+// (Identity.Current).
+func (c claim) current(o claim) bool {
+	if c.lingering != o.lingering {
+		return !c.lingering
+	}
+	if c.strength == claimNeighbor && o.strength == claimNeighbor && !c.seen.Equal(o.seen) {
+		return c.seen.After(o.seen)
+	}
+	return c.beats(o)
 }
 
 func (c claim) beats(o claim) bool {
@@ -168,24 +194,26 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			claims[ip] = append(claims[ip], c)
 		}
 	}
-	res := Identity{Addresses: map[string][]netip.Addr{}, Owner: map[netip.Addr]string{}}
+	res := Identity{Addresses: map[string][]netip.Addr{}, Current: map[string][]netip.Addr{}, Owner: map[netip.Addr]string{}}
+	// best is the claim that gave each address its owner: how current the address is for the device
+	best := map[netip.Addr]claim{}
 
 	for _, id := range sortedKeys(idx.Devices) {
 		d := idx.Devices[id]
 		switch {
 		case d.Client != nil:
 			if a, ok := parseAddr(d.Client.Address); ok {
-				add(a, claim{id, claimExplicit, time.Time{}})
+				add(a, claim{device: id, strength: claimExplicit})
 			}
 		case d.Device != nil:
 			if d.Device.FixedIp != nil {
 				if a, ok := parseAddr(*d.Device.FixedIp); ok {
-					add(a, claim{id, claimReservation, time.Time{}})
+					add(a, claim{device: id, strength: claimReservation})
 				}
 			}
 			for _, s := range deref(deref(d.Device.Identifiers).Ipv4) {
 				if a, ok := parseAddr(s); ok {
-					add(a, claim{id, claimExplicit, time.Time{}})
+					add(a, claim{device: id, strength: claimExplicit})
 				} else if p, ok := parsePrefix(s); ok {
 					res.Ranges = append(res.Ranges, IdentityRange{p.Masked(), id})
 				}
@@ -198,7 +226,7 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		}
 		if dev, ok := macs[lower(l.Mac)]; ok {
 			if a, ok := parseAddr(l.Ip); ok {
-				add(a, claim{dev, claimLease, l.ExpiresAt})
+				add(a, claim{device: dev, strength: claimLease, stamp: l.ExpiresAt})
 			}
 		}
 	}
@@ -207,12 +235,12 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			continue // an old entry says nothing about who has the address now
 		}
 		if dev, ok := macs[lower(n.MAC)]; ok {
-			add(n.IP, claim{dev, claimNeighbor, time.Time{}})
+			add(n.IP, claim{device: dev, strength: claimNeighbor, lingering: n.Stale, seen: n.Seen})
 		}
 	}
 	for _, id := range sortedKeys(obs.Probes) {
 		for _, ip := range obs.Probes[id].IPs {
-			add(ip, claim{id, claimNeighbor, time.Time{}})
+			add(ip, claim{device: id, strength: claimNeighbor})
 		}
 	}
 
@@ -226,6 +254,13 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		sort.SliceStable(cs, func(i, j int) bool { return cs[i].beats(cs[j]) })
 		winner := cs[0].device
 		res.Owner[ip] = winner
+		top := cs[0]
+		for _, c := range cs[1:] {
+			if c.device == winner && c.current(top) {
+				top = c
+			}
+		}
+		best[ip] = top
 		var rivals []string
 		seen := map[string]bool{}
 		for _, c := range cs {
@@ -247,6 +282,7 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			for _, ip := range prev.Addresses[dev] {
 				if _, taken := res.Owner[ip]; !taken && obs.ActiveSources[ip] {
 					res.Owner[ip] = dev
+					best[ip] = claim{device: dev, lingering: true}
 				}
 			}
 		}
@@ -254,8 +290,14 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 	for ip, dev := range res.Owner {
 		res.Addresses[dev] = append(res.Addresses[dev], ip)
 	}
-	for _, addrs := range res.Addresses {
+	for dev, addrs := range res.Addresses {
 		sort.Slice(addrs, func(i, j int) bool { return addrs[i].Less(addrs[j]) })
+		cur := append([]netip.Addr(nil), addrs...)
+		sort.SliceStable(cur, func(i, j int) bool {
+			a, b := best[cur[i]], best[cur[j]]
+			return a.current(b) && !b.current(a)
+		})
+		res.Current[dev] = cur
 	}
 	sort.Slice(res.Ranges, func(i, j int) bool {
 		a, b := res.Ranges[i], res.Ranges[j]
@@ -274,6 +316,9 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			}
 		}
 		sort.Slice(res.Addresses[d.ID], func(i, j int) bool { return res.Addresses[d.ID][i].Less(res.Addresses[d.ID][j]) })
+		if len(res.Addresses[d.ID]) > 0 {
+			res.Current[d.ID] = append([]netip.Addr(nil), res.Addresses[d.ID]...)
+		}
 	}
 	return res
 }

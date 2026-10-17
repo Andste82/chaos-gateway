@@ -393,6 +393,15 @@
       "add": {
         "chain": {
           "family": "inet",
+          "name": "mgmt_guard",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
           "hook": "postrouting",
           "name": "postrouting",
           "policy": "accept",
@@ -488,6 +497,15 @@
         "chain": {
           "family": "inet",
           "name": "mark_6",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "mgmt_guard",
           "table": "chaosgw"
         }
       }
@@ -1379,6 +1397,23 @@
             },
             {
               "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
+          "comment": "6c9925fa09d4",
+          "expr": [
+            {
+              "jump": {
+                "target": "mgmt_guard"
+              }
             }
           ],
           "family": "inet",
@@ -2461,6 +2496,87 @@
           "expr": [
             {
               "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "mgmt_guard",
+          "comment": "5dc4063108d6",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@mgmt_src_8743d6"
+              }
+            },
+            {
+              "counter": "forward_drop"
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "mgmt_guard",
+          "comment": "9cdec773a65a",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "mgmt0"
+              }
+            },
+            {
+              "counter": "forward_drop"
+            },
+            {
+              "drop": null
             }
           ],
           "family": "inet",

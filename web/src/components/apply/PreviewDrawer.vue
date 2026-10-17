@@ -5,7 +5,8 @@
 // Linux terms (nftables, tc, routes, … and the verify step); nothing changes until "Apply revision
 // N". Back to editing discards the candidate. A base that is not active any more opens the
 // concurrent-change dialog; a refused candidate (422) lists the problems and marks the objects; a
-// failed apply shows the failing step and the revision the gateway restored.
+// failed apply shows the failing step and the revision the gateway restored. The port forwards after
+// the change are listed with the note that faults do not apply to forwarded connections (M35a, M35b).
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
@@ -13,6 +14,7 @@ import { applyRevision, createRevision, discardRevision, previewRevision } from 
 import { getState } from '../../api/generated/hooks/system/system';
 import type { ApplyResult, Preview } from '../../api/generated/model';
 import { useGatewayState, useNames } from '../../composables/gateway';
+import { entryLabels, forwardTitle } from '../../lib/forwards';
 import { useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore } from '../../stores/draft';
@@ -76,6 +78,11 @@ function where(path: string | undefined): string {
   if (p) {
     const name = draft.effectiveRouting.protocols?.[p[1]!]?.name ?? draft.baseRouting.protocols?.[p[1]!]?.name ?? p[1];
     return `Routing protocol ${name}${rest(p[2])}`;
+  }
+  const f = /^\/port_forwards\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (f) {
+    const p = draft.effectiveForwards[f[1]!] ?? draft.baseForwards[f[1]!];
+    return `Port forward ${p ? forwardTitle(p) : f[1]}${rest(f[2])}`;
   }
   if (path === '/routing' || path?.startsWith('/routing/')) return `Routing${rest(path.slice('/routing/'.length))}`;
   const o = /^\/(groups|probes|scenarios)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
@@ -202,7 +209,7 @@ async function apply() {
     // edits made while it waits for confirmation move onto it once it is confirmed
     if (res.status === 'pending_confirm') draft.notePending(res.revision);
     draft.drawerOpen = false;
-    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
+    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink', 'port-forwards'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {
     apiPanel.record(`Preview & apply revision ${id} (refused: ${errorMessage(e)})`, [...calls, applyCall]);
     if (e instanceof ApiError && e.code === 'revision_conflict' && draft.base !== undefined) {
@@ -297,6 +304,24 @@ function value(v: unknown): string {
             {{ w.message }}
           </li>
         </ul>
+
+        <div v-if="preview.port_forwards?.length" class="flex flex-col gap-1.5" data-testid="preview-forwards">
+          <div class="text-xs font-semibold tracking-[0.06em] text-text-2">PORT FORWARDS</div>
+          <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
+            <li v-for="f in preview.port_forwards" :key="f.id" class="rounded-md border border-[#2a323d] bg-surface-2 px-3 py-2 text-[13px]">
+              <span class="font-medium">{{ f.name ?? `${f.protocol.toUpperCase()} ${f.external_ports}` }}</span>
+              <!-- `new` is set for a changed forward too: the cards call that CHANGED -->
+              <span v-if="f.new" class="ml-1.5 rounded border border-accent-strong px-1.5 text-xs text-accent-text" data-testid="preview-forward-mark">{{
+                draft.baseForwards[f.id] ? 'CHANGED' : 'NEW'
+              }}</span>
+              <span class="mono ml-1.5 text-text-2">{{ f.protocol.toUpperCase() }} {{ f.external_ports }} from the {{ entryLabels[f.entry] }} → {{ f.target }}:{{ f.target_ports }}</span>
+            </li>
+          </ul>
+          <p class="m-0 text-[13px] text-text-2" data-testid="preview-forwards-note">
+            Faults do not apply to forwarded connections: a fault of the target device, of its network or of everything leaves them
+            unimpaired. The access rules do apply, with the device as responder.
+          </p>
+        </div>
 
         <p v-if="preview.requires_confirm" class="m-0 rounded-md border border-fault-border bg-fault-tint px-3 py-2 text-[13px] text-fault-text">
           This change can cut you off from the gateway: after the apply it waits for your confirmation, and without it the gateway rolls back.

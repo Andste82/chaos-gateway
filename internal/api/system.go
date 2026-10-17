@@ -255,8 +255,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M11 provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain"}
+// M14 and M35a (port forwarding) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {
@@ -747,7 +747,7 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		return
 	}
 	now := s.clk.Now()
-	cfg, err := domain.NewCandidate(nil, body.Configuration, domain.FormatJSON, domain.CandidateFull, now)
+	cfg, err := domain.NewCandidate(nil, body.Configuration, domain.FormatJSON, domain.CandidateFull, now, s.validateOpts()...)
 	if err != nil {
 		s.fail(c, err)
 		return
@@ -757,7 +757,7 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	rev, err := s.cfg.Store.Create(cfg, store.CreateOptions{IfMatch: s.cfg.Store.ActiveID(), Message: "first-start setup", By: actorOf(principalOf(c)), Now: now})
+	rev, err := s.cfg.Store.Create(cfg, store.CreateOptions{IfMatch: s.cfg.Store.ActiveID(), Message: "first-start setup", By: actorOf(principalOf(c)), Now: now, Validate: s.validateOpts()})
 	if err != nil {
 		undo()
 		s.fail(c, err)

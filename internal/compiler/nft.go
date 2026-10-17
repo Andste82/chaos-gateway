@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,7 +64,8 @@ type MapDef struct {
 	// device, destination, protocol and port, plan §3.3).
 	KeyType []string `json:"key_type"`
 	// ValueType is the map's data type: "mark" for a plain integer value (the identity map's device
-	// numeral) or "verdict" for a map whose elements go to a chain (a classification map).
+	// numeral), "verdict" for a map whose elements go to a chain (a classification map), or several nft
+	// types joined with " . " for a concatenated value (the DNAT map's address and port, forward.go).
 	ValueType string `json:"value_type"`
 	// Flags are the map's flags; "interval" lets keys be ranges and prefixes (the classification
 	// maps, whose elements are disjoint ranges, plan §3.2 "overlapping selectors").
@@ -153,7 +155,7 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 		if len(m.KeyType) > 1 {
 			typ = m.KeyType
 		}
-		f := map[string]any{"name": m.Name, "type": typ, "map": m.ValueType}
+		f := map[string]any{"name": m.Name, "type": typ, "map": mapValueType(m.ValueType)}
 		if len(m.Flags) > 0 {
 			f["flags"] = m.Flags
 		}
@@ -470,14 +472,17 @@ func mapKeyPart(part string) any {
 	if addr, bits, ok := splitPrefix(part); ok {
 		return map[string]any{"prefix": map[string]any{"addr": addr, "len": bits}}
 	}
-	// "first-last": an interval element (addresses or ports)
+	// "first-last": an interval element (addresses or ports); anything else with a dash is a name (an
+	// interface such as br-iot)
 	if lo, hi, ok := strings.Cut(part, "-"); ok {
 		if a, err := strconv.Atoi(lo); err == nil {
 			if b, err := strconv.Atoi(hi); err == nil {
 				return map[string]any{"range": []any{a, b}}
 			}
-		} else {
-			return map[string]any{"range": []any{lo, hi}}
+		} else if _, err := netip.ParseAddr(lo); err == nil {
+			if _, err := netip.ParseAddr(hi); err == nil {
+				return map[string]any{"range": []any{lo, hi}}
+			}
 		}
 	}
 	if n, err := strconv.Atoi(part); err == nil {
@@ -486,8 +491,26 @@ func mapKeyPart(part string) any {
 	return part
 }
 
+// mapValueType is the data type of a map as the JSON of `add map` names it: one type, or the list of
+// the types of a concatenated value.
+func mapValueType(valueType string) any {
+	parts := strings.Split(valueType, " . ")
+	if len(parts) == 1 {
+		return valueType
+	}
+	out := make([]any, len(parts))
+	for i, p := range parts {
+		out[i] = p
+	}
+	return out
+}
+
 // mapValueExpr renders a map element's data per the map's value type.
 func mapValueExpr(valueType, value string) any {
+	if strings.Contains(valueType, " . ") {
+		// a concatenated value (the DNAT map's address . port): its parts like the parts of a key
+		return mapKeyExpr(value)
+	}
 	if valueType == "verdict" {
 		// goto, not jump: after a jump the kernel continues with the NEXT RULE of the calling chain
 		// (the rest of the rule that did the lookup is not run), so the lookup chain's next level would

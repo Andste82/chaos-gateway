@@ -511,6 +511,56 @@ func TestDockerUserAcceptLetsTestTrafficThroughDockersForwardPolicy(t *testing.T
 	}
 }
 
+// fwdListen echoes on tcp 8883; fwdTry connects to argv[1]:argv[2] and prints ok, or what went wrong.
+const (
+	fwdListen = `
+import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("0.0.0.0", 8883)); s.listen(10)
+while True:
+    c, _ = s.accept(); d = c.recv(10); c.sendall(d); c.close()
+`
+	fwdTry = `
+import socket, sys
+try:
+    s = socket.socket(); s.settimeout(2); s.connect((sys.argv[1], int(sys.argv[2]))); s.sendall(b"hi")
+    print("ok" if s.recv(10) == b"hi" else "bad")
+except Exception as e: print(type(e).__name__)
+`
+)
+
+// M35a, plan §3.4: a port forward passes Docker's FORWARD policy (DROP) through the accept rules of the
+// test-network bridges in DOCKER-USER, which cover the path from the entry side to a bridge; without
+// them Docker drops the forwarded connection like any other.
+func TestAForwardPassesDockersForwardPolicyThroughDockerUser(t *testing.T) {
+	g := newGateway(t)
+	gwns := g.top.GW
+	gwns.Must("iptables", "-w", "5", "-N", "DOCKER-USER")
+	gwns.Must("iptables", "-w", "5", "-A", "DOCKER-USER", "-j", "RETURN")
+	gwns.Must("iptables", "-w", "5", "-I", "FORWARD", "-j", "DOCKER-USER")
+	gwns.Must("iptables", "-w", "5", "-P", "FORWARD", "DROP")
+	tp := 8883
+	addr := testbed.ClientAAddr
+	g.cfg.PortForwards = &map[string]model.PortForward{"f4000000-0000-4000-8000-000000000001": {Protocol: model.PortForwardProtocolTcp,
+		Entry: model.PortForwardEntryUplink, ExternalPort: 8080, TargetPort: &tp, Target: model.PortForwardTarget{Address: &addr}}}
+	g.top.A.Start("python3", "-c", fwdListen)
+	g.apply(g.compile())
+	try := func() string {
+		out, _ := g.top.Server.Run(context.Background(), "python3", "-c", fwdTry, testbed.UplinkGateway, "8080")
+		return strings.TrimSpace(out)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for got := try(); got != "ok"; got = try() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the forward does not pass Docker's FORWARD policy: %s\n%s", got, g.dump())
+		}
+	}
+	gwns.Must("iptables", "-w", "5", "-F", "DOCKER-USER")
+	gwns.Must("iptables", "-w", "5", "-A", "DOCKER-USER", "-j", "RETURN")
+	if got := try(); got == "ok" {
+		t.Error("without the accept rules Docker's FORWARD policy must drop the forwarded connection")
+	}
+}
+
 func TestRemovingANetworkOnARealKernel(t *testing.T) {
 	g := newGateway(t)
 	g.apply(g.compile())

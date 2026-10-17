@@ -4,7 +4,8 @@
 // the device is (the fault dialog with the device as its fixed target), a fault of the device can
 // be edited, "Apply profile" leads to the profiles with the device as the scope. The panels whose
 // backend comes later (flows view, DNS, captures, DHCP and TLS test actions, diagnostics) arrive
-// with their milestones.
+// with their milestones. The port forwards to the device (M35a) are listed with their status and
+// counter, each with a link to edit it on the networks page, which also adds one to the device.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref } from 'vue';
 import { ApiError } from '../api/fetcher';
@@ -20,7 +21,8 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { fetchAll, firstError, useConfigFaults, useGatewayState, useNames, type ActiveFault } from '../composables/gateway';
+import { fetchAll, firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, usePortForwards, type ActiveFault } from '../composables/gateway';
+import { counterHint, counterText, entryLabels, forwardDeviceProblem, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
 import { useNow } from '../composables/useNow';
 import { deviceNetworkInfo, deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
@@ -49,6 +51,9 @@ const state = useGatewayState();
 const draft = useDraftStore();
 const connection = useConnectionStore();
 const now = useNow();
+const forwardViews = usePortForwards();
+// the draft's base: the forwards as the draft has them
+useActiveConfig();
 
 const d = computed(() => device.data.value);
 const notFound = computed(() => device.error.value instanceof ApiError && device.error.value.status === 404);
@@ -130,11 +135,29 @@ function editFault(o: Overlay) {
   editing.value = o;
   faultOpen.value = true;
 }
+/** The port forwards to this device, as the draft has them. */
+const forwards = computed(() => forwardRows(draft.baseForwards, draft.forwards, forwardViews.data.value ?? []).filter((r) => r.p.target.device === d.value?.id));
+/**
+ * A forward can go to the device: it is configured (or adopted in the draft), not a WireGuard client and
+ * not configured in another kind of network (one without a network is a target). The gateway refuses a
+ * forward to another device; the hint says what to do instead.
+ */
+const forwardBlocked = computed(() => {
+  const v = d.value;
+  if (!v) return undefined;
+  // the networks not loaded yet: the dialog and the gateway check
+  const problem = forwardDeviceProblem(v, draft.devices[v.id], (id) => networks.data.value?.find((n) => n.id === id)?.config.type);
+  if (problem === 'discovered') return 'Adopt the device to forward to it, or forward to its address on the networks page.';
+  if (problem === 'not_lan') return 'A port forward goes to a device in a local test network.';
+  return undefined;
+});
+const forwardDevice = (id: string) => (id === d.value?.id ? d.value.name : names.value.device?.(id));
 const changeBlocked = computed(() => !!state.data.value?.pending_confirm || connection.offline);
 
 useApiScreen('this device', () => [
   { method: 'GET', path: `/devices/${props.id}`, note: 'identity, lease, winning faults, counters' },
   { method: 'GET', path: `/overlays?device=${props.id}`, note: "the overlays that act on the device, its network's and groups' included" },
+  { method: 'GET', path: '/port-forwards', note: 'the port forwards, those to this device listed' },
 ]);
 </script>
 
@@ -244,6 +267,36 @@ useApiScreen('this device', () => [
               </dd>
             </template>
           </dl>
+        </SectionCard>
+
+        <SectionCard title="Port forwards">
+          <template #actions>
+            <RouterLink v-if="!forwardBlocked" class="btn btn-sm" :to="{ path: '/networks', query: { forward: 'new', device: d.id } }" :aria-label="`Add a port forward to ${d.name}`">Add</RouterLink>
+          </template>
+          <LoadError v-if="firstError(forwardViews)" :error="firstError(forwardViews)" what="The status of the port forwards is not loaded" :retry="forwardViews.refetch" />
+          <p v-if="forwards.length === 0" class="m-0 text-sm text-text-2" data-testid="device-forwards-empty">No port forward leads to this device.</p>
+          <ul v-else class="m-0 flex list-none flex-col gap-2 p-0" data-testid="device-forwards">
+            <li v-for="r in forwards" :key="r.id" class="text-[13px]" data-testid="device-forward">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span class="mono" :class="r.mark === 'DELETED' ? 'line-through opacity-60' : ''">{{ forwardSummary(r.p, forwardDevice) }}</span>
+                <span class="text-text-2">from the {{ entryLabels[r.p.entry] }}</span>
+                <span v-if="r.mark" class="rounded border border-accent-strong px-1.5 text-xs text-accent-text">{{ r.mark }}</span>
+              </div>
+              <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <StatusDot v-bind="rowStatus(r)" />
+                <span v-if="counterText(r)" class="mono text-xs text-text-2" :title="counterHint">{{ counterText(r) }}</span>
+                <RouterLink
+                  v-if="r.mark !== 'DELETED'"
+                  :to="{ path: '/networks', query: { forward: r.id } }"
+                  class="text-[13px]"
+                  :aria-label="`Edit the port forward ${forwardTitle(r.p)}`"
+                  >Edit</RouterLink
+                >
+              </div>
+            </li>
+          </ul>
+          <p v-if="forwardBlocked" class="mt-2 mb-0 text-xs text-text-2" data-testid="device-forwards-blocked">{{ forwardBlocked }}</p>
+          <p class="mt-2 mb-0 text-xs text-text-3">Faults do not apply to forwarded connections; the access rules do.</p>
         </SectionCard>
 
         <SectionCard title="Identity">

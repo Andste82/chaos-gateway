@@ -38,6 +38,7 @@ type Explanation struct {
 	Source      ExplainSource       `json:"source"`
 	Destination *ExplainDestination `json:"destination,omitempty"`
 	Access      ExplainAccess       `json:"access"`
+	Forward     *ExplainForward     `json:"forward,omitempty"`
 	Faults      []ExplainFamily     `json:"faults"`
 	Service     string              `json:"service,omitempty"`
 	Kernel      *ExplainKernel      `json:"kernel,omitempty"`
@@ -72,6 +73,18 @@ type ExplainAccess struct {
 	Rule string `json:"rule,omitempty"`
 	// Reason says which entry or default decided.
 	Reason string `json:"reason,omitempty"`
+}
+
+// ExplainForward is the port forward a forwarded connection takes (M35a).
+type ExplainForward struct {
+	ID       string                  `json:"id"`
+	Name     string                  `json:"name,omitempty"`
+	Entry    string                  `json:"entry"`
+	TargetIP string                  `json:"target_ip,omitempty"`
+	Port     int                     `json:"target_port"`
+	Device   *ExplainNamed           `json:"device,omitempty"`
+	Status   model.PortForwardStatus `json:"status"`
+	Note     string                  `json:"note"`
 }
 
 // ExplainFamily is the resolution of one family.
@@ -212,6 +225,13 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 	} else if q.Dst != "" {
 		query.DestNames = []string{strings.ToLower(q.Dst)}
 		out.Destination = &ExplainDestination{Hostname: q.Dst}
+	}
+
+	// a forwarded connection: judged with the forward's target as responder, and no fault applies to it
+	if fwd, ok := e.explainForwarded(snap, world, q, sub, dstIP, query.Protocol); ok {
+		out.Forward = fwd.forward
+		out.Access = fwd.access
+		return out, nil
 	}
 
 	// access: the control plane, the access rules, then the gateway's protection or the matrix
@@ -395,4 +415,58 @@ func (e *Engine) accessFacts(snap *Snapshot) domain.AccessFacts {
 	// two-port: the management network lies behind the uplink interface
 	f.TwoPort = snap.Applied != nil && snap.Management.Name != "" && snap.Management.Name == snap.Applied.Uplink.Name
 	return f
+}
+
+type explainedForward struct {
+	forward *ExplainForward
+	access  ExplainAccess
+}
+
+// explainForwarded explains a forwarded connection (M35a): from a source that is no device to the current
+// address of an entry side, on an external port of an enabled forward. The access rules judge it with the
+// forward's target as responder (plan §2.4); faults do not apply to it (M35b). ok is false for any other
+// traffic.
+func (e *Engine) explainForwarded(snap *Snapshot, world *domain.World, q ExplainQuery, sub domain.Subject, dst netip.Addr, proto string) (explainedForward, bool) {
+	if q.Device != "" || sub.Device != "" || !sub.IP.IsValid() || !dst.IsValid() || q.Port == 0 || (proto != "tcp" && proto != "udp") {
+		return explainedForward{}, false
+	}
+	facts, entry := forwardFacts(snap, snap.Config)
+	side := ""
+	for _, s := range []string{domain.EntryUplink, domain.EntryManagement} {
+		if a, ok := entry[s]; ok && a == dst && side == "" {
+			side = s
+		}
+	}
+	if side == "" {
+		return explainedForward{}, false
+	}
+	f, ok := domain.MatchForward(domain.Forwards(snap.Config), side, proto, q.Port)
+	if !ok {
+		return explainedForward{}, false
+	}
+	st := world.Index.ForwardStatus(f, facts)
+	out := &ExplainForward{ID: f.ID, Name: f.Name, Entry: f.Entry, Port: f.TargetPortOf(q.Port), Note: domain.FaultsNotOnForwards,
+		Status: model.PortForwardStatus{State: model.PortForwardStatusStateActive}}
+	if st.Target.IsValid() {
+		out.TargetIP = st.Target.String()
+		out.Status.TargetAddress = &out.TargetIP
+	}
+	owner := f.Device
+	if owner == "" && st.Target.IsValid() {
+		owner, _ = snap.Identity.OwnerOf(st.Target)
+		owner = strings.ToLower(owner)
+	}
+	if owner != "" {
+		out.Device = &ExplainNamed{ID: owner, Name: world.Index.NameOf(domain.KindDevice, owner)}
+	}
+	if !st.Active {
+		reason := model.PortForwardStatusReason(st.Reason)
+		msg := st.Message
+		out.Status = model.PortForwardStatus{State: model.PortForwardStatusStateInactive, Reason: &reason, Message: &msg, TargetAddress: out.Status.TargetAddress}
+		return explainedForward{out, ExplainAccess{Verdict: "drop", Layer: domain.AccessGatewayProtection,
+			Reason: "the port forward is " + msg + "; nothing is forwarded, and the gateway does not answer the port itself"}}, true
+	}
+	a := world.ForwardedDecision(domain.ForwardedQuery{Forward: f, Target: st.Target, Network: st.Network, Device: owner,
+		Peer: sub.IP, Protocol: proto, Port: q.Port}, e.accessFacts(snap))
+	return explainedForward{out, ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Rule: a.Rule, Reason: a.Reason}}, true
 }

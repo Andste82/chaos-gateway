@@ -19,6 +19,10 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
+- **Phase 3.1** (M35a): done on the branch `phase-3-1-port-forwarding` (PR #68, CI run 38991357139 green), reviewed, not yet audited. What the
+  implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
+  P31-M35a-01 to P31-M35a-10. P31-M35a-05, -09 and -10 were decided on 2026-10-17 and are closed; the others are open for
+  the maintainer's decision with the option that was implemented.
 
 ## Phase 1 audit result
 
@@ -1424,7 +1428,9 @@ plan:
 ## Shutdown and host cleanup (decided 2026-10-16)
 
 - Decision: **variant A.** When the service stops, the executor removes every kernel object Chaos Gateway created
-  (the `inet chaosgw` nftables table, its policy rules and routing tables 100 and 102, the test bridges with their
+  (the `inet chaosgw` nftables table, its policy rules and routing tables 100 to 109 (the policy table 100, the table 101
+  of the replies of a management-side port forward, the service table 102 and the PMTU mirror tables 103 to 109; the own
+  range is 100 to 110), the test bridges with their
   addresses, the service veth pair `svc0`/`svc1` and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
   `svcns` holder container and ends with it). Recorded as D35 in plan §7.1. The volumes stay, so `compose up` rebuilds
   the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
@@ -1443,3 +1449,256 @@ plan:
 - Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
   plan describes the target and `docs/install.md` plus the manual cleanup apply.
 - Needs maintainer: no (decided 2026-10-16).
+
+## Phase 3.1 open items
+
+Phase 3.1 (M35a, port forwarding) is implemented on the branch `phase-3-1-port-forwarding` (PR #68). The items below were found
+while implementing it; each records the option that was implemented so the work was not blocked, and what the maintainer may
+want to decide.
+
+### P31-M35a-01 When does a BGP neighbor sit on a forward's entry side?
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a refuses 179/tcp "while a BGP protocol of the routing configuration has a neighbor on
+  the entry side". The BGP protocols of the routing configuration run on WireGuard links (M4c), and a link's neighbor must be
+  the peer in the link's transfer network, so the BGP session itself never arrives on the uplink or the management interface;
+  the link's encrypted traffic does, through whichever of them leads to the peer's endpoint, and that is a matter of the host's
+  routes, not of the configuration.
+- Evidence: `internal/domain/validate_forward.go` (`bgpRuns`), `TestAForwardLeavesTheBGPPortWhileBGPRuns`.
+- Task: implemented (a) — 179/tcp is refused on both entry sides while an enabled BGP protocol is configured (a disabled one,
+  or an OSPF or Babel protocol, leaves the port free). Options: (a) as implemented; (b) refuse it only on the uplink side
+  (WireGuard runs over the uplink in the shipped topologies), so a three-port gateway may forward 179/tcp from the management
+  network; (c) refuse it only when a link's peer endpoint is an address of the entry side's network (needs the host's
+  addresses at validation time, which only the compiler has).
+- Recommendation: (a): it is the safe reading of the plan sentence, and forwarding BGP into a test network is rare.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-02 Forwards overlap whatever their entry side and whether they are enabled
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "no two forwards on the same protocol and external port". A forward on the uplink and
+  one on the management interface (three-port topology) could share a port, since they come in on different interfaces, and
+  a disabled forward does not use its port.
+- Evidence: `internal/domain/validate_forward.go` (`portForwards`), `TestTwoForwardsOnTheSameProtocolMustNotOverlap`.
+- Task: implemented (a) — two forwards on the same protocol whose external ranges overlap are refused
+  (`overlapping_forward`), whatever their entry side and whether they are enabled. Options: (a) as implemented, the plan's
+  wording; (b) compare only forwards of the same entry side; (c) compare only enabled forwards (enabling one may then fail).
+- Recommendation: (a): one external port means one target, which keeps the UI's list and `explain` unambiguous, and enabling a
+  forward never fails.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-03 The UI/API port is refused for udp and on both entry sides
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "the external port is never the UI/API port". The UI and the API listen on TCP only,
+  and in the three-port topology the uplink is not the management interface.
+- Evidence: `internal/domain/validate_forward.go`, `TestAForwardNeverTakesTheUIPort`.
+- Task: implemented (a) — the UI/API port (`management.ui_port`, else the port the API listens on, else the compiler's default
+  443) is refused for tcp and udp on both entry sides. Options: (a) as implemented; (b) refuse it for tcp only; (c) refuse it
+  only on the management side and on the two-port topology's shared interface, like 22/tcp.
+- Recommendation: (a): the plan says "never", and it keeps a forward from shadowing the control plane whatever the topology.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-04 A connection through a forward that is disabled or deleted lives on until it ends
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "a disabled or deleted forward leaves no DNAT and closes the path". The forward
+  chain accepts established traffic before anything else (D11, spike S3), and the translation of a tracked connection is in
+  its conntrack entry: a forwarded connection that exists when its forward goes keeps working until it ends, as a connection
+  does when an access matrix entry that allowed it goes.
+- Evidence: `internal/compiler/forward.go`, `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (a new connection to
+  a deleted forward's port reaches the gateway itself, not the device), `TestADisabledForwardLeavesTheKernel`.
+- Task: implemented (a) — the forward leaves the kernel (no DNAT element, no accept rule, no counter); new connections are
+  not translated. Options: (a) as implemented, like every other change of the access path (D11); (b) after the apply that
+  removes a forward, delete the tracked connections it translated (the engine knows them by their reply source and port, as
+  the cut of an access rule does), so the device's next packet meets no translation.
+- Recommendation: (a): it is what a matrix change does, and a forward that should cut its connections can be paired with a
+  rule with "also cut existing connections".
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-05 The replies of a forward from the management side go to the management subnet only
+
+- Status: closed (2026-10-17): decided — option (c), together with P31-M35a-10. The replies of a management-side forward
+  are routed by their connection, not by the peer's address: the forward's rule in the prerouting NAT chain sets bit 22 of
+  the conntrack mark (plan §3.3), the chain `fwd_reply` copies it onto the packet mark of the replies from the test networks,
+  and the policy rule `fwmark 0x400000/0x400000 lookup 101` (priority 925) sends them to table 101 (the management subnet,
+  the management interface's default gateway, a `prohibit` fallback). A peer behind a router of the management network is
+  answered; table 100 has no management route. Tests: `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`,
+  `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`, `TestGoldenForwards`, `TestGoldenForwardNftTransaction`; level 1
+  `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork` (the testbed's management host is the management
+  interface's default router; an address on its loopback outside the management subnet stands for a host behind it),
+  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`. Limitation (found in the review of 2026-10-17, documented):
+  table 101 knows the management interface's connected subnet and its default gateway (`Host.DefaultGateway`, the main
+  table's default route on that interface) only. A peer that the host reaches through another route of the management
+  interface, such as an admin network behind a static route via `mgmt0` while the main default goes via the uplink, gets no
+  reply to a forwarded connection. When the management interface has no default route at all the compiler warns
+  (`forward_replies_subnet_only`: "the replies of management forwards reach only <subnet>";
+  `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`), the spec's `PortForwardEntry`
+  says so, and the forward form shows it as the hint of the entry `management`. The text below is the state before the
+  decision.
+- Severity: low
+- Reason: needs-decision. A device's packets are looked up in the policy table 100 (§2.2), whose default route is the
+  uplink. A forward from the management network (three-port topology) needs its replies to go back through the management
+  interface, which table 100 did not know.
+- Evidence: `internal/compiler/compile.go` (`compileRouting`), `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`,
+  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`.
+- Task: implemented (a) — while a forward from the management side is compiled, table 100 has the management interface's
+  connected subnet. A device's own traffic to that subnet then leaves through the management interface too; the forward
+  chain's default drops it, but an access allow rule that matches it (P31-M35a-10) or a matrix entry network → management lets
+  it through. A peer of the management side that is not in that subnet (an allowed
+  source reached through a router of the management network) gets no answer. Options: (a) as implemented; (b) also route the
+  `allowed_sources` outside the subnet through the management interface's default gateway; (c) route the replies by the
+  connection (a conntrack mark set by the DNAT and a policy rule for it), independent of the peer's address.
+- Recommendation: (a) for M35a: the management network is the management interface's subnet in the shipped topologies; (c)
+  if forwards from routed management networks are needed.
+- Needs maintainer: no (decided 2026-10-17)
+- Effort: M
+
+### P31-M35a-06 A forwarded port range is one DNAT element per port
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. nftables has no expression that shifts a port by an offset (the kernel's shifted port ranges are not
+  in nft 1.0.9 or 1.1.6), so a range shifted one to one (8000-8010 to 9000-9010) needs one map element per port.
+- Evidence: `internal/compiler/forward.go` (`compileForwards`), `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`.
+- Task: implemented (a) — every forwarded port is one element of the DNAT map; ranges are not limited beyond 1-65535, so a
+  forward of all ports is 65535 elements, and a device's address change moves all of them in one element transaction.
+  Options: (a) as implemented; (b) limit the length of a range in the validation (e.g. 1024 ports); (c) an unshifted range
+  (target port = external port) as one interval element without a port in its value.
+- Recommendation: (a), with (b) if large ranges turn out to be slow on the smallest hardware (H1).
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-07 The entry address is every address of the entry interface
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "entry only on the chosen interface and its current address, which is followed through
+  netlink like masquerade". The DNAT rule matches a packet that comes in on the entry interface and is addressed to an address
+  of that interface (`fib daddr . iif type local`): the kernel follows a new address at once, without an apply, as masquerade
+  does. An interface with more than one IPv4 address forwards on each of them.
+- Evidence: `internal/compiler/forward.go` (`forwardDNAT`), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel`,
+  `TestAForwardFollowsANewUplinkAddress`.
+- Task: implemented (a). Options: (a) as implemented; (b) match the one address the engine reads (the interface's first IPv4
+  address, as the status and `explain` show it), compiled into the rule, so an address change takes a full apply.
+- Recommendation: (a): it follows a DHCP renewal within the kernel, and a second address on the uplink is the operator's own.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-08 The explain card of the faults screen asks for a device as the source
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision. Plan §5 M35a: "the preview and `explain` say that faults do not apply to forwarded connections".
+  `GET /explain` answers a forwarded connection when `src` is a peer behind the entry side and `dst` the entry side's address
+  (step 1). The explain card of the faults screen (M12) takes a device of the lab as the source, so it never asks for such a
+  connection; it shows the forward, the access layer `port_forward` and the note when the gateway's answer has them.
+- Evidence: `web/src/components/faults/ExplainCard.vue`, `web/e2e/port-forwards.spec.ts` ("explain shows a forwarded
+  connection's forward …").
+- Task: implemented (a) — the card renders the forward of an answer; a forwarded connection is explained through the API
+  (`chaosctl` or `GET /explain?src=…&dst=…&protocol=…&port=…`). Options: (a) as implemented; (b) a source choice "an address
+  behind the uplink or the management network" in the card, whose destination defaults to the entry side's address.
+- Recommendation: (b) with the flow view (M26), where a forwarded connection can be picked and explained.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-09 A forward's counter counts what the forward lets through, in hits
+
+- Status: closed (2026-10-17): decided — option (b). A counting rule per forward in the prerouting NAT chain, in front of the
+  DNAT rule (in on the entry interface, to an address of it, the protocol and the external ports, the forward's named counter
+  and `last`, no verdict), counts the first packet of each connection that arrives through the forward, whatever an access
+  rule decides afterwards (a TCP connection whose SYN a rule drops is counted per attempt). The last match comes from the
+  same rule's `last`, so the count and the time describe the same packets; the forward's accept rule counts nothing. The
+  API's `forwardCounter` reads it, the spec's `PortForwardView.counters` says connections, and the UI shows "N connections"
+  (`counterText`, `counterHint`). Tests: `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`,
+  `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestGoldenForwards`, `TestGoldenForwardNftTransaction`,
+  `TestAForwardCountsItsConnections` (API); level 1 `TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel`,
+  `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`,
+  `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`; `src/lib/forwards.test.ts` "the rows: …",
+  `port-forwards.spec.ts` "port forwards: the uplink and the management card list …", "port forwards: the device detail
+  lists …". The text below is the state before the decision.
+- Severity: low
+- Reason: needs-decision; found in the review of Phase 3.1. Plan §5 M35a: "a counter per forward" and "the counters count the
+  forwarded connections". The counter sits on the forward's accept rule in the forward chain. That rule (1) counts every
+  packet of a connection not yet established (one per connection, more for a retransmitted SYN or an unanswered UDP packet),
+  which is why the UI shows it as hits, and (2) runs after the access rules: the responder form of an access rule (§2.4) ends
+  in the rule's own verdict, so a forwarded connection that an `allow` rule selecting the device accepts (e.g. "device X:
+  allow tcp", or "network Lab → uplink: allow") is never counted by the forward, which then shows 0 hits and no last match
+  while traffic flows.
+- Evidence: `internal/compiler/forward.go` (`forwardAccepts`), `internal/compiler/access.go` (the responder form),
+  `internal/api` (`forwardCounter`), `web/src/lib/forwards.ts` (`counterText`), `TestAForwardHasTheCounterOfItsAcceptRule`.
+- Task: implemented (a). Options: (a) as implemented: hits of the forward's accept rule, i.e. what the forward itself let
+  through; (b) count each forward once per translated connection in the NAT prerouting chain (it sees only the first packet of
+  a conntrack entry): a counter-only rule per forward (iif, protocol, external range) in front of the DNAT map rule, so the
+  counter means "connections that arrived through the forward", including the ones an access rule then drops or accepts;
+  (c) a counter-only rule per forward in front of `jump access_forward` with the accept rule's match, which counts hits of
+  every forwarded connection that arrives, whoever accepts it; (d) a ct mark bit set by the DNAT and conntrack accounting.
+- Recommendation: (b): it counts connections, as the plan says, is cheap (one rule per forward, first packets only) and is
+  independent of the access rules; the UI then says "connections" again. The rule (and the API's `forwardCounter`) move to the
+  NAT chain, the accept rule keeps its `last` for the last match or gets it from the same rule.
+- Needs maintainer: no (decided 2026-10-17)
+- Effort: S
+
+### P31-M35a-10 A management-side forward makes the management subnet routable for the devices (three-port topology)
+
+- Status: closed (2026-10-17): decided — option (c) (with P31-M35a-05 (c)), and the guard of option (b) on top of it
+  (decided 2026-10-17 after the review of (c)). Table 100 never has a route to the management subnet; only the replies of a
+  management-side forward go back through the management interface, by bit 22 of the conntrack mark, the chain
+  `fwd_reply`, the rule `fwmark 0x400000/0x400000 lookup 101` and table 101 (see P31-M35a-05). A device's own new
+  connection to the management network follows the uplink default and the forward chain as any other, whether a
+  management forward exists or not. Routing alone does not keep it out, though: when table 100 loses its default (the
+  uplink loses its address, e.g. an expired DHCP lease: the kernel deletes the routes via the device, and the next compile
+  fails with `uplink_no_gateway`) the packet falls past rule 1000 to the main table, which knows the management subnet, and
+  a router behind the uplink that routes to the management subnet carries it there through the uplink. So the three-port
+  topology has the management guard too, exactly like the two-port one: the chain `mgmt_guard`, jumped to in front of the
+  access rules, drops new connections from the test interfaces (`ifs_test`: local test networks and WireGuard networks of
+  the role test) whose destination is in `mgmt_src` (whatever interface they leave through), to the management subnet
+  when the sources do not cover it, and whatever leaves through the management interface; the one exception is an explicit
+  access-matrix entry network → management: allow (a `return` in front of the drops). Replies, those of a management-side
+  forward included, are accepted before it. So no access rule, an allow rule without a destination included, carries a
+  device into the management network, whatever the routing. `explain` reports the guard as in the two-port topology (a
+  drop by the access matrix, no rule). No `prohibit` default is added to table 100 (the PMTU mirror tables copy its routes
+  with an MTU, and the executor refuses an MTU on a route that is not unicast). Tests of the guard:
+  `TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface`,
+  `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the golden scenario `access-threeport`,
+  `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (domain, both topologies),
+  `TestExplainNamesTheManagementGuardOfTheThreePortTopology`; level 1
+  `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork` and
+  `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`. The two-port topology is unchanged
+  (`management` is refused there, and its guard's output is the same). The executor's scope covers the new objects as they are
+  (table 101 lies in Chaos Gateway's tables 100-110, the route's device is the assigned management interface). Tests:
+  `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (no management subnet in table 100; the mark, the restore,
+  the rule and table 101; none of it without a management forward), `TestGoldenForwards`, `TestGoldenForwardNftTransaction`;
+  level 1 `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`,
+  `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`. The text below is the state before the decision.
+- Severity: low
+- Reason: needs-decision; found in the review of Phase 3.1. For P31-M35a-05 the policy table 100 gets the management subnet
+  while an enabled forward from the management side is compiled (even one whose target has no address). Table 100 is the table
+  of all packets of the test networks, so a device's own new connection to the management subnet then leaves through the
+  management interface with the device's address, instead of following the uplink default (masqueraded). The default stays
+  closed: with no allowance the implicit matrix accepts only the uplink and the forward chain's final drop drops it. But in the
+  three-port topology there is no guard in front of the access rules (the "cannot be overridden" guard of §2.4 exists only for
+  the two-port topology), so an access allow rule without a destination, an allow rule with a `cidr` covering the management
+  subnet, or a matrix entry network → management now carries a device into the management network, and only while a
+  management forward exists. Plan §2.2 and §2.16 keep the management network separated from the test networks.
+- Evidence: `internal/compiler/compile.go` (`compileRouting`), `internal/compiler/rules.go` (the forward chain's two-port guard),
+  `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`.
+- Task: implemented (a). Options: (a) as implemented: the route is present while a management forward exists; what the
+  access rules and the matrix allow decides, as §2.4 says for a rule without a destination; (b) a three-port guard in front of
+  the access rules, mirroring the two-port one: drop new connections from the test networks out to the management interface,
+  with the matrix entries to management as the only exception; (c) P31-M35a-05 (c): route only the forward's replies (a ct
+  mark set by the management-side DNAT, copied to the replies, and a policy rule `fwmark → management table`), so table 100
+  gets no management route at all and the reachability no longer depends on a forward.
+- Recommendation: (c): it removes the dependency on whether a forward exists and also answers peers behind a router of the
+  management network (P31-M35a-05); with a golden test and a level-1 test (a device with an allow-all rule cannot open a
+  connection into the management subnet while a management forward works).
+- Needs maintainer: no (decided 2026-10-17)
+- Effort: M

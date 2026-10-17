@@ -210,6 +210,9 @@ func visitConfiguration(cfg *model.Configuration, rewrite bool, fn refFunc) {
 		visitScope(path+"/source", &r.Source, fn)
 		visitDestination(path+"/destination", r.Destination, fn)
 	})
+	eachEntry(cfg.PortForwards, "/port_forwards", rewrite, func(path string, f *model.PortForward) {
+		visitRef(path+"/target/device", KindDevice, f.Target.Device, fn)
+	})
 	eachEntry(cfg.Faults, "/faults", rewrite, func(path string, f *model.ConfigFault) {
 		visitScope(path+"/source", f.Source, fn)
 		visitDestination(path+"/destination", f.Destination, fn)

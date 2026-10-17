@@ -159,6 +159,12 @@ type ServerInterface interface {
 	// RenewOverlay Renew an overlay's lease (heartbeat)
 	// (POST /overlays/{overlayId}/renew)
 	RenewOverlay(c *gin.Context, overlayId openapi_types.UUID)
+	// ListPortForwards Configured port forwards with their status and counters
+	// (GET /port-forwards)
+	ListPortForwards(c *gin.Context, params ListPortForwardsParams)
+	// GetPortForward One port forward
+	// (GET /port-forwards/{forwardId})
+	GetPortForward(c *gin.Context, forwardId Ref, params GetPortForwardParams)
 	// ListProbes Probes with their observed address
 	// (GET /probes)
 	ListProbes(c *gin.Context, params ListProbesParams)
@@ -1840,6 +1846,85 @@ func (siw *ServerInterfaceWrapper) RenewOverlay(c *gin.Context) {
 	siw.Handler.RenewOverlay(c, overlayId)
 }
 
+// ListPortForwards operation middleware
+func (siw *ServerInterfaceWrapper) ListPortForwards(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListPortForwardsParams
+
+	// ------------- Optional query parameter "revision" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "revision", c.Request.URL.Query(), &params.Revision, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter revision: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListPortForwards(c, params)
+}
+
+// GetPortForward operation middleware
+func (siw *ServerInterfaceWrapper) GetPortForward(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "forwardId" -------------
+	var forwardId Ref
+
+	err = runtime.BindStyledParameterWithOptions("simple", "forwardId", c.Param("forwardId"), &forwardId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter forwardId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPortForwardParams
+
+	// ------------- Optional query parameter "revision" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "revision", c.Request.URL.Query(), &params.Revision, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter revision: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetPortForward(c, forwardId, params)
+}
+
 // ListProbes operation middleware
 func (siw *ServerInterfaceWrapper) ListProbes(c *gin.Context) {
 
@@ -3318,6 +3403,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/groups/:groupId", wrapper.GetGroup)
 	router.GET(options.BaseURL+"/rules", wrapper.ListAccessRules)
 	router.GET(options.BaseURL+"/rules/:ruleId", wrapper.GetAccessRule)
+	router.GET(options.BaseURL+"/port-forwards", wrapper.ListPortForwards)
+	router.GET(options.BaseURL+"/port-forwards/:forwardId", wrapper.GetPortForward)
 	router.GET(options.BaseURL+"/faults", wrapper.ListFaults)
 	router.GET(options.BaseURL+"/faults/:faultId", wrapper.GetFault)
 	router.GET(options.BaseURL+"/profiles", wrapper.ListProfiles)
@@ -5358,6 +5445,85 @@ type RenewOverlaydefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response RenewOverlaydefaultApplicationProblemPlusJSONResponse) VisitRenewOverlayResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPortForwardsRequestObject struct {
+	Params ListPortForwardsParams
+}
+
+type ListPortForwardsResponseObject interface {
+	VisitListPortForwardsResponse(w http.ResponseWriter) error
+}
+
+type ListPortForwards200JSONResponse PortForwardPage
+
+func (response ListPortForwards200JSONResponse) VisitListPortForwardsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPortForwardsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListPortForwardsdefaultApplicationProblemPlusJSONResponse) VisitListPortForwardsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPortForwardRequestObject struct {
+	ForwardId Ref `json:"forwardId"`
+	Params    GetPortForwardParams
+}
+
+type GetPortForwardResponseObject interface {
+	VisitGetPortForwardResponse(w http.ResponseWriter) error
+}
+
+type GetPortForward200JSONResponse PortForwardView
+
+func (response GetPortForward200JSONResponse) VisitGetPortForwardResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPortForwarddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetPortForwarddefaultApplicationProblemPlusJSONResponse) VisitGetPortForwardResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7561,6 +7727,12 @@ type StrictServerInterface interface {
 	// RenewOverlay Renew an overlay's lease (heartbeat)
 	// (POST /overlays/{overlayId}/renew)
 	RenewOverlay(ctx context.Context, request RenewOverlayRequestObject) (RenewOverlayResponseObject, error)
+	// ListPortForwards Configured port forwards with their status and counters
+	// (GET /port-forwards)
+	ListPortForwards(ctx context.Context, request ListPortForwardsRequestObject) (ListPortForwardsResponseObject, error)
+	// GetPortForward One port forward
+	// (GET /port-forwards/{forwardId})
+	GetPortForward(ctx context.Context, request GetPortForwardRequestObject) (GetPortForwardResponseObject, error)
 	// ListProbes Probes with their observed address
 	// (GET /probes)
 	ListProbes(ctx context.Context, request ListProbesRequestObject) (ListProbesResponseObject, error)
@@ -9012,6 +9184,59 @@ func (sh *strictHandler) RenewOverlay(ctx *gin.Context, overlayId openapi_types.
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(RenewOverlayResponseObject); ok {
 		if err := validResponse.VisitRenewOverlayResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPortForwards operation middleware
+func (sh *strictHandler) ListPortForwards(ctx *gin.Context, params ListPortForwardsParams) {
+	var request ListPortForwardsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPortForwards(ctx, request.(ListPortForwardsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPortForwards")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ListPortForwardsResponseObject); ok {
+		if err := validResponse.VisitListPortForwardsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPortForward operation middleware
+func (sh *strictHandler) GetPortForward(ctx *gin.Context, forwardId Ref, params GetPortForwardParams) {
+	var request GetPortForwardRequestObject
+
+	request.ForwardId = forwardId
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPortForward(ctx, request.(GetPortForwardRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPortForward")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetPortForwardResponseObject); ok {
+		if err := validResponse.VisitGetPortForwardResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

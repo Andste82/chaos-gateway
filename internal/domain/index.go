@@ -33,11 +33,12 @@ const (
 	kindProtocol
 	kindFault
 	kindAccessRule
+	kindPortForward
 	kindCount
 )
 
 func (k Kind) String() string {
-	return [...]string{"network", "device", "group", "client", "link", "profile", "scenario", "protocol", "fault", "access rule"}[k]
+	return [...]string{"network", "device", "group", "client", "link", "profile", "scenario", "protocol", "fault", "access rule", "port forward"}[k]
 }
 
 // NetInfo describes one network of a configuration.
@@ -371,6 +372,14 @@ func BuildIndex(cfg *model.Configuration) (*Index, []model.ValidationError) {
 		if checkKey(path, key) {
 			if r := deref(cfg.AccessRules)[key]; r.Name != nil {
 				b.claim(kindAccessRule, path, key, *r.Name)
+			}
+		}
+	}
+	for _, key := range sortedKeys(deref(cfg.PortForwards)) {
+		path := schema.Pointer("/port_forwards", key)
+		if checkKey(path, key) {
+			if f := deref(cfg.PortForwards)[key]; f.Name != nil {
+				b.claim(kindPortForward, path, key, *f.Name)
 			}
 		}
 	}

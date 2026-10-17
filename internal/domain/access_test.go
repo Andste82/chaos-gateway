@@ -85,8 +85,8 @@ func TestDevicesUnderTestDoNotReachTheManagementNetworkBehindTheUplink(t *testin
 	w := accessWorld(t, nil)
 	a := netip.MustParseAddr
 	mgmt := []netip.Prefix{netip.MustParsePrefix("192.168.56.0/24")}
-	// with a management interface of its own the management network is just another destination
-	if got := w.AccessVerdict(a("10.10.0.5"), a("192.168.56.9"), "", 0, AccessFacts{Management: mgmt}); got.Verdict != "drop" {
+	// with a management interface of its own the guard says why too (P31-M35a-10)
+	if got := w.AccessVerdict(a("10.10.0.5"), a("192.168.56.9"), "", 0, AccessFacts{Management: mgmt}); got.Verdict != "drop" || got.Layer != AccessMatrix || !strings.Contains(got.Reason, "do not reach the management network") {
 		t.Errorf("no entry: %+v", got)
 	}
 	// behind the uplink the guard says why

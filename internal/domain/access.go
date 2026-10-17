@@ -22,9 +22,9 @@ type AccessFacts struct {
 	// Management are the prefixes of the management network (allowed sources and the management
 	// interface's subnet).
 	Management []netip.Prefix
-	// TwoPort reports that the management network lies behind the uplink interface: devices under
-	// test do not reach it, whatever an access rule says, unless an explicit matrix entry allows it
-	// (plan §2.16).
+	// TwoPort reports that the management network lies behind the uplink interface (plan §2.16). In
+	// both topologies devices under test do not reach the management network, whatever an access rule
+	// says, unless an explicit matrix entry allows it; TwoPort changes only the words of the reason.
 	TwoPort bool
 	// UIPort is the port of the UI and API: the gateway answers it for the management sources only,
 	// and no access rule changes that (0: unknown).
@@ -37,6 +37,9 @@ const (
 	AccessMatrix            = "access_matrix"
 	AccessOverlayRule       = "overlay_rule"
 	AccessConfigRule        = "config_rule"
+	// AccessPortForward is a forwarded connection that no access rule decided: the forward accepts it
+	// in front of the access matrix (M35a).
+	AccessPortForward = "port_forward"
 )
 
 // AccessExplanation is the verdict and what decided it.
@@ -160,8 +163,9 @@ func containsEndpoint(set []matrixEndpoint, e matrixEndpoint) bool {
 // ones. A drop, reject or reset rule refuses; an allow rule accepts: in the forward path it is an
 // exception to the matrix, in the input path it also opens the gateway's closed ports for its
 // selector (decided by the maintainer on 2026-10-11). The one exception to the exception is the
-// two-port guard: when the management network lies behind the uplink interface, it stands in front
-// of the rules and no rule opens it for a device under test (P2-M9-11). The access rules select the
+// management guard: it stands in front of the rules and no rule opens the management network for a
+// device under test, behind the uplink (P2-M9-11) and behind a management interface of its own
+// (P31-M35a-10, decided on 2026-10-17). The access rules select the
 // test, WireGuard and remote networks, so a management source is judged by the control-plane rule
 // and the protection's default only. q.Source.IP and q.DestIP must be set.
 func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
@@ -186,10 +190,10 @@ func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 			return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "the UI and API are reachable from the management network only; no access rule changes that"}
 		}
 	}
-	// the two-port guard stands in front of the rules, as in the forward chain: no rule, an allow rule
-	// included, opens the management network behind the uplink for a device under test
+	// the management guard stands in front of the rules, as in the forward chain: no rule, an allow
+	// rule included, opens the management network for a device under test
 	if !toGateway {
-		if g, ok := w.twoPortGuard(src, dst, f); ok {
+		if g, ok := w.mgmtGuard(src, dst, f); ok {
 			return g
 		}
 	}
@@ -266,7 +270,7 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
 	}
-	if g, ok := w.twoPortGuard(src, dst, f); ok {
+	if g, ok := w.mgmtGuard(src, dst, f); ok {
 		return g
 	}
 	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
@@ -329,16 +333,14 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "the default: no entry allows this traffic"}
 }
 
-// twoPortGuard is the guard of the forward chain (plan §2.16): with the management network behind the
-// uplink interface, a device under test (a packet that comes in on a test interface: a local test
-// network or a WireGuard network of the role test, with its clients) does not reach it. It stands in
-// front of the access rules and of the matrix; the one thing that opens it is an explicit matrix
-// entry that allows the source to reach the management network (the clients' `reachable` lists do
-// not).
-func (w *World) twoPortGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
-	if !f.TwoPort {
-		return AccessExplanation{}, false
-	}
+// mgmtGuard is the guard of the forward chain (plan §2.16): a device under test (a packet that comes
+// in on a test interface: a local test network or a WireGuard network of the role test, with its
+// clients) does not reach the management network, behind the uplink interface (two-port topology) or
+// behind a management interface of its own (three-port topology, P31-M35a-10, decided on 2026-10-17).
+// It stands in front of the access rules and of the matrix; the one thing that opens it is an
+// explicit matrix entry that allows the source to reach the management network (the clients'
+// `reachable` lists do not).
+func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
 	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
 	mgmt := matrixEndpoint{"management", ""}
 	if !containsEndpoint(to, mgmt) || !w.viaTestInterface(from) {
@@ -353,7 +355,10 @@ func (w *World) twoPortGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanat
 			}
 		}
 	}
-	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink; no access rule changes that"}, true
+	if f.TwoPort {
+		return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink; no access rule changes that"}, true
+	}
+	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network; no access rule changes that, only an access matrix entry that allows it"}, true
 }
 
 // viaTestInterface reports whether traffic from these endpoints comes in on a test interface: a

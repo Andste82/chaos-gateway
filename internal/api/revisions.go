@@ -147,7 +147,7 @@ func (s *Server) CreateRevision(c *gin.Context, params model.CreateRevisionParam
 // part of it.
 func (s *Server) createCandidate(c *gin.Context, base *model.Configuration, raw []byte, mode domain.CandidateMode, ifMatch int64, message string) (model.Revision, error) {
 	now := s.clk.Now()
-	cfg, err := domain.NewCandidate(base, raw, domain.FormatJSON, mode, now)
+	cfg, err := domain.NewCandidate(base, raw, domain.FormatJSON, mode, now, s.validateOpts()...)
 	if err != nil {
 		return model.Revision{}, err
 	}
@@ -189,9 +189,15 @@ func (s *Server) importAndProvision(cfg *model.Configuration) (*model.Configurat
 	return out, undo, nil
 }
 
+// validateOpts are the options of the validation that the server knows: the port the API listens on,
+// which a port forward must not take when the configuration names no UI port (M35a).
+func (s *Server) validateOpts() []domain.Option {
+	return []domain.Option{domain.WithUIPort(s.cfg.Engine.DefaultUIPort())}
+}
+
 func (s *Server) storeCandidate(c *gin.Context, cfg *model.Configuration, ifMatch int64, message string, now time.Time) (model.Revision, error) {
 	by := actorOf(principalOf(c))
-	rev, err := s.cfg.Store.Create(cfg, store.CreateOptions{IfMatch: ifMatch, Message: message, By: by, Now: now})
+	rev, err := s.cfg.Store.Create(cfg, store.CreateOptions{IfMatch: ifMatch, Message: message, By: by, Now: now, Validate: s.validateOpts()})
 	if err != nil {
 		return model.Revision{}, err
 	}
@@ -272,6 +278,17 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	}
 	if fs := previewFaults(p.Target); len(fs) > 0 {
 		body["faults"] = fs
+	}
+	if _, cand, err := s.cfg.Store.Get(revisionId); err == nil {
+		var base *model.Configuration
+		if p.Base != 0 {
+			_, base, _ = s.cfg.Store.Get(p.Base)
+		}
+		fwds, notes := s.previewForwards(cand, base)
+		if len(fwds) > 0 {
+			body["port_forwards"] = fwds
+		}
+		body["warnings"] = append(warnings, notes...)
 	}
 	if len(p.Capacity) > 0 {
 		cs := make([]gin.H, 0, len(p.Capacity))

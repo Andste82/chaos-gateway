@@ -303,12 +303,14 @@ type overlayState struct {
 	queueBorn map[string]int64
 	// ruleBorn is the same for the access rules, by key (access.go).
 	ruleBorn map[string]int64
+	// fwdBorn is the same for the port forwards, by id.
+	fwdBorn map[string]int64
 }
 
 func (o *owner) initOverlays() {
 	e := o.e
 	st := overlay.New(overlay.Options{Clock: e.cfg.Clock})
-	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}, queueBorn: map[string]int64{}, ruleBorn: map[string]int64{}}
+	o.ov = &overlayState{store: st, verified: st.Checkpoint(), born: map[string]int64{}, queueBorn: map[string]int64{}, ruleBorn: map[string]int64{}, fwdBorn: map[string]int64{}}
 	o.ov.expirer = overlay.NewExpirer(st, e.cfg.Clock, func() {
 		go func() {
 			select {
@@ -816,6 +818,23 @@ func (o *owner) trackRules(t *compiler.Target, gen uint64) {
 	}
 	o.ov.ruleBorn = born
 	o.snap.RuleEpochs = born
+}
+
+// trackForwards updates the epochs of the port forwards' counters after an apply, like trackRules: a
+// forward that is new in the applied target starts its counter at zero in this generation, one that went
+// is forgotten (its counter went with it).
+func (o *owner) trackForwards(t *compiler.Target, gen uint64) {
+	o.snap.Forwards = t.Forwards
+	born := make(map[string]int64, len(t.Forwards))
+	for _, f := range t.Forwards {
+		if g, ok := o.ov.fwdBorn[f.ID]; ok {
+			born[f.ID] = g
+		} else {
+			born[f.ID] = int64(gen)
+		}
+	}
+	o.ov.fwdBorn = born
+	o.snap.ForwardEpochs = born
 }
 
 // WGActionKey is the key under which the epoch of the counter of a blocked endpoint (a WireGuard action) is kept

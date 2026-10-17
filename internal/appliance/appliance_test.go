@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -85,27 +87,6 @@ class H(http.server.BaseHTTPRequestHandler):
 
 http.server.HTTPServer(("203.0.113.10", 8080), H).serve_forever()
 `
-
-func gatewayConfig(two bool) string {
-	mgmt := appliance.MACs.Mgmt
-	if two {
-		mgmt = appliance.MACs.Uplink // the management network lives behind the uplink interface
-	}
-	return fmt.Sprintf(`schema_version: 1
-uplink:
-  interface: {mac: '%s'}
-  gateway: %s
-management:
-  interface: {mac: '%s'}
-  allowed_sources: [%s]
-networks:
-  0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21:
-    type: lan
-    name: IoT
-    interfaces: [{mac: '%s'}]
-    address: %s/24
-`, appliance.MACs.Uplink, appliance.ServerAddr, mgmt, appliance.MgmtNetwork, appliance.MACs.LAN, appliance.GatewayLAN)
-}
 
 func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
@@ -228,12 +209,16 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	}
 
 	// the minimal deployment: `chaosgw apply --file` through the executor's socket
-	if err := vm.Put(ctx, "/opt/chaosgw/gateway.yaml", 0o644, strings.NewReader(gatewayConfig(two))); err != nil {
+	if err := vm.Put(ctx, "/opt/chaosgw/gateway.yaml", 0o644, strings.NewReader(appliance.GatewayConfig(two))); err != nil {
 		t.Fatal(err)
 	}
 	out := must("sudo docker run --rm --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/gateway.yaml:/gateway.yaml:ro " + tag +
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock 2>&1")
 	t.Logf("apply: %s", strings.TrimSpace(out))
+	// the compiler leaves a forward it would refuse out with a warning, and the apply goes on: not here
+	if strings.Contains(out, "is left out") {
+		t.Errorf("the apply left a port forward out:\n%s", out)
+	}
 
 	// Docker's FORWARD policy is DROP: the executor keeps accept rules for its interfaces in DOCKER-USER
 	if out := must("sudo iptables -S DOCKER-USER"); !strings.Contains(out, "ACCEPT") {
@@ -272,6 +257,97 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	// address at all
 	if _, err := client("nc", "-z", "-w", "3", appliance.GatewayLAN, "22"); err == nil {
 		t.Error("the client namespace could open TCP 22 on the gateway's LAN address")
+	}
+
+	portForwards(t, ctx, h, vm, names, two, tag, compose, dir)
+}
+
+// portForwards is the level 2 test of M35a: the configuration's forward on the uplink (and, with three
+// ports, on the management network) reaches a listener in the client namespace, next to a port that a
+// container in the VM's Docker publishes. Both translate in prerouting at the same priority, the gateway's
+// in nftables and Docker's in iptables-nft, and Docker's FORWARD policy is DROP: the forward passes it
+// through the DOCKER-USER accept rule of the test network's bridge, the published port through Docker's
+// own rules, and the gateway's forward chain lets the uplink → docker0 path alone.
+func portForwards(t *testing.T, ctx context.Context, h appliance.Host, vm *appliance.VM, names appliance.Names, two bool, tag, compose, dir string) {
+	t.Helper()
+	hostBin, err := appliance.BuildEcho(ctx, dir, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmBin, err := appliance.BuildEcho(ctx, dir, "amd64") // the cloud images are amd64
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the device: a listener on the target port in the client namespace
+	target := fmt.Sprintf("%s:%d", appliance.ClientAddr, appliance.TargetPort)
+	bg(t, h, append(append([]string(nil), hArgv(h)...), "ip", "netns", "exec", names.NSClient, hostBin, "-tag", "device", "-listen", target)...)
+
+	// the container: the helper in the gateway's own image (any image would do), its port published
+	if err := vm.PutFile(ctx, vmBin, "/opt/chaosgw/echo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := vm.Must(ctx, fmt.Sprintf("sudo docker run -d --name chaosgw-published -p %d:%d -v /opt/chaosgw/echo:/echo:ro --entrypoint /echo %s -tag published -listen :%d",
+		appliance.PublishedPort, appliance.ContainerPort, tag, appliance.ContainerPort)); err != nil {
+		t.Fatalf("starting the container that publishes a port: %v\n%s", err, out)
+	}
+
+	// get asks for http://addr/ until an answer comes (the listeners start in the background)
+	get := func(what string, run func(...string) (string, error), addr string) string {
+		t.Helper()
+		var body string
+		var err error
+		for i := 0; i < 15; i++ {
+			if body, err = run("curl", "-s", "-m", "5", "http://"+addr+"/"); err == nil && body != "" {
+				return strings.TrimSpace(body)
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Errorf("%s: no answer from %s: %v %s", what, addr, err, body)
+		return ""
+	}
+	server := func(args ...string) (string, error) {
+		return h.Run(ctx, append(appliance.Cmd{"ip", "netns", "exec", names.NSServer}, args...))
+	}
+
+	// through the forward on the uplink: DNAT only, so the device sees the peer behind the uplink
+	got := get("the forward on the uplink", server, fmt.Sprintf("%s:%d", appliance.GatewayUp, appliance.ForwardPort))
+	if want := "device client=" + appliance.ServerAddr; got != want {
+		t.Errorf("through the forward on the uplink: got %q, want %q", got, want)
+	}
+	// the port the container publishes, on the same address
+	got = get("the published port", server, fmt.Sprintf("%s:%d", appliance.GatewayUp, appliance.PublishedPort))
+	if !strings.HasPrefix(got, "published client=") {
+		t.Errorf("through the port the container publishes: got %q", got)
+	}
+	forwards := 1
+	if !two {
+		// the forward on the management network: the host is the peer there (three ports only; the
+		// two-port topology refuses `management` as a duplicate of the uplink)
+		host := func(args ...string) (string, error) { return h.Run(ctx, appliance.Cmd(args)) }
+		got = get("the forward on the management network", host, fmt.Sprintf("%s:%d", appliance.GatewayMgmt, appliance.ForwardMgmtPort))
+		if want := "device client=" + appliance.HostMgmt; got != want {
+			t.Errorf("through the forward on the management network: got %q, want %q", got, want)
+		}
+		forwards = 2
+	}
+	// the forward on the uplink still answers next to the container, and its counter counted
+	if got := get("the forward on the uplink, again", server, fmt.Sprintf("%s:%d", appliance.GatewayUp, appliance.ForwardPort)); !strings.HasPrefix(got, "device ") {
+		t.Errorf("the forward on the uplink after the published port: got %q", got)
+	}
+	out, err := vm.Must(ctx, compose+" exec -T exec nft list counters")
+	if err != nil {
+		t.Fatalf("listing the counters: %v\n%s", err, out)
+	}
+	counted := 0
+	for _, m := range regexp.MustCompile(`counter (fwd_\w+) \{\s*packets (\d+)`).FindAllStringSubmatch(out, -1) {
+		if m[2] != "0" {
+			counted++
+		} else {
+			t.Errorf("the counter %s of a forward counted nothing", m[1])
+		}
+	}
+	if counted != forwards {
+		t.Errorf("%d forward counters counted, want %d:\n%s", counted, forwards, out)
 	}
 }
 

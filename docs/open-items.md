@@ -19,7 +19,9 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
-- **Phase 3.1** (M35a): done on the branch `phase-3-1-port-forwarding` (PR #68, CI run 38991357139 green), reviewed, not yet audited. What the
+- **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
+  2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
+  items P31-AUDIT-01 to P31-AUDIT-06 are fixed on the branch `close-phase-3-1`. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
@@ -1451,9 +1453,26 @@ plan:
   plan describes the target and `docs/install.md` plus the manual cleanup apply.
 - Needs maintainer: no (decided 2026-10-16).
 
+## Phase 3.1 audit result
+
+Date: 2026-10-17. Audited on `main` at `0fb9176` (PR #68 merged), against `docs/plan.md` §5 Phase 3.1 (M35a Scope and Tests),
+D34, D35, §2.2, §2.4, §2.15 to §2.17, §3.3, §3.4, §3.8, §3.11, `api/openapi.yaml`, the Phase 3.1 open items and
+`docs/development.md` "Port forwarding (M35a)". The last part of the phase, the three-port management guard and its
+follow-ups (P31-M35a-10), had had no independent review before. Fixed on the branch `close-phase-3-1` (the "close Phase 3.1"
+round), each with a test that fails without the fix or with the corrected document.
+
+| Item | Severity | Finding | Fix |
+|---|---|---|---|
+| P31-AUDIT-01 | major | An explicit matrix entry to the management network could not open the three-port guard on the normal path: its return matched `oifname mgmt0`, but table 100 has no route to the management network, so the packet leaves through the uplink and the guard dropped it, while `explain` said allow. With allowed sources narrower than the management subnet, `explain` also counted the whole subnet as the management network in both topologies (two-port: a broker on the uplink's subnet was reported as guarded, the kernel let it through). | The three-port return and the matrix endpoint `management` as a destination match the destination only (`ip daddr @mgmt_src`), and an entry also returns for the management subnet the guard drops. `explain` uses the set the kernel matches: the allowed sources, in the three-port topology also the subnet (`AccessFacts.ManagementSubnet`). Tests: `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden, `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources`, `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources`, level 1 `TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink` (in `M35A_LEVEL1`). |
+| P31-AUDIT-02 | minor | The forwards' counting rules and the DNAT rule in the inet NAT chain also matched IPv6: an IPv6 connection to an entry interface's own address (link-local, SLAAC on the OS-owned uplink) on a forwarded port was counted, noted as the last match and, on the management side, marked with bit 22, although it is never forwarded. | `meta nfproto ipv4` in both rules. Tests: `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, the `forward` goldens, level 1 `TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel` (in `M35A_LEVEL1`). |
+| P31-AUDIT-03 | minor | Since `Identity.Current` was compared, a neighbor entry going STALE and back (with a connection still on its address) reordered a device's addresses and made a new generation, an applied event and an empty identity apply, also without any port forward. | The order counts only for a device that a forward sends to. Test: `TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget`. |
+| P31-AUDIT-04 | minor | Level 2 (the appliance smoke, M35a Tests) never ran on the final Phase 3.1 code: the last runs were on `97cd058` (before the counting rule in NAT, the replies by mark bit 22 and table 101, and the three-port guard) and on `main` before the merge. | The Nightly workflow runs on the branch `close-phase-3-1` before the round is merged; its run id is recorded in the PR of the round. |
+| P31-AUDIT-05 | minor | The status lines (`docs/plan.md`, this file, `README.md`) still said "on the branch … merges to main with the PR" and cited a CI run from before P31-M35a-05/-09/-10; P31-M35a-09's evidence named a test that no longer exists. | Status lines updated (merged as `0fb9176`, CI run 39057670486, audited); the test name in P31-M35a-09 marked as the state before the decision. |
+| P31-AUDIT-06 | minor | P31-M35a-08 named `chaosctl` as a way to explain a forwarded connection; `chaosctl` supports only `version` until M18. | The item names the API (`GET /explain`, or the generated clients); `chaosctl` gets `explain` with M18. |
+
 ## Phase 3.1 open items
 
-Phase 3.1 (M35a, port forwarding) is implemented on the branch `phase-3-1-port-forwarding` (PR #68). The items below were found
+Phase 3.1 (M35a, port forwarding) was implemented on the branch `phase-3-1-port-forwarding` (PR #68, merged 2026-10-17). The items below were found
 while implementing it; each records the option that was implemented so the work was not blocked. All were closed on 2026-10-17:
 P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practice with the maintainer's agreement.
 
@@ -1596,7 +1615,7 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
 
 ### P31-M35a-08 The explain card of the faults screen asks for a device as the source
 
-- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a) for M35a, as implemented: a forwarded connection is explained through the API (`GET /explain`, `chaosctl`); the source choice "an address behind the uplink or the management network" in the explain card (option (b)) moves to M26, whose flow view lets a forwarded connection be picked (plan §5 M26 Scope)
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a) for M35a, as implemented: a forwarded connection is explained through the API (`GET /explain`, or the generated clients; `chaosctl` gets `explain` with M18, P31-AUDIT-06); the source choice "an address behind the uplink or the management network" in the explain card (option (b)) moves to M26, whose flow view lets a forwarded connection be picked (plan §5 M26 Scope)
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "the preview and `explain` say that faults do not apply to forwarded connections".
   `GET /explain` answers a forwarded connection when `src` is a peer behind the entry side and `dst` the entry side's address
@@ -1605,7 +1624,7 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
 - Evidence: `web/src/components/faults/ExplainCard.vue`, `web/e2e/port-forwards.spec.ts` ("explain shows a forwarded
   connection's forward …").
 - Task: implemented (a) — the card renders the forward of an answer; a forwarded connection is explained through the API
-  (`chaosctl` or `GET /explain?src=…&dst=…&protocol=…&port=…`). Options: (a) as implemented; (b) a source choice "an address
+  (`GET /explain?src=…&dst=…&protocol=…&port=…`, or the generated clients; `chaosctl` gets `explain` with M18). Options: (a) as implemented; (b) a source choice "an address
   behind the uplink or the management network" in the card, whose destination defaults to the entry side's address.
 - Recommendation: (b) with the flow view (M26), where a forwarded connection can be picked and explained.
 - Needs maintainer: no (decided 2026-10-17)
@@ -1635,7 +1654,8 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
   allow tcp", or "network Lab → uplink: allow") is never counted by the forward, which then shows 0 hits and no last match
   while traffic flows.
 - Evidence: `internal/compiler/forward.go` (`forwardAccepts`), `internal/compiler/access.go` (the responder form),
-  `internal/api` (`forwardCounter`), `web/src/lib/forwards.ts` (`counterText`), `TestAForwardHasTheCounterOfItsAcceptRule`.
+  `internal/api` (`forwardCounter`), `web/src/lib/forwards.ts` (`counterText`), `TestAForwardHasTheCounterOfItsAcceptRule` (the state before the decision; the test was
+  replaced by `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`).
 - Task: implemented (a). Options: (a) as implemented: hits of the forward's accept rule, i.e. what the forward itself let
   through; (b) count each forward once per translated connection in the NAT prerouting chain (it sees only the first packet of
   a conntrack entry): a counter-only rule per forward (iif, protocol, external range) in front of the DNAT map rule, so the

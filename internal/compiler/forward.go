@@ -294,7 +294,15 @@ func (t *Target) forwardDNAT() []Rule {
 	key := concat(meta("iifname"), meta("l4proto"), payload("th", "dport"))
 	dnat := map[string]any{"dnat": map[string]any{"family": "ip", "type_flags": "concat",
 		"addr": map[string]any{"map": map[string]any{"key": key, "data": setRef(t.ForwardMap)}}}}
-	return []Rule{newRule(eq(meta("iifname"), iif), eq(meta("l4proto"), anon("tcp", "udp")), local, dnat)}
+	return []Rule{newRule(eq(meta("iifname"), iif), ipv4Only(), eq(meta("l4proto"), anon("tcp", "udp")), local, dnat)}
+}
+
+// ipv4Only matches IPv4 packets: the forwards are IPv4 only, and the inet NAT chain sees IPv6 too. An
+// IPv6 connection to an address of the entry interface (its link-local one, an address of SLAAC on the
+// OS-owned uplink) is not forwarded (the DNAT is IPv4), so it is neither counted nor marked
+// (P31-AUDIT-02).
+func ipv4Only() any {
+	return eq(meta("nfproto"), "ipv4")
 }
 
 // forwardCounts are the counting rules of the forwards in the prerouting NAT chain, in front of the DNAT
@@ -309,7 +317,7 @@ func (t *Target) forwardDNAT() []Rule {
 func (t *Target) forwardCounts() []Rule {
 	var out []Rule
 	for _, f := range t.Forwards {
-		expr := []any{iifname(f.Iface), eq(meta("l4proto"), f.Protocol), fibLocal(),
+		expr := []any{iifname(f.Iface), ipv4Only(), eq(meta("l4proto"), f.Protocol), fibLocal(),
 			eq(payload("th", "dport"), portValue([]PortRange{{f.ExtFrom, f.ExtTo}}))}
 		if f.Entry == domain.EntryManagement && t.managementReplies() {
 			expr = append(expr, ctMarkSet(bitOr(ctKey("mark"), int64(ForwardReplyMarkBit))))

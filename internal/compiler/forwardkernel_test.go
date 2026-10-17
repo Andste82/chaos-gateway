@@ -3,6 +3,7 @@
 package compiler
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -191,6 +192,38 @@ func TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel(t *testin
 	}
 	if used, ok := rs.LastUsed()[forwardOf(t, tg, fwdWeb).Counter]; !ok || used > time.Minute {
 		t.Errorf("the forward's last match: %v %v", used, ok)
+	}
+}
+
+// The forwards are IPv4 only (P31-AUDIT-02): an IPv6 connection to the uplink's own IPv6 address on a
+// forwarded port is not forwarded (the DNAT is IPv4), so the forward's counting rule does not count it
+// and does not note it as its last match; the IPv4 connection after it is counted.
+func TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel(t *testing.T) {
+	b := newForwardBed(t)
+	b.w.addForward(fwdWeb, `{name: web, protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}, target_port: 8883}`)
+	tg := b.apply()
+	b.gw.Must("ip", "-6", "addr", "add", "fd00:113::1/64", "dev", "wan0", "nodad")
+	b.srv.Must("ip", "-6", "addr", "add", "fd00:113::10/64", "dev", "eth0", "nodad")
+	// permanent neighbors: the packet reaches the gateway's prerouting whatever its input chain says
+	// about neighbor discovery
+	b.srv.Must("ip", "-6", "neigh", "replace", "fd00:113::1", "lladdr", strings.TrimSpace(b.gw.MAC("wan0")), "dev", "eth0", "nud", "permanent")
+	b.gw.Must("ip", "-6", "neigh", "replace", "fd00:113::10", "lladdr", strings.TrimSpace(b.srv.MAC("eth0")), "dev", "wan0", "nud", "permanent")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := b.srv.Run(ctx, "python3", "-c", tryScript6, "fd00:113::1", "8080", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out == "ok" {
+		t.Errorf("tcp [fd00:113::1]:8080 is answered: %s", out)
+	}
+	f := forwardOf(t, tg, fwdWeb)
+	if n := b.counter(f.Counter); n != 0 {
+		t.Errorf("the forward counted %d IPv6 connections, want 0", n)
+	}
+	b.expect(b.srv, "tcp", "203.0.113.1", 8080, "ok")
+	if n := b.counter(f.Counter); n != 1 {
+		t.Errorf("the forward counted %d connections, want the IPv4 one", n)
 	}
 }
 

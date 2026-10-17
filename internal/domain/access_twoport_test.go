@@ -76,3 +76,50 @@ func TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink(t *testing.T) {
 		t.Errorf("IoT with a deny entry: %+v", got)
 	}
 }
+
+// The guard covers what the kernel's guard drops (P31-AUDIT-01): the allowed sources, and in the three-port
+// topology the management interface's subnet as well. With allowed sources narrower than the subnet a host
+// on the uplink's subnet is no management host in the two-port topology (the kernel guard matches the
+// sources only), while the three-port guard keeps the whole management subnet closed until an entry opens it.
+func TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources(t *testing.T) {
+	everything := "a1000000-0000-4000-8000-000000000001"
+	allow := func(c *model.Configuration) {
+		name, global := "everything", model.ScopeGlobal(true)
+		rules := map[string]model.AccessRule{everything: {Name: &name, Source: model.Scope{Global: &global}, Action: model.AccessActionAllow}}
+		c.AccessRules, c.AccessRuleOrder = &rules, &[]uuid.UUID{uuid.MustParse(everything)}
+	}
+	a := netip.MustParseAddr
+	decide := func(w *World, dst string, f AccessFacts) AccessExplanation {
+		return w.AccessDecision(Query{Source: Subject{IP: a("10.10.0.5"), Network: "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"}, DestIP: a(dst)}, f)
+	}
+	w := accessWorld(t, allow)
+	if n, ok := w.NetworkOf(a("10.10.0.5")); !ok || n != "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21" {
+		t.Fatalf("10.10.0.5 is in %q", n)
+	}
+	twoPort := AccessFacts{Management: []netip.Prefix{netip.MustParsePrefix("192.168.1.10/32")}, TwoPort: true}
+	if got := decide(w, "192.168.1.20", twoPort); got.Verdict != "allow" || got.Rule != everything {
+		t.Errorf("two ports, a host on the uplink's subnet: %+v", got)
+	}
+	if got := decide(w, "192.168.1.10", twoPort); got.Verdict != "drop" || got.Rule != "" {
+		t.Errorf("two ports, the allowed source: %+v", got)
+	}
+	threePort := AccessFacts{Management: []netip.Prefix{netip.MustParsePrefix("192.168.56.2/32")}, ManagementSubnet: netip.MustParsePrefix("192.168.56.0/24")}
+	for _, dst := range []string{"192.168.56.2", "192.168.56.20"} {
+		if got := decide(w, dst, threePort); got.Verdict != "drop" || got.Rule != "" {
+			t.Errorf("three ports, %s: %+v", dst, got)
+		}
+	}
+	w = accessWorld(t, func(c *model.Configuration) {
+		allow(c)
+		idx, _ := BuildIndex(c)
+		iotID, _ := idx.Resolve(KindNetwork, "IoT")
+		m := model.MatrixEndpointManagement(true)
+		entries := append(deref(c.AccessMatrix.Entries), model.MatrixEntry{From: model.MatrixEndpoint{Network: &iotID}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow})
+		c.AccessMatrix.Entries = &entries
+	})
+	for _, dst := range []string{"192.168.56.2", "192.168.56.20"} {
+		if got := decide(w, dst, threePort); got.Verdict != "allow" || got.Rule != everything {
+			t.Errorf("three ports with an entry, %s: %+v", dst, got)
+		}
+	}
+}

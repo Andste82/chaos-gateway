@@ -2100,7 +2100,8 @@ forward   jump cut_forward*
 
   ```
   chain mgmt_guard {
-      meta iifname "br-lab" meta oifname "mgmt0" ip daddr @mgmt_src return    # one per explicit matrix entry
+      meta iifname "br-lab" ip daddr @mgmt_src return                 # one per explicit matrix entry
+      meta iifname "br-lab" ip daddr 192.168.56.0/24 return           # its subnet, when the sources do not cover it
       meta iifname @ifs_test ip daddr @mgmt_src counter "forward_drop" drop
       meta iifname @ifs_test ip daddr 192.168.56.0/24 counter "forward_drop" drop   # only when the sources do not cover the subnet
       meta iifname @ifs_test meta oifname "mgmt0" counter "forward_drop" drop
@@ -2108,15 +2109,25 @@ forward   jump cut_forward*
   ```
 
   Replies (established and related, the replies of a management-side port forward included) are accepted before the
-  jump, so the guard sees new connections only. `explain` names the guard in both topologies (a drop by the access matrix,
-  no rule; the reason names "behind the uplink" in the two-port topology only). No `prohibit` default is added to table
+  jump, so the guard sees new connections only. An entry's return mirrors the drops by destination: table 100 has no
+  route to the management network, so a packet an entry lets through leaves through the uplink (to a router there that
+  knows the management network), not through `mgmt0`; the matrix endpoint `management` as a destination is
+  `ip daddr @mgmt_src` in this topology for the same reason (P31-AUDIT-01). `explain` names the guard in both
+  topologies (a drop by the access matrix, no rule; the reason names "behind the uplink" in the two-port topology only)
+  and judges it by the set the kernel matches: the allowed sources, in the three-port topology also the management
+  interface's subnet (`AccessFacts.ManagementSubnet`); in the two-port topology a host on the uplink's subnet outside
+  the allowed sources is no management host. No `prohibit` default is added to table
   100 instead: the PMTU mirror tables copy every route of table 100 with an MTU, and the executor refuses an MTU on a route
   that is not unicast. Tests: `TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface`,
   `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden scenario (also in the kernel gate),
   `TestExplainNamesTheManagementGuardOfTheThreePortTopology` (engine) and the domain tests above; on the real kernel
   `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork` (the uplink default deleted from table
   100, the management host given a route back: an allow-all rule does not carry A there, the guard counts, `explain`
-  agrees, the management forward still answers) and `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`.
+  agrees, the management forward still answers), `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`
+  and `TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink` (the default kept: the entry opens a management address
+  behind the uplink, also with allowed sources narrower than the subnet); with narrow allowed sources
+  `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources` (domain) and
+  `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources` (engine, both topologies).
   Tests: `TestNoAccessRuleCanOpenTheManagementNetworkBehindTheUplink`, `TestAnExplicitMatrixEntryReturnsFromTheTwoPortGuard`,
   `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (the domain layer), the `access-twoport` scenario of the kernel
   gate, and on the real kernel `TestNoAllowRuleOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` and

@@ -408,12 +408,14 @@ func interfaceOfNetwork(snap *Snapshot, network string) string {
 }
 
 func (e *Engine) accessFacts(snap *Snapshot) domain.AccessFacts {
+	// the management network is what the kernel matches (P31-AUDIT-01): the allowed sources, and in the
+	// three-port topology the guard also drops the management interface's subnet
 	f := domain.AccessFacts{Gateway: gatewayAddrs(snap), Management: append([]netip.Prefix(nil), snap.Management.Sources...), UIPort: snap.Management.UIPort}
-	if snap.Management.Subnet.IsValid() {
-		f.Management = append(f.Management, snap.Management.Subnet)
-	}
 	// two-port: the management network lies behind the uplink interface
 	f.TwoPort = snap.Applied != nil && snap.Management.Name != "" && snap.Management.Name == snap.Applied.Uplink.Name
+	if !f.TwoPort {
+		f.ManagementSubnet = snap.Management.Subnet
+	}
 	return f
 }
 

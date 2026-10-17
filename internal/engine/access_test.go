@@ -754,6 +754,42 @@ func TestExplainNamesTheManagementGuardOfTheThreePortTopology(t *testing.T) {
 	}
 }
 
+// `explain` judges the management guard by the set the kernel's guard matches (P31-AUDIT-01): with allowed
+// sources narrower than the management interface's subnet the two-port guard keeps out the sources only
+// (a broker on the uplink's subnet stays reachable), the three-port guard the whole management subnet.
+func TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	everything := withConfigRules(map[string]model.AccessRule{
+		cfgRuleA: configRule("everything", "IoT", "", nil, model.AccessActionAllow, false),
+	}, cfgRuleA)
+	src := netip.MustParseAddr("10.10.0.77")
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		everything(c)
+		c.Management.AllowedSources = &[]string{"192.168.56.2/32"}
+	}))
+	for _, dst := range []string{"192.168.56.2", "192.168.56.20"} {
+		if ex := h.explain(engine.ExplainQuery{Src: src, Dst: dst, Protocol: "tcp", Port: 80}); ex.Access.Verdict != "drop" || ex.Access.Rule != "" || !strings.Contains(ex.Access.Reason, "management network") {
+			t.Errorf("three ports, %s: %+v, want the guard", dst, ex.Access)
+		}
+	}
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		everything(c)
+		wan := "wan0"
+		c.Management.Interface = model.InterfaceRef{Name: &wan}
+		c.Management.AllowedSources = &[]string{"203.0.113.5/32"}
+	}))
+	if s := h.e.Snapshot(); s.Applied == nil || s.Management.Name != s.Applied.Uplink.Name {
+		t.Fatalf("the management network must lie behind the uplink: %+v", s.Management)
+	}
+	if ex := h.explain(engine.ExplainQuery{Src: src, Dst: "203.0.113.50", Protocol: "tcp", Port: 80}); ex.Access.Verdict != "allow" || ex.Access.Rule != cfgRuleA {
+		t.Errorf("two ports, a host on the uplink's subnet: %+v, want the rule", ex.Access)
+	}
+	if ex := h.explain(engine.ExplainQuery{Src: src, Dst: "203.0.113.5", Protocol: "tcp", Port: 80}); ex.Access.Verdict != "drop" || ex.Access.Rule != "" || !strings.Contains(ex.Access.Reason, "behind the uplink") {
+		t.Errorf("two ports, the allowed source: %+v, want the guard", ex.Access)
+	}
+}
+
 func TestARuleOverlayAndAFaultCombineWithTheRuleFirst(t *testing.T) {
 	h := startedWithRevision(t)
 	h.mustPut(alice, iotLatency)

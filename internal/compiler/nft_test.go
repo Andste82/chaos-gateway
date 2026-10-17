@@ -330,29 +330,42 @@ func TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface(t 
 
 // The three-port guard has the two-port one's exception: an explicit matrix entry that allows a network
 // to reach the management network returns from the guard, so the entry's own place in the matrix decides.
-// Entries that deny, or that name another destination, do not open it.
+// Entries that deny, or that name another destination, do not open it. The policy table has no route to
+// the management network (plan §2.2), so the packet an entry lets through leaves through the uplink: the
+// return and the entry match the destination only, not the management interface (P31-AUDIT-01).
 func TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard(t *testing.T) {
-	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
+	entries := func(cfg *model.Configuration, h *Host) {
 		cfg.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{
 			matrixEntry(lanEP(iotID), mgmtEP(), model.MatrixEntryPolicyAllow),
 			matrixEntry(lanEP(labID), mgmtEP(), model.MatrixEntryPolicyDeny),
 			matrixEntry(lanEP(labID), uplinkEP(), model.MatrixEntryPolicyAllow),
 		}}
-	})
+	}
+	tg := compileBasic(t, entries)
 	g := renderRules(chainOf(t, tg, MgmtGuardChain))
-	if len(g) != 3 || !strings.HasSuffix(g[0], "return") || !strings.Contains(g[0], "br-iot") || !strings.Contains(g[0], "oifname mgmt0") || !strings.Contains(g[0], "@mgmt_src") ||
-		!strings.HasSuffix(g[1], "drop") || !strings.HasSuffix(g[2], "drop") {
+	if len(g) != 3 || g[0] != "meta iifname br-iot ip daddr @mgmt_src_8743d6 return" || !strings.HasSuffix(g[1], "drop") || !strings.HasSuffix(g[2], "drop") {
 		t.Fatalf("the guard chain: %v", g)
 	}
-	// the entry itself still accepts behind the access rules, in the matrix
+	// the entry itself still accepts behind the access rules, in the matrix, whatever interface the packet leaves through
 	found := false
 	for _, r := range renderRules(chainOf(t, tg, "forward")) {
-		if strings.Contains(r, "br-iot") && strings.Contains(r, "oifname mgmt0") && strings.HasSuffix(r, "accept") {
+		if r == "meta iifname br-iot ip daddr @mgmt_src_8743d6 accept" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("the matrix entry is not in the forward chain")
+		t.Errorf("the matrix entry is not in the forward chain: %v", renderRules(chainOf(t, tg, "forward")))
+	}
+	// allowed sources narrower than the management subnet: the guard drops the subnet too, so the entry
+	// opens the subnet too
+	tg = compileBasic(t, func(cfg *model.Configuration, h *Host) {
+		entries(cfg, h)
+		cfg.Management.AllowedSources = &[]string{"192.168.56.2/32"}
+	})
+	g = renderRules(chainOf(t, tg, MgmtGuardChain))
+	if len(g) != 5 || !strings.HasPrefix(g[0], "meta iifname br-iot ip daddr @mgmt_src") || g[1] != "meta iifname br-iot ip daddr 192.168.56.0/24 return" ||
+		!strings.Contains(g[3], "ip daddr 192.168.56.0/24") || !strings.HasSuffix(g[3], "drop") {
+		t.Fatalf("the guard chain with a narrow allowed source: %v", g)
 	}
 }
 

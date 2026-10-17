@@ -470,3 +470,55 @@ func TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn
 		t.Errorf("tcp from the management network through the forward: %s", got)
 	}
 }
+
+// The normal path of an explicit matrix entry to the management network in the three-port topology
+// (P31-AUDIT-01): the policy table keeps its default, so A's packet to a management address leaves through
+// the uplink, to a router there that knows the management network (here the server holds the address).
+// The guard's return and the entry match the destination, not the management interface, so the entry
+// opens it; with allowed sources narrower than the management subnet the entry opens the rest of the
+// subnet too, which the guard drops as well. `explain` agrees in both cases.
+func TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink(t *testing.T) {
+	const behindUplink = "192.168.56.77"
+	entry := func(c *model.Configuration) {
+		iot, m := fwIoT, model.MatrixEndpointManagement(true)
+		c.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow}}}
+	}
+	r := startForwardLab(t, entry)
+	r.top.Server.Addr("lo", behindUplink+"/32")
+	r.top.Server.Start("python3", "-c", accessServerScript)
+	eventually(t, r.top.Server, "tcp", behindUplink, 7050, 30*time.Second) // the server listens (the gateway itself would ask mgmt0)
+	bridge := ""
+	for _, b := range r.e.Snapshot().Bridges {
+		if strings.EqualFold(b.NetworkID, fwIoT) {
+			bridge = b.Name
+		}
+	}
+	if out := r.top.GW.Must("ip", "route", "get", behindUplink, "from", testbed.ClientAAddr, "iif", bridge); !strings.Contains(out, "dev wan0") {
+		t.Fatalf("A's packets to %s must leave through the uplink: %s", behindUplink, out)
+	}
+	check := func(what string) {
+		t.Helper()
+		if got := tryAt(r.top.A, "tcp", behindUplink, 7050, 3); got != "ok" {
+			t.Errorf("%s: A does not reach %s through the uplink with a matrix entry: %s", what, behindUplink, got)
+		}
+		ex, err := r.e.Explain(context.Background(), engine.ExplainQuery{Src: netip.MustParseAddr(testbed.ClientAAddr), Dst: behindUplink, Protocol: "tcp", Port: 7050})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ex.Access.Verdict != "allow" {
+			t.Errorf("%s: explain = %+v, want allow", what, ex.Access)
+		}
+	}
+	check("the default allowed sources")
+	if _, err := r.apply(r.revision(func(c *model.Configuration) {
+		withForwards(c)
+		entry(c)
+		c.Management.AllowedSources = &[]string{testbed.MgmtPeer + "/32"}
+	}), engine.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if out := r.top.GW.Must("nft", "list", "chain", "inet", "chaosgw", compiler.MgmtGuardChain); !strings.Contains(out, "ip daddr 192.168.56.0/24 return") {
+		t.Fatalf("the guard does not open the management subnet for the entry:\n%s", out)
+	}
+	check("narrow allowed sources")
+}

@@ -19,9 +19,14 @@ type AccessFacts struct {
 	// Gateway are the addresses the gateway itself answers on (bridge and WireGuard addresses):
 	// traffic to them is judged by the gateway's protection, not by the matrix.
 	Gateway []netip.Addr
-	// Management are the prefixes of the management network (allowed sources and the management
-	// interface's subnet).
+	// Management are the prefixes of the management network as the kernel tells it: the allowed
+	// sources (the set the anti-lockout rule, the matrix endpoint `management` and the two-port guard
+	// match).
 	Management []netip.Prefix
+	// ManagementSubnet is the management interface's subnet in the three-port topology: its guard
+	// drops it as well, whether or not the allowed sources cover it (unset in the two-port topology,
+	// where it is the uplink's subnet).
+	ManagementSubnet netip.Prefix
 	// TwoPort reports that the management network lies behind the uplink interface (plan §2.16). In
 	// both topologies devices under test do not reach the management network, whatever an access rule
 	// says, unless an explicit matrix entry allows it; TwoPort changes only the words of the reason.
@@ -343,7 +348,8 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
 	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
 	mgmt := matrixEndpoint{"management", ""}
-	if !containsEndpoint(to, mgmt) || !w.viaTestInterface(from) {
+	guarded := containsEndpoint(to, mgmt) || (!f.TwoPort && f.ManagementSubnet.IsValid() && f.ManagementSubnet.Contains(dst))
+	if !guarded || !w.viaTestInterface(from) {
 		return AccessExplanation{}, false
 	}
 	if w.Config.AccessMatrix != nil {

@@ -248,7 +248,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	drop := func(m ...any) Rule {
 		return newRule(append(append([]any{iifSet(ifsTest.Name)}, m...), counter("forward_drop"), verdict("drop"))...)
 	}
-	if twoPort := uplink != "" && t.Management.Name == uplink; twoPort {
+	if t.twoPort() {
 		// two-port topology: the management network lies behind the uplink interface, told apart
 		// from the uplink by its addresses
 		guard.Rules = append(guard.Rules, drop(oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name))))
@@ -382,6 +382,12 @@ func shortID(id string) string {
 }
 
 // coveredBy reports whether one of ps contains all of p.
+// twoPort reports the two-port topology: the management network lies behind the uplink interface
+// (plan §2.16).
+func (t *Target) twoPort() bool {
+	return t.Uplink.Name != "" && t.Management.Name == t.Uplink.Name
+}
+
 func coveredBy(p netip.Prefix, ps []netip.Prefix) bool {
 	for _, q := range ps {
 		if q.Bits() <= p.Bits() && q.Contains(p.Addr()) {
@@ -438,6 +444,13 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			if t.Management.Name == "" {
 				return endpoint{}, 0, false
 			}
+			if !from && !t.twoPort() {
+				// three-port topology: the management network as a destination is told by its addresses
+				// only. The policy table has no route to it (plan §2.2), so a packet that an entry lets
+				// through leaves through the uplink (a router behind it may know the management network),
+				// not through the management interface (P31-AUDIT-01).
+				return endpoint{oif: []any{eq(payload("ip", "daddr"), setRef(mgmtSet))}}, 1, true
+			}
 			return dev(t.Management.Name, setRef(mgmtSet)), 1, true
 		case ep.Uplink != nil && bool(*ep.Uplink):
 			if t.Uplink.Name == "" {
@@ -470,6 +483,11 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 		}
 		if !implicit && policy != model.MatrixEntryPolicyDeny && to.Management != nil && bool(*to.Management) {
 			mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+			if sub := t.Management.Subnet; !t.twoPort() && sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
+				// the three-port guard drops the management subnet too: the entry opens what the guard
+				// drops (P31-AUDIT-01)
+				mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), f.iif...), eq(payload("ip", "daddr"), prefixValue(sub)), verdict("return"))...))
+			}
 		}
 		expr = append(expr, verdict(v))
 		items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})

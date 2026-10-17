@@ -1,11 +1,13 @@
 package api_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
@@ -300,15 +302,37 @@ func TestTheCapabilitiesNamePortForwarding(t *testing.T) {
 	}
 }
 
-// The counter of a forward is the counter of its accept rule in the kernel: the new connections it let
-// through, with the epoch of the forward and the time it last matched. Only the revision the kernel runs
-// has counters, and only for the forwards in its packet path (a disabled one is not).
-func TestAForwardHasTheCounterOfItsAcceptRule(t *testing.T) {
+// The counter of a forward counts its connections (P31-M35a-09, option (b)): it is the counter of the
+// forward's counting rule in the prerouting NAT chain, which sees the first packet of each connection
+// before any access rule, with the epoch of the forward and the time the last connection arrived (the
+// rule's `last`). No rule of the forward chain counts into it. Only the revision the kernel runs has
+// counters, and only for the forwards in its packet path (a disabled one is not).
+func TestAForwardCountsItsConnections(t *testing.T) {
 	g := dhcpGateway(t)
 	if r := g.apply(g.mustPatch(forwardsPatch())); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	g.observe()
+	res, err := g.k.Run(context.Background(), executor.Command{Tool: executor.ToolNft, Args: []string{"-j", "list", "table", "inet", "chaosgw"}})
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	rs, err := linux.ParseNft([]byte(res.Stdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{fwdWeb, fwdRange} {
+		var chains []string
+		for _, o := range rs.Objects {
+			if o.Rule != nil && o.Rule.CounterName() == compiler.ForwardCounterName(id) {
+				_, _, last := o.Rule.Last()
+				chains = append(chains, fmt.Sprintf("%s last=%v", o.Rule.Chain, last))
+			}
+		}
+		if fmt.Sprint(chains) != "[prerouting last=true]" {
+			t.Errorf("the rules that count into the counter of %s: %v", id, chains)
+		}
+	}
 	g.k.BumpCounter(compiler.ForwardCounterName(fwdRange), 3)
 	items := g.do("GET", "/port-forwards", nil, nil, nil).json(t)["items"].([]any)
 	counters := map[string]map[string]any{}

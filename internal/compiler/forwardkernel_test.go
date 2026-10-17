@@ -121,8 +121,10 @@ func TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel(t *testing.T)
 	if n := b.counter(tg.Access.Rules[0].Counter); n == 0 {
 		t.Error("the rule's counter counts nothing")
 	}
-	if n := b.counter(forwardOf(t, tg, fwdWeb).Counter); n != passed {
-		t.Errorf("the forward counted %d connections the rule dropped", n-passed)
+	// the forward counts the connections that arrive through it, the one the rule dropped too (each
+	// attempt: a dropped SYN leaves no tracked connection, so its retransmission arrives anew)
+	if n := b.counter(forwardOf(t, tg, fwdWeb).Counter); n <= passed {
+		t.Errorf("the forward did not count the connection the rule dropped: %d, before %d", n, passed)
 	}
 	b.w.cfg = b.replaceRule(ruleA, `{name: no-mqtt, source: {device: esp32-42}, protocol: tcp, ports: [8883], action: reject, reject_with: host_unreachable}`)
 	b.apply()
@@ -156,6 +158,40 @@ func TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel(t *testing.T)
 	b.apply()
 	b.expect(b.srv, "tcp", "203.0.113.1", 8022, "ok")
 	b.expect(b.srv, "tcp", "203.0.113.1", 8080, "timeout")
+}
+
+// The counter of a forward counts the connections that arrive through it, one per connection, also when
+// an access allow rule accepts them before the forward's own accept rule (P31-M35a-09, option (b): the
+// counting rule stands in the NAT chain, in front of every access rule), with the time of the last one.
+// Before, the counter sat on the accept rule and showed 0 while an allow rule let the traffic through.
+func TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel(t *testing.T) {
+	b := newForwardBed(t)
+	b.w.addForward(fwdWeb, `{name: web, protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}, target_port: 8883}`)
+	b.w.addForward(fwdAddr, `{name: echo, protocol: udp, entry: uplink, external_port: 5353, target: {address: 10.10.0.42}}`)
+	b.w.addForward(fwdMgmt, `{name: mgmt, protocol: tcp, entry: management, external_port: 8443, target: {device: esp32-42}, target_port: 7050}`)
+	b.w.addConfigRule(ruleA, `{name: anywhere, source: {device: esp32-42}, action: allow}`)
+	tg := b.apply()
+	for range 3 {
+		b.expect(b.srv, "tcp", "203.0.113.1", 8080, "ok")
+	}
+	b.expect(b.srv, "udp", "203.0.113.1", 5353, "ok")
+	b.expect(b.m, "tcp", "192.168.56.1", 8443, "ok")
+	if n := b.counter(tg.Access.Rules[0].Counter); n == 0 {
+		t.Error("the allow rule did not accept the forwarded connections")
+	}
+	for id, want := range map[string]int{fwdWeb: 3, fwdAddr: 1, fwdMgmt: 1} {
+		f := forwardOf(t, tg, id)
+		if n := b.counter(f.Counter); n != want {
+			t.Errorf("the forward %s counted %d connections, want %d", f.Name, n, want)
+		}
+	}
+	rs, err := linux.ParseNft([]byte(b.gw.Must("nft", "-j", "list", "ruleset")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used, ok := rs.LastUsed()[forwardOf(t, tg, fwdWeb).Counter]; !ok || used > time.Minute {
+		t.Errorf("the forward's last match: %v %v", used, ok)
+	}
 }
 
 // "Also cut existing connections" resets an established forwarded connection: the window of the rule on

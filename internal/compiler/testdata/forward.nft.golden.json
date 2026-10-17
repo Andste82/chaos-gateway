@@ -2098,7 +2098,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "8d1673e32ad2",
+          "comment": "4c43e02ed38f",
           "expr": [
             {
               "match": {
@@ -2157,12 +2157,6 @@
               }
             },
             {
-              "counter": "fwd_74f89ac51f"
-            },
-            {
-              "last": null
-            },
-            {
               "accept": null
             }
           ],
@@ -2175,7 +2169,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "17c4026baee3",
+          "comment": "ad587f412e75",
           "expr": [
             {
               "match": {
@@ -2234,12 +2228,6 @@
               }
             },
             {
-              "counter": "fwd_e1e1f5dfd8"
-            },
-            {
-              "last": null
-            },
-            {
               "accept": null
             }
           ],
@@ -2252,7 +2240,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "5fbf91511a8f",
+          "comment": "ce9c9b9fbddc",
           "expr": [
             {
               "match": {
@@ -2316,12 +2304,6 @@
               }
             },
             {
-              "counter": "fwd_adc7fa6ad9"
-            },
-            {
-              "last": null
-            },
-            {
               "accept": null
             }
           ],
@@ -2334,7 +2316,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "648ae7e86eeb",
+          "comment": "579b1f2fdf99",
           "expr": [
             {
               "match": {
@@ -2391,12 +2373,6 @@
                 "op": "==",
                 "right": 8080
               }
-            },
-            {
-              "counter": "fwd_e1fe2665fa"
-            },
-            {
-              "last": null
             },
             {
               "accept": null
@@ -3411,6 +3387,279 @@
                 "family": "ip",
                 "port": 53
               }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "prerouting",
+          "comment": "adf1b02825c0",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "fib": {
+                    "flags": [
+                      "daddr",
+                      "iif"
+                    ],
+                    "result": "type"
+                  }
+                },
+                "op": "==",
+                "right": "local"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": 2222
+              }
+            },
+            {
+              "counter": "fwd_74f89ac51f"
+            },
+            {
+              "last": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "prerouting",
+          "comment": "65a21cc8edcf",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "mgmt0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "fib": {
+                    "flags": [
+                      "daddr",
+                      "iif"
+                    ],
+                    "result": "type"
+                  }
+                },
+                "op": "==",
+                "right": "local"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": 8443
+              }
+            },
+            {
+              "counter": "fwd_e1e1f5dfd8"
+            },
+            {
+              "last": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "prerouting",
+          "comment": "a802af077cee",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "udp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "fib": {
+                    "flags": [
+                      "daddr",
+                      "iif"
+                    ],
+                    "result": "type"
+                  }
+                },
+                "op": "==",
+                "right": "local"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "range": [
+                    8000,
+                    8003
+                  ]
+                }
+              }
+            },
+            {
+              "counter": "fwd_adc7fa6ad9"
+            },
+            {
+              "last": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "prerouting",
+          "comment": "c9c61960605f",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "fib": {
+                    "flags": [
+                      "daddr",
+                      "iif"
+                    ],
+                    "result": "type"
+                  }
+                },
+                "op": "==",
+                "right": "local"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": 8080
+              }
+            },
+            {
+              "counter": "fwd_e1fe2665fa"
+            },
+            {
+              "last": null
             }
           ],
           "family": "inet",

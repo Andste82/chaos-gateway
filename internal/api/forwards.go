@@ -36,9 +36,10 @@ func (s *Server) forwardViews(ctx context.Context, v view) []model.PortForwardVi
 	return out
 }
 
-// forwardCounter is the counter of a forward in the kernel's packet path: the packets and bytes it let
-// through to its target before their connection was established (its hits). Nil when the forward is
-// not in the kernel or the counters could not be read.
+// forwardCounter is the counter of a forward in the kernel's packet path: the connections that arrived
+// through it (the counting rule in the prerouting NAT chain sees the first packet of each, whatever an
+// access rule decides about it later; P31-M35a-09), with the time the last one arrived. Nil when the
+// forward is not in the kernel or the counters could not be read.
 func (oc overlayContext) forwardCounter(id string) *model.Counter {
 	if oc.counters == nil || oc.snap == nil {
 		return nil

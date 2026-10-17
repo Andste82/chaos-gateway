@@ -340,16 +340,16 @@ export function rowStatus(r: ForwardRow): { tone: 'normal' | 'fault' | 'offline'
 }
 
 /**
- * The counter of a row: "12 hits", like the hit counters of the access rules; empty while the forward is
- * not in the kernel. The kernel counts the packets of connections not yet established, so a retransmitted
- * SYN or an unanswered UDP packet counts again: the number is no count of connections (counterHint).
+ * The counter of a row: "12 connections"; empty while the forward is not in the kernel. The gateway
+ * counts the first packet of each connection that arrives through the forward, whatever an access rule
+ * decides about it afterwards (P31-M35a-09), so the number is the forward's connections (counterHint).
  */
 export function counterText(r: ForwardRow): string {
   const c = r.view?.counters;
   if (!c) return '';
-  return `${c.packets.toLocaleString('en-US')} ${c.packets === 1 ? 'hit' : 'hits'}`;
+  return `${c.packets.toLocaleString('en-US')} ${c.packets === 1 ? 'connection' : 'connections'}`;
 }
 
 /** What the counter counts, as the tooltip of counterText. */
 export const counterHint =
-  'Packets the forward let through before their connection was established: one per connection, more when a SYN is retransmitted or a UDP packet gets no answer';
+  'Connections that arrived through the forward, whether an access rule then allowed or refused them';

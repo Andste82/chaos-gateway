@@ -16,20 +16,24 @@ import (
 //
 // Where a forward stands in the packet path.
 //
-//	prerouting (nat, -100)  one rule for all forwards: in on an entry interface, to an address of that
-//	                        interface (`fib daddr . iif type local`, so a new address is followed by the
-//	                        kernel at once, like masquerade), DNAT to the element of the map `fwd_dnat`
-//	                        keyed on the entry interface, the protocol and the destination port. The map
-//	                        holds one element per forwarded port (a range is shifted one to one) with the
-//	                        target's current address: a device target follows its address by element
-//	                        updates, like the identity map (M7). A forward without a target address has
-//	                        no elements, and its connections are not translated.
+//	prerouting (nat, -100)  one counting rule per forward (forwardCounts): in on its entry interface, to an
+//	                        address of that interface, its protocol and external ports; it counts into
+//	                        the forward's counter and notes the time (`last`). A NAT chain sees only the
+//	                        first packet of a connection, so the counter counts the connections that
+//	                        arrive through the forward, whatever the access rules decide about them later
+//	                        (P31-M35a-09). Then one rule for all forwards: in on an entry interface, to an
+//	                        address of that interface (`fib daddr . iif type local`, so a new address is
+//	                        followed by the kernel at once, like masquerade), DNAT to the element of the
+//	                        map `fwd_dnat` keyed on the entry interface, the protocol and the destination
+//	                        port. The map holds one element per forwarded port (a range is shifted one to
+//	                        one) with the target's current address: a device target follows its address by
+//	                        element updates, like the identity map (M7). A forward without a target address
+//	                        has no elements, and its connections are not translated.
 //	forward                 established/related ... the access rules (which match a forwarded connection
 //	                        with the target as responder, access.go) -> one accept rule per forward
 //	                        (`ct status dnat`, in on its entry interface, out to a local test network,
-//	                        its protocol and external ports), which counts the connections the forward
-//	                        let through -> the access matrix, whose default keeps everything else from
-//	                        the uplink out of the test networks.
+//	                        its protocol and external ports) -> the access matrix, whose default keeps
+//	                        everything else from the uplink out of the test networks.
 //
 // Faults do not apply to forwarded connections (M35b): the classification chain runs before the DNAT on
 // the conntrack original tuple, whose ends (the peer and the entry address) lie in no test network, so it
@@ -74,7 +78,9 @@ type PortForward struct {
 	// Active reports whether the forward is in effect; Reason says why not (domain.Forward… reasons).
 	Active bool   `json:"active"`
 	Reason string `json:"reason,omitempty"`
-	// Counter is the named counter of the forward's accept rule: the new connections it let through.
+	// Counter is the named counter of the forward's counting rule in the NAT prerouting chain: the
+	// connections that arrived through the forward (the first packet of each), whatever the access rules
+	// decided about them.
 	Counter string `json:"counter"`
 }
 
@@ -233,26 +239,46 @@ func (t *Target) forwardDNAT() []Rule {
 	if len(ifs) > 1 {
 		iif = anon(ifs...)
 	}
-	local := eq(map[string]any{"fib": map[string]any{"result": "type", "flags": []any{"daddr", "iif"}}}, "local")
+	local := fibLocal()
 	key := concat(meta("iifname"), meta("l4proto"), payload("th", "dport"))
 	dnat := map[string]any{"dnat": map[string]any{"family": "ip", "type_flags": "concat",
 		"addr": map[string]any{"map": map[string]any{"key": key, "data": setRef(t.ForwardMap)}}}}
 	return []Rule{newRule(eq(meta("iifname"), iif), eq(meta("l4proto"), anon("tcp", "udp")), local, dnat)}
 }
 
+// forwardCounts are the counting rules of the forwards in the prerouting NAT chain, in front of the DNAT
+// rule: in on the forward's entry interface, to an address of that interface, its protocol and external
+// ports; each counts into the forward's counter and notes when it last matched (the `last` statement,
+// like the access rules). A NAT chain sees the first packet of a connection only, so the counter counts
+// connections: each connection that arrives through the forward once, whether an access rule or the
+// forward's accept rule lets it through or a rule drops it (a dropped TCP SYN leaves no conntrack entry,
+// so its retransmission arrives, and is counted, as a new connection).
+func (t *Target) forwardCounts() []Rule {
+	var out []Rule
+	for _, f := range t.Forwards {
+		expr := []any{iifname(f.Iface), eq(meta("l4proto"), f.Protocol), fibLocal(),
+			eq(payload("th", "dport"), portValue([]PortRange{{f.ExtFrom, f.ExtTo}}))}
+		out = append(out, newRule(append(expr, counter(f.Counter), lastStmt())...))
+	}
+	return out
+}
+
 // forwardAccepts are the accept rules of the forwards in the forward chain, after the access rules and
 // in front of the access matrix: a connection the DNAT of a forward translated (`ct status dnat`), in on
 // its entry interface, out to a local test network, with its protocol and an external port of its range.
-// Each counts into the forward's counter and notes when it last matched (the `last` statement, like the
-// access rules). The counter counts the packets of connections not yet established: one per connection,
-// more for a retransmitted SYN or an unanswered UDP packet, which is why the UI calls them hits.
+// They count nothing: the forward's counter is that of its counting rule (forwardCounts).
 func (t *Target) forwardAccepts(lanSet string) []Rule {
 	var out []Rule
 	for _, f := range t.Forwards {
 		out = append(out, newRule(iifname(f.Iface), oifSet(lanSet), ctStatusDNAT(), eq(meta("l4proto"), f.Protocol),
-			eq(ctOriginal("proto-dst"), portValue([]PortRange{{f.ExtFrom, f.ExtTo}})), counter(f.Counter), lastStmt(), verdict("accept")))
+			eq(ctOriginal("proto-dst"), portValue([]PortRange{{f.ExtFrom, f.ExtTo}})), verdict("accept")))
 	}
 	return out
+}
+
+// fibLocal matches a packet to an address of the interface it came in on (`fib daddr . iif type local`).
+func fibLocal() any {
+	return eq(map[string]any{"fib": map[string]any{"result": "type", "flags": []any{"daddr", "iif"}}}, "local")
 }
 
 // ctStatusDNAT matches a connection whose destination was translated (`ct status dnat`).

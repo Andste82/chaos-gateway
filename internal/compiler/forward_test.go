@@ -165,8 +165,9 @@ func TestADeviceForwardFollowsTheAddressByElementsOnly(t *testing.T) {
 	if !sameButMapElements(before, gone) {
 		t.Error("a device that lost its address changes more than the elements of maps")
 	}
-	if !hasCounter(gone, f.Counter) || indexOfRule(chainOf(t, gone, "forward"), f.Counter) < 0 {
-		t.Error("the inactive forward lost its counter or its accept rule")
+	if !hasCounter(gone, f.Counter) || indexOfRule(chainOf(t, gone, "prerouting"), f.Counter) < 0 ||
+		indexOfRule(chainOf(t, gone, "forward"), "ct original proto-dst 8080 accept") < 0 {
+		t.Error("the inactive forward lost its counter, its counting rule or its accept rule")
 	}
 }
 
@@ -189,8 +190,9 @@ func sameButMapElements(a, b *Target) bool {
 func hasCounter(tg *Target, name string) bool { return slices.Contains(tg.Nft.Counters, name) }
 
 // The prerouting NAT chain (priority -100, next to the service redirect) has one DNAT rule for every
-// forward: on the entry interfaces only, to an address of the interface the packet came in on (the
-// kernel's lookup follows a new address at once), DNAT through the map.
+// forward, after the counting rules of the forwards: on the entry interfaces only, to an address of the
+// interface the packet came in on (the kernel's lookup follows a new address at once), DNAT through the
+// map.
 func TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect(t *testing.T) {
 	w := forwardWorld(t)
 	tg := w.compile(func(in *Input) { in.ServiceNS = ServiceNSDefault })
@@ -207,21 +209,64 @@ func TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect(t *tes
 	if indexOfRule(c, "dport 53") < 0 {
 		t.Error("the service redirect is gone")
 	}
-	// without the service namespace the chain holds the DNAT alone
-	if rules := renderRules(chainOf(t, w.compile(nil), "prerouting")); len(rules) != 1 || rules[0] != want {
+	// without the service namespace the chain holds the counting rules and the DNAT alone
+	if rules := renderRules(chainOf(t, w.compile(nil), "prerouting")); len(rules) != len(tg.Forwards)+1 || rules[len(rules)-1] != want {
 		t.Errorf("without a service namespace: %v", rules)
 	}
 	// only the uplink: the interface alone, no set
 	u := accessWorld(t)
 	u.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
-	if r := renderRules(chainOf(t, u.compile(nil), "prerouting")); !strings.HasPrefix(r[0], "meta iifname wan0 meta l4proto") {
+	if r := renderRules(chainOf(t, u.compile(nil), "prerouting")); !strings.HasPrefix(r[len(r)-1], "meta iifname wan0 meta l4proto { tcp, udp }") {
 		t.Errorf("one entry interface: %v", r)
+	}
+}
+
+// The counter of a forward counts connections (P31-M35a-09, option (b)): one counting rule per forward in
+// the prerouting NAT chain, in front of the DNAT rule, in on the forward's entry interface, to an address
+// of that interface, its protocol and external ports, with the forward's counter and `last`. A NAT chain
+// sees the first packet of a connection only, and the rule stands before every access rule, so it counts
+// each connection that arrives through the forward whichever rule accepts or drops it afterwards. No
+// other rule counts into the forward's counter: not its accept rule, nor an allow rule that accepts its
+// connections.
+func TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT(t *testing.T) {
+	w := forwardWorld(t)
+	w.addConfigRule(ruleA, `{name: all, source: {device: esp32-42}, action: allow}`)
+	tg := w.compile(nil)
+	c := chainOf(t, tg, "prerouting")
+	rules := renderRules(c)
+	dnat := indexOfRule(c, "dnat ip concat")
+	for _, f := range tg.Forwards {
+		ports := fmt.Sprint(f.ExtFrom)
+		if f.ExtTo != f.ExtFrom {
+			ports = fmt.Sprintf("%d-%d", f.ExtFrom, f.ExtTo)
+		}
+		want := fmt.Sprintf(`meta iifname %s meta l4proto %s fib daddr . iif type local th dport %s counter %q last`, f.Iface, f.Protocol, ports, f.Counter)
+		i := slices.Index(rules, want)
+		if i < 0 || i > dnat {
+			t.Errorf("the counting rule of %s (at %d, the DNAT at %d):\nwant %s\n%s", f.Name, i, dnat, want, strings.Join(rules, "\n"))
+			continue
+		}
+		if !hasCounter(tg, f.Counter) {
+			t.Errorf("the counter %s of %s is not declared", f.Counter, f.ID)
+		}
+		for _, ch := range tg.Nft.Chains {
+			for _, r := range ch.Rules {
+				if strings.Contains(renderRule(r), fmt.Sprintf("counter %q", f.Counter)) && (ch.Name != "prerouting" || r.Comment != c.Rules[i].Comment) {
+					t.Errorf("the counter of %s is also in %s: %s", f.Name, ch.Name, renderRule(r))
+				}
+			}
+		}
+	}
+	// the counter follows the forward's id, not its place
+	if web, rng := forwardOf(t, tg, fwdWeb), forwardOf(t, tg, fwdRange); ForwardCounterName(fwdWeb) != web.Counter || web.Counter == rng.Counter {
+		t.Errorf("counters: %s %s", web.Counter, rng.Counter)
 	}
 }
 
 // In the forward chain each forward accepts the connections its DNAT translated (in on its entry
 // interface, out to a local test network, its protocol and external ports) after the access rules and in
-// front of the access matrix, and counts them; the default of the matrix keeps everything else out.
+// front of the access matrix; the default of the matrix keeps everything else out. The accept rule
+// counts nothing: the forward's counter is in the NAT chain.
 func TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix(t *testing.T) {
 	w := forwardWorld(t)
 	w.addConfigRule(ruleA, `{name: no-telnet, source: {global: true}, protocol: tcp, ports: [23], action: drop}`)
@@ -230,11 +275,9 @@ func TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix(t *testing.
 	tg := w.compile(nil)
 	fwd := chainOf(t, tg, "forward")
 	rules := renderRules(fwd)
-	web := forwardOf(t, tg, fwdWeb)
-	rng := forwardOf(t, tg, fwdRange)
 	lan := setName(t, tg, "ifs_lan")
-	wantWeb := fmt.Sprintf(`meta iifname wan0 meta oifname @%s ct status dnat meta l4proto tcp ct original proto-dst 8080 counter %q last accept`, lan, web.Counter)
-	wantRange := fmt.Sprintf(`meta iifname wan0 meta oifname @%s ct status dnat meta l4proto udp ct original proto-dst 8000-8003 counter %q last accept`, lan, rng.Counter)
+	wantWeb := fmt.Sprintf(`meta iifname wan0 meta oifname @%s ct status dnat meta l4proto tcp ct original proto-dst 8080 accept`, lan)
+	wantRange := fmt.Sprintf(`meta iifname wan0 meta oifname @%s ct status dnat meta l4proto udp ct original proto-dst 8000-8003 accept`, lan)
 	iWeb, iRange := slices.Index(rules, wantWeb), slices.Index(rules, wantRange)
 	if iWeb < 0 || iRange < 0 {
 		t.Fatalf("the accept rules are missing:\n%s", strings.Join(rules, "\n"))
@@ -244,15 +287,6 @@ func TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix(t *testing.
 	drop := indexOfRule(fwd, `counter "forward_drop" drop`)
 	if jump < 0 || matrix < 0 || drop < 0 || jump > iWeb || iWeb > matrix || iRange > matrix || matrix > drop {
 		t.Errorf("order: access %d, forwards %d/%d, matrix %d, drop %d", jump, iWeb, iRange, matrix, drop)
-	}
-	for _, f := range tg.Forwards {
-		if !hasCounter(tg, f.Counter) {
-			t.Errorf("the counter %s of %s is not declared", f.Counter, f.ID)
-		}
-	}
-	// the counter follows the forward's id, not its place
-	if ForwardCounterName(fwdWeb) != web.Counter || web.Counter == rng.Counter {
-		t.Errorf("counters: %s %s", web.Counter, rng.Counter)
 	}
 }
 

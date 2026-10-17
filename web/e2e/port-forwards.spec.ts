@@ -40,8 +40,8 @@ test('port forwards: the uplink and the management card list their forwards with
   await expect(web.getByTestId('forward-summary')).toHaveText('TCP 8080 → ESP32-42:80');
   await expect(web).toContainText('esp-web');
   await expect(web.getByTestId('forward-status')).toHaveText('active · to 10.10.0.42');
-  await expect(web.getByTestId('forward-counter')).toHaveText('12 hits');
-  await expect(web.getByTestId('forward-counter')).toHaveAttribute('title', /retransmitted/);
+  await expect(web.getByTestId('forward-counter')).toHaveText('12 connections');
+  await expect(web.getByTestId('forward-counter')).toHaveAttribute('title', /Connections that arrived through the forward/);
   await expect(forward(page, 'UDP 8000-8010').getByTestId('forward-summary')).toHaveText('UDP 8000-8010 → 10.20.0.50:9000-9010');
   // a device without an address leaves its forward inactive, and the status says why
   await expect(forward(page, 'TCP 2222').getByTestId('forward-status')).toHaveText('inactive: the device has no address');
@@ -206,7 +206,7 @@ test('port forwards: the device detail lists the forwards to the device, and Edi
   await expect(list).toHaveCount(2);
   await expect(list.filter({ hasText: 'TCP 8080' })).toContainText('TCP 8080 → ESP32-42:80');
   await expect(list.filter({ hasText: 'TCP 8080' })).toContainText('from the uplink');
-  await expect(list.filter({ hasText: 'TCP 8080' })).toContainText('12 hits');
+  await expect(list.filter({ hasText: 'TCP 8080' })).toContainText('12 connections');
   await expect(list.filter({ hasText: 'TCP 8443' })).toContainText('from the management network');
   await expect(list.filter({ hasText: 'TCP 8443' })).toContainText('disabled');
   await page.getByRole('link', { name: 'Edit the port forward esp-web' }).click();

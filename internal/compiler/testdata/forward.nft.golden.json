@@ -3605,7 +3605,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "adf1b02825c0",
+          "comment": "61e2bb6f5e26",
           "expr": [
             {
               "match": {
@@ -3616,6 +3616,17 @@
                 },
                 "op": "==",
                 "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
               }
             },
             {
@@ -3672,7 +3683,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "16980f222fa1",
+          "comment": "8c7e7985f969",
           "expr": [
             {
               "match": {
@@ -3683,6 +3694,17 @@
                 },
                 "op": "==",
                 "right": "mgmt0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
               }
             },
             {
@@ -3758,7 +3780,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "a802af077cee",
+          "comment": "86576f807d72",
           "expr": [
             {
               "match": {
@@ -3769,6 +3791,17 @@
                 },
                 "op": "==",
                 "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
               }
             },
             {
@@ -3830,7 +3863,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "c9c61960605f",
+          "comment": "6bbed1211185",
           "expr": [
             {
               "match": {
@@ -3841,6 +3874,17 @@
                 },
                 "op": "==",
                 "right": "wan0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
               }
             },
             {
@@ -3897,7 +3941,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "b8444409b06a",
+          "comment": "6bfae6c82f04",
           "expr": [
             {
               "match": {
@@ -3913,6 +3957,17 @@
                     "wan0"
                   ]
                 }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
               }
             },
             {

@@ -202,7 +202,7 @@ func TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect(t *tes
 	}
 	rules := renderRules(c)
 	last := rules[len(rules)-1]
-	want := `meta iifname { mgmt0, wan0 } meta l4proto { tcp, udp } fib daddr . iif type local dnat ip concat to meta iifname . meta l4proto . th dport map @` + tg.ForwardMap
+	want := `meta iifname { mgmt0, wan0 } meta nfproto ipv4 meta l4proto { tcp, udp } fib daddr . iif type local dnat ip concat to meta iifname . meta l4proto . th dport map @` + tg.ForwardMap
 	if last != want {
 		t.Fatalf("the DNAT rule:\n%s\nwant\n%s", last, want)
 	}
@@ -216,13 +216,13 @@ func TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect(t *tes
 	// only the uplink: the interface alone, no set
 	u := accessWorld(t)
 	u.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
-	if r := renderRules(chainOf(t, u.compile(nil), "prerouting")); !strings.HasPrefix(r[len(r)-1], "meta iifname wan0 meta l4proto { tcp, udp }") {
+	if r := renderRules(chainOf(t, u.compile(nil), "prerouting")); !strings.HasPrefix(r[len(r)-1], "meta iifname wan0 meta nfproto ipv4 meta l4proto { tcp, udp }") {
 		t.Errorf("one entry interface: %v", r)
 	}
 }
 
 // The counter of a forward counts connections (P31-M35a-09, option (b)): one counting rule per forward in
-// the prerouting NAT chain, in front of the DNAT rule, in on the forward's entry interface, to an address
+// the prerouting NAT chain, in front of the DNAT rule, IPv4 only (P31-AUDIT-02), in on the forward's entry interface, to an address
 // of that interface, its protocol and external ports, with the forward's counter and `last`. A NAT chain
 // sees the first packet of a connection only, and the rule stands before every access rule, so it counts
 // each connection that arrives through the forward whichever rule accepts or drops it afterwards. No
@@ -244,7 +244,7 @@ func TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT(t *testing
 		if f.Entry == domain.EntryManagement {
 			mark = "ct mark set ct mark | 0x400000 "
 		}
-		want := fmt.Sprintf(`meta iifname %s meta l4proto %s fib daddr . iif type local th dport %s %scounter %q last`, f.Iface, f.Protocol, ports, mark, f.Counter)
+		want := fmt.Sprintf(`meta iifname %s meta nfproto ipv4 meta l4proto %s fib daddr . iif type local th dport %s %scounter %q last`, f.Iface, f.Protocol, ports, mark, f.Counter)
 		i := slices.Index(rules, want)
 		if i < 0 || i > dnat {
 			t.Errorf("the counting rule of %s (at %d, the DNAT at %d):\nwant %s\n%s", f.Name, i, dnat, want, strings.Join(rules, "\n"))
@@ -719,7 +719,7 @@ func TestAManagementForwardRoutesItsRepliesToTheManagementNetwork(t *testing.T) 
 			marking = append(marking, r)
 		}
 	}
-	if len(marking) != 1 || !strings.HasPrefix(marking[0], "meta iifname mgmt0 meta l4proto tcp fib daddr . iif type local th dport 8443 ct mark set ct mark | 0x400000") {
+	if len(marking) != 1 || !strings.HasPrefix(marking[0], "meta iifname mgmt0 meta nfproto ipv4 meta l4proto tcp fib daddr . iif type local th dport 8443 ct mark set ct mark | 0x400000") {
 		t.Errorf("the rules that set the conntrack mark: %v", marking)
 	}
 

@@ -23,7 +23,7 @@ RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
         check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm test-appliance \
-        test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image clean
+        test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image image-local clean
 
 help: ## list the targets
 	@awk -F ':.*## ' '/^[a-zA-Z0-9_-]+:.*## /{printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -151,6 +151,11 @@ dev: $(WEBDEPS) ## web dev server with a proxy to the API (CHAOSGW_API, default 
 image: ## multi-arch container image (no push)
 	docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile \
 	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t chaos-gateway:$(VERSION) .
+
+image-local: ## container image for this machine's architecture, loaded as chaos-gateway:latest and :$(VERSION)
+	docker buildx build --load -f deploy/Dockerfile \
+	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) \
+	  -t chaos-gateway:latest -t chaos-gateway:$(VERSION) .
 
 clean: ## remove build output and generated, uncommitted code
 	rm -rf bin web/dist web/src/api/generated clients/typescript/src clients/python/chaosgw-client

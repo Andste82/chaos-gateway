@@ -12,15 +12,24 @@ commit:
 
 ```sh
 git clone https://github.com/Andste82/chaos-gateway.git && cd chaos-gateway
-docker build -f deploy/Dockerfile -t chaos-gateway:latest \
-  --build-arg VERSION="$(git describe --tags --always --dirty)" \
-  --build-arg COMMIT="$(git rev-parse --short HEAD)" \
-  --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" .
+make image-local
 docker run --rm chaos-gateway:latest version
 ```
 
-The compose files use `chaos-gateway:${CHAOSGW_VERSION:-latest}`. (`make image` builds both architectures with
-buildx and keeps no local image; it is for CI.)
+`make image-local` builds the image for the host's architecture, loads it into the local image store and tags
+it `chaos-gateway:latest` and `chaos-gateway:<version>` (the version is `git describe --tags --always --dirty`).
+On a Raspberry Pi the build takes 15 to 20 minutes. Without `make`, the same build is:
+
+```sh
+docker buildx build --load -f deploy/Dockerfile -t chaos-gateway:latest \
+  --build-arg VERSION="$(git describe --tags --always --dirty)" \
+  --build-arg COMMIT="$(git rev-parse --short HEAD)" \
+  --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" .
+```
+
+The compose files use `chaos-gateway:${CHAOSGW_VERSION:-latest}`; `CHAOSGW_VERSION=<version>` runs a tagged
+build instead. (`make image` builds both architectures with buildx and keeps no local image; it is for CI. The
+published multi-arch image comes with M28.)
 
 ## 2. Prepare the host
 

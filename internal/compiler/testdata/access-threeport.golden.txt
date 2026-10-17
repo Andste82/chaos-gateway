@@ -1,0 +1,36 @@
+# rules
+0  config:a1000000-0000-4000-8000-000000000001  everything  allow  scope "global"  dest ""  proto any  counter rule_add048cda1
+# sets
+# chain forward
+  ct state { established, related } accept
+  meta iifname br-iot meta oifname br-iot accept
+  meta iifname br-lab meta oifname br-lab accept
+  meta iifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta oifname @ifs_cg_bf4feb ct state { invalid } drop
+  meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  jump mgmt_guard
+  jump access_forward
+  meta iifname br-lab meta oifname mgmt0 ip daddr @mgmt_src_8743d6 accept
+  meta iifname @ifs_lan_bf4feb meta oifname wan0 accept
+  meta iifname @ifs_cg_bf4feb counter "forward_drop" drop
+  meta oifname @ifs_cg_bf4feb counter "forward_drop" drop
+# chain input
+  ct state { established, related } accept
+  meta iifname lo accept
+  meta iifname != @ifs_test_bf4feb ip saddr @mgmt_src_8743d6 tcp dport { 22, 443 } counter "anti_lockout" last accept
+  tcp dport 443 counter "input_drop" drop
+  jump access_input
+  meta iifname @ifs_test_bf4feb ip protocol icmp icmp type echo-request accept
+  meta iifname @ifs_test_bf4feb udp dport 67 accept
+  meta iifname @ifs_test_bf4feb udp dport 53 accept
+  meta iifname @ifs_test_bf4feb tcp dport 53 accept
+  meta iifname @ifs_test_bf4feb counter "input_drop" drop
+# chain mgmt_guard
+  meta iifname br-lab meta oifname mgmt0 ip daddr @mgmt_src_8743d6 return
+  meta iifname @ifs_test_bf4feb ip daddr @mgmt_src_8743d6 counter "forward_drop" drop
+  meta iifname @ifs_test_bf4feb meta oifname mgmt0 counter "forward_drop" drop
+# chain access_forward
+  ct original ip saddr @classify_nets_8743d6 counter "rule_add048cda1" last accept
+# chain access_input
+  ct original ip saddr @classify_nets_8743d6 counter "rule_add048cda1" last accept

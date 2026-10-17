@@ -285,14 +285,15 @@ func TestAReorderedLookupChainIsNotTheLookupChain(t *testing.T) {
 
 // Every classification element goes to its chain with a goto: a jump comes back to the NEXT RULE of
 // the calling chain, so the next level's entry would overwrite the id (proven on the kernel: both
-// ids counted the same packets). The transaction must contain no jump at all.
+// ids counted the same packets). The transaction must contain no jump but the forward chain's jump to
+// the management guard, which is no classification element.
 func TestClassificationElementsGotoTheirChainAndNeverJump(t *testing.T) {
 	for name, tg := range faultScenarios(t) {
 		tx, err := tg.Nft.Transaction(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := string(tx)
+		s := strings.ReplaceAll(string(tx), `{"jump":{"target":"`+MgmtGuardChain+`"}}`, "")
 		if strings.Contains(s, `"jump"`) {
 			t.Errorf("%s: the transaction has a jump", name)
 		}

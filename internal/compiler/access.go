@@ -51,7 +51,7 @@ const (
 	AccessInputChain   = "access_input"
 	CutForwardChain    = "cut_forward"
 	CutInputChain      = "cut_input"
-	// MgmtGuardChain is the two-port guard (plan §2.16): in front of the jump to the access rules.
+	// MgmtGuardChain is the management guard (plan §2.16): in front of the jump to the access rules.
 	MgmtGuardChain = "mgmt_guard"
 	// AntiLockoutCounter counts the packets the anti-lockout rule lets in.
 	AntiLockoutCounter = "anti_lockout"

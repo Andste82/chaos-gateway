@@ -263,7 +263,7 @@ func describeAccess(tg *Target) string {
 	for _, s := range sets {
 		fmt.Fprintf(&b, "set %s { %s }\n", s.Name, strings.Join(s.Elements, ", "))
 	}
-	for _, name := range []string{"forward", "input", AccessForwardChain, AccessInputChain, CutForwardChain, CutInputChain} {
+	for _, name := range []string{"forward", "input", MgmtGuardChain, AccessForwardChain, AccessInputChain, CutForwardChain, CutInputChain} {
 		if !hasChain(tg, name) {
 			continue
 		}

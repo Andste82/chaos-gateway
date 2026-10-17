@@ -15,6 +15,7 @@ set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
   meta oifname @ifs_cg_bf4feb ct state { invalid } drop
   meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
   meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  jump mgmt_guard
   jump access_forward
   meta iifname @ifs_lan_bf4feb meta oifname wan0 accept
   meta iifname @ifs_cg_bf4feb counter "forward_drop" drop
@@ -30,6 +31,9 @@ set asrc_bd595b570adb51b350ea4de6_8743d6 { 10.10.0.42 }
   meta iifname @ifs_test_bf4feb udp dport 53 accept
   meta iifname @ifs_test_bf4feb tcp dport 53 accept
   meta iifname @ifs_test_bf4feb counter "input_drop" drop
+# chain mgmt_guard
+  meta iifname @ifs_test_bf4feb ip daddr @mgmt_src_8743d6 counter "forward_drop" drop
+  meta iifname @ifs_test_bf4feb meta oifname mgmt0 counter "forward_drop" drop
 # chain access_forward
   ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto udp ct original proto-dst 6 counter "rule_8e9ca98e27" last reject with icmpx admin-prohibited
   ct original ip saddr @classify_nets_8743d6 meta l4proto tcp ct original proto-dst 1 counter "rule_add048cda1" last reject with icmpx port-unreachable

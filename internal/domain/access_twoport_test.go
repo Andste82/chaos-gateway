@@ -2,6 +2,7 @@ package domain
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,9 +10,10 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// With the management network behind the uplink interface the guard stands in front of the access
-// rules: an allow rule for everything does not open it for a device under test, an explicit matrix
-// entry does (P2-M9-11, decided on 2026-10-11).
+// The management guard stands in front of the access rules: an allow rule for everything does not open
+// the management network for a device under test, an explicit matrix entry does. Behind the uplink
+// since P2-M9-11 (decided on 2026-10-11), behind a management interface of its own since P31-M35a-10
+// (decided on 2026-10-17).
 func TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink(t *testing.T) {
 	everything := "a1000000-0000-4000-8000-000000000001"
 	allow := func(c *model.Configuration) {
@@ -34,8 +36,9 @@ func TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink(t *testing.T) {
 		if got := decide(w, src, "192.168.56.9", true); got.Verdict != "drop" || got.Layer != AccessMatrix || got.Rule != "" {
 			t.Errorf("%s: %+v", src, got)
 		}
-		// with a management interface of its own the allow rule is an exception to the matrix, as before
-		if got := decide(w, src, "192.168.56.9", false); got.Verdict != "allow" || got.Rule != everything {
+		// with a management interface of its own the guard stands in front of the rules too
+		// (P31-M35a-10, decided on 2026-10-17)
+		if got := decide(w, src, "192.168.56.9", false); got.Verdict != "drop" || got.Layer != AccessMatrix || got.Rule != "" || strings.Contains(got.Reason, "uplink") {
 			t.Errorf("%s, three ports: %+v", src, got)
 		}
 		// the rule still decides everything else
@@ -52,10 +55,24 @@ func TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink(t *testing.T) {
 		entries := append(deref(c.AccessMatrix.Entries), model.MatrixEntry{From: model.MatrixEndpoint{Network: &iotID}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow})
 		c.AccessMatrix.Entries = &entries
 	})
-	if got := decide(w, "10.10.0.5", "192.168.56.9", true); got.Verdict != "allow" || got.Rule != everything {
-		t.Errorf("IoT with an entry: %+v", got)
+	for _, twoPort := range []bool{true, false} {
+		if got := decide(w, "10.10.0.5", "192.168.56.9", twoPort); got.Verdict != "allow" || got.Rule != everything {
+			t.Errorf("IoT with an entry (two ports %v): %+v", twoPort, got)
+		}
+		if got := decide(w, "10.99.0.2", "192.168.56.9", twoPort); got.Verdict != "drop" || got.Layer != AccessMatrix {
+			t.Errorf("the hub's client has no entry (two ports %v): %+v", twoPort, got)
+		}
 	}
-	if got := decide(w, "10.99.0.2", "192.168.56.9", true); got.Verdict != "drop" || got.Layer != AccessMatrix {
-		t.Errorf("the hub's client has no entry: %+v", got)
+	// a deny entry opens nothing
+	w = accessWorld(t, func(c *model.Configuration) {
+		allow(c)
+		idx, _ := BuildIndex(c)
+		iotID, _ := idx.Resolve(KindNetwork, "IoT")
+		m := model.MatrixEndpointManagement(true)
+		entries := append(deref(c.AccessMatrix.Entries), model.MatrixEntry{From: model.MatrixEndpoint{Network: &iotID}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyDeny})
+		c.AccessMatrix.Entries = &entries
+	})
+	if got := decide(w, "10.10.0.5", "192.168.56.9", false); got.Verdict != "drop" || got.Rule != "" {
+		t.Errorf("IoT with a deny entry: %+v", got)
 	}
 }

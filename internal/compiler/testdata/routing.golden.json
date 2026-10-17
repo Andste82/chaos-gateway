@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "c2e62b6d26e75136",
+  "hash": "c0439fa1b98ccda2",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -875,6 +875,16 @@
           {
             "expr": [
               {
+                "jump": {
+                  "target": "mgmt_guard"
+                }
+              }
+            ],
+            "comment": "6c9925fa09d4"
+          },
+          {
+            "expr": [
+              {
                 "match": {
                   "left": {
                     "meta": {
@@ -1407,6 +1417,78 @@
               }
             ],
             "comment": "3fb664d93e2f"
+          }
+        ]
+      },
+      {
+        "name": "mgmt_guard",
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "payload": {
+                      "field": "daddr",
+                      "protocol": "ip"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@mgmt_src_8743d6"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "5dc4063108d6"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "mgmt0"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "9cdec773a65a"
           }
         ]
       },

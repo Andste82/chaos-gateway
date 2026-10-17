@@ -234,22 +234,40 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		newRule(iifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 		newRule(oifSet(ifsCG.Name), eq(meta("nfproto"), "ipv6"), counter("ipv6_drop"), verdict("drop")),
 	)
-	var mgmtGuard *Chain
 	explicit, implicit, mgmtOpen := t.matrixRules(cfg, tp, mgmtSrc.Name)
 	uplink := t.Uplink.Name
-	twoPort := uplink != "" && t.Management.Name == uplink
-	if twoPort {
-		// two-port topology: the management network lies behind the uplink interface. Devices under
-		// test cannot reach it (plan §2.16). The guard stands in front of the access rules, as the
-		// anti-lockout rule does for the control plane: no rule, an allow rule included, opens the
-		// management network for them. Only an explicit matrix entry that allows the traffic does: it
-		// returns from the guard chain (the matrix entries stay where they were, behind the rules).
-		guard := Chain{Name: MgmtGuardChain}
-		guard.Rules = append(guard.Rules, mgmtOpen...)
-		guard.Rules = append(guard.Rules, newRule(iifSet(ifsTest.Name), oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name)), counter("forward_drop"), verdict("drop")))
-		mgmtGuard = &guard
-		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": MgmtGuardChain}}))
+	// the management guard (plan §2.16): devices under test (a packet that comes in on a test
+	// interface: a local test network or a WireGuard network of the role test) do not open a
+	// connection into the management network. The guard stands in front of the access rules, as the
+	// anti-lockout rule does for the control plane: no rule, an allow rule included, opens the
+	// management network for them. Only an explicit matrix entry that allows the traffic does: it
+	// returns from the guard chain (the matrix entries stay where they were, behind the rules). The
+	// replies, of a forward from the management side too, are accepted before it (established).
+	guard := Chain{Name: MgmtGuardChain}
+	guard.Rules = append(guard.Rules, mgmtOpen...)
+	drop := func(m ...any) Rule {
+		return newRule(append(append([]any{iifSet(ifsTest.Name)}, m...), counter("forward_drop"), verdict("drop"))...)
 	}
+	if twoPort := uplink != "" && t.Management.Name == uplink; twoPort {
+		// two-port topology: the management network lies behind the uplink interface, told apart
+		// from the uplink by its addresses
+		guard.Rules = append(guard.Rules, drop(oifname(uplink), eq(payload("ip", "daddr"), setRef(mgmtSrc.Name))))
+	} else {
+		// three-port topology: the policy table 100 has no route to the management network, but routing
+		// alone does not keep a device out (P31-M35a-10, decided on 2026-10-17): without its default
+		// (the uplink lost its address) a packet falls through to the main table, which knows the
+		// management subnet, and a router behind the uplink may know it too. So the guard drops by the
+		// destination, whatever interface it leaves through, and anything that leaves through the
+		// management interface.
+		guard.Rules = append(guard.Rules, drop(eq(payload("ip", "daddr"), setRef(mgmtSrc.Name))))
+		if sub := t.Management.Subnet; sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
+			guard.Rules = append(guard.Rules, drop(eq(payload("ip", "daddr"), prefixValue(sub))))
+		}
+		if t.Management.Name != "" {
+			guard.Rules = append(guard.Rules, drop(oifname(t.Management.Name)))
+		}
+	}
+	forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": MgmtGuardChain}}))
 	// the access rules stand in front of the access matrix: an allow rule is an exception to it, a
 	// drop, reject or reset rule decides before the matrix is asked (plan §2.2, §2.4)
 	if t.Access != nil {
@@ -287,10 +305,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 		post.Rules = append(post.Rules, *r)
 	}
 	sort.Strings(t.Nft.Counters)
-	t.Nft.Chains = []Chain{forward, input, post}
-	if mgmtGuard != nil {
-		t.Nft.Chains = append(t.Nft.Chains, *mgmtGuard)
-	}
+	t.Nft.Chains = []Chain{forward, input, post, guard}
 	if t.Access != nil {
 		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain), t.Access.chain(AccessInputChain))
 		if t.Access.HasCuts() {
@@ -366,13 +381,23 @@ func shortID(id string) string {
 	return string(out)
 }
 
+// coveredBy reports whether one of ps contains all of p.
+func coveredBy(p netip.Prefix, ps []netip.Prefix) bool {
+	for _, q := range ps {
+		if q.Bits() <= p.Bits() && q.Contains(p.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
 func prefixValue(p netip.Prefix) any {
 	return map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
 }
 
 // matrixRules turns the access matrix into forward rules: the explicit entries first, then the
 // implicit allows of the clients' `reachable` lists. mgmtOpen are the explicit entries that allow
-// traffic to the management network, as rules that return from the two-port guard. Networks (bridges and WireGuard interfaces),
+// traffic to the management network, as rules that return from the management guard. Networks (bridges and WireGuard interfaces),
 // single WireGuard clients with the networks behind them, the uplink and the management network are
 // endpoints. The more specific endpoint comes first: a client before a network, the management
 // network (told apart from the uplink by its addresses) before the uplink.

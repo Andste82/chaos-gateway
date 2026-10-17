@@ -4036,8 +4036,8 @@ not run on this branch with the M14 flow yet.
 Phase 3.1, pulled forward ahead of Phase 4 (plan D34): a device in a local test network is reachable
 from behind the uplink or, in the three-port topology, from the management network, through a DNAT
 on the entry side's address. The access rules decide forwarded connections with the device as
-responder; faults do not apply to them before M35b. Decisions left to the maintainer are
-P31-M35a-01 to -04 and -06 to -08 in `docs/open-items.md`, each with the option that is implemented;
+responder; faults do not apply to them before M35b. Its open items in `docs/open-items.md` are closed: P31-M35a-01 to -04 and -06 to -08 as implemented
+(decided on 2026-10-17 by best practice; the explain card's source choice moves to M26), and
 P31-M35a-05, -09 and -10 (the routing of management-side replies and the forward's counter) were
 decided on 2026-10-17 and are implemented as described below.
 

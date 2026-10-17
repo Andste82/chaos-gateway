@@ -4313,4 +4313,9 @@ the testbed tests directly in 12 s.
   `docker login ghcr.io` with a token that has `read:packages`.
 - The workflow needs no secret: it logs in with the job's `GITHUB_TOKEN`.
 
+For a host without the registry, `make image-local` builds the image for the machine's own architecture with
+the version build arguments, loads it and tags it `chaos-gateway:latest` (what the compose files use) and
+`chaos-gateway:$(VERSION)`; `make image` is the multi-arch build without a local image (issue #57 F7,
+`TestMakeImageLocalBuildsAVersionedLocalImage` checks the command `make -n` prints).
+
 The image holds `chaosgw` and `chaosctl` only until M28 adds the rest.

@@ -19,7 +19,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
-- **Phase 3.1** (M35a): implemented on the branch `phase-3-1-port-forwarding`, PR pending, not yet audited. What the
+- **Phase 3.1** (M35a): done on the branch `phase-3-1-port-forwarding` (PR #68, CI run 38991357139 green), reviewed, not yet audited. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
   P31-M35a-01 to P31-M35a-10, each open for the maintainer's decision with the option that was implemented.
 
@@ -1449,7 +1449,7 @@ plan:
 
 ## Phase 3.1 open items
 
-Phase 3.1 (M35a, port forwarding) is being implemented on the branch `phase-3-1-port-forwarding`. The items below were found
+Phase 3.1 (M35a, port forwarding) is implemented on the branch `phase-3-1-port-forwarding` (PR #68). The items below were found
 while implementing it; each records the option that was implemented so the work was not blocked, and what the maintainer may
 want to decide.
 

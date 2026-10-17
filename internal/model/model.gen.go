@@ -6369,6 +6369,36 @@ type Uplink struct {
 	Interface InterfaceRef `json:"interface"`
 }
 
+// UplinkTraffic defines model for UplinkTraffic.
+type UplinkTraffic struct {
+	// Counters The last reading found the uplink interface's byte counters (false - no uplink interface, or it reports none).
+	Counters bool `json:"counters"`
+
+	// Interface The uplink interface of the last reading.
+	Interface *string `json:"interface,omitempty"`
+
+	// IntervalSeconds How often the uplink's counters are read.
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// PeriodSeconds How long a sample is kept.
+	PeriodSeconds int `json:"period_seconds"`
+
+	// Samples Oldest first.
+	Samples []UplinkTrafficSample `json:"samples"`
+}
+
+// UplinkTrafficSample defines model for UplinkTrafficSample.
+type UplinkTrafficSample struct {
+	// DownBps Bits per second the uplink interface received in the interval.
+	DownBps float64 `json:"down_bps"`
+
+	// Time When the reading that ends the interval was taken (millisecond precision).
+	Time time.Time `json:"time"`
+
+	// UpBps Bits per second the uplink interface sent in the interval.
+	UpBps float64 `json:"up_bps"`
+}
+
 // UplinkView defines model for UplinkView.
 type UplinkView struct {
 	// Config The OS configures the uplink (D3); Chaos Gateway only selects it.
@@ -6383,7 +6413,7 @@ type UplinkView struct {
 		Interface  *string        `json:"interface,omitempty"`
 		LinkUp     *bool          `json:"link_up,omitempty"`
 
-		// RxBytes Bytes the uplink interface received since it came up (the kernel's interface counter); the UI's traffic chart is the difference of two readings.
+		// RxBytes Bytes the uplink interface received since it came up (the kernel's interface counter); `GET /uplink/traffic` has the rates the gateway derives from it.
 		RxBytes   *int64 `json:"rx_bytes,omitempty"`
 		SpeedMbps *int   `json:"speed_mbps,omitempty"`
 
@@ -7014,6 +7044,12 @@ type ListHostInterfacesParams struct {
 type GetUplinkParams struct {
 	// Revision Read a candidate or older revision instead of the active one.
 	Revision *RevisionQuery `form:"revision,omitempty" json:"revision,omitempty"`
+}
+
+// GetUplinkTrafficParams defines parameters for GetUplinkTraffic.
+type GetUplinkTrafficParams struct {
+	// Since Only the samples taken after this time (exclusive). Default - all samples kept.
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
 }
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.

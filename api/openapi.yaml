@@ -797,6 +797,32 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/UplinkView'}
         default: {$ref: '#/components/responses/Problem'}
+  /uplink/traffic:
+    get:
+      tags: [config]
+      operationId: getUplinkTraffic
+      summary: The uplink's download and upload rates of the last minutes, as the gateway sampled them
+      description: |
+        The API reads the uplink interface's byte counters every `interval_seconds` and keeps the rates
+        between two readings for `period_seconds` (default 10 minutes, the overview's chart, plan §2.17) in
+        memory: after a restart of the API the history starts empty. A reading that finds a counter lower
+        than the one before (the interface was re-created) or another uplink interface gives no rate for
+        that interval. A client loads the whole history once and then asks with `since` for the samples
+        taken after the newest one it has.
+      x-milestone: M12
+      x-required-scope: read
+      parameters:
+        - name: since
+          in: query
+          description: Only the samples taken after this time (exclusive). Default - all samples kept.
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Uplink traffic history
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UplinkTraffic'}
+        default: {$ref: '#/components/responses/Problem'}
   /networks:
     get:
       tags: [config]
@@ -4547,11 +4573,47 @@ components:
             rx_bytes:
               type: integer
               format: int64
-              description: Bytes the uplink interface received since it came up (the kernel's interface counter); the UI's traffic chart is the difference of two readings.
+              description: Bytes the uplink interface received since it came up (the kernel's interface counter); `GET /uplink/traffic` has the rates the gateway derives from it.
             tx_bytes:
               type: integer
               format: int64
               description: Bytes the uplink interface sent since it came up.
+    UplinkTraffic:
+      type: object
+      required: [interval_seconds, period_seconds, counters, samples]
+      properties:
+        interval_seconds:
+          type: integer
+          description: How often the uplink's counters are read.
+        period_seconds:
+          type: integer
+          description: How long a sample is kept.
+        interface:
+          type: string
+          description: The uplink interface of the last reading.
+        counters:
+          type: boolean
+          description: The last reading found the uplink interface's byte counters (false - no uplink interface, or it reports none).
+        samples:
+          type: array
+          description: Oldest first.
+          items: {$ref: '#/components/schemas/UplinkTrafficSample'}
+    UplinkTrafficSample:
+      type: object
+      required: [time, down_bps, up_bps]
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: When the reading that ends the interval was taken (millisecond precision).
+        down_bps:
+          type: number
+          format: double
+          description: Bits per second the uplink interface received in the interval.
+        up_bps:
+          type: number
+          format: double
+          description: Bits per second the uplink interface sent in the interval.
     NetworkView:
       type: object
       required: [id, config, status]

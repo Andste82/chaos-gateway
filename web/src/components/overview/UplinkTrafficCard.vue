@@ -1,32 +1,32 @@
 <script setup lang="ts">
 // Uplink traffic of the last 10 minutes (plan §2.17, Overview), drawn with uPlot (plan §3.7) from
-// the rates between readings of the uplink's byte counters.
+// the rates the gateway samples from the uplink's byte counters (GET /uplink/traffic, issue #63): its
+// history at once, then every interval the samples after the newest one the chart has.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useQuery } from '@tanstack/vue-query';
 import uPlot from 'uplot';
-import { useGetUplink } from '../../api/generated/hooks/config/config';
+import { getGetUplinkTrafficQueryKey, getUplinkTraffic } from '../../api/generated/hooks/config/config';
 import { formatBitRate, formatHM } from '../../lib/format';
 import { firstError } from '../../composables/gateway';
 import LoadError from '../ui/LoadError.vue';
 import { chartRange, useTrafficStore } from '../../stores/traffic';
 import SectionCard from '../ui/SectionCard.vue';
 
-const uplink = useGetUplink(undefined, { query: { refetchInterval: 5_000 } });
 const traffic = useTrafficStore();
-
-// every fetch is a reading, also one with the same numbers (no traffic): watch the fetch time, not
-// the data, which the query cache keeps as the same object when nothing changed
-watch(
-  () => uplink.dataUpdatedAt.value,
-  (at) => {
-    const s = uplink.data.value?.status;
-    if (s?.rx_bytes !== undefined && s.tx_bytes !== undefined) traffic.record(s.rx_bytes, s.tx_bytes, new Date(at || Date.now()));
+const uplink = useQuery({
+  queryKey: getGetUplinkTrafficQueryKey(),
+  queryFn: async ({ signal }) => {
+    const r = await getUplinkTraffic(traffic.newest ? { since: traffic.newest } : undefined, { signal });
+    traffic.merge(r.samples);
+    return r;
   },
-  { immediate: true },
-);
+  // as often as the gateway reads the counters
+  refetchInterval: (q) => (q.state.data?.interval_seconds ?? 5) * 1000,
+});
 
 /** The uplink could not be read and nothing was read before: the chart must not look like an idle line. */
 const uplinkError = computed(() => firstError(uplink));
-const hasCounters = computed(() => uplink.data.value?.status.rx_bytes !== undefined);
+const hasCounters = computed(() => uplink.data.value?.counters === true);
 const latest = computed(() => traffic.points[traffic.points.length - 1]);
 const summary = computed(() =>
   latest.value
@@ -119,7 +119,14 @@ onUnmounted(() => {
         ↓ {{ formatBitRate(latest?.downBps) }} · ↑ {{ formatBitRate(latest?.upBps) }}
       </div>
       <div class="relative">
-        <div ref="el" role="img" :aria-label="`Uplink throughput. ${summary}`" class="min-h-[160px] w-full" />
+        <div
+          ref="el"
+          role="img"
+          :aria-label="`Uplink throughput. ${summary}`"
+          :data-samples="traffic.points.length"
+          class="min-h-[160px] w-full"
+          data-testid="uplink-chart"
+        />
         <p
           v-if="!latest && !uplinkError"
           class="absolute inset-0 m-0 flex items-center justify-center text-[13px] text-text-2"

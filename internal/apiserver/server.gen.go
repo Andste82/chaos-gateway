@@ -309,6 +309,9 @@ type ServerInterface interface {
 	// GetUplink Uplink selection and its observed address, gateway and resolvers
 	// (GET /uplink)
 	GetUplink(c *gin.Context, params GetUplinkParams)
+	// GetUplinkTraffic The uplink's download and upload rates of the last minutes, as the gateway sampled them
+	// (GET /uplink/traffic)
+	GetUplinkTraffic(c *gin.Context, params GetUplinkTrafficParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -3325,6 +3328,33 @@ func (siw *ServerInterfaceWrapper) GetUplink(c *gin.Context) {
 	siw.Handler.GetUplink(c, params)
 }
 
+// GetUplinkTraffic operation middleware
+func (siw *ServerInterfaceWrapper) GetUplinkTraffic(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetUplinkTrafficParams
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "since", c.Request.URL.Query(), &params.Since, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter since: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetUplinkTraffic(c, params)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -3385,6 +3415,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/revisions/:revisionId/export", wrapper.ExportRevision)
 	router.GET(options.BaseURL+"/explain", wrapper.Explain)
 	router.GET(options.BaseURL+"/uplink", wrapper.GetUplink)
+	router.GET(options.BaseURL+"/uplink/traffic", wrapper.GetUplinkTraffic)
 	router.GET(options.BaseURL+"/networks", wrapper.ListNetworks)
 	router.GET(options.BaseURL+"/networks/:networkId", wrapper.GetNetwork)
 	router.GET(options.BaseURL+"/networks/:networkId/leases", wrapper.ListLeases)
@@ -7587,6 +7618,45 @@ func (response GetUplinkdefaultApplicationProblemPlusJSONResponse) VisitGetUplin
 	return err
 }
 
+type GetUplinkTrafficRequestObject struct {
+	Params GetUplinkTrafficParams
+}
+
+type GetUplinkTrafficResponseObject interface {
+	VisitGetUplinkTrafficResponse(w http.ResponseWriter) error
+}
+
+type GetUplinkTraffic200JSONResponse UplinkTraffic
+
+func (response GetUplinkTraffic200JSONResponse) VisitGetUplinkTrafficResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetUplinkTrafficdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetUplinkTrafficdefaultApplicationProblemPlusJSONResponse) VisitGetUplinkTrafficResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListAudit Audit log, newest first
@@ -7877,6 +7947,9 @@ type StrictServerInterface interface {
 	// GetUplink Uplink selection and its observed address, gateway and resolvers
 	// (GET /uplink)
 	GetUplink(ctx context.Context, request GetUplinkRequestObject) (GetUplinkResponseObject, error)
+	// GetUplinkTraffic The uplink's download and upload rates of the last minutes, as the gateway sampled them
+	// (GET /uplink/traffic)
+	GetUplinkTraffic(ctx context.Context, request GetUplinkTrafficRequestObject) (GetUplinkTrafficResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx *gin.Context, request any) (any, error)
@@ -10524,6 +10597,32 @@ func (sh *strictHandler) GetUplink(ctx *gin.Context, params GetUplinkParams) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(GetUplinkResponseObject); ok {
 		if err := validResponse.VisitGetUplinkResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetUplinkTraffic operation middleware
+func (sh *strictHandler) GetUplinkTraffic(ctx *gin.Context, params GetUplinkTrafficParams) {
+	var request GetUplinkTrafficRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetUplinkTraffic(ctx, request.(GetUplinkTrafficRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetUplinkTraffic")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetUplinkTrafficResponseObject); ok {
+		if err := validResponse.VisitGetUplinkTrafficResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

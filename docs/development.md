@@ -3257,13 +3257,18 @@ destination with the fault badge), which is drawn from those flows (P3-AUDIT-37)
   network: it has a row of its own below the gateway, off the faulted path and without a fault badge, and the gateway
   counts test and management networks apart, P3-AUDIT-38), the active faults (impairing overlays and enabled configured faults:
   target and destination in words, the effect as fault chips, affected packets, the remaining TTL counting down or
-  "configured"), the uplink traffic of the last ten minutes (uPlot; rates from two readings of the uplink's byte counters,
-  which `GET /uplink` reports since M12 as `status.rx_bytes`/`tx_bytes` from `/sys/class/net/<if>/statistics`) and the
+  "configured"), the uplink traffic of the last ten minutes (uPlot; the rates between two readings of the uplink's byte
+  counters from `/sys/class/net/<if>/statistics`, which `GET /uplink` reports as `status.rx_bytes`/`tx_bytes`; since
+  issue #63 the API itself reads them every `--uplink-traffic-interval` (5 s) and keeps the rates in memory for
+  `--uplink-traffic-period` (10 min), a reading of another interface or with a lower counter giving no rate, evicted by
+  the monotonic clock, empty again after a restart of the API; `GET /uplink/traffic` returns that history, the chart
+  loads it at once on a page load or reload and then asks every interval with `since` for the samples after its newest
+  one, so none is missing or drawn twice; the store keeps the points when the user leaves the overview) and the
   recent events (the stream's, before that the audit log's last entries). Every item links to its detail (plan §2.17;
   `src/lib/links.ts`): a fault's target to the device or the network (a group or everything to the faults screen), an
   event to the device, network, overlay (faults) or rule its subject or data names, the topology's networks to their
   detail, the uplink to the networks and the gateway to the Linux view; "No test network" offers "Add a test
-  network". The chart's time axis is the app's 24-hour clock; before the second reading it ends at now (not at the
+  network". The chart's time axis is the app's 24-hour clock; before the gateway's first sample it ends at now (not at the
   epoch) and says "Collecting the first readings…" visibly, and it is drawn again once the Plex Mono font is loaded.
 - **Devices.** All devices with name, IP, MAC, network, traffic rates, the winning faults as chips (a `normal` profile is
   not one; `DeviceView.effective`, drawn from the overlay or configured fault it names in the overview's compact form,

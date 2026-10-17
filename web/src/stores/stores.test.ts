@@ -153,20 +153,26 @@ describe('traffic chart range', () => {
 });
 
 describe('traffic store', () => {
-  it('turns counter readings into bit rates over the last ten minutes', () => {
+  // issue #63: the gateway's history at once, then the newer samples appended without a duplicate
+  it('appends the gateway samples newer than its newest point, over the last ten minutes', () => {
     const t = useTrafficStore();
-    const t0 = new Date(2026, 0, 1, 12, 0, 0).getTime();
-    t.record(1000, 500, new Date(t0));
-    expect(t.points).toEqual([]); // one reading is no rate
-    t.record(1000 + 125_000, 500 + 12_500, new Date(t0 + 5000));
-    expect(t.points).toEqual([{ t: (t0 + 5000) / 1000, downBps: 200_000, upBps: 20_000 }]);
-    // a reset counter gives no (negative) rate for its interval
-    t.record(10, 10, new Date(t0 + 10_000));
-    expect(t.points).toHaveLength(1);
-    t.record(10 + 1000, 10, new Date(t0 + 11_000));
-    expect(t.points.at(-1)?.downBps).toBe(8000);
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const s = (ms: number, down: number) => ({ time: new Date(t0 + ms).toISOString(), down_bps: down, up_bps: down / 10 });
+    t.merge([s(0, 1000), s(5000, 2000)]);
+    expect(t.points).toEqual([
+      { t: t0 / 1000, downBps: 1000, upBps: 100 },
+      { t: (t0 + 5000) / 1000, downBps: 2000, upBps: 200 },
+    ]);
+    expect(t.newest).toBe(new Date(t0 + 5000).toISOString());
+    // an answer that repeats the newest sample (or an empty one) adds nothing twice
+    t.merge([s(5000, 2000), s(10_000, 3000)]);
+    t.merge([]);
+    expect(t.points.map((p) => p.downBps)).toEqual([1000, 2000, 3000]);
+    expect(t.newest).toBe(new Date(t0 + 10_000).toISOString());
     // points older than the window drop out
-    t.record(2000, 20, new Date(t0 + 11_000 + 601_000));
-    expect(t.points).toHaveLength(1);
+    t.merge([s(604_000, 4000)]);
+    expect(t.points.map((p) => p.downBps)).toEqual([2000, 3000, 4000]);
+    t.merge([s(609_000, 5000)]);
+    expect(t.points.map((p) => p.downBps)).toEqual([3000, 4000, 5000]);
   });
 });

@@ -443,8 +443,9 @@ func TestThePreviewNotesTheFaultsThatDoNotApplyToAForward(t *testing.T) {
 
 // A device that moved to a new address keeps its old one while a connection of its own still comes from
 // it (a stale neighbor entry, the address it had before); the forward sends to the new address all the
-// same, also when the old one sorts lower. Of two leases the newer one wins, and a reservation counts
-// less than a lease the device has.
+// same, also when the old one sorts lower. Of two leases the newer one wins, of two confirmed neighbor
+// entries the one seen later (the old one stays REACHABLE for a while after a move), and a reservation
+// counts less than a lease the device has.
 func TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn(t *testing.T) {
 	w, f := forwardWorld(t, nil)
 	cfg := stored(t) // esp32-42: reservation 10.10.0.42
@@ -466,6 +467,12 @@ func TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn(t *tes
 			Neighbors:     []Neighbor{{IP: ip("10.10.0.11"), MAC: espMAC, Stale: true}},
 			ActiveSources: map[netip.Addr]bool{ip("10.10.0.11"): true},
 		}, nil, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.42"), ip("10.10.0.11")}},
+		"two confirmed neighbor entries": {Observed{
+			Neighbors: []Neighbor{
+				{IP: ip("10.10.0.11"), MAC: espMAC, Seen: time.Unix(100, 0)},
+				{IP: ip("10.10.0.61"), MAC: espMAC, Seen: time.Unix(105, 0)},
+			},
+		}, nil, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.11"), ip("10.10.0.42")}},
 		"two leases": {Observed{
 			Leases: []model.DhcpLease{lease("10.10.0.11", espMAC, time.Hour), lease("10.10.0.61", espMAC, 2*time.Hour)},
 		}, nil, []netip.Addr{ip("10.10.0.61"), ip("10.10.0.11"), ip("10.10.0.42")}},

@@ -22,6 +22,10 @@ type Neighbor struct {
 	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, FAILED). It
 	// only counts while the address still carries connections.
 	Stale bool
+	// Seen is when the engine first saw the address with this MAC: of two confirmed entries of a
+	// device, the one seen later is its more current address (a device that moved keeps its old
+	// entry REACHABLE for a while). Zero when unknown.
+	Seen time.Time
 }
 
 // ProbeObservation is what is known about a probe: the MAC of its veth and its addresses.
@@ -80,7 +84,7 @@ type Identity struct {
 	// Addresses are the current addresses of each device of the device namespace, sorted.
 	Addresses map[string][]netip.Addr
 	// Current are the same addresses, the most current claim first: an explicit address, then leases
-	// (the newest first), what the neighbor table confirms, a reservation, and last an address that
+	// (the newest first), what the neighbor table confirms (the entry seen last first), a reservation, and last an address that
 	// stays mapped only because it still carries connections (a stale neighbor entry, an address the
 	// device had before). A forward sends its connections to the first one (ForwardStatus).
 	Current map[string][]netip.Addr
@@ -125,6 +129,8 @@ type claim struct {
 	// lingering marks a claim that only stands because the address still carries connections (a
 	// stale neighbor entry): it decides the owner like any neighbor claim, but is the least current.
 	lingering bool
+	// seen is when the neighbor entry behind a neighbor claim was first seen (Neighbor.Seen).
+	seen time.Time
 }
 
 // current reports whether the claim says more about the device's address now than o does
@@ -132,6 +138,9 @@ type claim struct {
 func (c claim) current(o claim) bool {
 	if c.lingering != o.lingering {
 		return !c.lingering
+	}
+	if c.strength == claimNeighbor && o.strength == claimNeighbor && !c.seen.Equal(o.seen) {
+		return c.seen.After(o.seen)
 	}
 	return c.beats(o)
 }
@@ -226,7 +235,7 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			continue // an old entry says nothing about who has the address now
 		}
 		if dev, ok := macs[lower(n.MAC)]; ok {
-			add(n.IP, claim{device: dev, strength: claimNeighbor, lingering: n.Stale})
+			add(n.IP, claim{device: dev, strength: claimNeighbor, lingering: n.Stale, seen: n.Seen})
 		}
 	}
 	for _, id := range sortedKeys(obs.Probes) {

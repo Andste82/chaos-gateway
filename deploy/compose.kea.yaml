@@ -4,8 +4,10 @@
 # its control socket directory to the API's group at start). It runs as root without any other
 # capability; its root file system is read-only. The API container configures it through the control
 # socket (`config-set`) and gets the lease events from Kea's run_script hook (`chaosgw-kea-hook`),
-# which posts them over the datagram socket the API serves in the shared chaosgw-kea-run volume
-# (M6a-09; HTTP with the service token is the fallback when that socket is unavailable).
+# which posts them over the datagram socket the API serves in the chaosgw-kea-events volume (M6a-09;
+# HTTP with the service token is the fallback when that socket is unavailable). That volume is the
+# API's (Kea keeps its control socket directory at 0750, too closed for the API to create a socket in
+# it, issue #57 F3); Kea mounts it read-only, which is enough to send to a socket.
 services:
   kea:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
@@ -20,6 +22,11 @@ services:
     volumes:
       # the control socket, shared with the API container
       - chaosgw-kea-run:/run/kea
+      # the API's datagram socket of the lease events: sending needs no write access to the mount
+      - type: volume
+        source: chaosgw-kea-events
+        target: /run/chaosgw-kea-events
+        read_only: true
       # the leases and the configuration Kea was started with
       - chaosgw-kea-state:/var/lib/kea
       # the service token and the API's certificate the hook reads: nothing else of the secrets volume
@@ -34,7 +41,7 @@ services:
       CHAOSGW_API_CERT: /var/lib/chaosgw/service/api.pem
       # the hook posts over this datagram socket instead of HTTP when it is available (M6a-09);
       # HTTP (CHAOSGW_API above) stays the fallback
-      CHAOSGW_KEA_EVENTS_SOCKET: /run/kea/chaosgw-events.sock
+      CHAOSGW_KEA_EVENTS_SOCKET: /run/chaosgw-kea-events/events.sock
     restart: unless-stopped
     stop_grace_period: 10s
     logging:
@@ -45,5 +52,6 @@ services:
 
 volumes:
   chaosgw-kea-run:
+  chaosgw-kea-events:
   chaosgw-kea-state:
   chaosgw-service:

@@ -63,7 +63,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	holderPID := fs.String("service-holder-pid-file", "", "file with the PID (as the executor sees it) of the process whose network namespace becomes the service namespace")
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
-	keaEventsSocket := fs.String("kea-events-socket", "/run/kea/chaosgw-events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
+	keaEventsSocket := fs.String("kea-events-socket", "/run/chaosgw-kea-events/events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
 	if err := fs.Parse(args); err != nil {

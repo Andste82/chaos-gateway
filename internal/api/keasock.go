@@ -30,9 +30,9 @@ func (s *Server) ListenKeaEvents(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	// group-writable so the Kea container (a different uid, sharing the volume) can post to it;
-	// the directory it lives in is the service token's, already restricted to the containers that
-	// need it (M6a-21)
+	// group-writable so the Kea container (a different uid in this user's group, which mounts the
+	// directory read-only) can post to it; the directory is this user's, open to its group for search
+	// only (deploy/Dockerfile, issue #57 F3)
 	_ = os.Chmod(path, 0o660)
 	context.AfterFunc(ctx, func() { _ = conn.Close() })
 	buf := make([]byte, maxKeaDatagram)

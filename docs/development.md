@@ -931,8 +931,13 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   requests at once. The generation rule in the kernel keeps naming the last full apply.
 - **Lease events.** Kea's `run_script` hook starts `chaosgw-kea-hook`, which runs `chaosgw kea-hook`: it
   writes the event as one JSON datagram to the Unix socket the API serves at `--kea-events-socket`
-  (`CHAOSGW_KEA_EVENTS_SOCKET`, default `/run/kea/chaosgw-events.sock` in the shared `chaosgw-kea-run`
-  volume, M6a-09) — no connection, no TLS handshake, so a DHCP flood from an untrusted device costs the
+  (`CHAOSGW_KEA_EVENTS_SOCKET`, default `/run/chaosgw-kea-events/events.sock`, M6a-09). The directory
+  is the volume `chaosgw-kea-events`, owned by the API's user (65532, mode 0750, made so in
+  `deploy/Dockerfile`); the Kea container (group 65532) mounts it read-only, which is enough to send to
+  the socket. It used to be Kea's control socket directory, which Kea keeps at `root:65532` 0750, so the
+  API could not create the socket there (issue #57 F3); the CI job `image` sends a datagram from a
+  container with the read-only mount, the Kea container's user and no capability to a socket of user
+  65532 on a fresh volume. A datagram needs no connection and no TLS handshake, so a DHCP flood from an untrusted device costs the
   hook a `write(2)` and the API a few bytes, not a forked process and a handshake each. The kernel
   drops a datagram rather than blocking the hook if the API is slow or the socket's buffer is full.
   When the socket is missing or the write fails for any reason, the hook falls back to

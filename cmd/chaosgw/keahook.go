@@ -31,7 +31,7 @@ func runKeaHook(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw kea-hook: %v\n", err)
 		return 1
 	}
-	eventsSocket := envOr("CHAOSGW_KEA_EVENTS_SOCKET", "/run/kea/chaosgw-events.sock")
+	eventsSocket := envOr("CHAOSGW_KEA_EVENTS_SOCKET", "/run/chaosgw-kea-events/events.sock")
 	var client *http.Client
 	api, token := "", ""
 	status := 0

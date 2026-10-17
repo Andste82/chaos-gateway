@@ -219,8 +219,12 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 8 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
+	if len(s.Volumes) != 9 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the Kea events socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
+	}
+	// issue #57 F3: the API creates the Kea events socket in a directory of its own, and the Kea hook sends to it there
+	if !containsPair(s.Command, "--kea-events-socket", keaEventsSocket) {
+		t.Errorf("the API does not serve the Kea events socket at %s: %v", keaEventsSocket, s.Command)
 	}
 	if len(s.Healthcheck.Test) < 4 || s.Healthcheck.Test[1] != "chaosgw" || !contains(s.Healthcheck.Test, "--health") {
 		t.Errorf("health check: %v", s.Healthcheck.Test)
@@ -285,9 +289,10 @@ func TestKeaContainerHardeningProfile(t *testing.T) {
 	if s.User != "0:65532" {
 		t.Errorf("user %q", s.User)
 	}
-	if len(s.Volumes) != 3 {
+	if len(s.Volumes) != 4 {
 		t.Errorf("volumes %d", len(s.Volumes))
 	}
+	readOnly := map[string]bool{}
 	for _, v := range s.Volumes {
 		if v.Kind == yaml.MappingNode {
 			var m struct {
@@ -297,12 +302,31 @@ func TestKeaContainerHardeningProfile(t *testing.T) {
 			if err := v.Decode(&m); err != nil {
 				t.Fatal(err)
 			}
-			if m.Target == "/var/lib/chaosgw/service" && !m.ReadOnly {
-				t.Error("Kea only reads the service token")
-			}
+			readOnly[m.Target] = m.ReadOnly
 		}
 	}
+	if !readOnly["/var/lib/chaosgw/service"] {
+		t.Error("Kea only reads the service token")
+	}
+	// issue #57 F3: the directory of the events socket is the API's; Kea only sends to the socket
+	if !readOnly[filepath.Dir(keaEventsSocket)] {
+		t.Errorf("Kea mounts the API's directory of the events socket (%s) read-only", filepath.Dir(keaEventsSocket))
+	}
+	var env struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Services["kea"].Environment["CHAOSGW_KEA_EVENTS_SOCKET"]; got != keaEventsSocket {
+		t.Errorf("the hook sends the lease events to %q, the API serves them at %s", got, keaEventsSocket)
+	}
 }
+
+// keaEventsSocket is where the API serves the Kea events socket and the hook sends to (issue #57 F3).
+const keaEventsSocket = "/run/chaosgw-kea-events/events.sock"
 
 // The holder of the service namespace has no network, no capability and no privilege; the DNS proxy
 // joins its namespace with the one capability that port 53 needs and mounts the service token
@@ -409,8 +433,8 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 			writable = append(writable, target)
 		}
 	}
-	if len(writable) != 4 {
-		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log and the service token", writable)
+	if len(writable) != 5 {
+		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the service token and the Kea events socket", writable)
 	}
 
 	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")
@@ -436,6 +460,10 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 	}
 	if !strings.Contains(string(dockerfile), "chmod 0700 /var/lib/chaosgw/secrets") {
 		t.Error("deploy/Dockerfile does not keep the secrets directory 0700")
+	}
+	// the Kea container (group 65532) searches the directory of the events socket, and nobody else
+	if !strings.Contains(string(dockerfile), "chmod 0750 "+filepath.Dir(keaEventsSocket)) {
+		t.Errorf("deploy/Dockerfile does not make %s 0750", filepath.Dir(keaEventsSocket))
 	}
 }
 

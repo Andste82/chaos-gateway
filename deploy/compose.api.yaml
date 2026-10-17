@@ -11,7 +11,7 @@
 services:
   api:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/kea/chaosgw-events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid"]
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid"]
     user: "65532:65532"
     network_mode: host
     read_only: true
@@ -31,6 +31,9 @@ services:
       - chaosgw-api:/var/lib/chaosgw/api
       # Kea's control socket (the Kea container creates it, in the group of this user)
       - chaosgw-kea-run:/run/kea
+      # the datagram socket of Kea's lease events: this user's directory, where it creates the socket;
+      # the Kea container mounts it read-only (issue #57 F3)
+      - chaosgw-kea-events:/run/chaosgw-kea-events
       # the token of the service containers: written here, read by Kea's hook
       - chaosgw-service:/var/lib/chaosgw/service
       # the resolvers of a host with systemd-resolved (its stub 127.0.0.53 is no use to the DNS proxy)
@@ -68,5 +71,6 @@ volumes:
   chaosgw-secrets:
   chaosgw-api:
   chaosgw-kea-run:
+  chaosgw-kea-events:
   chaosgw-service:
   chaosgw-svcns:

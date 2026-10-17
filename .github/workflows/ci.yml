@@ -217,7 +217,7 @@ jobs:
           cache-from: type=gha,scope=image
       - name: the API container writes its fresh volumes
         run: |
-          for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service; do
+          for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /run/chaosgw-kea-events; do
             vol="ci-$(basename "$dir")"
             docker volume rm -f "$vol" >/dev/null
             docker volume create "$vol" >/dev/null
@@ -228,6 +228,36 @@ jobs:
           mode=$(docker run --rm -v ci-secrets-mode:/var/lib/chaosgw/secrets --entrypoint stat chaos-gateway:ci -c '%u:%g %a' /var/lib/chaosgw/secrets)
           docker volume rm ci-secrets-mode >/dev/null
           test "$mode" = "65532:65532 700" || { echo "the secrets volume is $mode, want 65532:65532 700"; exit 1; }
+      # issue #57 F3: the API (user 65532) creates the Kea events socket in its own fresh volume, and the
+      # Kea container's user (0:65532, here without any capability) sends to it through a read-only mount
+      - name: the Kea hook sends to the API's events socket through a read-only mount
+        run: |
+          sock=/run/chaosgw-kea-events/events.sock
+          docker volume rm -f ci-kea-events >/dev/null
+          docker volume create ci-kea-events >/dev/null
+          docker run -d --name ci-kea-events-api --user 65532:65532 --read-only --cap-drop ALL -v ci-kea-events:/run/chaosgw-kea-events \
+            --entrypoint perl chaos-gateway:ci -MSocket -e '
+              socket(my $s, PF_UNIX, SOCK_DGRAM, 0) or die "socket: $!";
+              bind($s, pack_sockaddr_un($ARGV[0])) or die "bind: $!";
+              chmod(0660, $ARGV[0]) or die "chmod: $!";
+              defined(recv($s, my $b, 512, 0)) or die "recv: $!";
+              print $b' "$sock" >/dev/null
+          sent=""
+          for _ in $(seq 1 20); do
+            if docker run --rm --user 0:65532 --read-only --cap-drop ALL -v ci-kea-events:/run/chaosgw-kea-events:ro \
+                --entrypoint perl chaos-gateway:ci -MSocket -e '
+                  -S $ARGV[0] or exit 3;
+                  socket(my $s, PF_UNIX, SOCK_DGRAM, 0) or die "socket: $!";
+                  send($s, "lease", 0, pack_sockaddr_un($ARGV[0])) or die "send: $!"' "$sock"; then
+              sent=1; break
+            fi
+            sleep 1
+          done
+          timeout 20 docker wait ci-kea-events-api >/dev/null || true
+          got=$(docker logs ci-kea-events-api 2>&1)
+          docker rm -f ci-kea-events-api >/dev/null
+          docker volume rm ci-kea-events >/dev/null
+          test -n "$sent" && test "$got" = "lease" || { echo "the datagram did not arrive: sent=${sent:-no}, the API's side: $got"; exit 1; }
       - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - run: make test-arm64
 

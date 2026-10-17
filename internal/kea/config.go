@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Paths inside the Kea container (Kea restricts them: /run/kea and /var/lib/kea).
@@ -14,6 +15,16 @@ const (
 	LeaseFile     = "/var/lib/kea/kea-leases4.csv"
 	// HookScript is the script the run_script hook calls; it notifies the API.
 	HookScript = "/usr/share/kea/scripts/chaosgw-kea-hook"
+)
+
+// Kea opens its packet socket on an interface only while it is configured, and skips one that is
+// down or has no carrier then: a bridge whose test port flaps while a configuration arrives would stay
+// without a socket (#64). Kea tries again on its own, every SocketRetryWait for SocketRetries times
+// (a minute); a longer outage ends with a link change, after which the engine configures Kea again
+// (engine.DHCP.Reopen).
+const (
+	SocketRetries   = 12
+	SocketRetryWait = 5 * time.Second
 )
 
 // Pool is an address range.
@@ -185,7 +196,8 @@ func (c Config) Document() (map[string]any, error) {
 		hooks = append(hooks, jsonMap{"library": "libdhcp_run_script.so", "parameters": jsonMap{"name": c.Script, "sync": false}})
 	}
 	return jsonMap{"Dhcp4": jsonMap{
-		"interfaces-config":  jsonMap{"interfaces": ifaces, "dhcp-socket-type": "raw", "re-detect": true},
+		"interfaces-config": jsonMap{"interfaces": ifaces, "dhcp-socket-type": "raw", "re-detect": true,
+			"service-sockets-max-retries": SocketRetries, "service-sockets-retry-wait-time": SocketRetryWait.Milliseconds()},
 		"control-socket":     jsonMap{"socket-type": "unix", "socket-name": socket},
 		"lease-database":     jsonMap{"type": "memfile", "persist": true, "name": leases, "lfc-interval": 3600},
 		"hooks-libraries":    hooks,

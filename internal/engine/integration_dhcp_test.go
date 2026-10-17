@@ -4,6 +4,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -48,6 +49,8 @@ type dhcpBed struct {
 	dir  string
 	// nft counts the nft documents the engine writes (nftRecorder)
 	nft *nftRecorder
+	// log is the engine's log
+	log *lockedBuffer
 }
 
 // nftRecorder is the engine's executor that counts the nft documents it writes: element updates
@@ -173,7 +176,7 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	b := &dhcpBed{t: t, top: top, st: st, e: e, ex: ex, base: cfg, kc: kc, dir: dir, nft: rec}
+	b := &dhcpBed{t: t, top: top, st: st, e: e, ex: ex, base: cfg, kc: kc, dir: dir, nft: rec, log: engineLog}
 	return b
 }
 
@@ -379,6 +382,84 @@ func TestDhcpOffOnOneNetworkLeavesItSilent(t *testing.T) {
 	})
 	if ip, ok := waitBound(t, b.udhcpc(b.top.C, 8), 30*time.Second); !ok || !strings.HasPrefix(ip, "10.20.0.") {
 		t.Fatalf("after switching DHCP on: %q %v", ip, ok)
+	}
+}
+
+// keaSockets returns what Kea's status-get says about its sockets: "ready", "retrying" or "failed",
+// with the errors of the interfaces it could not open a socket on.
+func (b *dhcpBed) keaSockets() (string, []string) {
+	b.t.Helper()
+	a, err := b.kc.Do(context.Background(), "status-get", nil)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	var st struct {
+		Sockets struct {
+			Status string   `json:"status"`
+			Errors []string `json:"errors"`
+		} `json:"sockets"`
+	}
+	if err := json.Unmarshal(a.Arguments, &st); err != nil {
+		b.t.Fatal(err)
+	}
+	return st.Sockets.Status, st.Sockets.Errors
+}
+
+// #64 test: Kea opens its packet socket on a bridge only while it is configured, and skips a bridge
+// without a carrier. A configuration that arrives while the test port is down (its link flaps) left
+// the network without DHCP until Kea was restarted; now the gateway configures Kea again when the
+// bridge comes up, and DHCP answers.
+func TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply(t *testing.T) {
+	b := newDHCPBed(t)
+	b.apply(dhcpOn)
+	b.follow()
+	if err := b.e.FollowHost(context.Background(), 100*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := b.kc.Subnets(context.Background())
+	if err != nil || len(subs) != 1 {
+		t.Fatalf("%+v %v", subs, err)
+	}
+	bridge := subs[0].Interface
+	waitCarrier := func(on bool) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for strings.Contains(b.top.GW.Must("ip", "link", "show", "dev", bridge), "NO-CARRIER") == on {
+			if time.Now().After(deadline) {
+				t.Fatalf("the carrier of %s is not %v:\n%s", bridge, on, b.top.GW.Must("ip", "link"))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// the test port goes down (its peer on the switch side: the gateway's port loses its carrier,
+	// and with it the bridge), and a changed scope is applied meanwhile: Kea skips the bridge
+	b.top.Switch0.Must("ip", "link", "set", "p1", "down")
+	waitCarrier(false)
+	b.apply(func(c *model.Configuration) { setDHCP(c, tIoT, &model.DhcpScope{LeaseTime: ptrS("120s")}) })
+	if st, errs := b.keaSockets(); st == "ready" || len(errs) == 0 || !strings.Contains(errs[0], bridge) {
+		t.Fatalf("Kea opened a socket on %s without a carrier, the flap is not reproduced: %s %v", bridge, st, errs)
+	}
+
+	// the port comes back: DHCP answers on the network again
+	b.top.Switch0.Must("ip", "link", "set", "p1", "up")
+	waitCarrier(true)
+	ip, ok := waitBound(t, b.udhcpc(b.top.A, 8), 30*time.Second)
+	if !ok || !strings.HasPrefix(ip, "10.10.0.") {
+		st, errs := b.keaSockets()
+		t.Fatalf("no lease after the port came back (%q); Kea's sockets: %s %v", ip, st, errs)
+	}
+	if st, errs := b.keaSockets(); st != "ready" {
+		t.Errorf("Kea's sockets: %s %v", st, errs)
+	}
+	// the engine saw the bridge come up and configured Kea again; it does not wait for Kea's own
+	// retries, which end after a minute
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(b.log.String(), "an interface of the DHCP server came up") {
+		if time.Now().After(deadline) {
+			t.Fatal("the engine did not configure Kea again when the bridge came up")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

@@ -70,12 +70,14 @@ func (e *Engine) Observe(ctx context.Context, h compiler.Host) error {
 	return err
 }
 
-// Refresh reads the host through the executor and observes it.
+// Refresh reads the host through the executor and observes it; the DHCP server is configured again
+// when one of its interfaces came up (followDHCPLinks).
 func (e *Engine) Refresh(ctx context.Context) error {
-	h, err := apply.ReadHost(ctx, e.cfg.Exec, e.cfg.Namespace)
+	h, links, err := apply.ReadHostLinks(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return fmt.Errorf("read the host: %w", err)
 	}
+	e.followDHCPLinks(ctx, links)
 	return e.Observe(ctx, h)
 }
 

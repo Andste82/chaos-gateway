@@ -907,6 +907,28 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   configuration after the kernel state is verified; a Kea that is down does not fail the apply: the
   problem is in the snapshot (`DHCPError`) and the configuration is sent again every 5 s, also after Kea
   restarted (its configuration hash changed).
+- **Kea's packet sockets (issue #64).** Kea opens its packet socket on an interface only while it is
+  configured (`config-set`, which also detects the interfaces again: `re-detect`), and skips one that is
+  down or has no carrier (Kea: "is not running"); a bridge has a carrier only while one of its ports is
+  up. A configuration that arrived while the test port flapped left the bridge without a socket, and
+  DHCP silent on that network, until Kea was restarted. Two things close it. The configuration lets Kea
+  retry the sockets it could not open on its own, every 5 s for a minute
+  (`service-sockets-max-retries`, `kea.SocketRetries`); `status-get` then reports the sockets as
+  `retrying` instead of `failed`. And the engine follows the links of Kea's interfaces: every reading of
+  the host after a netlink event (`Engine.Refresh`, `apply.ReadHostLinks`, the bridges included) compares
+  their index and whether they are running (`UP` and `LOWER_UP`) with the reading before, and when one
+  came up or was created again (a new index: a socket bound to the old one receives nothing) it sends the
+  configuration again although Kea runs it already (`DHCP.Reopen`), so a longer outage or a recreated
+  bridge needs no restart either. A bridge going down, another interface and a reading without a change
+  send nothing. Tests: `TestTheDHCPServerIsConfiguredAgainWhenItsBridgeComesUp` (engine, a carrier and
+  a recreated bridge in the simulated kernel), `TestTheConfigurationLetsKeaRetryTheSocketsItCouldNotOpen`,
+  `TestKeaRetriesASocketItCouldNotOpen` (the real Kea on the loopback, which it never opens a socket on,
+  reports `retrying`), `TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration` (the real Kea:
+  `status-get`'s `reload` shows that `Reopen` configured it and `Apply` did not) and the testbed test
+  `TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply` (the switch side of the test port goes
+  down, a changed scope is applied, Kea reports the bridge not running; the port comes back, a client
+  gets a lease and the engine log shows the reconfiguration). Both testbed jobs name the three tests
+  that need root with `-expect-pass $I64_LEVEL1`.
 - **Observation.** `Engine.PollObserved` reads the neighbor table, conntrack and Kea's leases every
   second and when asked (`TriggerObserve`: netlink neighbor events through `FollowNeighbors`, lease
   events); a burst of triggers is one reading. The state owner's `tracker` (`devices.go`, a pure state
@@ -4291,8 +4313,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1` (the workflow's environment): the level 1 tests of port
-forwarding must each pass, so one that is renamed or no longer built fails the job.
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$I64_LEVEL1` (the workflow's environment): the level 1
+tests of port forwarding and those of Kea's packet socket after a link flap (issue #64) must each pass, so
+one that is renamed or no longer built fails the job.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

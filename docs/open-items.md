@@ -1702,3 +1702,30 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
   connection into the management subnet while a management forward works).
 - Needs maintainer: no (decided 2026-10-17)
 - Effort: M
+
+## Issue #64 open items
+
+Found while implementing issue #64 on the branch `close-phase-3-1`. Each item records the option that was implemented so the
+work was not blocked.
+
+### I64-01 Detecting a lost Kea packet socket directly
+
+- Status: open
+- Severity: low
+- Reason: needs-decision. Issue #64 item 3 asks to detect a lost socket. The cause found is that Kea opens its packet socket on
+  an interface only while it is configured and skips one that is down or has no carrier; a configuration that arrives while
+  the test port flaps leaves the bridge without a socket. That case is now prevented, not detected: Kea retries the sockets it
+  could not open for a minute (`kea.SocketRetries`), and the engine configures Kea again whenever one of its interfaces comes
+  up or is created again (`Engine.followDHCPLinks`, `DHCP.Reopen`). A socket lost in another way (Kea closing it after an
+  error of its own) would still go unnoticed.
+- Evidence: `internal/kea/config.go`, `internal/engine/dhcp.go`, `TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply`,
+  docs/development.md "Kea's packet sockets (issue #64)".
+- Task: implemented (a). Options: (a) as implemented: prevent the known cause, no direct detection; (b) read Kea's
+  `status-get` in the engine's 5 s DHCP loop and report `sockets` other than `ready` in `GET /system/health` (Kea's view: it
+  names the interfaces it skipped, but also a network whose test port is simply unplugged, which is not a fault); (c) a new
+  executor read of `/proc/net/packet` in the gateway's namespace, and configure Kea again when a running interface of Kea has
+  no packet socket bound to its index (direct, but another executor operation, and it cannot tell Kea's socket from a
+  capture's).
+- Recommendation: (a) until a lost socket is seen with another cause; (b) as a diagnostic in the health detail if it is.
+- Needs maintainer: yes
+- Effort: S ((b)), M ((c))

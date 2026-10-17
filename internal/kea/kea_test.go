@@ -63,6 +63,22 @@ func TestRenderIsDeterministicJSONWithOneSubnetPerNetwork(t *testing.T) {
 	}
 }
 
+// #64: Kea opens its sockets only while it is configured and skips an interface that is down or
+// has no carrier; the configuration lets it try again on its own for a while.
+func TestTheConfigurationLetsKeaRetryTheSocketsItCouldNotOpen(t *testing.T) {
+	doc, err := sampleConfig().Document()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic := doc["Dhcp4"].(jsonMap)["interfaces-config"].(jsonMap)
+	if ic["service-sockets-max-retries"] != SocketRetries || ic["service-sockets-retry-wait-time"] != int64(5000) || ic["re-detect"] != true {
+		t.Errorf("%v", ic)
+	}
+	if SocketRetries*SocketRetryWait < time.Minute {
+		t.Errorf("Kea gives up after %v", SocketRetries*SocketRetryWait)
+	}
+}
+
 func TestChecksRefuseWhatKeaWouldRefuse(t *testing.T) {
 	mod := func(f func(*Subnet)) error {
 		c := sampleConfig()
@@ -217,6 +233,36 @@ func startKea(t *testing.T, cfg Config) *Client {
 	}
 	t.Fatalf("kea does not answer:\n%s", out.String())
 	return nil
+}
+
+// #64: the real Kea takes the retries: an interface it cannot open a socket on (here the loopback,
+// which Kea never serves) leaves it retrying instead of failed for good.
+func TestKeaRetriesASocketItCouldNotOpen(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Subnets[0].Interface = "lo"
+	cfg.Subnets[0].Subnet = netip.MustParsePrefix("127.0.0.0/8")
+	cfg.Subnets[0].Pools = []Pool{{netip.MustParseAddr("127.0.0.100"), netip.MustParseAddr("127.0.0.200")}}
+	cfg.Subnets[0].Reservations = nil
+	cfg.Subnets[0].Router = netip.MustParseAddr("127.0.0.1")
+	cfg.Subnets[0].DNS, cfg.Subnets[0].NTP = nil, nil
+	cfg.Script = ""
+	c := startKea(t, cfg)
+	a, err := c.Do(context.Background(), "status-get", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st struct {
+		Sockets struct {
+			Status string   `json:"status"`
+			Errors []string `json:"errors"`
+		} `json:"sockets"`
+	}
+	if err := json.Unmarshal(a.Arguments, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Sockets.Status != "retrying" || len(st.Sockets.Errors) == 0 || !strings.Contains(st.Sockets.Errors[0], "lo") {
+		t.Errorf("%s", a.Arguments)
+	}
 }
 
 func TestTheClientDrivesARealKea(t *testing.T) {

@@ -37,6 +37,11 @@ func (l Link) Kind() string {
 // Up reports whether the administrative UP flag is set.
 func (l Link) Up() bool { return l.HasFlag("UP") }
 
+// Running reports whether the link is up and has a carrier (LOWER_UP; a bridge has one while one of
+// its ports forwards): what Kea's "running" means. Kea opens its packet socket only on a running
+// interface.
+func (l Link) Running() bool { return l.Up() && l.HasFlag("LOWER_UP") }
+
 // HasFlag reports whether the link carries the flag (UP, LOWER_UP, ...).
 func (l Link) HasFlag(f string) bool {
 	for _, x := range l.Flags {

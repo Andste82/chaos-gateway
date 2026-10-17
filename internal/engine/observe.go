@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
@@ -112,6 +113,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 		}
 	}
 	nets := bridgeNetworks(snap.Bridges)
+	seen := e.neighborsSeen(neigh, obs.At)
 	for _, n := range neigh {
 		nid, isTest := nets[n.Dev]
 		if !isTest || !n.Usable() {
@@ -121,7 +123,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 		if err != nil {
 			continue
 		}
-		obs.Neighbors = append(obs.Neighbors, domain.Neighbor{IP: ip, MAC: n.LLAddr, Interface: n.Dev, Network: nid, Stale: n.Stale()})
+		obs.Neighbors = append(obs.Neighbors, domain.Neighbor{IP: ip, MAC: n.LLAddr, Interface: n.Dev, Network: nid, Stale: n.Stale(), Seen: seen[neighKey(n)]})
 	}
 	// the connections: addresses that are in use, and hosts behind tunnels. Once a watch streams
 	// (M6a-04), the ticker's own re-read is a fallback only, at most every conntrackFallback: the
@@ -183,6 +185,26 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 }
 
 func wait2[T any](ctx context.Context, e *Engine, ch <-chan T) (T, error) { return wait(ctx, e, ch) }
+
+// neighborsSeen returns when each entry of the neighbor table was first read, and forgets the entries
+// that are gone: an entry that comes back counts as new.
+func (e *Engine) neighborsSeen(neigh []linux.Neighbor, now time.Time) map[string]time.Time {
+	e.neighMu.Lock()
+	defer e.neighMu.Unlock()
+	out := make(map[string]time.Time, len(neigh))
+	for _, n := range neigh {
+		k := neighKey(n)
+		if t, ok := e.neighSeen[k]; ok {
+			out[k] = t
+		} else {
+			out[k] = now
+		}
+	}
+	e.neighSeen = out // a new map on every read: the caller may keep the one it got
+	return out
+}
+
+func neighKey(n linux.Neighbor) string { return n.Dev + " " + n.Dst + " " + strings.ToLower(n.LLAddr) }
 
 func (e *Engine) setActive(a map[netip.Addr]bool) {
 	e.activeMu.Lock()

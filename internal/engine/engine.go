@@ -242,6 +242,10 @@ type Engine struct {
 	dhcp            dhcpState
 	activeMu        sync.Mutex
 	active          map[netip.Addr]bool
+	// neighSeen is when each neighbor entry (interface, address, MAC) was first read: of two
+	// entries of a device, the one seen later is its more current address (domain.Neighbor.Seen).
+	neighMu   sync.Mutex
+	neighSeen map[string]time.Time
 	// observeNow asks the observation poller to read at once (a lease event, a neighbor change).
 	observeNow chan struct{}
 	obsErrMu   sync.Mutex

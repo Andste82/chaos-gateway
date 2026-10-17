@@ -4008,7 +4008,9 @@ Phase 3.1, pulled forward ahead of Phase 4 (plan D34): a device in a local test 
 from behind the uplink or, in the three-port topology, from the management network, through a DNAT
 on the entry side's address. The access rules decide forwarded connections with the device as
 responder; faults do not apply to them before M35b. Decisions left to the maintainer are
-P31-M35a-01 to P31-M35a-10 in `docs/open-items.md`, each with the option that is implemented.
+P31-M35a-01 to -04 and -06 to -08 in `docs/open-items.md`, each with the option that is implemented;
+P31-M35a-05, -09 and -10 (the routing of management-side replies and the forward's counter) were
+decided on 2026-10-17 and are implemented as described below.
 
 ### How it works
 
@@ -4023,7 +4025,8 @@ P31-M35a-01 to P31-M35a-10 in `docs/open-items.md`, each with the option that is
   `?revision=`, paging) return each forward with its configuration, its `status` (`active`, or
   `inactive` with `disabled`, `device_without_address`, `device_outside_test_network`,
   `management_is_uplink`, `entry_without_address`; its message; the target address now) and, for the
-  revision the kernel runs, the counter of its accept rule. The status comes from
+  revision the kernel runs, its counter: the connections that arrived through it, with the time of the
+  last one (`forwardCounter`, see *Counting* below). The status comes from
   `Index.ForwardStatus` with the facts the engine observes (`Engine.ForwardFacts`: the devices'
   addresses, whether management and uplink are one interface, whether each entry side has an
   address); the entry sides are judged once the host has been observed. The capability
@@ -4062,21 +4065,46 @@ P31-M35a-01 to P31-M35a-10 in `docs/open-items.md`, each with the option that is
     address change is an element update through the identity path of M7 (`internal/engine/forward.go`,
     `owner.go`), never a full apply. A device without an address keeps its forward compiled, with no
     elements and the status `device_without_address`.
+  - *Counting* (P31-M35a-09, option (b), decided 2026-10-17). One counting rule per forward in the
+    same NAT chain, in front of the DNAT rule: in on the forward's entry interface, to an address of
+    that interface, its protocol and `th dport` in its external ports, the named counter
+    `fwd_<hash of the id>` and `last`, no verdict. A NAT chain sees the first packet of a connection
+    only, and the rule runs before any access rule, so the counter counts connections: each one that
+    arrives through the forward once, whether an access `allow` rule, the forward's accept rule or
+    nothing lets it through (a TCP connection whose SYN a rule drops is counted per attempt, since a
+    dropped packet leaves no conntrack entry). The last match comes from the same rule's `last`, so
+    counter and time always describe the same packets; the accept rule carries neither. The API's
+    `forwardCounter` reads it, and the UI shows "N connections".
   - *Accept.* One rule per forward in `forward`, after `jump access_forward` and before the matrix:
     `ct status dnat`, in on the forward's entry interface, out to a local test network, its protocol
-    and `ct original proto-dst` in its external ports, a named counter `fwd_<hash of the id>` and
-    `last`. The forward is the allowance; the matrix default keeps everything else from the uplink
-    out of the test networks.
-  - *Management side.* While a forward from the management network is compiled, the policy table
-    (100) gets a route to the management subnet, so the device's replies go back the way they came
-    and not to the uplink's default (P31-M35a-05: a peer behind a router of the management network
-    gets no answer).
+    and `ct original proto-dst` in its external ports. The forward is the allowance; the matrix
+    default keeps everything else from the uplink out of the test networks.
+  - *Management side* (P31-M35a-05 and -10, option (c), decided 2026-10-17). The policy table 100,
+    which every packet of a test network is looked up in, never has a route to the management
+    subnet: a device's own new connection to the management network follows the uplink default
+    (masqueraded) and the forward chain like any other, so no access rule, an allow rule without a
+    destination included, carries it into the management network. Only the replies of a connection
+    that came in through a management-side forward go back through the management interface, by
+    a mark: the forward's counting rule sets bit 22 of the conntrack mark (`ct mark set ct mark |
+    0x400000`; plan §3.3, bits 22-23 reserved for routing marks), the base chain `fwd_reply`
+    (filter, prerouting, priority -140: after the classification, before the NAT chain and the
+    routing decision) copies it onto the packet mark of the replies that come in from a local test
+    network (`iifname @ifs_lan ct direction reply ct mark & 0x400000 == 0x400000 meta mark set meta
+    mark | 0x400000`), and the policy rule `fwmark 0x400000/0x400000 lookup 101` (priority 925,
+    between the service selection at 900 and the PMTU mirrors at 950) sends them to table 101: the
+    management interface's connected subnet, a default via the management interface's own default
+    gateway (the main table's default route on that interface, when there is one), and a `prohibit`
+    default with metric 4096 as the fallback, so such a reply never falls through to the uplink.
+    So a peer behind a router of the management network is answered too. The table, the rule and
+    the chain exist only while a forward from the management side is compiled (three-port topology;
+    the executor's scope already covers them: table 101 lies in Chaos Gateway's tables 100-110, the
+    route's device is the assigned management interface); bit 22 is read or written nowhere else.
   - *DOCKER-USER.* The existing per-bridge accept rules (`-o <bridge>`) already cover the path from
     the entry side to a test-network bridge (plan §3.4); no new rule.
   - *Hairpin* (a device using the entry address) is not supported: the DNAT matches the entry
     interfaces only.
-  - *Without an enabled forward the output is byte-identical* to before M35a: no map, no DNAT, no
-    accept, no responder form, the same hash (`TestWithoutAForwardInThePacketPathNothingChanges`; the
+  - *Without an enabled forward the output is byte-identical* to before M35a: no map, no counting
+    rule, no DNAT, no accept, no responder form, no `fwd_reply`, no table 101, the same hash (`TestWithoutAForwardInThePacketPathNothingChanges`; the
     golden files of every other scenario are unchanged).
 - **Access rules with the device as responder** (plan §2.4, D34; `internal/compiler/access.go`). While
   a forward is compiled, every rule, configured and overlay, gets a second form right after its own,
@@ -4136,7 +4164,7 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 
 | Plan M35a Tests | Test |
 |---|---|
-| golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder) | `TestGoldenForwards`, `TestGoldenForwardNftTransaction` (`forward.golden.txt`, `forward.nft.golden.json`); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder`, `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer`, `TestWithoutAForwardInThePacketPathNothingChanges`, `TestMapElementsWithInterfaceNamesAndConcatenatedValues`; the kernel takes the ruleset and its cut windows: `TestEveryTransactionIsAcceptedByNftsParser`, `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` (scenario `forward`) |
+| golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder) | `TestGoldenForwards`, `TestGoldenForwardNftTransaction` (`forward.golden.txt`, `forward.nft.golden.json`); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`, `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the golden file shows the counting rules, `fwd_reply`, tables 100 and 101 and the fwmark rules), `TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder`, `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer`, `TestWithoutAForwardInThePacketPathNothingChanges`, `TestMapElementsWithInterfaceNamesAndConcatenatedValues`; the kernel takes the ruleset and its cut windows: `TestEveryTransactionIsAcceptedByNftsParser`, `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` (scenario `forward`) |
 | level 1 — a server namespace behind the uplink reaches a TCP and a UDP listener of a test-network client through a forward, and without a forward its connection is dropped and counted | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`; through the engine `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` |
 | a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); the new address also while the old one lingers on with a connection of the device or its neighbor entry is still REACHABLE: `TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn`, `TestANeighborEntryKeepsWhenItWasFirstSeen`, `TestTheDNATMapSendsToTheDevicesMostCurrentAddress`; `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements` |
 | a drop, reject and reset rule on the device stops forwarded connections, and "also cut existing connections" resets an established one | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`, `TestACutWindowResetsAnEstablishedForwardedConnectionOnTheRealKernel`, `TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection`; `TestACutWindowAlsoResetsForwardedConnections`, `TestACutTakesTheForwardedConnectionsOfItsTarget` |
@@ -4144,10 +4172,10 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 | an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network, also with `allowed_sources` unset or narrower); `TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection`, `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
 | a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` |
 | a port range is forwarded one to one | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (tcp 9049-9050 → 7049-7050); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`; `port-forwards.spec.ts` "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field" |
-| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
+| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the mark, table 101 and its rule, no management subnet in table 100), `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`; a peer behind a router of the management network is answered, and a device with an allow rule without a destination does not reach the management network (P31-M35a-05, -10): `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
 | a forward follows a new uplink address (DHCP) within 1 s | `TestAForwardFollowsANewUplinkAddress` (the address replaced as a new lease does, measured, and the status follows), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` |
 | a device without a known address leaves its forward inactive with its reason in the status | `TestAForwardFollowsItsDeviceAndSaysWhyItIsInactive`, `TestPortForwardsAreListedWithTheirStatus`, `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestAForwardOfAnEntryWithoutAddressIsInactive`; `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status" |
-| the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; `TestAForwardHasTheCounterOfItsAcceptRule`; level 2 `TestSmokeOnCleanUbuntuHosts`. The counter counts the packets of connections not yet established (one per connection, more for a retransmitted SYN or an unanswered UDP packet), so the UI shows it as hits, like the access rules' counters; a connection an access `allow` rule accepts through its responder form is not counted by the forward (P31-M35a-09): `src/lib/forwards.test.ts` "the rows: …", `port-forwards.spec.ts` "port forwards: the uplink and the management card list …" |
+| the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; also the connections an access `allow` rule accepts, and the ones a rule drops (P31-M35a-09): `TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`, `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`; the counting rule in the NAT chain `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`; over the API `TestAForwardCountsItsConnections`; level 2 `TestSmokeOnCleanUbuntuHosts`. The UI shows "N connections": `src/lib/forwards.test.ts` "the rows: …", `port-forwards.spec.ts` "port forwards: the uplink and the management card list …", "port forwards: the device detail lists …" |
 | a disabled or deleted forward leaves no DNAT and closes the path | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (deleted), `TestADisabledForwardLeavesTheKernel`, `TestWithoutAForwardInThePacketPathNothingChanges` (disabled), `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress` |
 | Playwright against the mocked API for the forward list | `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status", "port forwards: enabling a disabled forward and changing a target say that the change is not applied yet", "port forwards: the status not loaded says so with Try again on the cards and the device detail; the forwards stay listed", "port forwards: without forwards the cards list none and offer Add"; `src/lib/forwards.test.ts` "the rows: …", "a changed row says that the gateway's status is the applied forward's: …" |
 | the form (add, edit, disable, delete through the drawer, a refused port shown at its field, a range) | `port-forwards.spec.ts` "port forwards: add a forward to a device through the drawer — no commit-confirm, and it is listed after the apply", "port forwards: edit, disable and delete through the draft and the drawer; Undo takes each back", "port forwards: a port the gateway refuses is shown at its field, and Fix opens the forward again with the gateway's message", "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field", "port forwards: a forward changed meanwhile through the API opens the conflict dialog, and reapplying keeps their change"; `src/lib/forwards.test.ts` "the port forward form (M35a)"; `src/stores/draft.forwards.test.ts` "the port forwards in the draft (M35a)" |

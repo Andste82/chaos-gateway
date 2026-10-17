@@ -56,6 +56,7 @@ set asrc_be61152c2009e2fc3b2690cd_8743d6 { 10.20.0.0/24 }
   meta oifname @ifs_cg_bf4feb ct state { invalid } drop
   meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
   meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
+  jump mgmt_guard
   jump access_forward
   meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 2222 accept
   meta iifname mgmt0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8443 accept
@@ -81,6 +82,9 @@ set asrc_be61152c2009e2fc3b2690cd_8743d6 { 10.20.0.0/24 }
   meta iifname @ifs_test_bf4feb udp dport 53 accept
   meta iifname @ifs_test_bf4feb tcp dport 53 accept
   meta iifname @ifs_test_bf4feb counter "input_drop" drop
+# chain mgmt_guard
+  meta iifname @ifs_test_bf4feb ip daddr @mgmt_src_8743d6 counter "forward_drop" drop
+  meta iifname @ifs_test_bf4feb meta oifname mgmt0 counter "forward_drop" drop
 # chain access_forward
   ct original ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp counter "rule_8e9ca98e27" last drop
   ct status dnat ct reply ip saddr @asrc_32ea59bcd142051d86b1c9ec_8743d6 meta l4proto udp counter "rule_8e9ca98e27" last drop

@@ -27,9 +27,12 @@ func TestWithoutRulesThereIsNoAccessMachinery(t *testing.T) {
 			t.Errorf("chain %s without a rule", name)
 		}
 	}
+	// the one jump without a rule is the management guard's, which every topology has (plan §2.16)
 	for _, name := range []string{"forward", "input"} {
-		if i := indexOfRule(chainOf(t, tg, name), "jump"); i >= 0 {
-			t.Errorf("%s jumps somewhere without a rule: %s", name, renderRule(chainOf(t, tg, name).Rules[i]))
+		for _, r := range chainOf(t, tg, name).Rules {
+			if s := renderRule(r); strings.Contains(s, "jump") && s != "jump "+MgmtGuardChain {
+				t.Errorf("%s jumps somewhere without a rule: %s", name, s)
+			}
 		}
 	}
 }
@@ -768,6 +771,22 @@ func scenarioAccessTwoPort(t *testing.T) *Target {
 	return tg
 }
 
+// scenarioAccessThreePort has a management interface of its own, a rule for everything and an explicit
+// matrix entry that opens the management network for Lab: the guard chain with a return and the drops
+// by destination and by the management interface (P31-M35a-10, decided on 2026-10-17).
+func scenarioAccessThreePort(t *testing.T) *Target {
+	t.Helper()
+	w := accessWorld(t)
+	entries := []model.MatrixEntry{matrixEntry(lanEP(labID), mgmtEP(), model.MatrixEntryPolicyAllow)}
+	w.cfg.AccessMatrix = &model.AccessMatrix{Entries: &entries}
+	w.addConfigRule(ruleA, `{name: everything, source: {global: true}, action: allow}`)
+	tg := w.compile(nil)
+	if g := renderRules(chainOf(t, tg, MgmtGuardChain)); len(g) != 3 || !strings.HasSuffix(g[0], "return") {
+		t.Fatalf("the guard chain: %v", g)
+	}
+	return tg
+}
+
 func scenarioAccessCut(t *testing.T) *Target {
 	t.Helper()
 	w := accessWorld(t)
@@ -795,6 +814,8 @@ func accessScenarios(t *testing.T) map[string]*Target {
 		"access":        scenarioAccess(t),
 		"access-cut":    scenarioAccessCut(t),
 		"access-reject": scenarioAccessReject(t),
+		// the management guard of the three-port topology in front of an allow rule for everything
+		"access-threeport": scenarioAccessThreePort(t),
 	}
 }
 

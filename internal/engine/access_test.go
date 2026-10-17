@@ -717,6 +717,43 @@ func TestAnAllowRuleOpensTheGatewayButNoRuleChangesItsControlPlane(t *testing.T)
 	}
 }
 
+// In the three-port topology (the harness's: a management interface of its own) the management guard
+// stands in front of the access rules too (P31-M35a-10, decided on 2026-10-17): an allow rule without a
+// destination does not open the management network for a device, `explain` names the guard (a drop of the
+// access matrix, no rule), and an explicit matrix entry is the one exception.
+func TestExplainNamesTheManagementGuardOfTheThreePortTopology(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	everything := withConfigRules(map[string]model.AccessRule{
+		cfgRuleA: configRule("everything", "IoT", "", nil, model.AccessActionAllow, false),
+	}, cfgRuleA)
+	h.mustApply(h.revision(everything))
+	if s := h.e.Snapshot(); s.Management.Name == "" || s.Applied == nil || s.Management.Name == s.Applied.Uplink.Name {
+		t.Fatalf("the harness must have a management interface of its own: %+v", s.Management)
+	}
+	q := engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.77"), Dst: "192.168.56.20", Protocol: "tcp", Port: 80}
+	if ex := h.explain(q); ex.Access.Verdict != "drop" || ex.Access.Layer != "access_matrix" || ex.Access.Rule != "" || !strings.Contains(ex.Access.Reason, "management network") {
+		t.Errorf("explain = %+v, want the guard", ex.Access)
+	}
+	// the rule still decides everything else
+	if ex := h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.77"), Dst: "203.0.113.50", Protocol: "tcp", Port: 80}); ex.Access.Rule != cfgRuleA {
+		t.Errorf("explain = %+v, want the rule", ex.Access)
+	}
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		everything(c)
+		iot, m := "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21", model.MatrixEndpointManagement(true)
+		entries := []model.MatrixEntry{}
+		if c.AccessMatrix != nil && c.AccessMatrix.Entries != nil {
+			entries = *c.AccessMatrix.Entries
+		}
+		entries = append(entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow})
+		c.AccessMatrix = &model.AccessMatrix{Entries: &entries}
+	}))
+	if ex := h.explain(q); ex.Access.Verdict != "allow" || ex.Access.Rule != cfgRuleA {
+		t.Errorf("explain with a matrix entry = %+v, want the rule's allow", ex.Access)
+	}
+}
+
 func TestARuleOverlayAndAFaultCombineWithTheRuleFirst(t *testing.T) {
 	h := startedWithRevision(t)
 	h.mustPut(alice, iotLatency)

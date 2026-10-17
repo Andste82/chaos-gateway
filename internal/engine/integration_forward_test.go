@@ -4,6 +4,7 @@ package engine_test
 
 import (
 	"context"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -294,7 +295,8 @@ func allowAllForA(c *model.Configuration) {
 // (P31-M35a-10, option (c)): the policy table that a device's packets are looked up in has no route to
 // the management subnet; only the replies of a forwarded connection go back through the management
 // interface, by their mark. So even with an allow rule without a destination A cannot open a connection
-// to a host of the management network while the management forward works. And the forwards' counters
+// to a host of the management network while the management forward works (and the management guard in
+// front of the access rules would drop it if the routing let it through, see below). And the forwards' counters
 // count their connections although that allow rule, not the forward, accepts them (P31-M35a-09).
 func TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks(t *testing.T) {
 	r := startForwardLab(t, allowAllForA)
@@ -367,3 +369,104 @@ except ConnectionRefusedError: print("refused")
 except ConnectionResetError: print("reset")
 except socket.timeout: print("timeout")
 `
+
+// withoutPolicyDefault takes the uplink's default route out of the policy table 100, as the kernel does
+// when the uplink loses its address (an expired DHCP lease: the routes via the device go, and the next
+// compile fails with uplink_no_gateway), and gives the management host a route back to the local test
+// networks, so only the gateway's own filter can keep a device out of the management network: a device's
+// packet to it falls past the policy rules to the main table, which knows the management subnet.
+func withoutPolicyDefault(t *testing.T, r *real) {
+	t.Helper()
+	r.top.GW.Must("ip", "route", "del", "default", "table", strconv.Itoa(compiler.PolicyTable))
+	r.top.Mgmt.Route("10.0.0.0/8", "via", testbed.MgmtGateway)
+	bridge := ""
+	for _, b := range r.e.Snapshot().Bridges {
+		if strings.EqualFold(b.NetworkID, fwIoT) {
+			bridge = b.Name
+		}
+	}
+	if out := r.top.GW.Must("ip", "route", "get", testbed.MgmtPeer, "from", testbed.ClientAAddr, "iif", bridge); !strings.Contains(out, "dev mgmt0") {
+		t.Fatalf("A's packets to the management host must now leave through mgmt0: %s", out)
+	}
+}
+
+// policyDefaultStillGone fails the test when something put the policy table's default back: then the
+// probes would prove nothing about the guard.
+func policyDefaultStillGone(t *testing.T, r *real) {
+	t.Helper()
+	if out := r.top.GW.Must("ip", "route", "show", "default", "table", strconv.Itoa(compiler.PolicyTable)); strings.TrimSpace(out) != "" {
+		t.Fatalf("the policy table has a default again, the probes prove nothing: %s", out)
+	}
+}
+
+// The management guard of the three-port topology (P31-M35a-10, decided on 2026-10-17): routing alone does
+// not keep a device out of the management network. Without the policy table's default a device's packet to
+// the management host falls through to the main table and leaves through mgmt0, and the management host
+// can answer; an allow rule without a destination would carry it there. The guard in front of the access
+// rules drops it (and counts it), `explain` names the guard, not the rule, and the management forward
+// still answers: its replies are established and routed by their mark.
+func TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork(t *testing.T) {
+	r := startForwardLab(t, allowAllForA)
+	r.top.Mgmt.Start("python3", "-c", accessServerScript)
+	eventually(t, r.top.GW, "tcp", testbed.MgmtPeer, 7050, 30*time.Second) // the management host listens
+	withoutPolicyDefault(t, r)
+
+	before := r.counters()["forward_drop"].Packets
+	for _, port := range []int{7050, 8883} {
+		if got := tryAt(r.top.A, "tcp", testbed.MgmtPeer, port, 2); got == "ok" {
+			t.Errorf("A reaches the management host on tcp %d without the policy default", port)
+		}
+	}
+	if got := tryAt(r.top.A, "udp", testbed.MgmtPeer, 5353, 2); got == "ok" {
+		t.Error("A reaches the management host over udp without the policy default")
+	}
+	policyDefaultStillGone(t, r)
+	if after := r.counters()["forward_drop"].Packets; after <= before {
+		t.Errorf("the guard counted nothing: forward_drop %d -> %d", before, after)
+	}
+	ex, err := r.e.Explain(context.Background(), engine.ExplainQuery{Src: netip.MustParseAddr(testbed.ClientAAddr), Dst: testbed.MgmtPeer, Protocol: "tcp", Port: 7050})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex.Access.Verdict != "drop" || ex.Access.Layer != "access_matrix" || ex.Access.Rule != "" {
+		t.Errorf("explain = %+v, want the guard (a drop in the access matrix, no rule)", ex.Access)
+	}
+	// the management forward still answers
+	if got := tryAt(r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 2); got != "ok" {
+		t.Errorf("tcp from the management network through the forward: %s", got)
+	}
+	policyDefaultStillGone(t, r)
+}
+
+// The one thing that opens the management network for a device in the three-port topology is an explicit
+// entry of the access matrix, as in the two-port one (plan §2.16): with "IoT -> management: allow" and the
+// same lost policy default, A reaches the management host, and `explain` agrees with the kernel.
+func TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn(t *testing.T) {
+	r := startForwardLab(t, func(c *model.Configuration) {
+		allowAllForA(c)
+		entries := []model.MatrixEntry{}
+		if c.AccessMatrix != nil && c.AccessMatrix.Entries != nil {
+			entries = *c.AccessMatrix.Entries
+		}
+		iot, m := fwIoT, model.MatrixEndpointManagement(true)
+		entries = append(entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow})
+		c.AccessMatrix = &model.AccessMatrix{Entries: &entries}
+	})
+	r.top.Mgmt.Start("python3", "-c", accessServerScript)
+	eventually(t, r.top.GW, "tcp", testbed.MgmtPeer, 7050, 30*time.Second)
+	withoutPolicyDefault(t, r)
+	if got := tryAt(r.top.A, "tcp", testbed.MgmtPeer, 7050, 3); got != "ok" {
+		t.Errorf("A does not reach the management host with a matrix entry: %s", got)
+	}
+	policyDefaultStillGone(t, r)
+	ex, err := r.e.Explain(context.Background(), engine.ExplainQuery{Src: netip.MustParseAddr(testbed.ClientAAddr), Dst: testbed.MgmtPeer, Protocol: "tcp", Port: 7050})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex.Access.Verdict != "allow" {
+		t.Errorf("explain = %+v, want allow", ex.Access)
+	}
+	if got := tryAt(r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 2); got != "ok" {
+		t.Errorf("tcp from the management network through the forward: %s", got)
+	}
+}

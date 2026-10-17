@@ -100,6 +100,8 @@ func TestForwardingDefaultsDropEverythingButTestToUplink(t *testing.T) {
 			order = append(order, "invalid")
 		case strings.Contains(s, `"ipv6"`):
 			order = append(order, "ipv6")
+		case strings.Contains(s, MgmtGuardChain):
+			order = append(order, "mgmt-guard")
 		case strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept"):
 			order = append(order, "test->uplink")
 		case strings.Contains(s, "forward_drop") && strings.Contains(s, `"iifname"`):
@@ -110,7 +112,7 @@ func TestForwardingDefaultsDropEverythingButTestToUplink(t *testing.T) {
 			order = append(order, "?"+s)
 		}
 	}
-	want := "established same-bridge same-bridge invalid invalid ipv6 ipv6 test->uplink drop-from-test drop-to-test"
+	want := "established same-bridge same-bridge invalid invalid ipv6 ipv6 mgmt-guard test->uplink drop-from-test drop-to-test"
 	if strings.Join(order, " ") != want {
 		t.Errorf("forward chain order:\n%s\nwant\n%s", strings.Join(order, " "), want)
 	}
@@ -288,15 +290,69 @@ func TestTwoPortTopologyDeniesTestToManagementByDefault(t *testing.T) {
 	if len(guard) != 1 || !strings.Contains(guard[0], "@mgmt_src") || !strings.Contains(guard[0], "@ifs_test") || !strings.Contains(guard[0], "oifname wan0") || !strings.HasSuffix(guard[0], "drop") {
 		t.Errorf("the guard chain: %v", guard)
 	}
-	// with a separate management interface no such rule is needed
-	tg = compileBasic(t, nil)
-	if hasChain(tg, MgmtGuardChain) {
-		t.Error("a guard chain without a management network behind the uplink")
-	}
-	for _, r := range chainOf(t, tg, "forward").Rules {
-		if strings.Contains(js(r.Expr), "mgmt_src") {
-			t.Errorf("an unneeded management guard: %s", js(r.Expr))
+}
+
+// In the three-port topology the policy table has no route to the management network, but routing
+// alone does not keep a device out: without the table's default (the uplink lost its address) a packet
+// falls through to the main table, which knows the management subnet, and a router behind the uplink
+// may know it too. The guard drops by the destination, whatever interface the packet leaves through,
+// and anything that leaves through the management interface (P31-M35a-10, decided on 2026-10-17).
+func TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface(t *testing.T) {
+	tg := compileBasic(t, nil)
+	fwd := chainOf(t, tg, "forward")
+	jump, established, accept := indexOfRule(fwd, "jump "+MgmtGuardChain), indexOfRule(fwd, "established"), -1
+	for i, r := range fwd.Rules {
+		s := js(r.Expr)
+		if strings.Contains(s, "ifs_lan") && strings.Contains(s, `"wan0"`) && strings.Contains(s, "accept") {
+			accept = i
 		}
+	}
+	if jump < 0 || established < 0 || accept < 0 || established > jump || jump > accept {
+		t.Fatalf("established %d, guard %d, test -> uplink %d: the replies come first, then the guard, then the default:\n%v", established, jump, accept, renderRules(fwd))
+	}
+	guard := renderRules(chainOf(t, tg, MgmtGuardChain))
+	want := []string{
+		`meta iifname @ifs_test_bf4feb ip daddr @mgmt_src_8743d6 counter "forward_drop" drop`,
+		`meta iifname @ifs_test_bf4feb meta oifname mgmt0 counter "forward_drop" drop`,
+	}
+	if strings.Join(guard, "\n") != strings.Join(want, "\n") {
+		t.Errorf("the guard chain:\n%s\nwant\n%s", strings.Join(guard, "\n"), strings.Join(want, "\n"))
+	}
+	// allowed sources that do not cover the management subnet: the subnet is guarded by its own rule
+	tg = compileBasic(t, func(cfg *model.Configuration, h *Host) {
+		cfg.Management.AllowedSources = &[]string{"10.200.0.0/24"}
+	})
+	guard = renderRules(chainOf(t, tg, MgmtGuardChain))
+	if len(guard) != 3 || !strings.Contains(guard[0], "@mgmt_src") || !strings.Contains(guard[1], "ip daddr 192.168.56.0/24") || !strings.Contains(guard[2], "oifname mgmt0") {
+		t.Errorf("the guard chain with other sources: %v", guard)
+	}
+}
+
+// The three-port guard has the two-port one's exception: an explicit matrix entry that allows a network
+// to reach the management network returns from the guard, so the entry's own place in the matrix decides.
+// Entries that deny, or that name another destination, do not open it.
+func TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard(t *testing.T) {
+	tg := compileBasic(t, func(cfg *model.Configuration, h *Host) {
+		cfg.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{
+			matrixEntry(lanEP(iotID), mgmtEP(), model.MatrixEntryPolicyAllow),
+			matrixEntry(lanEP(labID), mgmtEP(), model.MatrixEntryPolicyDeny),
+			matrixEntry(lanEP(labID), uplinkEP(), model.MatrixEntryPolicyAllow),
+		}}
+	})
+	g := renderRules(chainOf(t, tg, MgmtGuardChain))
+	if len(g) != 3 || !strings.HasSuffix(g[0], "return") || !strings.Contains(g[0], "br-iot") || !strings.Contains(g[0], "oifname mgmt0") || !strings.Contains(g[0], "@mgmt_src") ||
+		!strings.HasSuffix(g[1], "drop") || !strings.HasSuffix(g[2], "drop") {
+		t.Fatalf("the guard chain: %v", g)
+	}
+	// the entry itself still accepts behind the access rules, in the matrix
+	found := false
+	for _, r := range renderRules(chainOf(t, tg, "forward")) {
+		if strings.Contains(r, "br-iot") && strings.Contains(r, "oifname mgmt0") && strings.HasSuffix(r, "accept") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the matrix entry is not in the forward chain")
 	}
 }
 

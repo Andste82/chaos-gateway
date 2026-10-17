@@ -525,9 +525,11 @@ func (o *owner) observe(h compiler.Host) {
 		return
 	}
 	o.host = h
+	// published before it is announced: a waiting preview compiles the snapshot's host
+	o.publish()
+	o.e.announceHostChange()
 	if o.current == nil {
-		o.publish() // nothing is applied yet: the host is only remembered
-		return
+		return // nothing is applied yet: the host is only remembered
 	}
 	d := o.nextDesired(o.current.Config, o.current.Revision)
 	o.converge(d)

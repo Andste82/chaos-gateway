@@ -553,6 +553,15 @@ Three layers keep the kernel on the committed revision (plan §2.14, §3.2, §3.
   out, host changes from the netlink observer go into the next apply. `Preview` compares a
   candidate with the kernel and returns the domain diff, the plan and unified diffs per subsystem
   (the `routes` diff also covers bridges, addresses, sysctls and offloads).
+  `PreviewAwaitingUplink` is the preview of an apply (`POST /revisions/{id}/apply` and `POST /setup`):
+  when the candidate's only error is `uplink_no_address` (the OS has taken the uplink's address away for a
+  moment, e.g. `netplan apply` or a Wi-Fi reassociation), it waits for the next host change the observer
+  reports (the owner closes a channel when it takes a changed host) and compiles again, up to
+  `api.Config.UplinkWait` (default `engine.DefaultUplinkWait`, 10 s); then the apply fails as before
+  (issue #64). Tests: `TestAnApplyWaitsForTheUplinkAddressTheObserverReportsBack` and
+  `TestAnApplyWaitsForTheUplinkAddressOnlyForABoundedTime` (`internal/engine/uplinkwait_test.go`),
+  `TestAnApplyWaitsForTheUplinkAddressInsteadOfFailing` and
+  `TestTheSetupWaitsForTheUplinkAddressInsteadOfFailing` (`internal/api/uplinkwait_test.go`).
 
 Tests of these layers do not need privileges: `internal/apply/kernelsim` implements the executor's
 `Runner` and answers like the real tools (an nftables transaction is atomic, a set that a rule

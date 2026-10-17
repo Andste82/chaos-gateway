@@ -357,8 +357,9 @@ func problemsToError(ps []compiler.Problem) *problem {
 // ApplyRevision implements POST /revisions/{revisionId}/apply.
 func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, params model.ApplyRevisionParams) {
 	// the compiler's errors are the client's to fix: they are reported as such, before anything is
-	// touched; the engine only sees a target that compiles
-	pv, err := s.cfg.Engine.Preview(contextOf(c), revisionId)
+	// touched; the engine only sees a target that compiles. An uplink that has lost its address for a
+	// moment is waited for (issue #64).
+	pv, err := s.cfg.Engine.PreviewAwaitingUplink(contextOf(c), revisionId, s.cfg.UplinkWait)
 	if err != nil {
 		s.fail(c, err)
 		return

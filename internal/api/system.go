@@ -770,6 +770,9 @@ func (s *Server) CompleteSetup(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
+	// an uplink that has lost its address for a moment (the host's `netplan apply` the setup asks for)
+	// is waited for before the apply compiles (issue #64); whatever else is wrong, the apply reports
+	_, _ = s.cfg.Engine.PreviewAwaitingUplink(contextOf(c), rev.Id, s.cfg.UplinkWait)
 	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), rev.Id, engine.ApplyOptions{ConfirmTimeout: s.cfg.ConfirmTimeout, ForceConfirm: true})
 	if err != nil {
 		_ = s.cfg.Store.Discard(rev.Id) // the setup stays open: the candidate is of no use

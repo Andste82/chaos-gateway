@@ -33,15 +33,68 @@ published multi-arch image comes with M28.)
 
 ## 2. Prepare the host
 
-Once, as root; safe to run again:
+Once, as root; safe to run again. Name every interface that will carry a test network with `--test-interface`
+(here `eth0`):
 
 ```sh
-docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh
+docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh > host-setup.sh
+sudo sh host-setup.sh --test-interface eth0
 ```
 
 It installs Docker if missing, loads the kernel modules now and at boot
-(`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding (`/etc/sysctl.d/90-chaos-gateway.conf`) and
-prints the netplan changes the test interfaces need. It never touches the uplink or the management configuration.
+(`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding (`/etc/sysctl.d/90-chaos-gateway.conf`),
+keeps systemd-networkd off each test interface (below), prints the netplan changes the test interfaces need and
+ends with the check of each test interface. It never touches the uplink or the management configuration, or any
+netplan file. `sh host-setup.sh --help` lists its options.
+
+### The test interfaces belong to the gateway alone
+
+A test interface must not be configured by the operating system: if it is, the host runs its own DHCP client on
+the port and the devices of the test network get no answer from the gateway. Two things to do before the setup
+wizard:
+
+1. **Delete the interface's netplan entry.** Ubuntu's installer and cloud-init write one for every port, for
+   example in `/etc/netplan/50-cloud-init.yaml`:
+
+   ```yaml
+       eth0:
+         optional: true
+         dhcp4: false
+         dhcp6: false
+   ```
+
+   Delete the whole entry (an entry that only turns DHCP off still hands the port to the operating system), keep
+   the uplink's and the management interface's entries as they are, then run `sudo netplan apply`. Remove a
+   NetworkManager connection of the interface too, if there is one (`nmcli connection show`).
+2. **Keep systemd-networkd off the interface.** With the netplan entry gone, a default of the distribution may
+   take the port: on Ubuntu for the Raspberry Pi, `/run/systemd/network/zzzz-dracut-default.network` runs DHCP on
+   every ethernet port no other file names. `--test-interface eth0` writes
+   `/etc/systemd/network/10-chaosgw-eth0.network`, which comes before every such default, and reloads
+   systemd-networkd:
+
+   ```ini
+   [Match]
+   Name=eth0
+
+   [Link]
+   Unmanaged=yes
+   ```
+
+   `networkctl list` then shows `eth0` as `unmanaged`. `sudo sh host-setup.sh --remove-test-interface eth0`
+   removes the file again.
+
+Then check, until it says `the test interfaces are ready`:
+
+```sh
+sudo sh host-setup.sh --check eth0
+```
+
+The check changes nothing. For each interface it reports whether it exists and has a carrier (no carrier is only a
+warning: DHCP answers once the cable and the device are there), and names every netplan file and line,
+NetworkManager connection and systemd-networkd file that configures it, with the fix. It exits with status 1 while
+a step is missing. The setup wizard's preflight shows the same hints for netplan and NetworkManager and for the
+systemd-networkd files in `/etc/systemd/network`; it cannot see the ones in `/run` and `/usr/lib` (the gateway
+reads only the host's `/etc`), so run the check before the wizard.
 
 ## 3. Start the containers
 
@@ -68,8 +121,11 @@ The API prints a one-time setup token to its log at the first start:
 docker compose logs api | grep -A1 'First start'
 ```
 
-Until the setup has been applied, the `dns` container logs once that it cannot fetch its configuration: the link
-between the gateway and the DNS proxy is made by the first apply.
+Two things are normal until the setup has been applied, because the link between the gateway and the DNS proxy is
+made by the first apply: the `dns` container logs once that it cannot fetch its configuration, and
+`GET /api/v1/system/health` reports `degraded` (the DNS proxy has not polled yet; the container's health check
+still passes, only `unhealthy` fails it). After the setup both are gone; if not, look at the logs of the `api` and
+`dns` containers.
 
 Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until one is
 installed (M29), so the browser warns once. The setup wizard asks for the token, the uplink, the management
@@ -79,6 +135,14 @@ entry to remove from a test interface).
 Applying the setup configures the host's real interfaces and restricts the UI and API to the management network.
 Revision 1 waits for confirmation: if the browser cannot reach the gateway afterwards, it is rolled back when the
 countdown ends and the setup opens again, with a new token in the log.
+
+**Security until the setup is done** (plan §2.16): the wizard listens on every address of the host that is not
+yet on a test network, and whoever has the setup token can finish the setup and choose the admin password. The
+token is in the API container's log, which everyone who may run `docker compose logs` can read (membership in
+the `docker` group is as good as root on the host anyway). So run the setup right after the first start, from a
+network you trust, and keep the host's port 8443 away from untrusted networks until it is done; do not share the
+container logs before. After the setup the UI and API listen on the management network only, and the token is of
+no use any more.
 
 ## Port forwarding
 
@@ -97,6 +161,30 @@ goes through preview and apply like every other change. Things to know:
 - Docker's published ports live on the same addresses: do not forward a port a container on the host
   publishes, the two would compete for it.
 - The status of each forward says why it is inactive, for example "the device has no address".
+
+## Troubleshooting: DHCP does not answer
+
+A device on a test network gets no address. In this order:
+
+1. **The operating system leaves the port alone.** `sudo sh host-setup.sh --check eth0` (step 2) must say `the
+   test interfaces are ready`. `networkctl list` must show the port as `unmanaged`; `configuring`,
+   `configured` or `enslaved` mean systemd-networkd still runs DHCP on it: write the rule
+   (`--test-interface eth0`) and run `sudo networkctl reload`.
+2. **The port has a link and is in the network's bridge.** `ip link show eth0` shows `state UP` and
+   `master br-<network>` (the bridge of the network; the Linux view of the network in the UI names it).
+3. **Kea listens on the bridge.** Kea opens its packet socket on the bridge only while the bridge has a carrier,
+   that is while one of its ports is up. It tries again for a minute after a failure, and the gateway configures it
+   again whenever the bridge comes up, so a port that flapped needs nothing. To see it: the bridge's index
+   (`cat /sys/class/net/br-<network>/ifindex`) must be among the interface indexes of the packet sockets
+   (`sudo awk 'NR > 1 {print $5}' /proc/net/packet`). `docker compose logs kea` names an interface Kea skipped
+   ("is not running"). If the index is missing although the port is up, `docker compose restart kea` restores
+   it; please report that case.
+4. **The device asks again.** A device that gave up after its first tries waits a long time before the next:
+   renew its lease (`sudo dhclient -r eth0 && sudo dhclient eth0`, `ipconfig /renew`, or unplug and plug the
+   cable).
+5. **Capture on the port, not on the bridge.** `sudo tcpdump -eni eth0 port 67 or port 68` shows the device's
+   requests and the gateway's answers on the wire. Frames the bridge forwards between its ports are not seen on
+   the bridge device, so a capture on `br-<network>` can miss what the device sends or receives.
 
 ## Upgrading an installation made before issue #57 was fixed
 
@@ -121,13 +209,15 @@ then:
 
 ```sh
 docker compose down -v
+sudo sh host-setup.sh --remove-test-interface eth0
 sudo rm -f /etc/modules-load.d/chaos-gateway.conf /etc/sysctl.d/90-chaos-gateway.conf
 sudo reboot
 ```
 
 Stopping the executor removes the active faults; the bridges, nftables tables, routes and WireGuard interfaces of
-the last configuration stay until the reboot, which also unloads the modules and resets IPv4 forwarding. Undo
-by hand what you changed in netplan for the test interfaces.
+the last configuration stay until the reboot, which also unloads the modules and resets IPv4 forwarding.
+`--remove-test-interface` removes the systemd-networkd rule of a test interface (once per interface). Undo by
+hand what you changed in netplan for the test interfaces.
 
 If `docker compose down -v` fails with `device or resource busy` on the `chaosgw-run` volume, a mount of the
 executor has leaked into the host (issue #57, F4). Unmount it, then run `down -v` again:

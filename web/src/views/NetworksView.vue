@@ -268,7 +268,11 @@ watch(unknownNetwork, async (unknown) => {
           >
         </span>
         <span class="text-[13px] text-text-2">UI, API, SSH · owned by the OS</span>
-        <ForwardList v-if="forwardsOf('management').length" :rows="forwardsOf('management')" :device-name="deviceName" label="Port forwards from the management network" @edit="editForward" />
+        <template v-if="!draft.baseConfig && !twoPort">
+          <LoadError v-if="firstError(active)" :error="firstError(active)" what="The port forwards are not loaded" :retry="active.refetch" />
+          <span v-else class="text-xs text-text-2" role="status" data-testid="management-forwards-loading">Loading the port forwards…</span>
+        </template>
+        <ForwardList v-else-if="forwardsOf('management').length" :rows="forwardsOf('management')" :device-name="deviceName" label="Port forwards from the management network" @edit="editForward" />
         <button v-if="!twoPort" type="button" class="btn btn-sm" :disabled="!draft.baseConfig" aria-label="Add a port forward from the management network" @click="addForward('management')">
           Add port forward
         </button>
@@ -290,7 +294,11 @@ watch(unknownNetwork, async (unknown) => {
             >
           </span>
         </template>
-        <ForwardList v-if="forwardsOf('uplink').length" :rows="forwardsOf('uplink')" :device-name="deviceName" label="Port forwards from the uplink" @edit="editForward" />
+        <template v-if="!draft.baseConfig">
+          <LoadError v-if="firstError(active)" :error="firstError(active)" what="The port forwards are not loaded" :retry="active.refetch" />
+          <span v-else class="text-xs text-text-2" role="status" data-testid="uplink-forwards-loading">Loading the port forwards…</span>
+        </template>
+        <ForwardList v-else-if="forwardsOf('uplink').length" :rows="forwardsOf('uplink')" :device-name="deviceName" label="Port forwards from the uplink" @edit="editForward" />
         <button type="button" class="btn btn-sm" :disabled="!draft.baseConfig" aria-label="Add a port forward from the uplink" @click="addForward('uplink')">Add port forward</button>
         <LoadError v-if="firstError(forwardViews)" :error="firstError(forwardViews)" what="The status of the port forwards is not loaded" :retry="forwardViews.refetch" />
       </div>

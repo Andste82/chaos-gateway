@@ -54,8 +54,8 @@ const draft = useDraftStore();
 const connection = useConnectionStore();
 const now = useNow();
 const forwardViews = usePortForwards();
-// the draft's base: the forwards as the draft has them
-useActiveConfig();
+// the draft's base: the forwards as the draft has them; until it is loaded the card does not say "none"
+const active = useActiveConfig();
 
 const d = computed(() => device.data.value);
 const notFound = computed(() => device.error.value instanceof ApiError && device.error.value.status === 404);
@@ -276,13 +276,23 @@ useApiScreen('this device', () => [
             <RouterLink v-if="!forwardBlocked" class="btn btn-sm" :to="{ path: '/networks', query: { forward: 'new', device: d.id } }" :aria-label="`Add a port forward to ${d.name}`">Add</RouterLink>
           </template>
           <LoadError v-if="firstError(forwardViews)" :error="firstError(forwardViews)" what="The status of the port forwards is not loaded" :retry="forwardViews.refetch" />
-          <p v-if="forwards.length === 0" class="m-0 text-sm text-text-2" data-testid="device-forwards-empty">No port forward leads to this device.</p>
+          <template v-if="!draft.baseConfig">
+            <LoadError v-if="firstError(active)" :error="firstError(active)" what="The port forwards are not loaded" :retry="active.refetch" />
+            <p v-else class="m-0 text-sm text-text-2" role="status" data-testid="device-forwards-loading">Loading the port forwards…</p>
+          </template>
+          <p v-else-if="forwards.length === 0" class="m-0 text-sm text-text-2" data-testid="device-forwards-empty">No port forward leads to this device.</p>
           <ul v-else class="m-0 flex list-none flex-col gap-2 p-0" data-testid="device-forwards">
             <li v-for="r in forwards" :key="r.id" class="text-[13px]" data-testid="device-forward">
               <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span class="mono" :class="r.mark === 'DELETED' ? 'line-through opacity-60' : ''">{{ forwardSummary(r.p, forwardDevice) }}</span>
                 <span class="text-text-2">from the {{ entryLabels[r.p.entry] }}</span>
-                <span v-if="r.mark" class="rounded border border-accent-strong px-1.5 text-xs text-accent-text">{{ r.mark }}</span>
+                <span
+                  v-if="r.mark"
+                  class="rounded border px-1.5 text-xs"
+                  :class="r.mark === 'DELETED' ? 'border-block-border text-block-text' : 'border-accent-strong text-accent-text'"
+                  data-testid="device-forward-mark"
+                  >{{ r.mark }}</span
+                >
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <StatusDot v-bind="rowStatus(r)" />

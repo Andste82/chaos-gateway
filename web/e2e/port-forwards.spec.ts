@@ -360,6 +360,62 @@ test('port forwards: the status not loaded says so with Try again on the cards a
   await expect(page.getByTestId('device-forward').filter({ hasText: 'TCP 8080' })).toContainText('active · to 10.10.0.42');
 });
 
+test('port forwards: the configuration not loaded says so with Try again on the cards and the device detail, never "none"', async ({ page }) => {
+  // the forwards come from the active revision: while it loads or after it failed, no card claims an answer
+  const gw = withForwards(withNetworks(MockGateway.sample()));
+  let release = () => {};
+  gw.holding['/revisions/active'] = new Promise<void>((r) => (release = r));
+  await open(page, `/devices/${ESP}`, gw);
+  await expect(page.getByTestId('device-forwards-loading')).toHaveText('Loading the port forwards…');
+  await expect(page.getByTestId('device-forwards-empty')).toHaveCount(0);
+  release();
+  await expect(page.getByTestId('device-forward')).toHaveCount(2);
+
+  delete gw.holding['/revisions/active'];
+  gw.failing['/revisions/active'] = 500;
+  await page.goto(`/devices/${ESP}`);
+  const deviceError = page.getByTestId('load-error').filter({ hasText: 'The port forwards are not loaded' });
+  await expect(deviceError).toContainText('the gateway failed to read /revisions/active');
+  await expect(page.getByTestId('device-forwards-empty')).toHaveCount(0);
+  delete gw.failing['/revisions/active'];
+  await deviceError.getByRole('button', { name: 'Try again' }).click();
+  await expect(deviceError).toHaveCount(0);
+  await expect(page.getByTestId('device-forward')).toHaveCount(2);
+
+  gw.failing['/revisions/active'] = 500;
+  await page.goto('/networks');
+  for (const card of [uplinkCard(page), managementCard(page)]) {
+    await expect(card.getByTestId('load-error')).toContainText('The port forwards are not loaded: the gateway failed to read /revisions/active');
+  }
+  await expect(page.getByTestId('forward')).toHaveCount(0);
+  delete gw.failing['/revisions/active'];
+  await uplinkCard(page).getByTestId('load-error').getByRole('button', { name: 'Try again' }).click();
+  await expect(uplinkCard(page).getByTestId('forward')).toHaveCount(3);
+  await expect(managementCard(page).getByTestId('forward')).toHaveCount(1);
+  await expect(page.getByTestId('load-error')).toHaveCount(0);
+
+  gw.holding['/revisions/active'] = new Promise<void>(() => {});
+  await page.goto('/networks');
+  await expect(page.getByTestId('uplink-forwards-loading')).toHaveText('Loading the port forwards…');
+  await expect(page.getByTestId('management-forwards-loading')).toHaveText('Loading the port forwards…');
+});
+
+test('port forwards: a deleted forward is marked in the blocked tone on the cards and the device detail alike', async ({ page }) => {
+  await open(page);
+  await forward(page, 'esp-web').getByRole('button', { name: 'Delete esp-web' }).click();
+  const cardMark = forward(page, 'esp-web').getByTestId('forward-mark');
+  await expect(cardMark).toHaveText('DELETED');
+  await expect(cardMark).toHaveClass(/text-block-text/);
+  // within the app, so the draft stays
+  await page.getByRole('link', { name: 'Devices' }).first().click();
+  await page.getByRole('link', { name: 'ESP32-42' }).first().click();
+  const mark = page.getByTestId('device-forward').filter({ hasText: 'TCP 8080' }).getByTestId('device-forward-mark');
+  await expect(mark).toHaveText('DELETED');
+  await expect(mark).toHaveClass(/border-block-border/);
+  await expect(mark).toHaveClass(/text-block-text/);
+  await expect(mark).not.toHaveClass(/text-accent-text/);
+});
+
 test('port forwards: without forwards the cards list none and offer Add', async ({ page }) => {
   const gw = withForwards(withNetworks(MockGateway.sample()));
   gw.config = { ...gw.config, port_forwards: {} };

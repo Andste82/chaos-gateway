@@ -21,8 +21,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): done on the branch `phase-3-1-port-forwarding` (PR #68, CI run 38991357139 green), reviewed, not yet audited. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
-  P31-M35a-01 to P31-M35a-10. P31-M35a-05, -09 and -10 were decided on 2026-10-17 and are closed; the others are open for
-  the maintainer's decision with the option that was implemented.
+  P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
+  by best practice in the context of the project with the maintainer's agreement.
 
 ## Phase 1 audit result
 
@@ -1453,12 +1453,12 @@ plan:
 ## Phase 3.1 open items
 
 Phase 3.1 (M35a, port forwarding) is implemented on the branch `phase-3-1-port-forwarding` (PR #68). The items below were found
-while implementing it; each records the option that was implemented so the work was not blocked, and what the maintainer may
-want to decide.
+while implementing it; each records the option that was implemented so the work was not blocked. All were closed on 2026-10-17:
+P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practice with the maintainer's agreement.
 
 ### P31-M35a-01 When does a BGP neighbor sit on a forward's entry side?
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: 179/tcp is refused on both entry sides while an enabled BGP protocol is configured; the safe reading of the plan, and forwarding BGP into a test network is not a use case
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a refuses 179/tcp "while a BGP protocol of the routing configuration has a neighbor on
   the entry side". The BGP protocols of the routing configuration run on WireGuard links (M4c), and a link's neighbor must be
@@ -1472,12 +1472,12 @@ want to decide.
   network; (c) refuse it only when a link's peer endpoint is an address of the entry side's network (needs the host's
   addresses at validation time, which only the compiler has).
 - Recommendation: (a): it is the safe reading of the plan sentence, and forwarding BGP into a test network is rare.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-02 Forwards overlap whatever their entry side and whether they are enabled
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: one external port has one target, across both entry sides and whether a forward is enabled or not; the list and `explain` stay unambiguous and enabling a forward never fails, as on common routers
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "no two forwards on the same protocol and external port". A forward on the uplink and
   one on the management interface (three-port topology) could share a port, since they come in on different interfaces, and
@@ -1488,12 +1488,12 @@ want to decide.
   wording; (b) compare only forwards of the same entry side; (c) compare only enabled forwards (enabling one may then fail).
 - Recommendation: (a): one external port means one target, which keeps the UI's list and `explain` unambiguous, and enabling a
   forward never fails.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-03 The UI/API port is refused for udp and on both entry sides
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: the UI/API port is refused for tcp and udp on both entry sides; the plan says "never", and no forward can shadow the control plane in any topology
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "the external port is never the UI/API port". The UI and the API listen on TCP only,
   and in the three-port topology the uplink is not the management interface.
@@ -1502,12 +1502,12 @@ want to decide.
   443) is refused for tcp and udp on both entry sides. Options: (a) as implemented; (b) refuse it for tcp only; (c) refuse it
   only on the management side and on the two-port topology's shared interface, like 22/tcp.
 - Recommendation: (a): the plan says "never", and it keeps a forward from shadowing the control plane whatever the topology.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-04 A connection through a forward that is disabled or deleted lives on until it ends
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: a connection through a forward that is disabled or deleted lives on until it ends, like every other change of the access path (D11); a forward that should cut its connections is paired with a rule with "also cut existing connections"
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "a disabled or deleted forward leaves no DNAT and closes the path". The forward
   chain accepts established traffic before anything else (D11, spike S3), and the translation of a tracked connection is in
@@ -1521,7 +1521,7 @@ want to decide.
   the cut of an access rule does), so the device's next packet meets no translation.
 - Recommendation: (a): it is what a matrix change does, and a forward that should cut its connections can be paired with a
   rule with "also cut existing connections".
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-05 The replies of a forward from the management side go to the management subnet only
@@ -1564,7 +1564,7 @@ want to decide.
 
 ### P31-M35a-06 A forwarded port range is one DNAT element per port
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: one DNAT element per port, ranges not limited beyond 1-65535; a limit (option (b)) follows only if the measurements on the smallest hardware (H1) show large ranges to be slow
 - Severity: low
 - Reason: needs-decision. nftables has no expression that shifts a port by an offset (the kernel's shifted port ranges are not
   in nft 1.0.9 or 1.1.6), so a range shifted one to one (8000-8010 to 9000-9010) needs one map element per port.
@@ -1574,12 +1574,12 @@ want to decide.
   Options: (a) as implemented; (b) limit the length of a range in the validation (e.g. 1024 ports); (c) an unshifted range
   (target port = external port) as one interval element without a port in its value.
 - Recommendation: (a), with (b) if large ranges turn out to be slow on the smallest hardware (H1).
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-07 The entry address is every address of the entry interface
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a), as implemented: the forward enters on every address of the entry interface, so the kernel follows a new DHCP address at once, without an apply; a second address on the uplink is the operator's own
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "entry only on the chosen interface and its current address, which is followed through
   netlink like masquerade". The DNAT rule matches a packet that comes in on the entry interface and is addressed to an address
@@ -1590,12 +1590,12 @@ want to decide.
 - Task: implemented (a). Options: (a) as implemented; (b) match the one address the engine reads (the interface's first IPv4
   address, as the status and `explain` show it), compiled into the rule, so an address change takes a full apply.
 - Recommendation: (a): it follows a DHCP renewal within the kernel, and a second address on the uplink is the operator's own.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-08 The explain card of the faults screen asks for a device as the source
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a) for M35a, as implemented: a forwarded connection is explained through the API (`GET /explain`, `chaosctl`); the source choice "an address behind the uplink or the management network" in the explain card (option (b)) moves to M26, whose flow view lets a forwarded connection be picked (plan §5 M26 Scope)
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "the preview and `explain` say that faults do not apply to forwarded connections".
   `GET /explain` answers a forwarded connection when `src` is a peer behind the entry side and `dst` the entry side's address
@@ -1607,7 +1607,7 @@ want to decide.
   (`chaosctl` or `GET /explain?src=…&dst=…&protocol=…&port=…`). Options: (a) as implemented; (b) a source choice "an address
   behind the uplink or the management network" in the card, whose destination defaults to the entry side's address.
 - Recommendation: (b) with the flow view (M26), where a forwarded connection can be picked and explained.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-09 A forward's counter counts what the forward lets through, in hits

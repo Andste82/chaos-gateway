@@ -59,6 +59,9 @@ The API prints a one-time setup token to its log at the first start:
 docker compose logs api | grep -A1 'First start'
 ```
 
+Until the setup has been applied, the `dns` container logs once that it cannot fetch its configuration: the link
+between the gateway and the DNS proxy is made by the first apply.
+
 Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until one is
 installed (M29), so the browser warns once. The setup wizard asks for the token, the uplink, the management
 interface, the test interfaces and the admin password, and shows the preflight's hints (for example a netplan

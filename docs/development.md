@@ -1050,6 +1050,10 @@ proxy; the TLS responder (M21) joins it later.
   `TestAnOlderSelfSignedCertificateGetsTheServiceAddress`). The proxy reads the published
   certificate at every request and makes a new client when it changed, so it trusts a certificate the
   API issued again without a restart (`TestTheAPIClientTrustsTheCertificateTheAPIIssuedAgain`).
+  Until the setup has been applied the proxy cannot reach the API (the link to its namespace is made by
+  the first apply). `Follow` warns once, with a hint, and again only when the error changes; the
+  attempts in between are logged at debug level, and the recovery once (issue #57 F6,
+  `TestTheProxyWarnsOnceWhileTheAPICannotBeReached`).
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
   `/internal/dns/resolutions` (M20), per-device query statistics.
 

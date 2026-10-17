@@ -1428,7 +1428,9 @@ plan:
 ## Shutdown and host cleanup (decided 2026-10-16)
 
 - Decision: **variant A.** When the service stops, the executor removes every kernel object Chaos Gateway created
-  (the `inet chaosgw` nftables table, its policy rules and routing tables 100 and 102, the test bridges with their
+  (the `inet chaosgw` nftables table, its policy rules and routing tables 100 to 109 (the policy table 100, the table 101
+  of the replies of a management-side port forward, the service table 102 and the PMTU mirror tables 103 to 109; the own
+  range is 100 to 110), the test bridges with their
   addresses, the service veth pair `svc0`/`svc1` and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
   `svcns` holder container and ends with it). Recorded as D35 in plan §7.1. The volumes stay, so `compose up` rebuilds
   the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
@@ -1533,7 +1535,15 @@ want to decide.
   `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`, `TestGoldenForwards`, `TestGoldenForwardNftTransaction`; level 1
   `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork` (the testbed's management host is the management
   interface's default router; an address on its loopback outside the management subnet stands for a host behind it),
-  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`. The text below is the state before the decision.
+  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`. Limitation (found in the review of 2026-10-17, documented):
+  table 101 knows the management interface's connected subnet and its default gateway (`Host.DefaultGateway`, the main
+  table's default route on that interface) only. A peer that the host reaches through another route of the management
+  interface, such as an admin network behind a static route via `mgmt0` while the main default goes via the uplink, gets no
+  reply to a forwarded connection. When the management interface has no default route at all the compiler warns
+  (`forward_replies_subnet_only`: "the replies of management forwards reach only <subnet>";
+  `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`), the spec's `PortForwardEntry`
+  says so, and the forward form shows it as the hint of the entry `management`. The text below is the state before the
+  decision.
 - Severity: low
 - Reason: needs-decision. A device's packets are looked up in the policy table 100 (§2.2), whose default route is the
   uplink. A forward from the management network (three-port topology) needs its replies to go back through the management
@@ -1639,12 +1649,31 @@ want to decide.
 
 ### P31-M35a-10 A management-side forward makes the management subnet routable for the devices (three-port topology)
 
-- Status: closed (2026-10-17): decided — option (c) (with P31-M35a-05 (c)). Table 100 never has a route to the management
-  subnet; only the replies of a management-side forward go back through the management interface, by bit 22 of the
-  conntrack mark, the chain `fwd_reply`, the rule `fwmark 0x400000/0x400000 lookup 101` and table 101 (see P31-M35a-05). A
-  device's own new connection to the management network follows the uplink default and the forward chain as any other, so
-  even an allow rule without a destination does not carry it there, whether a management forward exists or not. The
-  two-port topology is unchanged (`management` is refused there). The executor's scope covers the new objects as they are
+- Status: closed (2026-10-17): decided — option (c) (with P31-M35a-05 (c)), and the guard of option (b) on top of it
+  (decided 2026-10-17 after the review of (c)). Table 100 never has a route to the management subnet; only the replies of a
+  management-side forward go back through the management interface, by bit 22 of the conntrack mark, the chain
+  `fwd_reply`, the rule `fwmark 0x400000/0x400000 lookup 101` and table 101 (see P31-M35a-05). A device's own new
+  connection to the management network follows the uplink default and the forward chain as any other, whether a
+  management forward exists or not. Routing alone does not keep it out, though: when table 100 loses its default (the
+  uplink loses its address, e.g. an expired DHCP lease: the kernel deletes the routes via the device, and the next compile
+  fails with `uplink_no_gateway`) the packet falls past rule 1000 to the main table, which knows the management subnet, and
+  a router behind the uplink that routes to the management subnet carries it there through the uplink. So the three-port
+  topology has the management guard too, exactly like the two-port one: the chain `mgmt_guard`, jumped to in front of the
+  access rules, drops new connections from the test interfaces (`ifs_test`: local test networks and WireGuard networks of
+  the role test) whose destination is in `mgmt_src` (whatever interface they leave through), to the management subnet
+  when the sources do not cover it, and whatever leaves through the management interface; the one exception is an explicit
+  access-matrix entry network → management: allow (a `return` in front of the drops). Replies, those of a management-side
+  forward included, are accepted before it. So no access rule, an allow rule without a destination included, carries a
+  device into the management network, whatever the routing. `explain` reports the guard as in the two-port topology (a
+  drop by the access matrix, no rule). No `prohibit` default is added to table 100 (the PMTU mirror tables copy its routes
+  with an MTU, and the executor refuses an MTU on a route that is not unicast). Tests of the guard:
+  `TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface`,
+  `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the golden scenario `access-threeport`,
+  `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (domain, both topologies),
+  `TestExplainNamesTheManagementGuardOfTheThreePortTopology`; level 1
+  `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork` and
+  `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`. The two-port topology is unchanged
+  (`management` is refused there, and its guard's output is the same). The executor's scope covers the new objects as they are
   (table 101 lies in Chaos Gateway's tables 100-110, the route's device is the assigned management interface). Tests:
   `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (no management subnet in table 100; the mark, the restore,
   the rule and table 101; none of it without a management forward), `TestGoldenForwards`, `TestGoldenForwardNftTransaction`;

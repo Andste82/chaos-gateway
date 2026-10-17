@@ -1997,7 +1997,7 @@ input     jump cut_input*                    only when a rule can cut (below)
 forward   jump cut_forward*
           ct state established,related accept
           (service guard, switched traffic, invalid, IPv6)
-          jump mgmt_guard*                   only with the management network behind the uplink
+          jump mgmt_guard                    the management guard, in both topologies
           jump access_forward                <- the rules
           the access matrix, the service rules, the default
 ```
@@ -2005,7 +2005,7 @@ forward   jump cut_forward*
 - **The rules decide before the matrix.** `allow` in forward is `accept`: an exception to the matrix
   ("IoT may not reach management, but this device may reach that host on port 22"). Traffic that no
   rule selects goes on to the matrix, which stays the default policy per network.
-- **The two-port guard stands in front of the rules.** When the management interface is the uplink interface (the
+- **The management guard stands in front of the rules.** When the management interface is the uplink interface (the
   two-port topology, plan §2.16) the management network lies behind the uplink, and a device under test must not
   reach it. The rule that drops this (`ifs_test` to the uplink, destination in `mgmt_src`, counter `forward_drop`) is the
   last rule of the chain `mgmt_guard`, which forward jumps to in front of `jump access_forward`, as the anti-lockout rule
@@ -2015,9 +2015,37 @@ forward   jump cut_forward*
   access matrix that allows the device's network to reach the management network: the chain starts with a `return` for
   each such entry, so that traffic goes on to the rules and meets the entry in its place in the matrix. What a client's
   `reachable` list implies does not open it, and an explicit entry "to the uplink" does not either (it matches the
-  interface only). `domain.World.AccessDecision` checks the same guard (`twoPortGuard`) before the rules and answers a drop by the
+  interface only). `domain.World.AccessDecision` checks the same guard (`mgmtGuard`) before the rules and answers a drop by the
   access matrix without a rule, so `explain` and the kernel agree. Decided by the maintainer on 2026-10-11 (P2-M9-11;
   before, the guard stood behind the jump, and an `allow` rule for such a destination opened the management network).
+  **The three-port topology has the guard too** (decided on 2026-10-17, P31-M35a-10). The policy table 100 has no route to
+  the management network, but routing alone does not keep a device out: when the table loses its default (the uplink
+  loses its address, e.g. an expired DHCP lease; the kernel deletes the routes via the device and the next compile fails
+  with `uplink_no_gateway`) a device's packet falls past the policy rules to the main table, which knows the management
+  subnet, and a router behind the uplink that routes to the management subnet carries it there through the uplink. So
+  `mgmt_guard` drops, behind the same `return`s of the explicit matrix entries, new connections from `ifs_test` whose
+  destination is in `mgmt_src` (whatever interface they leave through), to the management subnet when `allowed_sources`
+  do not cover it, and whatever leaves through the management interface:
+
+  ```
+  chain mgmt_guard {
+      meta iifname "br-lab" meta oifname "mgmt0" ip daddr @mgmt_src return    # one per explicit matrix entry
+      meta iifname @ifs_test ip daddr @mgmt_src counter "forward_drop" drop
+      meta iifname @ifs_test ip daddr 192.168.56.0/24 counter "forward_drop" drop   # only when the sources do not cover the subnet
+      meta iifname @ifs_test meta oifname "mgmt0" counter "forward_drop" drop
+  }
+  ```
+
+  Replies (established and related, the replies of a management-side port forward included) are accepted before the
+  jump, so the guard sees new connections only. `explain` names the guard in both topologies (a drop by the access matrix,
+  no rule; the reason names "behind the uplink" in the two-port topology only). No `prohibit` default is added to table
+  100 instead: the PMTU mirror tables copy every route of table 100 with an MTU, and the executor refuses an MTU on a route
+  that is not unicast. Tests: `TestThreePortTopologyGuardsTheManagementNetworkByDestinationAndInterface`,
+  `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden scenario (also in the kernel gate),
+  `TestExplainNamesTheManagementGuardOfTheThreePortTopology` (engine) and the domain tests above; on the real kernel
+  `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork` (the uplink default deleted from table
+  100, the management host given a route back: an allow-all rule does not carry A there, the guard counts, `explain`
+  agrees, the management forward still answers) and `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`.
   Tests: `TestNoAccessRuleCanOpenTheManagementNetworkBehindTheUplink`, `TestAnExplicitMatrixEntryReturnsFromTheTwoPortGuard`,
   `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (the domain layer), the `access-twoport` scenario of the kernel
   gate, and on the real kernel `TestNoAllowRuleOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` and
@@ -2585,7 +2613,8 @@ size share one table. `Input.PMTUTables` is the allocation of the previous compi
 takes the lowest free one, and the eighth distinct size is `capacity_exceeded` (the message names the scope that needs
 the most, like the class limit's). Blackhole and clamp faults need no table and do not count.
 
-**Mirror tables 103 to 109** (table 100 is the policy table, 102 the service table, 101 stays free; the executor's range
+**Mirror tables 103 to 109** (table 100 is the policy table, 101 the table of the replies of a management-side port forward
+(M35a), 102 the service table; the executor's range
 is 100 to 110) hold a copy of **every route of table 100** (connected networks, the uplink, downstream routes,
 WireGuard networks and the networks behind clients, the default route) with `mtu lock <size>`
 (`executor.Route.MTU`), and `ip rule priority 950 fwmark <index<<17>/0xe0000 lookup <table>` selects them, after the
@@ -4082,8 +4111,11 @@ decided on 2026-10-17 and are implemented as described below.
   - *Management side* (P31-M35a-05 and -10, option (c), decided 2026-10-17). The policy table 100,
     which every packet of a test network is looked up in, never has a route to the management
     subnet: a device's own new connection to the management network follows the uplink default
-    (masqueraded) and the forward chain like any other, so no access rule, an allow rule without a
-    destination included, carries it into the management network. Only the replies of a connection
+    (masqueraded) and the forward chain like any other. Routing alone does not keep the device out,
+    though (the table can lose its default with the uplink's address, and a router behind the uplink
+    may know the management subnet): the management guard in front of the access rules does, so no
+    access rule, an allow rule without a destination included, carries a device into the management
+    network; only an explicit matrix entry opens it (decided 2026-10-17). Only the replies of a connection
     that came in through a management-side forward go back through the management interface, by
     a mark: the forward's counting rule sets bit 22 of the conntrack mark (`ct mark set ct mark |
     0x400000`; plan §3.3, bits 22-23 reserved for routing marks), the base chain `fwd_reply`
@@ -4095,7 +4127,12 @@ decided on 2026-10-17 and are implemented as described below.
     management interface's connected subnet, a default via the management interface's own default
     gateway (the main table's default route on that interface, when there is one), and a `prohibit`
     default with metric 4096 as the fallback, so such a reply never falls through to the uplink.
-    So a peer behind a router of the management network is answered too. The table, the rule and
+    So a peer behind a router of the management network is answered too. A peer that the host reaches
+    through another route of the management interface (a static route to an admin network while the
+    main default goes via the uplink) is not in table 101 and gets no reply; when the management
+    interface has no default route at all the compiler warns (`forward_replies_subnet_only`: "the
+    replies of management forwards reach only <subnet>", `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`),
+    and the form of a management forward in the UI says the same. The table, the rule and
     the chain exist only while a forward from the management side is compiled (three-port topology;
     the executor's scope already covers them: table 101 lies in Chaos Gateway's tables 100-110, the
     route's device is the assigned management interface); bit 22 is read or written nowhere else.
@@ -4172,7 +4209,7 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 | an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network, also with `allowed_sources` unset or narrower); `TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection`, `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
 | a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` |
 | a port range is forwarded one to one | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (tcp 9049-9050 → 7049-7050); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`; `port-forwards.spec.ts` "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field" |
-| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the mark, table 101 and its rule, no management subnet in table 100), `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`; a peer behind a router of the management network is answered, and a device with an allow rule without a destination does not reach the management network (P31-M35a-05, -10): `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
+| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the mark, table 101 and its rule, no management subnet in table 100), `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`; a peer behind a router of the management network is answered, and a device with an allow rule without a destination does not reach the management network (P31-M35a-05, -10): `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`; the management guard keeps a device out also when table 100 has lost its default, and an explicit matrix entry opens it (decided 2026-10-17): `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork`, `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`; the warning when the management interface has no default route: `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
 | a forward follows a new uplink address (DHCP) within 1 s | `TestAForwardFollowsANewUplinkAddress` (the address replaced as a new lease does, measured, and the status follows), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` |
 | a device without a known address leaves its forward inactive with its reason in the status | `TestAForwardFollowsItsDeviceAndSaysWhyItIsInactive`, `TestPortForwardsAreListedWithTheirStatus`, `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestAForwardOfAnEntryWithoutAddressIsInactive`; `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status" |
 | the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; also the connections an access `allow` rule accepts, and the ones a rule drops (P31-M35a-09): `TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`, `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`; the counting rule in the NAT chain `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`; over the API `TestAForwardCountsItsConnections`; level 2 `TestSmokeOnCleanUbuntuHosts`. The UI shows "N connections": `src/lib/forwards.test.ts` "the rows: …", `port-forwards.spec.ts` "port forwards: the uplink and the management card list …", "port forwards: the device detail lists …" |

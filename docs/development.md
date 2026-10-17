@@ -2074,8 +2074,9 @@ forward   jump cut_forward*
 ```
 
 - **The rules decide before the matrix.** `allow` in forward is `accept`: an exception to the matrix
-  ("IoT may not reach management, but this device may reach that host on port 22"). Traffic that no
-  rule selects goes on to the matrix, which stays the default policy per network.
+  ("IoT may not reach Lab, but this device may reach that host on port 22"). Traffic that no
+  rule selects goes on to the matrix, which stays the default policy per network. The management
+  network is the exception: the guard below stands in front of the rules.
 - **The management guard stands in front of the rules.** When the management interface is the uplink interface (the
   two-port topology, plan §2.16) the management network lies behind the uplink, and a device under test must not
   reach it. The rule that drops this (`ifs_test` to the uplink, destination in `mgmt_src`, counter `forward_drop`) is the
@@ -4213,7 +4214,8 @@ decided on 2026-10-17 and are implemented as described below.
     network; only an explicit matrix entry opens it (decided 2026-10-17). Only the replies of a connection
     that came in through a management-side forward go back through the management interface, by
     a mark: the forward's counting rule sets bit 22 of the conntrack mark (`ct mark set ct mark |
-    0x400000`; plan §3.3, bits 22-23 reserved for routing marks), the base chain `fwd_reply`
+    0x400000`; plan §3.3: bit 22 is the reply mark of a management-side forward, bit 23 stays reserved for routing
+    marks), the base chain `fwd_reply`
     (filter, prerouting, priority -140: after the classification, before the NAT chain and the
     routing decision) copies it onto the packet mark of the replies that come in from a local test
     network (`iifname @ifs_lan ct direction reply ct mark & 0x400000 == 0x400000 meta mark set meta

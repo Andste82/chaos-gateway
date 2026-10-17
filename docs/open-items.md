@@ -15,14 +15,14 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   P3-AUDIT-36 are fixed (CI run 38646886557 on `aeeeed3` green), P3-AUDIT-37 (the device detail's path view, → M26)
   and P3-AUDIT-38 (a management hub in the overview topology, fixed) were decided by the maintainer on 2026-10-15, and
   the four choices the fixes made, listed there, were confirmed on 2026-10-15. What the implementation of a milestone could not settle is
-  under [Phase 3 open items](#phase-3-open-items), at the end of the
-  file; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
+  under [Phase 3 open items](#phase-3-open-items), right after the Phase 3 audit
+  result; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
   instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
-  items P31-AUDIT-01 to P31-AUDIT-09 are fixed on the branch `close-phase-3-1`. What the
-  implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
+  items P31-AUDIT-01 to P31-AUDIT-10 are fixed on the branch `close-phase-3-1`. What the
+  implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
 
@@ -1472,10 +1472,11 @@ round), each with a test that fails without the fix or with the corrected docume
 | P31-AUDIT-07 | major | The device detail said "No port forward leads to this device." while the active revision, which the forwards come from, was loading or had failed to load; the error of the revision was not shown (the class of P3-AUDIT-10). | The card shows "Loading the port forwards…" until the revision is there and "The port forwards are not loaded" with Try again when it failed; the empty sentence only with the revision loaded. Test: e2e `port forwards: the configuration not loaded says so with Try again on the cards and the device detail, never "none"`. |
 | P31-AUDIT-08 | minor | The uplink card and the management card listed no forward and said nothing when the active revision was not loaded; Add port forward was disabled without a reason. | Both cards say "Loading the port forwards…" or "The port forwards are not loaded" with Try again until the revision is there. Test: the same e2e case. |
 | P31-AUDIT-09 | minor | The device detail marked a deleted forward DELETED in the accent tone; the cards of the networks view mark it in the blocked tone (§2.17: red removed, blue as configured). | The device detail uses the blocked tone for DELETED like `ForwardList`. Test: e2e `port forwards: a deleted forward is marked in the blocked tone on the cards and the device detail alike`. |
+| P31-AUDIT-10 | minor | Documents behind the decisions of 2026-10-17: `docs/development.md` gave an `allow` rule into the management network as the example of an exception to the matrix, which the management guard now drops, and called mark bits 22–23 reserved after §3.3 gave bit 22 to the replies of a management-side forward; the M35a Scope accepted a forwarded connection "in from the uplink" only, though `management` is an entry side; `docs/install.md` did not say where the replies of a management-side forward can go; the Phase 3 bullet of this file put its open items "at the end of the file"; the M35a Status left out the three-port guard of P31-M35a-10. | The example uses a test network ("IoT may not reach Lab …") and names the guard as the exception; §3.3 is cited as bit 22 for the replies, bit 23 reserved; the Scope says "in on the forward's entry interface"; install.md's "Things to know" says that a management-side forward answers the management subnet and peers behind the management interface's default gateway only, and that the preview warns without a default route; the bullets point to the section after the audit result; the M35a Status names the guard. |
 
 ## Phase 3.1 open items
 
-Phase 3.1 (M35a, port forwarding) was implemented on the branch `phase-3-1-port-forwarding` (PR #68, merged 2026-10-17). The items below were found
+Phase 3.1 (M35a, port forwarding) is implemented on `main` (PR #68, merged 2026-10-17 as `0fb9176`). The items below were found
 while implementing it; each records the option that was implemented so the work was not blocked. All were closed on 2026-10-17:
 P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practice with the maintainer's agreement.
 

@@ -160,6 +160,9 @@ goes through preview and apply like every other change. Things to know:
   uplink only.
 - Docker's published ports live on the same addresses: do not forward a port a container on the host
   publishes, the two would compete for it.
+- A forward from the management network answers peers in the management subnet and behind the management
+  interface's default gateway only; a peer reached through another route of that interface gets no reply (the
+  preview warns when the management interface has no default route).
 - The status of each forward says why it is inactive, for example "the device has no address".
 
 ## Troubleshooting: DHCP does not answer

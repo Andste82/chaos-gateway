@@ -8,13 +8,14 @@
 // gateway refused says why, and Fix opens the form with the messages under their fields. A link of the
 // gateway exports its remote side's configuration and, when a routing protocol runs on it, the
 // matching BIRD snippet (plan §2.2.1 "Keys and export").
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import type { LanNetwork, NetworkView, WireGuardNetwork } from '../../api/generated/model';
 import { useGetUplink } from '../../api/generated/hooks/config/config';
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
 import { effectivePools, hostOf, subnetText } from '../../lib/networks';
 import { useDraftStore } from '../../stores/draft';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import StatusDot from '../ui/StatusDot.vue';
 import LinkExportDialog from './LinkExportDialog.vue';
 import LinuxExcerpt from './LinuxExcerpt.vue';
@@ -43,6 +44,7 @@ const uplinkHost = computed(() => uplink.data.value?.status.address?.split('/')[
 const title = computed(() => `${(props.network.config as { name: string }).name} ${lan.value ? 'network' : wg.value?.kind === 'hub' ? 'WireGuard hub' : 'WireGuard link'}`);
 
 const linux = ref(false);
+const linuxId = `${useId()}-linux`;
 watch(
   () => props.network.id,
   () => (linux.value = false),
@@ -223,10 +225,10 @@ const exportOpen = computed({
       </template>
     </dl>
 
-    <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="linux" @click="linux = !linux">
+    <DisclosureButton v-model:open="linux" :controls="linuxId">
       {{ linux ? 'Hide Linux view' : 'Show Linux view (compiled)' }}
-    </button>
-    <LinuxExcerpt v-if="linux" :terms="terms" />
+    </DisclosureButton>
+    <LinuxExcerpt v-if="linux" :id="linuxId" :terms="terms" />
     <LinkExportDialog v-if="exportable" v-model:open="exportOpen" :network="network" :format="exporting ?? 'conf'" />
   </section>
 </template>

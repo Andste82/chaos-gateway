@@ -28,6 +28,7 @@ import {
 } from '../../lib/networks';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore } from '../../stores/draft';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
 const props = defineProps<{
@@ -181,10 +182,10 @@ function toggleReach(key: string, on: boolean) {
         </div>
       </div>
 
-      <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="advanced" @click="advanced = !advanced">
+      <DisclosureButton v-model:open="advanced" :controls="`${uid}-advanced`">
         {{ advanced ? 'Hide advanced' : 'Advanced: client networks, access, DNS, keys' }}
-      </button>
-      <div v-if="advanced" class="flex flex-col gap-4">
+      </DisclosureButton>
+      <div v-if="advanced" :id="`${uid}-advanced`" class="flex flex-col gap-4">
         <div>
           <label class="label" :for="`${uid}-nets`">Client networks (subnets behind the client)</label>
           <input

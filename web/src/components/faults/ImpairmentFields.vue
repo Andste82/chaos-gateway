@@ -8,6 +8,7 @@
 // Each message stands under its field; `errors` holds the download set's as `download.<field>`.
 import { computed, ref, useId, watch } from 'vue';
 import { advancedFields, hasAdvanced, presets, tunnelFields, type ImpairmentField, type ImpairmentForm, type NetemField, type NetemForm } from '../../lib/netemForm';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 
 const props = defineProps<{
@@ -141,10 +142,10 @@ const advancedLabel = computed(() =>
       <p v-else class="m-0 self-end pb-2 text-[13px] text-text-2">Loss: burst model (Advanced)</p>
     </div>
 
-    <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="advanced" @click="advanced = !advanced">
+    <DisclosureButton v-model:open="advanced" :controls="`${uid}-advanced`">
       {{ advanced ? 'Hide advanced' : advancedLabel }}
-    </button>
-    <template v-if="advanced">
+    </DisclosureButton>
+    <div v-if="advanced" :id="`${uid}-advanced`" class="flex flex-col gap-4">
       <div v-if="!tunnel" class="grid grid-cols-5 gap-3">
         <div v-for="f in ['rate', 'queueLimit', 'reorder', 'duplicate', 'corrupt'] as const" :key="f">
           <label class="label" :for="fid(f)">{{ labels[f] }}</label>
@@ -236,6 +237,6 @@ const advancedLabel = computed(() =>
           </div>
         </template>
       </div>
-    </template>
+    </div>
   </div>
 </template>

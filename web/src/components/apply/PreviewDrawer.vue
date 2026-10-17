@@ -8,7 +8,7 @@
 // failed apply shows the failing step and the revision the gateway restored. The port forwards after
 // the change are listed with the note that faults do not apply to forwarded connections (M35a, M35b).
 import { useQueryClient } from '@tanstack/vue-query';
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
 import { applyRevision, createRevision, discardRevision, previewRevision } from '../../api/generated/hooks/revisions/revisions';
 import { getState } from '../../api/generated/hooks/system/system';
@@ -19,6 +19,7 @@ import { useApiPanelStore, type ApiCall } from '../../stores/apiPanel';
 import { useConnectionStore } from '../../stores/connection';
 import { useDraftStore } from '../../stores/draft';
 import { useToastStore } from '../../stores/toasts';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import SideDrawer from '../ui/SideDrawer.vue';
 
 type Phase = 'creating' | 'ready' | 'invalid' | 'applying' | 'failed' | 'error';
@@ -38,6 +39,7 @@ const problems = ref<{ where: string; message: string }[]>([]);
 const error = ref('');
 const failure = ref<{ step: string; detail: string; restored?: number }>();
 const linux = ref(false);
+const linuxId = `${useId()}-linux`;
 const force = ref(false);
 let calls: ApiCall[] = [];
 
@@ -335,10 +337,10 @@ function value(v: unknown): string {
           <label class="flex items-center gap-2 text-text"><input v-model="force" type="checkbox" /> Remove them when applying</label>
         </div>
 
-        <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="linux" @click="linux = !linux">
+        <DisclosureButton v-model:open="linux" :controls="linuxId">
           {{ linux ? 'Hide Linux changes' : 'Show Linux changes' }}
-        </button>
-        <div v-if="linux" class="flex flex-col gap-2" data-testid="preview-linux">
+        </DisclosureButton>
+        <div v-if="linux" :id="linuxId" class="flex flex-col gap-2" data-testid="preview-linux">
           <template v-for="[name, text] in linuxParts" :key="name">
             <div class="text-xs text-text-3">{{ name }}</div>
             <pre class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed whitespace-pre-wrap text-[#d9dee5]">{{ text }}</pre>

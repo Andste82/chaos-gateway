@@ -15,12 +15,13 @@ const shown = new WeakSet<Promise<string>>();
 // by the gateway) and shows it as a QR code for phones and tablets and as a .conf file to save. Both come
 // from that one text, so the code and the file are the same, and a client with "export once" is exported
 // once only. The configuration holds the client's private key: the dialog says so.
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { exportWireGuardClient } from '../../api/generated/hooks/wireguard/wireguard';
 import type { WireGuardClientView } from '../../api/generated/model';
 import { qrMatrix, qrPath } from '../../lib/qr';
 import { useApiPanelStore } from '../../stores/apiPanel';
+import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 
 const props = defineProps<{ network: string; client: WireGuardClientView | undefined }>();
@@ -31,6 +32,7 @@ const conf = ref<string>();
 const error = ref('');
 const loading = ref(false);
 const showText = ref(false);
+const textId = `${useId()}-text`;
 
 // Each opening counts: an export that answers after the dialog was closed, or reopened for another
 // client, belongs to an opening that is over and is dropped, so the dialog never shows another
@@ -149,10 +151,10 @@ function download() {
           </svg>
           <p v-else class="m-0 text-sm text-block-text">The configuration is too long for a QR code; save the file instead.</p>
         </div>
-        <button type="button" class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text" :aria-expanded="showText" @click="showText = !showText">
+        <DisclosureButton v-model:open="showText" :controls="textId">
           {{ showText ? 'Hide the configuration text' : 'Show the configuration text' }}
-        </button>
-        <pre v-if="showText" class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed text-[#d9dee5]" data-testid="client-conf-text">{{ conf }}</pre>
+        </DisclosureButton>
+        <pre v-if="showText" :id="textId" class="mono m-0 overflow-auto rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed text-[#d9dee5]" data-testid="client-conf-text">{{ conf }}</pre>
       </template>
     </div>
     <template #footer>

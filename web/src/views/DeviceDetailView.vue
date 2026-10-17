@@ -7,7 +7,7 @@
 // with their milestones. The port forwards to the device (M35a) are listed with their status and
 // counter, each with a link to edit it on the networks page, which also adds one to the device.
 import { useQuery } from '@tanstack/vue-query';
-import { computed, ref } from 'vue';
+import { computed, ref, useId } from 'vue';
 import { ApiError } from '../api/fetcher';
 import { useGetDevice } from '../api/generated/hooks/devices/devices';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
@@ -17,6 +17,7 @@ import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
+import DisclosureButton from '../components/ui/DisclosureButton.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
@@ -38,6 +39,7 @@ const props = defineProps<{ id: string }>();
 // "Show Linux view" (plan §2.17 "Technical view", P3-M14-03): the device's identity map elements and the
 // classification of its addresses, as the kernel holds them
 const linuxOpen = ref(false);
+const linuxId = `${useId()}-linux`;
 
 const device = useGetDevice(() => props.id, undefined, { query: { refetchInterval: 5_000 } });
 const overlays = useQuery({
@@ -322,15 +324,10 @@ useApiScreen('this device', () => [
               <dd class="m-0">{{ d.config.trusts_test_ca ? 'trusted' : 'not trusted' }}</dd>
             </template>
           </dl>
-          <button
-            type="button"
-            class="mt-3 self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
-            :aria-expanded="linuxOpen"
-            @click="linuxOpen = !linuxOpen"
-          >
+          <DisclosureButton v-model:open="linuxOpen" :controls="linuxId" class="mt-3">
             {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (identity and classification)' }}
-          </button>
-          <LinuxObjectExcerpt v-if="linuxOpen" kind="device" :id="d.id" class="mt-2" />
+          </DisclosureButton>
+          <div v-if="linuxOpen" :id="linuxId" class="mt-2"><LinuxObjectExcerpt kind="device" :id="d.id" /></div>
         </SectionCard>
       </aside>
     </div>

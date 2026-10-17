@@ -7,7 +7,7 @@
 // and moves go into the configuration draft and reach the gateway through Preview & apply; a deleted
 // rule stays at its place, struck through with an undo, until the draft is applied or discarded.
 import { useQueryClient } from '@tanstack/vue-query';
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../api/fetcher';
 import { deleteOverlay } from '../api/generated/hooks/overlays/overlays';
 import type { AccessRule, AccessRuleView, Overlay } from '../api/generated/model';
@@ -16,6 +16,7 @@ import LinuxObjectExcerpt from '../components/linux/LinuxObjectExcerpt.vue';
 import RuleEditor from '../components/rules/RuleEditor.vue';
 import AccessChip from '../components/ui/AccessChip.vue';
 import AppIcon from '../components/ui/AppIcon.vue';
+import DisclosureButton from '../components/ui/DisclosureButton.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SwitchToggle from '../components/ui/SwitchToggle.vue';
@@ -105,6 +106,7 @@ function lastMatch(at: string | undefined, applied: boolean): string {
 // "Show Linux view" (plan §2.17 "Technical view", P3-M14-03): the selected rule's compiled rule in both
 // hooks with its counter and last match; closed again when another rule is selected
 const linuxOpen = ref(false);
+const linuxId = `${useId()}-linux`;
 watch(selected, () => (linuxOpen.value = false));
 
 function setEnabled(id: string, rule: AccessRule, on: boolean) {
@@ -328,15 +330,10 @@ const rowClass = (on: boolean) =>
           </div>
         </div>
         <template v-if="!selConfig.isNew">
-          <button
-            type="button"
-            class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
-            :aria-expanded="linuxOpen"
-            @click="linuxOpen = !linuxOpen"
-          >
+          <DisclosureButton v-model:open="linuxOpen" :controls="linuxId">
             {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
-          </button>
-          <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selConfig.id" />
+          </DisclosureButton>
+          <div v-if="linuxOpen" :id="linuxId"><LinuxObjectExcerpt kind="rule" :id="selConfig.id" /></div>
         </template>
       </template>
 
@@ -361,15 +358,10 @@ const rowClass = (on: boolean) =>
             {{ ruleEffectInWords({ ...selOverlay.rule!, source: selOverlay.target ?? { global: true } }, { state: selOverlay.state, applied: true }) }}
           </div>
         </div>
-        <button
-          type="button"
-          class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
-          :aria-expanded="linuxOpen"
-          @click="linuxOpen = !linuxOpen"
-        >
+        <DisclosureButton v-model:open="linuxOpen" :controls="linuxId">
           {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
-        </button>
-        <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selOverlay.id" />
+        </DisclosureButton>
+        <div v-if="linuxOpen" :id="linuxId"><LinuxObjectExcerpt kind="rule" :id="selOverlay.id" /></div>
         <button type="button" class="btn self-start" :disabled="removing || !!state.data.value?.pending_confirm || connection.offline" @click="removeOverlayRule(selOverlay)">
           <AppIcon name="close" />Remove overlay rule
         </button>
@@ -393,15 +385,10 @@ const rowClass = (on: boolean) =>
           </div>
           <div class="text-[13px] text-[#d9dee5]">Evaluated before every other rule.</div>
         </div>
-        <button
-          type="button"
-          class="self-start border-0 bg-transparent p-0 text-[13px] text-accent-text"
-          :aria-expanded="linuxOpen"
-          @click="linuxOpen = !linuxOpen"
-        >
+        <DisclosureButton v-model:open="linuxOpen" :controls="linuxId">
           {{ linuxOpen ? 'Hide Linux view' : 'Show Linux view (compiled rule and counter)' }}
-        </button>
-        <LinuxObjectExcerpt v-if="linuxOpen" kind="rule" :id="selSystem.key" />
+        </DisclosureButton>
+        <div v-if="linuxOpen" :id="linuxId"><LinuxObjectExcerpt kind="rule" :id="selSystem.key" /></div>
       </template>
       <p v-else id="rule-editor-title" class="m-0 text-sm text-text-2">Select a rule to see it here.</p>
     </section>

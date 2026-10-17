@@ -1042,7 +1042,14 @@ proxy; the TLS responder (M21) joins it later.
   The proxy and the Kea hook verify the API's certificate against the one it publishes to the
   `chaosgw-service` volume (`--api-cert-file`/`CHAOSGW_API_CERT`, set by default in
   `compose.dns.yaml`/`compose.kea.yaml`); without it, either trusts whatever is presented (they only
-  ever talk to the gateway over a private link).
+  ever talk to the gateway over a private link). The proxy connects to `169.254.100.1`
+  (`compiler.ServiceHostCIDR`), so the API's self-signed certificate has that address besides the
+  loopback (issue #64); a self-signed certificate of an earlier version without it is issued again at
+  the API's start with the same key, names and addresses, and one someone installed is left alone
+  (`TestTheCertificateIsValidForTheServiceAddress`,
+  `TestAnOlderSelfSignedCertificateGetsTheServiceAddress`). The proxy reads the published
+  certificate at every request and makes a new client when it changed, so it trusts a certificate the
+  API issued again without a restart (`TestTheAPIClientTrustsTheCertificateTheAPIIssuedAgain`).
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
   `/internal/dns/resolutions` (M20), per-device query statistics.
 

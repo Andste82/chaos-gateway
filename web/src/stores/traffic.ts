@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import type { UplinkTrafficSample } from '../api/generated/model';
 
 /** One point of the uplink chart: bit rates between two readings of the interface counters. */
 export interface RatePoint {
@@ -19,28 +20,27 @@ export function chartRange(max: number | null | undefined, now = Date.now()): [n
 }
 
 /**
- * The uplink's traffic since the page was opened, from the byte counters of `GET /uplink`. It is
- * a store, not component state, so the chart keeps its history when the user leaves the overview.
+ * The uplink's traffic as the gateway sampled it (`GET /uplink/traffic`, issue #63): the history it
+ * keeps, loaded at once, then the samples taken after the newest one here. It is a store, not
+ * component state, so the chart keeps its points when the user leaves the overview and fills the
+ * gap from the gateway's history when they come back.
  */
 export const useTrafficStore = defineStore('traffic', () => {
   const points = ref<RatePoint[]>([]);
-  let last: { t: number; rx: number; tx: number } | undefined;
+  /** The newest sample's time as the gateway wrote it: the `since` of the next request. */
+  const newest = ref<string>();
 
-  /** Adds a reading of the counters (bytes received and sent) taken at `at`. */
-  function record(rx: number, tx: number, at: Date = new Date()) {
-    const t = at.getTime() / 1000;
-    if (last && t > last.t) {
-      const dt = t - last.t;
-      // a counter that went down was reset (interface re-created): no rate for that interval
-      if (rx >= last.rx && tx >= last.tx) {
-        points.value = [
-          ...points.value.filter((p) => p.t > t - windowSeconds),
-          { t, downBps: ((rx - last.rx) * 8) / dt, upBps: ((tx - last.tx) * 8) / dt },
-        ];
-      }
-    }
-    if (!last || t > last.t) last = { t, rx, tx };
+  /** Appends the samples of an answer that are newer than the newest point (none twice). */
+  function merge(samples: UplinkTrafficSample[]) {
+    const last = points.value.at(-1)?.t;
+    const fresh = samples
+      .map((s) => ({ point: { t: Date.parse(s.time) / 1000, downBps: s.down_bps, upBps: s.up_bps }, time: s.time }))
+      .filter((s) => Number.isFinite(s.point.t) && (last === undefined || s.point.t > last));
+    if (fresh.length === 0) return;
+    newest.value = fresh[fresh.length - 1]!.time;
+    const end = fresh[fresh.length - 1]!.point.t;
+    points.value = [...points.value, ...fresh.map((s) => s.point)].filter((p) => p.t > end - windowSeconds);
   }
 
-  return { points, record };
+  return { points, newest, merge };
 });

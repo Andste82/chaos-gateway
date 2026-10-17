@@ -24,7 +24,8 @@ const props = defineProps<{
   faultsError?: unknown;
 }>();
 
-const uplink = useGetUplink();
+// the link state changes without an event
+const uplink = useGetUplink(undefined, { query: { refetchInterval: 5_000 } });
 
 interface Box {
   id: string;

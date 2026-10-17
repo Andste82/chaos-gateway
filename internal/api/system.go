@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -568,12 +569,18 @@ func assignment(cfg *model.Configuration, l compiler.HostLink) *hostAssignment {
 }
 
 // sysClassNet is where the kernel lists the interfaces of the API's network namespace (the host's in
-// production, where the API runs with the host network).
-var sysClassNet = "/sys/class/net"
+// production, where the API runs with the host network). The uplink traffic sampler reads it in its
+// own goroutine, so a test that points it elsewhere swaps it atomically.
+var sysClassNet atomic.Pointer[string]
+
+func init() {
+	d := "/sys/class/net"
+	sysClassNet.Store(&d)
+}
 
 // sysfs adds what only the kernel's file system knows: link state, speed, driver and bus.
 func sysfs(hi *hostInterface) {
-	base := filepath.Join(sysClassNet, hi.Name)
+	base := filepath.Join(*sysClassNet.Load(), hi.Name)
 	if b, err := os.ReadFile(filepath.Join(base, "carrier")); err == nil {
 		up := strings.TrimSpace(string(b)) == "1"
 		hi.LinkUp = &up
@@ -602,7 +609,7 @@ func sysfs(hi *hostInterface) {
 // linkBytes returns the received and sent bytes of an interface from its kernel counters.
 func linkBytes(name string) (rx, tx int64, ok bool) {
 	read := func(f string) (int64, bool) {
-		b, err := os.ReadFile(filepath.Join(sysClassNet, name, "statistics", f))
+		b, err := os.ReadFile(filepath.Join(*sysClassNet.Load(), name, "statistics", f))
 		if err != nil {
 			return 0, false
 		}

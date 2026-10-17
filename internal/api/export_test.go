@@ -24,9 +24,8 @@ func SetDNSPoll(wait, tick time.Duration) (restore func()) {
 // SetSysClassNet points the reads of interface state and counters at dir and returns a function
 // that restores them.
 func SetSysClassNet(dir string) (restore func()) {
-	old := sysClassNet
-	sysClassNet = dir
-	return func() { sysClassNet = old }
+	old := sysClassNet.Swap(&dir)
+	return func() { sysClassNet.Store(old) }
 }
 
 // OSConfigCacheReadsOfALateCaller fills the cache of GET /setup's read of the host's network configuration,

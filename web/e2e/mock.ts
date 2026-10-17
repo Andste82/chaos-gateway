@@ -40,6 +40,7 @@ import type {
   Session,
   SetupStatus,
   SystemInfo,
+  UplinkTrafficSample,
   UplinkView,
   WireGuardClient,
   WireGuardClientView,
@@ -430,6 +431,13 @@ export class MockGateway {
   };
   /** Bytes the uplink counters grow by per reading. */
   uplinkStep = { rx: 750_000, tx: 125_000 };
+  /**
+   * The gateway's history of the uplink's rates (`GET /uplink/traffic`), oldest first. Like the API's
+   * sampler, a request adds a reading when 5 s passed since the last one (the first only starts the
+   * history); a test may seed it.
+   */
+  uplinkTraffic: UplinkTrafficSample[] = [];
+  private uplinkReadAt?: number;
   requests: Recorded[] = [];
   /**
    * How far the gateway's clock is ahead of the browser's (negative: behind). The answers carry the
@@ -662,6 +670,21 @@ export class MockGateway {
         this.uplink = { ...this.uplink, status: { ...st, rx_bytes: st.rx_bytes + this.uplinkStep.rx, tx_bytes: st.tx_bytes + this.uplinkStep.tx } };
       }
       return json(200, this.uplink);
+    }
+    if (path === '/uplink/traffic') {
+      const st = this.uplink.status;
+      const counters = st.rx_bytes !== undefined && st.tx_bytes !== undefined;
+      const now = this.now();
+      const readAt = this.uplinkReadAt ?? (this.uplinkTraffic.length ? Date.parse(this.uplinkTraffic.at(-1)!.time) : undefined);
+      if (counters && readAt === undefined) this.uplinkReadAt = now;
+      else if (counters && readAt !== undefined && now - readAt >= 4_500) {
+        const dt = (now - readAt) / 1000;
+        this.uplinkTraffic.push({ time: new Date(now).toISOString(), down_bps: (this.uplinkStep.rx * 8) / dt, up_bps: (this.uplinkStep.tx * 8) / dt });
+        this.uplinkReadAt = now;
+      }
+      const since = url.searchParams.get('since');
+      const samples = since ? this.uplinkTraffic.filter((s) => Date.parse(s.time) > Date.parse(since)) : this.uplinkTraffic;
+      return json(200, { interval_seconds: 5, period_seconds: 600, interface: st.interface, counters, samples });
     }
     if (path === '/devices') return json(200, this.page(this.devices, url));
     const dev = /^\/devices\/([^/]+)$/.exec(path);

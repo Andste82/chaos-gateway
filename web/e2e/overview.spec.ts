@@ -96,6 +96,7 @@ test('while the networks and the events load, the overview says so instead of "n
 test('the uplink is not claimed "up" while it is not known, and a failed read says so', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.failing['/uplink'] = 500;
+  gw.failing['/uplink/traffic'] = 500;
   await gw.install(page);
   await page.goto('/');
   await expect(page.getByTestId('topology-uplink')).toContainText('Uplink not loaded');
@@ -110,6 +111,41 @@ test('the uplink chart says visibly that it collects the first readings, until i
   await page.goto('/');
   await expect(page.getByTestId('uplink-collecting')).toHaveText('Collecting the first readings…');
   await expect(page.getByTestId('uplink-rates')).toContainText('Mbit/s', { timeout: 15_000 });
+  await expect(page.getByTestId('uplink-collecting')).toHaveCount(0);
+});
+
+// Issue #63: the gateway keeps the history, so a page load or a reload draws the last minutes at once;
+// the live samples are appended to it, none missing and none twice.
+test('the uplink chart draws the gateway history at once after a reload, then appends the live samples', async ({ page }) => {
+  const gw = MockGateway.sample();
+  const t0 = gw.now() - 300_000;
+  // five minutes of readings every 5 s, the newest just now
+  for (let i = 1; i <= 60; i++) {
+    gw.uplinkTraffic.push({ time: new Date(t0 + i * 5_000).toISOString(), down_bps: i * 50_000, up_bps: 100_000 });
+  }
+  const newest = gw.uplinkTraffic.at(-1)!.time;
+  await gw.install(page);
+  await page.goto('/');
+  const chart = page.getByTestId('uplink-chart');
+  await expect(chart).toHaveAttribute('data-samples', '60', { timeout: 4_000 });
+  await expect(page.getByTestId('uplink-collecting')).toHaveCount(0);
+  await expect(page.getByTestId('uplink-rates')).toContainText('↓ 3.0 Mbit/s');
+  const traffic = () => gw.requests.filter((r) => r.path === '/uplink/traffic');
+  expect(traffic()[0]!.query.since).toBeUndefined();
+
+  // the next request asks for what came after the newest sample, and the chart has exactly the gateway's samples
+  await expect.poll(() => traffic().length, { timeout: 15_000 }).toBeGreaterThan(1);
+  expect(traffic()[1]!.query.since).toBe(newest);
+  await expect.poll(async () => gw.uplinkTraffic.length > 60 && (await chart.getAttribute('data-samples')) === String(gw.uplinkTraffic.length), { timeout: 15_000 }).toBe(true);
+  await expect(page.getByTestId('uplink-rates')).not.toContainText('↓ 3.0 Mbit/s');
+
+  // a reload loses nothing: the whole history again, before the next live sample
+  const before = gw.uplinkTraffic.length;
+  const requests = traffic().length;
+  await page.reload();
+  await expect.poll(() => traffic().length, { timeout: 4_000 }).toBeGreaterThan(requests);
+  expect(traffic()[requests]!.query.since).toBeUndefined();
+  await expect.poll(async () => Number(await chart.getAttribute('data-samples')), { timeout: 4_000 }).toBeGreaterThanOrEqual(before);
   await expect(page.getByTestId('uplink-collecting')).toHaveCount(0);
 });
 

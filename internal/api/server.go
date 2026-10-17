@@ -54,6 +54,9 @@ type Config struct {
 	// Resolvers returns the host's upstream resolvers for the DNS proxy when the uplink names none;
 	// nil reads the host's resolver files.
 	Resolvers func() []netip.Addr
+	// TrafficInterval is how often the uplink's counters are read for GET /uplink/traffic and
+	// TrafficPeriod how long a rate is kept; zero takes the defaults (5 s, 10 min).
+	TrafficInterval, TrafficPeriod time.Duration
 }
 
 // Server implements apiserver.ServerInterface.
@@ -78,6 +81,9 @@ type Server struct {
 	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
 	unsubEvents func()
 	eventsDone  chan struct{}
+	// traffic is the history of the uplink's rates (GET /uplink/traffic), sampler what fills it
+	traffic *uplinkTraffic
+	sampler trafficSampler
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -93,11 +99,20 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
+	if cfg.TrafficInterval == 0 {
+		cfg.TrafficInterval = defaultTrafficInterval
+	}
+	if cfg.TrafficPeriod == 0 {
+		cfg.TrafficPeriod = defaultTrafficPeriod
+	}
+	if cfg.TrafficInterval < time.Second || cfg.TrafficPeriod < cfg.TrafficInterval {
+		return nil, errors.New("api: the uplink traffic interval must be at least a second and the period at least the interval")
+	}
 	ops, err := loadOps()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, log: cfg.Log, clk: cfg.Clock, ops: ops}
+	s := &Server{cfg: cfg, log: cfg.Log, clk: cfg.Clock, ops: ops, traffic: &uplinkTraffic{interval: cfg.TrafficInterval, period: cfg.TrafficPeriod}}
 	if s.idem, err = openIdempotency(cfg.StateDir, cfg.Clock); err != nil {
 		return nil, err
 	}
@@ -105,6 +120,7 @@ func New(cfg Config) (*Server, error) {
 	s.unsubEvents = unsub
 	s.eventsDone = make(chan struct{})
 	go s.auditSystemEvents(events)
+	s.startTrafficSampler()
 	return s, nil
 }
 
@@ -199,6 +215,7 @@ func pathMatches(pattern, actual string) bool {
 
 // Close releases what the server holds.
 func (s *Server) Close() error {
+	s.stopTrafficSampler()
 	s.unsubEvents()
 	<-s.eventsDone
 	return s.idem.close()

@@ -56,6 +56,8 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	listen := fs.String("listen", "", "listen on exactly this address instead of the management network (development, tests)")
 	webDir := fs.String("web-dir", "", "serve the web app from this directory (a build of web/, `make build-web`) instead of the one embedded in the binary")
 	poll := fs.Duration("poll-interval", 5*time.Second, "how often WireGuard and routing state are read")
+	trafficInterval := fs.Duration("uplink-traffic-interval", 5*time.Second, "how often the uplink's byte counters are read for the overview's traffic chart")
+	trafficPeriod := fs.Duration("uplink-traffic-period", 10*time.Minute, "how long the uplink's rates are kept in memory for the overview's traffic chart")
 	keaSocket := fs.String("kea-socket", kea.ControlSocket, "Kea's control socket; empty runs without DHCP")
 	serviceNS := fs.String("service-ns", "", "name of the service namespace of the gateway services (the DNS proxy); empty runs without one")
 	holderPID := fs.String("service-holder-pid-file", "", "file with the PID (as the executor sees it) of the process whose network namespace becomes the service namespace")
@@ -78,7 +80,8 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
-		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket,
+		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -96,6 +99,8 @@ type apiOptions struct {
 	port            int
 	listen          string
 	poll            time.Duration
+	trafficInterval time.Duration
+	trafficPeriod   time.Duration
 	confirm         time.Duration
 	webDir          string
 	keaSocket       string
@@ -188,7 +193,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
-		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui})
+		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod})
 	if err != nil {
 		return err
 	}

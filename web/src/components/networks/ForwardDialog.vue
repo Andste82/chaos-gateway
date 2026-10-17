@@ -20,6 +20,7 @@ import {
   forwardFormErrors,
   forwardFromForm,
   forwardTitle,
+  managementReplyHint,
   type ForwardField,
   type ForwardForm,
 } from '../../lib/forwards';
@@ -193,9 +194,10 @@ async function submit() {
         </div>
         <div>
           <span class="label">Entry</span>
-          <SegmentedControl v-model="entry" :options="entries" label="Entry" :described-by="shown('entry') ? 'forward-entry-error' : twoPort ? 'forward-entry-hint' : undefined" />
+          <SegmentedControl v-model="entry" :options="entries" label="Entry" :described-by="shown('entry') ? 'forward-entry-error' : twoPort || entry === 'management' ? 'forward-entry-hint' : undefined" />
           <p v-if="shown('entry')" id="forward-entry-error" class="field-error" role="alert">{{ shown('entry') }}</p>
           <p v-else-if="twoPort" id="forward-entry-hint" class="m-0 mt-1 text-xs text-text-3">Two-port topology: the management network is the uplink.</p>
+          <p v-else-if="entry === 'management'" id="forward-entry-hint" class="m-0 mt-1 text-xs text-text-3">{{ managementReplyHint }}</p>
         </div>
       </div>
       <TextField v-model="form.external" label="External port" mono placeholder="8080 or 8000-8010" :error="shown('external')" hint="On the entry side's addresses." />

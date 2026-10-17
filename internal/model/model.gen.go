@@ -2650,12 +2650,17 @@ type AccessRule struct {
 // anti-lockout rule with its counter; the closure of the UI/API port is described here only, it is
 // not listed there and has no counter of its own. Decided by the maintainer on 2026-10-11.
 //
-// The same holds for the two-port topology (the management interface is the uplink interface, plan
-// §2.16): the guard that stops devices under test from reaching the management network behind the
-// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
-// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
-// Only an explicit entry of the access matrix from the device's network to the management network
-// opens it. Decided by the maintainer on 2026-10-11.
+// The same holds for the management network (plan §2.16): the guard that stops devices under test
+// from opening connections into it stands in front of the access rules, so no rule, `allow`
+// included, opens that network for a device under test. In the two-port topology (the management
+// interface is the uplink interface) the guard drops by the management addresses behind the uplink
+// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
+// addresses, whatever interface the packet would leave through, and anything that would leave
+// through the management interface, so a lost uplink default route or a router behind the uplink
+// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
+// access matrix from the device's network to the management network opens it. Replies, those of a
+// port forward from the management side included, are accepted before the guard.
 //
 // **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 // the management network towards a device, so a rule whose source is a device, group or network matches
@@ -3874,7 +3879,12 @@ type Explanation struct {
 		// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
 		// topology only (in the two-port topology both are one interface, so `management` is refused as a
 		// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
-		// (plan §2.2).
+		// (plan §2.2). The replies of a `management` forward go back through the management interface by a
+		// table of their own, which knows the interface's connected subnet and its default gateway (the
+		// default route of the management interface in the host's main table) only: a peer that the host
+		// reaches through another route of the management interface (a static route to an admin network
+		// while the main default goes via the uplink) gets no reply. The compiler warns when the management
+		// interface has no default route (P31-M35a-05).
 		Entry PortForwardEntry `json:"entry"`
 		Id    Uuid             `json:"id"`
 		Name  *string          `json:"name,omitempty"`
@@ -4808,12 +4818,17 @@ type Overlay struct {
 	// anti-lockout rule with its counter; the closure of the UI/API port is described here only, it is
 	// not listed there and has no counter of its own. Decided by the maintainer on 2026-10-11.
 	//
-	// The same holds for the two-port topology (the management interface is the uplink interface, plan
-	// §2.16): the guard that stops devices under test from reaching the management network behind the
-	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
-	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
-	// Only an explicit entry of the access matrix from the device's network to the management network
-	// opens it. Decided by the maintainer on 2026-10-11.
+	// The same holds for the management network (plan §2.16): the guard that stops devices under test
+	// from opening connections into it stands in front of the access rules, so no rule, `allow`
+	// included, opens that network for a device under test. In the two-port topology (the management
+	// interface is the uplink interface) the guard drops by the management addresses behind the uplink
+	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
+	// addresses, whatever interface the packet would leave through, and anything that would leave
+	// through the management interface, so a lost uplink default route or a router behind the uplink
+	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
+	// access matrix from the device's network to the management network opens it. Replies, those of a
+	// port forward from the management side included, are accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches
@@ -4965,12 +4980,17 @@ type OverlayRequest struct {
 	// anti-lockout rule with its counter; the closure of the UI/API port is described here only, it is
 	// not listed there and has no counter of its own. Decided by the maintainer on 2026-10-11.
 	//
-	// The same holds for the two-port topology (the management interface is the uplink interface, plan
-	// §2.16): the guard that stops devices under test from reaching the management network behind the
-	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
-	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
-	// Only an explicit entry of the access matrix from the device's network to the management network
-	// opens it. Decided by the maintainer on 2026-10-11.
+	// The same holds for the management network (plan §2.16): the guard that stops devices under test
+	// from opening connections into it stands in front of the access rules, so no rule, `allow`
+	// included, opens that network for a device under test. In the two-port topology (the management
+	// interface is the uplink interface) the guard drops by the management addresses behind the uplink
+	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
+	// addresses, whatever interface the packet would leave through, and anything that would leave
+	// through the management interface, so a lost uplink default route or a router behind the uplink
+	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
+	// access matrix from the device's network to the management network opens it. Replies, those of a
+	// port forward from the management side included, are accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches
@@ -5068,7 +5088,12 @@ type PortForward struct {
 	// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
 	// topology only (in the two-port topology both are one interface, so `management` is refused as a
 	// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
-	// (plan §2.2).
+	// (plan §2.2). The replies of a `management` forward go back through the management interface by a
+	// table of their own, which knows the interface's connected subnet and its default gateway (the
+	// default route of the management interface in the host's main table) only: a peer that the host
+	// reaches through another route of the management interface (a static route to an admin network
+	// while the main default goes via the uplink) gets no reply. The compiler warns when the management
+	// interface has no default route (P31-M35a-05).
 	Entry PortForwardEntry `json:"entry"`
 
 	// ExternalPort The external port, or the first port of the external range.
@@ -5099,7 +5124,12 @@ type PortForward struct {
 // it; `management` - on the management interface, on every IPv4 address of it, in the three-port
 // topology only (in the two-port topology both are one interface, so `management` is refused as a
 // duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
-// (plan §2.2).
+// (plan §2.2). The replies of a `management` forward go back through the management interface by a
+// table of their own, which knows the interface's connected subnet and its default gateway (the
+// default route of the management interface in the host's main table) only: a peer that the host
+// reaches through another route of the management interface (a static route to an admin network
+// while the main default goes via the uplink) gets no reply. The compiler warns when the management
+// interface has no default route (P31-M35a-05).
 type PortForwardEntry string
 
 // PortForwardPage defines model for PortForwardPage.
@@ -5177,7 +5207,9 @@ type PortForwardView struct {
 	// packets, and
 	// `last_match` is when the last one arrived. A connection is counted whatever the access rules
 	// decide about it afterwards (allowed, dropped or rejected); a TCP connection whose SYN is dropped
-	// is counted once per attempt, since a dropped packet leaves no tracked connection. Monotonic
+	// is counted once per attempt, since a dropped packet leaves no tracked connection. The connections
+	// of an inactive forward whose device has no address are counted too: they are not translated and
+	// reach the gateway's own input path instead (and its protection). Monotonic
 	// across applies; `epoch` changes on a restart. Only for the revision the kernel runs; absent
 	// while the forward is not in the kernel.
 	Counters *Counter `json:"counters,omitempty"`
@@ -5338,7 +5370,12 @@ type PreviewPortForward struct {
 	// it; `management` - on the management interface, on every IPv4 address of it, in the three-port
 	// topology only (in the two-port topology both are one interface, so `management` is refused as a
 	// duplicate of `uplink`: `management_is_uplink`). The addresses are followed like the masquerade's
-	// (plan §2.2).
+	// (plan §2.2). The replies of a `management` forward go back through the management interface by a
+	// table of their own, which knows the interface's connected subnet and its default gateway (the
+	// default route of the management interface in the host's main table) only: a peer that the host
+	// reaches through another route of the management interface (a static route to an admin network
+	// while the main default goes via the uplink) gets no reply. The compiler warns when the management
+	// interface has no default route (P31-M35a-05).
 	Entry PortForwardEntry `json:"entry"`
 
 	// ExternalPorts A port or a range `from-to`.
@@ -6110,12 +6147,17 @@ type Step struct {
 	// anti-lockout rule with its counter; the closure of the UI/API port is described here only, it is
 	// not listed there and has no counter of its own. Decided by the maintainer on 2026-10-11.
 	//
-	// The same holds for the two-port topology (the management interface is the uplink interface, plan
-	// §2.16): the guard that stops devices under test from reaching the management network behind the
-	// uplink stands in front of the access rules, so no rule, `allow` included, opens that network for
-	// a device under test. `explain` reports the guard as a drop by the access matrix, without a rule.
-	// Only an explicit entry of the access matrix from the device's network to the management network
-	// opens it. Decided by the maintainer on 2026-10-11.
+	// The same holds for the management network (plan §2.16): the guard that stops devices under test
+	// from opening connections into it stands in front of the access rules, so no rule, `allow`
+	// included, opens that network for a device under test. In the two-port topology (the management
+	// interface is the uplink interface) the guard drops by the management addresses behind the uplink
+	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
+	// addresses, whatever interface the packet would leave through, and anything that would leave
+	// through the management interface, so a lost uplink default route or a router behind the uplink
+	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
+	// access matrix from the device's network to the management network opens it. Replies, those of a
+	// port forward from the management side included, are accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches

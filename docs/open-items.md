@@ -21,7 +21,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
-  items P31-AUDIT-01 to P31-AUDIT-06 are fixed on the branch `close-phase-3-1`. What the
+  items P31-AUDIT-01 to P31-AUDIT-09 are fixed on the branch `close-phase-3-1`. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
@@ -1469,6 +1469,9 @@ round), each with a test that fails without the fix or with the corrected docume
 | P31-AUDIT-04 | minor | Level 2 (the appliance smoke, M35a Tests) never ran on the final Phase 3.1 code: the last runs were on `97cd058` (before the counting rule in NAT, the replies by mark bit 22 and table 101, and the three-port guard) and on `main` before the merge. | The Nightly workflow runs on the branch `close-phase-3-1` before the round is merged; its run id is recorded in the PR of the round. |
 | P31-AUDIT-05 | minor | The status lines (`docs/plan.md`, this file, `README.md`) still said "on the branch … merges to main with the PR" and cited a CI run from before P31-M35a-05/-09/-10; P31-M35a-09's evidence named a test that no longer exists. | Status lines updated (merged as `0fb9176`, CI run 39057670486, audited); the test name in P31-M35a-09 marked as the state before the decision. |
 | P31-AUDIT-06 | minor | P31-M35a-08 named `chaosctl` as a way to explain a forwarded connection; `chaosctl` supports only `version` until M18. | The item names the API (`GET /explain`, or the generated clients); `chaosctl` gets `explain` with M18. |
+| P31-AUDIT-07 | major | The device detail said "No port forward leads to this device." while the active revision, which the forwards come from, was loading or had failed to load; the error of the revision was not shown (the class of P3-AUDIT-10). | The card shows "Loading the port forwards…" until the revision is there and "The port forwards are not loaded" with Try again when it failed; the empty sentence only with the revision loaded. Test: e2e `port forwards: the configuration not loaded says so with Try again on the cards and the device detail, never "none"`. |
+| P31-AUDIT-08 | minor | The uplink card and the management card listed no forward and said nothing when the active revision was not loaded; Add port forward was disabled without a reason. | Both cards say "Loading the port forwards…" or "The port forwards are not loaded" with Try again until the revision is there. Test: the same e2e case. |
+| P31-AUDIT-09 | minor | The device detail marked a deleted forward DELETED in the accent tone; the cards of the networks view mark it in the blocked tone (§2.17: red removed, blue as configured). | The device detail uses the blocked tone for DELETED like `ForwardList`. Test: e2e `port forwards: a deleted forward is marked in the blocked tone on the cards and the device detail alike`. |
 
 ## Phase 3.1 open items
 

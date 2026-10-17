@@ -282,3 +282,88 @@ func TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection(t *testing.T) {
 		t.Errorf("the forwarded connection to another port stopped: %s", out)
 	}
 }
+
+// allowAllForA is an access allow rule for device A without a destination, protocol or port: the
+// broadest rule there is for A.
+func allowAllForA(c *model.Configuration) {
+	name, dev := "a-anywhere", fwDevA
+	withConfigRules(map[string]model.AccessRule{cfgRuleA: {Name: &name, Source: model.Scope{Device: &dev}, Action: model.AccessActionAllow}}, cfgRuleA)(c)
+}
+
+// A forward from the management side does not make the management network reachable for a device
+// (P31-M35a-10, option (c)): the policy table that a device's packets are looked up in has no route to
+// the management subnet; only the replies of a forwarded connection go back through the management
+// interface, by their mark. So even with an allow rule without a destination A cannot open a connection
+// to a host of the management network while the management forward works. And the forwards' counters
+// count their connections although that allow rule, not the forward, accepts them (P31-M35a-09).
+func TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks(t *testing.T) {
+	r := startForwardLab(t, allowAllForA)
+	r.top.Mgmt.Start("python3", "-c", accessServerScript)
+	eventually(t, r.top.GW, "tcp", testbed.MgmtPeer, 7050, 30*time.Second) // the management host listens
+	eventually(t, r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 30*time.Second)
+	if got := tryAt(r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 2); got != "ok" {
+		t.Errorf("tcp from the management network through the forward: %s", got)
+	}
+	for _, port := range []int{7050, 8883} {
+		if got := tryAt(r.top.A, "tcp", testbed.MgmtPeer, port, 2); got == "ok" {
+			t.Errorf("A reaches the management host on tcp %d with an allow rule", port)
+		}
+	}
+	if got := tryAt(r.top.A, "udp", testbed.MgmtPeer, 5353, 2); got == "ok" {
+		t.Error("A reaches the management host over udp with an allow rule")
+	}
+	// the allow rule itself works: A reaches the server behind the uplink
+	r.top.Server.Start("python3", "-c", accessServerScript)
+	eventually(t, r.top.A, "tcp", testbed.ServerAddr, 8883, 30*time.Second)
+
+	// the forwarded connections the allow rule accepted are counted by the forwards
+	eventually(t, r.top.Server, "tcp", uplinkIP, 8080, 30*time.Second)
+	cs, err := r.e.ReadCounters(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{fwTCP, fwMgmt} {
+		if v := cs[compiler.ForwardCounterName(id)]; v.Packets == 0 || v.LastUsed == nil {
+			t.Errorf("the counter of %s counts nothing the allow rule accepted: %+v", id, v)
+		}
+	}
+}
+
+// A forward from the management side answers a peer behind a router of the management network
+// (P31-M35a-05, option (c)): its replies are routed by their mark through a table with the management
+// interface's subnet and its default gateway. The testbed's management host is the gateway's default
+// router on the management interface (192.168.56.254); an address on its loopback outside the
+// management subnet stands for a host behind that router, as the remote sites' loopbacks do behind the
+// uplink. A device does not reach that address: nothing but the replies of the forwards is routed to the
+// management side.
+func TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork(t *testing.T) {
+	r := startForwardLab(t, nil)
+	r.top.Mgmt.Addr("lo", mgmtRemoteHost+"/32")
+	eventually(t, r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 30*time.Second)
+	out, _ := r.top.Mgmt.Run(context.Background(), "python3", "-c", tryFromScript, mgmtRemoteHost, "tcp", testbed.MgmtGateway, "8443", "3")
+	if got := strings.TrimSpace(out); got != "ok" {
+		t.Errorf("tcp from %s behind the management router through the forward: %s", mgmtRemoteHost, got)
+	}
+	r.top.Mgmt.Start("python3", "-c", accessServerScript)
+	if got := tryAt(r.top.A, "tcp", mgmtRemoteHost, 7050, 2); got == "ok" {
+		t.Errorf("A reaches %s behind the management router", mgmtRemoteHost)
+	}
+}
+
+// mgmtRemoteHost is an address behind the management network's router (the management host's loopback).
+const mgmtRemoteHost = "172.16.56.10"
+
+// tryFromScript is accessTry from a given source address: source, tcp or udp, address, port, timeout.
+const tryFromScript = `
+import socket, sys
+src, proto, ip, port, t = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), float(sys.argv[5])
+try:
+    if proto == "tcp":
+        s = socket.socket(); s.settimeout(t); s.bind((src, 0)); s.connect((ip, port)); s.sendall(b"hi"); r = s.recv(10)
+    else:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(t); s.bind((src, 0)); s.connect((ip, port)); s.send(b"hi"); r = s.recv(10)
+    print("ok" if r == b"hi" else "bad")
+except ConnectionRefusedError: print("refused")
+except ConnectionResetError: print("reset")
+except socket.timeout: print("timeout")
+`

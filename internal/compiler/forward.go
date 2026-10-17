@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 )
 
 // This file is port forwarding (plan §2.2 layer 4, milestone M35a, D34): connections that come in on an
@@ -21,19 +22,33 @@ import (
 //	                        the forward's counter and notes the time (`last`). A NAT chain sees only the
 //	                        first packet of a connection, so the counter counts the connections that
 //	                        arrive through the forward, whatever the access rules decide about them later
-//	                        (P31-M35a-09). Then one rule for all forwards: in on an entry interface, to an
-//	                        address of that interface (`fib daddr . iif type local`, so a new address is
-//	                        followed by the kernel at once, like masquerade), DNAT to the element of the
-//	                        map `fwd_dnat` keyed on the entry interface, the protocol and the destination
-//	                        port. The map holds one element per forwarded port (a range is shifted one to
-//	                        one) with the target's current address: a device target follows its address by
-//	                        element updates, like the identity map (M7). A forward without a target address
-//	                        has no elements, and its connections are not translated.
+//	                        (P31-M35a-09). The rule of a forward from the management side also sets the
+//	                        conntrack mark bit ForwardReplyMarkBit (see below). Then one rule for all
+//	                        forwards: in on an entry interface, to an address of that interface
+//	                        (`fib daddr . iif type local`, so a new address is followed by the kernel at
+//	                        once, like masquerade), DNAT to the element of the map `fwd_dnat` keyed on the
+//	                        entry interface, the protocol and the destination port. The map holds one
+//	                        element per forwarded port (a range is shifted one to one) with the target's
+//	                        current address: a device target follows its address by element updates, like
+//	                        the identity map (M7). A forward without a target address has no elements, and
+//	                        its connections are not translated.
 //	forward                 established/related ... the access rules (which match a forwarded connection
 //	                        with the target as responder, access.go) -> one accept rule per forward
 //	                        (`ct status dnat`, in on its entry interface, out to a local test network,
 //	                        its protocol and external ports) -> the access matrix, whose default keeps
 //	                        everything else from the uplink out of the test networks.
+//
+// The replies of a forward from the management side (three-port topology; P31-M35a-05 and -10, option
+// (c)). A device's packets are looked up in the policy table 100, whose default is the uplink, and that
+// table has no route to the management network, so a device cannot open a connection there whatever the
+// access rules allow. Only the replies of a connection that came in through a management-side forward go
+// back through the management interface: its counting rule sets bit 22 of the conntrack mark (plan §3.3),
+// the chain fwd_reply (prerouting, before the routing decision) copies it onto the packet mark of the
+// replies that come in from a local test network, and the policy rule `fwmark 0x400000/0x400000`
+// (priority 925, before the rules of table 100) sends them to table 101: the management interface's
+// connected subnet, its default gateway when it has one (so a peer behind a router of the management
+// network is answered too), and a prohibit route as the fallback, so such a reply never leaves through
+// the uplink. Without a forward from the management side none of this is compiled.
 //
 // Faults do not apply to forwarded connections (M35b): the classification chain runs before the DNAT on
 // the conntrack original tuple, whose ends (the peer and the entry address) lie in no test network, so it
@@ -50,6 +65,28 @@ const ForwardMapBase = "fwd_dnat"
 // the caller names (Input.DefaultUIPort: the API's --port, or the --ui-port of `chaosgw apply`, which
 // validates a file against it, too).
 const CodeForwardRefused = "forward_refused"
+
+// The routing of the replies of a forward from the management side (see the overview above).
+const (
+	// ForwardReplyMarkBit is bit 22 of the mark layout of plan §3.3 (bits 22-23: further routing marks): in
+	// the conntrack mark it says that the connection came in through a forward of the management side, in
+	// the packet mark that the packet is a reply of such a connection and goes back through the management
+	// interface. No other chain reads or writes it (the classification keeps every bit but its own).
+	ForwardReplyMarkBit = uint32(1) << 22
+	// ForwardReplyMark is the fwmark of the policy rule: the bit, under a mask of the bit alone.
+	ForwardReplyMark = "0x400000/0x400000"
+	// ForwardReplyTable is the routing table of those replies: 101, free between the policy table and
+	// the service table.
+	ForwardReplyTable = PolicyTable + 1
+	// ForwardReplyRulePriority puts its rule after the service selection (900) and before the PMTU
+	// mirrors (950) and the rules of the policy table (1000).
+	ForwardReplyRulePriority = PolicyRulePriority - 75
+	// ForwardReplyChain is the chain that copies the bit from the conntrack mark onto the packet mark of
+	// the replies; ForwardReplyPriority runs it after the classification (-150), before the NAT chain
+	// (-100) and the routing decision.
+	ForwardReplyChain    = "fwd_reply"
+	ForwardReplyPriority = ClassifyPriority + 10
+)
 
 // forwardMapKey and forwardMapValue are the types of the DNAT map: the entry interface, the protocol and
 // the external port to the target's address and the target port.
@@ -252,12 +289,17 @@ func (t *Target) forwardDNAT() []Rule {
 // like the access rules). A NAT chain sees the first packet of a connection only, so the counter counts
 // connections: each connection that arrives through the forward once, whether an access rule or the
 // forward's accept rule lets it through or a rule drops it (a dropped TCP SYN leaves no conntrack entry,
-// so its retransmission arrives, and is counted, as a new connection).
+// so its retransmission arrives, and is counted, as a new connection). The rule of a forward from the
+// management side also sets ForwardReplyMarkBit in the conntrack mark, so the replies of the connection
+// are routed back through the management interface (forwardReplyChain, forwardReplyRouting).
 func (t *Target) forwardCounts() []Rule {
 	var out []Rule
 	for _, f := range t.Forwards {
 		expr := []any{iifname(f.Iface), eq(meta("l4proto"), f.Protocol), fibLocal(),
 			eq(payload("th", "dport"), portValue([]PortRange{{f.ExtFrom, f.ExtTo}}))}
+		if f.Entry == domain.EntryManagement && t.managementReplies() {
+			expr = append(expr, ctMarkSet(bitOr(ctKey("mark"), int64(ForwardReplyMarkBit))))
+		}
 		out = append(out, newRule(append(expr, counter(f.Counter), lastStmt())...))
 	}
 	return out
@@ -276,9 +318,55 @@ func (t *Target) forwardAccepts(lanSet string) []Rule {
 	return out
 }
 
+// managementReplies reports whether the replies of forwarded connections are routed back through the
+// management interface: while a forward from the management side is compiled, in the three-port
+// topology (the two-port one compiles no such forward) and with the management interface's subnet known.
+func (t *Target) managementReplies() bool {
+	return t.Management.Name != "" && t.Management.Name != t.Uplink.Name && t.Management.Subnet.IsValid() &&
+		t.forwardsFrom(domain.EntryManagement)
+}
+
+// forwardReplyChain copies ForwardReplyMarkBit from the conntrack mark onto the packet mark of a reply
+// that comes in from a local test network, before the routing decision, so the policy rule of
+// ForwardReplyMark sends it to ForwardReplyTable. Every other bit of the packet mark is kept. Nil without
+// a forward from the management side.
+func (t *Target) forwardReplyChain(lanSet string) *Chain {
+	if !t.managementReplies() {
+		return nil
+	}
+	bit := int64(ForwardReplyMarkBit)
+	return &Chain{Name: ForwardReplyChain, Base: &BaseChain{Type: "filter", Hook: "prerouting", Prio: ForwardReplyPriority, Policy: "accept"},
+		Rules: []Rule{newRule(iifSet(lanSet), match(ctKey("direction"), "==", "reply"), eq(bitAnd(ctKey("mark"), bit), bit),
+			markSet(bitOr(meta("mark"), bit)))}}
+}
+
+// forwardReplyRouting adds the table and the policy rule of the replies of a management-side forward:
+// the management interface's connected subnet, its default gateway when it has one, and a prohibit route
+// as the fallback, so a reply the table has no route for fails instead of falling through to the policy
+// table, whose default is the uplink.
+func (t *Target) forwardReplyRouting() {
+	if !t.managementReplies() {
+		return
+	}
+	m := t.Management
+	t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: m.Subnet.String(), Dev: m.Name})
+	if m.gateway.IsValid() {
+		zero := 0
+		t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: "default", Via: m.gateway.String(), Dev: m.Name, Metric: &zero})
+	}
+	prohibitMetric := 4096
+	t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: "default", Type: "prohibit", Metric: &prohibitMetric})
+	t.Rules = append(t.Rules, executor.Rule{Action: "add", Family: 4, Priority: ForwardReplyRulePriority, Fwmark: ForwardReplyMark, Table: ForwardReplyTable})
+}
+
 // fibLocal matches a packet to an address of the interface it came in on (`fib daddr . iif type local`).
 func fibLocal() any {
 	return eq(map[string]any{"fib": map[string]any{"result": "type", "flags": []any{"daddr", "iif"}}}, "local")
+}
+
+// ctMarkSet is "ct mark set <value>".
+func ctMarkSet(value any) any {
+	return map[string]any{"mangle": map[string]any{"key": ctKey("mark"), "value": value}}
 }
 
 // ctStatusDNAT matches a connection whose destination was translated (`ct status dnat`).

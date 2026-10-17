@@ -387,6 +387,19 @@
       "add": {
         "chain": {
           "family": "inet",
+          "hook": "prerouting",
+          "name": "fwd_reply",
+          "policy": "accept",
+          "prio": -140,
+          "table": "chaosgw",
+          "type": "filter"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
           "hook": "input",
           "name": "input",
           "policy": "accept",
@@ -481,6 +494,15 @@
         "chain": {
           "family": "inet",
           "name": "forward",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "name": "fwd_reply",
           "table": "chaosgw"
         }
       }
@@ -2640,6 +2662,75 @@
     {
       "add": {
         "rule": {
+          "chain": "fwd_reply",
+          "comment": "78ef3c0a1f81",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_lan_bf4feb"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "direction"
+                  }
+                },
+                "op": "==",
+                "right": "reply"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "\u0026": [
+                    {
+                      "ct": {
+                        "key": "mark"
+                      }
+                    },
+                    4194304
+                  ]
+                },
+                "op": "==",
+                "right": 4194304
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "|": [
+                    {
+                      "meta": {
+                        "key": "mark"
+                      }
+                    },
+                    4194304
+                  ]
+                }
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
           "chain": "input",
           "comment": "868b9d5da411",
           "expr": [
@@ -3465,7 +3556,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "65a21cc8edcf",
+          "comment": "16980f222fa1",
           "expr": [
             {
               "match": {
@@ -3514,6 +3605,25 @@
                 },
                 "op": "==",
                 "right": 8443
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "|": [
+                    {
+                      "ct": {
+                        "key": "mark"
+                      }
+                    },
+                    4194304
+                  ]
+                }
               }
             },
             {

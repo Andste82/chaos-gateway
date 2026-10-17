@@ -21,7 +21,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): implemented on the branch `phase-3-1-port-forwarding`, PR pending, not yet audited. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
-  P31-M35a-01 to P31-M35a-08, each open for the maintainer's decision with the option that was implemented.
+  P31-M35a-01 to P31-M35a-10, each open for the maintainer's decision with the option that was implemented.
 
 ## Phase 1 audit result
 
@@ -1531,8 +1531,9 @@ want to decide.
 - Evidence: `internal/compiler/compile.go` (`compileRouting`), `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`,
   `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`.
 - Task: implemented (a) — while a forward from the management side is compiled, table 100 has the management interface's
-  connected subnet (a device's traffic to that subnet then leaves through the management interface, where the forward chain's
-  default drops it unless the access matrix allows it). A peer of the management side that is not in that subnet (an allowed
+  connected subnet. A device's own traffic to that subnet then leaves through the management interface too; the forward
+  chain's default drops it, but an access allow rule that matches it (P31-M35a-10) or a matrix entry network → management lets
+  it through. A peer of the management side that is not in that subnet (an allowed
   source reached through a router of the management network) gets no answer. Options: (a) as implemented; (b) also route the
   `allowed_sources` outside the subnet through the management interface's default gateway; (c) route the replies by the
   connection (a conntrack mark set by the DNAT and a policy rule for it), independent of the peer's address.
@@ -1588,3 +1589,55 @@ want to decide.
 - Recommendation: (b) with the flow view (M26), where a forwarded connection can be picked and explained.
 - Needs maintainer: yes
 - Effort: S
+
+### P31-M35a-09 A forward's counter counts what the forward lets through, in hits
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision; found in the review of Phase 3.1. Plan §5 M35a: "a counter per forward" and "the counters count the
+  forwarded connections". The counter sits on the forward's accept rule in the forward chain. That rule (1) counts every
+  packet of a connection not yet established (one per connection, more for a retransmitted SYN or an unanswered UDP packet),
+  which is why the UI shows it as hits, and (2) runs after the access rules: the responder form of an access rule (§2.4) ends
+  in the rule's own verdict, so a forwarded connection that an `allow` rule selecting the device accepts (e.g. "device X:
+  allow tcp", or "network Lab → uplink: allow") is never counted by the forward, which then shows 0 hits and no last match
+  while traffic flows.
+- Evidence: `internal/compiler/forward.go` (`forwardAccepts`), `internal/compiler/access.go` (the responder form),
+  `internal/api` (`forwardCounter`), `web/src/lib/forwards.ts` (`counterText`), `TestAForwardHasTheCounterOfItsAcceptRule`.
+- Task: implemented (a). Options: (a) as implemented: hits of the forward's accept rule, i.e. what the forward itself let
+  through; (b) count each forward once per translated connection in the NAT prerouting chain (it sees only the first packet of
+  a conntrack entry): a counter-only rule per forward (iif, protocol, external range) in front of the DNAT map rule, so the
+  counter means "connections that arrived through the forward", including the ones an access rule then drops or accepts;
+  (c) a counter-only rule per forward in front of `jump access_forward` with the accept rule's match, which counts hits of
+  every forwarded connection that arrives, whoever accepts it; (d) a ct mark bit set by the DNAT and conntrack accounting.
+- Recommendation: (b): it counts connections, as the plan says, is cheap (one rule per forward, first packets only) and is
+  independent of the access rules; the UI then says "connections" again. The rule (and the API's `forwardCounter`) move to the
+  NAT chain, the accept rule keeps its `last` for the last match or gets it from the same rule.
+- Needs maintainer: yes
+- Effort: S
+
+### P31-M35a-10 A management-side forward makes the management subnet routable for the devices (three-port topology)
+
+- Status: open; option (a) implemented
+- Severity: low
+- Reason: needs-decision; found in the review of Phase 3.1. For P31-M35a-05 the policy table 100 gets the management subnet
+  while an enabled forward from the management side is compiled (even one whose target has no address). Table 100 is the table
+  of all packets of the test networks, so a device's own new connection to the management subnet then leaves through the
+  management interface with the device's address, instead of following the uplink default (masqueraded). The default stays
+  closed: with no allowance the implicit matrix accepts only the uplink and the forward chain's final drop drops it. But in the
+  three-port topology there is no guard in front of the access rules (the "cannot be overridden" guard of §2.4 exists only for
+  the two-port topology), so an access allow rule without a destination, an allow rule with a `cidr` covering the management
+  subnet, or a matrix entry network → management now carries a device into the management network, and only while a
+  management forward exists. Plan §2.2 and §2.16 keep the management network separated from the test networks.
+- Evidence: `internal/compiler/compile.go` (`compileRouting`), `internal/compiler/rules.go` (the forward chain's two-port guard),
+  `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`.
+- Task: implemented (a). Options: (a) as implemented: the route is present while a management forward exists; what the
+  access rules and the matrix allow decides, as §2.4 says for a rule without a destination; (b) a three-port guard in front of
+  the access rules, mirroring the two-port one: drop new connections from the test networks out to the management interface,
+  with the matrix entries to management as the only exception; (c) P31-M35a-05 (c): route only the forward's replies (a ct
+  mark set by the management-side DNAT, copied to the replies, and a policy rule `fwmark → management table`), so table 100
+  gets no management route at all and the reachability no longer depends on a forward.
+- Recommendation: (c): it removes the dependency on whether a forward exists and also answers peers behind a router of the
+  management network (P31-M35a-05); with a golden test and a level-1 test (a device with an allow-all rule cannot open a
+  connection into the management subnet while a management forward works).
+- Needs maintainer: yes
+- Effort: M

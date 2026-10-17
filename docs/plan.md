@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 (M35a, port forwarding) implemented on the branch `phase-3-1-port-forwarding` (PR pending), open for decision: P31-M35a-01 to P31-M35a-08; next: Phase 4 · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 (M35a, port forwarding) implemented on the branch `phase-3-1-port-forwarding` (PR pending), open for decision: P31-M35a-01 to P31-M35a-10; next: Phase 4 · October 2026
 
 ---
 

@@ -50,8 +50,8 @@ services:
         source: /lib/modules
         target: /lib/modules
         read_only: true
-      # the host's /etc, read-only: the preflight reads where netplan and NetworkManager configure an
-      # interface (/etc/netplan, /etc/NetworkManager/system-connections; their files are root's), so the
+      # the host's /etc, read-only: the preflight reads where netplan, NetworkManager and systemd-networkd configure an
+      # interface (/etc/netplan, /etc/NetworkManager/system-connections, /etc/systemd/network; their files are root's), so the
       # setup wizard can say which entry to remove from a test interface. Only the file, the entry and the
       # interface it names leave the executor, never a file's content. The whole /etc, not only those
       # directories: a bind mount needs its source, and a host without netplan or NetworkManager has none

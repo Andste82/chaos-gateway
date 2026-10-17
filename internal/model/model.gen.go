@@ -4292,7 +4292,7 @@ type HostInterface struct {
 	Mac  MacAddress `json:"mac"`
 	Name string     `json:"name"`
 
-	// OsManaged Configured by netplan/NetworkManager (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
+	// OsManaged Configured by netplan, NetworkManager or systemd-networkd (must be false for test interfaces); absent when the configuration of the operating system could not be read. The preflight's check of the interface names the entry.
 	OsManaged *bool `json:"os_managed,omitempty"`
 	SpeedMbps *int  `json:"speed_mbps,omitempty"`
 }
@@ -4481,7 +4481,7 @@ type LanNetwork struct {
 	Dhcp *DhcpScope  `json:"dhcp,omitempty"`
 	Dns  *NetworkDns `json:"dns,omitempty"`
 
-	// Interfaces Physical ports of the network's bridge. Must not be configured by netplan/NetworkManager.
+	// Interfaces Physical ports of the network's bridge. Must not be configured by netplan/NetworkManager/systemd-networkd.
 	Interfaces []InterfaceRef `json:"interfaces"`
 
 	// Name Unique per object type (case-insensitive); must not have the form of a UUID.

@@ -64,7 +64,7 @@ type Executor struct {
 	state   string // file holding the assigned interfaces, empty for none
 	keys    KeyProvider
 	birdDir string // where the BIRD configuration files and control sockets live
-	// hostFS is the host's root file system, read for its netplan and NetworkManager configuration
+	// hostFS is the host's root file system, read for its netplan, NetworkManager and systemd-networkd configuration
 	// (ReadHostNet); nil reads the executor's own root
 	hostFS fs.FS
 
@@ -124,8 +124,8 @@ func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir
 
 // WithHostRoot tells the executor where the host's file system is mounted ("/host" in the executor's
 // container, which mounts the host's whole /etc read-only at /host/etc, deploy/compose.executor.yaml):
-// ReadHostNet reads the host's network configuration from it (preflight.NetplanDirs, NMDirs, NMConfFiles
-// and NMConfDirs; only those under etc/ are there in the shipped deployment). The whole /etc is mounted,
+// ReadHostNet reads the host's network configuration from it (preflight.NetplanDirs, NMDirs, NMConfFiles,
+// NMConfDirs and NetworkdDirs; only those under etc/ are there in the shipped deployment). The whole /etc is mounted,
 // not those directories, because a bind mount needs its source: a host without netplan or NetworkManager
 // has no /etc/netplan or /etc/NetworkManager, and the executor must not create them on the host. The
 // executor is privileged anyway; nothing of the files but the entries leaves it (HostNetState). The
@@ -1142,7 +1142,7 @@ func routeGetNoRoute(stderr string) bool {
 }
 
 // HostNetState is the answer of ReadHostNet: where the operating system configures network interfaces
-// (netplan entries, NetworkManager connections, preflight.OSEntry) and the files that could not be read.
+// (netplan entries, NetworkManager connections, systemd-networkd files, preflight.OSEntry) and the files that could not be read.
 // Only where an interface is named leaves the executor, never a file's content (P3-M12-07).
 type HostNetState struct {
 	Entries []preflight.OSEntry `json:"entries"`

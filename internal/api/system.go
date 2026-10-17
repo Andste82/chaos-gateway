@@ -431,7 +431,7 @@ type hostInterface struct {
 	LinkUp    *bool           `json:"link_up,omitempty"`
 	MAC       string          `json:"mac"`
 	Name      string          `json:"name"`
-	// OSManaged says whether netplan or NetworkManager configures the interface; absent when that could not
+	// OSManaged says whether netplan, NetworkManager or systemd-networkd configures the interface; absent when that could not
 	// be read
 	OSManaged *bool `json:"os_managed,omitempty"`
 	SpeedMbps int   `json:"speed_mbps,omitempty"`
@@ -659,8 +659,8 @@ func (s *Server) GetSetup(c *gin.Context) {
 
 // preflightReport is the report of the preflight (plan §3.4): the checks of the host the process made when it
 // started (kernel, modules; Config.Preflight), and one check per interface that is assigned to a test network
-// or may become one (not the uplink, not the management interface), made now: whether netplan or
-// NetworkManager configures it, and which entry to remove (docs/open-items.md P3-M12-07). The wizard and every
+// or may become one (not the uplink, not the management interface), made now: whether netplan,
+// NetworkManager or systemd-networkd configures it, and which entry to remove (docs/open-items.md P3-M12-07). The wizard and every
 // client show the same text. The report's status counts the checks of the host and of the assigned test
 // interfaces, not a candidate's warning. noRun adds a warning when no check of the host has run in this
 // process (Config.Preflight is nil or returns nil; a report without a time, such as a host that cannot be

@@ -16,6 +16,10 @@ f1000000-0000-4000-8000-000000000001  web  tcp/8080-8080 on wan0 (uplink) -> 10.
   meta iifname br-iot ip daddr 10.10.0.1 tcp dport 53 dnat ip to 169.254.100.2
   meta iifname br-lab ip daddr 10.20.0.1 udp dport 53 dnat ip to 169.254.100.2
   meta iifname br-lab ip daddr 10.20.0.1 tcp dport 53 dnat ip to 169.254.100.2
+  meta iifname wan0 meta l4proto tcp fib daddr . iif type local th dport 2222 counter "fwd_74f89ac51f" last
+  meta iifname mgmt0 meta l4proto tcp fib daddr . iif type local th dport 8443 counter "fwd_e1e1f5dfd8" last
+  meta iifname wan0 meta l4proto udp fib daddr . iif type local th dport 8000-8003 counter "fwd_adc7fa6ad9" last
+  meta iifname wan0 meta l4proto tcp fib daddr . iif type local th dport 8080 counter "fwd_e1fe2665fa" last
   meta iifname { mgmt0, wan0 } meta l4proto { tcp, udp } fib daddr . iif type local dnat ip concat to meta iifname . meta l4proto . th dport map @fwd_dnat_bdf066
 # rules
 0  overlay:00000000-0000-4000-8000-000000000001    drop  scope "group sensors"  dest ""  proto udp  counter rule_8e9ca98e27
@@ -37,10 +41,10 @@ set asrc_be61152c2009e2fc3b2690cd_8743d6 { 10.20.0.0/24 }
   meta iifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
   meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
   jump access_forward
-  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 2222 counter "fwd_74f89ac51f" last accept
-  meta iifname mgmt0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8443 counter "fwd_e1e1f5dfd8" last accept
-  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto udp ct original proto-dst 8000-8003 counter "fwd_adc7fa6ad9" last accept
-  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8080 counter "fwd_e1fe2665fa" last accept
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 2222 accept
+  meta iifname mgmt0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8443 accept
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto udp ct original proto-dst 8000-8003 accept
+  meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8080 accept
   meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 53 accept
   meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 53 accept
   meta iifname svc0 meta oifname wan0 accept

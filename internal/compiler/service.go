@@ -118,10 +118,10 @@ func (t *Target) serviceForward(ifsCG string, uplink string) []Rule {
 	return out
 }
 
-// prerouting is the NAT chain of the prerouting hook: the service redirect and the DNAT of the port
-// forwards (forward.go). Nil when there is neither.
+// prerouting is the NAT chain of the prerouting hook: the service redirect, then the counting rules and
+// the DNAT of the port forwards (forward.go). Nil when there is neither.
 func (t *Target) prerouting(tp *topo) *Chain {
-	rules := append(t.serviceRedirect(tp), t.forwardDNAT()...)
+	rules := append(append(t.serviceRedirect(tp), t.forwardCounts()...), t.forwardDNAT()...)
 	if len(rules) == 0 {
 		return nil
 	}

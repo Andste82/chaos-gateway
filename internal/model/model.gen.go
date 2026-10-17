@@ -3282,8 +3282,8 @@ type Counter struct {
 	// Epoch Changes when counters restart (reboot, recreated object).
 	Epoch int64 `json:"epoch"`
 
-	// LastMatch Access rules only (configured, overlay and system rules): when the rule last matched a new
-	// connection, as the kernel notes it (the nftables `last` statement of the rule, kernel 5.17
+	// LastMatch Access rules (configured, overlay and system rules) and port forwards only: when the rule last
+	// matched a new connection, as the kernel notes it (the nftables `last` statement of the rule, kernel 5.17
 	// or newer). An apply that makes the rule anew carries the time over (late by at most the
 	// length of the apply). Absent while the rule has not matched since it was created (a new
 	// rule, or a table made anew, e.g. after a reboot).
@@ -5171,11 +5171,15 @@ type PortForwardView struct {
 	// so applying one never waits for commit-confirm.
 	Config PortForward `json:"config"`
 
-	// Counters Packets and bytes the forward sent to its target before their connection was established (the
-	// hits of its accept rule; established traffic is accepted before it, like for the access rules):
-	// one packet per connection, more when a TCP SYN is retransmitted or a UDP packet gets no answer,
-	// so it is no exact count of connections. Monotonic across applies; `epoch` changes on a restart.
-	// Only for the revision the kernel runs; absent while the forward is not in the kernel.
+	// Counters The connections that arrived through the forward: `packets` counts the first packet of each
+	// connection on the forward's entry side, protocol and external ports (the forward's rule in the
+	// NAT chain, which sees the first packet of a connection only), `bytes` the bytes of those
+	// packets, and
+	// `last_match` is when the last one arrived. A connection is counted whatever the access rules
+	// decide about it afterwards (allowed, dropped or rejected); a TCP connection whose SYN is dropped
+	// is counted once per attempt, since a dropped packet leaves no tracked connection. Monotonic
+	// across applies; `epoch` changes on a restart. Only for the revision the kernel runs; absent
+	// while the forward is not in the kernel.
 	Counters *Counter `json:"counters,omitempty"`
 	Id       Uuid     `json:"id"`
 

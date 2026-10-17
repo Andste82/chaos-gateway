@@ -163,8 +163,8 @@ describe('the port forward form (M35a)', () => {
     expect(rowStatus(rows[1]!)).toEqual({ tone: 'offline', label: 'disabled · not applied yet' });
     expect(rowStatus(rows[2]!)).toEqual({ tone: 'fault', label: 'inactive: the device has no address' });
     expect(rowStatus({ id: WEB, p: web, view: views[0] })).toEqual({ tone: 'normal', label: 'active · to 10.10.0.42' });
-    expect(counterText(rows[1]!)).toBe('12 hits');
-    expect(counterText({ ...rows[1]!, view: { ...rows[1]!.view!, counters: { ...rows[1]!.view!.counters!, packets: 1 } } })).toBe('1 hit');
+    expect(counterText(rows[1]!)).toBe('12 connections');
+    expect(counterText({ ...rows[1]!, view: { ...rows[1]!.view!, counters: { ...rows[1]!.view!.counters!, packets: 1 } } })).toBe('1 connection');
     expect(counterText(rows[0]!)).toBe('');
   });
 

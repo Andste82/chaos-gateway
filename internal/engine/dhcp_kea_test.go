@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -102,6 +103,62 @@ func TestTheConfigurationIsSentAgainToAKeaThatRestarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if subs, _ := client.Subnets(ctx); len(subs) != 0 {
+		t.Errorf("%+v", subs)
+	}
+}
+
+// #64: Reopen sends the configuration although Kea runs it already (Kea opens its sockets only while
+// it is configured); Apply does not.
+func TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration(t *testing.T) {
+	if _, err := exec.LookPath("kea-dhcp4"); err != nil {
+		t.Skip("kea-dhcp4 is not installed")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("Kea opens raw sockets: it needs root")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	defer runKea(t, dir, kea.Config{})()
+	client := &kea.Client{Socket: filepath.Join(dir, "ctrl.sock"), Timeout: 5 * time.Second}
+	k := &engine.KeaDHCP{Client: client, Base: kea.Config{Socket: client.Socket, Leases: filepath.Join(dir, "leases.csv")}}
+	target := &compiler.KeaTarget{Config: kea.Config{Subnets: []kea.Subnet{{
+		ID: 3, Network: "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21", Subnet: netip.MustParsePrefix("127.0.0.0/8"), Interface: "lo",
+		Pools: []kea.Pool{{Start: netip.MustParseAddr("127.0.0.100"), End: netip.MustParseAddr("127.0.0.110")}}, LeaseSeconds: 600}}}}
+	ctx := context.Background()
+	// the seconds since Kea was configured last
+	sinceConfigured := func() int {
+		t.Helper()
+		a, err := client.Do(ctx, "status-get", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var st struct {
+			Reload int `json:"reload"`
+		}
+		if err := json.Unmarshal(a.Arguments, &st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Reload
+	}
+	if err := k.Apply(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if err := k.Apply(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if s := sinceConfigured(); s < 1 {
+		t.Fatalf("Apply sent an unchanged configuration again (configured %d s ago)", s)
+	}
+	if err := k.Reopen(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if s := sinceConfigured(); s != 0 {
+		t.Errorf("Reopen did not configure Kea again (configured %d s ago)", s)
+	}
+	if subs, _ := client.Subnets(ctx); len(subs) != 1 || subs[0].ID != 3 {
 		t.Errorf("%+v", subs)
 	}
 }

@@ -580,6 +580,8 @@ func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error {
 
 func (f *fakeDHCP) setErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
 
+func (f *fakeDHCP) Reopen(ctx context.Context, t *compiler.KeaTarget) error { return f.Apply(ctx, t) }
+
 func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error { return nil }
 
 func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {

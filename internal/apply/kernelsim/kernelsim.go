@@ -31,6 +31,7 @@ type link struct {
 	peerNS, peerName        string
 	name, mac, kind, master string
 	up                      bool
+	noCarrier               bool
 	addrs                   []string // "ip/len"
 	index                   int
 	mtu                     int
@@ -253,6 +254,16 @@ func (k *Kernel) addLink(name, mac, kind string, up bool) *link {
 	k.links[name] = l
 	k.features[name] = map[string]bool{"generic-receive-offload": true, "generic-segmentation-offload": true, "tcp-segmentation-offload": true}
 	return l
+}
+
+// SetCarrier takes the carrier of an interface away or gives it back (a test port that was unplugged,
+// a bridge without a forwarding port).
+func (k *Kernel) SetCarrier(name string, on bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if l, ok := k.links[name]; ok {
+		l.noCarrier = !on
+	}
 }
 
 // HasLink reports whether the interface exists.
@@ -622,7 +633,10 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 				continue
 			}
 			flags := []string{"BROADCAST", "MULTICAST"}
-			if l.up {
+			switch {
+			case l.up && l.noCarrier:
+				flags = append(flags, "NO-CARRIER", "UP")
+			case l.up:
 				flags = append(flags, "UP", "LOWER_UP")
 			}
 			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether", "mtu": l.mtu}

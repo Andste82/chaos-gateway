@@ -469,18 +469,36 @@ func dockerNoise(name string) bool {
 // every burst of network events, and the tc state of the assigned interfaces alone is several tool
 // runs (P2-M8b-04).
 func ReadHost(ctx context.Context, ex Exec, ns string) (compiler.Host, error) {
+	h, _, err := ReadHostLinks(ctx, ex, ns)
+	return h, err
+}
+
+// LinkState is what decides whether a server can listen on an interface: its index (a device that
+// was deleted and created again has another one) and whether it is running.
+type LinkState struct {
+	Index   int
+	Running bool
+}
+
+// ReadHostLinks is ReadHost that also returns the state of every link by name, bridges included,
+// from the same reading.
+func ReadHostLinks(ctx context.Context, ex Exec, ns string) (compiler.Host, map[string]LinkState, error) {
 	out, err := ex.Do(ctx, read(ns, executor.ReadLinks, ""), read(ns, executor.ReadAddrs, ""), read(ns, executor.ReadRoutes, ""))
 	if err != nil {
-		return compiler.Host{}, fmt.Errorf("read the kernel state: %w", err)
+		return compiler.Host{}, nil, fmt.Errorf("read the kernel state: %w", err)
 	}
 	s := &State{Links: map[string]linux.Link{}, Addrs: map[string][]linux.Address{}}
 	if err := s.setLinks(out, 0, 1); err != nil {
-		return compiler.Host{}, err
+		return compiler.Host{}, nil, err
 	}
 	if s.Routes, err = decode[[]linux.Route](out, 2, "routes"); err != nil {
-		return compiler.Host{}, err
+		return compiler.Host{}, nil, err
 	}
-	return s.Host(), nil
+	links := make(map[string]LinkState, len(s.Links))
+	for n, l := range s.Links {
+		links[n] = LinkState{Index: l.Index, Running: l.Running()}
+	}
+	return s.Host(), links, nil
 }
 
 // Local lets the executor type be used as an Exec in the same process (tests, the CLI in a

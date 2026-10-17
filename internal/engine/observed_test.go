@@ -31,10 +31,20 @@ const (
 type fakeDHCP struct {
 	mu      sync.Mutex
 	applys  []*compiler.KeaTarget
+	reopens []*compiler.KeaTarget
 	err     error
 	testErr error
 	leases  []kea.Lease
 }
+
+func (f *fakeDHCP) Reopen(_ context.Context, t *compiler.KeaTarget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reopens = append(f.reopens, t)
+	return f.err
+}
+
+func (f *fakeDHCP) reopened() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.reopens) }
 
 func (f *fakeDHCP) Apply(_ context.Context, t *compiler.KeaTarget) error {
 	f.mu.Lock()

@@ -21,7 +21,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): done on the branch `phase-3-1-port-forwarding` (PR #68, CI run 38991357139 green), reviewed, not yet audited. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), at the end of the file:
-  P31-M35a-01 to P31-M35a-10, each open for the maintainer's decision with the option that was implemented.
+  P31-M35a-01 to P31-M35a-10. P31-M35a-05, -09 and -10 were decided on 2026-10-17 and are closed; the others are open for
+  the maintainer's decision with the option that was implemented.
 
 ## Phase 1 audit result
 
@@ -1523,7 +1524,16 @@ want to decide.
 
 ### P31-M35a-05 The replies of a forward from the management side go to the management subnet only
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided — option (c), together with P31-M35a-10. The replies of a management-side forward
+  are routed by their connection, not by the peer's address: the forward's rule in the prerouting NAT chain sets bit 22 of
+  the conntrack mark (plan §3.3), the chain `fwd_reply` copies it onto the packet mark of the replies from the test networks,
+  and the policy rule `fwmark 0x400000/0x400000 lookup 101` (priority 925) sends them to table 101 (the management subnet,
+  the management interface's default gateway, a `prohibit` fallback). A peer behind a router of the management network is
+  answered; table 100 has no management route. Tests: `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork`,
+  `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`, `TestGoldenForwards`, `TestGoldenForwardNftTransaction`; level 1
+  `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork` (the testbed's management host is the management
+  interface's default router; an address on its loopback outside the management subnet stands for a host behind it),
+  `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`. The text below is the state before the decision.
 - Severity: low
 - Reason: needs-decision. A device's packets are looked up in the policy table 100 (§2.2), whose default route is the
   uplink. A forward from the management network (three-port topology) needs its replies to go back through the management
@@ -1539,7 +1549,7 @@ want to decide.
   connection (a conntrack mark set by the DNAT and a policy rule for it), independent of the peer's address.
 - Recommendation: (a) for M35a: the management network is the management interface's subnet in the shipped topologies; (c)
   if forwards from routed management networks are needed.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: M
 
 ### P31-M35a-06 A forwarded port range is one DNAT element per port
@@ -1592,7 +1602,19 @@ want to decide.
 
 ### P31-M35a-09 A forward's counter counts what the forward lets through, in hits
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided — option (b). A counting rule per forward in the prerouting NAT chain, in front of the
+  DNAT rule (in on the entry interface, to an address of it, the protocol and the external ports, the forward's named counter
+  and `last`, no verdict), counts the first packet of each connection that arrives through the forward, whatever an access
+  rule decides afterwards (a TCP connection whose SYN a rule drops is counted per attempt). The last match comes from the
+  same rule's `last`, so the count and the time describe the same packets; the forward's accept rule counts nothing. The
+  API's `forwardCounter` reads it, the spec's `PortForwardView.counters` says connections, and the UI shows "N connections"
+  (`counterText`, `counterHint`). Tests: `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`,
+  `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestGoldenForwards`, `TestGoldenForwardNftTransaction`,
+  `TestAForwardCountsItsConnections` (API); level 1 `TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel`,
+  `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`,
+  `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`; `src/lib/forwards.test.ts` "the rows: …",
+  `port-forwards.spec.ts` "port forwards: the uplink and the management card list …", "port forwards: the device detail
+  lists …". The text below is the state before the decision.
 - Severity: low
 - Reason: needs-decision; found in the review of Phase 3.1. Plan §5 M35a: "a counter per forward" and "the counters count the
   forwarded connections". The counter sits on the forward's accept rule in the forward chain. That rule (1) counts every
@@ -1612,12 +1634,22 @@ want to decide.
 - Recommendation: (b): it counts connections, as the plan says, is cheap (one rule per forward, first packets only) and is
   independent of the access rules; the UI then says "connections" again. The rule (and the API's `forwardCounter`) move to the
   NAT chain, the accept rule keeps its `last` for the last match or gets it from the same rule.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: S
 
 ### P31-M35a-10 A management-side forward makes the management subnet routable for the devices (three-port topology)
 
-- Status: open; option (a) implemented
+- Status: closed (2026-10-17): decided — option (c) (with P31-M35a-05 (c)). Table 100 never has a route to the management
+  subnet; only the replies of a management-side forward go back through the management interface, by bit 22 of the
+  conntrack mark, the chain `fwd_reply`, the rule `fwmark 0x400000/0x400000 lookup 101` and table 101 (see P31-M35a-05). A
+  device's own new connection to the management network follows the uplink default and the forward chain as any other, so
+  even an allow rule without a destination does not carry it there, whether a management forward exists or not. The
+  two-port topology is unchanged (`management` is refused there). The executor's scope covers the new objects as they are
+  (table 101 lies in Chaos Gateway's tables 100-110, the route's device is the assigned management interface). Tests:
+  `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (no management subnet in table 100; the mark, the restore,
+  the rule and table 101; none of it without a management forward), `TestGoldenForwards`, `TestGoldenForwardNftTransaction`;
+  level 1 `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`,
+  `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`. The text below is the state before the decision.
 - Severity: low
 - Reason: needs-decision; found in the review of Phase 3.1. For P31-M35a-05 the policy table 100 gets the management subnet
   while an enabled forward from the management side is compiled (even one whose target has no address). Table 100 is the table
@@ -1639,5 +1671,5 @@ want to decide.
 - Recommendation: (c): it removes the dependency on whether a forward exists and also answers peers behind a router of the
   management network (P31-M35a-05); with a golden test and a level-1 test (a device with an allow-all rule cannot open a
   connection into the management subnet while a management forward works).
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-17)
 - Effort: M

@@ -908,7 +908,7 @@ func (o *owner) observed(obs observation) {
 		cfg = o.committed.Config
 	}
 	id, states, events := o.tracker.step(cfg, obs)
-	changed := o.identity == nil || !sameIdentity(*o.identity, id)
+	changed := o.identity == nil || !sameIdentity(*o.identity, id, cfg)
 	o.identity = &id
 	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
 	o.snap.ObserveError = obs.ObserveError
@@ -949,10 +949,20 @@ func (o *owner) observed(obs observation) {
 // another change the kernel does not have yet (desired.Changed) converge at once.
 const identityConvergeWindow = 2 * time.Second
 
-// sameIdentity compares what the compiler uses: the addresses of every device, and which of them is
-// the most current (a forward's target).
-func sameIdentity(a, b domain.Identity) bool {
-	return sameAddrMap(a.Addresses, b.Addresses) && sameAddrMap(a.Current, b.Current)
+// sameIdentity compares what the compiler uses: the addresses of every device, and for a device that a
+// port forward of cfg sends to, which of them is the most current (the forward's target). The order of
+// the others does not matter: a neighbor entry that goes STALE and back on its own reorders them, and
+// that alone must not make a new generation (P31-AUDIT-03).
+func sameIdentity(a, b domain.Identity, cfg *model.Configuration) bool {
+	if !sameAddrMap(a.Addresses, b.Addresses) {
+		return false
+	}
+	for _, f := range domain.Forwards(cfg) {
+		if f.Device != "" && !sameAddrs(a.Current[f.Device], b.Current[f.Device]) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameAddrMap(a, b map[string][]netip.Addr) bool {

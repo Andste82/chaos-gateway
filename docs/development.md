@@ -4185,7 +4185,9 @@ decided on 2026-10-17 and are implemented as described below.
     stays mapped only because a connection of the device still comes from it), so an old address
     that lingers on with a long-lived connection is no target while the device has a newer one. An
     address change is an element update through the identity path of M7 (`internal/engine/forward.go`,
-    `owner.go`), never a full apply. A device without an address keeps its forward compiled, with no
+    `owner.go`), never a full apply. Only for a device that a forward sends to does the order of its
+    addresses alone make a new generation; a neighbor entry going STALE and back reorders the others
+    without one (P31-AUDIT-03, `TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget`). A device without an address keeps its forward compiled, with no
     elements and the status `device_without_address`.
   - *Counting* (P31-M35a-09, option (b), decided 2026-10-17). One counting rule per forward in the
     same NAT chain, in front of the DNAT rule: IPv4, in on the forward's entry interface, to an address of

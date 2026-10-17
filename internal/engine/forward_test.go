@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
@@ -141,5 +142,58 @@ func TestAFullApplyKeepsTheForwardsElements(t *testing.T) {
 	}
 	if got := h.deviceSetElements(devID); got != "10.10.0.31" {
 		t.Errorf("the identity map after a full apply: %q", got)
+	}
+}
+
+// The order of a device's addresses (Identity.Current) makes a new generation only for a device that a
+// forward sends to (P31-AUDIT-03): a neighbor entry that goes STALE and back on its own while a connection
+// still comes from its address reorders the addresses, not the addresses themselves. Without a forward the
+// generation stays; with a forward to the device the target follows the most current address.
+func TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget(t *testing.T) {
+	for _, forward := range []bool{false, true} {
+		h, _ := dhcpHarness(t)
+		mod := withDHCPAndDevice
+		if forward {
+			mod = withForwardToDevice
+		}
+		h.mustApply(h.revision(mod))
+		h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+		h.observe()
+		h.clk.Advance(time.Minute)
+		second := neighbor("10.10.0.32", macCfg)
+		h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg), second})
+		h.k.SetConntrack(conntrackText(conntrackLine("tcp", "ESTABLISHED", "10.10.0.32", 40001, "203.0.113.10", 8883)))
+		h.observe()
+		h.barrier()
+		s := h.e.Snapshot()
+		if cur := s.Identity.Current[devID]; len(cur) != 2 || cur[0].String() != "10.10.0.32" {
+			t.Fatalf("forward %v: the most current address is not the newer neighbor: %v", forward, cur)
+		}
+		gen := s.Generation
+		for i, state := range []string{"STALE", "REACHABLE", "DELAY"} {
+			second.State = []string{state}
+			h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg), second})
+			h.observe()
+			h.barrier()
+			s = h.e.Snapshot()
+			want := "10.10.0.32"
+			if state != "REACHABLE" {
+				want = "10.10.0.31" // the stale entry only lingers on with its connection
+			}
+			if cur := s.Identity.Current[devID]; len(cur) != 2 || cur[0].String() != want || len(s.Identity.Addresses[devID]) != 2 {
+				t.Fatalf("forward %v, %s: the addresses %v, most current first %v", forward, state, s.Identity.Addresses[devID], cur)
+			}
+			switch {
+			case !forward && s.Generation != gen:
+				t.Errorf("without a forward a neighbor going %s made generation %d, was %d", state, s.Generation, gen)
+			case forward && s.Generation != gen+uint64(i)+1:
+				t.Errorf("with a forward to the device a neighbor going %s: generation %d, want %d", state, s.Generation, gen+uint64(i)+1)
+			}
+			if forward {
+				if f := s.Forwards[0]; f.Target.String() != want {
+					t.Errorf("%s: the forward sends to %s, want %s", state, f.Target, want)
+				}
+			}
+		}
 	}
 }

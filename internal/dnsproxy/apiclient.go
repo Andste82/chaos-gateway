@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -34,28 +35,43 @@ type APIClient struct {
 	// Dial replaces the dialer; the tests of the service namespace connect from inside it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
+	// mu guards client and cert: the configuration poll and the query log share the client
+	mu     sync.Mutex
 	client *http.Client
+	cert   []byte
 }
 
+// http returns the client for the certificate in CertFile now: a certificate the API has issued again
+// (issue #64: one without the service address) is trusted without a restart of the proxy.
 func (c *APIClient) http() (*http.Client, error) {
-	if c.client != nil {
+	var cert []byte
+	if c.CertFile != "" {
+		b, err := os.ReadFile(c.CertFile)
+		if err != nil {
+			return nil, err
+		}
+		cert = b
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != nil && bytes.Equal(cert, c.cert) {
 		return c.client, nil
 	}
 	tc := &tls.Config{MinVersion: tls.VersionTLS12}
 	if c.CertFile != "" {
-		pem, err := os.ReadFile(c.CertFile)
-		if err != nil {
-			return nil, err
-		}
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
+		if !pool.AppendCertsFromPEM(cert) {
 			return nil, fmt.Errorf("%s holds no certificate", c.CertFile)
 		}
 		tc.RootCAs = pool
 	} else {
 		tc.InsecureSkipVerify = true //nolint:gosec // the private link to the gateway; see CertFile
 	}
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
 	c.client = &http.Client{Transport: &http.Transport{TLSClientConfig: tc, MaxIdleConns: 2, IdleConnTimeout: 60 * time.Second, DialContext: c.Dial}}
+	c.cert = cert
 	return c.client, nil
 }
 
@@ -96,6 +112,8 @@ func (b *cancelBody) Close() error { err := b.ReadCloser.Close(); b.cancel(); re
 
 // CloseIdleConnections closes the connections the client keeps open.
 func (c *APIClient) CloseIdleConnections() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.client != nil {
 		c.client.CloseIdleConnections()
 	}

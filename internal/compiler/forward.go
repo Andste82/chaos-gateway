@@ -32,7 +32,8 @@ import (
 //	                        current address: a device target follows its address by element updates, like
 //	                        the identity map (M7). A forward without a target address has no elements, and
 //	                        its connections are not translated.
-//	forward                 established/related ... the access rules (which match a forwarded connection
+//	forward                 established/related ... the management guard (rules.go) ... the access rules
+//	                        (which match a forwarded connection
 //	                        with the target as responder, access.go) -> one accept rule per forward
 //	                        (`ct status dnat`, in on its entry interface, out to a local test network,
 //	                        its protocol and external ports) -> the access matrix, whose default keeps
@@ -40,15 +41,23 @@ import (
 //
 // The replies of a forward from the management side (three-port topology; P31-M35a-05 and -10, option
 // (c)). A device's packets are looked up in the policy table 100, whose default is the uplink, and that
-// table has no route to the management network, so a device cannot open a connection there whatever the
-// access rules allow. Only the replies of a connection that came in through a management-side forward go
-// back through the management interface: its counting rule sets bit 22 of the conntrack mark (plan §3.3),
+// table has no route to the management network. Routing alone does not keep a device out, though: when
+// the table loses its default (the uplink loses its address) a packet falls through to the main table,
+// which knows the management subnet, and a router behind the uplink may know it too. What keeps a device
+// from opening a connection into the management network whatever the access rules allow is the
+// management guard in front of them (rules.go, decided on 2026-10-17); only an explicit access matrix
+// entry opens it. The replies of a connection that came in through a management-side forward are
+// established, so the guard does not see them; they go back through the management interface: the
+// forward's counting rule sets bit 22 of the conntrack mark (plan §3.3),
 // the chain fwd_reply (prerouting, before the routing decision) copies it onto the packet mark of the
 // replies that come in from a local test network, and the policy rule `fwmark 0x400000/0x400000`
 // (priority 925, before the rules of table 100) sends them to table 101: the management interface's
 // connected subnet, its default gateway when it has one (so a peer behind a router of the management
 // network is answered too), and a prohibit route as the fallback, so such a reply never leaves through
-// the uplink. Without a forward from the management side none of this is compiled.
+// the uplink. Other routes of the management interface (a static route to an admin network while the
+// main default goes via the uplink) are not in the table: such a peer gets no reply, and the compiler
+// warns (CodeForwardRepliesSubnetOnly) when the management interface has no default route. Without a
+// forward from the management side none of this is compiled.
 //
 // Faults do not apply to forwarded connections (M35b): the classification chain runs before the DNAT on
 // the conntrack original tuple, whose ends (the peer and the entry address) lie in no test network, so it
@@ -66,6 +75,11 @@ const ForwardMapBase = "fwd_dnat"
 // validates a file against it, too).
 const CodeForwardRefused = "forward_refused"
 
+// CodeForwardRepliesSubnetOnly is the warning for a forward from the management side while the management
+// interface has no default route: the table of its replies knows the interface's connected subnet only, so
+// a peer anywhere else (behind a static route of the management interface) gets no reply (P31-M35a-05).
+const CodeForwardRepliesSubnetOnly = "forward_replies_subnet_only"
+
 // The routing of the replies of a forward from the management side (see the overview above).
 const (
 	// ForwardReplyMarkBit is bit 22 of the mark layout of plan §3.3 (bits 22-23: further routing marks): in
@@ -75,8 +89,8 @@ const (
 	ForwardReplyMarkBit = uint32(1) << 22
 	// ForwardReplyMark is the fwmark of the policy rule: the bit, under a mask of the bit alone.
 	ForwardReplyMark = "0x400000/0x400000"
-	// ForwardReplyTable is the routing table of those replies: 101, free between the policy table and
-	// the service table.
+	// ForwardReplyTable is the routing table of those replies: 101, between the policy table and the
+	// service table (102).
 	ForwardReplyTable = PolicyTable + 1
 	// ForwardReplyRulePriority puts its rule after the service selection (900) and before the PMTU
 	// mirrors (950) and the rules of the policy table (1000).
@@ -353,6 +367,8 @@ func (t *Target) forwardReplyRouting() {
 	if m.gateway.IsValid() {
 		zero := 0
 		t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: "default", Via: m.gateway.String(), Dev: m.Name, Metric: &zero})
+	} else {
+		t.warn(CodeForwardRepliesSubnetOnly, "", "the replies of management forwards reach only %s: the management interface %s has no default route, so a peer behind another route of it gets no reply", m.Subnet, m.Name)
 	}
 	prohibitMetric := 4096
 	t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: "default", Type: "prohibit", Metric: &prohibitMetric})

@@ -759,6 +759,55 @@ func TestAManagementForwardRoutesItsRepliesToTheManagementNetwork(t *testing.T) 
 	}
 }
 
+// Table 101 knows the management interface's connected subnet and its default gateway only: without a
+// default route of the management interface a peer outside the subnet (behind a static route of the
+// management interface) gets no reply, and the compiler says so with a warning (P31-M35a-05). With a
+// default route, or without a forward from the management side, there is no such warning.
+func TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly(t *testing.T) {
+	warnings := func(tg *Target) []Problem {
+		var out []Problem
+		for _, p := range tg.Problems {
+			if p.Code == CodeForwardRepliesSubnetOnly {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	noGW := forwardWorld(t).compile(func(in *Input) {
+		var kept []HostRoute
+		for _, r := range in.Host.Defaults {
+			if r.Dev != "mgmt0" {
+				kept = append(kept, r)
+			}
+		}
+		in.Host.Defaults = kept
+	})
+	got := warnings(noGW)
+	if len(got) != 1 || got[0].Severity != SevWarning || !strings.Contains(got[0].Message, "the replies of management forwards reach only 192.168.56.0/24") {
+		t.Errorf("warnings %+v", got)
+	}
+	if noGW.HasErrors() {
+		t.Errorf("a warning must not stop the apply: %+v", noGW.Problems)
+	}
+	if got := warnings(forwardWorld(t).compile(nil)); len(got) != 0 {
+		t.Errorf("a warning although the management interface has a default route: %+v", got)
+	}
+	w := accessWorld(t)
+	w.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
+	plain := w.compile(func(in *Input) {
+		var kept []HostRoute
+		for _, r := range in.Host.Defaults {
+			if r.Dev != "mgmt0" {
+				kept = append(kept, r)
+			}
+		}
+		in.Host.Defaults = kept
+	})
+	if got := warnings(plain); len(got) != 0 {
+		t.Errorf("a warning without a forward from the management side: %+v", got)
+	}
+}
+
 // The bit of the replies of a management-side forward is bit 22 of the mark layout (plan §3.3, bits 22-23
 // reserved for further routing marks): no fault id, direction, PMTU index, service or duplication bit,
 // and outside the bits left to other software. The classification keeps it when it writes the id or the

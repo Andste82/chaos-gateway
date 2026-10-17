@@ -350,6 +350,19 @@ export function counterText(r: ForwardRow): string {
   return `${c.packets.toLocaleString('en-US')} ${c.packets === 1 ? 'connection' : 'connections'}`;
 }
 
-/** What the counter counts, as the tooltip of counterText. */
+/**
+ * What the counter counts, as the tooltip of counterText. The counting rule stands in front of the DNAT,
+ * so it also counts the connections of an inactive forward whose device has no address: they are not
+ * translated and reach the gateway itself.
+ */
 export const counterHint =
-  'Connections that arrived through the forward, whether an access rule then allowed or refused them';
+  'Connections that arrived through the forward, whether an access rule then allowed or refused them; ' +
+  'while the device has no address they are counted too and reach the gateway itself';
+
+/**
+ * Where the replies of a forward from the management network go (P31-M35a-05): back through the management
+ * interface to its subnet and through its default gateway only, so a peer behind another route of the
+ * management interface gets no reply.
+ */
+export const managementReplyHint =
+  'Replies reach the management subnet and peers behind its default gateway only, not other routes of the management interface.';

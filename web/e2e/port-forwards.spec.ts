@@ -264,6 +264,8 @@ test('port forwards: from the management network in the three-port topology', as
   await managementCard(page).getByRole('button', { name: 'Add a port forward from the management network' }).click();
   const dialog = page.getByRole('dialog', { name: 'Add port forward' });
   await expect(dialog.getByRole('button', { name: 'Management network' })).toHaveAttribute('aria-pressed', 'true');
+  // where the replies go (P31-M35a-05)
+  await expect(dialog.getByText('Replies reach the management subnet and peers behind its default gateway only')).toBeVisible();
   await dialog.getByLabel('External port').fill('2201');
   await dialog.getByLabel('Device', { exact: true }).selectOption({ label: 'Sensor-07 (10.10.0.57)' });
   await dialog.getByLabel('Target port').fill('22');

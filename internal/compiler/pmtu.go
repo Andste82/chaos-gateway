@@ -41,8 +41,9 @@ const (
 	pmtuKeep = ^PMTUMarkMask // 0xfff1ffff
 	// PMTUMaxTables is the number of mirror tables, and so of distinct icmp sizes at once.
 	PMTUMaxTables = 7
-	// PMTUTableFirst is the mirror table of index 1: 100 is the policy table, 101 is free and 102
-	// the service table, so the mirrors are 103 to 109 (table 110 stays unused).
+	// PMTUTableFirst is the mirror table of index 1: 100 is the policy table, 101 the table of the
+	// replies of a management-side forward (forward.go) and 102 the service table, so the mirrors are
+	// 103 to 109 (table 110 stays unused).
 	PMTUTableFirst = PolicyTable + 3
 	// PMTURulePriority is before the policy rules and after the rule of the service selection.
 	PMTURulePriority = PolicyRulePriority - 50

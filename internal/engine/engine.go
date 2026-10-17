@@ -257,6 +257,10 @@ type Engine struct {
 	conntrackWatching atomic.Bool
 	conntrackMu       sync.Mutex
 	lastConntrack     time.Time
+	// hostChanged is closed, and replaced by a new channel, when the state owner takes an observed
+	// host that differs from the one before (PreviewAwaitingUplink waits for it).
+	hostMu      sync.Mutex
+	hostChanged chan struct{}
 }
 
 // conntrackFallback is how rarely the regular poll still re-reads conntrack on its own, once
@@ -308,7 +312,8 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
 	e := &Engine{cfg: cfg, cmds: make(chan command, 64), wake: make(chan struct{}, 1), results: make(chan applyResult, 8),
-		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{}), ready: make(chan struct{})}
+		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{}), ready: make(chan struct{}),
+		hostChanged: make(chan struct{})}
 	if e.sup == nil {
 		// a panic in the state owner or the apply loop stops the engine: the commands that wait
 		// get ErrClosed, and the process (which watches Done) restarts and recompiles from the

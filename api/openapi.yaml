@@ -146,6 +146,8 @@ paths:
         Requires the one-time setup token from the container log. Creates revision 1
         from the request, applies it with commit-confirm, sets the admin password and
         restricts the UI/API to the management network. Fails with `409` once setup is done.
+        Like `applyRevision`, it waits up to 10 seconds for an uplink that has no IPv4 address
+        at the moment before it applies.
       security:
         - setupToken: []
       x-milestone: M5
@@ -615,6 +617,9 @@ paths:
         overlays the revision's merge moved go back to the discovered device, and the overlays
         that refer to an object only the rolled-back revision had are removed (event
         `overlay_orphaned` with `data.reason` `rollback`).
+        A candidate whose only error is that the uplink has no IPv4 address at the moment
+        (`uplink_no_address`: the OS reconfigures it, e.g. `netplan apply`) waits up to 10
+        seconds for the address to come back before it fails with `422 validation_failed`.
       x-milestone: M5
       x-required-scope: full
       parameters:

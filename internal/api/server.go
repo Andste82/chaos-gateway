@@ -49,6 +49,10 @@ type Config struct {
 	Preflight func() *PreflightReport
 	// ConfirmTimeout overrides the commit-confirm window (tests use seconds).
 	ConfirmTimeout time.Duration
+	// UplinkWait is how long an apply waits for the uplink's IPv4 address when the host has none at the
+	// moment (engine.PreviewAwaitingUplink); zero takes engine.DefaultUplinkWait, a negative value does
+	// not wait.
+	UplinkWait time.Duration
 	// UI is the build of the web app (web/dist), served for every GET outside /api/; nil serves none.
 	UI fs.FS
 	// Resolvers returns the host's upstream resolvers for the DNS proxy when the uplink names none;
@@ -98,6 +102,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
+	}
+	if cfg.UplinkWait == 0 {
+		cfg.UplinkWait = engine.DefaultUplinkWait
 	}
 	if cfg.TrafficInterval == 0 {
 		cfg.TrafficInterval = defaultTrafficInterval

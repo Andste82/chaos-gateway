@@ -316,8 +316,12 @@ func TestAccessRuleOrderAndOverlaysOnTheRealKernel(t *testing.T) {
 	b.w.ruleOverlay(`{target: {device: esp32-42}, rule: {action: allow, protocol: tcp, ports: [22], destination: {uplink: true}}}`, 2*time.Hour)
 	b.apply()
 	b.expect(b.dev, "tcp", "203.0.113.10", 22, "ok")
-	// the older overlay rejects it everywhere else (its destination is not the uplink)
-	b.expect(b.dev, "tcp", "192.168.56.2", 22, "refused")
+	// the older overlay rejects it everywhere else (its destination is not the uplink): on the gateway itself
+	b.expect(b.dev, "tcp", "10.10.0.1", 22, "refused")
+	// the management host stays closed whatever the overlays say: the management guard stands in front of
+	// the rules in the three-port topology too, so it drops the connection before the reject is asked
+	// (P31-M35a-10, decided on 2026-10-17; this bed routes the management subnet in the main table)
+	b.expect(b.dev, "tcp", "192.168.56.2", 22, "timeout")
 }
 
 // The gateway's own services: a rule drops DNS to the gateway before the gateway answers it, an

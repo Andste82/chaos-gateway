@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -10 in `docs/open-items.md`, fixed on the branch `close-phase-3-1`; level 2 runs there, P31-AUDIT-04); next: Phase 4 · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -10 in `docs/open-items.md`, fixed on the branch `close-phase-3-1`; level 2 runs there, P31-AUDIT-04); open from issue #64: I64-01 to I64-03 (wait for the maintainer); next: Phase 4 · October 2026
 
 ---
 
@@ -878,7 +878,7 @@ Server reply ──► prerouting on uplink:
   - IP forwarding
   - Docker (always present, §3.8): its FORWARD policy is DROP; an accept rule in Chaos Gateway's own table does not override it, only an accept in Docker's `DOCKER-USER` chain does (spike S7). The executor keeps that rule for Chaos Gateway's interfaces (a dedicated, narrowly scoped operation) and verify checks it.
   - other firewalls (ufw, firewalld) and known mark users (§3.3)
-  - that the assigned test interfaces carry no OS configuration (netplan/NetworkManager), and that the uplink has an address and a gateway
+  - that the assigned test interfaces carry no OS configuration (netplan, NetworkManager or systemd-networkd; issue #64, I64-04), and that the uplink has an address and a gateway
   - offloads (above)
 
   Missing items are reported with the fix. On Ubuntu generic kernels all required modules are in the base `linux-modules` package; the host setup (§3.8) loads them at boot through `/etc/modules-load.d/`. Minimal kernels, such as some VM or cloud sandboxes, can lack netem entirely.
@@ -888,7 +888,7 @@ Server reply ──► prerouting on uplink:
 
 Chaos Gateway owns the interfaces **assigned to test networks**. The operating system keeps the management interface and the **uplink** (D3): netplan configures their addresses, gateways and DHCP as usual, and Chaos Gateway never changes them.
 
-- Test interfaces must not be configured by netplan/NetworkManager (they simply have no entry there); the preflight checks this, and the setup wizard shows the netplan snippet to remove if one exists. Chaos Gateway runs in a container and does not edit host files.
+- Test interfaces must not be configured by netplan, NetworkManager or systemd-networkd (they simply have no entry there; a distribution's systemd-networkd default is kept off them by the host setup's rule, §3.8); the preflight checks this, and the setup wizard shows the netplan snippet to remove if one exists. Chaos Gateway runs in a container and does not edit host files.
 - Its own nftables table (`inet chaosgw`), its own routing tables (100 and the PMTU mirrors) and `ip rule` entries (policy routing, §2.2), its own route protocol tag, one bridge per test network, WireGuard interfaces, qdiscs on its own interfaces and bridges and on the uplink (egress faults), router-advertisement acceptance off on its interfaces.
 - In the two-port topology the management network shares the uplink: the control plane is then reachable from the uplink side, and the anti-lockout rule applies to the management addresses configured at setup.
 - Other firewalls: detected by the preflight check. A drop verdict in another table still drops packets, so conflicts are reported, not silently ignored.
@@ -1003,7 +1003,7 @@ chaos-gateway/
 
 | Container | Privileges | Why |
 |---|---|---|
-| `exec` | **privileged** (the only one), host network, `/run/netns` shared with the host (`rshared`), `/lib/modules` read-only, the host's `/etc` read-only at `/host/etc` | writes nftables, tc, routes, sysctls (per-interface sysctls of new bridges need a writable `/proc/sys`, which only a privileged container has, S7), network namespaces for probes, loads missing modules; reads where netplan and NetworkManager configure an interface for the preflight (§3.4, root-only files) |
+| `exec` | **privileged** (the only one), host network, `/run/netns` shared with the host (`rshared`), `/lib/modules` read-only, the host's `/etc` read-only at `/host/etc` | writes nftables, tc, routes, sysctls (per-interface sysctls of new bridges need a writable `/proc/sys`, which only a privileged container has, S7), network namespaces for probes, loads missing modules; reads where netplan, NetworkManager and systemd-networkd configure an interface for the preflight (§3.4, root-only files) |
 | `api` | unprivileged user, all capabilities dropped | REST/SSE/UI; reaches the executor, Kea and BIRD through Unix sockets on a shared volume |
 | `svcns` | none, `--network none` | holder of the service namespace: only `sleep`; the executor attaches the `svc0` veth pair to it by PID and installs the redirect rules inside |
 | `dns`, `tls` | `NET_BIND_SERVICE`, joined to `svcns` (`network_mode: service:svcns`), unprivileged user | bind port 53 and the redirect ports inside the service namespace |
@@ -1011,7 +1011,7 @@ chaos-gateway/
 | `bird` | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE` | writes routes into Chaos Gateway's tables; OSPF needs raw sockets |
 | `tls-proxy` (optional) | `NET_BIND_SERVICE`, joined to `svcns` | mitmproxy, only when interception is used |
 
-- **Host setup** (a script shipped with the image, run once): installs Docker Engine if missing, loads the kernel modules at boot (`/etc/modules-load.d/chaos-gateway.conf`), sets `net.ipv4.ip_forward=1`, and prints the netplan changes for the test interfaces. It never touches the uplink or management configuration.
+- **Host setup** (a script shipped with the image, run once): installs Docker Engine if missing, loads the kernel modules at boot (`/etc/modules-load.d/chaos-gateway.conf`), sets `net.ipv4.ip_forward=1`, and prints the netplan changes for the test interfaces. For each test interface it names (issue #64, I64-04) it writes the systemd-networkd rule that keeps networkd off it (`/etc/systemd/network/10-chaosgw-<interface>.network`, `Unmanaged=yes`) and checks that no netplan entry, NetworkManager connection or systemd-networkd file configures it; it removes the rule again on request. It never touches the uplink or management configuration, and refuses a test interface with the default route, an IPv4 address or the SSH session it runs in.
 - Docker itself is always present: its FORWARD DROP policy is handled through `DOCKER-USER` (§3.4). Chaos Gateway's networks must not overlap Docker's own address pools.
 - **Start order:** `exec` first (health check: executor socket ready and initial apply verified), then `svcns` (the executor attaches the veth pair), then the services.
 - **Service namespace lifecycle** (S16 part C): a restarting service container rejoins the holder's namespace and works immediately. If the holder itself restarts, it gets a new namespace; services still running keep the old one alive. The executor therefore watches the holder's namespace (inode) and re-attaches `svc0` when it changes; each service checks that its namespace carries the `svc0` peer address and exits when not, so its restart policy moves it into the current namespace. While no namespace is attached, selected traffic fails closed (`prohibit` route). Restart policy `unless-stopped`; containers restart after a host reboot with Docker.

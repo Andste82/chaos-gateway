@@ -222,10 +222,9 @@ func rtt(t *testing.T, ns *testbed.Namespace, ip string, port int) time.Duration
 
 // A fault on the device impairs what the device initiates, but not a connection that reaches it through a
 // forward (M35b): the classification never marks it. The forwarded connection is measured between two
-// measurements of A's own connection that show the fault in force: under software emulation an apply can
-// take long enough for A's neighbor entry to lapse, and while A is offline for the gateway its fault
-// selects nothing (that is the device tracking of M6a, not the forward), so a measurement that is not
-// framed by the fault is taken again.
+// measurements of A's own connection that show the fault in force. A's neighbor entry may go stale during
+// a slow apply, but A keeps its address while a forward sends to it (P31-AUDIT-14), so its fault keeps
+// selecting it and one measurement is enough.
 func TestADeviceFaultDoesNotImpairAForwardedConnection(t *testing.T) {
 	r := startForwardLab(t, nil)
 	r.top.Server.Start("python3", "-c", accessServerScript)
@@ -234,28 +233,65 @@ func TestADeviceFaultDoesNotImpairAForwardedConnection(t *testing.T) {
 		Request: overlayRequest(t, "target: {device: "+fwDevA+"}\nfault: {latency: 400ms}")}); err != nil {
 		t.Fatal(err)
 	}
-	inForce := func() (time.Duration, bool) {
-		if got := tryAt(r.top.A, "tcp", testbed.ServerAddr, 8883, 10); got != "ok" {
-			return 0, false
-		}
-		own := rtt(t, r.top.A, testbed.ServerAddr, 8883)
-		return own, own >= 400*time.Millisecond
+	eventually(t, r.top.A, "tcp", testbed.ServerAddr, 8883, 30*time.Second)
+	ownBefore := rtt(t, r.top.A, testbed.ServerAddr, 8883)
+	fwd := rtt(t, r.top.Server, uplinkIP, 8080)
+	ownAfter := rtt(t, r.top.A, testbed.ServerAddr, 8883)
+	if ownBefore < 400*time.Millisecond || ownAfter < 400*time.Millisecond {
+		t.Fatalf("A's fault is not in force around the measurement: A's own round trips %v and %v (identity %v)", ownBefore, ownAfter, r.e.Snapshot().Identity.Addresses)
 	}
-	deadline := time.Now().Add(5 * time.Minute)
+	if fwd >= 200*time.Millisecond {
+		t.Errorf("a forwarded connection to A is delayed by A's fault: %v (A's own: %v, %v)", fwd, ownBefore, ownAfter)
+	}
+}
+
+// P31-AUDIT-14 (decided 2026-10-18, option (a)): A is known only from the neighbor table (by its MAC, a static
+// address, no lease). With a short reachable time on its bridge its entry goes STALE, and with its connections
+// gone nothing on the address is in use; the forward keeps A as its target all the same, and a new forwarded
+// connection reaches A (the kernel probes the entry, A answers).
+func TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale(t *testing.T) {
+	r := startForwardLab(t, nil)
+	bridge := ""
+	for _, b := range r.e.Snapshot().Bridges {
+		if strings.EqualFold(b.NetworkID, fwIoT) {
+			bridge = b.Name
+		}
+	}
+	r.top.GW.Must("sysctl", "-w", "net.ipv4.neigh."+bridge+".base_reachable_time_ms=500")
+	deadline := time.Now().Add(60 * time.Second)
 	for {
-		ownBefore, ok1 := inForce()
-		fwd := rtt(t, r.top.Server, uplinkIP, 8080)
-		ownAfter, ok2 := inForce()
-		if ok1 && ok2 {
-			if fwd >= 200*time.Millisecond {
-				t.Errorf("a forwarded connection to A is delayed by A's fault: %v (A's own: %v, %v)", fwd, ownBefore, ownAfter)
-			}
-			return
+		// A's own connections (the ping of the lab's start) go, so its address is no active source
+		_, _ = r.top.GW.Run(context.Background(), "conntrack", "-D", "-s", testbed.ClientAAddr)
+		_, _ = r.top.GW.Run(context.Background(), "conntrack", "-D", "-d", testbed.ClientAAddr)
+		out := r.top.GW.Must("ip", "neigh", "show", testbed.ClientAAddr, "dev", bridge)
+		if strings.Contains(out, "STALE") {
+			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the fault never held around a measurement: A's own round trips %v and %v (identity %v)", ownBefore, ownAfter, r.e.Snapshot().Identity.Addresses)
+			t.Fatalf("A's neighbor entry does not go stale: %s", out)
 		}
-		t.Logf("the fault did not hold around the measurement (A's own round trips %v and %v): again", ownBefore, ownAfter)
+		time.Sleep(200 * time.Millisecond)
+	}
+	// several readings of the host (every 200 ms) see the stale entry without a connection
+	time.Sleep(2 * time.Second)
+	if out := r.top.GW.Must("ip", "neigh", "show", testbed.ClientAAddr, "dev", bridge); !strings.Contains(out, "STALE") {
+		t.Fatalf("A's neighbor entry is not stale any more, the test proves nothing: %s", out)
+	}
+	var st *string
+	for _, f := range r.e.Snapshot().Forwards {
+		if f.ID == fwTCP {
+			s := f.Target.String()
+			if !f.Active {
+				s = "inactive: " + f.Reason
+			}
+			st = &s
+		}
+	}
+	if st == nil || *st != testbed.ClientAAddr {
+		t.Fatalf("the forward to A with A's entry stale: %v (identity %v)", st, r.e.Snapshot().Identity.Addresses)
+	}
+	if got := tryAt(r.top.Server, "tcp", uplinkIP, 8080, 5); got != "ok" {
+		t.Errorf("a new forwarded connection to the idle A: %s", got)
 	}
 }
 

@@ -19,8 +19,9 @@ type Neighbor struct {
 	MAC       string
 	Interface string
 	Network   string // UUID of the network the interface belongs to
-	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, FAILED). It
-	// only counts while the address still carries connections.
+	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, PROBE). It
+	// only counts while the address still carries connections, or while an enabled port forward
+	// sends to the device and no other device claims the address (P31-AUDIT-14).
 	Stale bool
 	// Seen is when the engine first saw the address with this MAC: of two confirmed entries of a
 	// device, the one seen later is its more current address (a device that moved keeps its old
@@ -131,6 +132,31 @@ type claim struct {
 	lingering bool
 	// seen is when the neighbor entry behind a neighbor claim was first seen (Neighbor.Seen).
 	seen time.Time
+	// forwardOnly marks a stale neighbor entry without connections that stands only because a port forward
+	// sends to the device: any claim of another device on the address takes it away (yieldToOthers).
+	forwardOnly bool
+}
+
+// yieldToOthers drops the forwardOnly claims of an address that another device claims too: the new
+// holder of an address wins over a forward target's stale entry.
+func yieldToOthers(cs []claim) []claim {
+	out := cs[:0:0]
+	for _, c := range cs {
+		if c.forwardOnly && claimedByOther(cs, c.device) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func claimedByOther(cs []claim, dev string) bool {
+	for _, o := range cs {
+		if o.device != dev {
+			return true
+		}
+	}
+	return false
 }
 
 // current reports whether the claim says more about the device's address now than o does
@@ -230,13 +256,30 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			}
 		}
 	}
+	// the devices an enabled port forward sends to: a server that only answers is the common target of a
+	// forward, and it sends nothing of its own that would keep its neighbor entry confirmed
+	targets := map[string]bool{}
+	for _, f := range Forwards(cfg) {
+		if f.Enabled && f.Device != "" {
+			targets[f.Device] = true
+		}
+	}
 	for _, n := range obs.Neighbors {
+		dev, ok := macs[lower(n.MAC)]
+		if !ok {
+			continue
+		}
+		c := claim{device: dev, strength: claimNeighbor, lingering: n.Stale, seen: n.Seen}
 		if n.Stale && !obs.ActiveSources[n.IP] {
-			continue // an old entry says nothing about who has the address now
+			if !targets[dev] {
+				continue // an old entry says nothing about who has the address now
+			}
+			// a forward's target keeps its stale entry as a lingering claim, so the forward keeps sending
+			// there (the kernel probes the entry when a connection comes, and an entry that fails goes); it
+			// gives way to any claim of another device (P31-AUDIT-14, decided 2026-10-18)
+			c.forwardOnly = true
 		}
-		if dev, ok := macs[lower(n.MAC)]; ok {
-			add(n.IP, claim{device: dev, strength: claimNeighbor, lingering: n.Stale, seen: n.Seen})
-		}
+		add(n.IP, c)
 	}
 	for _, id := range sortedKeys(obs.Probes) {
 		for _, ip := range obs.Probes[id].IPs {
@@ -250,7 +293,10 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 	}
 	sort.Slice(ips, func(i, j int) bool { return ips[i].Less(ips[j]) })
 	for _, ip := range ips {
-		cs := claims[ip]
+		cs := yieldToOthers(claims[ip])
+		if len(cs) == 0 {
+			continue
+		}
 		sort.SliceStable(cs, func(i, j int) bool { return cs[i].beats(cs[j]) })
 		winner := cs[0].device
 		res.Owner[ip] = winner

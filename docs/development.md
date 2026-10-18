@@ -17,6 +17,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution and the classification tables built from it, overlays and their keys, the overlays a revision orphans or moves, observed state and device identity, candidate creation (merge patch), domain diff |
 | `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
 | `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
+| `internal/capture` | the packet capture engine (M17): the filter of a capture (a selector as a user space matcher and as a classic BPF program), the pcap and pcapng writers and reader, the files of a capture with ring buffer and size limit, and the session that reads AF_PACKET sockets (runs in the executor) |
+| `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit, the stream to the executor, the download |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -367,6 +369,9 @@ stay in scope.
 nightly workflow runs them for an hour each. A crashing input lands in
 `internal/executor/testdata/fuzz/`; commit it as a regression test with the fix.
 
+Captures (M17) are not operations of this queue: a capture lives as long as a connection of its own, like a watch,
+and changes nothing in the network configuration (see "Packet captures (M17)").
+
 All operations the compiler needs are implemented (`links`, `sysctl`, `wireguard`, `bird` and
 `service_ns` followed in M4-M6b). Still deferred: the persistent netlink connection for
 DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20). The reader pool
@@ -479,7 +484,8 @@ problem). The codes are stable; new ones are added, never renamed.
 | `invalid_timers` | A routing protocol's timers are inconsistent (hold vs. keepalive, dead vs. hello) or too short. |
 | `invalid_table` | An external routing table number belongs to the system or to Chaos Gateway itself. |
 | `unknown_remote_network` | A remote network scope's CIDR is not inside a client network or a route via a link. |
-| `invalid_step_reference` | A scenario step's `remove` names a step that does not exist, created no overlay, or runs later. |
+| `invalid_step_reference` | A scenario step's `remove` names a step that does not exist, created no overlay, or runs later; a `capture: stop` has no `capture: start` of the same target before it. |
+| `invalid_capture_limit` | A capture's `max_size` or the `file_size` of its ring buffer is below 64 KiB, or the ring buffer is larger than the quota, or `max_size` is. |
 | `target_widened` | A step's `target` is broader than the scenario's own target. |
 | `invalid_target` | A scope is not valid where it is used (wrong kind for that context); a port forward's target is not a host in a local test network (a WireGuard client, a device of a WireGuard network, the management network, a gateway address, a network or broadcast address). |
 | `tunnel_outside_target` | A tunnel fault or WireGuard action's target is not that WireGuard network or client. |
@@ -4483,9 +4489,10 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   and resolves every reference to its UUID. That resolved scenario is the run's `snapshot`, with the revision
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
-  naming the milestone: `capture: true` or a `capture` step (M17), a `dns` step (M20), `tls`
-  (M21), `dhcp` (M23), a profile with a DNS or TLS part, and a `wait` for a host name (M20); `GET
-  /capabilities` lists `step_types` (profile, fault, rule, wireguard, wait, remove, restore) and, since M16, the
+  naming the milestone: a `dns` step (M20), `tls`
+  (M21), `dhcp` (M23), a profile with a DNS or TLS part, and a `wait` for a host name (M20), and, on a gateway
+  without a capture volume, `capture: true` or a `capture` step (see Packet captures (M17)); `GET
+  /capabilities` lists `step_types` (profile, fault, rule, wireguard, capture, wait, remove, restore) and, since M16, the
   `check_types` (a check of `tls_rejected` or `tls_accepted` is M21, one for a host name M20). Nothing is stored
   for a refused scenario.
 - **One run per target, the queue.** Two targets overlap when they share a device or a network
@@ -4598,11 +4605,11 @@ Taken by best practice where the plan leaves room (none needs the maintainer, so
    than 100 ms"), not the scheduler's lateness.
 5. **A group or network target is online when one device is** (and `uses_gateway_dns` asks every online device),
    because a network that has a device that has been off for a month would otherwise never run.
-6. **Checks, capture, zero-hit warnings are M16 and M17.** (M16 delivered the checks and the zero-hit warnings; capture is M17.)
-   A scenario that has them was refused with
+6. **Checks, capture, zero-hit warnings are M16 and M17.** (M16 delivered the checks and the zero-hit warnings, M17 the
+   capture.) A scenario that has them was refused with
    `unsupported_feature` rather than run without them, because a `passed` run whose checks were not evaluated
-   would be a lie (the same reason as the zero-hit warning of plan §2.10). `RunWarning.capture_missing` is in the spec
-   and unused so far (M17).
+   would be a lie (the same reason as the zero-hit warning of plan §2.10). `RunWarning.capture_missing` is used
+   since M17.
 7. **Aborting twice, and a report that is not there yet.** Aborting an ended run returns it (idempotent); a
    report, JUnit file or event file of a run that has not ended is `404 not_found`; renewing a run that has
    ended, or has no lease, is `422 validation_failed`. The error codes of the plan have no better ones.
@@ -4775,6 +4782,219 @@ there: not run in the sandbox; run by CI.
 | Scope: checks with windows relative to named steps (`from` a step or `start`, `within` or `until`) | `TestNoConnectionPassesWhenTheWindowToItsEndStepCloses`, `TestAWindowFromStartOpensWithTheTimeline`, `TestChecksOfEveryTypeAreEvaluatedOverTheAPI`; the window rules are the domain's (`TestScenarioCheckRules` of M15) |
 | Scope: zero-hit warnings (optionally errors) | as above; `RunWarning.zero_hit` and `Scenario.zero_hit` are in the spec since M15 and are described in it now |
 
+## Packet captures (M17)
+
+Plan §2.11 and M17. A capture records the packets of a network, a device or a selector, or of the uplink, into a pcapng or
+pcap file that can be downloaded while it runs; a scenario attaches captures to its run. M17 adds the capture engine
+(`internal/capture`), its management (`internal/capturemgr`), a connection type of the executor protocol for captures, the
+operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`/`DELETE /captures/{id}`, `POST
+…/stop`, `GET …/download`), the `capture` step type and `capture: true` of scenarios, the events `capture_started`,
+`capture_stopped` and `disk_low`, the feature `captures` and the volume `chaosgw-captures` of the deployment.
+
+### How it works
+
+- **The engine is plain Go, in the executor** (`internal/capture`). The plan names "libpcap processes started by the executor";
+  the executor runs a goroutine per capture instead, with one AF_PACKET socket per interface, so the image needs no
+  `tcpdump` or libpcap, the filter is tested against a user space specification (below) and the whole thing runs in the
+  unit tests of this repository on the loopback interface (a process with `CAP_NET_RAW`). A session
+  (`capture.Start`) makes each socket without a protocol, reads the interface's index and hardware type
+  (`SIOCGIFINDEX`, `SIOCGIFHWADDR`: Ethernet and the loopback interface are `LINKTYPE_ETHERNET`, a WireGuard interface
+  `LINKTYPE_RAW`; anything else is refused), attaches the filter, switches on the kernel's time stamp (`SO_TIMESTAMPNS`) and
+  `PACKET_AUXDATA` (the original length of a packet the filter cut), sets a 16 MiB queue, and only then binds it with
+  `ETH_P_ALL`, so no packet is queued before the filter is in place. A socket in a named network namespace
+  (`CaptureOpen.Namespace`, the testbed's gateway) is made by a thread that joined the namespace and went back
+  (`inNamespace`). Each socket has a reader goroutine (a 100 ms receive timeout, so it notices a stop); the packets are
+  written through one `Output`; the controlling goroutine flushes the file every 250 ms, ends the capture at its
+  duration and checks the disk. A **stop drains**: the readers go on until their socket has been quiet for 100 ms (at most
+  65536 more packets), so everything that reached the socket before the stop is in the file. The kernel's drop counter
+  (`PACKET_STATISTICS`) is summed as `Capture.dropped`.
+- **The filter** (`capture.Filter`) names a *local* side (Ethernet addresses, or addresses and prefixes) and a *peer* side
+  (prefixes, or prefixes it is not in), a protocol (tcp, udp, icmp) and the peer's ports. A packet is selected when either
+  direction fits: `local(source) and peer(destination) and the port is the destination port`, or the reverse with the
+  source port. A connection of a device is therefore captured with its replies, which is what "exact against a capture on
+  the device itself" (spike S9) asks for. Every empty part selects everything; a packet that is not IP is never selected
+  when the peer, the protocol or the ports are given, and is selected by the local side alone (a device capture holds the
+  device's ARP and DHCP frames). `Matcher.Match` is the specification; `Matcher.BPF` compiles the same filter to a classic
+  BPF program (`golang.org/x/net/bpf`; every condition is three instructions with 32-bit jumps, because the offsets of a
+  conditional jump are 8 bits wide and a group has a long list of addresses). The two are tested against each other on
+  random packets, with fragments, IP options, truncation, IPv6 and other protocols
+  (`TestTheKernelFilterSelectsExactlyWhatTheUserSpaceFilterSelects`, with the BPF virtual machine of `x/net`), and the
+  kernel accepts the programs (the loopback tests). A filter whose program passes the kernel's 4096 instructions (14 per
+  Ethernet address: about 290 of them) falls back to a program that takes every packet and filters in the reader
+  (`TestAFilterTooLargeForTheKernelIsAppliedInUserSpace`). Not supported: 802.1Q tags (the filter reads an untagged
+  Ethernet header) and IPv6 extension headers before the transport header.
+- **The files** (`capture.Output`, `capture.Writer`). pcapng: a section header, one interface description block per
+  interface (name, description, nanosecond resolution), an enhanced packet block per packet with the interface, the original
+  length and the direction (`epb_flags`: inbound or outbound, from `PACKET_OUTGOING`); a file may hold interfaces of
+  different link types. pcap: microseconds, one link type (a request that mixes link types in a pcap file is refused with
+  `validation_failed` at `/format`). Every block is written by one call into a 256 KiB buffer; a reader that opens
+  the file while it is written may see half a block, so a download copies only complete records
+  (`capture.CopyComplete`). A **ring buffer** (`ring_buffer`) writes `files` files of about `file_size` bytes, each a
+  complete pcap or pcapng file of its own (`capture-00001.pcapng`, …), and deletes the oldest when a new one starts; a
+  download joins them (pcapng files by concatenation: each starts a new section; pcap files without the repeated global
+  header). Without a ring buffer one file `capture.pcapng` grows up to `max_size`, headers included, and the capture ends with
+  the reason `size` before a packet would pass it, so the file never does. The files are created with `O_EXCL` below an
+  `os.Root` of the capture's directory (no symbolic link leads out of it, no existing file is overwritten), mode 0640 less
+  the executor's umask (0600), and given to the owner of the directory (below).
+- **The executor protocol.** A capture is not an operation of the request queue: it changes nothing in the network
+  configuration and must not wait behind a plan. Like a watch it has a connection of its own (`Frame.Capture` as the one
+  message after the hello; the executor answers with `Frame.CaptureEvent`s: `started` with the interfaces and their link
+  types, `stats` once a second, `stopped` with the reason; the client may send `CaptureCtl{Stop}`), and **a capture lives as long
+  as the connection**: if the API ends, its captures end with it and no capture is left behind in the executor. The request
+  (`executor.CaptureOpen`) is checked by `Validate` (the name of the directory, the interface names, the formats, the
+  limits) and by the scope: every interface must be one assigned to Chaos Gateway, the same set the other operations are
+  limited to (`ErrOutOfScope`), so a capture cannot read the host's own interfaces other than the uplink and the management
+  interface, which are assigned as OS-owned. The directory is `Dir` below the executor's `--captures-dir`, opened with
+  `os.Root` (a link to elsewhere is refused); it must exist, and the executor gives the files to the owner of that
+  directory. At most `executor.MaxCaptures` (8) captures run in one executor. `Client.OpenCapture`, `Redialing.OpenCapture` and
+  `apply.Local.OpenCapture` are the three ways to open one (they implement `capturemgr.Opener`); the refusals come back
+  as the sentinel errors `ErrOutOfScope`, `ErrTooManyCaptures`, `ErrDiskLow` and `ErrNoCaptureDir` on both sides of the
+  socket (error codes `out_of_scope`, `capture_limit`, `disk_low`, `captures_unavailable`).
+- **What a scope stands for** (`capturemgr.Resolve`, with the snapshot of the moment). A **network** is its bridge
+  (`br-<name>`; no filter), a WireGuard network its interfaces (raw IP). A **device** is the interface of its network
+  filtered by its Ethernet addresses; a device without one (behind a router, a WireGuard client) by its addresses; a device
+  without either is `validation_failed` at `/scope/device`. A **selector** takes the source as a device, a group (one
+  interface per network of its members, the members of that network in its filter), a network or `global` (every bridge and
+  the WireGuard interfaces of the role test), and adds the protocol, the ports and the destination: an address or prefix, a network
+  (`domain.World.NetworkPrefixes`, the same prefixes an access rule uses), or `uplink` (every address outside the configured
+  networks and the management network, `World.NonUplinkPrefixes`, as the filter's `NotPeers`). A host name is `422
+  unsupported_feature` until M20, a `remote_network` source `validation_failed`. The **uplink** is the uplink interface, all
+  packets, after NAT. A scope that spans more than 16 interfaces is refused.
+- **What an interface shows.** A capture sees a packet as the kernel hands it to the taps of the interface: on the bridge,
+  what the gateway receives from and sends to the network, before NAT on the way in (the S9 result), so everything a device
+  exchanges with the uplink or another network is in it; frames the bridge forwards between two ports of the same network
+  (device to device) never reach the bridge device and are not (the same reason as in `install.md`'s DHCP hint). On the way
+  out the tap sees a packet when the interface sends it, so a packet that an egress fault delays is captured after the delay,
+  and one it drops is not captured; a packet is captured on the way in before the ingress fault (the IFB redirect) acts. The
+  capture is the evidence of what the device saw, not of what the gateway intended.
+- **The manager** (`capturemgr.Manager`). `Start` resolves the scope, refuses a mixed `pcap`, a request while the volume is
+  below the free-space limit (`ErrDiskLow`) and a ninth running capture (`ErrTooMany`), makes room in the quota (below), makes
+  the directory `<dir>/<id>` (the API's user owns it), opens the stream in the executor, takes its `started` event for the
+  interfaces and writes the record `capture.json` (atomically; schema version 1) before it answers `201` with the running
+  capture. A goroutine per capture follows its stream: `stats` events update packets, size and drops (a client that polls
+  `GET /captures/{id}` sees them with at most a second of delay), `stopped` ends the capture (`finish`): status `stopped`
+  and the reason of the executor, or `failed` when the reason is `error`, with the message, and `capture_stopped` (and
+  `disk_low` for that reason) on the event bus; a stream that closes without an end (the executor died) is `failed` too.
+  `Stop` asks the executor and returns when the files are closed (`user`; the runs use `run_end`); a capture that has
+  ended is returned as it is. `Delete` refuses one that runs. `Recover` (called when the API starts) loads the records: a
+  capture that was `running` ended with the process (the executor closes the files when the connection breaks), so it
+  is `failed`, reason `error`, message "the service restarted…", with the size of the files it left; a directory without a
+  readable record is left alone with a warning. `Close` stops what still runs the same way, with the message "the service
+  stopped". Time stamps are the API's clock; files and records are all that survives.
+- **Quota** (plan §3.6: 5 GiB, oldest first). The quota is the configuration's `settings.retention.captures_quota`, else
+  `--capture-quota` of `chaosgw api` (5 GiB). Before a capture starts, the oldest *stopped* captures are deleted until
+  the captures take at most `quota − 64 KiB`; the capture's own `max_size` is cut to what is left (the stop reason
+  `size` then comes with the message "the capture reached the space left in the quota"), a `max_size` or ring buffer larger
+  than the whole quota is `validation_failed` (`invalid_capture_limit`), and a ring buffer that does not fit what is left
+  after deleting every stopped capture is `capacity_exceeded`. While captures run, every `stats` event checks the sum: stopped
+  captures go first, and if the sum still passes the quota the capture whose counters just arrived is stopped with the
+  reason `size` and the message "the captures take … more than their quota" (the running captures may together pass the
+  quota by a second of their traffic; the stopped one stays, and the next `Start` makes room by deleting it if it must).
+  A run's captures are deleted with its record (30 days, plan §3.6) and, if the quota needs the room, before.
+- **Disk low** (plan §3.6: below 10 % free). The API refuses a new capture when the volume is below the limit
+  (`422 capacity_exceeded`); the executor checks again when it opens the files (`ErrDiskLow`, also `capacity_exceeded`: the
+  two containers see the same volume, and a gateway whose executor has a stricter `--capture-min-free` is still told) and
+  every 250 ms while a capture runs: below the limit the capture stops with the reason `disk_low`, status `stopped`, what was
+  recorded stays, and an `ENOSPC` of a write is the same reason. The limit is `--capture-min-free` (10) of both
+  `chaosgw exec` and `chaosgw api`; tests give the free space with a function.
+- **Download** (`GET /captures/{id}/download`). The Content-Type is `application/x-pcapng` or `application/vnd.tcpdump.pcap`
+  and the file name `<name>.pcapng`/`.pcap` (the name as `[A-Za-z0-9._-]`, else `capture-<id>`); the body is streamed from
+  the files, never held in memory: the complete records of every file of the capture in the order they were written,
+  while the capture runs too (a running capture's file is as current as the last flush, at most 250 ms behind). A file
+  the ring deletes while the download runs is skipped. `part=keylog` is `404 not_found` (no capture has a key log before
+  M22); `part=keylog` and a capture marked `sensitive` need the scope `full`, which the check in the handler already
+  applies.
+- **API details.** `POST /captures` takes `Idempotency-Key` and the scope `overlays`; it writes `capture.start`,
+  `capture.stop` and `capture.delete` to the audit log; a deployment without a capture volume (`--captures-dir` empty)
+  answers every operation with `422 unsupported_feature`, and its `GET /capabilities` lacks the step type `capture` and
+  the feature `captures`. The spec gained the fields `message`, `dropped` and `interfaces` (name, link type, the filter in
+  words) of `Capture`, text for the operations and the request (the default and the minimum limits), and the example
+  `api/examples/capture-requests.yaml` (validated by `make check-spec` and decoded by the domain tests).
+- **Runs** (`internal/run/captures.go`). With `capture: true` the run starts a capture of its target (a device or a
+  network as it is, a group as a selector with the group as its source) *before* the timeline starts, so the first step is in
+  it, and stops it with the reason `run_end` as the first thing `finish` does (before the overlays go, for every way a run
+  can end). `capture: start` starts a capture of the step's target (a narrower one than the run's is fine); a start while a
+  capture of that target from an earlier step runs is `skipped`; `capture: stop` stops the captures of earlier steps of
+  that target with the reason `user` (`skipped` when none runs; the domain refuses a `stop` that has no `start` of the same
+  target before it, `invalid_step_reference`). `capture: true` is stopped by no step. A capture that cannot be started
+  (the executor refuses, the disk is low) never ends the run: `capture_missing` names it (with the step) and the step is
+  `skipped`; a capture that stops before its run ends (`disk_low`, `size`, `error`) is reported the same way at the end,
+  with its reason and message, and keeps what it recorded. The captures of a run are its artifacts (`kind: capture`, the download URL, the
+  size as of reading, the capture's id) in the report, also the ones that ended early; the record of a run that a restart
+  aborted gets the captures that process left. A gateway without a capture volume refuses a scenario that records
+  (`unsupported_feature`, "the gateway has no capture volume") instead of running it without.
+- **Deployment.** The volume `chaosgw-captures` is mounted at `/var/lib/chaosgw/captures` in the executor and the API
+  container (`--captures-dir`), the image creates the directory owned by 65532 so that a new volume starts with the owner the API
+  needs, and `TestTheCapturesVolumeIsTheSameInTheExecutorAndTheAPI` and the hardening tests pin it. The executor needs no
+  capability it does not have (it is privileged); the API container still has none.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 4 item in
+`open-items.md` for M17):
+
+1. **Native Go capture instead of libpcap processes** (above): testable here, one binary, no extra package in the executor
+   image; the formats are the same files libpcap writes, checked against Wireshark's dissector in
+   `TestWiresharkReadsBothFormats` and the level 1 tests.
+2. **A capture lives as long as its connection**, and a restart makes it `failed`, not resumed. A capture has no meaning
+   without the process that wants its files; no executor-side registry means nothing to leak or to recover.
+3. **The API makes the directory, the executor writes in it as the directory's owner.** The privileged process never
+   follows a path the API chooses, and the API can delete what it serves without extra privileges.
+4. **A capture is taken on the bridge, not on its ports.** One socket per network, the addresses of the gateway's side; the
+   cost (no device-to-device frames) is the one `install.md` already names for the DHCP debugging hint, and a port-level
+   capture would need one socket per physical port and a merge. A capture of the physical ports stays possible with
+   `tcpdump` on the host.
+5. **`uplink` as a destination is the complement of the configured networks** (the definition of the spec), done by
+   `NotPeers` in the filter.
+6. **`pcapng` is the default; `pcap` refuses mixed link types.** pcapng is the format that holds several interfaces,
+   directions and original lengths.
+7. **A capture with no limit stops at 1 GiB** (`domain.DefaultCaptureMaxSize`), and every file has at least 64 KiB; a
+   ring buffer takes no `max_size` (it is bounded by its files). A forgotten capture must not fill the volume.
+8. **A capture stopped by the quota stays.** Deleting the capture that was just stopped, to get under the quota,
+   would destroy the evidence of a run to make room for nothing; the next start deletes it if it must.
+9. **Errors of the executor are `failed`, stops are `stopped`.** `disk_low`, `size` and `duration` are the capture doing its
+   job, so a run that waits for the file can use it.
+10. **Captures have no owner.** The spec gives no owner to a capture and scope `overlays` covers `captures`; a token with
+    that scope may stop and delete any capture (unlike overlays and runs). Downloading needs `read`.
+11. **A problem with a capture never ends a run**; the run says so in `capture_missing`. A run is the evidence the CI
+    reads, and its verdict is about the device, but a report must not silently lack the file it promised.
+12. **The tests that open AF_PACKET sockets carry the build tag `testbed`.** The hosted level 0 job is not root and has no
+    `CAP_NET_RAW`; the testbed jobs are, and name the tests with `-expect-pass $M17_LEVEL1`, so a test that skips or is no
+    longer built fails there. Everything else (the filter against the BPF virtual machine, the writers, the manager, the
+    API with a fake executor side) runs in level 0.
+
+### Tests
+
+Level 0 (all run here, with `-race`): `internal/capture` (`filter_test.go`, `format_test.go`, `output_test.go`: the filter
+against the BPF virtual machine on random packets, the readers and writers, Wireshark reading both formats, the ring and the
+size limit); `internal/executor/capture_validate_test.go` (a request refused before any socket) and the hardening and
+deployment tests; `internal/capturemgr` (the resolution of scopes against a snapshot, the lifecycle with a fake executor
+stream, the records across a restart, the download of a ring cut in the middle of a record, the captures of a run);
+`internal/domain` (the request and its limits, byte sizes, `capture: stop` ordering, the example file);
+`internal/run/captures_test.go` (`capture: true`, steps, skipped steps, a capture that cannot start or ends early, abort and
+error, restart, retention); and over the API with the simulated kernel, the real engine and the real manager
+(`internal/api/captures_test.go`, `runs_captures_test.go`; the executor's side is `capture_fake_test.go`, which writes real
+capture files and applies the real filters to the frames a test puts on an interface). The tests with the build tag `testbed`
+that need only `CAP_NET_RAW` ran here (as root) with `go test -tags testbed -run …
+./internal/capture ./internal/executor` (`M17_LEVEL1` names them): sessions on the loopback interface with the filters of the
+plan's Tests line (the kernel accepts them; frames injected through a raw socket with the addresses of devices that do not
+exist), the duration, the size limit, the ring, the free-space limit, the executor over its socket with a stop, a lost
+connection, the refusals and the owner of the files. The level 1 tests of the API on the real kernel
+(`internal/api/e2e_captures_test.go`, a capture on the interface of the device itself as the ground truth) are written,
+vetted with `-tags testbed` and wired into both CI testbed jobs, but were not run here (no KVM, no namespaces): run by CI.
+
+### Acceptance map (plan M17 "Tests")
+
+| Plan M17 Tests | Test |
+|---|---|
+| the capture contains exactly the selected traffic | the filter: `TestAFilterSelectsBothDirectionsOfTheLocalSide`, `TestPeersProtocolAndPortsNarrowTheSelectionAndPortsAreThePeersPorts`, `TestAFilterWithPeersNeverSelectsAFrameThatIsNoIPPacket`, `TestHostsSelectRawIPPacketsOfBothFamilies`, `TestNotPeersExcludeAddressesAndNeedAnIPPacket`, `TestTheKernelFilterSelectsExactlyWhatTheUserSpaceFilterSelects` (the BPF program equals the specification on random packets); the sockets (loopback interface, tag `testbed`): `TestACaptureOnTheLoopbackHoldsExactlyTheSelectedTraffic`, `TestADeviceCaptureHoldsTheFramesOfItsAddressInBothDirectionsAndNoOthers`, `TestASelectorCaptureHoldsOnlyTheMatchingTrafficOfTheDevice`, `TestAFilterTooLargeForTheKernelIsAppliedInUserSpace`, `TestTheSnapLengthCutsPacketsAndKeepsTheOriginalLength`; over the API: `TestACaptureOfADeviceHoldsExactlyItsFramesAndCanBeDownloadedWhileItRuns` (also while running), `TestASelectorCaptureHoldsOnlyTheTrafficItNames`, `TestTheDestinationOfASelectorMayBeTheUplinkOrANetwork`, `TestNetworksAndTheUplinkAreCapturedOnTheirInterfaces` (bridge, WireGuard interface as raw IP, uplink, `global`), `TestADeviceOfAWireGuardNetworkIsSelectedByItsAddress`; on the real kernel against a capture on the device itself: `TestACaptureOfADeviceIsExactlyTheCaptureOnTheDeviceItselfOnTheRealKernel`, `TestASelectorCaptureHoldsTheConnectionsItNamesOnTheRealKernel`, `TestAWireGuardNetworkIsCapturedAsRawIPOnTheRealKernel`, `TestTheUplinkCaptureShowsThePacketsAfterNATOnTheRealKernel`; not runnable here |
+| quota enforcement | `TestTheQuotaDeletesTheOldestStoppedCapturesAndLimitsTheRunningOnes` (the oldest stopped capture goes, the new one gets the room that is left and ends with `size`, the total stays within the quota, a limit above the quota is refused), `TestRunningCapturesThatTogetherPassTheQuotaAreStopped`, `TestTheQuotaIsASettingOfTheConfiguration`; the limits per capture: `TestAMaximumSizeEndsTheCaptureWithTheReasonSize`, `TestARingBufferCaptureKeepsTheNewestFilesAndDownloadsAsOne`, `TestTheDefaultLimitAndTheDurationReachTheExecutor`, and on the files `TestAnOutputWithASizeLimitStopsBeforeItWouldPassIt`, `TestARingKeepsTheNewestFilesAndEveryFileStandsAlone`, `TestTheSizeLimitEndsTheCaptureAndTheFileStaysWithinIt` |
+| a run with capture attaches it to the report | `TestACaptureTrueRecordsTheTargetForTheWholeRun`, `TestTheCaptureOfARunHasTheScopeOfTheTarget`, `TestCaptureStepsRecordAPartOfTheRun`, `TestACaptureStepWithoutAStopEndsWithTheRunAndAWholeRunCaptureIsNotStoppedByAStep`, `TestCaptureStepsThatHaveNothingToDoAreSkipped`, `TestCapturesEndWithARunWhateverEndsIt`, `TestARestartAttachesTheCapturesOfARunThatWasRunning`, `TestTheCapturesOfAnExpiredRunAreDeletedWithIt`; over the API with the real engine: `TestARunWithCaptureTrueAttachesTheCaptureOfItsTargetToTheReport` (the artifact is the file with exactly the device's frames; `?run=`; the events of the run), `TestCaptureStepsOverTheAPIRecordOnlyTheirWindow`, `TestAnAbortedRunStopsItsCapture`; `TestADeploymentWithoutACaptureVolumeCannotCapture` (a scenario that records is refused); on the real kernel `TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel`; not runnable here |
+| low disk stops captures but not the run | `TestALowDiskRefusesNewCapturesAndStopsRunningOnes` (refusal below 10 %, `disk_low`, what was recorded stays, the events), `TestALowDiskStopsTheCaptureOfARunButNotTheRun` (the run passes with `capture_missing` and the file), `TestARunWhoseCaptureCannotStartRunsWithoutItAndSaysSo`, `TestARunGoesOnWhenTheExecutorRefusesItsCapture`, `TestACaptureThatEndsEarlyLeavesItsFileAndAWarning`, `TestACaptureThatCannotStartIsAWarningAndTheRunGoesOn`; the executor's side: `TestACaptureStopsWhenTheDiskIsAlmostFullAndRefusesToStartOnOne`, `TestACaptureOnAFullDiskIsRefusedAndStopsWhenTheDiskFills`, `TestAFullDiskIsTheDiskLowReason`; on the real kernel, on a 4 MiB file system that the traffic fills: `TestALowDiskStopsTheCaptureButNotTheRunOnTheRealKernel`, `TestTheExecutorRefusesACaptureOnAVolumeBelowItsLimitOnTheRealKernel`; not runnable here |
+| Scope: capture by network (incl. WireGuard interfaces, raw IP link type), device or selector (AF_PACKET per S9) | as the first row; `TestPcapngHoldsInterfacesOfDifferentLinkTypes`, `TestWiresharkReadsBothFormats` (raw IP next to Ethernet in one file), `TestACaptureRequestThatDoesNotFitIsRefusedWithItsPointer`, `TestACaptureRequestIsDecodedAndItsLimitsAreChecked` |
+| Scope: ring buffer, quotas, retention, disk-low behavior, download (also while running) | as the second and fourth rows; `TestCopyCompleteCutsARecordThatIsBeingWritten`, `TestADownloadJoinsTheFilesOfARingAndCutsAFileThatIsBeingWritten`, `TestTheRecordsOfCapturesSurviveARestart`, `TestARestartEndsACaptureThatWasRunningAsFailed`, `TestCapturesFollowTheScopesOfTokens`, `TestAnIdempotencyKeyMakesOneCapture`, `TestOnlyEightCapturesRunAtOnce` |
+| Scope: capture step type; attachment to runs | as the third row |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -4810,8 +5030,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
-tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of Kea's packet socket after a link flap
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of Kea's packet socket after a link flap
 (issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 

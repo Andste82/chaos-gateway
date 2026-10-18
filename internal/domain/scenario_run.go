@@ -31,6 +31,27 @@ func StepCreatesOverlay(st *model.Step) bool {
 // not have exactly one.
 func StepKind(st *model.Step) string { return firstKind(*st) }
 
+// CheckKind returns the type of a check ("reconnected", "dns_query_seen", ...), "" for a check that
+// does not have exactly one.
+func CheckKind(c *model.Check) string {
+	kind := ""
+	n := 0
+	for name, set := range map[string]bool{
+		"reconnected": c.Reconnected != nil, "no_connection": c.NoConnection != nil, "traffic_seen": c.TrafficSeen != nil,
+		"traffic_not_seen": c.TrafficNotSeen != nil, "dns_query_seen": c.DnsQuerySeen != nil,
+		"tls_rejected": c.TlsRejected != nil, "tls_accepted": c.TlsAccepted != nil,
+	} {
+		if set {
+			kind = name
+			n++
+		}
+	}
+	if n != 1 {
+		return ""
+	}
+	return kind
+}
+
 // TimelineOrder returns the indexes of the steps in the order a run executes them: by `at`, and in
 // list order for steps with the same `at` (plan §2.10).
 func TimelineOrder(steps []model.Step) []int { return timelineOrder(steps) }

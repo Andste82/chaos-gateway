@@ -3084,8 +3084,17 @@ type CertificateUpload struct {
 }
 
 // Check Exactly one check type besides `window` and `name`. Checks observe the scenario
-// target (flows, DNS log, TLS handshake events) inside the window.
+// target (flows, DNS log, TLS handshake events) inside the window, which opens when the step
+// `window.from` has been applied (`start`: when the timeline begins) and closes after `within` or
+// when the step `until` has been applied. Observations are made every 250 ms; one counts for the
+// window if the poll that sees it lies inside it. A positive check (`reconnected`, `traffic_seen`,
+// `dns_query_seen`) passes at its first observation and fails when the window closes without one;
+// a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
+// the window closes. A run lasts until its last check is decided, so a window may reach past the last
+// step; the overlays of the run stay until then. A run with a failed check ends as `failed`; one with a
+// check that could not be decided (`error`) ends as `error`.
 type Check struct {
+	// DnsQuerySeen A device of the target asks the gateway's DNS proxy for the name inside the window.
 	DnsQuerySeen *DnsQueryCheck `json:"dns_query_seen,omitempty"`
 
 	// Name Name in the report (JUnit testcase). Default derived from the type.
@@ -3094,33 +3103,41 @@ type Check struct {
 	// NoConnection No connection matching the selector is established inside the window.
 	NoConnection *TrafficMatch `json:"no_connection,omitempty"`
 
-	// Reconnected A new connection matching the selector is established inside the window.
+	// Reconnected A new connection of the target matching the selector is established inside the window: one that was there
+	// when the window opened does not count, one that is only trying (TCP before the handshake is through, a UDP
+	// flow nobody answered) does not count until it is answered.
 	Reconnected *TrafficMatch `json:"reconnected,omitempty"`
 
 	// TlsAccepted The device completed the handshake (a failed security check if the case must be rejected).
 	TlsAccepted *TrafficMatch `json:"tls_accepted,omitempty"`
 
 	// TlsRejected The device aborted the TLS handshake with the responder (M21).
-	TlsRejected    *TrafficMatch        `json:"tls_rejected,omitempty"`
+	TlsRejected *TrafficMatch `json:"tls_rejected,omitempty"`
+
+	// TrafficNotSeen No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
 	TrafficNotSeen *TrafficNotSeenCheck `json:"traffic_not_seen,omitempty"`
-	TrafficSeen    *TrafficMatch        `json:"traffic_seen,omitempty"`
-	Window         CheckWindow          `json:"window"`
+
+	// TrafficSeen A packet of a connection of the target matching the selector is seen inside the window - a new connection in any state, or an old one that carries packets.
+	TrafficSeen *TrafficMatch `json:"traffic_seen,omitempty"`
+	Window      CheckWindow   `json:"window"`
 }
 
 // CheckResult defines model for CheckResult.
 type CheckResult struct {
 	// Evidence Observations that decided the result (flows, queries, handshakes).
-	Evidence    *[]map[string]interface{} `json:"evidence,omitempty"`
-	Index       int                       `json:"index"`
-	Message     *string                   `json:"message,omitempty"`
-	Name        string                    `json:"name"`
-	Status      CheckResultStatus         `json:"status"`
-	Type        CheckResultType           `json:"type"`
-	WindowEnd   *time.Time                `json:"window_end,omitempty"`
-	WindowStart *time.Time                `json:"window_start,omitempty"`
+	Evidence *[]map[string]interface{} `json:"evidence,omitempty"`
+	Index    int                       `json:"index"`
+	Message  *string                   `json:"message,omitempty"`
+	Name     string                    `json:"name"`
+
+	// Status `pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.
+	Status      CheckResultStatus `json:"status"`
+	Type        CheckResultType   `json:"type"`
+	WindowEnd   *time.Time        `json:"window_end,omitempty"`
+	WindowStart *time.Time        `json:"window_start,omitempty"`
 }
 
-// CheckResultStatus defines model for CheckResult.Status.
+// CheckResultStatus `pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.
 type CheckResultStatus string
 
 // CheckResultType defines model for CheckResult.Type.
@@ -3616,7 +3633,7 @@ type DnsFault struct {
 // DnsFaultAction defines model for DnsFault.Action.
 type DnsFaultAction string
 
-// DnsQueryCheck defines model for DnsQueryCheck.
+// DnsQueryCheck A device of the target asks the gateway's DNS proxy for the name inside the window.
 type DnsQueryCheck struct {
 	// Name Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
 	Name Hostname `json:"name"`
@@ -6028,11 +6045,19 @@ type Scenario struct {
 	// Target Device, group or network (not `global`, not `remote_network`). One run per target at a time.
 	Target Scope `json:"target"`
 
-	// ZeroHit How a fault or rule of the run that matched no packet is reported.
+	// ZeroHit How a fault, rule or profile step of the run that matched no packet is reported. `warning` adds the run
+	// warning `zero_hit` for the step; `error` also ends a run that would have passed as `failed` (the reason
+	// names the steps) and adds a failed test case for each such step to the JUnit report. A step that replaces
+	// the overlay of an earlier one is judged by what the overlay matched from then on. A run that ended as
+	// `error` or `aborted` gets no zero-hit warnings: its steps may never have had the time to match.
 	ZeroHit *ScenarioZeroHit `json:"zero_hit,omitempty"`
 }
 
-// ScenarioZeroHit How a fault or rule of the run that matched no packet is reported.
+// ScenarioZeroHit How a fault, rule or profile step of the run that matched no packet is reported. `warning` adds the run
+// warning `zero_hit` for the step; `error` also ends a run that would have passed as `failed` (the reason
+// names the steps) and adds a failed test case for each such step to the JUnit report. A step that replaces
+// the overlay of an earlier one is judged by what the overlay matched from then on. A run that ended as
+// `error` or `aborted` gets no zero-hit warnings: its steps may never have had the time to match.
 type ScenarioZeroHit string
 
 // ScenarioPreconditions defines model for ScenarioPreconditions.
@@ -6386,7 +6411,7 @@ type TrafficMatch struct {
 	Protocol    *Protocol    `json:"protocol,omitempty"`
 }
 
-// TrafficNotSeenCheck defines model for TrafficNotSeenCheck.
+// TrafficNotSeenCheck No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
 type TrafficNotSeenCheck struct {
 	// Destination Exactly one property. Omit the whole destination for "any".
 	Destination *Destination `json:"destination,omitempty"`

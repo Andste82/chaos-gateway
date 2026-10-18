@@ -293,3 +293,25 @@ func TestARevisionOrphansTheScenarioOfARunThatRefersToWhatItDeletes(t *testing.T
 		t.Errorf("%v", got)
 	}
 }
+
+func TestCheckKindNamesTheOneTypeOfACheck(t *testing.T) {
+	m := &model.TrafficMatch{}
+	win := model.CheckWindow{From: "start"}
+	for want, c := range map[string]model.Check{
+		"reconnected":      {Reconnected: m, Window: win},
+		"no_connection":    {NoConnection: m, Window: win},
+		"traffic_seen":     {TrafficSeen: m, Window: win},
+		"traffic_not_seen": {TrafficNotSeen: &model.TrafficNotSeenCheck{}, Window: win},
+		"dns_query_seen":   {DnsQuerySeen: &model.DnsQueryCheck{Name: "a.example.com"}, Window: win},
+		"tls_rejected":     {TlsRejected: m, Window: win},
+		"tls_accepted":     {TlsAccepted: m, Window: win},
+		"":                 {Window: win},
+	} {
+		if got := CheckKind(&c); got != want {
+			t.Errorf("%q: %q", want, got)
+		}
+	}
+	if got := CheckKind(&model.Check{Reconnected: m, NoConnection: m}); got != "" {
+		t.Errorf("two types: %q", got)
+	}
+}

@@ -24,6 +24,7 @@ const (
 	EventRunQueued   = "run_queued"
 	EventRunStarted  = "run_started"
 	EventRunStep     = "run_step"
+	EventRunCheck    = "run_check"
 	EventRunFinished = "run_finished"
 )
 

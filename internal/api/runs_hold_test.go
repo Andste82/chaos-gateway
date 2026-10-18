@@ -94,8 +94,15 @@ func TestAStepBehindARevisionApplyWaitsAndTheRunSaysSo(t *testing.T) {
 	if wait, _ := a["queue_wait_ms"].(float64); wait < 300 {
 		t.Errorf("the step waited %v ms behind a held apply", a["queue_wait_ms"])
 	}
+	// (the simulated kernel matches no packet, so the fault is also a zero hit)
 	ws, _ := done["warnings"].([]any)
-	if len(ws) != 1 || ws[0].(map[string]any)["code"] != "step_late" || ws[0].(map[string]any)["step"] != "a" {
+	late := 0
+	for _, w := range ws {
+		if m := w.(map[string]any); m["code"] == "step_late" && m["step"] == "a" {
+			late++
+		}
+	}
+	if late != 1 {
 		t.Fatalf("warnings %v", done["warnings"])
 	}
 	// the JUnit file carries it

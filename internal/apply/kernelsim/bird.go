@@ -136,6 +136,7 @@ func (k *Kernel) Stream(ctx context.Context, c executor.Command) (<-chan string,
 // (exit 1 and "0 flow entries have been deleted." when nothing matched).
 func (k *Kernel) conntrackCmd(args []string) (executor.Result, error) {
 	if len(args) == 0 || args[0] != "-D" {
+		k.conntrackReads++
 		return okr(k.conntrack)
 	}
 	want := map[string]string{}
@@ -196,6 +197,14 @@ func conntrackMatches(c linux.Conntrack, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// ConntrackReads counts the listings of the conntrack table so far: a test that changes the table and wants a
+// reader (a run's checks) to have looked at it waits for the count to grow past one it took afterwards.
+func (k *Kernel) ConntrackReads() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.conntrackReads
 }
 
 // Conntrack returns the scripted conntrack text as it is now (after deletions).

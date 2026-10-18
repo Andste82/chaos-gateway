@@ -32,7 +32,7 @@ const waitPoll = 250 * time.Millisecond
 // milestones of Unsupported.
 var (
 	SupportedStepTypes  = []string{"profile", "fault", "rule", "wireguard", "wait", "remove", "restore"}
-	SupportedCheckTypes = []string{}
+	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen"}
 )
 
 var (
@@ -91,18 +91,30 @@ type Gateway interface {
 	Subscribe() (<-chan engine.Event, func())
 }
 
+// DNSQuery is a query of a device that the gateway's DNS proxy logged.
+type DNSQuery struct {
+	// Device is the device's UUID, Name the name asked and Type the record type ("A").
+	Device, Name, Type string
+	Time               time.Time
+}
+
 // Observer is what the runs read of what the gateway sees besides the snapshot: the connections for
-// `wait` steps, the DNS log for the baseline and for `dns_query` waits, and the counters of overlays
-// for the report.
+// `wait` steps and checks, the DNS log for the baseline, for `dns_query` waits and for `dns_query_seen`
+// checks, and the counters of overlays for the report and the zero-hit warnings.
 type Observer interface {
 	// Flows returns the tracked connections of the test networks.
 	Flows(ctx context.Context) ([]engine.Flow, error)
 	// DNSQuerySeen reports whether one of the devices (UUIDs) asked the gateway's DNS proxy for the
 	// name at or after the time. A name may be `*.suffix`.
 	DNSQuerySeen(devices []string, name string, since time.Time) bool
+	// DNSQueries returns the queries for the name (exact, or `*.suffix`) that one of the devices (UUIDs)
+	// asked the gateway's DNS proxy at or after the time, oldest first.
+	DNSQueries(devices []string, name string, since time.Time) []DNSQuery
 	// DNSClientSeen reports whether the device has asked the gateway's DNS proxy for anything.
 	DNSClientSeen(device string) bool
-	// Counters returns the counters of the overlays (their kernel counters), those that have some.
+	// Counters returns the counters of the overlays (their kernel counters). An overlay that is in the
+	// kernel's view but has nothing in it (a rule that is not in the packet path, a fault that another one
+	// overrides) counts zero packets; one whose counters could not be read is left out.
 	Counters(ctx context.Context, overlays []uuid.UUID) map[uuid.UUID]*model.Counter
 }
 

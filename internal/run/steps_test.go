@@ -347,7 +347,7 @@ func TestAParameterThatNamesNothingIsRefused(t *testing.T) {
 }
 
 // A stored scenario is found by name or UUID in the active revision, and run as it is; the example's
-// scenario needs checks and capture, which arrive with M16 and M17.
+// scenario captures, which arrives with M17.
 func TestAStoredScenarioNeedsAllItsMilestones(t *testing.T) {
 	h := newHarness(t)
 	for _, ref := range []string{"mqtt-outage", "3d4e5f6a-7b8c-4d9e-0f1a-2b3c4d5e6f71"} {
@@ -366,12 +366,24 @@ func TestAStoredScenarioNeedsAllItsMilestones(t *testing.T) {
 func TestStepTypesAndChecksOfLaterMilestonesAreRefused(t *testing.T) {
 	h := newHarness(t)
 	for name, tc := range map[string]struct{ yaml, milestone string }{
-		"checks": {`
+		"tls check": {`
 name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-checks: [{reconnected: {protocol: tcp, ports: [8883]}, window: {from: a, within: 30s}}]
-`, "M16"},
+checks: [{tls_rejected: {protocol: tcp, ports: [8883]}, window: {from: a, within: 30s}}]
+`, "M21"},
+		"check for a host name": {`
+name: c
+target: {device: esp32-42}
+steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
+checks: [{reconnected: {destination: {hostname: broker.example.com}}, window: {from: a, within: 30s}}]
+`, "M20"},
+		"check that excepts a host name": {`
+name: c
+target: {device: esp32-42}
+steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
+checks: [{traffic_not_seen: {except: [{hostname: broker.example.com}]}, window: {from: a, within: 30s}}]
+`, "M20"},
 		"capture flag": {`
 name: c
 target: {device: esp32-42}

@@ -3661,7 +3661,12 @@ components:
           type: string
           enum: [warning, error]
           default: warning
-          description: How a fault or rule of the run that matched no packet is reported.
+          description: |
+            How a fault, rule or profile step of the run that matched no packet is reported. `warning` adds the run
+            warning `zero_hit` for the step; `error` also ends a run that would have passed as `failed` (the reason
+            names the steps) and adds a failed test case for each such step to the JUnit report. A step that replaces
+            the overlay of an earlier one is judged by what the overlay matched from then on. A run that ended as
+            `error` or `aborted` gets no zero-hit warnings: its steps may never have had the time to match.
         preconditions: {$ref: '#/components/schemas/ScenarioPreconditions'}
         steps:
           type: array
@@ -3733,7 +3738,15 @@ components:
       type: object
       description: |
         Exactly one check type besides `window` and `name`. Checks observe the scenario
-        target (flows, DNS log, TLS handshake events) inside the window.
+        target (flows, DNS log, TLS handshake events) inside the window, which opens when the step
+        `window.from` has been applied (`start`: when the timeline begins) and closes after `within` or
+        when the step `until` has been applied. Observations are made every 250 ms; one counts for the
+        window if the poll that sees it lies inside it. A positive check (`reconnected`, `traffic_seen`,
+        `dns_query_seen`) passes at its first observation and fails when the window closes without one;
+        a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
+        the window closes. A run lasts until its last check is decided, so a window may reach past the last
+        step; the overlays of the run stay until then. A run with a failed check ends as `failed`; one with a
+        check that could not be decided (`error`) ends as `error`.
       required: [window]
       properties:
         name:
@@ -3743,12 +3756,16 @@ components:
         window: {$ref: '#/components/schemas/CheckWindow'}
         reconnected:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
-          description: A new connection matching the selector is established inside the window.
+          description: |
+            A new connection of the target matching the selector is established inside the window: one that was there
+            when the window opened does not count, one that is only trying (TCP before the handshake is through, a UDP
+            flow nobody answered) does not count until it is answered.
         no_connection:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
           description: No connection matching the selector is established inside the window.
         traffic_seen:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
+          description: A packet of a connection of the target matching the selector is seen inside the window - a new connection in any state, or an old one that carries packets.
         traffic_not_seen: {$ref: '#/components/schemas/TrafficNotSeenCheck'}
         dns_query_seen: {$ref: '#/components/schemas/DnsQueryCheck'}
         tls_rejected:
@@ -3759,10 +3776,12 @@ components:
           description: The device completed the handshake (a failed security check if the case must be rejected).
     DnsQueryCheck:
       type: object
+      description: A device of the target asks the gateway's DNS proxy for the name inside the window.
       required: [name]
       properties:
         name: {$ref: '#/components/schemas/Hostname'}
     TrafficNotSeenCheck:
+      description: No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object
@@ -5252,6 +5271,7 @@ components:
           enum: [reconnected, no_connection, traffic_seen, traffic_not_seen, dns_query_seen, tls_rejected, tls_accepted]
         status:
           type: string
+          description: '`pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.'
           enum: [pending, passed, failed, error]
         window_start: {type: string, format: date-time}
         window_end: {type: string, format: date-time}

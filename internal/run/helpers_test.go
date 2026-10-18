@@ -272,6 +272,11 @@ type fakeObserver struct {
 	dns      map[string]bool // device -> asked the gateway's DNS
 	queries  []query
 	counters map[uuid.UUID]*model.Counter
+	// gw and stepCounters give the counter of the overlay that a step wrote, whatever its id
+	gw           *fakeGateway
+	stepCounters map[string]*model.Counter
+	flowErr      error
+	flowPolls    int
 }
 
 type query struct {
@@ -282,6 +287,10 @@ type query struct {
 func (o *fakeObserver) Flows(context.Context) ([]engine.Flow, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.flowPolls++
+	if o.flowErr != nil {
+		return nil, o.flowErr
+	}
 	return append([]engine.Flow(nil), o.flows...), nil
 }
 
@@ -304,6 +313,20 @@ func (o *fakeObserver) DNSQuerySeen(devices []string, name string, since time.Ti
 	return false
 }
 
+func (o *fakeObserver) DNSQueries(devices []string, name string, since time.Time) []run.DNSQuery {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []run.DNSQuery
+	for _, q := range o.queries {
+		for _, d := range devices {
+			if q.device == d && q.name == name && !q.at.Before(since) {
+				out = append(out, run.DNSQuery{Device: q.device, Name: q.name, Type: "A", Time: q.at})
+			}
+		}
+	}
+	return out
+}
+
 func (o *fakeObserver) DNSClientSeen(device string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -316,6 +339,20 @@ func (o *fakeObserver) Counters(_ context.Context, ids []uuid.UUID) map[uuid.UUI
 	out := map[uuid.UUID]*model.Counter{}
 	for _, id := range ids {
 		if c, ok := o.counters[id]; ok {
+			cc := *c
+			out[id] = &cc
+			continue
+		}
+		if o.gw == nil {
+			continue
+		}
+		o.gw.mu.Lock()
+		ov, ok := o.gw.byID[id]
+		o.gw.mu.Unlock()
+		if !ok || ov.Run == nil {
+			continue
+		}
+		if c, ok := o.stepCounters[ov.Run.Step]; ok {
 			cc := *c
 			out[id] = &cc
 		}
@@ -344,7 +381,7 @@ func newHarnessIn(t *testing.T, dir string, opts ...option) *harness {
 	t.Helper()
 	clk := clock.NewFake(t0)
 	gw := newGateway(testConfig(t))
-	obs := &fakeObserver{dns: map[string]bool{}, counters: map[uuid.UUID]*model.Counter{}}
+	obs := &fakeObserver{dns: map[string]bool{}, counters: map[uuid.UUID]*model.Counter{}, stepCounters: map[string]*model.Counter{}, gw: gw}
 	cfg := run.Config{Clock: clk, Dir: dir, Gateway: gw, Observer: obs}
 	for _, o := range opts {
 		o(&cfg)
@@ -378,6 +415,14 @@ func eventually(t *testing.T, what string, cond func() bool) {
 var token = model.Actor{Type: model.ActorTypeToken, Id: "tok-1", Name: ptr("ci")}
 
 func ptr[T any](v T) *T { return &v }
+
+func deref[T any](p *T) T {
+	var z T
+	if p != nil {
+		z = *p
+	}
+	return z
+}
 
 // inline parses a scenario given as YAML.
 func inline(t *testing.T, yaml string) *model.Scenario {

@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -14 in `docs/open-items.md`; -01 to -03 and -05 to -10 fixed on the branch `close-phase-3-1`, level 2 passed there (Nightly 39084099383, P31-AUDIT-04 closed); -11 to -14 decided by the maintainer on 2026-10-18 and implemented on that branch; the branch merged to main with PR #69, 2026-10-18, `4ec8987`, CI run 39140329787 green, closing issues #57, #63 and #64); the decisions I64-01 to I64-03 from issue #64 made on 2026-10-18 (I64-02 implemented), I64-05 closed; Phase 4: M15 done on the branch `worktree-phase-4` (level 1 tests run by CI); next: M16 · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -14 in `docs/open-items.md`; -01 to -03 and -05 to -10 fixed on the branch `close-phase-3-1`, level 2 passed there (Nightly 39084099383, P31-AUDIT-04 closed); -11 to -14 decided by the maintainer on 2026-10-18 and implemented on that branch; the branch merged to main with PR #69, 2026-10-18, `4ec8987`, CI run 39140329787 green, closing issues #57, #63 and #64); the decisions I64-01 to I64-03 from issue #64 made on 2026-10-18 (I64-02 implemented), I64-05 closed; Phase 4: M15 and M16 done on the branch `worktree-phase-4` (level 1 tests run by CI); next: M17 · October 2026
 
 ---
 
@@ -1447,7 +1447,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 ## Phase 4 — Automation
 
-**Status:** M15 done on the branch `worktree-phase-4` (not merged yet); M16 to M19 open.
+**Status:** M15 and M16 done on the branch `worktree-phase-4` (not merged yet); M17 to M19 open.
 
 **M15 — Scenario engine and runs** (L)
 - **Status:** done — committed on the branch worktree-phase-4 (`3902e34`, `4970d01`, `c853440`, `95a9956`, `daf8602`). Reviewed; all level 0 tests pass here. The level 1 tests (`internal/api/e2e_runs_test.go`, among them the +-100 ms step timing, abort and lease on the real kernel) are written, vetted with `-tags testbed` and wired into both CI testbed jobs with `M15_LEVEL1`, but were not run here (no KVM, no namespaces): run by CI. Hardware step timing stays with H1.
@@ -1456,6 +1456,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M11.
 
 **M16 — Checks** (M)
+- **Status:** done — committed on the branch worktree-phase-4 (`0e75fb8`, `3e90e2e`, `bb607e3`). Reviewed; all level 0 tests pass here (fake clock, API, kernelsim; `-race` repeated). The level 1 tests (`internal/api/e2e_checks_test.go`: a scripted device that reconnects, one that gives up, a fault that never matches) are written, vetted with `-tags testbed` and wired into both CI testbed jobs with `M16_LEVEL1`, but were not run here (no KVM, no namespaces): run by CI. Host names in checks arrive with M20, `tls_rejected` and `tls_accepted` with M21 (refused with `unsupported_feature` until then).
 - Scope: observation-based checks with windows relative to named steps (connection established within t, no connection accepted, traffic to destination seen/not seen, DNS query seen); zero-hit warnings for faults and rules of the run (optionally errors).
 - Tests: checks pass and fail correctly with scripted client behavior in the testbed; a scenario whose fault never matches reports the zero-hit warning.
 - Depends on: M15.

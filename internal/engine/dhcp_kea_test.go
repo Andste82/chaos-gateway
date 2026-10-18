@@ -152,11 +152,15 @@ func TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration(t *testing.T) {
 	if s := sinceConfigured(); s < 1 {
 		t.Fatalf("Apply sent an unchanged configuration again (configured %d s ago)", s)
 	}
+	// Kea counts whole seconds since its last configuration. Wait until that is clearly more than a loaded
+	// machine needs between Reopen and the query, and compare against it instead of expecting exactly 0.
+	time.Sleep(2100 * time.Millisecond)
+	before := sinceConfigured()
 	if err := k.Reopen(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	if s := sinceConfigured(); s != 0 {
-		t.Errorf("Reopen did not configure Kea again (configured %d s ago)", s)
+	if s := sinceConfigured(); s >= before {
+		t.Errorf("Reopen did not configure Kea again (configured %d s ago, %d s before)", s, before)
 	}
 	if subs, _ := client.Subnets(ctx); len(subs) != 1 || subs[0].ID != 3 {
 		t.Errorf("%+v", subs)

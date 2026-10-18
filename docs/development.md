@@ -882,7 +882,10 @@ two ports:    the management network lives behind the uplink interface; there is
   before netplan's generated `10-netplan-*` and every distribution default such as dracut's
   `zzzz-dracut-default.network`), reloads systemd-networkd and then checks the interface. Before it changes
   anything it refuses (exit 2) an interface that carries the host's own connection, because the rule would make
-  systemd-networkd drop it at once: the local address of `$SSH_CONNECTION` is one of its addresses, it has a
+  systemd-networkd drop it at once: the local address of an SSH session is one of its addresses (that of
+  `$SSH_CONNECTION`, which `sudo` drops by default, and the local end of every established connection of
+  sshd in `ss -Htnp state established`: sshd's process, or the local port 22; a guarded session cannot be
+  told from the others, so any one counts), it has a
   default route (`ip -4|-6 route show default dev IF`), or it has a global IPv4 address (`ip -o addr show dev
   IF`); the message says to remove the port's configuration and address first if it really is a test port.
   `--remove-test-interface IF` removes the file again, only when its first line is the host setup's mark.
@@ -903,8 +906,9 @@ two ports:    the management network lives behind the uplink interface; there is
   `TestThePreflightEvaluatesANetworkdMatch`, `TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup`
   (API, `GET /setup`), `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`,
   `TestHostSetupTestInterfaceOptions` and `TestHostSetupEvaluatesNetworkdLikeThePreflight` (the same table of
-  `[Match]` cases through the script, against a fake sysfs and root under `--prefix`, and a stub `ip` on `PATH`
-  for the routes and addresses the guard asks about); the appliance test runs `--check` on its test port, which
+  `[Match]` cases through the script, against a fake sysfs and root under `--prefix`, and stubs of `ip` and `ss` on
+  `PATH` for the routes, addresses and connections the guard asks about; an SSH session found by `ss` alone,
+  as under `sudo`, over IPv6, link-local and IPv4-mapped, is refused too); the appliance test runs `--check` on its test port, which
   cloud-init's netplan entry keeps failing, and `--test-interface wan0`, which the guard refuses without
   writing the rule.
 

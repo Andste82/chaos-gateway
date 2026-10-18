@@ -21,10 +21,11 @@ func runHostSetup(t *testing.T, args ...string) (string, error) {
 
 // hostState is what the stub of `ip` reports to the host setup's guard of --test-interface, by interface
 // name: its default routes (`ip -4|-6 route show default dev IF`) and its addresses (`ip -o addr show dev
-// IF`); ssh is $SSH_CONNECTION. The tests never ask the real host, whose interfaces they do not know.
+// IF`); ssh is $SSH_CONNECTION, and ss what the stub of `ss` lists (`ss -Htnp state established`). The
+// tests never ask the real host, whose interfaces and connections they do not know.
 type hostState struct {
 	routes4, routes6, addrs map[string]string
-	ssh                     string
+	ssh, ss                 string
 }
 
 const ipStub = `#!/bin/sh
@@ -38,12 +39,21 @@ eval "dev=\${$#}"
 cat "$HOST_SETUP_TEST_IP/$f-$dev" 2>/dev/null || true
 `
 
+const ssStub = `#!/bin/sh
+[ "$*" = "-Htnp state established" ] || { echo "ss stub: unexpected: $*" >&2; exit 1; }
+cat "$HOST_SETUP_TEST_IP/ss"
+`
+
 func runHostSetupOn(t *testing.T, h hostState, args ...string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "bin/ip"), ipStub)
-	if err := os.Chmod(filepath.Join(dir, "bin/ip"), 0o755); err != nil {
-		t.Fatal(err)
+	writeFile(t, filepath.Join(dir, "bin/ss"), ssStub)
+	writeFile(t, filepath.Join(dir, "ss"), h.ss)
+	for _, stub := range []string{"bin/ip", "bin/ss"} {
+		if err := os.Chmod(filepath.Join(dir, stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for kind, m := range map[string]map[string]string{"route4": h.routes4, "route6": h.routes6, "addr": h.addrs} {
 		for dev, v := range m {
@@ -378,7 +388,18 @@ func TestHostSetupTestInterfaceOptions(t *testing.T) {
 		{hostState{routes6: map[string]string{"eth0": "default via fe80::1 proto ra metric 100 pref medium\n"}}, []string{"--test-interface", "eth0"}, "eth0 has the default route"},
 		{host, []string{"--test-interface", "lan0", "--test-interface", "eth1"}, "--test-interface eth1: eth1 has the IPv4 address 10.99.0.5/24, it looks like the uplink or the management interface."},
 		{hostState{addrs: map[string]string{"lan0": "4: lan0    inet6 2001:db8::5/64 scope global \\       valid_lft forever preferred_lft forever\n"}, ssh: "2001:db8::9 50022 2001:db8::5 22"},
-			[]string{"--test-interface", "lan0"}, "the SSH session that runs the setup comes in on lan0 (address 2001:db8::5)"},
+			[]string{"--test-interface", "lan0"}, "an SSH session of the host comes in on lan0 (address 2001:db8::5)"},
+		// `sudo sh host-setup.sh` runs without $SSH_CONNECTION: the sessions come from ss (sshd's process,
+		// or the local port 22 when ss shows no process)
+		{hostState{addrs: map[string]string{"lan0": "4: lan0    inet6 2001:db8::5/64 scope global \\       valid_lft forever preferred_lft forever\n"},
+			ss: "0      0      [2001:db8::5]:2222 [2001:db8::9]:50022 users:((\"sshd-session\",pid=812,fd=7))\n"},
+			[]string{"--test-interface", "lan0"}, "an SSH session of the host comes in on lan0 (address 2001:db8::5)"},
+		{hostState{addrs: map[string]string{"lan0": "4: lan0    inet6 fe80::2ecf:67ff:fe00:3/64 scope link \\       valid_lft forever preferred_lft forever\n"},
+			ss: "0      0      192.168.1.20:443 192.168.1.9:50000 users:((\"chaosgw\",pid=9,fd=3))\n0      0      [fe80::2ecf:67ff:fe00:3%lan0]:22 [fe80::9%lan0]:50022\n"},
+			[]string{"--test-interface", "lan0"}, "an SSH session of the host comes in on lan0 (address fe80::2ecf:67ff:fe00:3)"},
+		{hostState{addrs: map[string]string{"eth1": "3: eth1    inet 10.99.0.5/24 brd 10.99.0.255 scope global eth1\\       valid_lft forever preferred_lft forever\n"},
+			ss: "0      0      [::ffff:10.99.0.5]:22 [::ffff:10.99.0.9]:50022\n"},
+			[]string{"--test-interface", "eth1"}, "an SSH session of the host comes in on eth1 (address 10.99.0.5)"},
 	} {
 		out, err := runHostSetupOn(t, c.h, append(setup, c.args...)...)
 		if exitCode(err) != 2 || !strings.Contains(out, c.want) || !strings.Contains(out, "nothing was changed") {
@@ -394,6 +415,8 @@ func TestHostSetupTestInterfaceOptions(t *testing.T) {
 		t.Errorf("lan0 was refused: %v\n%s", err, out)
 	}
 	host.ssh = "192.168.1.9 50022 192.168.1.20 22"
+	host.ss = "0      0      192.168.1.20:22 192.168.1.9:50022 users:((\"sshd\",pid=812,fd=4))\n" +
+		"0      0      [fe80::2ecf:67ff:fe00:3%lan0]:443 [fe80::9%lan0]:50000 users:((\"curl\",pid=9,fd=3))\n"
 	if out, _ := runHostSetupOn(t, host, append(setup, "--test-interface", "lan0")...); strings.Contains(out, "nothing was changed") {
 		t.Errorf("lan0 was refused for an SSH session on eth0:\n%s", out)
 	}

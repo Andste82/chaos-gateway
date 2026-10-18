@@ -46,7 +46,7 @@ It installs Docker if missing, loads the kernel modules now and at boot
 keeps systemd-networkd off each test interface (below), prints the netplan changes the test interfaces need and
 ends with the check of each test interface. It never touches the uplink or the management configuration, or any
 netplan file, and it refuses, before it changes anything, a `--test-interface` that has the default route, an IPv4
-address or the SSH session it runs in: that is the uplink or the management interface named by mistake, which
+address or an SSH session of the host (the one it runs in included): that is the uplink or the management interface named by mistake, which
 systemd-networkd would otherwise stop configuring. `sh host-setup.sh --help` lists its options.
 
 ### The test interfaces belong to the gateway alone

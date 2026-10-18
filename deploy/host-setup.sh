@@ -13,8 +13,8 @@
 #     (/etc/systemd/network/10-chaosgw-<interface>.network, issue #64) and checks it (as --check),
 #   - prints the netplan changes the test interfaces need.
 # What it never does: touch the uplink or the management configuration, or any netplan file. It refuses a
-# --test-interface that carries the host's own connection (the default route, an IPv4 address, the SSH
-# session that runs it): the rule would make systemd-networkd drop that interface at once.
+# --test-interface that carries the host's own connection (the default route, an IPv4 address, an SSH
+# session, the one that runs it included): the rule would make systemd-networkd drop that interface at once.
 #
 # Options:
 #   --test-interface IF          IF will be a test interface: write its networkd rule, then check it
@@ -83,7 +83,7 @@ Chaos Gateway host setup: installs Docker if missing, loads the kernel modules a
 IPv4 forwarding now and at every boot, keeps systemd-networkd off the test interfaces and
 checks them, and prints the netplan hints for them. It never touches the uplink or the
 management configuration, or any netplan file, and refuses a --test-interface that has the
-default route, an IPv4 address or the SSH session that runs the setup.
+default route, an IPv4 address or an SSH session (the one that runs the setup included).
 
   --test-interface IF          IF will be a test interface: write
                                /etc/systemd/network/10-chaosgw-IF.network ([Link] Unmanaged=yes),
@@ -128,18 +128,37 @@ fi
 say() { echo "host-setup: $*"; }
 
 # refuse_host_interface stops the setup, before it changes anything, when a --test-interface carries the
-# host's own connection: the SSH session that runs the setup comes in on it, it has the default route (the
-# uplink), or it has an IPv4 address (the management interface, or a port the operating system still
-# configures). Its networkd rule would make systemd-networkd drop the interface at once: no lease renewal,
+# host's own connection: an SSH session (the one that runs the setup included) comes in on it, it has the
+# default route (the uplink), or it has an IPv4 address (the management interface, or a port the operating
+# system still configures). Its networkd rule would make systemd-networkd drop the interface at once: no lease renewal,
 # no configuration after the next boot. The setup wizard keeps the uplink and the management interface out
 # of the test interfaces for the same reason; this script runs before the wizard and knows neither.
+#
+# ssh_addresses prints the host's local addresses of the SSH sessions: $SSH_CONNECTION, which sudo drops
+# from the environment by default, and the local end of every established connection of sshd that ss
+# lists (the process, or the local port 22), without the port, the brackets, the zone and an IPv4-mapped
+# prefix. The setup cannot tell which session runs it; a test interface carries none of them.
+ssh_addresses() {
+	echo "${SSH_CONNECTION:-}" | awk '{print $3}'
+	command -v ss >/dev/null 2>&1 || return 0
+	ss -Htnp state established 2>/dev/null | awk '/"sshd/ || $3 ~ /:22$/ {
+		a = $3; sub(/:[0-9]+$/, "", a); gsub(/[][]/, "", a); sub(/%.*$/, "", a); sub(/^::ffff:/, "", a); print a
+	}' || true
+}
+
 refuse_host_interface() { # interface
 	command -v ip >/dev/null 2>&1 || return 0
 	addrs=$(ip -o addr show dev "$1" 2>/dev/null || true)
 	why=""
-	ssh_local=$(echo "${SSH_CONNECTION:-}" | awk '{print $3}')
-	if [ -n "$ssh_local" ] && echo "$addrs" | awk -v a="$ssh_local" '{split($4, p, "/"); if (p[1] == a) f = 1} END {exit !f}'; then
-		why="the SSH session that runs the setup comes in on $1 (address $ssh_local)"
+	ssh_local=""
+	for a in $(ssh_addresses); do
+		if echo "$addrs" | awk -v a="$a" '{split($4, p, "/"); if (p[1] == a) f = 1} END {exit !f}'; then
+			ssh_local=$a
+			break
+		fi
+	done
+	if [ -n "$ssh_local" ]; then
+		why="an SSH session of the host comes in on $1 (address $ssh_local)"
 	elif [ -n "$(ip -4 route show default dev "$1" 2>/dev/null)$(ip -6 route show default dev "$1" 2>/dev/null)" ]; then
 		why="$1 has the default route, it looks like the uplink"
 	else

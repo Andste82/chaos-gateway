@@ -130,7 +130,7 @@ still passes, only `unhealthy` fails it). After the setup both are gone; if not,
 `dns` containers.
 
 Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until one is
-installed (M29), so the browser warns once. The setup wizard asks for the token, the uplink, the management
+installed (M29), so the browser warns once (and once more after an upgrade that issues it again, below). The setup wizard asks for the token, the uplink, the management
 interface, the test interfaces and the admin password, and shows the preflight's hints (for example a netplan
 entry to remove from a test interface).
 
@@ -190,6 +190,13 @@ A device on a test network gets no address. In this order:
 5. **Capture on the port, not on the bridge.** `sudo tcpdump -eni lan0 port 67 or port 68` shows the device's
    requests and the gateway's answers on the wire. Frames the bridge forwards between its ports are not seen on
    the bridge device, so a capture on `br-<network>` can miss what the device sends or receives.
+
+## Upgrading an installation made before issue #64 was fixed
+
+The gateway's own self-signed certificate is now also valid for the service address 169.254.100.1, which the DNS proxy
+verifies it for. An older one lacks that address, so the API issues the certificate again at the first start of the new
+image, and the browser warns once more. A certificate you installed yourself is not changed; it has to include
+169.254.100.1 itself (installing one comes with M29).
 
 ## Upgrading an installation made before issue #57 was fixed
 

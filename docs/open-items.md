@@ -21,10 +21,14 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
-  items P31-AUDIT-01 to P31-AUDIT-10 are fixed on the branch `close-phase-3-1`. What the
+  items P31-AUDIT-01 to -03 and -05 to -10 are fixed on the branch `close-phase-3-1`; P31-AUDIT-04 (level 2 on the final
+  code) closes with the Nightly run on that branch. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
+- **Issue #64** (branch `close-phase-3-1`): I64-01 to I64-03 wait for the maintainer (each records the option that was
+  implemented, so the work was not blocked), and I64-04 records the plan's wording that the issue made outdated; see
+  [Issue #64 open items](#issue-64-open-items) at the end of the file.
 
 ## Phase 1 audit result
 
@@ -1786,12 +1790,13 @@ work was not blocked.
 - Reason: needs-decision. Issue #64 proposes that the executor writes `10-chaosgw-<interface>.network` when an interface is
   assigned to a test network and removes it on release. The executor sees the host's `/etc` read-only, so this changes its
   hardening profile (`compose.executor.yaml`). Implemented instead: the host setup, which runs as root on the host, writes
-  the rule (`host-setup.sh --test-interface IF`) and removes it (`--remove-test-interface IF`), and its check and the
-  wizard's preflight say when it is missing (docs/install.md step 2).
+  the rule (`host-setup.sh --test-interface IF`) and removes it (`--remove-test-interface IF`). Neither tool reports a
+  missing rule as such: the host setup's check (every networkd directory) and the wizard's preflight (only `/etc`, see
+  I64-02) report a systemd-networkd file that configures the port, which the rule is the fix for (docs/install.md step 2).
 - Evidence: `deploy/host-setup.sh`, `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`; docs/open-items.md "Shutdown and
   host cleanup" (the rule was a host change made by hand).
-- Task: implemented (a). Options: (a) as implemented: the host setup writes and removes the rule, the preflight reports a
-  missing one; (b) the executor writes and removes it on assignment and release (mount `/etc/systemd/network` writable,
+- Task: implemented (a). Options: (a) as implemented: the host setup writes and removes the rule, its check and the
+  preflight report a networkd file that configures the port; (b) the executor writes and removes it on assignment and release (mount `/etc/systemd/network` writable,
   a new executor operation scoped to `10-chaosgw-*.network`, a `networkctl reload` from the container through D-Bus or
   `nsenter`, and the removal joins M27's stop cleanup and `teardown`); (c) like (b), but the executor only writes it in the
   setup and never removes it.
@@ -1799,3 +1804,20 @@ work was not blocked.
   only if interfaces are reassigned often.
 - Needs maintainer: yes
 - Effort: M ((b))
+
+### I64-04 The plan names netplan and NetworkManager only, not systemd-networkd
+
+- Status: fixed on the branch `close-phase-3-1`
+- Severity: low
+- Reason: plan-error (outdated). Plan §3.4 says that the preflight checks "no OS configuration (netplan/NetworkManager)" and
+  that test interfaces "must not be configured by netplan/NetworkManager"; §3.8 says that the executor reads where netplan and
+  NetworkManager configure an interface and that the host setup prints the netplan changes. Since issue #64 the preflight
+  also reads systemd-networkd's `.network` files (`internal/preflight/networkd.go`, `api/openapi.yaml`: "netplan,
+  NetworkManager or systemd-networkd"), and the host setup writes and removes the systemd-networkd rule of a test interface
+  and checks it (`host-setup.sh --test-interface`, `--check`, `--remove-test-interface`). The code extends the plan; it
+  does not contradict it.
+- Evidence: commit `3185482`, `internal/preflight/networkd.go`, `deploy/host-setup.sh`, docs/install.md step 2.
+- Task: §3.4 and §3.8 say "netplan, NetworkManager or systemd-networkd", and §3.8 names the host setup's systemd-networkd
+  rule and check of the test interfaces (done).
+- Needs maintainer: no
+- Effort: S

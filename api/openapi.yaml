@@ -1596,6 +1596,14 @@ paths:
       tags: [runs]
       operationId: createRun
       summary: Start a run of a stored scenario (`scenario`) or an inline one (`inline`)
+      description: |
+        The run is `queued` when another queued or running run has a target that overlaps this one (the same device,
+        a group or network that contains it, ...), else it starts at once (`running`; its baseline is checked first, so
+        a failed precondition ends it as `error`). With `queue=false` a busy target is `409 target_busy` instead. The
+        scenario is validated against the active revision (references by name or UUID, resolved in the stored
+        snapshot); an inline scenario is stored with the run only and changes no revision. A step type or check type
+        this build does not have (`GET /capabilities`: `step_types`, `check_types`) is `422 unsupported_feature`,
+        and so is `capture: true` before M17. The owner of the run is the token, or the admin user for the UI.
       x-milestone: M15
       x-required-scope: overlays
       parameters:
@@ -1637,6 +1645,10 @@ paths:
       tags: [runs]
       operationId: abortRun
       summary: Abort a queued or running run; its overlays are removed
+      description: |
+        Returns when the run has ended and its overlays are gone (`Chaos-Generation` is the generation that removed
+        them). Aborting a run that has ended already changes nothing and returns it. A token with the scope
+        `overlays` may only abort its own runs.
       x-milestone: M15
       x-required-scope: overlays
       parameters:
@@ -5126,11 +5138,22 @@ components:
       properties:
         parameters:
           type: object
-          description: 'Overrides of scenario fields by dotted path, e.g. `{"target.device": "esp32-42"}` (`chaosctl run --set`).'
+          description: |
+            Overrides of scenario fields by dotted path, e.g. `{"target.device": "esp32-42"}` (`chaosctl run --set`).
+            A path is a chain of field names; a segment into a list is the position (`steps.1.at`) or the `id` of the
+            step (`steps.slow.fault.latency`). A value is a string, except that `true`, `false` and whole numbers are
+            read as such and a value that starts with `[` or `{` as JSON. Setting a member of a `target` (the
+            scenario's or a step's) replaces the whole target (`target.network` after `target.device` leaves only the
+            network). The scenario is changed before it is validated, so an inline scenario may leave out what the
+            parameters give (`target`); a path that names no field, or an element that is not there, is
+            `validation_failed` at `/parameters/<path>`. The run stores the scenario as executed (`snapshot`).
           additionalProperties: {type: string}
         lease:
           allOf: [{$ref: '#/components/schemas/Duration'}]
-          description: The client must renew the run within this interval, else it is aborted.
+          description: |
+            The client must renew the run (`POST /runs/{id}/renew`) within this interval, else the server aborts it
+            (`reason: lease expired`) and removes its overlays. At least 1 s. It starts when the run is created, so a
+            run that waits in `queued` and whose client has gone never starts.
     RunRequest:
       description: Exactly one of `scenario` and `inline`.
       allOf:
@@ -5202,10 +5225,22 @@ components:
           description: Executor commit time stamp.
         offset_ms:
           type: integer
-          description: Actual offset from run start in milliseconds (monotonic clock).
+          description: Actual offset from run start in milliseconds (monotonic clock). For a `wait` step, when its condition held.
+        queue_wait_ms:
+          type: integer
+          minimum: 0
+          description: |
+            How long the step's change waited before the executor began to apply it, in milliseconds: the time behind the
+            apply in flight (a revision apply, or the change of an earlier step or of another writer) and in the executor's
+            queue (plan §3.11). A step that waited for more than 100 ms makes the run warning `step_late`. Absent for a
+            step that changes nothing in the kernel (`wait`) and for one that was not applied.
         generation: {type: integer, format: int64}
-        overlay: {$ref: '#/components/schemas/Uuid'}
-        error: {type: string}
+        overlay:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The overlay the step created or replaced, or removed (`remove`).
+        error:
+          type: string
+          description: Why the step is `error` or `skipped`.
     CheckResult:
       type: object
       required: [index, name, type, status]

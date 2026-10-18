@@ -277,6 +277,8 @@ type fakeObserver struct {
 	stepCounters map[string]*model.Counter
 	flowErr      error
 	flowPolls    int
+	// block, when set, holds every read of the connections until it is closed or the read is cancelled
+	block chan struct{}
 }
 
 type query struct {
@@ -284,10 +286,21 @@ type query struct {
 	at           time.Time
 }
 
-func (o *fakeObserver) Flows(context.Context) ([]engine.Flow, error) {
+func (o *fakeObserver) Flows(ctx context.Context) ([]engine.Flow, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.flowPolls++
+	if o.block != nil {
+		block := o.block
+		o.mu.Unlock()
+		select {
+		case <-block:
+		case <-ctx.Done():
+			o.mu.Lock()
+			return nil, ctx.Err()
+		}
+		o.mu.Lock()
+	}
 	if o.flowErr != nil {
 		return nil, o.flowErr
 	}

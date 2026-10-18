@@ -234,6 +234,18 @@ func (c *liveCheck) observes(snap *engine.Snapshot, target model.Scope, devices 
 	return false
 }
 
+// startedSince keeps the events of connections that began at or after the time. A connection without a start
+// time (conntrack does not always report one) is never kept.
+func startedSince(events []flowEvent, since time.Time) []flowEvent {
+	var out []flowEvent
+	for _, ev := range events {
+		if !ev.flow.StartedAt.IsZero() && !ev.flow.StartedAt.Before(since) {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
 func flowEvidence(f engine.Flow, at time.Time) map[string]any {
 	m := map[string]any{
 		"kind": "flow", "protocol": f.Protocol, "src": f.Src.String(), "sport": f.SPort, "dst": f.Dst.String(), "dport": f.DPort,
@@ -303,13 +315,15 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 			if c.decided || !c.opened {
 				continue
 			}
-			if c.armed {
-				switch {
-				case c.usesFlows():
-					m.feed(r, c, snap, devSet, events, nowWall)
-				default:
-					m.lookDNS(r, c, devs)
-				}
+			switch {
+			case c.usesFlows() && c.armed:
+				m.feed(r, c, snap, devSet, events, nowWall)
+			case c.usesFlows():
+				// the baseline poll: a connection that conntrack says began at or after the opening of the
+				// window is news, one that the poll merely found is not
+				m.feed(r, c, snap, devSet, startedSince(events, c.wstartWall), nowWall)
+			case c.armed:
+				m.lookDNS(r, c, devs)
 			}
 			if c.decided {
 				continue

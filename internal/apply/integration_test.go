@@ -214,7 +214,7 @@ func recordRealToolOutput(t *testing.T, ns *testbed.Namespace) {
 		t.Fatal(err)
 	}
 	commands := map[string][]string{
-		"ip_link.json":      {"ip", "-j", "-d", "link", "show"},
+		"ip_link.json":      {"ip", "-j", "-d", "-s", "-s", "link", "show"},
 		"ip_addr.json":      {"ip", "-j", "addr", "show"},
 		"ip_route.json":     {"ip", "-j", "route", "show", "table", "all"},
 		"ip_rule.json":      {"ip", "-j", "rule", "show"},
@@ -577,5 +577,36 @@ func TestRemovingANetworkOnARealKernel(t *testing.T) {
 	}
 	if r := testbed.MustPing(t, g.top.C, testbed.LAN1Gateway, 2, 200*time.Millisecond); r.Received != 0 {
 		t.Error("the removed network is still served")
+	}
+}
+
+// #64 test: the reading of the host counts the carrier changes of a link (`ip -s -s`), so a flap that
+// ends between two readings, which both see the link running with the same index, still tells the
+// engine to configure the DHCP server again.
+func TestTheHostReadingCountsACarrierFlapOnARealKernel(t *testing.T) {
+	g := newGateway(t)
+	g.top.GW.Must("ip", "link", "add", "flap0", "type", "veth", "peer", "name", "flap1")
+	g.top.GW.Must("ip", "link", "set", "flap0", "up")
+	g.top.GW.Must("ip", "link", "set", "flap1", "up")
+	read := func() apply.LinkState {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			_, links, err := apply.ReadHostLinks(context.Background(), g.exec(), g.ns())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l := links["flap0"]; l.Running || time.Now().After(deadline) {
+				return l
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	before := read()
+	g.top.GW.Must("ip", "link", "set", "flap1", "down")
+	g.top.GW.Must("ip", "link", "set", "flap1", "up")
+	after := read()
+	if !before.Running || !after.Running || after.Index != before.Index || after.CarrierChanges < before.CarrierChanges+2 {
+		t.Errorf("before the flap %+v, after it %+v: want both running with the same index and two more carrier changes", before, after)
 	}
 }

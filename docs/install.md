@@ -178,8 +178,8 @@ A device on a test network gets no address. In this order:
 2. **The port has a link and is in the network's bridge.** `ip link show lan0` shows `state UP` and
    `master br-<network>` (the bridge of the network; the Linux view of the network in the UI names it).
 3. **Kea listens on the bridge.** Kea opens its packet socket on the bridge only while the bridge has a carrier,
-   that is while one of its ports is up. It tries again for a minute after a failure, and the gateway configures it
-   again whenever the bridge comes up, so a port that flapped needs nothing. To see it: the bridge's index
+   that is while one of its ports is up. The gateway configures it again whenever the bridge comes up or its
+   carrier went and came back, so a port that flapped needs nothing. To see it: the bridge's index
    (`cat /sys/class/net/br-<network>/ifindex`) must be among the interface indexes of the packet sockets
    (`sudo awk 'NR > 1 {print $5}' /proc/net/packet`). `docker compose logs kea` names an interface Kea skipped
    ("is not running"). If the index is missing although the port is up, `docker compose restart kea` restores

@@ -19,9 +19,10 @@ const (
 
 // Kea opens its packet socket on an interface only while it is configured, and skips one that is
 // down or has no carrier then: a bridge whose test port flaps while a configuration arrives would stay
-// without a socket (#64). Kea tries again on its own, every SocketRetryWait for SocketRetries times
-// (a minute); a longer outage ends with a link change, after which the engine configures Kea again
-// (engine.DHCP.Reopen).
+// without a socket (#64). Kea retries the sockets it could not open, every SocketRetryWait for
+// SocketRetries times (a minute), and status-get reports them as retrying meanwhile. The gateway does
+// not count on these retries opening the socket once the link is back: the engine configures Kea again
+// whenever one of its interfaces comes up or its carrier changed (engine.DHCP.Reopen).
 const (
 	SocketRetries   = 12
 	SocketRetryWait = 5 * time.Second

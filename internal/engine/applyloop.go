@@ -155,11 +155,13 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 					"same_config", last != nil && last.d.Config == d.Config, "same_revision", last != nil && last.d.Revision == d.Revision,
 					"same_host", last != nil && hostEqual(last.d.Host, d.Host))
 			}
+			// after is the kernel state the apply read back, before the DHCP server is configured
+			var after *apply.State
 			if !incremental {
 				var res *apply.Result
 				res, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
 				if res != nil {
-					plan = res.Plan
+					plan, after = res.Plan, res.After
 				}
 				arm()
 			}
@@ -189,7 +191,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			}
 			if err == nil && !incremental {
 				cutStuck = nil // the full apply flushed the cut chains
-				dhcpErr = e.syncDHCP(ctx, target)
+				dhcpErr = e.syncDHCP(ctx, target, after)
 				cut = e.cutExisting(ctx, verified, target)
 				if cut != nil && cut.WindowOpen {
 					cutStuck = cut.Err

@@ -384,7 +384,8 @@ func ReadCommand(o *Read) Command {
 	c := Command{NS: o.NS}
 	switch o.What {
 	case ReadLinks:
-		c.Tool, c.Args = ToolIP, []string{"-j", "-d", "link", "show"}
+		// -s -s for the carrier changes (linux.Link.CarrierChanges)
+		c.Tool, c.Args = ToolIP, []string{"-j", "-d", "-s", "-s", "link", "show"}
 		if o.Dev != "" {
 			c.Args = append(c.Args, "dev", o.Dev)
 		}

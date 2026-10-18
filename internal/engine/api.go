@@ -70,15 +70,17 @@ func (e *Engine) Observe(ctx context.Context, h compiler.Host) error {
 	return err
 }
 
-// Refresh reads the host through the executor and observes it; the DHCP server is configured again
-// when one of its interfaces came up (followDHCPLinks).
+// Refresh reads the host through the executor and observes it; then it has the DHCP server
+// configured again when one of its interfaces came up (followDHCPLinks), off this path: the next
+// reading never waits for the DHCP server.
 func (e *Engine) Refresh(ctx context.Context) error {
 	h, links, err := apply.ReadHostLinks(ctx, e.cfg.Exec, e.cfg.Namespace)
 	if err != nil {
 		return fmt.Errorf("read the host: %w", err)
 	}
-	e.followDHCPLinks(ctx, links)
-	return e.Observe(ctx, h)
+	err = e.Observe(ctx, h)
+	e.followDHCPLinks(links)
+	return err
 }
 
 // Barrier waits until the desired state of this moment has been applied (or has failed to apply)

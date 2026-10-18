@@ -314,6 +314,7 @@ func New(cfg Config) (*Engine, error) {
 	e := &Engine{cfg: cfg, cmds: make(chan command, 64), wake: make(chan struct{}, 1), results: make(chan applyResult, 8),
 		events: newBus(), observeNow: make(chan struct{}, 1), sup: cfg.Supervisor, done: make(chan struct{}), ready: make(chan struct{}),
 		hostChanged: make(chan struct{})}
+	e.dhcp.reopen = make(chan struct{}, 1)
 	if e.sup == nil {
 		// a panic in the state owner or the apply loop stops the engine: the commands that wait
 		// get ErrClosed, and the process (which watches Done) restarts and recompiles from the

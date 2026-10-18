@@ -941,23 +941,33 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   configured (`config-set`, which also detects the interfaces again: `re-detect`), and skips one that is
   down or has no carrier (Kea: "is not running"); a bridge has a carrier only while one of its ports is
   up. A configuration that arrived while the test port flapped left the bridge without a socket, and
-  DHCP silent on that network, until Kea was restarted. Two things close it. The configuration lets Kea
-  retry the sockets it could not open on its own, every 5 s for a minute
-  (`service-sockets-max-retries`, `kea.SocketRetries`); `status-get` then reports the sockets as
-  `retrying` instead of `failed`. And the engine follows the links of Kea's interfaces: every reading of
-  the host after a netlink event (`Engine.Refresh`, `apply.ReadHostLinks`, the bridges included) compares
-  their index and whether they are running (`UP` and `LOWER_UP`) with the reading before, and when one
-  came up or was created again (a new index: a socket bound to the old one receives nothing) it sends the
-  configuration again although Kea runs it already (`DHCP.Reopen`), so a longer outage or a recreated
-  bridge needs no restart either. A bridge going down, another interface and a reading without a change
-  send nothing. Tests: `TestTheDHCPServerIsConfiguredAgainWhenItsBridgeComesUp` (engine, a carrier and
-  a recreated bridge in the simulated kernel), `TestTheConfigurationLetsKeaRetryTheSocketsItCouldNotOpen`,
+  DHCP silent on that network, until Kea was restarted. The configuration lets Kea retry the sockets it
+  could not open, every 5 s for a minute (`service-sockets-max-retries`, `kea.SocketRetries`);
+  `status-get` then reports the sockets as `retrying` instead of `failed`. No test shows that a retry
+  opens the socket once the link is back, and the gateway does not count on it: the engine follows the
+  links of Kea's interfaces. Every reading of the host after a netlink event (`Engine.Refresh`,
+  `apply.ReadHostLinks`, the bridges included) compares their index, whether they are running (`UP` and
+  `LOWER_UP`) and the kernel's count of carrier changes (`carrier_changes`, read with `ip -j -d -s -s link
+  show`) with the reading before, and when one is running and was not, was created again (a new index: a
+  socket bound to the old one receives nothing) or had its carrier go and come back (a flap within the
+  500 ms debounce of the readings, which both see the link running) it sends the configuration again
+  although Kea runs it already (`DHCP.Reopen`). The reading only takes note: `runDHCPRetry`, the engine's
+  DHCP goroutine, sends, so a slow or hung Kea never holds up the following of the host (the uplink
+  address, the forwards' entry addresses). The comparison starts from the links the apply read back just
+  before it sent the configuration (`Result.After`), so a bridge the apply created is not configured a
+  second time, while a carrier that changes during the send is caught. A bridge going down, another
+  interface and a reading without a change send nothing. Tests: `TestTheDHCPServerIsConfiguredAgainWhenItsBridgeComesUp`
+  (engine: a carrier, a flap between two readings, a recreated bridge and the first reading after the
+  apply that created the bridge in the simulated kernel), `TestADHCPServerThatHangsDoesNotHoldUpTheReadingOfTheHost`
+  (a `Reopen` that hangs; the readings return and observe the uplink's new address),
+  `TestTheHostReadingCountsACarrierFlapOnARealKernel` (testbed: a veth flap counts two carrier changes,
+  same index, running before and after), `TestTheConfigurationLetsKeaRetryTheSocketsItCouldNotOpen`,
   `TestKeaRetriesASocketItCouldNotOpen` (the real Kea on the loopback, which it never opens a socket on,
   reports `retrying`), `TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration` (the real Kea:
   `status-get`'s `reload` shows that `Reopen` configured it and `Apply` did not) and the testbed test
   `TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply` (the switch side of the test port goes
   down, a changed scope is applied, Kea reports the bridge not running; the port comes back, a client
-  gets a lease and the engine log shows the reconfiguration). Both testbed jobs name the three tests
+  gets a lease and the engine log shows the reconfiguration). Both testbed jobs name the four tests
   that need root with `-expect-pass $I64_LEVEL1`.
 - **Observation.** `Engine.PollObserved` reads the neighbor table, conntrack and Kea's leases every
   second and when asked (`TriggerObserve`: netlink neighbor events through `FollowNeighbors`, lease

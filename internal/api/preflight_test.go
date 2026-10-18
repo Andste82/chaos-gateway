@@ -126,6 +126,27 @@ func TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup(t *testi
 	}
 }
 
+// I64-02 (decided 2026-10-18): the executor mounts the host's /usr/lib/systemd/network below its host root, so
+// the wizard's preflight also names a distribution's default there that configures a test interface, and the
+// fix is the host setup's rule, which comes first.
+func TestThePreflightNamesANetworkdDefaultUnderUsrLib(t *testing.T) {
+	host := fstest.MapFS{
+		"usr/lib/systemd/network/99-default-ether.network": {Data: []byte("[Match]\nType=ether\n\n[Network]\nDHCP=yes\n")},
+	}
+	g := newGW(t, func(o *options) { o.hostFS = host })
+	checks := map[string]map[string]any{}
+	for _, c := range g.do("GET", "/setup", nil, nil, nil).json(t)["preflight"].(map[string]any)["checks"].([]any) {
+		m := c.(map[string]any)
+		checks[m["id"].(string)] = m
+	}
+	lan0 := checks["interface.lan0.os_config"]
+	if lan0 == nil || lan0["status"] != "warn" ||
+		lan0["message"] != "lan0 is configured by systemd-networkd (/usr/lib/systemd/network/99-default-ether.network); a test interface must not be" ||
+		!strings.Contains(lan0["fix"].(string), "write /etc/systemd/network/10-chaosgw-lan0.network") {
+		t.Errorf("lan0: %v", lan0)
+	}
+}
+
 // A configuration file the executor cannot read or parse is a warning of its own; the others are still checked.
 func TestThePreflightSaysWhichOSConfigurationFileItCannotRead(t *testing.T) {
 	g := newGW(t, func(o *options) {

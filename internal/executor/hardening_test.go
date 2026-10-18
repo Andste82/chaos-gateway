@@ -3,11 +3,17 @@ package executor_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 )
+
+// networkdDefaults is the mount of systemd-networkd's default files (I64-02): source and target.
+const networkdDefaults = "/usr/lib/systemd/network:/host/usr/lib/systemd/network"
 
 // service is the part of a compose service this test pins.
 type service struct {
@@ -104,20 +110,27 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			if err := v.Decode(&m); err != nil {
 				t.Fatal(err)
 			}
-			if (m.Target == "/lib/modules" || m.Target == "/var/lib/chaosgw/secrets" || m.Target == "/host/etc") && !m.ReadOnly {
+			if (m.Target == "/lib/modules" || m.Target == "/var/lib/chaosgw/secrets" || strings.HasPrefix(m.Target, "/host/")) && !m.ReadOnly {
 				t.Errorf("%s must be mounted read-only", m.Target)
 			}
 			mounts = append(mounts, m.Source+":"+m.Target)
 		}
 	}
 	for _, m := range mounts {
-		// the host's /etc only read-only at /host/etc, for the netplan and NetworkManager files the preflight reads (P3-M12-07)
-		if strings.Contains(m, "docker.sock") || strings.HasPrefix(m, "/:") || (strings.HasPrefix(m, "/etc") && m != "/etc:/host/etc") || strings.HasPrefix(m, "/var/run:") {
+		// the host's /etc only read-only at /host/etc, for the netplan, NetworkManager and systemd-networkd files the
+		// preflight reads (P3-M12-07), and systemd-networkd's defaults at /host/usr/lib/systemd/network (I64-02);
+		// no other part of /usr, and not /run with its sockets
+		if strings.Contains(m, "docker.sock") || strings.HasPrefix(m, "/:") || (strings.HasPrefix(m, "/etc") && m != "/etc:/host/etc") ||
+			strings.HasPrefix(m, "/var/run:") || strings.HasPrefix(m, "/run:") || strings.HasPrefix(m, "/run/systemd") || (strings.HasPrefix(m, "/usr") && m != networkdDefaults) {
 			t.Errorf("unexpected mount %q", m)
 		}
 	}
-	if len(mounts) != 7 || !contains(mounts, "/etc:/host/etc") || !contains(s.Command, "/host") {
-		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns, /lib/modules and the host's /etc (read by --host-root /host)", mounts)
+	if len(mounts) != 8 || !contains(mounts, "/etc:/host/etc") || !contains(mounts, networkdDefaults) || !contains(s.Command, "/host") {
+		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns, /lib/modules, the host's /etc and its systemd-networkd defaults (read by --host-root /host)", mounts)
+	}
+	// the preflight reads the defaults where the mount puts them: below the host root, in a directory of NetworkdDirs
+	if dir := strings.TrimPrefix(strings.SplitN(networkdDefaults, ":", 2)[1], "/host/"); !slices.Contains(preflight.NetworkdDirs, dir) {
+		t.Errorf("%s is no directory the preflight reads below the host root: %v", dir, preflight.NetworkdDirs)
 	}
 	if len(s.Tmpfs) != 2 || !strings.Contains(s.Tmpfs[0], "mode=0700") {
 		t.Errorf("tmpfs %v", s.Tmpfs)

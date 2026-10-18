@@ -123,9 +123,10 @@ func WithKeys(p KeyProvider) Option { return func(e *Executor) { e.keys = p } }
 func WithBirdDir(dir string) Option { return func(e *Executor) { e.birdDir = dir } }
 
 // WithHostRoot tells the executor where the host's file system is mounted ("/host" in the executor's
-// container, which mounts the host's whole /etc read-only at /host/etc, deploy/compose.executor.yaml):
-// ReadHostNet reads the host's network configuration from it (preflight.NetplanDirs, NMDirs, NMConfFiles,
-// NMConfDirs and NetworkdDirs; only those under etc/ are there in the shipped deployment). The whole /etc is mounted,
+// container, which mounts the host's whole /etc read-only at /host/etc and its /usr/lib/systemd/network at
+// /host/usr/lib/systemd/network, deploy/compose.executor.yaml): ReadHostNet reads the host's network
+// configuration from it (preflight.NetplanDirs, NMDirs, NMConfFiles, NMConfDirs and NetworkdDirs; those under
+// etc/ and usr/lib/systemd/network are there in the shipped deployment, I64-02). The whole /etc is mounted,
 // not those directories, because a bind mount needs its source: a host without netplan or NetworkManager
 // has no /etc/netplan or /etc/NetworkManager, and the executor must not create them on the host. The
 // executor is privileged anyway; nothing of the files but the entries leaves it (HostNetState). The

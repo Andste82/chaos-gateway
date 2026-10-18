@@ -19,7 +19,8 @@ import (
 // /run, /run hides /usr/lib), and a file without a [Match] condition is ignored by networkd (an empty file, or
 // a symlink to /dev/null that masks a file of the same name, too). Drop-ins (<file>.network.d/*.conf) are not
 // read. As for netplan, a directory is read only when it is there under the root: the shipped deployment
-// mounts only the host's /etc (docs/open-items.md I64-02).
+// mounts the host's /etc and /usr/lib/systemd/network, not /run/systemd/network, which exists only while
+// networkd or netplan has written to it (docs/open-items.md I64-02, decided 2026-10-18).
 var NetworkdDirs = []string{"etc/systemd/network", "run/systemd/network", "usr/local/lib/systemd/network", "usr/lib/systemd/network", "lib/systemd/network"}
 
 // ManagerNetworkd is systemd-networkd's entries' Manager.

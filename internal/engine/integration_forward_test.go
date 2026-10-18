@@ -233,7 +233,13 @@ func TestADeviceFaultDoesNotImpairAForwardedConnection(t *testing.T) {
 		Request: overlayRequest(t, "target: {device: "+fwDevA+"}\nfault: {latency: 400ms}")}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, r.top.A, "tcp", testbed.ServerAddr, 8883, 30*time.Second)
+	// A's own connection works through its fault (an attempt waits longer than the fault's 400 ms)
+	deadline := time.Now().Add(30 * time.Second)
+	for tryAt(r.top.A, "tcp", testbed.ServerAddr, 8883, 10) != "ok" {
+		if time.Now().After(deadline) {
+			t.Fatalf("A does not reach the server through its fault (identity %v)", r.e.Snapshot().Identity.Addresses)
+		}
+	}
 	ownBefore := rtt(t, r.top.A, testbed.ServerAddr, 8883)
 	fwd := rtt(t, r.top.Server, uplinkIP, 8080)
 	ownAfter := rtt(t, r.top.A, testbed.ServerAddr, 8883)
@@ -246,9 +252,10 @@ func TestADeviceFaultDoesNotImpairAForwardedConnection(t *testing.T) {
 }
 
 // P31-AUDIT-14 (decided 2026-10-18, option (a)): A is known only from the neighbor table (by its MAC, a static
-// address, no lease). With a short reachable time on its bridge its entry goes STALE, and with its connections
-// gone nothing on the address is in use; the forward keeps A as its target all the same, and a new forwarded
-// connection reaches A (the kernel probes the entry, A answers).
+// address, no lease). With a short reachable time on its bridge its entry goes stale (STALE, or DELAY when the
+// gateway sends to A; a long first-probe delay keeps it there instead of PROBE and REACHABLE again), and with its
+// connections gone nothing on the address is in use; the forward keeps A as its target all the same, and a new
+// forwarded connection reaches A.
 func TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale(t *testing.T) {
 	r := startForwardLab(t, nil)
 	bridge := ""
@@ -258,13 +265,18 @@ func TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale(t *testing.T) {
 		}
 	}
 	r.top.GW.Must("sysctl", "-w", "net.ipv4.neigh."+bridge+".base_reachable_time_ms=500")
+	r.top.GW.Must("sysctl", "-w", "net.ipv4.neigh."+bridge+".delay_first_probe_time=60")
+	// the states the engine reads as stale (linux.Neighbor.Stale)
+	stale := func(out string) bool {
+		return strings.Contains(out, "STALE") || strings.Contains(out, "DELAY") || strings.Contains(out, "PROBE")
+	}
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		// A's own connections (the ping of the lab's start) go, so its address is no active source
 		_, _ = r.top.GW.Run(context.Background(), "conntrack", "-D", "-s", testbed.ClientAAddr)
 		_, _ = r.top.GW.Run(context.Background(), "conntrack", "-D", "-d", testbed.ClientAAddr)
 		out := r.top.GW.Must("ip", "neigh", "show", testbed.ClientAAddr, "dev", bridge)
-		if strings.Contains(out, "STALE") {
+		if stale(out) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -274,7 +286,7 @@ func TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale(t *testing.T) {
 	}
 	// several readings of the host (every 200 ms) see the stale entry without a connection
 	time.Sleep(2 * time.Second)
-	if out := r.top.GW.Must("ip", "neigh", "show", testbed.ClientAAddr, "dev", bridge); !strings.Contains(out, "STALE") {
+	if out := r.top.GW.Must("ip", "neigh", "show", testbed.ClientAAddr, "dev", bridge); !stale(out) {
 		t.Fatalf("A's neighbor entry is not stale any more, the test proves nothing: %s", out)
 	}
 	var st *string

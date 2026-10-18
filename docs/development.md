@@ -4265,7 +4265,7 @@ target with a stale neighbor entry).
     forward goes inactive. Tests: `TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale`,
     `TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse`, level 1
     `TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale` (a short `base_reachable_time_ms` on the bridge,
-    A's entry STALE and its connections deleted, a new forwarded connection reaches A).
+    A's entry stale (STALE or DELAY, with a long first-probe delay) and its connections deleted, a new forwarded connection reaches A).
   - *Counting* (P31-M35a-09, option (b), decided 2026-10-17). One counting rule per forward in the
     same NAT chain, in front of the DNAT rule: IPv4, in on the forward's entry interface, to an address of
     that interface, its protocol and `th dport` in its external ports, the named counter

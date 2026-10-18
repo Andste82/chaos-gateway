@@ -22,6 +22,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/run"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
@@ -61,6 +62,8 @@ type Config struct {
 	// TrafficInterval is how often the uplink's counters are read for GET /uplink/traffic and
 	// TrafficPeriod how long a rate is kept; zero takes the defaults (5 s, 10 min).
 	TrafficInterval, TrafficPeriod time.Duration
+	// RunRetention is how long the record of an ended run is kept (plan §3.6); zero takes run.DefaultRetention.
+	RunRetention time.Duration
 }
 
 // Server implements apiserver.ServerInterface.
@@ -88,6 +91,9 @@ type Server struct {
 	// traffic is the history of the uplink's rates (GET /uplink/traffic), sampler what fills it
 	traffic *uplinkTraffic
 	sampler trafficSampler
+	// runs is the engine of scenario runs (M15), runsTemp the directory it uses when there is no state directory
+	runs     *run.Manager
+	runsTemp string
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -128,6 +134,12 @@ func New(cfg Config) (*Server, error) {
 	s.eventsDone = make(chan struct{})
 	go s.auditSystemEvents(events)
 	s.startTrafficSampler()
+	if err := s.initRuns(); err != nil {
+		s.stopTrafficSampler()
+		unsub()
+		<-s.eventsDone
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -222,6 +234,7 @@ func pathMatches(pattern, actual string) bool {
 
 // Close releases what the server holds.
 func (s *Server) Close() error {
+	s.closeRuns()
 	s.stopTrafficSampler()
 	s.unsubEvents()
 	<-s.eventsDone

@@ -1,0 +1,709 @@
+package api_test
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/domain"
+)
+
+// M15: scenarios and runs over the API, on the simulated kernel with the real engine. The clock of the API
+// (and with it the schedule of the runs) is a fake one the tests move. Every response is checked against the spec.
+
+// runClock makes a gateway whose runs keep time with a fake clock.
+func readyRuns(t *testing.T) (*gw, *clock.Fake) {
+	t.Helper()
+	clk := clock.NewFake(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC))
+	g := newGW(t, func(o *options) { o.apiClock = clk })
+	g.finishSetup()
+	return g, clk
+}
+
+func eventuallyTrue(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout: %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func (g *gw) postRun(body any, query string) resp {
+	g.t.Helper()
+	return g.do("POST", "/runs"+query, body, nil, nil)
+}
+
+func (g *gw) run(id string) map[string]any {
+	g.t.Helper()
+	r := g.do("GET", "/runs/"+id, nil, nil, nil)
+	if r.Status != 200 {
+		g.t.Fatalf("GET /runs/%s: %d %s", id, r.Status, r.Body)
+	}
+	return r.json(g.t)
+}
+
+func (g *gw) waitRun(id string, statuses ...string) map[string]any {
+	g.t.Helper()
+	var r map[string]any
+	eventuallyTrue(g.t, "run "+id+" "+statuses[0], func() bool {
+		r = g.run(id)
+		for _, s := range statuses {
+			if r["status"] == s {
+				return true
+			}
+		}
+		return false
+	})
+	return r
+}
+
+func stepOf(run map[string]any, id string) map[string]any {
+	for _, s := range run["steps"].([]any) {
+		if m := s.(map[string]any); m["id"] == id {
+			return m
+		}
+	}
+	return nil
+}
+
+func (g *gw) waitStep(id, step, status string) map[string]any {
+	g.t.Helper()
+	var s map[string]any
+	eventuallyTrue(g.t, "step "+step+" "+status, func() bool {
+		s = stepOf(g.run(id), step)
+		return s != nil && s["status"] == status
+	})
+	return s
+}
+
+func (g *gw) overlaysOf(runID string) []any {
+	g.t.Helper()
+	return g.do("GET", "/overlays?owner="+runID, nil, nil, nil).json(g.t)["items"].([]any)
+}
+
+// inlineRun is the body of a run of a scenario that is sent with the request.
+func inlineRun(name string, target map[string]any, steps ...map[string]any) map[string]any {
+	st := make([]any, len(steps))
+	for i, s := range steps {
+		st[i] = s
+	}
+	return map[string]any{"inline": map[string]any{
+		"name": name, "target": target, "preconditions": map[string]any{"skip": []string{"target_online"}}, "steps": st,
+	}}
+}
+
+func step(id, at string, kv ...any) map[string]any {
+	m := map[string]any{"id": id, "at": at}
+	for i := 0; i < len(kv); i += 2 {
+		m[kv[i].(string)] = kv[i+1]
+	}
+	return m
+}
+
+var iotTarget = map[string]any{"network": "IoT"}
+
+// A run from a file: its steps are applied at their times, its overlays are the run's, the kernel has them while
+// the run lasts and not afterwards, and the report, the JUnit file and the events are there at the end. The active
+// revision does not change.
+func TestARunFromAFileAppliesItsStepsAndLeavesAReport(t *testing.T) {
+	g, clk := readyRuns(t)
+	rev := g.activeID()
+	r := g.postRun(inlineRun("api-run", iotTarget,
+		step("slow", "0s", "fault", map[string]any{"latency": "100ms"}),
+		step("cut", "10s", "rule", map[string]any{"action": "drop", "protocol": "tcp", "ports": []int{8883}}),
+		step("end", "20s", "restore", true),
+	), "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	run := r.json(t)
+	id := run["id"].(string)
+	if r.Header.Get("Location") != "/api/v1/runs/"+id || run["scenario"].(map[string]any)["inline"] != true {
+		t.Errorf("%v %v", r.Header, run)
+	}
+	if owner := run["owner"].(map[string]any); owner["type"] != "token" {
+		t.Errorf("owner %v", owner)
+	}
+
+	g.waitStep(id, "slow", "applied")
+	ovs := g.overlaysOf(id)
+	if len(ovs) != 1 {
+		t.Fatalf("overlays of the run: %v", ovs)
+	}
+	ov := ovs[0].(map[string]any)
+	if ov["kind"] != "fault" || ov["owner"].(map[string]any)["type"] != "run" || ov["owner"].(map[string]any)["id"] != id ||
+		ov["run"].(map[string]any)["id"] != id || ov["run"].(map[string]any)["step"] != "slow" {
+		t.Errorf("the overlay of a step: %v", ov)
+	}
+	if n := len(g.e.Snapshot().Faults); n != 1 {
+		t.Errorf("the kernel has %d faults while the run lasts", n)
+	}
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["runs_active"] != float64(1) {
+		t.Errorf("state %v", st)
+	}
+	if b := g.do("GET", "/system/busy", nil, nil, nil).json(t); b["busy"] != true || b["runs_active"] != float64(1) || len(b["run_ids"].([]any)) != 1 {
+		t.Errorf("busy %v", b)
+	}
+
+	clk.Advance(10 * time.Second)
+	cut := g.waitStep(id, "cut", "applied")
+	if cut["offset_ms"] != float64(10000) || cut["generation"] == nil || cut["queue_wait_ms"] == nil {
+		t.Errorf("step %v", cut)
+	}
+	if n := len(g.overlaysOf(id)); n != 2 {
+		t.Errorf("%d overlays after the rule", n)
+	}
+	clk.Advance(10 * time.Second)
+	done := g.waitRun(id, "passed")
+	if n := len(g.overlaysOf(id)); n != 0 {
+		t.Errorf("%d overlays are left", n)
+	}
+	if n := len(g.e.Snapshot().Faults); n != 0 {
+		t.Errorf("the kernel keeps %d faults", n)
+	}
+	if done["ended_at"] == nil || done["started_at"] == nil || len(done["artifacts"].([]any)) != 3 {
+		t.Errorf("%v", done)
+	}
+	if g.activeID() != rev {
+		t.Errorf("a run changed the active revision: %d, was %d", g.activeID(), rev)
+	}
+
+	rep := g.do("GET", "/runs/"+id+"/report.json", nil, nil, nil)
+	if rep.Status != 200 {
+		t.Fatalf("%d %s", rep.Status, rep.Body)
+	}
+	body := rep.json(t)
+	if len(body["steps"].([]any)) != 3 || body["snapshot"] == nil {
+		t.Errorf("%v", body)
+	}
+	for _, s := range body["steps"].([]any) {
+		m := s.(map[string]any)
+		if m["queue_wait_ms"] == nil || m["generation"] == nil || m["applied_at"] == nil {
+			t.Errorf("a step of the report lacks its timing: %v", m)
+		}
+	}
+	if counters, _ := body["counters"].([]any); len(counters) == 0 {
+		t.Errorf("the report has no counters of the overlays: %v", body)
+	}
+	xmlRep := g.do("GET", "/runs/"+id+"/report.xml", nil, nil, nil)
+	if xmlRep.Status != 200 || !strings.HasPrefix(xmlRep.Header.Get("Content-Type"), "application/xml") ||
+		!strings.Contains(string(xmlRep.Body), `<testsuite name="api-run"`) {
+		t.Errorf("%d %s", xmlRep.Status, xmlRep.Body)
+	}
+	ev := g.do("GET", "/runs/"+id+"/events", nil, nil, nil)
+	if ev.Status != 200 || !strings.HasPrefix(ev.Header.Get("Content-Type"), "application/jsonl") {
+		t.Fatalf("%d %s", ev.Status, ev.Body)
+	}
+	var types []string
+	for _, line := range strings.Split(strings.TrimSpace(string(ev.Body)), "\n") {
+		var e map[string]any
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("%v: %s", err, line)
+		}
+		if e["run"] != id {
+			t.Errorf("an event of another run: %s", line)
+		}
+		types = append(types, e["type"].(string))
+	}
+	joined := strings.Join(types, ",")
+	for _, want := range []string{"run_started", "overlay_created", "run_step", "overlay_removed", "run_finished"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("no %s in the events of the run: %s", want, joined)
+		}
+	}
+	if types[0] != "run_started" || types[len(types)-1] != "run_finished" {
+		t.Errorf("the events are not in order: %s", joined)
+	}
+
+	// the lists
+	list := g.do("GET", "/runs?scenario=api-run&status=passed", nil, nil, nil).json(t)["items"].([]any)
+	if len(list) != 1 || list[0].(map[string]any)["steps"] != nil {
+		t.Errorf("the list of runs has the timeline, or misses the run: %v", list)
+	}
+	if n := len(g.do("GET", "/runs?status=running", nil, nil, nil).json(t)["items"].([]any)); n != 0 {
+		t.Errorf("%d running", n)
+	}
+	if st := g.do("GET", "/state", nil, nil, nil).json(t); st["runs_active"] != float64(0) {
+		t.Errorf("state %v", st)
+	}
+	// the audit log
+	e, _, _ := g.log.List(auditFilter(), "", 20)
+	var actions []string
+	for _, x := range e {
+		actions = append(actions, x.Action)
+	}
+	if !strings.Contains(strings.Join(actions, ","), "run.create") {
+		t.Errorf("audit actions %v", actions)
+	}
+}
+
+// A run goes on when the client that started it is gone: the request that made it is not what the run is.
+func TestARunKeepsGoingWhenTheRequestIsOver(t *testing.T) {
+	g, clk := readyRuns(t)
+	r := g.postRun(inlineRun("go-on", iotTarget,
+		step("a", "0s", "fault", map[string]any{"latency": "20ms"}),
+		step("b", "30s", "fault", map[string]any{"loss": "1%"}),
+	), "")
+	id := r.json(t)["id"].(string)
+	g.client.CloseIdleConnections()
+	g.waitStep(id, "a", "applied")
+	clk.Advance(30 * time.Second)
+	g.waitRun(id, "passed")
+}
+
+func TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName(t *testing.T) {
+	g, clk := readyRuns(t)
+	scID := "3d4e5f6a-7b8c-4d9e-0f1a-2b3c4d5e6f71"
+	rev := g.mustPatch(map[string]any{"scenarios": map[string]any{scID: map[string]any{
+		"name": "stored", "target": iotTarget, "preconditions": map[string]any{"skip": []string{"target_online"}},
+		"steps": []any{step("lat", "0s", "fault", map[string]any{"latency": "50ms"}), step("done", "5s", "restore", true)},
+	}}})
+	if r := g.apply(rev); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+
+	list := g.do("GET", "/scenarios", nil, nil, nil).json(t)["items"].([]any)
+	if len(list) != 1 || list[0].(map[string]any)["id"] != scID || list[0].(map[string]any)["config"].(map[string]any)["name"] != "stored" {
+		t.Fatalf("%v", list)
+	}
+	for _, ref := range []string{scID, "stored"} {
+		if r := g.do("GET", "/scenarios/"+ref, nil, nil, nil); r.Status != 200 || r.json(t)["id"] != scID {
+			t.Errorf("%s: %d %s", ref, r.Status, r.Body)
+		}
+	}
+	y := g.do("GET", "/scenarios/stored", nil, map[string]string{"Accept": "application/yaml"}, nil)
+	if y.Status != 200 || !strings.HasPrefix(y.Header.Get("Content-Type"), "application/yaml") || !strings.Contains(string(y.Body), "name: stored") {
+		t.Fatalf("%d %s %s", y.Status, y.Header.Get("Content-Type"), y.Body)
+	}
+	if r := g.do("GET", "/scenarios/nope", nil, nil, nil); r.Status != 404 || r.code(t) != "not_found" {
+		t.Errorf("%d %s", r.Status, r.Body)
+	}
+
+	// the YAML is a scenario file: the import format reads it back
+	if sc, err := domain.DecodeScenario(y.Body, domain.FormatYAML); err != nil || sc.Name != "stored" || len(sc.Steps) != 2 {
+		t.Fatalf("the YAML of a scenario does not read back: %v", err)
+	}
+	// a run of the stored scenario, with a parameter that changes the latency
+	r := g.do("POST", "/scenarios/stored/runs", map[string]any{"parameters": map[string]string{"steps.lat.fault.latency": "75ms"}, "lease": "1m"}, nil, nil)
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	run := r.json(t)
+	id := run["id"].(string)
+	if run["scenario"].(map[string]any)["id"] != scID || run["scenario"].(map[string]any)["inline"] != false || run["lease_expires_at"] == nil {
+		t.Errorf("%v", run)
+	}
+	g.waitStep(id, "lat", "applied")
+	ov := g.overlaysOf(id)[0].(map[string]any)
+	if ov["fault"].(map[string]any)["latency"] != "75ms" {
+		t.Errorf("the parameter did not reach the overlay: %v", ov)
+	}
+	g.waitRun(id, "running")
+	clk.Advance(5 * time.Second)
+	done := g.waitRun(id, "passed")
+	if done["snapshot"].(map[string]any)["steps"].([]any)[0].(map[string]any)["fault"].(map[string]any)["latency"] != "75ms" {
+		t.Errorf("the snapshot is not the scenario as executed: %v", done["snapshot"])
+	}
+	// the stored scenario itself is unchanged
+	got := g.do("GET", "/scenarios/stored", nil, nil, nil).json(t)["config"].(map[string]any)
+	if got["steps"].([]any)[0].(map[string]any)["fault"].(map[string]any)["latency"] != "50ms" {
+		t.Errorf("the run changed the stored scenario: %v", got)
+	}
+	// a run by name through POST /runs
+	r2 := g.postRun(map[string]any{"scenario": "stored"}, "")
+	if r2.Status != 201 {
+		t.Fatalf("%d %s", r2.Status, r2.Body)
+	}
+	g.do("POST", "/runs/"+r2.json(t)["id"].(string)+"/abort", nil, nil, nil)
+}
+
+func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.T) {
+	g, _ := readyRuns(t)
+	checks := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
+	checks["inline"].(map[string]any)["checks"] = []any{map[string]any{
+		"reconnected": map[string]any{"protocol": "tcp", "ports": []int{8883}}, "window": map[string]any{"from": "a", "within": "30s"}}}
+	if r := g.postRun(checks, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M16") {
+		t.Errorf("checks: %d %s", r.Status, r.Body)
+	}
+	dns := inlineRun("d", iotTarget, step("a", "0s", "dns", map[string]any{"action": "servfail", "names": []string{"x.example.com"}}))
+	if r := g.postRun(dns, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
+		t.Errorf("dns: %d %s", r.Status, r.Body)
+	}
+	bad := inlineRun("b", map[string]any{"device": "nobody"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
+	r := g.postRun(bad, "")
+	if r.Status != 422 || r.code(t) != "validation_failed" || !strings.Contains(string(r.Body), "unknown_reference") {
+		t.Errorf("unknown device: %d %s", r.Status, r.Body)
+	}
+	for name, body := range map[string]any{
+		"neither":       map[string]any{},
+		"both":          map[string]any{"scenario": "x", "inline": inlineRun("x", iotTarget, step("a", "0s", "restore", true))["inline"]},
+		"unknown field": map[string]any{"scenario": "x", "bogus": 1},
+		"short lease":   map[string]any{"scenario": "x", "lease": "500ms"},
+		"bad parameter": map[string]any{"inline": inlineRun("x", iotTarget, step("a", "0s", "restore", true))["inline"], "parameters": map[string]string{"nope.nope": "1"}},
+	} {
+		g.badRequest = true
+		r := g.postRun(body, "")
+		g.badRequest = false
+		if r.Status != 422 || r.code(t) != "validation_failed" {
+			t.Errorf("%s: %d %s", name, r.Status, r.Body)
+		}
+	}
+	if r := g.postRun(map[string]any{"scenario": "nope"}, ""); r.Status != 404 || r.code(t) != "not_found" {
+		t.Errorf("unknown scenario: %d %s", r.Status, r.Body)
+	}
+	if n := len(g.do("GET", "/runs", nil, nil, nil).json(t)["items"].([]any)); n != 0 {
+		t.Errorf("a refused run made %d runs", n)
+	}
+	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
+	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
+	if steps != "profile,fault,rule,wireguard,wait,remove,restore" || len(caps["check_types"].([]any)) != 0 {
+		t.Errorf("capabilities %v", caps)
+	}
+	if !strings.Contains(strings.Join(toStrings(caps["features"].([]any)), ","), "runs") {
+		t.Errorf("features %v", caps["features"])
+	}
+}
+
+func toStrings(in []any) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = v.(string)
+	}
+	return out
+}
+
+// One run per target: the second run on the target waits in queued, with queue=false it is refused with 409
+// target_busy, and aborting the first starts the second.
+func TestASecondRunOnTheSameTargetWaitsAndTheQueueFalseRefusesIt(t *testing.T) {
+	g, _ := readyRuns(t)
+	body := func(name string) map[string]any {
+		return inlineRun(name, iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true))
+	}
+	first := g.postRun(body("first"), "").json(t)["id"].(string)
+	g.waitStep(first, "a", "applied")
+	second := g.postRun(body("second"), "")
+	if second.Status != 201 || second.json(t)["status"] != "queued" {
+		t.Fatalf("%d %s", second.Status, second.Body)
+	}
+	secondID := second.json(t)["id"].(string)
+	r := g.postRun(body("third"), "?queue=false")
+	if r.Status != 409 || r.code(t) != "target_busy" || !strings.Contains(string(r.Body), first) {
+		t.Errorf("%d %s", r.Status, r.Body)
+	}
+	if b := g.do("GET", "/system/busy", nil, nil, nil).json(t); b["runs_active"] != float64(1) || b["runs_queued"] != float64(1) {
+		t.Errorf("busy %v", b)
+	}
+	if n := len(g.overlaysOf(secondID)); n != 0 {
+		t.Errorf("the queued run has %d overlays", n)
+	}
+
+	ab := g.do("POST", "/runs/"+first+"/abort", nil, nil, nil)
+	if ab.Status != 200 || ab.json(t)["status"] != "aborted" || ab.Header.Get("Chaos-Generation") == "" {
+		t.Fatalf("%d %s", ab.Status, ab.Body)
+	}
+	if n := len(g.overlaysOf(first)); n != 0 {
+		t.Errorf("the aborted run left %d overlays", n)
+	}
+	g.waitStep(secondID, "a", "applied")
+	if g.run(secondID)["status"] != "running" {
+		t.Error("the queued run did not start")
+	}
+	g.do("POST", "/runs/"+secondID+"/abort", nil, nil, nil)
+	if n := len(g.e.Snapshot().Overlays); n != 0 {
+		t.Errorf("%d overlays are left", n)
+	}
+}
+
+// A failed precondition ends the run as error with the reason; here nothing is online on the network.
+func TestAFailedPreconditionEndsTheRunAsErrorOverTheAPI(t *testing.T) {
+	g, _ := readyRuns(t)
+	r := g.postRun(map[string]any{"inline": map[string]any{
+		"name": "baseline", "target": iotTarget, "steps": []any{step("a", "0s", "fault", map[string]any{"latency": "10ms"})}}}, "")
+	id := r.json(t)["id"].(string)
+	done := g.waitRun(id, "error")
+	if !strings.Contains(done["reason"].(string), "precondition target_online failed") {
+		t.Errorf("reason %v", done["reason"])
+	}
+	if n := len(g.overlaysOf(id)); n != 0 {
+		t.Errorf("%d overlays", n)
+	}
+	x := g.do("GET", "/runs/"+id+"/report.xml", nil, nil, nil)
+	if x.Status != 200 || !strings.Contains(string(x.Body), `type="run_error"`) {
+		t.Errorf("%d %s", x.Status, x.Body)
+	}
+}
+
+func TestTheLeaseOfARunIsRenewedOverTheAPIAndExpires(t *testing.T) {
+	g, clk := readyRuns(t)
+	r := g.postRun(withLease(inlineRun("leased", iotTarget,
+		step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "30s"), "")
+	id := r.json(t)["id"].(string)
+	g.waitStep(id, "a", "applied")
+	clk.Advance(20 * time.Second)
+	rn := g.do("POST", "/runs/"+id+"/renew", nil, nil, nil)
+	if rn.Status != 200 || rn.json(t)["lease_expires_at"] != "2026-10-18T12:00:50Z" {
+		t.Fatalf("%d %s", rn.Status, rn.Body)
+	}
+	clk.Advance(29 * time.Second)
+	if g.run(id)["status"] != "running" {
+		t.Fatal("the run ended inside its lease")
+	}
+	clk.Advance(time.Second)
+	done := g.waitRun(id, "aborted")
+	if done["reason"] != "lease expired" {
+		t.Errorf("reason %v", done["reason"])
+	}
+	if n := len(g.overlaysOf(id)); n != 0 {
+		t.Errorf("%d overlays", n)
+	}
+	if r := g.do("POST", "/runs/"+id+"/renew", nil, nil, nil); r.Status != 422 || r.code(t) != "validation_failed" {
+		t.Errorf("renewing an ended run: %d %s", r.Status, r.Body)
+	}
+	plain := g.postRun(inlineRun("nolease", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "").json(t)["id"].(string)
+	if r := g.do("POST", "/runs/"+plain+"/renew", nil, nil, nil); r.Status != 422 {
+		t.Errorf("renewing a run without a lease: %d %s", r.Status, r.Body)
+	}
+	g.do("POST", "/runs/"+plain+"/abort", nil, nil, nil)
+}
+
+func withLease(body map[string]any, lease string) map[string]any {
+	body["lease"] = lease
+	return body
+}
+
+// Tokens: reading needs read, starting a run needs overlays, and a token with overlays aborts and renews its own
+// runs only; reset takes the caller's runs and owner=all needs full.
+func TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns(t *testing.T) {
+	g, _ := readyRuns(t)
+	admin := g.token
+	mkRun := func(name string, target map[string]any) string {
+		r := g.postRun(inlineRun(name, target, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "")
+		if r.Status != 201 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+		return r.json(t)["id"].(string)
+	}
+	g.mintToken("read")
+	if r := g.postRun(inlineRun("x", iotTarget, step("a", "0s", "restore", true)), ""); r.Status != 403 {
+		t.Errorf("a read-only token starts a run: %d", r.Status)
+	}
+	if r := g.do("GET", "/runs", nil, nil, nil); r.Status != 200 {
+		t.Errorf("a read-only token lists runs: %d", r.Status)
+	}
+	readTok := g.token
+
+	g.mintToken("overlays")
+	mine := mkRun("mine", iotTarget)
+	g.waitStep(mine, "a", "applied")
+	other := g.mintToken("overlays")
+	_ = other
+	if r := g.do("POST", "/runs/"+mine+"/abort", nil, nil, nil); r.Status != 403 || r.code(t) != "forbidden" {
+		t.Errorf("aborting another token's run: %d %s", r.Status, r.Body)
+	}
+	if r := g.do("POST", "/runs/"+mine+"/renew", nil, nil, nil); r.Status != 403 {
+		t.Errorf("renewing another token's run: %d %s", r.Status, r.Body)
+	}
+	if r := g.do("GET", "/runs/"+mine, nil, nil, nil); r.Status != 200 {
+		t.Errorf("reading another token's run: %d", r.Status)
+	}
+	// reset takes only the caller's runs (this token has none)
+	if r := g.do("POST", "/reset", nil, nil, nil); r.Status != 200 || r.json(t)["aborted_runs"] != float64(0) {
+		t.Errorf("%d %s", r.Status, r.Body)
+	}
+	if g.run(mine)["status"] != "queued" && g.run(mine)["status"] != "running" {
+		t.Errorf("another token's reset stopped the run: %v", g.run(mine)["status"])
+	}
+	if r := g.do("POST", "/reset?owner=all", nil, nil, nil); r.Status != 403 {
+		t.Errorf("owner=all with the scope overlays: %d", r.Status)
+	}
+	// the admin token (scope full) aborts any run; reset?owner=all aborts the rest
+	g.token = admin
+	own := g.postRun(inlineRun("own", map[string]any{"network": "lab-hub"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "").json(t)["id"].(string)
+	g.waitStep(own, "a", "applied")
+	r := g.do("POST", "/reset", nil, nil, nil)
+	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) || r.json(t)["removed_overlays"] != float64(0) {
+		t.Fatalf("reset of the admin token: %d %s", r.Status, r.Body)
+	}
+	if st := g.run(own); st["status"] != "aborted" {
+		t.Errorf("%v", st["status"])
+	}
+	if g.run(mine)["status"] != "running" {
+		t.Errorf("the other token's run was stopped by the admin's own reset")
+	}
+	r = g.do("POST", "/reset?owner=all", nil, nil, nil)
+	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) {
+		t.Fatalf("reset of all: %d %s", r.Status, r.Body)
+	}
+	if st := g.run(mine); st["status"] != "aborted" {
+		t.Errorf("%v", st["status"])
+	}
+	_ = readTok
+	if n := len(g.e.Snapshot().Overlays); n != 0 {
+		t.Errorf("%d overlays are left", n)
+	}
+}
+
+// A repeated POST /runs with the same Idempotency-Key is the same run.
+func TestAnIdempotencyKeyMakesOneRun(t *testing.T) {
+	g, _ := readyRuns(t)
+	body := inlineRun("once", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true))
+	h := map[string]string{"Idempotency-Key": "run-key-1"}
+	a := g.do("POST", "/runs", body, h, nil)
+	b := g.do("POST", "/runs", body, h, nil)
+	if a.Status != 201 || b.Status != 201 || a.json(t)["id"] != b.json(t)["id"] {
+		t.Fatalf("%d %s / %d %s", a.Status, a.Body, b.Status, b.Body)
+	}
+	if n := len(g.do("GET", "/runs", nil, nil, nil).json(t)["items"].([]any)); n != 1 {
+		t.Errorf("%d runs", n)
+	}
+	g.do("POST", "/runs/"+a.json(t)["id"].(string)+"/abort", nil, nil, nil)
+}
+
+// A revision that deletes an object a run refers to is refused with the run listed, the preview says so, and
+// forcing it aborts the run (plan §2.1.1).
+func TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced(t *testing.T) {
+	g, _ := readyRuns(t)
+	devID := "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	add := g.mustPatch(map[string]any{"devices": map[string]any{devID: map[string]any{
+		"name": "esp32-42", "identifiers": map[string]any{"macs": []string{"02:00:00:00:00:31"}},
+	}}})
+	if r := g.apply(add); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	runBody := inlineRun("refers", map[string]any{"device": "esp32-42"},
+		step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true))
+	id := g.postRun(runBody, "").json(t)["id"].(string)
+	g.waitStep(id, "a", "applied")
+	queued := g.postRun(inlineRun("waits", map[string]any{"device": "esp32-42"}, step("a", "0s", "restore", true)), "").json(t)["id"].(string)
+
+	del := g.mustPatch(map[string]any{"devices": map[string]any{devID: nil}})
+	pv := g.do("POST", "/revisions/"+itoa(del)+"/preview", nil, nil, nil)
+	if pv.Status != 200 {
+		t.Fatalf("%d %s", pv.Status, pv.Body)
+	}
+	prefs, _ := pv.json(t)["references"].([]any)
+	if len(prefs) != 3 { // the run, the queued run, and the run's overlay
+		t.Fatalf("preview references %s", pv.Body)
+	}
+	r := g.apply(del)
+	if r.Status != 422 || r.code(t) != "validation_failed" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	kinds := map[string]int{}
+	ids := map[string]bool{}
+	for _, x := range r.json(t)["references"].([]any) {
+		ref := x.(map[string]any)
+		kinds[ref["kind"].(string)]++
+		ids[ref["id"].(string)] = true
+		if ref["object"] != "/devices/"+devID {
+			t.Errorf("reference %v", ref)
+		}
+	}
+	if kinds["run"] != 2 || kinds["overlay"] != 1 || !ids[id] || !ids[queued] {
+		t.Errorf("references %v %v", kinds, ids)
+	}
+	if g.run(id)["status"] != "running" || g.activeID() != add {
+		t.Error("a refused revision changed something")
+	}
+
+	r = g.do("POST", "/revisions/"+itoa(del)+"/apply?force=true", nil, nil, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	for _, rid := range []string{id, queued} {
+		got := g.run(rid)
+		if got["status"] != "aborted" || !strings.Contains(got["reason"].(string), "deletes /devices/"+devID) {
+			t.Errorf("run %s: %v %v", rid, got["status"], got["reason"])
+		}
+	}
+	if n := len(g.e.Snapshot().Overlays); n != 0 {
+		t.Errorf("%d overlays are left", n)
+	}
+}
+
+// The runs of an earlier process: one that was running ends as aborted when the next process starts.
+func TestARestartEndsARunThatWasRunningAsAborted(t *testing.T) {
+	root := t.TempDir()
+	g := newGW(t, func(o *options) { o.root = root })
+	g.finishSetup()
+	id := "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e"
+	dir := filepath.Join(root, "api", "runs", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := `{"schema_version":1,"run":{"id":"` + id + `","scenario":{"name":"crashed","inline":true},"revision":2,"target":{"network":"0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"},
+	"owner":{"type":"token","id":"t1","name":"ci"},"status":"running","created_at":"2026-10-18T11:00:00Z","started_at":"2026-10-18T11:00:00Z",
+	"steps":[{"id":"a","status":"applied"},{"id":"b","status":"pending"}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte(rec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g.close()
+
+	g2 := newGW(t, func(o *options) { o.root = root })
+	g2.token = ""
+	g2.mintToken("full")
+	r := g2.run(id)
+	if r["status"] != "aborted" || r["reason"] != "service restart" || r["ended_at"] == nil {
+		t.Fatalf("%v", r)
+	}
+	if stepOf(r, "b")["status"] != "skipped" || stepOf(r, "a")["status"] != "applied" {
+		t.Errorf("%v", r["steps"])
+	}
+	if rep := g2.do("GET", "/runs/"+id+"/report.json", nil, nil, nil); rep.Status != 200 {
+		t.Errorf("the report of the aborted run: %d %s", rep.Status, rep.Body)
+	}
+	if st := g2.do("GET", "/state", nil, nil, nil).json(t); st["runs_active"] != float64(0) {
+		t.Errorf("%v", st)
+	}
+}
+
+// Every step type of this build runs against the real engine: a profile, a fault, a rule and a WireGuard action
+// are the run's overlays, `remove` takes one away and `restore` the rest.
+func TestEveryStepTypeOfThisBuildRunsOverTheAPI(t *testing.T) {
+	g, clk := readyRuns(t)
+	r := g.postRun(inlineRun("kinds", map[string]any{"network": "lab-hub"},
+		step("prof", "0s", "profile", "lte"),
+		step("lat", "0s", "fault", map[string]any{"latency": "40ms"}),
+		step("drop", "0s", "rule", map[string]any{"action": "drop", "protocol": "tcp", "ports": []int{8883}}),
+		step("peer", "0s", "wireguard", map[string]any{"client": "rA", "action": "disable"}),
+		step("undo", "5s", "remove", "lat"),
+		step("all", "10s", "restore", true),
+	), "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := r.json(t)["id"].(string)
+	g.waitStep(id, "peer", "applied")
+	kinds := map[string]bool{}
+	for _, o := range g.overlaysOf(id) {
+		kinds[o.(map[string]any)["kind"].(string)] = true
+	}
+	if len(kinds) != 4 || !kinds["profile"] || !kinds["fault"] || !kinds["rule"] || !kinds["wireguard"] {
+		t.Errorf("the overlays of the run: %v", kinds)
+	}
+	clk.Advance(5 * time.Second)
+	g.waitStep(id, "undo", "applied")
+	if n := len(g.overlaysOf(id)); n != 3 {
+		t.Errorf("%d overlays after the remove", n)
+	}
+	clk.Advance(5 * time.Second)
+	done := g.waitRun(id, "passed")
+	if n := len(g.overlaysOf(id)); n != 0 {
+		t.Errorf("%d overlays after the restore", n)
+	}
+	types := map[string]string{}
+	for _, s := range done["steps"].([]any) {
+		m := s.(map[string]any)
+		types[m["id"].(string)] = m["type"].(string)
+	}
+	if types["prof"] != "profile" || types["lat"] != "fault" || types["drop"] != "rule" || types["peer"] != "wireguard" || types["undo"] != "remove" || types["all"] != "restore" {
+		t.Errorf("%v", types)
+	}
+}

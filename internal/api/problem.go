@@ -12,6 +12,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/run"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
@@ -152,6 +153,8 @@ func (s *Server) problemFor(err error) *problem {
 		unsupRev *engine.UnsupportedProfileRevisionError
 		comp     *engine.CompileError
 		orphans  *engine.ErrOverlaysOrphaned
+		busy     *run.TargetBusyError
+		unsupRun *run.UnsupportedError
 	)
 	switch {
 	case errors.As(err, &conflict):
@@ -191,6 +194,26 @@ func (s *Server) problemFor(err error) *problem {
 	case errors.As(err, &orphans):
 		refs := blockingReferences(orphans.References)
 		return newProblem(model.ErrorCodeValidationFailed, "%s", orphans.Error()).with(func(b *model.Problem) { b.References = &refs })
+	case errors.As(err, &busy):
+		return newProblem(model.ErrorCodeTargetBusy, "%s", busy.Error())
+	case errors.As(err, &unsupRun):
+		return newProblem(model.ErrorCodeUnsupportedFeature, "%s", unsupRun.Error())
+	case errors.Is(err, run.ErrNoScenario):
+		return newProblem(model.ErrorCodeNotFound, "%s", strings.TrimPrefix(err.Error(), "run: "))
+	case errors.Is(err, run.ErrNotFound):
+		return newProblem(model.ErrorCodeNotFound, "no such run (it never existed, or its record was deleted after the retention time)")
+	case errors.Is(err, run.ErrNotEnded):
+		return newProblem(model.ErrorCodeNotFound, "the report is there once the run has ended")
+	case errors.Is(err, run.ErrForbidden):
+		return newProblem(model.ErrorCodeForbidden, "the run belongs to another owner: a token with the scope overlays only changes its own")
+	case errors.Is(err, run.ErrNoLease):
+		return newProblem(model.ErrorCodeValidationFailed, "the run has no lease to renew")
+	case errors.Is(err, run.ErrEnded):
+		return newProblem(model.ErrorCodeValidationFailed, "the run has ended: there is nothing to renew")
+	case errors.Is(err, run.ErrTooManyRuns):
+		return newProblem(model.ErrorCodeCapacityExceeded, "too many queued or running runs: abort some, or wait for them")
+	case errors.Is(err, run.ErrClosed):
+		return newProblem(model.ErrorCodeUnavailable, "the gateway is stopping")
 	case errors.Is(err, engine.ErrOverlayNotFound):
 		return newProblem(model.ErrorCodeNotFound, "no such overlay (it never existed, or it was removed or has expired)")
 	case errors.Is(err, engine.ErrOverlayForbidden):

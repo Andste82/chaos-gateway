@@ -24,6 +24,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/preflight"
+	"github.com/Andste82/chaos-gateway/internal/run"
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/supervisor"
 )
@@ -127,6 +128,12 @@ type gatewayState struct {
 	SafeMode         bool            `json:"safe_mode"`
 }
 
+// runsActive is the number of runs that are running now.
+func (s *Server) runsActive() int {
+	running, _, _ := s.runs.Busy()
+	return running
+}
+
 // GetState implements GET /state.
 func (s *Server) GetState(c *gin.Context) {
 	snap := s.cfg.Engine.Snapshot()
@@ -136,6 +143,7 @@ func (s *Server) GetState(c *gin.Context) {
 		BootID:         s.cfg.BootID,
 		LastKnownGood:  s.lastKnownGood(),
 		OverlaysActive: len(snap.Overlays),
+		RunsActive:     s.runsActive(),
 		CounterEpoch:   snap.CounterEpoch,
 	}
 	if p := snap.Pending; p != nil {
@@ -244,8 +252,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 		Features:      Features,
 		OverlayKinds:  engine.SupportedOverlayKinds,
 		FaultFamilies: engine.SupportedFaultFamilies,
-		StepTypes:     []string{},
-		CheckTypes:    []string{},
+		StepTypes:     run.SupportedStepTypes,
+		CheckTypes:    run.SupportedCheckTypes,
 	}
 	// the limits of plan §3.3: the ids the mark layout has, the classes the compiler accepts per interface
 	caps.Limits = &struct {
@@ -256,8 +264,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14 and M35a (port forwarding) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards"}
+// M14, M35a (port forwarding) and M15 (runs) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {

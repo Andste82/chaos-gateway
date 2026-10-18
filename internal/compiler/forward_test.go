@@ -876,6 +876,8 @@ func TestAForwardTheValidationRefusesIsLeftOutWithAWarning(t *testing.T) {
 		{"outside the test networks", `{protocol: tcp, entry: uplink, external_port: 7000, target: {address: 203.0.113.50}}`, "no local test network"},
 		{"in the management network", `{protocol: tcp, entry: uplink, external_port: 7000, target: {address: 192.168.56.9}}`, "no local test network"},
 		{"ranges of different length", `{protocol: tcp, entry: uplink, external_port: 7000, external_port_end: 7002, target_port: 9000, target_port_end: 9001, target: {device: esp32-42}}`, "as long as"},
+		// P31-AUDIT-12: with the forward "web" one port more than domain.MaxForwardedPorts
+		{"more ports than allowed", `{name: zz, protocol: udp, entry: uplink, external_port: 1024, external_port_end: 17407, target: {device: esp32-42}}`, "16385 ports together, at most 16384"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := accessWorld(t)
@@ -928,4 +930,63 @@ func TestTheDNATMapSendsToTheDevicesMostCurrentAddress(t *testing.T) {
 	if f := forwardOf(t, tg, fwdWeb); f.Target != netip.MustParseAddr("10.10.0.61") {
 		t.Errorf("the forward's target: %+v", f)
 	}
+}
+
+// P31-AUDIT-12 (decided 2026-10-18, option (a)): the largest configuration the validation allows,
+// domain.MaxForwardedPorts ports in total (tcp and udp ranges to one device, which the faults of the example
+// select too), compiles into a full transaction and, when the device moves to another address, into an element
+// transaction (the DNAT map and the classification maps, as the engine's identity path sends them) that the
+// executor decodes: both stay within its limit for one operation (8 MiB).
+func TestTheLargestAllowedForwardsAndADeviceMoveFitTheExecutorsLimit(t *testing.T) {
+	w := accessWorld(t)
+	half := domain.MaxForwardedPorts / 2
+	w.addForward(fwdWeb, fmt.Sprintf(`{name: tcp-wide, protocol: tcp, entry: uplink, external_port: 1024, external_port_end: %d, target: {device: esp32-42}}`, 1024+half-1))
+	w.addForward(fwdRange, fmt.Sprintf(`{name: udp-wide, protocol: udp, entry: uplink, external_port: 1024, external_port_end: %d, target: {device: esp32-42}}`, 1024+half-1))
+	if errs := domain.Validate(w.cfg); len(errs) != 0 {
+		t.Fatalf("the largest allowed configuration does not validate: %+v", errs)
+	}
+	decode := func(what string, tx []byte) {
+		t.Helper()
+		raw, err := executor.Encode(&executor.NftApply{Ruleset: tx})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := executor.Decode(raw); err != nil {
+			t.Fatalf("%s: the executor refuses it: %v", what, err)
+		}
+		t.Logf("%s: %d bytes", what, len(raw))
+	}
+	before := w.compile(nil)
+	if before.HasErrors() || len(before.Forwards) != 2 {
+		t.Fatalf("forwards %+v, problems %+v", before.Forwards, before.Problems)
+	}
+	full, err := before.Nft.Transaction(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode("the full apply", full)
+
+	w.setAddrs(map[string][]string{devESP42: {"10.10.0.61"}, devESP43: {"10.10.0.43"}, devLab: {"10.20.0.50"}})
+	after := w.compile(nil)
+	if f, _ := after.Forward(fwdWeb); f == nil || f.Target.String() != "10.10.0.61" {
+		t.Fatalf("the forward does not follow the device: %+v", f)
+	}
+	var updates []MapUpdate
+	for _, m := range after.Nft.Maps {
+		if m.Name == after.IdentityMap {
+			continue // the identity map has element operations of its own
+		}
+		for _, o := range before.Nft.Maps {
+			if o.Name == m.Name {
+				if u := DiffMap(o, m); !u.Empty() {
+					updates = append(updates, u)
+				}
+			}
+		}
+	}
+	move, err := after.Nft.ElementTransaction(updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode("the device's move", move)
 }

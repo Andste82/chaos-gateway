@@ -3254,7 +3254,10 @@ components:
         Refused with `validation_failed` at the forward's field: two forwards on the same protocol whose
         external ports overlap (`overlapping_forward`, whatever their entry side); ranges of different
         length (`port_range_length`), a range that ends before it starts or a target range that would end
-        past 65535 (`invalid_port_range`); an external port that is the UI/API port (`management.ui_port`, by default the port the API listens
+        past 65535 (`invalid_port_range`); enabled forwards that forward more than 16384 ports together
+        (`invalid_port_range` at the range of the forward, in the order of the names, that crosses the limit:
+        every forwarded port is an element of the gateway's DNAT map, and the move of a target device
+        replaces all of them in one transaction); an external port that is the UI/API port (`management.ui_port`, by default the port the API listens
         on), a listen port of a WireGuard network of the gateway (udp), 22/tcp on the management side or
         on the two-port topology's shared interface, or 179/tcp while an enabled BGP protocol is
         configured (`reserved_port`); `management` in the two-port topology (`management_is_uplink`); a

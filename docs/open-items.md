@@ -1634,7 +1634,7 @@ none blocked the round. The maintainer decided all four on 2026-10-18; each is c
   target; not without an enabled forward; another device's confirmed entry or lease wins; a newer address is the target),
   `TestAStaleNeighborOnlyCountsWhileTheAddressCarriesConnections` (a device no forward sends to, as before), level 1
   `TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale` (in `M35A_LEVEL1`: `base_reachable_time_ms` 500 on the
-  bridge, A's connections deleted and its entry STALE, the forward still goes to A and a new forwarded connection
+  bridge, A's connections deleted and its entry stale (STALE or DELAY, with a long first-probe delay), the forward still goes to A and a new forwarded connection
   reaches it).
 - Severity: major
 - Reason: needs-decision. `ResolveIdentity` keeps a neighbor claim in the kernel states STALE, DELAY or PROBE only while

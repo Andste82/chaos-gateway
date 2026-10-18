@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -26,5 +27,28 @@ func TestANeighborEntryKeepsWhenItWasFirstSeen(t *testing.T) {
 	s = e.neighborsSeen([]linux.Neighbor{old, moved}, t0.Add(4*time.Second))
 	if !s[neighKey(old)].Equal(t0.Add(4*time.Second)) || !s[neighKey(moved)].Equal(t0.Add(2*time.Second)) {
 		t.Fatalf("the old entry came back: %v", s)
+	}
+}
+
+// A forwarded connection's original source is the peer behind the entry interface; the device it was
+// sent to is the reply's source. It counts as in use, so a device that only answers forwards keeps its
+// stale neighbor entry and with it the address its forward sends to (P31-AUDIT-14). A connection that is
+// not translated, a masqueraded one and the DNS proxy's service redirect name no such device.
+func TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse(t *testing.T) {
+	flow := func(src, dst, rsrc, rdst string) linux.Conntrack {
+		return linux.Conntrack{Proto: "tcp", Original: linux.Tuple{Src: src, Dst: dst}, Reply: linux.Tuple{Src: rsrc, Dst: rdst}}
+	}
+	if a, ok := forwardTarget(flow("203.0.113.10", "192.168.1.2", "10.10.0.11", "203.0.113.10")); !ok || a != netip.MustParseAddr("10.10.0.11") {
+		t.Fatalf("forwarded: %v %v", a, ok)
+	}
+	for name, f := range map[string]linux.Conntrack{
+		"not translated": flow("10.10.0.11", "10.20.0.5", "10.20.0.5", "10.10.0.11"),
+		"masqueraded":    flow("10.10.0.11", "198.51.100.7", "198.51.100.7", "192.168.1.2"),
+		"service":        flow("10.10.0.11", "10.10.0.1", "169.254.100.2", "10.10.0.11"),
+		"unparsable":     flow("10.10.0.11", "", "10.10.0.12", "10.10.0.11"),
+	} {
+		if a, ok := forwardTarget(f); ok {
+			t.Errorf("%s: %v", name, a)
+		}
 	}
 }

@@ -142,6 +142,9 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 					continue
 				}
 				obs.Active[ip] = true
+				if target, ok := forwardTarget(f); ok {
+					obs.Active[target] = true
+				}
 				if !seen[ip] && inAny(behind, ip) {
 					seen[ip] = true
 					obs.UnknownSources = append(obs.UnknownSources, ip)
@@ -205,6 +208,20 @@ func (e *Engine) neighborsSeen(neigh []linux.Neighbor, now time.Time) map[string
 }
 
 func neighKey(n linux.Neighbor) string { return n.Dev + " " + n.Dst + " " + strings.ToLower(n.LLAddr) }
+
+// forwardTarget returns the device a translated connection was sent to (a port forward, M35a): the
+// reply's source when it is not the original destination. A forwarded connection's original source is
+// the peer behind the entry interface, so without it a device that only answers forwards would never
+// count as in use, and its stale neighbor entry would lose the address its forward sends to. The
+// service redirect of the DNS proxy is translated too; its peer is not a device.
+func forwardTarget(f linux.Conntrack) (netip.Addr, bool) {
+	r, err := netip.ParseAddr(f.Reply.Src)
+	dst, derr := netip.ParseAddr(f.Original.Dst)
+	if err != nil || derr != nil || !r.Is4() || r == dst || compiler.ServicePeerCIDR.Contains(r) {
+		return netip.Addr{}, false
+	}
+	return r, true
+}
 
 func (e *Engine) setActive(a map[netip.Addr]bool) {
 	e.activeMu.Lock()

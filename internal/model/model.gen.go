@@ -165,6 +165,24 @@ func (e CaptureFormat) Valid() bool {
 	}
 }
 
+// Defines values for CaptureInterfacesLinkType.
+const (
+	Ethernet CaptureInterfacesLinkType = "ethernet"
+	Raw      CaptureInterfacesLinkType = "raw"
+)
+
+// Valid indicates whether the value is a known member of the CaptureInterfacesLinkType enum.
+func (e CaptureInterfacesLinkType) Valid() bool {
+	switch e {
+	case Ethernet:
+		return true
+	case Raw:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CaptureStatus.
 const (
 	CaptureStatusFailed  CaptureStatus = "failed"
@@ -2966,18 +2984,31 @@ type Capabilities struct {
 
 // Capture defines model for Capture.
 type Capture struct {
+	// Dropped Packets the kernel dropped because the reader was too slow; a capture without loss has none.
+	Dropped *int64 `json:"dropped,omitempty"`
+
 	// Duration Example: 90s
 	Duration *Duration      `json:"duration,omitempty"`
 	Format   *CaptureFormat `json:"format,omitempty"`
 	Id       Uuid           `json:"id"`
 
+	// Interfaces The interfaces the capture reads, with the link type of each and the filter in words.
+	Interfaces *[]struct {
+		Filter   *string                   `json:"filter,omitempty"`
+		LinkType CaptureInterfacesLinkType `json:"link_type"`
+		Name     string                    `json:"name"`
+	} `json:"interfaces,omitempty"`
+
 	// Keylog A TLS key log is attached.
 	Keylog *bool `json:"keylog,omitempty"`
 
 	// MaxSize Example: 5GiB
-	MaxSize    *ByteSize `json:"max_size,omitempty"`
-	Name       *string   `json:"name,omitempty"`
-	Packets    *int64    `json:"packets,omitempty"`
+	MaxSize *ByteSize `json:"max_size,omitempty"`
+
+	// Message Why the capture ended early (`disk_low`, `size` by the quota, `error`), or what failed.
+	Message    *string `json:"message,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	Packets    *int64  `json:"packets,omitempty"`
 	RingBuffer *struct {
 		// FileSize Example: 5GiB
 		FileSize ByteSize `json:"file_size"`
@@ -3001,6 +3032,9 @@ type Capture struct {
 // CaptureFormat defines model for Capture.Format.
 type CaptureFormat string
 
+// CaptureInterfacesLinkType defines model for Capture.Interfaces.LinkType.
+type CaptureInterfacesLinkType string
+
 // CaptureStatus defines model for Capture.Status.
 type CaptureStatus string
 
@@ -3013,7 +3047,8 @@ type CapturePage struct {
 	NextCursor *string   `json:"next_cursor,omitempty"`
 }
 
-// CaptureRequest defines model for CaptureRequest.
+// CaptureRequest `ring_buffer` keeps the newest `files` files of about `file_size` bytes (at least 64 KiB) and takes no
+// `max_size`. Without a ring buffer, `max_size` bounds the files, headers included (1 GiB when absent).
 type CaptureRequest struct {
 	// Duration Example: 90s
 	Duration *Duration             `json:"duration,omitempty"`
@@ -6032,7 +6067,11 @@ type RunWarningCode string
 // step's overlay, `restore` all of them. Steps inherit `target` and may narrow it, never
 // widen it.
 type Scenario struct {
-	// Capture Capture the target's traffic for the whole run (M17).
+	// Capture Capture the target's traffic for the whole run: a capture of the target (a device's, a group's or a
+	// network's traffic) starts when the run's timeline starts, after its preconditions, and stops when the run
+	// ends (`stop_reason: run_end`); it is attached to the run (`Capture.run`, an `Artifact` of kind `capture`).
+	// A capture that cannot start or ends early (a disk below 10 % free space, a lost interface) does not stop
+	// the run: the run gets the warning `capture_missing`.
 	Capture     *bool        `json:"capture,omitempty"`
 	Checks      *[]Check     `json:"checks,omitempty"`
 	Description *Description `json:"description,omitempty"`
@@ -6164,7 +6203,13 @@ type SetupStatus struct {
 // lies inside the target (the target is that WireGuard network or that client).
 type Step struct {
 	// At Example: 90s
-	At      Duration     `json:"at"`
+	At Duration `json:"at"`
+
+	// Capture `start` records the traffic of the step's target (the scenario's, or the narrower one of the step) into a
+	// capture attached to the run; a start while a capture of that target that an earlier step started is
+	// still running is `skipped`. `stop` stops the captures that earlier steps started for that target
+	// (`skipped` when none runs). Captures that are still running when the run ends are stopped with it. A
+	// `capture: true` capture is stopped by neither.
 	Capture *StepCapture `json:"capture,omitempty"`
 
 	// Dhcp DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
@@ -6279,7 +6324,11 @@ type Step struct {
 	Wireguard *WireGuardAction `json:"wireguard,omitempty"`
 }
 
-// StepCapture defines model for Step.Capture.
+// StepCapture `start` records the traffic of the step's target (the scenario's, or the narrower one of the step) into a
+// capture attached to the run; a start while a capture of that target that an earlier step started is
+// still running is `skipped`. `stop` stops the captures that earlier steps started for that target
+// (`skipped` when none runs). Captures that are still running when the run ends are stopped with it. A
+// `capture: true` capture is stopped by neither.
 type StepCapture string
 
 // StepRestore Remove all overlays of the run.

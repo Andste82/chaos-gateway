@@ -26,6 +26,10 @@ const (
 	EventRunStep     = "run_step"
 	EventRunCheck    = "run_check"
 	EventRunFinished = "run_finished"
+	// The events of captures (internal/capturemgr, M17) and of the volume they are on.
+	EventCaptureStarted = "capture_started"
+	EventCaptureStopped = "capture_stopped"
+	EventDiskLow        = "disk_low"
 )
 
 // Event is something that happened to the gateway.

@@ -1,0 +1,20 @@
+# Example `POST /captures` bodies (schema `CaptureRequest`, plan §2.11): the MQTT traffic of one device to anywhere
+# outside the test networks for 90 s, a ring buffer on a network as a classic pcap file, the uplink with a size limit,
+# and a device as it is.
+- name: esp-mqtt
+  scope:
+    selector:
+      source: {device: esp32-42}
+      protocol: tcp
+      ports: [8883]
+      destination: {uplink: true}
+  duration: 90s
+- name: iot-ring
+  scope: {network: IoT}
+  format: pcap
+  snaplen: 128
+  ring_buffer: {files: 4, file_size: 16MiB}
+- name: uplink
+  scope: {uplink: true}
+  max_size: 100MiB
+- scope: {device: esp32-42}

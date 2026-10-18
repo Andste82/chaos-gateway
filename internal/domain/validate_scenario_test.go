@@ -64,6 +64,16 @@ func TestScenarioStepRules(t *testing.T) {
 		{"a step that removes a step that creates no overlay", func(t *testing.T, d doc) {
 			scenarioWith(t, d, `[{"id":"a","at":"0s","capture":"start"},{"id":"b","at":"1s","remove":"a"}]`, "")
 		}, sc("/steps/1/remove"), CodeStepOrder},
+		{"a capture stop without a start", func(t *testing.T, d doc) {
+			scenarioWith(t, d, `[{"id":"a","at":"0s","capture":"stop"}]`, "")
+		}, sc("/steps/0/capture"), CodeStepOrder},
+		{"a capture stop before its start", func(t *testing.T, d doc) {
+			scenarioWith(t, d, `[{"id":"a","at":"0s","capture":"stop"},{"id":"b","at":"5s","capture":"start"}]`, "")
+		}, sc("/steps/0/capture"), CodeStepOrder},
+		{"a capture stop of another target than the start", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"network":"IoT"}`), "scenarios", idScenario, "target")
+			scenarioWith(t, d, `[{"id":"a","at":"0s","capture":"start"},{"id":"b","at":"5s","capture":"stop","target":{"device":"esp32-42"}}]`, "")
+		}, sc("/steps/1/capture"), CodeStepOrder},
 		{"a step that removes a later step", func(t *testing.T, d doc) {
 			scenarioWith(t, d, `[{"id":"gone","at":"5s","remove":"later"},{"id":"later","at":"10s","fault":{"blackout":true}}]`, "")
 		}, sc("/steps/0/remove"), CodeStepOrder},

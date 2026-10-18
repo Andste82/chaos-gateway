@@ -410,6 +410,17 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 			if errs := ValidateScenario(cfg, &run.Inline); len(errs) != 0 {
 				t.Errorf("%s: %v", name, errs)
 			}
+		case "capture-requests.yaml":
+			doc, _ := ParseDocument(raw, FormatYAML)
+			for i, item := range doc.([]any) {
+				itemRaw, err := json.Marshal(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeCaptureRequest(itemRaw); err != nil {
+					t.Errorf("%s[%d]: %v", name, i, err)
+				}
+			}
 		default:
 			t.Errorf("%s is an example the domain tests do not know: add it", name)
 		}

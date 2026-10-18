@@ -21,7 +21,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
-  items P31-AUDIT-01 to -03 and -05 to -10 are fixed on the branch `close-phase-3-1`; P31-AUDIT-04 (level 2 on the final
+  items P31-AUDIT-01 to -03 and -05 to -10 were fixed on the branch `close-phase-3-1`, merged to `main` with PR #69 on 2026-10-18 (`4ec8987`; CI run 39140329787 on `4ec8987` green); P31-AUDIT-04 (level 2 on the final
   code) is closed by the Nightly run on that branch (39084099383, green); P31-AUDIT-11 to -14 were decided by the maintainer on
   2026-10-18 and are closed on that branch (each implemented with its tests), and the audit's alternative to P31-AUDIT-01 was
   decided against (the entry stays allowed, no warning), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer).
@@ -29,7 +29,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
-- **Issue #64** (branch `close-phase-3-1`): I64-01 to I64-03 were decided by the maintainer on 2026-10-18 (I64-01 and I64-03
+- **Issue #64** (branch `close-phase-3-1`, merged with PR #69, which closed issues #57, #63 and #64 on 2026-10-18): I64-01 to I64-03 were decided by the maintainer on 2026-10-18 (I64-01 and I64-03
   as implemented, I64-02 by mounting the host's `/usr/lib/systemd/network` into the executor), I64-04 records the plan's
   wording that the issue made outdated (fixed), and I64-05 (the tests against the real Kea in the testbed jobs) is closed;
   all are closed, see [Issue #64 open items](#issue-64-open-items) at the end of the file.
@@ -1474,7 +1474,7 @@ Phase 3.1" round), each with a test that fails without the fix or with the corre
 -10 (table below; P31-AUDIT-04 is closed by the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed). P31-AUDIT-11 to -14 needed the maintainer and are
 recorded with their options under [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer); the
 maintainer decided them on 2026-10-18 and they are implemented on the branch with their tests, as is the decision against the
-audit's alternative to P31-AUDIT-01. Six further findings were checked and rejected.
+audit's alternative to P31-AUDIT-01. Six further findings were checked and rejected. The branch was merged to `main` with PR #69 on 2026-10-18 (`4ec8987`; CI run 39140329787 on `4ec8987` green).
 
 | Verdict | Items |
 |---|---|
@@ -1956,7 +1956,7 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
 
 ## Issue #64 open items
 
-Found while implementing issue #64 on the branch `close-phase-3-1`. Each item records the option that was implemented so the
+Found while implementing issue #64 on the branch `close-phase-3-1` (merged with PR #69 on 2026-10-18, `4ec8987`). Each item records the option that was implemented so the
 work was not blocked. The maintainer decided I64-01 to I64-03 on 2026-10-18; every item is closed.
 
 ### I64-01 Detecting a lost Kea packet socket directly
@@ -2045,7 +2045,7 @@ work was not blocked. The maintainer decided I64-01 to I64-03 on 2026-10-18; eve
 
 ### I64-04 The plan names netplan and NetworkManager only, not systemd-networkd
 
-- Status: closed: fixed on the branch `close-phase-3-1`
+- Status: closed: fixed on the branch `close-phase-3-1` (merged with PR #69 on 2026-10-18)
 - Severity: low
 - Reason: plan-error (outdated). Plan §3.4 says that the preflight checks "no OS configuration (netplan/NetworkManager)" and
   that test interfaces "must not be configured by netplan/NetworkManager"; §3.8 says that the executor reads where netplan and

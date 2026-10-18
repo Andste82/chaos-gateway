@@ -22,14 +22,17 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
   items P31-AUDIT-01 to -03 and -05 to -10 are fixed on the branch `close-phase-3-1`; P31-AUDIT-04 (level 2 on the final
-  code) is closed by the Nightly run on that branch (39084099383, green); P31-AUDIT-11 to -14 wait for the maintainer (P31-AUDIT-14 fixed in
-  part), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer). What the
+  code) is closed by the Nightly run on that branch (39084099383, green); P31-AUDIT-11 to -14 were decided by the maintainer on
+  2026-10-18 and are closed on that branch (each implemented with its tests), and the audit's alternative to P31-AUDIT-01 was
+  decided against (the entry stays allowed, no warning), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer).
+  Every item of the audit is closed. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
-- **Issue #64** (branch `close-phase-3-1`): I64-01 to I64-03 wait for the maintainer (each records the option that was
-  implemented, so the work was not blocked), and I64-04 records the plan's wording that the issue made outdated; see
-  [Issue #64 open items](#issue-64-open-items) at the end of the file.
+- **Issue #64** (branch `close-phase-3-1`): I64-01 to I64-03 were decided by the maintainer on 2026-10-18 (I64-01 and I64-03
+  as implemented, I64-02 by mounting the host's `/usr/lib/systemd/network` into the executor), I64-04 records the plan's
+  wording that the issue made outdated (fixed), and I64-05 (the tests against the real Kea in the testbed jobs) is closed;
+  all are closed, see [Issue #64 open items](#issue-64-open-items) at the end of the file.
 
 ## Phase 1 audit result
 
@@ -1468,20 +1471,21 @@ security, the management guard in both topologies, regressions against the state
 (the compiled nftables, routing and conntrack against the executor's limits), the UI and its states (§2.17), the documents,
 and the tests and CI. Two review rounds of the fixes followed on the branch. Fixed on the branch `close-phase-3-1` (the "close
 Phase 3.1" round), each with a test that fails without the fix or with the corrected document: P31-AUDIT-01 to -03 and -05 to
--10 (table below; P31-AUDIT-04 is closed by the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed). P31-AUDIT-11 to -14 need the maintainer and are
-recorded with options under [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer);
-P31-AUDIT-14 is fixed in part. Six further findings were checked and rejected.
+-10 (table below; P31-AUDIT-04 is closed by the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed). P31-AUDIT-11 to -14 needed the maintainer and are
+recorded with their options under [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer); the
+maintainer decided them on 2026-10-18 and they are implemented on the branch with their tests, as is the decision against the
+audit's alternative to P31-AUDIT-01. Six further findings were checked and rejected.
 
 | Verdict | Items |
 |---|---|
 | Fixed on the branch, with a test or the corrected document | P31-AUDIT-01 to -03, -05 to -10 |
 | Closed by the Nightly run on the branch (39084099383, green) | P31-AUDIT-04 |
-| Open, needs the maintainer | P31-AUDIT-11, -12, -13; P31-AUDIT-14 (the case without any connection; the forwarded connections are fixed) |
+| Decided by the maintainer on 2026-10-18 and implemented on the branch | P31-AUDIT-11 (b), -12 (a), -13 (b), -14 (a); P31-AUDIT-01's alternative not taken |
 | Checked and rejected | 6 findings |
 
 | Item | Severity | Finding | Fix |
 |---|---|---|---|
-| P31-AUDIT-01 | major | An explicit matrix entry to the management network could not open the three-port guard on the normal path: its return matched `oifname mgmt0`, but table 100 has no route to the management network, so the packet leaves through the uplink and the guard dropped it, while `explain` said allow. With allowed sources narrower than the management subnet, `explain` also counted the whole subnet as the management network in both topologies (two-port: a broker on the uplink's subnet was reported as guarded, the kernel let it through). | The three-port return and the matrix endpoint `management` as a destination match the destination only (`ip daddr @mgmt_src`), and an entry also returns for the management subnet the guard drops. `explain` uses the set the kernel matches: the allowed sources, in the three-port topology also the subnet (`AccessFacts.ManagementSubnet`). Tests: `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden, `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources`, `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources`, level 1 `TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink` (in `M35A_LEVEL1`). |
+| P31-AUDIT-01 | major | An explicit matrix entry to the management network could not open the three-port guard on the normal path: its return matched `oifname mgmt0`, but table 100 has no route to the management network, so the packet leaves through the uplink and the guard dropped it, while `explain` said allow. With allowed sources narrower than the management subnet, `explain` also counted the whole subnet as the management network in both topologies (two-port: a broker on the uplink's subnet was reported as guarded, the kernel let it through). | The three-port return and the matrix endpoint `management` as a destination match the destination only (`ip daddr @mgmt_src`), and an entry also returns for the management subnet the guard drops. `explain` uses the set the kernel matches: the allowed sources, in the three-port topology also the subnet (`AccessFacts.ManagementSubnet`). Tests: `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden, `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources`, `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources`, level 1 `TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink` (in `M35A_LEVEL1`). The audit's alternative, to refuse or warn on such an entry in the three-port topology, was decided against by the maintainer on 2026-10-18: the entry stays allowed, without a warning (no code change). |
 | P31-AUDIT-02 | minor | The forwards' counting rules and the DNAT rule in the inet NAT chain also matched IPv6: an IPv6 connection to an entry interface's own address (link-local, SLAAC on the OS-owned uplink) on a forwarded port was counted, noted as the last match and, on the management side, marked with bit 22, although it is never forwarded. | `meta nfproto ipv4` in both rules. Tests: `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, the `forward` goldens, level 1 `TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel` (in `M35A_LEVEL1`). |
 | P31-AUDIT-03 | minor | Since `Identity.Current` was compared, a neighbor entry going STALE and back (with a connection still on its address) reordered a device's addresses and made a new generation, an applied event and an empty identity apply, also without any port forward. | The order counts only for a device that a forward sends to. Test: `TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget`. |
 | P31-AUDIT-04 | minor | Level 2 (the appliance smoke, M35a Tests) never ran on the final Phase 3.1 code: the last runs were on `97cd058` (before the counting rule in NAT, the replies by mark bit 22 and table 101, and the three-port guard) and on `main` before the merge. | Closed: the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed. |
@@ -1494,12 +1498,34 @@ P31-AUDIT-14 is fixed in part. Six further findings were checked and rejected.
 
 ### Phase 3.1 audit items for the maintainer
 
-Found by the audit of 2026-10-17 and confirmed in the code (with a scratch compile or test where noted). Each needs a decision;
-none blocked the round.
+Found by the audit of 2026-10-17 and confirmed in the code (with a scratch compile or test where noted). Each needed a decision;
+none blocked the round. The maintainer decided all four on 2026-10-18; each is closed with what was done and its tests.
 
 #### P31-AUDIT-11 The three-port guard closes management-role WireGuard networks to their own matrix entries
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (b). The WireGuard networks of the role management (with their clients and
+  the networks behind them) are part of the management network for the guard in both topologies: `mgmt_guard` ends with
+  `meta iifname @ifs_test meta oifname <interface> counter "forward_drop" drop` for each such network, in the two-port
+  topology too. An explicit allow entry towards such a network or one of its clients returns from the guard by its
+  destination (the entry's own match, `oifname` and for a client its prefixes), and the endpoint `management` as a
+  destination also stands for each such interface (a return and a matrix rule more per interface), so "IoT -> management"
+  opens them as it opens the management network (as since P31-AUDIT-01). A client's `reachable` list is not an explicit
+  entry and does not open the guard (choice made following plan §2.16 and §2.2.1 and the existing code, where only
+  explicit entries return: the implicit entries are what the client may reach, while §2.16 names an explicit matrix
+  entry as the one way into the management network; a test client that names a management-role network in
+  `reachable` gets the matrix accept but is dropped by the guard). `explain` agrees with the kernel:
+  `World.endpointsTo` counts an address in such a network as the management network, the guard opens for an entry
+  towards the management network or towards the management-role network (or client) the destination lies in, and its
+  reason names "a WireGuard network of the role management". Recorded in plan §2.2, §2.4 (the guard bullet) and §2.16,
+  `api/openapi.yaml` (`AccessRuleBody`) and docs/development.md "Access rules (M9)". Code: `internal/compiler/rules.go`
+  (`matrixRules`, the guard), `internal/compiler/wireguard.go` (`topo.mgmtWG`, `inMgmtWG`), `internal/domain/access.go`
+  (`endpointsTo`, `inMgmtWG`, `mgmtGuard`). Tests: the golden files `access-threeport-wg` and `access-twoport-wg`
+  (`TestGoldenTheGuardOfManagementRoleWireGuardNetworks`, also in the nft parser and kernel gate),
+  `TestAMatrixEntryTowardsAManagementRoleWireGuardNetworkReturnsFromTheGuard` (both topologies),
+  `TestAManagementRoleWireGuardNetworkIsPartOfTheManagementNetworkForTheGuard` (domain, both topologies),
+  `TestExplainGuardsAManagementRoleWireGuardNetworkInBothTopologies` (engine), the `wireguard` and `routing` goldens, and
+  level 1 `TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt` (both topologies, in
+  `M35A_LEVEL1`: the testbed's management hub with its administrator in the remote machine "site").
 - Severity: major
 - Reason: needs-decision. `finishManagementSources` (`internal/compiler/wireguard.go`) adds the subnet of every management-role
   WireGuard network to the management sources, so it is in `mgmt_src`. The three-port guard drops every test interface's packet
@@ -1520,12 +1546,24 @@ none blocked the round.
   management-role WireGuard network, and the same answer in both topologies.
 - Recommendation: (b): an admin tunnel is as much the management network as `mgmt0`, and an explicit entry stays the one way to
   open it, as §2.16 says.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S
 
 #### P31-AUDIT-12 Wide forwarded port ranges make an nft transaction the executor refuses
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (a) with 16384. The validation refuses a configuration whose enabled
+  forwards forward more than `domain.MaxForwardedPorts` (16384) ports together: `validation_failed`, code
+  `invalid_port_range`, at `/external_port_end` (or `/external_port`) of the forward that crosses the limit, in the order
+  of the names (`OverForwardedPorts`, `validator.forwardedPorts` in `internal/domain/validate_forward.go`). The compiler's
+  `forwardRefusal` leaves out, with the warning `forward_refused`, a forward that would take the compiled forwards past
+  the limit (the backstop for an old revision). The limit is in `api/openapi.yaml` (`PortForward`), plan M35a Scope and
+  docs/development.md "Port forwarding (M35a)". The largest allowed configuration (tcp and udp 1024-9215 to one device of
+  the example, whose faults select it too) is a full transaction of 1.07 MB and a move of 1.56 MB, both decoded by the
+  executor. Tests: `TestTheEnabledForwardsForwardAtMostTheLimitOfPortsTogether` (domain: the limit, one port more, a
+  disabled forward, the order), `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` ("more ports than allowed"),
+  `TestTheLargestAllowedForwardsAndADeviceMoveFitTheExecutorsLimit` (level 0: `Nft.Transaction` and the element
+  transaction of the move through `executor.Encode` and `executor.Decode` within `maxOperationBytes`). Option (c) stays
+  for later if wide unshifted ranges are needed.
 - Severity: major
 - Reason: needs-decision. Every forwarded port is one element of the DNAT map (P31-M35a-06), about 66 bytes of nft JSON, and
   the whole transaction is one `NftApply`, which the executor refuses above 8 MiB (`maxOperationBytes`). The validation bounds a
@@ -1544,12 +1582,25 @@ none blocked the round.
   atomic move of a forward); (c) an unshifted range (target port = external port) as one interval element (P31-M35a-06 (c)),
   which helps only unshifted ranges; (d) raise `maxOperationBytes` (only moves the limit).
 - Recommendation: (a) with 16384, and (c) later if wide unshifted ranges are needed.
-- Needs maintainer: yes (the limit)
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S
 
 #### P31-AUDIT-13 After the last management forward goes, the replies of its open connections take the uplink
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (b). In the three-port topology (with the management subnet known) the
+  chain `fwd_reply`, the policy rule 925 and table 101 are compiled whether or not a management forward exists
+  (`managementReplies` in `internal/compiler/forward.go`), so a reply whose conntrack mark has bit 22 never takes the
+  uplink; D11 is kept (the connection lives on, no conntrack work). Only a management forward's counting rule sets the
+  bit, and the warning `forward_replies_subnet_only` comes only with a management forward. The goldens of the three-port
+  scenarios (`routed`, `routing`, `wireguard`, and the nft transactions `access.nft`, `faults.nft`, `routed.nft`) have the
+  chain, the rule and the table now; the two-port ones do not. Recorded in plan §2.2 and §3.3 (bit 22) and docs/development.md "Port
+  forwarding (M35a)". Tests: `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (it asserted "nothing without
+  a management forward"; now the chain, the rule and the table with a disabled management forward and without any
+  forward, and nothing in the two-port topology), `TestPolicyRoutingTable100`, the PMTU tests of `internal/apply` and
+  `internal/compiler` (they leave the reply rule out of the mirrors' rules), and level 1
+  `TestTheRepliesOfAManagementForwardedConnectionStayOffTheUplinkAfterTheForwardIsDeleted` (in `M35A_LEVEL1`: an open
+  connection through the management forward, the forward deleted, the connection keeps getting its replies through the
+  management interface and a probe table counts none of its packets leaving through the uplink).
 - Severity: minor
 - Reason: needs-decision. A forwarded connection lives on after its forward is deleted or disabled (P31-M35a-04, D11). For a
   forward from the management side its replies are routed by mark bit 22 through `fwd_reply`, the policy rule 925 and table
@@ -1565,15 +1616,26 @@ none blocked the round.
   (c) accept and document it.
 - Recommendation: (b): static, no conntrack work, and it keeps D11 (connections live on until they end) without the leak. A
   level 1 test: an open management-forwarded connection after the delete sends no reply out of the uplink.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S
 
 #### P31-AUDIT-14 A forward to a device known only from the neighbor table goes inactive once the entry is stale
 
-- Status: open in part. Fixed on the branch: a forwarded connection now marks the device it was sent to as in use (the
-  reply's source of a translated connection, `forwardTarget` in `internal/engine/observe.go`; test
-  `TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse`), so a device that only answers forwards keeps its stale neighbor
-  entry, and with it its forward, while it has forwarded connections. Open: the device without any connection.
+- Status: closed (2026-10-18): decided — option (a). Before the decision a forwarded connection already marked the device it
+  was sent to as in use (the reply's source of a translated connection, `forwardTarget` in `internal/engine/observe.go`;
+  test `TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse`). Now `ResolveIdentity` keeps a stale neighbor entry
+  (STALE, DELAY, PROBE) without connections as a lingering claim for a device that an enabled forward sends to
+  (`claim.forwardOnly`), unless another device claims the address (`yieldToOthers`: the new holder wins); it is the
+  device's least current address, so a newer one is the target. An idle listener known only from the neighbor table stays
+  the forward's target; the kernel probes the entry when a forwarded connection comes, and an entry that fails leaves
+  the table. The retry loop of `TestADeviceFaultDoesNotImpairAForwardedConnection` is dropped (one measurement framed by
+  A's own round trips). Recorded in docs/development.md "Port forwarding (M35a)". Tests:
+  `TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale` (domain: a stale entry and no connection keeps the
+  target; not without an enabled forward; another device's confirmed entry or lease wins; a newer address is the target),
+  `TestAStaleNeighborOnlyCountsWhileTheAddressCarriesConnections` (a device no forward sends to, as before), level 1
+  `TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale` (in `M35A_LEVEL1`: `base_reachable_time_ms` 500 on the
+  bridge, A's connections deleted and its entry STALE, the forward still goes to A and a new forwarded connection
+  reaches it).
 - Severity: major
 - Reason: needs-decision. `ResolveIdentity` keeps a neighbor claim in the kernel states STALE, DELAY or PROBE only while
   the address is an active source; before the fix only a connection's original source counted, which for a forwarded
@@ -1593,7 +1655,7 @@ none blocked the round.
   forwarded connection still reaches A), and the retry loop of `TestADeviceFaultDoesNotImpairAForwardedConnection` dropped.
 - Recommendation: (a): the plan says the forward follows the device's address, and a server that only answers is the common
   target of a forward.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S
 
 ### Phase 3.1 audit: checked and not recorded as items
@@ -1858,11 +1920,13 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
 ## Issue #64 open items
 
 Found while implementing issue #64 on the branch `close-phase-3-1`. Each item records the option that was implemented so the
-work was not blocked.
+work was not blocked. The maintainer decided I64-01 to I64-03 on 2026-10-18; every item is closed.
 
 ### I64-01 Detecting a lost Kea packet socket directly
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (a), as implemented: the known cause is prevented (Kea's socket retries,
+  the engine configures Kea again when an interface of it comes up, is created again or flapped), with no direct
+  detection; no code change. (b) stays the diagnostic to add should a lost socket ever be seen with another cause.
 - Severity: low
 - Reason: needs-decision. Issue #64 item 3 asks to detect a lost socket. The cause found is that Kea opens its packet socket on
   an interface only while it is configured and skips one that is down or has no carrier; a configuration that arrives while
@@ -1881,12 +1945,23 @@ work was not blocked.
   no packet socket bound to its index (direct, but another executor operation, and it cannot tell Kea's socket from a
   capture's).
 - Recommendation: (a) until a lost socket is seen with another cause; (b) as a diagnostic in the health detail if it is.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S ((b)), M ((c))
 
 ### I64-02 The wizard's preflight sees only the systemd-networkd files under /etc
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (b) for `/usr/lib/systemd/network` only. `deploy/compose.executor.yaml`
+  mounts the host's `/usr/lib/systemd/network` read-only at `/host/usr/lib/systemd/network`, where the preflight reads it
+  below the executor's host root (`--host-root /host`, `preflight.NetworkdDirs`, no code change in the preflight); the
+  directory is part of systemd's package, so the bind mount always has its source. `/run/systemd/network` is not
+  mounted (it exists only while networkd or netplan has written to it; the host setup's check reads it). The mount is not
+  nested in another (`/host/etc` and `/host/usr/lib/systemd/network`), so the CI job `mounts` is unchanged. The fix text of
+  an unreadable OS configuration names both mounts (`internal/api/system.go`). Recorded in plan §3.8 (the `exec` row),
+  docs/development.md (the host setup and the preflight). Tests: `TestExecutorContainerHardeningProfile` (eight mounts, the
+  new one read-only, no other part of `/usr` and nothing of `/run`, and its target is a directory of
+  `preflight.NetworkdDirs` below the host root), `TestNoContainerMountsAVolumeInsideAnother`,
+  `TestThePreflightNamesANetworkdDefaultUnderUsrLib` (API: `GET /setup` names
+  `/usr/lib/systemd/network/99-default-ether.network` for a test interface, with the host setup's rule as the fix).
 - Severity: low
 - Reason: needs-decision. Issue #64 item 2: a distribution's default `.network` file (dracut's
   `/run/systemd/network/zzzz-dracut-default.network` on a Raspberry Pi) ran DHCP on the test port. The preflight now reads
@@ -1904,12 +1979,14 @@ work was not blocked.
   it unless `create_host_path` creates it on the host); (c) mount the host's whole `/run` and `/usr` read-only (always
   there, but much more of the host in the privileged container, including the sockets under `/run`).
 - Recommendation: (a); (b) for `/usr/lib/systemd/network` only, if a default there is ever seen to take a test port.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: S
 
 ### I64-03 The executor writing the systemd-networkd rule of a test interface itself
 
-- Status: open
+- Status: closed (2026-10-18): decided — option (a), as implemented: the host setup writes and removes the rule
+  (`host-setup.sh --test-interface`, `--remove-test-interface`), its check and the wizard's preflight report a networkd
+  file that configures the port; the executor's hardening profile stays (its `/etc` read-only); no code change.
 - Severity: low
 - Reason: needs-decision. Issue #64 proposes that the executor writes `10-chaosgw-<interface>.network` when an interface is
   assigned to a test network and removes it on release. The executor sees the host's `/etc` read-only, so this changes its
@@ -1926,12 +2003,12 @@ work was not blocked.
   setup and never removes it.
 - Recommendation: (a): the rule is a host change made once per port, like the netplan entry the operator removes; (b)
   only if interfaces are reassigned often.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-18)
 - Effort: M ((b))
 
 ### I64-04 The plan names netplan and NetworkManager only, not systemd-networkd
 
-- Status: fixed on the branch `close-phase-3-1`
+- Status: closed: fixed on the branch `close-phase-3-1`
 - Severity: low
 - Reason: plan-error (outdated). Plan §3.4 says that the preflight checks "no OS configuration (netplan/NetworkManager)" and
   that test interfaces "must not be configured by netplan/NetworkManager"; §3.8 says that the executor reads where netplan and
@@ -1948,7 +2025,13 @@ work was not blocked.
 
 ### I64-05 The tests against the real Kea did not run in any CI job
 
-- Status: open; fixed for the new test only
+- Status: closed (2026-10-18): every test of `internal/kea/kea_test.go` that calls `startKea`, `TestTheClientDrivesARealKea`
+  and `TestLeasesArePagedPastTheLimit`, moved with `startKea` into `internal/kea/kea_testbed_test.go` (build tag
+  `testbed`), and both testbed jobs name them with `-expect-pass $KEA_LEVEL1` (`.github/workflows/ci.yml`), so a run in
+  which one skips or is not built fails. Before the move both passed against the real Kea as root in the devcontainer
+  (`go test -tags testbed ./internal/kea -count=1 -v`, kea-dhcp4 of the devcontainer; no fix was needed).
+  `TestKeaAcceptsTheRenderedConfiguration` stays untagged: it needs `kea-dhcp4` but no root, and runs `kea-dhcp4 -t`
+  only.
 - Severity: low
 - Reason: found when the CI of the branch `close-phase-3-1` failed (run 39084143071): `TestKeaRetriesASocketItCouldNotOpen`
   was expected to pass in the testbed jobs but sat in an untagged file, so the testbed runner, which builds only packages
@@ -1959,5 +2042,5 @@ work was not blocked.
 - Evidence: `internal/kea/kea_test.go` (`startKea` skips without `kea-dhcp4` or root), `internal/kea/kea_testbed_test.go`.
 - Task: move every test that calls `startKea` into the tagged file and add them to the testbed jobs' expected tests, so the
   runner fails a run in which one skips; first check that each passes on the real Kea (they have not run in CI).
-- Needs maintainer: no (a test-coverage fix, no behavior change)
+- Needs maintainer: no (a test-coverage fix, no behavior change; closed 2026-10-18 without a decision)
 - Effort: S

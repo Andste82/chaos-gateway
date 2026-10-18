@@ -270,8 +270,12 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 	if p.Base != 0 {
 		body["base"] = p.Base
 	}
-	if len(p.References) > 0 {
-		body["references"] = blockingReferences(p.References)
+	refs := blockingReferences(p.References)
+	if _, cand, err := s.cfg.Store.Get(revisionId); err == nil {
+		refs = append(refs, runBlockingReferences(s.runReferences(cand))...)
+	}
+	if len(refs) > 0 {
+		body["references"] = refs
 	}
 	if len(p.Rules) > 0 {
 		body["rules"] = previewRules(p.Rules)
@@ -368,8 +372,22 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 		s.write(c, perr)
 		return
 	}
-	// the apply is not the client's to cancel: the engine goes on, and so does the record of it
 	force := params.Force != nil && *params.Force
+	// a revision that deletes what a queued or running run refers to is refused with the overlays it would orphan, or,
+	// forced, aborts the runs first (their overlays go with them): the engine only knows the overlays
+	if _, cand, gerr := s.cfg.Store.Get(revisionId); gerr == nil {
+		if refs := s.runReferences(cand); len(refs) > 0 {
+			if !force {
+				all := append(blockingReferences(pv.References), runBlockingReferences(refs)...)
+				s.write(c, newProblem(model.ErrorCodeValidationFailed, "the revision deletes objects that %d active overlays and %d runs refer to: apply with force to remove those overlays and abort those runs",
+					len(pv.References), len(refs)).with(func(b *model.Problem) { b.References = &all }))
+				return
+			}
+			n := s.runs.AbortReferences(context.WithoutCancel(contextOf(c)), refs, revisionId)
+			s.record(c, "run.abort", nil, revisionId, fmt.Sprintf("%d runs, revision %d deletes what they refer to", n, revisionId))
+		}
+	}
+	// the apply is not the client's to cancel: the engine goes on, and so does the record of it
 	res, err := s.cfg.Engine.Apply(context.WithoutCancel(contextOf(c)), revisionId, engine.ApplyOptions{
 		ConfirmTimeout: s.cfg.ConfirmTimeout, Force: force, Actor: actorOf(principalOf(c))})
 	if err != nil {

@@ -47,6 +47,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// the JUnit report and the event lines of a run are text for the contract check, not documents to decode
+	openapi3filter.RegisterBodyDecoder("application/xml", openapi3filter.FileBodyDecoder)
+	openapi3filter.RegisterBodyDecoder("application/jsonl", openapi3filter.FileBodyDecoder)
 	auth.RefreshInterval = time.Millisecond // M5-09: don't sleep real time for a cross-process test
 	goleak.VerifyTestMain(m)
 }
@@ -427,12 +430,16 @@ func (g *gw) checkYAMLConfiguration(method, path string, r resp) {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		g.t.Fatal(err)
 	}
-	schema := g.doc.Components.Schemas["Configuration"]
+	name := "Configuration"
+	if strings.HasPrefix(path, "/scenarios/") {
+		name = "Scenario" // the YAML of one stored scenario
+	}
+	schema := g.doc.Components.Schemas[name]
 	if schema == nil {
-		g.t.Fatalf("the spec has no Configuration schema")
+		g.t.Fatalf("the spec has no %s schema", name)
 	}
 	if err := schema.Value.VisitJSON(v); err != nil {
-		g.t.Errorf("%s %s: the YAML export does not match Configuration: %v\n%s", method, path, err, truncate(r.Body))
+		g.t.Errorf("%s %s: the YAML export does not match %s: %v\n%s", method, path, name, err, truncate(r.Body))
 	}
 }
 

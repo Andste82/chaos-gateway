@@ -64,6 +64,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
 	keaEventsSocket := fs.String("kea-events-socket", "/run/chaosgw-kea-events/events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
+	runRetention := fs.Duration("run-retention", 30*24*time.Hour, "how long the record and the report of an ended run are kept")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
 	if err := fs.Parse(args); err != nil {
@@ -81,7 +82,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
 		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket,
-		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, runRetention: *runRetention, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -101,6 +102,7 @@ type apiOptions struct {
 	poll            time.Duration
 	trafficInterval time.Duration
 	trafficPeriod   time.Duration
+	runRetention    time.Duration
 	confirm         time.Duration
 	webDir          string
 	keaSocket       string
@@ -193,7 +195,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
-		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod})
+		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention})
 	if err != nil {
 		return err
 	}

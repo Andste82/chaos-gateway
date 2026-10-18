@@ -473,8 +473,8 @@ type resetBody struct {
 	Generation      int64 `json:"generation"`
 }
 
-// Reset implements POST /reset: the caller's overlays, or every owner's with owner=all (scope
-// full). Runs join in with M15.
+// Reset implements POST /reset: the caller's runs and overlays, or every owner's with owner=all (scope full).
+// The runs are aborted first, which removes their overlays; then the overlays that are left go.
 func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 	p := principalOf(c)
 	all := params.Owner != nil && *params.Owner == model.ResetParamsOwner("all")
@@ -488,7 +488,9 @@ func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 		o := ownerOf(p)
 		by = &o
 	}
-	res, err := s.cfg.Engine.ResetOverlays(context.WithoutCancel(contextOf(c)), by, actorOf(p))
+	ctx := context.WithoutCancel(contextOf(c))
+	aborted, abortGen := s.runs.AbortOwned(ctx, by, "stopped by a reset")
+	res, err := s.cfg.Engine.ResetOverlays(ctx, by, actorOf(p))
 	if err != nil {
 		s.fail(c, err)
 		return
@@ -497,9 +499,11 @@ func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 	if all {
 		detail = "all"
 	}
-	s.record(c, "overlay.reset", nil, 0, fmt.Sprintf("owner=%s removed=%d", detail, res.Removed))
-	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
-	c.JSON(200, resetBody{RemovedOverlays: res.Removed, Generation: int64(res.Generation)})
+	// the overlays of the runs went with the runs: they count as removed overlays too
+	s.record(c, "overlay.reset", nil, 0, fmt.Sprintf("owner=%s removed=%d aborted_runs=%d", detail, res.Removed, aborted))
+	gen := max(int64(res.Generation), int64(abortGen))
+	c.Header("Chaos-Generation", itoa(gen))
+	c.JSON(200, resetBody{RemovedOverlays: res.Removed, AbortedRuns: aborted, Generation: gen})
 }
 
 // ---- faults

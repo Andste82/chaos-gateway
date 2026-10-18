@@ -47,6 +47,7 @@ type publicEvent struct {
 	Generation *int64              `json:"generation,omitempty"`
 	Actor      *model.Actor        `json:"actor,omitempty"`
 	Subject    *publicEventSubject `json:"subject,omitempty"`
+	Run        string              `json:"run,omitempty"`
 }
 
 type publicEventSubject struct {
@@ -66,6 +67,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
 		model.EventTypeEventsLost, model.EventTypeOverlayCreated, model.EventTypeOverlayUpdated, model.EventTypeOverlayRemoved,
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
+		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunFinished,
 	} {
 		m[string(t)] = true
 	}
@@ -78,10 +80,11 @@ func (s *Server) toPublic(ev engine.Event) (publicEvent, bool) {
 	}
 	// actor and subject (M5-06) are reported as their own fields, not nested under data too
 	data := ev.Data
-	if _, ok := data["actor"]; ok {
-		data = maps.Clone(data)
-	} else if _, ok := data["subject"]; ok {
-		data = maps.Clone(data)
+	for _, k := range []string{"actor", "subject", "run"} {
+		if _, ok := data[k]; ok {
+			data = maps.Clone(data)
+			break
+		}
 	}
 	pe := publicEvent{ID: ev.ID(s.cfg.Engine.BootID()), Type: ev.Type, Time: ev.Time.UTC(), Data: data, Message: describe(ev)}
 	if a, ok := data["actor"]; ok {
@@ -95,6 +98,10 @@ func (s *Server) toPublic(ev engine.Event) (publicEvent, bool) {
 			pe.Subject = &publicEventSubject{Kind: sub.Kind, ID: sub.ID, Name: sub.Name}
 		}
 		delete(data, "subject")
+	}
+	if r, ok := data["run"].(string); ok {
+		pe.Run = r
+		delete(data, "run")
 	}
 	if len(data) == 0 {
 		pe.Data = nil
@@ -166,6 +173,17 @@ func describe(ev engine.Event) string {
 		return "overlay " + str("overlay") + " expired (" + str("reason") + ")"
 	case "overlay_orphaned":
 		return "overlay " + str("overlay") + " removed: its target was deleted"
+	case "run_queued":
+		return "run " + str("name") + " queued behind another run of its target"
+	case "run_started":
+		return "run " + str("name") + " started"
+	case "run_step":
+		return "run " + str("name") + ": step " + str("step") + " " + str("status")
+	case "run_finished":
+		if r := str("reason"); r != "" {
+			return "run " + str("name") + " " + str("status") + ": " + r
+		}
+		return "run " + str("name") + " " + str("status")
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

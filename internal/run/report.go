@@ -126,8 +126,9 @@ func seconds(d time.Duration) string { return fmt.Sprintf("%.3f", d.Seconds()) }
 
 // JUnit returns the report of a run that has ended as JUnit XML for CI: one test suite, a test case for the
 // run itself (an error when the run ended as `error` or `aborted`, with its reason), one for each step that
-// could not be executed and one for each check (a failure when it failed, an error when it could not be
-// decided). The warnings, the timeline and the final counters are the suite's output.
+// could not be executed, one for each check (a failure when it failed, an error when it could not be
+// decided, skipped when the run ended before it was) and, with `zero_hit: error`, one failure for each fault
+// or rule that matched no packet. The warnings, the timeline and the final counters are the suite's output.
 func (m *Manager) JUnit(id uuid.UUID) ([]byte, error) {
 	rep, err := m.Report(id)
 	if err != nil {
@@ -170,6 +171,15 @@ func junitOf(rep model.RunReport) ([]byte, error) {
 		}
 		suite.Cases = append(suite.Cases, junitCase{Name: "step " + st.Id, ClassName: class, Time: "0.000",
 			Error: &junitProblem{Message: deref(st.Error), Type: "step_error", Text: deref(st.Error)}})
+	}
+	if rep.Snapshot != nil && rep.Snapshot.ZeroHit != nil && *rep.Snapshot.ZeroHit == model.ScenarioZeroHitError {
+		// `zero_hit: error`: a fault or rule that matched no packet is a failed test case of its own
+		for _, w := range deref(rep.Warnings) {
+			if w.Code == model.ZeroHit {
+				suite.Cases = append(suite.Cases, junitCase{Name: "zero hits of step " + deref(w.Step), ClassName: class, Time: "0.000",
+					Failure: &junitProblem{Message: w.Message, Type: "zero_hit", Text: w.Message}})
+			}
+		}
 	}
 	for _, c := range deref(rep.Checks) {
 		tc := junitCase{Name: c.Name, ClassName: class, Time: "0.000"}

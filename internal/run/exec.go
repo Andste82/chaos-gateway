@@ -76,6 +76,18 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 		return m.outcome(r, err)
 	}
 	start := m.clk.Monotonic()
+	m.reached(r, "start", 0, m.clk.Now())
+	var checksDone chan struct{}
+	if len(deref(r.sc.Checks)) > 0 {
+		// the checks look at the gateway next to the timeline, so a slow read never delays a step
+		cctx, stop := context.WithCancel(r.ctx)
+		checksDone = make(chan struct{})
+		go func() {
+			defer close(checksDone)
+			m.runChecks(cctx, r, start)
+		}()
+		defer func() { stop(); <-checksDone }()
+	}
 	var shift time.Duration
 	for pos, idx := range r.order {
 		st := &r.sc.Steps[idx]
@@ -100,7 +112,18 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 			return m.outcome(r, err)
 		}
 	}
-	return model.RunStatusPassed, ""
+	if checksDone != nil {
+		// the run lasts until the last window has closed
+		select {
+		case <-checksDone:
+		case <-r.ctx.Done():
+			return m.outcome(r, r.ctx.Err())
+		}
+		if err := r.ctx.Err(); err != nil {
+			return m.outcome(r, err)
+		}
+	}
+	return m.verdict(r)
 }
 
 // sleepUntil waits until the monotonic clock reaches due, or the run is cancelled.
@@ -152,6 +175,7 @@ func (m *Manager) applied(r *runState, pos int, st *model.Step, start time.Durat
 	if res != nil {
 		queueMs = ptr(int(res.QueueWait / time.Millisecond))
 	}
+	m.reached(r, st.Id, off, now)
 	m.setStep(r, pos, func(s *model.RunStep) {
 		s.Status = model.RunStepStatusApplied
 		s.AppliedAt, s.OffsetMs, s.QueueWaitMs = &now, ptr(int(off/time.Millisecond)), queueMs
@@ -202,13 +226,22 @@ func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start time.D
 		return m.failStep(r, pos, st, start, err)
 	}
 	runID := r.id
+	key, kerr := domain.OverlayKey(r.owner, &req)
+	if kerr != nil {
+		return m.failStep(r, pos, st, start, kerr)
+	}
+	if id, ok := r.byKey[key]; ok && r.owned[id].alive {
+		// the step replaces the overlay of an earlier one: the counters of that step end here
+		m.captureCounters(r)
+	}
 	res, err := m.cfg.Gateway.PutOverlay(r.ctx, engine.OverlayWrite{Owner: r.owner, Run: &model.OverlayRunRef{Id: runID, Step: st.Id}, Request: req})
 	if err != nil {
 		return m.failStep(r, pos, st, start, err)
 	}
 	id := res.Overlay.Id
 	r.overlays[st.Id] = id
-	r.own(id, st.Id)
+	r.byKey[key] = id
+	r.own(id, st.Id, domain.StepKind(st), impairsNothing(m.cfg.Gateway.Snapshot().Config, st))
 	m.applied(r, pos, st, start, &res, &id)
 	return nil
 }
@@ -247,6 +280,7 @@ func (m *Manager) restoreStep(r *runState, pos int, st *model.Step, start time.D
 // skipStep records a step that had nothing to do.
 func (m *Manager) skipStep(r *runState, pos int, st *model.Step, start time.Duration, why string) error {
 	off := m.clk.Monotonic() - start
+	m.reached(r, st.Id, off, m.clk.Now())
 	m.setStep(r, pos, func(s *model.RunStep) {
 		s.Status, s.Error, s.OffsetMs = model.RunStepStatusSkipped, ptr(why), ptr(int(off/time.Millisecond))
 	})
@@ -257,24 +291,40 @@ func (m *Manager) skipStep(r *runState, pos int, st *model.Step, start time.Dura
 
 // ---- the overlays a run owns, and their counters
 
-// ownedOverlay is an overlay a step of the run wrote: the first step that did, whether it is still there, and
-// its counter as last read.
+// ownedOverlay is an overlay a step of the run wrote: the first step that did, whether it is still there, its
+// counter as last read, and the steps that wrote it (a later step with the same key replaces the overlay and
+// keeps its id).
 type ownedOverlay struct {
 	step     string
 	alive    bool
 	counters *model.Counter
+	steps    []*stepHits
 }
 
-func (r *runState) own(id uuid.UUID, step string) {
+// stepHits is what one step's write of an overlay matched: the zero-hit warning is about steps, not overlays.
+type stepHits struct {
+	step, kind string
+	// noop: the step is meant to match nothing (a profile that impairs nothing), so it has no zero hit to report
+	noop bool
+	// base is the overlay's counter when the step replaced the earlier one (nil for the first step, whose overlay
+	// starts at zero); packets is what the step has matched as of the last reading, read whether there was one.
+	base    *model.Counter
+	packets int64
+	read    bool
+}
+
+func (r *runState) own(id uuid.UUID, step, kind string, noop bool) {
 	if r.owned == nil {
 		r.owned = map[uuid.UUID]*ownedOverlay{}
 	}
-	if o, ok := r.owned[id]; ok {
-		o.alive = true
-		return
+	o, ok := r.owned[id]
+	if !ok {
+		o = &ownedOverlay{step: step}
+		r.owned[id] = o
+		r.ownedOrder = append(r.ownedOrder, id)
 	}
-	r.owned[id] = &ownedOverlay{step: step, alive: true}
-	r.ownedOrder = append(r.ownedOrder, id)
+	o.alive = true
+	o.steps = append(o.steps, &stepHits{step: step, kind: kind, noop: noop, base: o.counters})
 }
 
 func (r *runState) release(id uuid.UUID) {
@@ -307,6 +357,7 @@ func (m *Manager) captureCounters(r *runState) {
 	for id, c := range m.cfg.Observer.Counters(ctx, alive) {
 		if o, ok := r.owned[id]; ok && c != nil {
 			o.counters = c
+			o.steps[len(o.steps)-1].count(c)
 		}
 	}
 }
@@ -330,6 +381,7 @@ func (m *Manager) finish(r *runState, status model.RunStatus, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), cleanupTimeout)
 	defer cancel()
 	m.captureCounters(r)
+	status, reason = m.zeroHits(r, status, reason)
 	var cleanErr error
 	for attempt := 0; attempt < cleanupAttempts; attempt++ {
 		res, err := m.cfg.Gateway.ResetOverlays(ctx, &r.owner, r.owner)

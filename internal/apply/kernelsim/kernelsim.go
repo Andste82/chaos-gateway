@@ -128,6 +128,8 @@ type Kernel struct {
 	// docker
 	neighbors []linux.Neighbor
 	conntrack string
+	// conntrackReads counts the listings (ConntrackReads)
+	conntrackReads int
 	// conntrackEvents is the open conntrack watch's channel, if any (M6a-04); nil when none is open.
 	conntrackEvents chan string
 	birdShow        string // output of `show protocols all` set by a test

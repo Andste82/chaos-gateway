@@ -60,6 +60,9 @@ type overlayContext struct {
 	world *domain.World
 	// readAt is when the counters were read; the time a rule last matched is counted back from it
 	readAt time.Time
+	// countersFailed is set when the counters were needed and could not be read (a run does not take a missing
+	// counter for zero packets)
+	countersFailed bool
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -77,6 +80,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
 			s.log.Warn("cannot read the fault counters", "error", err)
+			oc.countersFailed = true
 			return oc
 		}
 		oc.counters = cs

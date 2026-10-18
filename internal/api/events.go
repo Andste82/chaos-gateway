@@ -67,7 +67,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
 		model.EventTypeEventsLost, model.EventTypeOverlayCreated, model.EventTypeOverlayUpdated, model.EventTypeOverlayRemoved,
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
-		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunFinished,
+		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
 	} {
 		m[string(t)] = true
 	}
@@ -179,6 +179,8 @@ func describe(ev engine.Event) string {
 		return "run " + str("name") + " started"
 	case "run_step":
 		return "run " + str("name") + ": step " + str("step") + " " + str("status")
+	case "run_check":
+		return "run " + str("name") + ": check " + str("check_name") + " " + str("status")
 	case "run_finished":
 		if r := str("reason"); r != "" {
 			return "run " + str("name") + " " + str("status") + ": " + r

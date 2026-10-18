@@ -69,8 +69,14 @@ type runState struct {
 	// overlays maps a step to the overlay it wrote or replaced, owned has every overlay the run wrote (in
 	// the order of ownedOrder) with its counters; the goroutine of the run only
 	overlays   map[string]uuid.UUID
+	byKey      map[string]uuid.UUID // the overlay under the key (owner, kind, target, selector) of the steps so far
 	owned      map[uuid.UUID]*ownedOverlay
 	ownedOrder []uuid.UUID
+
+	// reachedAt is when the timeline reached each step (and "start"), guarded by Manager.mu; progress wakes the
+	// goroutine of the checks when it did (capacity one: a wake that is already pending is enough)
+	reachedAt map[string]stepTime
+	progress  chan struct{}
 }
 
 // abortCause is why a run is cancelled; context.Cause(run.ctx) returns it.
@@ -180,6 +186,7 @@ func (m *Manager) Recover() error {
 		}
 		m.mu.Lock()
 		failRemaining(&r.rec, "the service restarted")
+		failPendingChecks(&r.rec, model.RunStatusAborted, "service restart")
 		r.rec.Status, r.rec.Reason, r.rec.EndedAt = model.RunStatusAborted, ptr("service restart"), ptr(now)
 		r.rec.LeaseExpiresAt = nil
 		r.rec.Artifacts = artifactsOf(r)
@@ -227,7 +234,8 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (model.Run, err
 
 	id := m.cfg.NewID()
 	r := &runState{id: id, sc: resolved, actor: req.Owner, lease: req.Lease, order: domain.TimelineOrder(resolved.Steps),
-		overlays: map[string]uuid.UUID{}, done: make(chan struct{}), recorded: make(chan struct{})}
+		overlays: map[string]uuid.UUID{}, byKey: map[string]uuid.UUID{},
+		reachedAt: map[string]stepTime{}, progress: make(chan struct{}, 1), done: make(chan struct{}), recorded: make(chan struct{})}
 	name := resolved.Name
 	r.owner = model.Owner{Type: model.ActorTypeRun, Id: id.String(), Name: &name}
 	r.ctx, r.cancel = context.WithCancelCause(m.ctx)
@@ -247,6 +255,13 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (model.Run, err
 		steps = append(steps, step)
 	}
 	r.rec.Steps = &steps
+	if cs := deref(resolved.Checks); len(cs) > 0 {
+		results := make([]model.CheckResult, len(cs))
+		for i := range cs {
+			results[i] = model.CheckResult{Index: i, Name: checkName(snap.Config, &cs[i]), Type: model.CheckResultType(domain.CheckKind(&cs[i])), Status: model.CheckResultStatusPending}
+		}
+		r.rec.Checks = &results
+	}
 
 	tokens := scopeTokens(snap, resolved.Target)
 	m.mu.Lock()
@@ -320,6 +335,27 @@ func scenarioOf(cfg *model.Configuration, req CreateRequest) (*model.Scenario, *
 	return nil, nil, fmt.Errorf("%w %q in the active revision", ErrNoScenario, req.Scenario)
 }
 
+// checkHostname returns a host name that a check names as a destination or an exception, "" when it names none: the
+// resolver that tells which addresses belong to a name arrives with M20.
+func checkHostname(c *model.Check) string {
+	for _, m := range []*model.TrafficMatch{c.Reconnected, c.NoConnection, c.TrafficSeen} {
+		if m != nil && m.Destination != nil && m.Destination.Hostname != nil {
+			return *m.Destination.Hostname
+		}
+	}
+	if n := c.TrafficNotSeen; n != nil {
+		if n.Destination != nil && n.Destination.Hostname != nil {
+			return *n.Destination.Hostname
+		}
+		for _, d := range deref(n.Except) {
+			if d.Hostname != nil {
+				return *d.Hostname
+			}
+		}
+	}
+	return ""
+}
+
 func discoveredIDs(snap *engine.Snapshot) []string {
 	var out []string
 	for _, d := range snap.Devices {
@@ -331,14 +367,21 @@ func discoveredIDs(snap *engine.Snapshot) []string {
 }
 
 // supported refuses a scenario that needs a milestone this build does not have (the spec's
-// `unsupported_feature`): a step type or a check, capturing, a host name where the resolver is needed, an
+// `unsupported_feature`): a step type or a check type, capturing, a host name where the resolver is needed, an
 // overlay whose kind or profile is not available.
 func supported(cfg *model.Configuration, sc *model.Scenario) error {
 	if sc.Capture != nil && *sc.Capture {
 		return &UnsupportedError{What: "capture: true (capturing the target's traffic)", Milestone: "M17"}
 	}
-	if len(deref(sc.Checks)) > 0 {
-		return &UnsupportedError{What: "checks", Milestone: "M16"}
+	for i := range deref(sc.Checks) {
+		c := &(*sc.Checks)[i]
+		kind := domain.CheckKind(c)
+		if kind == "tls_rejected" || kind == "tls_accepted" {
+			return &UnsupportedError{What: fmt.Sprintf("a %s check (check %d)", kind, i), Milestone: "M21"}
+		}
+		if host := checkHostname(c); host != "" {
+			return &UnsupportedError{What: fmt.Sprintf("a check (check %d) for the host name %s", i, host), Milestone: "M20"}
+		}
 	}
 	for i := range sc.Steps {
 		st := &sc.Steps[i]
@@ -709,6 +752,23 @@ func failRemaining(rec *model.Run, why string) {
 	}
 }
 
+// failPendingChecks says of the checks that were not decided when the run ended why they were not.
+func failPendingChecks(rec *model.Run, status model.RunStatus, reason string) {
+	if rec.Checks == nil {
+		return
+	}
+	why := "not decided: the run ended as " + string(status)
+	if reason != "" {
+		why += " (" + reason + ")"
+	}
+	cs := *rec.Checks
+	for i := range cs {
+		if cs[i].Status == model.CheckResultStatusPending {
+			cs[i].Message = ptr(why)
+		}
+	}
+}
+
 // finishLocked records the end of a run: its status, reason and time, the steps that did not run, the
 // artifacts. The caller holds m.mu and calls afterFinish once it has released it.
 func (m *Manager) finishLocked(r *runState, status model.RunStatus, reason string, counters []counterRecord) {
@@ -719,6 +779,7 @@ func (m *Manager) finishLocked(r *runState, status model.RunStatus, reason strin
 		r.leaseTimer.Stop()
 	}
 	failRemaining(&r.rec, reason)
+	failPendingChecks(&r.rec, status, reason)
 	r.rec.Status, r.rec.EndedAt = status, ptr(m.clk.Now())
 	r.rec.LeaseExpiresAt = nil
 	if reason != "" {

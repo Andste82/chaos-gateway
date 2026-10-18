@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -77,6 +78,15 @@ func (s *Server) encodeRunEvent(ev engine.Event) ([]byte, bool) {
 // runObserver is what the runs read of the gateway besides its snapshot.
 type runObserver struct{ s *Server }
 
+// hostnameMatches is the match of a `Hostname` of the spec: an exact name, or `*.suffix`, which matches the
+// subdomains of the suffix and not the suffix itself (the query log's filter by name is looser: it includes it).
+func hostnameMatches(pattern, name string) bool {
+	if rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSuffix(pattern, ".")), "*."); ok {
+		return strings.HasSuffix(strings.ToLower(strings.TrimSuffix(name, ".")), "."+rest)
+	}
+	return nameMatches(pattern, name)
+}
+
 func (o runObserver) Flows(ctx context.Context) ([]engine.Flow, error) {
 	return o.s.cfg.Engine.Flows(ctx)
 }
@@ -93,11 +103,32 @@ func (o runObserver) DNSQuerySeen(devices []string, name string, since time.Time
 		if q.Time.Before(since) {
 			break // the log is oldest first
 		}
-		if q.Device != nil && want[strings.ToLower(q.Device.String())] && nameMatches(name, q.Name) {
+		if q.Device != nil && want[strings.ToLower(q.Device.String())] && hostnameMatches(name, q.Name) {
 			return true
 		}
 	}
 	return false
+}
+
+func (o runObserver) DNSQueries(devices []string, name string, since time.Time) []run.DNSQuery {
+	want := map[string]bool{}
+	for _, d := range devices {
+		want[strings.ToLower(d)] = true
+	}
+	var out []run.DNSQuery
+	o.s.dns.logMu.Lock()
+	defer o.s.dns.logMu.Unlock()
+	for i := len(o.s.dns.entries) - 1; i >= 0; i-- {
+		q := o.s.dns.entries[i].e
+		if q.Time.Before(since) {
+			break // the log is oldest first
+		}
+		if q.Device != nil && want[strings.ToLower(q.Device.String())] && hostnameMatches(name, q.Name) {
+			out = append(out, run.DNSQuery{Device: strings.ToLower(q.Device.String()), Name: q.Name, Type: q.Type, Time: q.Time})
+		}
+	}
+	slices.Reverse(out)
+	return out
 }
 
 func (o runObserver) DNSClientSeen(device string) bool {
@@ -118,11 +149,20 @@ func (o runObserver) Counters(ctx context.Context, ids []uuid.UUID) map[uuid.UUI
 	}
 	oc := o.s.readOverlayContext(ctx, true)
 	out := map[uuid.UUID]*model.Counter{}
+	if oc.countersFailed {
+		return out
+	}
 	for _, ov := range oc.snap.Overlays {
 		if !want[ov.Id] {
 			continue
 		}
-		if c := oc.overlayView(ov).Counters; c != nil {
+		c := oc.overlayView(ov).Counters
+		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile) {
+			// the counters were read and the overlay has none: it is not in the packet path (a rule that
+			// is disabled, a fault another one overrides), so it matched nothing
+			c = &model.Counter{}
+		}
+		if c != nil {
 			out[ov.Id] = c
 		}
 	}

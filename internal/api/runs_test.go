@@ -333,11 +333,17 @@ func TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName(t *testing.T) {
 
 func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.T) {
 	g, _ := readyRuns(t)
-	checks := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
-	checks["inline"].(map[string]any)["checks"] = []any{map[string]any{
-		"reconnected": map[string]any{"protocol": "tcp", "ports": []int{8883}}, "window": map[string]any{"from": "a", "within": "30s"}}}
-	if r := g.postRun(checks, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M16") {
-		t.Errorf("checks: %d %s", r.Status, r.Body)
+	tls := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
+	tls["inline"].(map[string]any)["checks"] = []any{map[string]any{
+		"tls_rejected": map[string]any{"protocol": "tcp", "ports": []int{8883}}, "window": map[string]any{"from": "a", "within": "30s"}}}
+	if r := g.postRun(tls, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
+		t.Errorf("a TLS check: %d %s", r.Status, r.Body)
+	}
+	named := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
+	named["inline"].(map[string]any)["checks"] = []any{map[string]any{
+		"reconnected": map[string]any{"destination": map[string]any{"hostname": "broker.example.com"}}, "window": map[string]any{"from": "a", "within": "30s"}}}
+	if r := g.postRun(named, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
+		t.Errorf("a check for a host name: %d %s", r.Status, r.Body)
 	}
 	dns := inlineRun("d", iotTarget, step("a", "0s", "dns", map[string]any{"action": "servfail", "names": []string{"x.example.com"}}))
 	if r := g.postRun(dns, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
@@ -370,10 +376,11 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
-	if steps != "profile,fault,rule,wireguard,wait,remove,restore" || len(caps["check_types"].([]any)) != 0 {
+	if steps != "profile,fault,rule,wireguard,wait,remove,restore" ||
+		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen" {
 		t.Errorf("capabilities %v", caps)
 	}
-	if !strings.Contains(strings.Join(toStrings(caps["features"].([]any)), ","), "runs") {
+	if feats := strings.Join(toStrings(caps["features"].([]any)), ","); !strings.Contains(feats, "runs") || !strings.Contains(feats, "checks") {
 		t.Errorf("features %v", caps["features"])
 	}
 }

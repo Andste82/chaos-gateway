@@ -5868,10 +5868,19 @@ type Run struct {
 
 // RunOptions defines model for RunOptions.
 type RunOptions struct {
-	// Lease The client must renew the run within this interval, else it is aborted.
+	// Lease The client must renew the run (`POST /runs/{id}/renew`) within this interval, else the server aborts it
+	// (`reason: lease expired`) and removes its overlays. At least 1 s. It starts when the run is created, so a
+	// run that waits in `queued` and whose client has gone never starts.
 	Lease *Duration `json:"lease,omitempty"`
 
 	// Parameters Overrides of scenario fields by dotted path, e.g. `{"target.device": "esp32-42"}` (`chaosctl run --set`).
+	// A path is a chain of field names; a segment into a list is the position (`steps.1.at`) or the `id` of the
+	// step (`steps.slow.fault.latency`). A value is a string, except that `true`, `false` and whole numbers are
+	// read as such and a value that starts with `[` or `{` as JSON. Setting a member of a `target` (the
+	// scenario's or a step's) replaces the whole target (`target.network` after `target.device` leaves only the
+	// network). The scenario is changed before it is validated, so an inline scenario may leave out what the
+	// parameters give (`target`); a path that names no field, or an element that is not there, is
+	// `validation_failed` at `/parameters/<path>`. The run stores the scenario as executed (`snapshot`).
 	Parameters *map[string]string `json:"parameters,omitempty"`
 }
 
@@ -5930,10 +5939,19 @@ type RunRequest struct {
 	// Inline Scenario sent with the request (stored with the run only).
 	Inline *Scenario `json:"inline,omitempty"`
 
-	// Lease The client must renew the run within this interval, else it is aborted.
+	// Lease The client must renew the run (`POST /runs/{id}/renew`) within this interval, else the server aborts it
+	// (`reason: lease expired`) and removes its overlays. At least 1 s. It starts when the run is created, so a
+	// run that waits in `queued` and whose client has gone never starts.
 	Lease *Duration `json:"lease,omitempty"`
 
 	// Parameters Overrides of scenario fields by dotted path, e.g. `{"target.device": "esp32-42"}` (`chaosctl run --set`).
+	// A path is a chain of field names; a segment into a list is the position (`steps.1.at`) or the `id` of the
+	// step (`steps.slow.fault.latency`). A value is a string, except that `true`, `false` and whole numbers are
+	// read as such and a value that starts with `[` or `{` as JSON. Setting a member of a `target` (the
+	// scenario's or a step's) replaces the whole target (`target.network` after `target.device` leaves only the
+	// network). The scenario is changed before it is validated, so an inline scenario may leave out what the
+	// parameters give (`target`); a path that names no field, or an element that is not there, is
+	// `validation_failed` at `/parameters/<path>`. The run stores the scenario as executed (`snapshot`).
 	Parameters *map[string]string `json:"parameters,omitempty"`
 
 	// Scenario Stored scenario of the active revision.
@@ -5946,16 +5964,26 @@ type RunStatus string
 // RunStep defines model for RunStep.
 type RunStep struct {
 	// AppliedAt Executor commit time stamp.
-	AppliedAt  *time.Time `json:"applied_at,omitempty"`
-	Error      *string    `json:"error,omitempty"`
-	Generation *int64     `json:"generation,omitempty"`
+	AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+	// Error Why the step is `error` or `skipped`.
+	Error      *string `json:"error,omitempty"`
+	Generation *int64  `json:"generation,omitempty"`
 
 	// Id Unique within a scenario. `start` is reserved (check windows).
 	Id StepId `json:"id"`
 
-	// OffsetMs Actual offset from run start in milliseconds (monotonic clock).
-	OffsetMs *int  `json:"offset_ms,omitempty"`
-	Overlay  *Uuid `json:"overlay,omitempty"`
+	// OffsetMs Actual offset from run start in milliseconds (monotonic clock). For a `wait` step, when its condition held.
+	OffsetMs *int `json:"offset_ms,omitempty"`
+
+	// Overlay The overlay the step created or replaced, or removed (`remove`).
+	Overlay *Uuid `json:"overlay,omitempty"`
+
+	// QueueWaitMs How long the step's change waited before the executor began to apply it, in milliseconds: the time behind the
+	// apply in flight (a revision apply, or the change of an earlier step or of another writer) and in the executor's
+	// queue (plan §3.11). A step that waited for more than 100 ms makes the run warning `step_late`. Absent for a
+	// step that changes nothing in the kernel (`wait`) and for one that was not applied.
+	QueueWaitMs *int `json:"queue_wait_ms,omitempty"`
 
 	// ScheduledOffset Example: 90s
 	ScheduledOffset *Duration     `json:"scheduled_offset,omitempty"`

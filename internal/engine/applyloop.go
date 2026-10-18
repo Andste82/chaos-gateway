@@ -115,12 +115,14 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			}
 			before := done
 			done = d.Generation
+			picked := e.cfg.Clock.Monotonic()
 			in := e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, prev, retirer.IDs())
 			e.withPeerEndpoints(ctx, &in)
 			target := compiler.Compile(in)
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			var plan *apply.Plan
+			var execWait time.Duration
 			incremental := false
 			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) {
 				ops, ierr := identityOps(e.cfg.Namespace, last.target, target)
@@ -162,6 +164,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				res, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
 				if res != nil {
 					plan, after = res.Plan, res.After
+					execWait = res.Outcome.QueueWait()
 				}
 				arm()
 			}
@@ -203,7 +206,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if err == nil {
 				verified = target
 			}
-			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut, cutStuck: cutStuck}
+			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut, cutStuck: cutStuck, started: picked, execWait: execWait}
 			if err == nil && incremental && last != nil {
 				res.dhcpErr = e.dhcp.errorNow()
 			}

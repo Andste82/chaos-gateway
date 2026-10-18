@@ -143,6 +143,11 @@ type OverlayResult struct {
 	Generation uint64
 	// Removed counts the overlays a reset removed.
 	Removed int
+	// QueueWait is how long the change waited before the executor began to apply it (plan §3.11, a scenario
+	// step's queue wait): from the moment the state owner took the change in until the apply loop started the
+	// apply that carries it (behind an apply in flight), plus the time that apply's plan waited in the
+	// executor's queue. Zero for a renewal, which changes nothing in the kernel.
+	QueueWait time.Duration
 }
 
 type overlayReply struct {
@@ -261,6 +266,8 @@ type overlayWaiter struct {
 	gen   uint64
 	reply chan overlayReply
 	res   OverlayResult
+	// accepted is the monotonic time at which the state owner took the change in.
+	accepted time.Duration
 }
 
 // overlayMark is one change of the store that the kernel has not confirmed yet.
@@ -425,6 +432,8 @@ type putBatch struct {
 type pendingPut struct {
 	cmd cmdOverlayPut
 	ch  overlay.Change
+	// accepted is the monotonic time at which the state owner took the write in.
+	accepted time.Duration
 }
 
 // overlayPut validates a write and takes it into the open batch (starting one when there is none).
@@ -445,7 +454,7 @@ func (o *owner) overlayPut(c cmdOverlayPut) {
 		o.reply(c.reply, OverlayResult{}, err)
 		return
 	}
-	o.batch.items = append(o.batch.items, pendingPut{cmd: c, ch: ch})
+	o.batch.items = append(o.batch.items, pendingPut{cmd: c, ch: ch, accepted: o.e.cfg.Clock.Monotonic()})
 }
 
 // validPut checks a write against the live configuration; it answers the writer itself when the
@@ -509,7 +518,7 @@ func (o *owner) finishBatch() {
 		}
 		o.overlayChanged(changes)
 		for _, it := range b.items {
-			o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: it.cmd.reply,
+			o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: it.cmd.reply, accepted: it.accepted,
 				res: OverlayResult{Overlay: it.ch.Overlay, Created: it.ch.Type == overlay.Created}})
 		}
 		return
@@ -556,7 +565,7 @@ func (o *owner) putOne(c cmdOverlayPut) {
 		return
 	}
 	o.overlayChanged([]actedChange{{Change: ch, actor: writeActor(c.w)}})
-	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply,
+	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, accepted: o.e.cfg.Clock.Monotonic(),
 		res: OverlayResult{Overlay: ch.Overlay, Created: ch.Type == overlay.Created}})
 }
 
@@ -577,7 +586,7 @@ func (o *owner) overlayDelete(c cmdOverlayDelete) {
 	}
 	o.refreshOverlays()
 	o.overlayChanged(acted([]overlay.Change{ch}, c.actor))
-	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, res: OverlayResult{Overlay: ch.Overlay}})
+	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, accepted: o.e.cfg.Clock.Monotonic(), res: OverlayResult{Overlay: ch.Overlay}})
 }
 
 func (o *owner) overlayRenew(c cmdOverlayRenew) {
@@ -617,7 +626,7 @@ func (o *owner) overlayReset(c cmdOverlayReset) {
 	}
 	o.refreshOverlays()
 	o.overlayChanged(acted(changes, c.actor))
-	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, res: OverlayResult{Removed: len(changes)}})
+	o.ov.waiters = append(o.ov.waiters, overlayWaiter{gen: o.gen, reply: c.reply, accepted: o.e.cfg.Clock.Monotonic(), res: OverlayResult{Removed: len(changes)}})
 }
 
 // overlayExpire removes what has run out; nobody waits for it.
@@ -691,6 +700,10 @@ func overlayEventData(ch overlay.Change, gen uint64, actor model.Actor) map[stri
 	if ch.Overlay.Target != nil {
 		data["target"] = *ch.Overlay.Target
 	}
+	if ch.Overlay.Run != nil {
+		// the run that owns it (Event.run), for the events of a run
+		data["run"] = ch.Overlay.Run.Id.String()
+	}
 	return data
 }
 
@@ -724,6 +737,7 @@ func (o *owner) settleOverlays(r applyResult) (reverted bool) {
 				continue
 			}
 			w.res.Generation = g
+			w.res.QueueWait = max(0, r.started-w.accepted) + r.execWait
 			o.reply(w.reply, w.res, nil)
 		}
 		ov.waiters = keep

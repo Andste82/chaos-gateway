@@ -65,6 +65,15 @@ func timelineOrder(steps []model.Step) []int {
 // or run from a file (`POST /runs` with an inline scenario) without becoming part of a
 // revision. References may be names; errors are reported relative to the scenario.
 func ValidateScenario(cfg *model.Configuration, sc *model.Scenario, opts ...Option) []model.ValidationError {
+	_, errs := ResolveScenario(cfg, sc, opts...)
+	return errs
+}
+
+// ResolveScenario is ValidateScenario that also returns the scenario with every reference
+// resolved to a UUID: the form a run stores as its snapshot and executes, so renaming an object
+// while the run lasts changes nothing for it. The scenario given is not changed. The result is
+// only meaningful when there are no errors.
+func ResolveScenario(cfg *model.Configuration, sc *model.Scenario, opts ...Option) (*model.Scenario, []model.ValidationError) {
 	work := clone(*cfg)
 	idx, _ := newIndex(&work, collectOptions(opts))
 	local := clone(*sc)
@@ -78,7 +87,7 @@ func ValidateScenario(cfg *model.Configuration, sc *model.Scenario, opts ...Opti
 	})
 	v := &validator{cfg: &work, idx: idx}
 	v.scenario("", local)
-	return sortErrors(append(errs, v.errs...))
+	return &local, sortErrors(append(errs, v.errs...))
 }
 
 func (v *validator) scenario(path string, sc model.Scenario) {

@@ -20,6 +20,11 @@ const (
 	EventNetworkRecovered = "network_restored"
 	EventUplinkChanged    = "uplink_changed"
 	EventObservedChanged  = "observed_changed"
+	// The events of runs (internal/run, M15).
+	EventRunQueued   = "run_queued"
+	EventRunStarted  = "run_started"
+	EventRunStep     = "run_step"
+	EventRunFinished = "run_finished"
 )
 
 // Event is something that happened to the gateway.

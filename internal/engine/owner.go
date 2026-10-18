@@ -180,6 +180,9 @@ type applyResult struct {
 	cut *cutOutcome
 	// cutStuck is why the window of a cut could not be closed, nil while it is closed (cut.go).
 	cutStuck error
+	// started is the monotonic time at which the apply loop took up this desired state, and execWait how long its plan
+	// waited in the executor's queue: the queue wait of the overlay writes it carries (OverlayResult.QueueWait).
+	started, execWait time.Duration
 }
 
 // inflight is a revision apply the state owner waits for.

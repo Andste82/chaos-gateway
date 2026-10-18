@@ -35,13 +35,23 @@ type fakeDHCP struct {
 	err     error
 	testErr error
 	leases  []kea.Lease
+	// block, when set, holds Reopen until it is closed (a server that does not answer)
+	block chan struct{}
 }
 
-func (f *fakeDHCP) Reopen(_ context.Context, t *compiler.KeaTarget) error {
+func (f *fakeDHCP) Reopen(ctx context.Context, t *compiler.KeaTarget) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.reopens = append(f.reopens, t)
-	return f.err
+	block, err := f.block, f.err
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }
 
 func (f *fakeDHCP) reopened() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.reopens) }

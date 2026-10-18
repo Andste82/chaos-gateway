@@ -32,6 +32,7 @@ type link struct {
 	name, mac, kind, master string
 	up                      bool
 	noCarrier               bool
+	carrierChanges          uint64   // the kernel's carrier_changes: SetCarrier counts each change
 	addrs                   []string // "ip/len"
 	index                   int
 	mtu                     int
@@ -261,8 +262,9 @@ func (k *Kernel) addLink(name, mac, kind string, up bool) *link {
 func (k *Kernel) SetCarrier(name string, on bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if l, ok := k.links[name]; ok {
+	if l, ok := k.links[name]; ok && l.noCarrier == on {
 		l.noCarrier = !on
+		l.carrierChanges++
 	}
 }
 
@@ -608,7 +610,7 @@ func (k *Kernel) ip(c executor.Command) (executor.Result, error) {
 	}
 	if len(a) > 0 && a[0] == "-j" {
 		a = a[1:]
-		if len(a) > 0 && a[0] == "-d" {
+		for len(a) > 0 && (a[0] == "-d" || a[0] == "-s") {
 			a = a[1:]
 		}
 		return k.ipRead(a)
@@ -639,7 +641,8 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			case l.up:
 				flags = append(flags, "UP", "LOWER_UP")
 			}
-			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether", "mtu": l.mtu}
+			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether", "mtu": l.mtu,
+				"stats64": map[string]any{"tx": map[string]any{"carrier_changes": l.carrierChanges}}}
 			if l.master != "" {
 				m["master"] = l.master
 			}

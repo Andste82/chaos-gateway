@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Link is one entry of `ip -j [-d] link show`.
+// Link is one entry of `ip -j [-d] [-s -s] link show`.
 type Link struct {
 	Index     int      `json:"ifindex"`
 	Name      string   `json:"ifname"`
@@ -24,6 +24,22 @@ type Link struct {
 		Kind      string `json:"info_kind"`
 		SlaveKind string `json:"info_slave_kind"`
 	} `json:"linkinfo"`
+	// Stats are the counters of `-s -s`; only the carrier changes are read.
+	Stats *struct {
+		TX struct {
+			CarrierChanges uint64 `json:"carrier_changes"`
+		} `json:"tx"`
+	} `json:"stats64,omitempty"`
+}
+
+// CarrierChanges is how often the link's carrier went and came since the device was created (the
+// kernel's carrier_changes, 0 when the reading has none): a flap between two readings changes it,
+// although both see the link running.
+func (l Link) CarrierChanges() uint64 {
+	if l.Stats == nil {
+		return 0
+	}
+	return l.Stats.TX.CarrierChanges
 }
 
 // Kind returns the device kind (bridge, veth, ifb, wireguard, ...), empty for physical devices.

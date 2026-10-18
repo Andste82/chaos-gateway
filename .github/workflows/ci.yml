@@ -20,7 +20,7 @@ env:
 
   # The level 1 tests of Kea's packet socket after a link flap of a test port (#64), named the same way: the testbed
   # test and the tests against the real Kea, which run as root only.
-  I64_LEVEL1: TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply,TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration,TestKeaRetriesASocketItCouldNotOpen
+  I64_LEVEL1: TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply,TestTheHostReadingCountsACarrierFlapOnARealKernel,TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration,TestKeaRetriesASocketItCouldNotOpen
 
 jobs:
   # Level 0 (plan §4.5): everything that needs no root. Generated code is checked here too:

@@ -186,9 +186,15 @@ type dhcpState struct {
 	target  *compiler.KeaTarget
 	wanted  bool
 	err     string
-	// links is the state of the target's interfaces at the last reading of the host, nil before the
-	// first one
+	// links is the state of the target's interfaces at the last reading of the host, or at the
+	// reading of the apply just before the configuration was sent when that came later; nil before
+	// the first one
 	links map[string]apply.LinkState
+	// came are the interfaces that came up since the server was configured last, waiting for
+	// runDHCPRetry; reopen wakes it, scheduled counts the times it was woken for them (tests)
+	came      map[string]bool
+	reopen    chan struct{}
+	scheduled int
 }
 
 func (d *dhcpState) set(t *compiler.KeaTarget, err string) {
@@ -206,11 +212,21 @@ func (d *dhcpState) errorNow() string {
 // syncDHCP hands the target's DHCP configuration to the server. A server that is down does not fail
 // the apply of the kernel state (a stopped Kea container must not block every change); the problem is
 // reported in the snapshot and the configuration is sent again until the server takes it.
-func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target) string {
+//
+// after is the kernel state the apply read back just before: the links of the next reading are compared
+// with it, so a bridge the apply created is not taken for one that came up (the server sees it when it
+// takes this configuration), while a carrier that changes from here on, during the send included, is.
+func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target, after *apply.State) string {
 	if e.cfg.DHCP == nil {
 		return ""
 	}
 	e.dhcp.sending.Lock()
+	if after != nil {
+		links := after.LinkStates()
+		e.dhcp.mu.Lock()
+		e.dhcp.links = servedLinks(t.Kea, links)
+		e.dhcp.mu.Unlock()
+	}
 	err := e.cfg.DHCP.Apply(ctx, t.Kea)
 	msg := e.dhcpDescribe(err)
 	e.dhcp.set(t.Kea, msg)
@@ -222,33 +238,83 @@ func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target) string {
 }
 
 // runDHCPRetry sends the configuration again while the server has not taken it, and when the server
-// restarted and forgot it: Apply is cheap while the server runs what it was given.
+// restarted and forgot it: Apply is cheap while the server runs what it was given. It also configures
+// the server again for the interfaces followDHCPLinks saw come up.
 func (e *Engine) runDHCPRetry(ctx context.Context) error {
 	tick := e.cfg.Clock.NewTicker(dhcpRetry)
 	defer tick.Stop()
 	for {
+		reopen := false
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C():
+		case <-e.dhcp.reopen:
+			reopen = true
 		}
-		if msg, had, sent := e.resendDHCP(ctx, false); sent && msg != had {
+		if reopen {
+			e.dhcp.mu.Lock()
+			came := make([]string, 0, len(e.dhcp.came))
+			for n := range e.dhcp.came {
+				came = append(came, n)
+			}
+			e.dhcp.came = nil
+			e.dhcp.mu.Unlock()
+			sort.Strings(came)
+			e.cfg.Log.Info("an interface of the DHCP server came up: the server is configured again to listen on it", "interfaces", came)
+		}
+		msg, had, sent := e.resendDHCP(ctx, reopen)
+		if reopen && msg != "" {
+			e.cfg.Log.Warn("the DHCP server does not take the configuration", "error", msg)
+		}
+		if sent && msg != had {
 			_ = e.send(ctx, cmdDHCPStatus{err: msg})
 		}
 	}
 }
 
-// followDHCPLinks configures the DHCP server again when one of its interfaces became running or was
-// created again since the last reading of the host (#64). Kea opens its packet socket on an interface
-// only while it is configured and skips one that is down or has no carrier: a bridge whose test port
-// flapped while a configuration arrived, or one that had no port up for longer than Kea tries again
-// on its own (kea.SocketRetries), would stay without a socket, and DHCP silent on that network.
-func (e *Engine) followDHCPLinks(ctx context.Context, links map[string]apply.LinkState) {
+// followDHCPLinks has the DHCP server configured again when one of its interfaces is running and was
+// not, was created again, or had its carrier go and come (a flap that ended before this reading) since
+// the last reading of the host or the send of the configuration (#64). Kea opens its packet socket on
+// an interface only while it is configured and skips one that is down or has no carrier: a bridge whose
+// test port flapped while a configuration arrived would stay without a socket, and DHCP silent on that
+// network. The engine does not count on Kea's own retries (kea.SocketRetries) for that.
+//
+// It only takes note and wakes runDHCPRetry, which sends the configuration: the reading of the host
+// that called it (Refresh) does not wait for the DHCP server.
+func (e *Engine) followDHCPLinks(links map[string]apply.LinkState) {
 	if e.cfg.DHCP == nil {
 		return
 	}
 	e.dhcp.mu.Lock()
+	defer e.dhcp.mu.Unlock()
 	t, wanted, prev := e.dhcp.target, e.dhcp.wanted, e.dhcp.links
+	now := servedLinks(t, links)
+	e.dhcp.links = now
+	if !wanted || t == nil || prev == nil {
+		return
+	}
+	came := false
+	for name, l := range now {
+		if p, ok := prev[name]; l.Running && (!ok || !p.Running || p.Index != l.Index || p.CarrierChanges != l.CarrierChanges) {
+			if e.dhcp.came == nil {
+				e.dhcp.came = map[string]bool{}
+			}
+			e.dhcp.came[name], came = true, true
+		}
+	}
+	if !came {
+		return
+	}
+	e.dhcp.scheduled++
+	select {
+	case e.dhcp.reopen <- struct{}{}:
+	default: // already woken: it takes these interfaces too
+	}
+}
+
+// servedLinks is the state of the interfaces the DHCP configuration serves.
+func servedLinks(t *compiler.KeaTarget, links map[string]apply.LinkState) map[string]apply.LinkState {
 	now := map[string]apply.LinkState{}
 	if t != nil {
 		for _, s := range t.Config.Subnets {
@@ -257,29 +323,7 @@ func (e *Engine) followDHCPLinks(ctx context.Context, links map[string]apply.Lin
 			}
 		}
 	}
-	e.dhcp.links = now
-	e.dhcp.mu.Unlock()
-	if !wanted || t == nil || prev == nil {
-		return
-	}
-	var came []string
-	for name, l := range now {
-		if p, ok := prev[name]; l.Running && (!ok || !p.Running || p.Index != l.Index) {
-			came = append(came, name)
-		}
-	}
-	if len(came) == 0 {
-		return
-	}
-	sort.Strings(came)
-	e.cfg.Log.Info("an interface of the DHCP server came up: the server is configured again to listen on it", "interfaces", came)
-	msg, had, _ := e.resendDHCP(ctx, true)
-	if msg != "" {
-		e.cfg.Log.Warn("the DHCP server does not take the configuration", "error", msg)
-	}
-	if msg != had {
-		_ = e.send(ctx, cmdDHCPStatus{err: msg})
-	}
+	return now
 }
 
 // resendDHCP sends the current target to the server again (with Reopen when reopen is set) and

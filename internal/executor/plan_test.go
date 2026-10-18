@@ -238,8 +238,8 @@ func TestPlanOffloadsAndDockerUser(t *testing.T) {
 
 func TestReadCommands(t *testing.T) {
 	for in, want := range map[string]string{
-		`{"type":"read","what":"links"}`:                                                         "ip -j -d link show",
-		`{"type":"read","what":"links","dev":"lan0"}`:                                            "ip -j -d link show dev lan0",
+		`{"type":"read","what":"links"}`:                                                         "ip -j -d -s -s link show",
+		`{"type":"read","what":"links","dev":"lan0"}`:                                            "ip -j -d -s -s link show dev lan0",
 		`{"type":"read","what":"addrs"}`:                                                         "ip -j addr show",
 		`{"type":"read","what":"routes"}`:                                                        "ip -j route show table all",
 		`{"type":"read","what":"routes","table":"100","dev":"wan0"}`:                             "ip -j route show table 100 dev wan0",

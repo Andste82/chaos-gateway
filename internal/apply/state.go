@@ -474,10 +474,21 @@ func ReadHost(ctx context.Context, ex Exec, ns string) (compiler.Host, error) {
 }
 
 // LinkState is what decides whether a server can listen on an interface: its index (a device that
-// was deleted and created again has another one) and whether it is running.
+// was deleted and created again has another one), whether it is running, and how often its carrier
+// changed (a flap that ended before the next reading still counts).
 type LinkState struct {
-	Index   int
-	Running bool
+	Index          int
+	Running        bool
+	CarrierChanges uint64
+}
+
+// LinkStates returns the state of every link of the reading by name, bridges included.
+func (s *State) LinkStates() map[string]LinkState {
+	links := make(map[string]LinkState, len(s.Links))
+	for n, l := range s.Links {
+		links[n] = LinkState{Index: l.Index, Running: l.Running(), CarrierChanges: l.CarrierChanges()}
+	}
+	return links
 }
 
 // ReadHostLinks is ReadHost that also returns the state of every link by name, bridges included,
@@ -494,11 +505,7 @@ func ReadHostLinks(ctx context.Context, ex Exec, ns string) (compiler.Host, map[
 	if s.Routes, err = decode[[]linux.Route](out, 2, "routes"); err != nil {
 		return compiler.Host{}, nil, err
 	}
-	links := make(map[string]LinkState, len(s.Links))
-	for n, l := range s.Links {
-		links[n] = LinkState{Index: l.Index, Running: l.Running()}
-	}
-	return s.Host(), links, nil
+	return s.Host(), s.LinkStates(), nil
 }
 
 // Local lets the executor type be used as an Exec in the same process (tests, the CLI in a

@@ -44,6 +44,20 @@ func TestParseLinkKindAndMaster(t *testing.T) {
 	}
 }
 
+// #64: `ip -j -s -s link show` carries the kernel's count of carrier changes in the TX statistics; a
+// reading without statistics counts none.
+func TestParseLinkCarrierChanges(t *testing.T) {
+	links, err := ParseLinks([]byte(`[{"ifindex":2,"ifname":"eth0","flags":["UP","LOWER_UP"],"stats64":{"rx":{"bytes":1341096352,"packets":1362248},` +
+		`"tx":{"bytes":612639348,"packets":1208421,"carrier_errors":0,"collisions":0,"heartbeat_errors":0,"carrier_changes":7}}},` +
+		`{"ifindex":3,"ifname":"eth1","flags":["UP"]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if links[0].CarrierChanges() != 7 || links[1].CarrierChanges() != 0 {
+		t.Fatalf("%d %d", links[0].CarrierChanges(), links[1].CarrierChanges())
+	}
+}
+
 func TestParseAddrs(t *testing.T) {
 	a, err := ParseAddrs(fixture(t, "ip_addr.json"))
 	if err != nil {

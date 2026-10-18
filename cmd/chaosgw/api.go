@@ -26,7 +26,9 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
+	"github.com/Andste82/chaos-gateway/internal/capturemgr"
 	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/kea"
@@ -65,6 +67,9 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
 	keaEventsSocket := fs.String("kea-events-socket", "/run/chaosgw-kea-events/events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
 	runRetention := fs.Duration("run-retention", 30*24*time.Hour, "how long the record and the report of an ended run are kept")
+	capturesDir := fs.String("captures-dir", "", "volume of the packet captures, shared with the executor (one directory per capture); empty runs without captures")
+	captureQuota := fs.String("capture-quota", "5GiB", "total size of all captures when the configuration names none (settings.retention.captures_quota); the oldest stopped captures are deleted first")
+	captureMinFree := fs.Float64("capture-min-free", capturemgr.DefaultMinFreePercent, "percent of free space of the capture volume below which captures stop and new ones are refused")
 	confirm := fs.Duration("confirm-timeout", 0, "override the commit-confirm window (tests)")
 	health := fs.Bool("health", false, "check a running server (https://127.0.0.1:<port>/api/v1/system/health) and exit")
 	if err := fs.Parse(args); err != nil {
@@ -72,6 +77,11 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() != 0 || *execUID < 0 || *port < 1 || *port > 65535 {
 		fmt.Fprintln(stderr, "usage: chaosgw api [--socket <path>] [--state-dir <dir>] [--secrets-dir <dir>] [--data-dir <dir>] [--port <n>] [--health]")
+		return 2
+	}
+	quota, ok := domain.ParseByteSize(*captureQuota)
+	if !ok || quota <= 0 {
+		fmt.Fprintf(stderr, "chaosgw api: --capture-quota %q is not a size such as 5GiB\n", *captureQuota)
 		return 2
 	}
 	if *health {
@@ -82,7 +92,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
 		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket,
-		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, runRetention: *runRetention, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, runRetention: *runRetention, capturesDir: *capturesDir, captureQuota: quota, captureMinFree: *captureMinFree, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -103,6 +113,9 @@ type apiOptions struct {
 	trafficInterval time.Duration
 	trafficPeriod   time.Duration
 	runRetention    time.Duration
+	capturesDir     string
+	captureQuota    int64
+	captureMinFree  float64
 	confirm         time.Duration
 	webDir          string
 	keaSocket       string
@@ -195,7 +208,8 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
-		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention})
+		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention,
+		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree})
 	if err != nil {
 		return err
 	}

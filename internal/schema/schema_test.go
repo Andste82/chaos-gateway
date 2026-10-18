@@ -111,6 +111,11 @@ func TestEveryExampleOfTheSpecValidates(t *testing.T) {
 	if errs := v.Validate("RunRequest", decodeYAML(t, read("run-request.yaml"))); len(errs) != 0 {
 		t.Errorf("run-request.yaml: %v", errs)
 	}
+	for i, doc := range decodeYAML(t, read("capture-requests.yaml")).([]any) {
+		if errs := v.Validate("CaptureRequest", doc); len(errs) != 0 {
+			t.Errorf("capture-requests.yaml[%d]: %v", i, errs)
+		}
+	}
 }
 
 func TestInvalidDocumentsAreRejectedWithPointerAndCode(t *testing.T) {

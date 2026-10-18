@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -164,6 +165,10 @@ func (v *validator) step(path string, i int, st model.Step, sc model.Scenario, f
 	case "wireguard":
 		v.wireguardAction(path+"/wireguard", *st.Wireguard)
 		v.tunnelInsideTarget(path+"/wireguard", &model.TunnelRef{Client: st.Wireguard.Client, Link: st.Wireguard.Link}, target)
+	case "capture":
+		if *st.Capture == model.Stop {
+			v.captureStop(path+"/capture", i, target, sc, position)
+		}
 	case "wait":
 		v.wait(path+"/wait", *st.Wait)
 	case "remove":
@@ -177,6 +182,31 @@ func (v *validator) step(path string, i int, st model.Step, sc model.Scenario, f
 			v.add(path+"/remove", CodeStepOrder, "step %q runs after this step", *st.Remove)
 		}
 	}
+}
+
+// captureStop checks that a `capture: stop` has something to stop: a step before it that starts the capture of the
+// same target.
+func (v *validator) captureStop(path string, i int, target model.Scope, sc model.Scenario, position map[int]int) {
+	for j, o := range sc.Steps {
+		if o.Capture == nil || *o.Capture != model.Start || position[j] >= position[i] {
+			continue
+		}
+		ot := sc.Target
+		if o.Target != nil {
+			ot = *o.Target
+		}
+		if sameTarget(ot, target) {
+			return
+		}
+	}
+	v.add(path, CodeStepOrder, "no step before this one starts a capture of the same target")
+}
+
+// sameTarget reports whether two scopes name the same thing.
+func sameTarget(a, b model.Scope) bool {
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return strings.EqualFold(string(ja), string(jb))
 }
 
 func firstKind(s model.Step) string {

@@ -1602,8 +1602,8 @@ paths:
         a failed precondition ends it as `error`). With `queue=false` a busy target is `409 target_busy` instead. The
         scenario is validated against the active revision (references by name or UUID, resolved in the stored
         snapshot); an inline scenario is stored with the run only and changes no revision. A step type or check type
-        this build does not have (`GET /capabilities`: `step_types`, `check_types`) is `422 unsupported_feature`,
-        and so is `capture: true` before M17. The owner of the run is the token, or the admin user for the UI.
+        this build does not have (`GET /capabilities`: `step_types`, `check_types`) is `422 unsupported_feature`.
+        The owner of the run is the token, or the admin user for the UI.
       x-milestone: M15
       x-required-scope: overlays
       parameters:
@@ -1733,6 +1733,7 @@ paths:
       tags: [captures]
       operationId: listCaptures
       summary: Captures
+      description: 'Newest first. `run` lists the captures a run made (`capture: true` or its `capture` steps).'
       x-milestone: M17
       x-required-scope: read
       parameters:
@@ -1752,6 +1753,28 @@ paths:
       tags: [captures]
       operationId: startCapture
       summary: Start a capture
+      description: |
+        Starts recording at once and answers `201` with the running capture. The files are written by the executor
+        (AF_PACKET on the interface of the scope, a kernel filter for a device or a selector, plan §2.11) below the
+        gateway's capture volume; `GET /captures/{id}/download` returns them also while the capture runs. A capture
+        ends by `POST /captures/{id}/stop`, by its `duration`, by reaching its `max_size` (or, with a `ring_buffer`,
+        never by size: the ring keeps the newest files), when the total of all captures reaches the quota
+        (`settings.retention.captures_quota`, 5 GiB by default: the oldest stopped captures are deleted first, a
+        running capture that still does not fit stops with `size`), when the volume has less than 10 % free space
+        (`disk_low`), or when the executor or its interface is lost (`error`, status `failed`).
+
+        `scope` names a network (its bridge, or the WireGuard interfaces of a WireGuard network: raw IP packets), a
+        device (its network's interface, filtered by its Ethernet addresses, or by its addresses on a WireGuard
+        network), a selector (the packets of a source, device, group, network or global, to the `destination`,
+        `protocol` and `ports`, in both directions, on the interfaces of the source) or the uplink (every packet
+        of the uplink interface after NAT, not attributable to devices). A `pcap` file holds one link type; a
+        scope that spans Ethernet and raw IP interfaces needs `pcapng`. A hostname destination arrives with M20
+        (`422 unsupported_feature`). Without `max_size`, `duration` or `ring_buffer` the capture stops at 1 GiB.
+
+        `422 validation_failed` names the field (a scope that selects no interface, a device that has no
+        address yet, a ring buffer next to a `max_size`); `422 capacity_exceeded` is the disk below 10 % free space
+        or eight captures running; `422 unsupported_feature` is a deployment without a capture volume;
+        `503 unavailable` is an executor that does not answer.
       x-milestone: M17
       x-required-scope: overlays
       parameters:
@@ -1775,6 +1798,7 @@ paths:
       tags: [captures]
       operationId: getCapture
       summary: One capture
+      description: A running capture reports its counters as of the last second.
       x-milestone: M17
       x-required-scope: read
       responses:
@@ -1788,6 +1812,7 @@ paths:
       tags: [captures]
       operationId: deleteCapture
       summary: Delete a stopped capture and its files
+      description: A capture that still runs is `422 validation_failed`; stop it first.
       x-milestone: M17
       x-required-scope: overlays
       responses:
@@ -1798,6 +1823,7 @@ paths:
       tags: [captures]
       operationId: stopCapture
       summary: Stop a running capture
+      description: 'Answers when the files are closed, with the capture as stopped (`stop_reason: user`). Stopping a capture that has ended returns it unchanged.'
       x-milestone: M17
       x-required-scope: overlays
       parameters:
@@ -1814,7 +1840,11 @@ paths:
       tags: [captures]
       operationId: downloadCapture
       summary: Download the capture (also while running); `keylog` returns the TLS key log
-      description: '`part=keylog` and captures marked `sensitive` need scope `full`.'
+      description: |
+        `part=keylog` and captures marked `sensitive` need scope `full`. A capture that has no key log (`keylog:
+        false`, until M22) is `404 not_found` for `part=keylog`. A capture of a ring buffer is one file: the files
+        of the ring joined, oldest first (pcapng files join into a file of several sections, pcap files into one
+        file); of a running capture only the complete records are sent.
       x-milestone: M17
       x-required-scope: read
       parameters:
@@ -3656,7 +3686,12 @@ components:
         capture:
           type: boolean
           default: false
-          description: Capture the target's traffic for the whole run (M17).
+          description: |
+            Capture the target's traffic for the whole run: a capture of the target (a device's, a group's or a
+            network's traffic) starts when the run's timeline starts, after its preconditions, and stops when the run
+            ends (`stop_reason: run_end`); it is attached to the run (`Capture.run`, an `Artifact` of kind `capture`).
+            A capture that cannot start or ends early (a disk below 10 % free space, a lost interface) does not stop
+            the run: the run gets the warning `capture_missing`.
         zero_hit:
           type: string
           enum: [warning, error]
@@ -3713,6 +3748,12 @@ components:
         capture:
           type: string
           enum: [start, stop]
+          description: |
+            `start` records the traffic of the step's target (the scenario's, or the narrower one of the step) into a
+            capture attached to the run; a start while a capture of that target that an earlier step started is
+            still running is `skipped`. `stop` stops the captures that earlier steps started for that target
+            (`skipped` when none runs). Captures that are still running when the run ends are stopped with it. A
+            `capture: true` capture is stopped by neither.
         wait: {$ref: '#/components/schemas/WaitCondition'}
         remove:
           allOf: [{$ref: '#/components/schemas/StepId'}]
@@ -5339,6 +5380,9 @@ components:
     CaptureRequest:
       type: object
       required: [scope]
+      description: |
+        `ring_buffer` keeps the newest `files` files of about `file_size` bytes (at least 64 KiB) and takes no
+        `max_size`. Without a ring buffer, `max_size` bounds the files, headers included (1 GiB when absent).
       properties:
         name: {type: string, maxLength: 64}
         scope: {$ref: '#/components/schemas/CaptureScope'}
@@ -5377,6 +5421,25 @@ components:
             size_bytes: {type: integer, format: int64}
             packets: {type: integer, format: int64}
             run: {$ref: '#/components/schemas/Uuid'}
+            message:
+              type: string
+              description: Why the capture ended early (`disk_low`, `size` by the quota, `error`), or what failed.
+            dropped:
+              type: integer
+              format: int64
+              description: Packets the kernel dropped because the reader was too slow; a capture without loss has none.
+            interfaces:
+              type: array
+              description: The interfaces the capture reads, with the link type of each and the filter in words.
+              items:
+                type: object
+                required: [name, link_type]
+                properties:
+                  name: {type: string}
+                  link_type:
+                    type: string
+                    enum: [ethernet, raw]
+                  filter: {type: string}
             keylog:
               type: boolean
               description: A TLS key log is attached.

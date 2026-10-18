@@ -64,6 +64,8 @@ expect_valid("configuration.yaml", "Configuration", config)
 for i, overlay in enumerate(yaml.safe_load((HERE / "overlays.yaml").read_text())):
     expect_valid(f"overlays.yaml[{i}]", "OverlayRequest", overlay)
 expect_valid("run-request.yaml", "RunRequest", yaml.safe_load((HERE / "run-request.yaml").read_text()))
+for i, capture in enumerate(yaml.safe_load((HERE / "capture-requests.yaml").read_text())):
+    expect_valid(f"capture-requests.yaml[{i}]", "CaptureRequest", capture)
 
 # Things the schema itself must reject.
 expect_invalid("loss without %", "NetemParams", {"loss": "10"})
@@ -77,6 +79,8 @@ expect_invalid("network without type", "Network", {"name": "x", "address": "10.0
 expect_invalid("cidr with host bits as prefix length 33", "Ipv4Cidr", "10.0.0.0/33")
 expect_invalid("upper-case MAC", "MacAddress", "AA:BB:CC:DD:EE:FF")
 expect_invalid("step without at", "Step", {"id": "x", "restore": True})
+expect_invalid("capture scope with two scopes", "CaptureRequest", {"scope": {"uplink": True, "network": "IoT"}})
+expect_invalid("capture ring buffer of one file", "CaptureRequest", {"scope": {"uplink": True}, "ring_buffer": {"files": 1, "file_size": "1MiB"}})
 expect_invalid("bad step id", "Step", {"id": "Bad Id", "at": "1s", "restore": True})
 expect_invalid("schema version 2", "Configuration", {**config, "schema_version": 2})
 

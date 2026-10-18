@@ -68,6 +68,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeEventsLost, model.EventTypeOverlayCreated, model.EventTypeOverlayUpdated, model.EventTypeOverlayRemoved,
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
+		model.EventTypeCaptureStarted, model.EventTypeCaptureStopped, model.EventTypeDiskLow,
 	} {
 		m[string(t)] = true
 	}
@@ -186,6 +187,15 @@ func describe(ev engine.Event) string {
 			return "run " + str("name") + " " + str("status") + ": " + r
 		}
 		return "run " + str("name") + " " + str("status")
+	case "capture_started":
+		return "capture " + str("capture") + " started"
+	case "capture_stopped":
+		if m := str("message"); m != "" {
+			return "capture " + str("capture") + " stopped (" + str("reason") + "): " + m
+		}
+		return "capture " + str("capture") + " stopped (" + str("reason") + ")"
+	case "disk_low":
+		return "the volume of the captures has " + str("free_percent") + " % free space"
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

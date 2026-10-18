@@ -19,6 +19,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
+	"github.com/Andste82/chaos-gateway/internal/capturemgr"
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -64,6 +65,17 @@ type Config struct {
 	TrafficInterval, TrafficPeriod time.Duration
 	// RunRetention is how long the record of an ended run is kept (plan §3.6); zero takes run.DefaultRetention.
 	RunRetention time.Duration
+	// CapturesDir is the volume of the packet captures (M17), shared with the executor, which writes the files; empty
+	// for a deployment without one (the operations of captures answer `unsupported_feature`). Capturer starts the
+	// captures: the executor behind Exec when it can, unless a test gives another.
+	CapturesDir string
+	Capturer    capturemgr.Opener
+	// CaptureQuota is the total size of all captures when the configuration names none (zero: 5 GiB);
+	// CaptureMinFree and CaptureDiskFree are the free-space limit of the volume in percent (zero: 10) and how to read it
+	// (nil: statfs of CapturesDir).
+	CaptureQuota    int64
+	CaptureMinFree  float64
+	CaptureDiskFree func() (free, total uint64, err error)
 }
 
 // Server implements apiserver.ServerInterface.
@@ -94,6 +106,8 @@ type Server struct {
 	// runs is the engine of scenario runs (M15), runsTemp the directory it uses when there is no state directory
 	runs     *run.Manager
 	runsTemp string
+	// captures is the manager of the packet captures (M17), nil without a capture volume
+	captures *capturemgr.Manager
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -134,7 +148,14 @@ func New(cfg Config) (*Server, error) {
 	s.eventsDone = make(chan struct{})
 	go s.auditSystemEvents(events)
 	s.startTrafficSampler()
+	if err := s.initCaptures(); err != nil {
+		s.stopTrafficSampler()
+		unsub()
+		<-s.eventsDone
+		return nil, err
+	}
 	if err := s.initRuns(); err != nil {
+		s.closeCaptures()
 		s.stopTrafficSampler()
 		unsub()
 		<-s.eventsDone
@@ -235,6 +256,7 @@ func pathMatches(pattern, actual string) bool {
 // Close releases what the server holds.
 func (s *Server) Close() error {
 	s.closeRuns()
+	s.closeCaptures()
 	s.stopTrafficSampler()
 	s.unsubEvents()
 	<-s.eventsDone

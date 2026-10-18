@@ -347,13 +347,13 @@ func TestAParameterThatNamesNothingIsRefused(t *testing.T) {
 }
 
 // A stored scenario is found by name or UUID in the active revision, and run as it is; the example's
-// scenario captures, which arrives with M17.
-func TestAStoredScenarioNeedsAllItsMilestones(t *testing.T) {
+// scenario captures, which a gateway without a capture volume cannot (M17).
+func TestAStoredScenarioThatCapturesNeedsACaptureVolume(t *testing.T) {
 	h := newHarness(t)
 	for _, ref := range []string{"mqtt-outage", "3d4e5f6a-7b8c-4d9e-0f1a-2b3c4d5e6f71"} {
 		_, err := h.m.Create(context.Background(), run.CreateRequest{Scenario: ref, Queue: true, Owner: token})
 		u, ok := errAs[*run.UnsupportedError](err)
-		if !ok || u.Milestone != "M17" {
+		if !ok || u.Milestone != "" || !has(err.Error(), "capture volume") {
 			t.Errorf("%s: %v", ref, err)
 		}
 	}
@@ -389,12 +389,12 @@ name: c
 target: {device: esp32-42}
 capture: true
 steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-`, "M17"},
+`, ""},
 		"capture step": {`
 name: c
 target: {device: esp32-42}
-steps: [{id: a, at: 0s, capture: start}]
-`, "M17"},
+steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
+`, ""},
 		"dns step": {`
 name: c
 target: {device: esp32-42}

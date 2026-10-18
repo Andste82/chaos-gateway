@@ -75,6 +75,8 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 	if err := m.preconditions(r); err != nil {
 		return m.outcome(r, err)
 	}
+	// the capture of the whole run starts before the timeline, so that the first step is in it
+	m.startRunCapture(r)
 	start := m.clk.Monotonic()
 	m.reached(r, "start", 0, m.clk.Now())
 	var checksDone chan struct{}
@@ -102,6 +104,8 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 			err = m.removeStep(r, pos, st, start)
 		case "restore":
 			err = m.restoreStep(r, pos, st, start)
+		case "capture":
+			err = m.captureStep(r, pos, st, start)
 		case "wait":
 			err = m.waitStep(r, pos, st, start, due)
 			shift = max(shift, m.clk.Monotonic()-start-at)
@@ -390,6 +394,8 @@ func (r *runState) counterRecords() []counterRecord {
 func (m *Manager) finish(r *runState, status model.RunStatus, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), cleanupTimeout)
 	defer cancel()
+	// the recording ends with the run, before its overlays go
+	m.finishCaptures(r)
 	m.captureCounters(r, finishCounterTimeout)
 	status, reason = m.zeroHits(r, status, reason)
 	var cleanErr error

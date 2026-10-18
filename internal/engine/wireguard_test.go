@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
@@ -438,5 +439,53 @@ func TestAReconnectingSubscriberGetsTheBufferedEvents(t *testing.T) {
 	cancel()
 	if len(none) != 0 {
 		t.Errorf("%d events replayed for a number beyond the newest", len(none))
+	}
+}
+
+// P31-AUDIT-11 (decided 2026-10-18, option (b)): `explain` judges a WireGuard network of the role management as
+// part of the management network in both topologies, as the compiled guard drops it: a device under test with an
+// allow rule for everything is dropped on its way to the management hub's client and the network behind it, and
+// an explicit matrix entry towards the hub opens it.
+func TestExplainGuardsAManagementRoleWireGuardNetworkInBothTopologies(t *testing.T) {
+	const wgAdmin, wgAdm, iot = "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9", "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	h, sec := newWGHarness(t)
+	src := netip.MustParseAddr("10.10.0.77")
+	mod := func(twoPort, entry bool) func(*model.Configuration) {
+		return func(c *model.Configuration) {
+			n := (*c.Networks)[wgAdmin]
+			wg, _ := n.AsWireGuardNetwork()
+			gen := model.Generated
+			wg.Clients = &map[string]model.WireGuardClient{wgAdm: {Name: "adm", Address: "10.98.0.2", ClientNetworks: &[]string{"10.97.0.0/24"}, Key: &model.WireGuardKeySettings{Mode: &gen}}}
+			_ = n.FromWireGuardNetwork(wg)
+			(*c.Networks)[wgAdmin] = n
+			withConfigRules(map[string]model.AccessRule{cfgRuleA: configRule("everything", iot, "", nil, model.AccessActionAllow, false)}, cfgRuleA)(c)
+			if entry {
+				from, to := iot, wgAdmin
+				entries := append(*c.AccessMatrix.Entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &from}, To: model.MatrixEndpoint{Network: &to}, Policy: model.MatrixEntryPolicyAllow})
+				c.AccessMatrix.Entries = &entries
+			}
+			if twoPort {
+				wan := "wan0"
+				c.Management.Interface = model.InterfaceRef{Name: &wan}
+				c.Management.AllowedSources = &[]string{"203.0.113.5/32"}
+			}
+		}
+	}
+	for _, twoPort := range []bool{false, true} {
+		h.mustApply(wgRevision(t, h, sec, mod(twoPort, false)), engine.ApplyOptions{SkipConfirm: true})
+		if s := h.e.Snapshot(); (s.Management.Name == s.Applied.Uplink.Name) != twoPort {
+			t.Fatalf("two ports %v: the management interface %s", twoPort, s.Management.Name)
+		}
+		for _, dst := range []string{"10.98.0.2", "10.97.0.10"} {
+			if ex := h.explain(engine.ExplainQuery{Src: src, Dst: dst, Protocol: "tcp", Port: 22}); ex.Access.Verdict != "drop" || ex.Access.Rule != "" || !strings.Contains(ex.Access.Reason, "WireGuard network of the role management") {
+				t.Errorf("two ports %v, %s: %+v, want the guard", twoPort, dst, ex.Access)
+			}
+		}
+		h.mustApply(wgRevision(t, h, sec, mod(twoPort, true)), engine.ApplyOptions{SkipConfirm: true})
+		for _, dst := range []string{"10.98.0.2", "10.97.0.10"} {
+			if ex := h.explain(engine.ExplainQuery{Src: src, Dst: dst, Protocol: "tcp", Port: 22}); ex.Access.Verdict != "allow" || ex.Access.Rule != cfgRuleA {
+				t.Errorf("two ports %v, %s with the entry: %+v, want the rule", twoPort, dst, ex.Access)
+			}
+		}
 	}
 }

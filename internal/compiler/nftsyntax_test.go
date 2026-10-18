@@ -68,6 +68,9 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	}
 	// the two-port guard in front of the access rules (P2-M9-11)
 	out["access-twoport"] = scenarioAccessTwoPort(t)
+	// the guard of the WireGuard networks of the role management in both topologies (P31-AUDIT-11)
+	out["access-threeport-wg"] = adminWG(t, false)
+	out["access-twoport-wg"] = adminWG(t, true)
 	// the port forwards (M35a): the DNAT map with its concatenated value, the DNAT through it next to the
 	// service redirect, the accept rules with `ct status dnat`, the responder forms of the access rules
 	out["forward"] = scenarioForward(t)

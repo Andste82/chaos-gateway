@@ -2657,10 +2657,14 @@ type AccessRule struct {
 // (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
 // addresses, whatever interface the packet would leave through, and anything that would leave
 // through the management interface, so a lost uplink default route or a router behind the uplink
-// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+// that knows the management network does not open it either (decided on 2026-10-17). In both
+// topologies the WireGuard networks of the role `management`, with their clients and the networks
+// behind them, are part of the management network for the guard (decided on 2026-10-18). `explain`
 // reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
-// access matrix from the device's network to the management network opens it. Replies, those of a
-// port forward from the management side included, are accepted before the guard.
+// access matrix from the device's network to the management network, or to the WireGuard network of
+// the role `management` (or the client of one) the destination lies in, opens it; a client's
+// `reachable` list does not. Replies, those of a port forward from the management side included, are
+// accepted before the guard.
 //
 // **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 // the management network towards a device, so a rule whose source is a device, group or network matches
@@ -4825,10 +4829,14 @@ type Overlay struct {
 	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
 	// addresses, whatever interface the packet would leave through, and anything that would leave
 	// through the management interface, so a lost uplink default route or a router behind the uplink
-	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// that knows the management network does not open it either (decided on 2026-10-17). In both
+	// topologies the WireGuard networks of the role `management`, with their clients and the networks
+	// behind them, are part of the management network for the guard (decided on 2026-10-18). `explain`
 	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
-	// access matrix from the device's network to the management network opens it. Replies, those of a
-	// port forward from the management side included, are accepted before the guard.
+	// access matrix from the device's network to the management network, or to the WireGuard network of
+	// the role `management` (or the client of one) the destination lies in, opens it; a client's
+	// `reachable` list does not. Replies, those of a port forward from the management side included, are
+	// accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches
@@ -4987,10 +4995,14 @@ type OverlayRequest struct {
 	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
 	// addresses, whatever interface the packet would leave through, and anything that would leave
 	// through the management interface, so a lost uplink default route or a router behind the uplink
-	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// that knows the management network does not open it either (decided on 2026-10-17). In both
+	// topologies the WireGuard networks of the role `management`, with their clients and the networks
+	// behind them, are part of the management network for the guard (decided on 2026-10-18). `explain`
 	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
-	// access matrix from the device's network to the management network opens it. Replies, those of a
-	// port forward from the management side included, are accepted before the guard.
+	// access matrix from the device's network to the management network, or to the WireGuard network of
+	// the role `management` (or the client of one) the destination lies in, opens it; a client's
+	// `reachable` list does not. Replies, those of a port forward from the management side included, are
+	// accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches
@@ -6160,10 +6172,14 @@ type Step struct {
 	// (decided by the maintainer on 2026-10-11); in the three-port topology it drops by the management
 	// addresses, whatever interface the packet would leave through, and anything that would leave
 	// through the management interface, so a lost uplink default route or a router behind the uplink
-	// that knows the management network does not open it either (decided on 2026-10-17). `explain`
+	// that knows the management network does not open it either (decided on 2026-10-17). In both
+	// topologies the WireGuard networks of the role `management`, with their clients and the networks
+	// behind them, are part of the management network for the guard (decided on 2026-10-18). `explain`
 	// reports the guard as a drop by the access matrix, without a rule. Only an explicit entry of the
-	// access matrix from the device's network to the management network opens it. Replies, those of a
-	// port forward from the management side included, are accepted before the guard.
+	// access matrix from the device's network to the management network, or to the WireGuard network of
+	// the role `management` (or the client of one) the destination lies in, opens it; a client's
+	// `reachable` list does not. Replies, those of a port forward from the management side included, are
+	// accepted before the guard.
 	//
 	// **Forwarded connections** (port forwards, `PortForward`, M35a) are initiated from behind the uplink or
 	// the management network towards a device, so a rule whose source is a device, group or network matches

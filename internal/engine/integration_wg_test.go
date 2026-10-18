@@ -7,6 +7,7 @@ import (
 	"context"
 	"image/png"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -595,5 +596,101 @@ func TestPrivateKeysStayOutOfStoreSnapshotAndLogsAndAReapplyKeepsTheTunnel(t *te
 	check("nftables", g.top.GW.Must("nft", "list", "ruleset"))
 	if !strings.Contains(g.logs.String(), "level=") {
 		t.Error("the logger did not log anything: the check proves nothing")
+	}
+}
+
+// P31-AUDIT-11 (decided 2026-10-18, option (b)) on the real kernel: the management hub "admin" is part of the
+// management network for the guard in both topologies. Device A (IoT) with an allow rule for everything does not
+// reach the administrator's tunnel address (the remote machine "site" holds it), the guard counts the drop and
+// `explain` names it; an explicit matrix entry "IoT -> admin" opens it, and `explain` agrees.
+func TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt(t *testing.T) {
+	for _, twoPort := range []bool{false, true} {
+		name := "three-ports"
+		if twoPort {
+			name = "two-ports"
+		}
+		t.Run(name, func(t *testing.T) {
+			g := newWGGW(t)
+			mod := func(entry bool) func(*model.Configuration) {
+				return func(c *model.Configuration) {
+					// the administrator's tunnel routes the local test network back, so A's packets get their answers
+					n := (*c.Networks)[tAdmin]
+					wg, _ := n.AsWireGuardNetwork()
+					adm := (*wg.Clients)[tAdm]
+					iot := tIoT
+					adm.Reachable = &[]model.MatrixEndpoint{{Network: &iot}}
+					(*wg.Clients)[tAdm] = adm
+					_ = n.FromWireGuardNetwork(wg)
+					(*c.Networks)[tAdmin] = n
+					name, dev := "a-anywhere", tIoT
+					withConfigRules(map[string]model.AccessRule{cfgRuleA: {Name: &name, Source: model.Scope{Network: &dev}, Action: model.AccessActionAllow}}, cfgRuleA)(c)
+					if entry {
+						to := tAdmin
+						entries := append(*c.AccessMatrix.Entries, model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &to}, Policy: model.MatrixEntryPolicyAllow})
+						c.AccessMatrix.Entries = &entries
+					}
+					if twoPort {
+						wan := "wan0"
+						c.Management.Interface = model.InterfaceRef{Name: &wan}
+					}
+				}
+			}
+			g.apply(mod(false))
+			if s := g.e.Snapshot(); (s.Management.Name == s.Applied.Uplink.Name) != twoPort {
+				t.Fatalf("the management interface %s", s.Management.Name)
+			}
+			g.up(g.top.Site, "wgadm", g.client(tAdmin, tAdm).Conf)
+			if !pingOK(g.top.Site, "", "10.98.0.1") {
+				t.Fatalf("the administrator's tunnel is not up\n%s", g.wgShow())
+			}
+			g.top.Site.Start("python3", "-c", `import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("10.98.0.2", 7050)); s.listen(5)
+while True:
+    c, a = s.accept(); c.sendall(b"hi"); c.close()
+`)
+			connect := func() bool {
+				_, err := g.top.A.Run(context.Background(), "python3", "-c", `import socket, sys
+try:
+    s = socket.create_connection(("10.98.0.2", 7050), timeout=2); sys.exit(0 if s.recv(2) == b"hi" else 1)
+except Exception:
+    sys.exit(1)
+`)
+				return err == nil
+			}
+			explain := func() engine.ExplainAccess {
+				ex, err := g.e.Explain(context.Background(), engine.ExplainQuery{Src: netip.MustParseAddr(testbed.ClientAAddr), Dst: "10.98.0.2", Protocol: "tcp", Port: 7050})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return ex.Access
+			}
+			cs, err := g.e.ReadCounters(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := cs["forward_drop"].Packets
+			if connect() {
+				t.Errorf("A reaches the administrator's tunnel address with an allow rule\n%s", g.top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "mgmt_guard"))
+			}
+			if cs, _ := g.e.ReadCounters(context.Background()); cs["forward_drop"].Packets <= before {
+				t.Errorf("the guard counted nothing: forward_drop %d -> %d", before, cs["forward_drop"].Packets)
+			}
+			if ex := explain(); ex.Verdict != "drop" || ex.Rule != "" || !strings.Contains(ex.Reason, "WireGuard network of the role management") {
+				t.Errorf("explain = %+v, want the guard", ex)
+			}
+
+			g.apply(mod(true))
+			deadline := time.Now().Add(30 * time.Second)
+			for !connect() {
+				if time.Now().After(deadline) {
+					t.Fatalf("A does not reach the administrator's tunnel address with the matrix entry\n%s", g.top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "mgmt_guard"))
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			if ex := explain(); ex.Verdict != "allow" {
+				t.Errorf("explain = %+v, want allow", ex)
+			}
+		})
 	}
 }

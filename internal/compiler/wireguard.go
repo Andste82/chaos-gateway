@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -241,9 +242,25 @@ type topo struct {
 	reach []reachEntry
 	lan   []string // bridges of local test networks
 	test  []string // untrusted interfaces: bridges and WireGuard networks of role test
-	all   []string // every interface of Chaos Gateway's networks
-	wg    []string // WireGuard interfaces
-	nat   []natSource
+	// mgmtWG are the interfaces of the WireGuard networks of role management: part of the management
+	// network for the management guard, in both topologies (P31-AUDIT-11)
+	mgmtWG []string
+	all    []string // every interface of Chaos Gateway's networks
+	wg     []string // WireGuard interfaces
+	nat    []natSource
+}
+
+// inMgmtWG reports whether a matrix endpoint is a WireGuard network of role management or a client of
+// one (P31-AUDIT-11).
+func (tp *topo) inMgmtWG(ep model.MatrixEndpoint) bool {
+	dev := ""
+	switch {
+	case ep.Network != nil:
+		dev = tp.netDev[*ep.Network]
+	case ep.Client != nil:
+		dev = tp.clients[*ep.Client].dev
+	}
+	return dev != "" && slices.Contains(tp.mgmtWG, dev)
 }
 
 type clientMatch struct {
@@ -281,6 +298,8 @@ func (t *Target) topology(idx *domain.Index, nets map[string]*Bridge) *topo {
 		tp.all = append(tp.all, w.Name)
 		if w.Role != "management" {
 			tp.test = append(tp.test, w.Name)
+		} else {
+			tp.mgmtWG = append(tp.mgmtWG, w.Name)
 		}
 		src := []netip.Prefix{w.Address.Masked()}
 		for _, p := range w.Peers {
@@ -304,6 +323,7 @@ func (t *Target) topology(idx *domain.Index, nets map[string]*Bridge) *topo {
 	}
 	sort.Strings(tp.lan)
 	sort.Strings(tp.test)
+	sort.Strings(tp.mgmtWG)
 	sort.Strings(tp.all)
 	sort.Strings(tp.wg)
 	return tp

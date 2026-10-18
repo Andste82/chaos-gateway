@@ -320,6 +320,44 @@ func TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection(t *testing.T) {
 	}
 }
 
+// P31-AUDIT-13 (decided 2026-10-18, option (b)): a connection that came in through a management-side forward
+// lives on after the forward is deleted (D11), and its replies still go back through the management interface:
+// in the three-port topology the chain fwd_reply, the policy rule 925 and table 101 stay without any
+// management forward, so a reply whose conntrack mark has the bit never takes the uplink. A probe table counts
+// what of the connection leaves through the uplink.
+func TestTheRepliesOfAManagementForwardedConnectionStayOffTheUplinkAfterTheForwardIsDeleted(t *testing.T) {
+	r := startForwardLab(t, nil)
+	eventually(t, r.top.Mgmt, "tcp", testbed.MgmtGateway, 8443, 30*time.Second)
+	r.top.GW.Must("nft", "add", "table", "inet", "probe13")
+	r.top.GW.Must("nft", "add", "chain", "inet", "probe13", "post", "{ type filter hook postrouting priority 0 ; policy accept ; }")
+	r.top.GW.Must("nft", "add", "rule", "inet", "probe13", "post", "oifname", "wan0", "ct", "status", "dnat", "ct", "original", "proto-dst", "8443", "counter")
+	hold := r.top.Mgmt.Start("python3", "-c", accessHold, testbed.MgmtGateway, "8443")
+	waitText(t, hold, "ok", 60*time.Second)
+
+	if _, err := r.apply(r.revision(func(c *model.Configuration) {
+		withForwards(c)
+		delete(*c.PortForwards, fwMgmt)
+	}), engine.ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range r.e.Snapshot().Forwards {
+		if f.ID == fwMgmt {
+			t.Fatalf("the management forward is still applied: %+v", f)
+		}
+	}
+	if out := r.top.GW.Must("ip", "rule", "show", "priority", strconv.Itoa(compiler.ForwardReplyRulePriority)); !strings.Contains(out, "lookup "+strconv.Itoa(compiler.ForwardReplyTable)) {
+		t.Fatalf("the policy rule of the marked replies went with the last management forward: %q", out)
+	}
+	before := strings.Count(hold.Output(), "ok")
+	time.Sleep(2 * time.Second)
+	if out := hold.Output(); strings.Count(out, "ok") <= before+5 || strings.Contains(out, "Error") || strings.Contains(out, "timeout") {
+		t.Errorf("the connection through the deleted forward stopped getting its replies: %s", out)
+	}
+	if out := r.top.GW.Must("nft", "list", "chain", "inet", "probe13", "post"); !strings.Contains(out, "packets 0 ") {
+		t.Errorf("replies of the management-forwarded connection left through the uplink:\n%s", out)
+	}
+}
+
 // allowAllForA is an access allow rule for device A without a destination, protocol or port: the
 // broadest rule there is for A.
 func allowAllForA(c *model.Configuration) {

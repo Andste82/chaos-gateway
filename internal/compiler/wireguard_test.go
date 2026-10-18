@@ -130,7 +130,7 @@ func TestWireGuardRoutesAndRules(t *testing.T) {
 	have := map[string]bool{}
 	for _, r := range tg.Routes {
 		have[r.Dst+" dev "+r.Dev+" via "+r.Via] = true
-		if r.Table != PolicyTable {
+		if r.Table != PolicyTable && r.Table != ForwardReplyTable {
 			t.Errorf("%+v", r)
 		}
 	}
@@ -149,7 +149,7 @@ func TestWireGuardRoutesAndRules(t *testing.T) {
 	var iifs []string
 	for _, r := range tg.Rules {
 		iifs = append(iifs, r.Iif)
-		if r.Priority != PolicyRulePriority {
+		if r.Priority != PolicyRulePriority && r.Fwmark != ForwardReplyMark {
 			t.Errorf("%+v", r)
 		}
 	}

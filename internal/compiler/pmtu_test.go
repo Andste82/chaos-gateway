@@ -152,7 +152,7 @@ func TestABlackholeAndAnMSSClampNeedNoMirrorTableAndDoTheirWorkInTheirChain(t *t
 		t.Errorf("tables %v", tg.PMTUTables)
 	}
 	for _, r := range tg.Routes {
-		if r.Table != PolicyTable && r.Table != ServiceTable {
+		if r.Table != PolicyTable && r.Table != ServiceTable && r.Table != ForwardReplyTable {
 			t.Errorf("a route in table %d", r.Table)
 		}
 		if r.MTU != 0 {
@@ -160,7 +160,7 @@ func TestABlackholeAndAnMSSClampNeedNoMirrorTableAndDoTheirWorkInTheirChain(t *t
 		}
 	}
 	for _, r := range tg.Rules {
-		if r.Fwmark != "" && r.Table != ServiceTable {
+		if r.Fwmark != "" && r.Table != ServiceTable && r.Fwmark != ForwardReplyMark {
 			t.Errorf("a rule on the mark: %+v", r)
 		}
 	}
@@ -459,12 +459,12 @@ func describePMTU(tg *Target) string {
 	}
 	fmt.Fprintf(&b, "# routes and rules of the mirrors\n")
 	for _, r := range tg.Routes {
-		if r.Table != PolicyTable && r.Table != ServiceTable {
+		if r.Table != PolicyTable && r.Table != ServiceTable && r.Table != ForwardReplyTable {
 			fmt.Fprintf(&b, "route table %d %s via %q dev %s mtu %d\n", r.Table, r.Dst, r.Via, r.Dev, r.MTU)
 		}
 	}
 	for _, r := range tg.Rules {
-		if r.Fwmark != "" && r.Table != ServiceTable {
+		if r.Fwmark != "" && r.Table != ServiceTable && r.Fwmark != ForwardReplyMark {
 			fmt.Fprintf(&b, "rule %d fwmark %s lookup %d\n", r.Priority, r.Fwmark, r.Table)
 		}
 	}

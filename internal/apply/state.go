@@ -517,6 +517,11 @@ func (l Local) Do(ctx context.Context, ops ...executor.Operation) (executor.Outc
 	return l.E.DoBatch(ctx, ops)
 }
 
+// OpenCapture starts a capture in the executor of this process (M17); see executor.Executor.OpenCapture.
+func (l Local) OpenCapture(ctx context.Context, o executor.CaptureOpen) (executor.CaptureStream, error) {
+	return l.E.OpenCapture(ctx, o)
+}
+
 // Watch implements Watcher: in the same process there is no connection to open, so this goes
 // straight to the executor's own Watch (M6a-04).
 func (l Local) Watch(ctx context.Context, what, ns string) (<-chan json.RawMessage, func(), error) {

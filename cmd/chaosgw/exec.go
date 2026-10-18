@@ -42,6 +42,8 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	owner := fs.Int("socket-owner", -1, "uid that owns the socket file (-1: unchanged)")
 	secretsDir := fs.String("secrets-dir", "", "directory with the secrets (WireGuard keys); the executor only reads it")
 	birdDir := fs.String("bird-dir", "", "directory shared with the BIRD container (<instance>.conf and .ctl); without it dynamic routing is refused")
+	capturesDir := fs.String("captures-dir", "", "volume of the packet captures, shared with the API container (one directory per capture, made by the API); without it captures are refused")
+	captureMinFree := fs.Float64("capture-min-free", executor.DefaultMinFreePercent, "percent of free space of the capture volume below which captures stop and new ones are refused")
 	hostRoot := fs.String("host-root", "/", "where the host's file system is mounted: its netplan, NetworkManager and systemd-networkd configuration is read from there (the preflight's check of the test interfaces)")
 	health := fs.Bool("health", false, "check a running executor (handshake and generation) and exit")
 	var allow uidList
@@ -71,6 +73,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot))}
 	if *birdDir != "" {
 		opts = append(opts, executor.WithBirdDir(*birdDir))
+	}
+	if *capturesDir != "" {
+		opts = append(opts, executor.WithCaptures(*capturesDir, *captureMinFree))
 	}
 	if *secretsDir != "" {
 		// the secrets volume may still be empty when the executor starts (the API creates its

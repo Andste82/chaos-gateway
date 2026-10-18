@@ -197,6 +197,10 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		s.serveWatch(ctx, cc, f.Watch)
 		return
 	}
+	if f.Capture != nil {
+		s.serveCapture(ctx, cc, f.Capture)
+		return
+	}
 	for {
 		if f.Request == nil {
 			_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: "expected a request"}})
@@ -208,8 +212,8 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		if f, err = cc.read(); err != nil {
 			return
 		}
-		if f.Watch != nil {
-			_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: "a watch must be the only message on its connection"}})
+		if f.Watch != nil || f.Capture != nil {
+			_ = cc.write(&Frame{Error: &RemoteError{Code: CodeInvalid, Message: "a watch or a capture must be the only message on its connection"}})
 			return
 		}
 	}
@@ -244,6 +248,55 @@ func (s *Server) serveWatch(ctx context.Context, cc *codec, w *WatchRequest) {
 			continue
 		}
 		if err := cc.write(&Frame{Event: &WatchEvent{Data: b}}); err != nil {
+			return
+		}
+	}
+}
+
+// serveCapture runs a connection that asked for a capture (M17): the capture lives as long as the connection. The
+// first answer is the error that refused it, or the event `started`; then come the counters and the end, and
+// the client may send a stop. A connection that breaks ends the capture.
+func (s *Server) serveCapture(ctx context.Context, cc *codec, o *CaptureOpen) {
+	stream, err := s.Exec.OpenCapture(ctx, *o)
+	if err != nil {
+		code := CodeInvalid
+		switch {
+		case errors.Is(err, ErrOutOfScope):
+			code = CodeScope
+		case errors.Is(err, ErrTooManyCaptures):
+			code = CodeCaptureLimit
+		case errors.Is(err, ErrDiskLow):
+			code = CodeDiskLow
+		case errors.Is(err, ErrNoCaptureDir):
+			code = CodeNoCaptures
+		}
+		_ = cc.write(&Frame{Error: &RemoteError{Code: code, Message: err.Error()}})
+		return
+	}
+	defer stream.Close()
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		for {
+			f, err := cc.read()
+			if err != nil {
+				return
+			}
+			if f.CaptureCtl != nil && f.CaptureCtl.Stop {
+				stream.Stop(f.CaptureCtl.Reason)
+			}
+		}
+	}()
+	for {
+		select {
+		case ev, ok := <-stream.Events():
+			if !ok {
+				return
+			}
+			if err := cc.write(&Frame{CaptureEvent: &ev}); err != nil {
+				return
+			}
+		case <-gone:
 			return
 		}
 	}

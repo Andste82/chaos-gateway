@@ -64,6 +64,12 @@ type Executor struct {
 	state   string // file holding the assigned interfaces, empty for none
 	keys    KeyProvider
 	birdDir string // where the BIRD configuration files and control sockets live
+	// capDir is the directory of the captures' files (WithCaptures), empty for none; capSlots bounds the captures
+	// that run, capMinFree is the free space they need and capClock times them
+	capDir     string
+	capMinFree float64
+	capClock   clock.Clock
+	capSlots   chan struct{}
 	// hostFS is the host's root file system, read for its netplan, NetworkManager and systemd-networkd configuration
 	// (ReadHostNet); nil reads the executor's own root
 	hostFS fs.FS
@@ -148,8 +154,12 @@ func WithNetnsInode(f func(path string) (uint64, bool)) Option {
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
 	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), readers: make(chan struct{}, readerSlots), clock: clock.NewReal(), done: make(chan struct{}), stopped: make(chan struct{})}
+	e.capSlots = make(chan struct{}, MaxCaptures)
 	for _, o := range opts {
 		o(e)
+	}
+	if e.capClock == nil {
+		e.capClock = e.clock
 	}
 	if err := e.loadState(); err != nil {
 		return nil, err

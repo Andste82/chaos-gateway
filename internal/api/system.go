@@ -687,10 +687,10 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun, pu
 	switch {
 	case osc.err != nil && public:
 		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "the network configuration of the operating system cannot be read (the reason is in the log of the gateway)",
-			Fix: "give the executor the host's /etc read-only at /host/etc (--host-root /host, deploy/compose.executor.yaml)"})
+			Fix: "give the executor the host's /etc and /usr/lib/systemd/network read-only below /host (--host-root /host, deploy/compose.executor.yaml)"})
 	case osc.err != nil:
 		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "the network configuration of the operating system cannot be read: " + firstLine(osc.err.Error()),
-			Fix: "give the executor the host's /etc read-only at /host/etc (--host-root /host, deploy/compose.executor.yaml)"})
+			Fix: "give the executor the host's /etc and /usr/lib/systemd/network read-only below /host (--host-root /host, deploy/compose.executor.yaml)"})
 	case osc.state != nil && len(osc.state.Errors) > 0:
 		add(PreflightCheck{ID: "interfaces.os_config", Status: "warn", Message: "some network configuration files of the operating system cannot be read: " + strings.Join(osc.state.Errors, "; ")})
 	}

@@ -60,6 +60,15 @@ services:
         source: /etc
         target: /host/etc
         read_only: true
+      # the host's systemd-networkd defaults, read-only: the preflight reads the .network files of every directory
+      # networkd reads (internal/preflight/networkd.go), and a distribution's default here can configure a test
+      # interface (I64-02, decided 2026-10-18). /usr/lib/systemd/network is part of systemd's package, so the bind
+      # mount always has its source. /run/systemd/network is not mounted: it exists only while networkd or
+      # netplan has written to it, and the host setup's check (host-setup.sh --check) reads it.
+      - type: bind
+        source: /usr/lib/systemd/network
+        target: /host/usr/lib/systemd/network
+        read_only: true
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:

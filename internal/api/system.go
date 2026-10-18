@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -247,12 +248,19 @@ func (s *Server) GetLinuxObject(c *gin.Context, kind model.GetLinuxObjectParamsK
 
 // GetCapabilities implements GET /capabilities.
 func (s *Server) GetCapabilities(c *gin.Context) {
+	features, steps := Features, run.SupportedStepTypes
+	if s.captures == nil {
+		// a deployment without a capture volume cannot record (M17)
+		steps = slices.DeleteFunc(slices.Clone(steps), func(t string) bool { return t == "capture" })
+	} else {
+		features = append(slices.Clone(features), "captures")
+	}
 	caps := model.Capabilities{
 		Version:       s.cfg.Version,
-		Features:      Features,
+		Features:      features,
 		OverlayKinds:  engine.SupportedOverlayKinds,
 		FaultFamilies: engine.SupportedFaultFamilies,
-		StepTypes:     run.SupportedStepTypes,
+		StepTypes:     steps,
 		CheckTypes:    run.SupportedCheckTypes,
 	}
 	// the limits of plan §3.3: the ids the mark layout has, the classes the compiler accepts per interface

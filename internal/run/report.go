@@ -19,8 +19,16 @@ func (m *Manager) sized(v model.Run) model.Run {
 	}
 	as := append([]model.Artifact(nil), *v.Artifacts...)
 	for i := range as {
-		if as[i].Kind == model.ArtifactKindEvents {
+		switch {
+		case as[i].Kind == model.ArtifactKindEvents:
 			as[i].SizeBytes = ptr(m.eventFileSize(v.Id))
+		case as[i].Kind == model.ArtifactKindCapture && as[i].Capture != nil && m.cfg.Captures != nil:
+			// the size as it is now: a capture that was deleted since has none
+			if cp, err := m.cfg.Captures.Get(*as[i].Capture); err == nil {
+				as[i].SizeBytes = cp.SizeBytes
+			} else {
+				as[i].SizeBytes = nil
+			}
 		}
 	}
 	v.Artifacts = &as

@@ -31,7 +31,7 @@ const waitPoll = 250 * time.Millisecond
 // The step types and check types this build runs (GET /capabilities). The others arrive with the
 // milestones of Unsupported.
 var (
-	SupportedStepTypes  = []string{"profile", "fault", "rule", "wireguard", "wait", "remove", "restore"}
+	SupportedStepTypes  = []string{"profile", "fault", "rule", "wireguard", "capture", "wait", "remove", "restore"}
 	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen"}
 )
 
@@ -77,6 +77,9 @@ type UnsupportedError struct {
 }
 
 func (e *UnsupportedError) Error() string {
+	if e.Milestone == "" {
+		return fmt.Sprintf("a scenario with %s cannot run in this deployment", e.What)
+	}
 	return fmt.Sprintf("a scenario with %s cannot run in this build; it arrives with milestone %s (see GET /capabilities)", e.What, e.Milestone)
 }
 
@@ -118,6 +121,22 @@ type Observer interface {
 	Counters(ctx context.Context, overlays []uuid.UUID) map[uuid.UUID]*model.Counter
 }
 
+// Captures is what the runs need of the packet captures (M17): a capture attached to a run starts with a scope
+// of the run, ends with the reason `run_end` or `user`, and is kept as long as the record of the run.
+// A capture that cannot be made never ends a run: the run says so with the warning `capture_missing`.
+type Captures interface {
+	// Start starts a capture of the scope, named name and attached to the run.
+	Start(ctx context.Context, scope model.CaptureScope, name string, run uuid.UUID) (model.Capture, error)
+	// Stop ends a capture for the reason and returns it once its files are closed; one that has ended is returned as
+	// it is.
+	Stop(ctx context.Context, id uuid.UUID, reason model.CaptureStopReason) (model.Capture, error)
+	// Get returns a capture; OfRun the captures attached to a run, newest first.
+	Get(id uuid.UUID) (model.Capture, error)
+	OfRun(run uuid.UUID) []model.Capture
+	// DeleteRun deletes the captures of a run whose record is deleted.
+	DeleteRun(run uuid.UUID)
+}
+
 // Config configures a Manager.
 type Config struct {
 	// Clock is the time source: monotonic for the schedule and the leases. Required.
@@ -127,6 +146,8 @@ type Config struct {
 	// Gateway and Observer are the engine and what it sees. Required.
 	Gateway  Gateway
 	Observer Observer
+	// Captures records the traffic of a run (`capture: true`, the `capture` steps); nil for a build that cannot.
+	Captures Captures
 	Log      *slog.Logger
 	// Retention is how long the record of an ended run is kept; DefaultRetention when zero.
 	Retention time.Duration

@@ -40,7 +40,11 @@ func (s *Server) initRuns() error {
 		}
 		dir, s.runsTemp = tmp, tmp
 	}
-	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Log: s.log, Retention: s.cfg.RunRetention, EncodeEvent: s.encodeRunEvent})
+	var caps run.Captures // without a capture volume, a scenario that records is refused
+	if s.captures != nil {
+		caps = captureAdapter{s}
+	}
+	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Captures: caps, Log: s.log, Retention: s.cfg.RunRetention, EncodeEvent: s.encodeRunEvent})
 	if err != nil {
 		return err
 	}

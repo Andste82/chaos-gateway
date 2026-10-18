@@ -50,6 +50,8 @@ func TestMain(m *testing.M) {
 	// the JUnit report and the event lines of a run are text for the contract check, not documents to decode
 	openapi3filter.RegisterBodyDecoder("application/xml", openapi3filter.FileBodyDecoder)
 	openapi3filter.RegisterBodyDecoder("application/jsonl", openapi3filter.FileBodyDecoder)
+	openapi3filter.RegisterBodyDecoder("application/x-pcapng", openapi3filter.FileBodyDecoder)
+	openapi3filter.RegisterBodyDecoder("application/vnd.tcpdump.pcap", openapi3filter.FileBodyDecoder)
 	auth.RefreshInterval = time.Millisecond // M5-09: don't sleep real time for a cross-process test
 	goleak.VerifyTestMain(m)
 }
@@ -82,6 +84,10 @@ type gw struct {
 	dhcp     *fakeDHCP
 	// noContract turns the response check off for a call that is known to be outside the spec
 	noContract bool
+	// cap is the capturer the captures go to (M17), nil without a capture volume
+	cap *fakeCapturer
+	// root is the directory of the gateway's data
+	root string
 }
 
 type options struct {
@@ -115,6 +121,13 @@ type options struct {
 	// apiClock is the API server's clock (nil: the real one), for a test whose result must not depend on
 	// how fast the machine runs, e.g. a cache with a lifetime
 	apiClock clock.Clock
+	// noCaptures leaves out the capture volume (M17): a deployment that cannot record
+	noCaptures bool
+	// captureQuota is the quota of the captures when the configuration names none (0: the default)
+	captureQuota int64
+	// captureMinFree is the free space of the capture volume below which the real executor of the testbed refuses and
+	// stops captures (0: 10 percent)
+	captureMinFree float64
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -156,6 +169,10 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		o.hostFS = fstest.MapFS{}
 	}
 	eopts = append(eopts, executor.WithHostRoot(o.hostFS))
+	if o.runner != nil && !o.noCaptures {
+		// the testbed: the real executor captures on the real interfaces, in the namespace of the gateway
+		eopts = append(eopts, executor.WithCaptures(filepath.Join(root, "captures"), o.captureMinFree))
+	}
 	ex, err := executor.New(runner, eopts...)
 	if err != nil {
 		t.Fatal(err)
@@ -190,14 +207,28 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
-	srv, err := api.New(api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
+	var fc *fakeCapturer
+	capCfg := func(c *api.Config) {}
+	switch {
+	case o.noCaptures:
+	case o.runner != nil:
+		capCfg = func(c *api.Config) { c.CapturesDir, c.CaptureQuota = filepath.Join(root, "captures"), o.captureQuota }
+	default:
+		fc = newFakeCapturer(filepath.Join(root, "captures"))
+		capCfg = func(c *api.Config) {
+			c.CapturesDir, c.Capturer, c.CaptureDiskFree, c.CaptureQuota = fc.dir, fc, fc.diskFree, o.captureQuota
+		}
+	}
+	apiCfg := api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
 		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers
 			}
 			return []netip.Addr{netip.MustParseAddr("192.0.2.53")}
-		}})
+		}}
+	capCfg(&apiCfg)
+	srv, err := api.New(apiCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +247,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	jar, _ := cookiejar.New(nil)
-	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, doc: doc, authPath: authPath, dhcp: fd}
+	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, doc: doc, authPath: authPath, dhcp: fd, cap: fc, root: root}
 	switch {
 	case o.done:
 		g.completeSetupDirectly()

@@ -73,6 +73,11 @@ type runState struct {
 	owned      map[uuid.UUID]*ownedOverlay
 	ownedOrder []uuid.UUID
 
+	// caps are the captures of the run (the goroutine of the run only), capArts their artifacts once the run has ended
+	// (guarded by Manager.mu)
+	caps    []*runCapture
+	capArts []model.Artifact
+
 	// reachedAt is when the timeline reached each step (and "start"), guarded by Manager.mu; progress wakes the
 	// goroutine of the checks when it did (capacity one: a wake that is already pending is enough)
 	reachedAt map[string]stepTime
@@ -168,6 +173,9 @@ func (m *Manager) Recover() error {
 			if err := removeRun(m.cfg.Dir, id); err != nil {
 				m.log.Warn("cannot delete an expired run", "run", id, "error", err)
 			}
+			if m.cfg.Captures != nil {
+				m.cfg.Captures.DeleteRun(id)
+			}
 			continue
 		}
 		r := &runState{id: id, rec: f.Run, counters: f.Counters, done: closedChan(), recorded: make(chan struct{})}
@@ -189,6 +197,10 @@ func (m *Manager) Recover() error {
 		failPendingChecks(&r.rec, model.RunStatusAborted, "service restart")
 		r.rec.Status, r.rec.Reason, r.rec.EndedAt = model.RunStatusAborted, ptr("service restart"), ptr(now)
 		r.rec.LeaseExpiresAt = nil
+		if m.cfg.Captures != nil {
+			// the captures the process left (they ended with it) are the artifacts of the run
+			r.capArts = captureArtifacts(m.cfg.Captures.OfRun(id))
+		}
 		r.rec.Artifacts = artifactsOf(r)
 		m.mu.Unlock()
 		m.save(r)
@@ -228,7 +240,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (model.Run, err
 	if len(verrs) > 0 {
 		return model.Run{}, domain.ValidationErrors(verrs)
 	}
-	if err := supported(snap.Config, resolved); err != nil {
+	if err := m.supported(snap.Config, resolved); err != nil {
 		return model.Run{}, err
 	}
 
@@ -369,9 +381,16 @@ func discoveredIDs(snap *engine.Snapshot) []string {
 // supported refuses a scenario that needs a milestone this build does not have (the spec's
 // `unsupported_feature`): a step type or a check type, capturing, a host name where the resolver is needed, an
 // overlay whose kind or profile is not available.
-func supported(cfg *model.Configuration, sc *model.Scenario) error {
-	if sc.Capture != nil && *sc.Capture {
-		return &UnsupportedError{What: "capture: true (capturing the target's traffic)", Milestone: "M17"}
+func (m *Manager) supported(cfg *model.Configuration, sc *model.Scenario) error {
+	if m.cfg.Captures == nil {
+		if sc.Capture != nil && *sc.Capture {
+			return &UnsupportedError{What: "capture: true (the gateway has no capture volume: the executor needs a captures directory)"}
+		}
+		for i := range sc.Steps {
+			if domain.StepKind(&sc.Steps[i]) == "capture" {
+				return &UnsupportedError{What: fmt.Sprintf("a capture step (%s; the gateway has no capture volume: the executor needs a captures directory)", sc.Steps[i].Id)}
+			}
+		}
 	}
 	for i := range deref(sc.Checks) {
 		c := &(*sc.Checks)[i]
@@ -386,8 +405,6 @@ func supported(cfg *model.Configuration, sc *model.Scenario) error {
 	for i := range sc.Steps {
 		st := &sc.Steps[i]
 		switch domain.StepKind(st) {
-		case "capture":
-			return &UnsupportedError{What: fmt.Sprintf("a capture step (%s)", st.Id), Milestone: "M17"}
 		case "wait":
 			if d := st.Wait.Destination; d != nil && d.Hostname != nil {
 				return &UnsupportedError{What: fmt.Sprintf("a wait step (%s) for a host name", st.Id), Milestone: "M20"}
@@ -813,11 +830,12 @@ func (m *Manager) afterFinish(r *runState) {
 // is read when the run is read).
 func artifactsOf(r *runState) *[]model.Artifact {
 	base := "/api/v1/runs/" + r.id.String()
-	return &[]model.Artifact{
+	out := []model.Artifact{
 		{Kind: model.ArtifactKindReportJson, Url: base + "/report.json"},
 		{Kind: model.ArtifactKindReportXml, Url: base + "/report.xml"},
 		{Kind: model.ArtifactKindEvents, Url: base + "/events"},
 	}
+	return ptr(append(out, r.capArts...))
 }
 
 // prune deletes the records of runs that ended before the retention time.
@@ -835,6 +853,9 @@ func (m *Manager) prune() {
 	for _, id := range gone {
 		if err := removeRun(m.cfg.Dir, id); err != nil {
 			m.log.Warn("cannot delete an expired run", "run", id, "error", err)
+		}
+		if m.cfg.Captures != nil {
+			m.cfg.Captures.DeleteRun(id)
 		}
 	}
 }

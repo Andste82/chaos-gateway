@@ -267,6 +267,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 			guard.Rules = append(guard.Rules, drop(oifname(t.Management.Name)))
 		}
 	}
+	// both topologies: the WireGuard networks of role management are part of the management network
+	// (P31-AUDIT-11, decided 2026-10-18), whatever lies behind their clients
+	for _, w := range tp.mgmtWG {
+		guard.Rules = append(guard.Rules, drop(oifname(w)))
+	}
 	forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": MgmtGuardChain}}))
 	// the access rules stand in front of the access matrix: an allow rule is an exception to it, a
 	// drop, reject or reset rule decides before the matrix is asked (plan §2.2, §2.4)
@@ -473,24 +478,39 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			t.warn(CodeUnsupported, "", "an access matrix entry with an endpoint that does not exist (or is not available) is not compiled")
 			return
 		}
-		var expr []any
-		expr = append(expr, f.iif...)
-		expr = append(expr, d.oif...)
-		v := "accept"
-		if policy == model.MatrixEntryPolicyDeny {
-			expr = append(expr, counter("forward_drop"))
-			v = "drop"
-		}
-		if !implicit && policy != model.MatrixEntryPolicyDeny && to.Management != nil && bool(*to.Management) {
-			mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
-			if sub := t.Management.Subnet; !t.twoPort() && sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
-				// the three-port guard drops the management subnet too: the entry opens what the guard
-				// drops (P31-AUDIT-01)
-				mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), f.iif...), eq(payload("ip", "daddr"), prefixValue(sub)), verdict("return"))...))
+		toMgmt := to.Management != nil && bool(*to.Management)
+		dests := []endpoint{d}
+		if toMgmt {
+			// the WireGuard networks of role management are part of the management network (P31-AUDIT-11,
+			// decided 2026-10-18): the endpoint also stands for what leaves through their interfaces, in
+			// both topologies
+			for _, w := range tp.mgmtWG {
+				dests = append(dests, endpoint{oif: []any{oifname(w)}})
 			}
 		}
-		expr = append(expr, verdict(v))
-		items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})
+		// an explicit entry that allows traffic to the management network, or to a WireGuard network of
+		// role management or one of its clients, returns from the management guard by its destination
+		opens := !implicit && policy != model.MatrixEntryPolicyDeny && (toMgmt || tp.inMgmtWG(to))
+		for i, d := range dests {
+			var expr []any
+			expr = append(expr, f.iif...)
+			expr = append(expr, d.oif...)
+			v := "accept"
+			if policy == model.MatrixEntryPolicyDeny {
+				expr = append(expr, counter("forward_drop"))
+				v = "drop"
+			}
+			if opens {
+				mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+				if sub := t.Management.Subnet; i == 0 && toMgmt && !t.twoPort() && sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
+					// the three-port guard drops the management subnet too: the entry opens what the guard
+					// drops (P31-AUDIT-01)
+					mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), f.iif...), eq(payload("ip", "daddr"), prefixValue(sub)), verdict("return"))...))
+				}
+			}
+			expr = append(expr, verdict(v))
+			items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})
+		}
 	}
 	if cfg.AccessMatrix != nil && cfg.AccessMatrix.Entries != nil {
 		for _, e := range *cfg.AccessMatrix.Entries {

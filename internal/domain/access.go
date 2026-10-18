@@ -136,6 +136,44 @@ func (w *World) endpointsOf(ip netip.Addr, mgmt []netip.Prefix) []matrixEndpoint
 	return out
 }
 
+// endpointsTo returns the matrix endpoints of a destination: those of endpointsOf, and the management
+// network when the address lies in a WireGuard network of the role management or behind one of its clients.
+// Those networks are part of the management network for the guard and for the matrix endpoint `management`
+// as a destination, in both topologies (P31-AUDIT-11, decided 2026-10-18), as the compiler has it.
+func (w *World) endpointsTo(ip netip.Addr, f AccessFacts) []matrixEndpoint {
+	out := w.endpointsOf(ip, f.Management)
+	mgmt := matrixEndpoint{"management", ""}
+	if containsEndpoint(out, mgmt) {
+		return out
+	}
+	for _, e := range out {
+		if w.inMgmtWG(e) {
+			return append(out, mgmt)
+		}
+	}
+	return out
+}
+
+// inMgmtWG reports whether an endpoint is a WireGuard network of the role management or a client of one.
+func (w *World) inMgmtWG(e matrixEndpoint) bool {
+	mgmtRole := func(n *NetInfo) bool {
+		return n != nil && n.WG != nil && n.WG.Role != nil && *n.WG.Role == model.WireGuardNetworkRoleManagement
+	}
+	switch e.kind {
+	case "network":
+		return mgmtRole(w.Index.Networks[e.id])
+	case "client":
+		for _, nid := range sortedKeys(w.Index.Networks) {
+			if n := w.Index.Networks[nid]; n.IsHub() && mgmtRole(n) {
+				if _, ok := deref(n.WG.Clients)[e.id]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func endpointOf(e model.MatrixEndpoint) (matrixEndpoint, bool) {
 	switch {
 	case e.Client != nil:
@@ -278,7 +316,7 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 	if g, ok := w.mgmtGuard(src, dst, f); ok {
 		return g
 	}
-	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
+	from, to := w.endpointsOf(src, f.Management), w.endpointsTo(dst, f)
 
 	type entry struct {
 		rank     int
@@ -342,11 +380,14 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 // in on a test interface: a local test network or a WireGuard network of the role test, with its
 // clients) does not reach the management network, behind the uplink interface (two-port topology) or
 // behind a management interface of its own (three-port topology, P31-M35a-10, decided on 2026-10-17).
+// The WireGuard networks of the role management, with their clients and the networks behind them, are
+// part of the management network for the guard in both topologies (P31-AUDIT-11, decided 2026-10-18).
 // It stands in front of the access rules and of the matrix; the one thing that opens it is an
-// explicit matrix entry that allows the source to reach the management network (the clients'
-// `reachable` lists do not).
+// explicit matrix entry that allows the source to reach the management network, or the WireGuard network
+// of the role management (or its client) the destination lies in. The clients' `reachable` lists do not:
+// they are implicit entries (plan §2.16, §2.2.1).
 func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
-	from, to := w.endpointsOf(src, f.Management), w.endpointsOf(dst, f.Management)
+	from, to := w.endpointsOf(src, f.Management), w.endpointsTo(dst, f)
 	mgmt := matrixEndpoint{"management", ""}
 	guarded := containsEndpoint(to, mgmt) || (!f.TwoPort && f.ManagementSubnet.IsValid() && f.ManagementSubnet.Contains(dst))
 	if !guarded || !w.viaTestInterface(from) {
@@ -356,10 +397,20 @@ func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation
 		for _, e := range deref(w.Config.AccessMatrix.Entries) {
 			fe, ok1 := endpointOf(e.From)
 			te, ok2 := endpointOf(e.To)
-			if ok1 && ok2 && e.Policy != model.MatrixEntryPolicyDeny && te == mgmt && containsEndpoint(from, fe) {
+			// an entry to the management network, or to the WireGuard network of the role management (or the
+			// client of one) the destination lies in, opens it by the destination (P31-AUDIT-11)
+			opens := te == mgmt || (w.inMgmtWG(te) && containsEndpoint(to, te))
+			if ok1 && ok2 && e.Policy != model.MatrixEntryPolicyDeny && opens && containsEndpoint(from, fe) {
 				return AccessExplanation{}, false
 			}
 		}
+	}
+	tunnel := false
+	for _, e := range to {
+		tunnel = tunnel || w.inMgmtWG(e)
+	}
+	if tunnel {
+		return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach a WireGuard network of the role management, which is part of the management network; no access rule changes that, only an access matrix entry that allows it"}, true
 	}
 	if f.TwoPort {
 		return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "devices under test do not reach the management network behind the uplink; no access rule changes that"}, true

@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "32eebb8f624eab1c",
+  "hash": "fc65cd0966515d23",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -1593,6 +1593,39 @@
               }
             ],
             "comment": "9cdec773a65a"
+          },
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_test_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "oifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "wg-admin"
+                }
+              },
+              {
+                "counter": "forward_drop"
+              },
+              {
+                "drop": null
+              }
+            ],
+            "comment": "f2ec24b73028"
           }
         ]
       },

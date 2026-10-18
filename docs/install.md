@@ -3,7 +3,8 @@
 How to install Chaos Gateway on a host today, until M28 (container deployment: one `compose.yaml`, the update
 script, `teardown`) and M30 (the user guide) replace this page. The host is Ubuntu 24.04 or 26.04, x86-64 or
 ARM64, with at least one interface for the uplink and management and one interface per test network
-(plan §1.5, §3.8). Everything below runs on that host.
+(plan §1.5, §3.8), and with `/usr/lib/systemd/network` (systemd ships it on Ubuntu; the executor mounts it read-only to
+read the distribution's systemd-networkd defaults). Everything below runs on that host.
 
 ## 1. Build the image
 

@@ -23,8 +23,10 @@ env:
   I64_LEVEL1: TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply,TestTheHostReadingCountsACarrierFlapOnARealKernel,TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration,TestKeaRetriesASocketItCouldNotOpen
 
   # The older tests against the real Kea (internal/kea/kea_testbed_test.go, startKea; I64-05): they run as root
-  # only, so they carry the build tag testbed and are named the same way, and a run in which one skips fails.
-  KEA_LEVEL1: TestTheClientDrivesARealKea,TestLeasesArePagedPastTheLimit
+  # only, so they carry the build tag testbed and are named the same way, and a run in which one skips fails. The
+  # tests against the real Kea without the tag (TestKeaAcceptsTheRenderedConfiguration, and the engine's restart
+  # test, which runs as root only) are in packages with tagged tests, so the testbed runner builds and runs them too.
+  KEA_LEVEL1: TestTheClientDrivesARealKea,TestLeasesArePagedPastTheLimit,TestKeaAcceptsTheRenderedConfiguration,TestTheConfigurationIsSentAgainToAKeaThatRestarted
 
 jobs:
   # Level 0 (plan §4.5): everything that needs no root. Generated code is checked here too:
@@ -294,6 +296,8 @@ jobs:
           $compose run -d --name ci-mounts-exec --entrypoint sleep exec infinity
           sleep 2
           leaked=$(findmnt -rn -o TARGET | grep '/var/lib/docker/volumes/ci-mounts_' || true)
+          # the host's systemd-networkd defaults (I64-02) are readable in the executor container
+          docker exec ci-mounts-exec ls /host/usr/lib/systemd/network || { echo "/host/usr/lib/systemd/network is not readable in the executor container"; fail=1; }
           docker rm -f ci-mounts-exec >/dev/null
           if [ -n "$leaked" ]; then echo "mounts of the executor container in the host's mount table:"; echo "$leaked"; fail=1; fi
           $compose down -v || { echo "docker compose down -v failed"; fail=1; }

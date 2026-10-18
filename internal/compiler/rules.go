@@ -2,7 +2,9 @@ package compiler
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
 
@@ -518,6 +520,17 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 				srcs = append(srcs, ranked{endpoint{iif: []any{iifname(w)}}, rankMgmtWG})
 			}
 		}
+		if !implicit && (toMgmt || fromMgmt) && len(tp.mgmtWG) > 0 {
+			// before 2026-10-18 the endpoint stood for the management interface and the allowed sources only:
+			// an entry kept from then covers more now, so the compiler says so (the upgrade note of plan §2.16)
+			t.warn(CodeMatrixManagementWG, "", "the access matrix entry %s -> %s also covers the WireGuard %s of the role management %s, which %s part of the management network (P31-AUDIT-11)",
+				t.endpointName(from), t.endpointName(to), pluralNetworks(len(tp.mgmtWG)), t.mgmtWGNames(), isAre(len(tp.mgmtWG)))
+		}
+		if implicit && (toMgmt || tp.inMgmtWG(to)) && from.Client != nil && !slices.Contains(tp.mgmtWG, tp.clients[*from.Client].dev) {
+			// a test client's `reachable` list is no explicit entry: the management guard drops what it would open
+			t.warn(CodeReachableGuarded, "", "the client %s names %s in its reachable list, but the management guard drops a device under test there: only an explicit access matrix entry opens it",
+				t.endpointName(from), t.endpointName(to))
+		}
 		// an explicit entry that allows traffic to the management network, or to a WireGuard network of
 		// role management or one of its clients, returns from the management guard by its destination
 		opens := !implicit && policy != model.MatrixEntryPolicyDeny && (toMgmt || tp.inMgmtWG(to))
@@ -581,4 +594,72 @@ func ifnames(names []string) any {
 		vals[i] = n
 	}
 	return anon(vals...)
+}
+
+// CodeMatrixManagementWG is the warning for an explicit access matrix entry from or towards the management
+// network while WireGuard networks of the role management exist: since 2026-10-18 the endpoint covers them
+// too (P31-AUDIT-11), so an entry written before covers more than it did (plan §2.16).
+const CodeMatrixManagementWG = "matrix_management_wireguard"
+
+// CodeReachableGuarded is the warning for a client of a test-role WireGuard network that names the management
+// network, a WireGuard network of the role management or one of its clients in its `reachable` list: the list is
+// an implicit entry, and the management guard drops that traffic until an explicit matrix entry opens it.
+const CodeReachableGuarded = "reachable_guarded"
+
+// endpointName names a matrix endpoint in a message: the network's or the client's name.
+func (t *Target) endpointName(ep model.MatrixEndpoint) string {
+	switch {
+	case ep.Client != nil:
+		for _, w := range t.WireGuard {
+			for _, p := range w.Peers {
+				if p.ID == *ep.Client {
+					return "client " + p.Name + " (" + w.NetworkName + ")"
+				}
+			}
+		}
+		return "client " + *ep.Client
+	case ep.Network != nil:
+		for _, b := range t.Bridges {
+			if b.NetworkID == *ep.Network {
+				return "network " + b.NetworkName
+			}
+		}
+		for _, w := range t.WireGuard {
+			if w.NetworkID == *ep.Network {
+				return "network " + w.NetworkName
+			}
+		}
+		return "network " + *ep.Network
+	case ep.Management != nil && bool(*ep.Management):
+		return "management"
+	case ep.Uplink != nil && bool(*ep.Uplink):
+		return "uplink"
+	}
+	return "?"
+}
+
+// mgmtWGNames lists the names of the WireGuard networks of the role management.
+func (t *Target) mgmtWGNames() string {
+	var names []string
+	for _, w := range t.WireGuard {
+		if w.Role == "management" {
+			names = append(names, w.NetworkName)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+func pluralNetworks(n int) string {
+	if n == 1 {
+		return "network"
+	}
+	return "networks"
+}
+
+func isAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }

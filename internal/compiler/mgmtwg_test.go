@@ -264,3 +264,83 @@ func TestAManagementEntryAlsoMatchesTrafficFromAManagementRoleWireGuardNetwork(t
 		}
 	}
 }
+
+// The upgrade note of plan §2.16: an entry from or towards `management` covers the WireGuard networks of the role
+// management since 2026-10-18; the compiler warns and names them.
+func TestAManagementEntryWarnsThatItCoversTheManagementRoleWireGuardNetworks(t *testing.T) {
+	for _, twoPort := range []bool{false, true} {
+		got := warningsOf(t, adminWG(t, twoPort), CodeMatrixManagementWG)
+		if len(got) != 1 || !strings.Contains(got[0], "network site-b -> management") || !strings.Contains(got[0], "WireGuard network of the role management admin") {
+			t.Errorf("two ports %v: %q", twoPort, got)
+		}
+		got = warningsOf(t, adminWGWith(t, twoPort, specificDeny), CodeMatrixManagementWG)
+		if len(got) != 2 || !strings.Contains(strings.Join(got, "\n"), "management -> network IoT") {
+			t.Errorf("two ports %v, from the management network: %q", twoPort, got)
+		}
+	}
+	// the plain WireGuard scenario has no entry of the management network
+	if got := warningsOf(t, compileWG(t, nil), CodeMatrixManagementWG); len(got) != 0 {
+		t.Errorf("a warning without an entry: %q", got)
+	}
+	// nor does an entry of the management network warn without a WireGuard network of the role management
+	m := model.MatrixEndpointManagement(true)
+	plain := compileBasic(t, func(c *model.Configuration, _ *Host) {
+		iot := iotNet
+		c.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow}}}
+	})
+	if got := warningsOf(t, plain, CodeMatrixManagementWG); len(got) != 0 {
+		t.Errorf("a warning without a management-role network: %q", got)
+	}
+}
+
+// A test client's `reachable` list naming a management-role network, one of its clients or the management network
+// compiles to an accept the guard drops: the compiler warns, names the client and the endpoint and says that an
+// explicit matrix entry is needed. A client of the management hub is no device under test: no warning.
+func TestAReachableListThatTheGuardDropsWarns(t *testing.T) {
+	for _, twoPort := range []bool{false, true} {
+		got := warningsOf(t, adminWG(t, twoPort), CodeReachableGuarded)
+		if len(got) != 1 || !strings.Contains(got[0], "client rA (lab-hub) names network admin") || !strings.Contains(got[0], "explicit access matrix entry") {
+			t.Errorf("two ports %v: %q", twoPort, got)
+		}
+		toMgmt := func(s string) string {
+			return strings.Replace(s, "          - network: admin\n", "          - management: true\n", 1)
+		}
+		got = warningsOf(t, adminWGWith(t, twoPort, "", toMgmt), CodeReachableGuarded)
+		if len(got) != 1 || !strings.Contains(got[0], "client rA (lab-hub) names management") {
+			t.Errorf("two ports %v, management: %q", twoPort, got)
+		}
+		toClient := func(s string) string {
+			return strings.Replace(s, "          - network: admin\n", "          - client: 1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9\n", 1)
+		}
+		got = warningsOf(t, adminWGWith(t, twoPort, "", toClient), CodeReachableGuarded)
+		if len(got) != 1 || !strings.Contains(got[0], "names client adm (admin)") {
+			t.Errorf("two ports %v, the client of the management hub: %q", twoPort, got)
+		}
+		// adm, a client of the management hub, may name the management network
+		admReach := func(s string) string {
+			s = strings.Replace(s, "          - network: admin\n", "", 1)
+			return strings.Replace(s, "        client_networks: [10.97.0.0/24]\n", "        client_networks: [10.97.0.0/24]\n        reachable: [{management: true}]\n", 1)
+		}
+		if got := warningsOf(t, adminWGWith(t, twoPort, "", admReach), CodeReachableGuarded); len(got) != 0 {
+			t.Errorf("two ports %v, a management client: %q", twoPort, got)
+		}
+	}
+	if got := warningsOf(t, compileWG(t, nil), CodeReachableGuarded); len(got) != 0 {
+		t.Errorf("a warning without such a reachable list: %q", got)
+	}
+}
+
+// warningsOf returns the messages of the problems of a code, which must be warnings.
+func warningsOf(t *testing.T, tg *Target, code string) []string {
+	t.Helper()
+	var out []string
+	for _, p := range tg.Problems {
+		if p.Code == code {
+			if p.Severity != SevWarning {
+				t.Errorf("not a warning: %+v", p)
+			}
+			out = append(out, p.Message)
+		}
+	}
+	return out
+}

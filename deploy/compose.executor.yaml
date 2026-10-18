@@ -12,7 +12,7 @@
 services:
   exec:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw-bird", "--allow-uid", "65532", "--socket-owner", "65532", "--host-root", "/host"]
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw-bird", "--allow-uid", "65532", "--socket-owner", "65532", "--host-root", "/host", "--captures-dir", "/var/lib/chaosgw/captures"]
     user: "0:0"
     privileged: true
     network_mode: host
@@ -33,6 +33,9 @@ services:
       - chaosgw-bird:/run/chaosgw-bird
       # the interfaces assigned to Chaos Gateway; nothing else is stored
       - chaosgw-exec-state:/var/lib/chaosgw/exec
+      # the packet captures (M17): the executor holds the privilege for the raw sockets and writes the files into the
+      # directories the API container makes; the API container reads, serves and deletes them
+      - chaosgw-captures:/var/lib/chaosgw/captures
       # the WireGuard keys: the executor only reads them (the API container writes)
       - type: volume
         source: chaosgw-secrets
@@ -88,3 +91,4 @@ volumes:
   chaosgw-exec-state:
   chaosgw-secrets:
   chaosgw-bird:
+  chaosgw-captures:

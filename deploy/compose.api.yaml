@@ -11,7 +11,7 @@
 services:
   api:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid"]
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid", "--captures-dir", "/var/lib/chaosgw/captures"]
     user: "65532:65532"
     network_mode: host
     read_only: true
@@ -29,6 +29,9 @@ services:
       - chaosgw-secrets:/var/lib/chaosgw/secrets
       # the audit log and the idempotency keys
       - chaosgw-api:/var/lib/chaosgw/api
+      # the packet captures (M17): the API makes the directory of a capture, the executor writes the packet files in it
+      # (as the owner of the directory), and the API serves and deletes them and keeps the quota
+      - chaosgw-captures:/var/lib/chaosgw/captures
       # Kea's control socket (the Kea container creates it, in the group of this user)
       - chaosgw-kea-run:/run/kea
       # the datagram socket of Kea's lease events: this user's directory, where it creates the socket;
@@ -70,6 +73,7 @@ volumes:
   chaosgw-state:
   chaosgw-secrets:
   chaosgw-api:
+  chaosgw-captures:
   chaosgw-kea-run:
   chaosgw-kea-events:
   chaosgw-service:

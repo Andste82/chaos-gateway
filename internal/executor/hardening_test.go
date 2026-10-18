@@ -84,7 +84,7 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "exec" {
 		t.Fatalf("command %v: the image's entrypoint is chaosgw, the command starts with the subcommand", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true, "--bird-dir": true, "--host-root": true}
+	known := map[string]bool{"--socket": true, "--state": true, "--allow-uid": true, "--socket-owner": true, "--secrets-dir": true, "--bird-dir": true, "--host-root": true, "--captures-dir": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw exec`", a)
@@ -125,8 +125,8 @@ func TestExecutorContainerHardeningProfile(t *testing.T) {
 			t.Errorf("unexpected mount %q", m)
 		}
 	}
-	if len(mounts) != 8 || !contains(mounts, "/etc:/host/etc") || !contains(mounts, networkdDefaults) || !contains(s.Command, "/host") {
-		t.Errorf("mounts %v: want the socket, BIRD, state and secrets volumes, /run/netns, /lib/modules, the host's /etc and its systemd-networkd defaults (read by --host-root /host)", mounts)
+	if len(mounts) != 9 || !contains(mounts, "/etc:/host/etc") || !contains(mounts, networkdDefaults) || !contains(s.Command, "/host") {
+		t.Errorf("mounts %v: want the socket, BIRD, state, captures and secrets volumes, /run/netns, /lib/modules, the host's /etc and its systemd-networkd defaults (read by --host-root /host)", mounts)
 	}
 	// the preflight reads the defaults where the mount puts them: below the host root, in a directory of NetworkdDirs
 	if dir := strings.TrimPrefix(strings.SplitN(networkdDefaults, ":", 2)[1], "/host/"); !slices.Contains(preflight.NetworkdDirs, dir) {
@@ -226,14 +226,14 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "api" {
 		t.Fatalf("command %v", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--kea-events-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--kea-events-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true, "--captures-dir": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 9 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, Kea's socket, the Kea events socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
+	if len(s.Volumes) != 10 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, the captures, Kea's socket, the Kea events socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
 	}
 	// issue #57 F3: the API creates the Kea events socket in a directory of its own, and the Kea hook sends to it there
 	if !containsPair(s.Command, "--kea-events-socket", keaEventsSocket) {
@@ -446,8 +446,8 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 			writable = append(writable, target)
 		}
 	}
-	if len(writable) != 5 {
-		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the service token and the Kea events socket", writable)
+	if len(writable) != 6 {
+		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the captures, the service token and the Kea events socket", writable)
 	}
 
 	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")

@@ -58,9 +58,10 @@ COPY deploy/kea-start.sh /usr/local/bin/chaosgw-kea-start
 # named volume that is still empty takes its owner and mode from the image's directory when a container
 # first mounts it, so these must exist here with that owner (issue #57: otherwise the volumes are root's
 # and the API cannot start). The secrets are the API's alone; the executor reads them as root. The
-# directory of the Kea events socket is the API's too: the Kea container (group 65532) only sends to it.
-RUN mkdir -p /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /run/chaosgw-svcns /run/chaosgw-kea-events \
-    && chown 65532:65532 /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /run/chaosgw-svcns /run/chaosgw-kea-events \
+# directory of the Kea events socket is the API's too: the Kea container (group 65532) only sends to it. The
+# captures (M17) are the API's volume as well: it makes one directory per capture, the executor writes into it.
+RUN mkdir -p /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /var/lib/chaosgw/captures /run/chaosgw-svcns /run/chaosgw-kea-events \
+    && chown 65532:65532 /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /var/lib/chaosgw/captures /run/chaosgw-svcns /run/chaosgw-kea-events \
     && chmod 0700 /var/lib/chaosgw/secrets \
     && chmod 0750 /run/chaosgw-kea-events
 ENTRYPOINT ["chaosgw"]

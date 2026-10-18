@@ -27,6 +27,10 @@ const (
 	CodeCommand   = "command_failed"
 	CodeInternal  = "internal"
 	CodeForbidden = "forbidden"
+	// The refusals of a capture (M17): too many running, a volume that is almost full, an executor without a volume.
+	CodeCaptureLimit = "capture_limit"
+	CodeDiskLow      = "disk_low"
+	CodeNoCaptures   = "captures_unavailable"
 )
 
 // Hello is the first line each side sends.
@@ -44,6 +48,12 @@ type Frame struct {
 	Watch    *WatchRequest `json:"watch,omitempty"`
 	Event    *WatchEvent   `json:"event,omitempty"`
 	Error    *RemoteError  `json:"error,omitempty"` // connection-level error; the sender closes
+	// Capture opens a capture on this connection (M17): the one message a capture connection sends after its
+	// hello, the executor answers with CaptureEvents until the capture has ended; CaptureCtl is what the client
+	// may still send.
+	Capture      *CaptureOpen  `json:"capture,omitempty"`
+	CaptureCtl   *CaptureCtl   `json:"capture_ctl,omitempty"`
+	CaptureEvent *CaptureEvent `json:"capture_event,omitempty"`
 }
 
 // WatchRequest asks the executor to stream events on this connection instead of answering

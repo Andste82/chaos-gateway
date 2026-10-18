@@ -188,6 +188,12 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 		!strings.Contains(r.Stdout, "link: lan0") {
 		t.Errorf("the check of the test port: %v (exit %d)\n%s", err, r.Exit, r.Stdout)
 	}
+	// the uplink named as a test interface by mistake is refused before systemd-networkd lets go of it
+	if r, err := vm.Run(ctx, "sudo sh /opt/chaosgw/host-setup.sh --skip-docker --skip-modprobe --test-interface wan0 2>&1", nil); err != nil || r.Exit != 2 ||
+		!strings.Contains(r.Stdout, "--test-interface wan0: ") || !strings.Contains(r.Stdout, "nothing was changed") {
+		t.Errorf("the uplink as a test interface: %v (exit %d)\n%s", err, r.Exit, r.Stdout)
+	}
+	must("test ! -e /etc/systemd/network/10-chaosgw-wan0.network")
 
 	// the image, the executor and the BIRD container (plan §3.8; M4c-07: BIRD depends on the
 	// executor's health, since it crash-loops until the executor has written chaosgw.conf)

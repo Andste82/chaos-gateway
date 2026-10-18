@@ -16,7 +16,51 @@ const hostSetup = "../../deploy/host-setup.sh"
 
 func runHostSetup(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	out, err := exec.Command("sh", append([]string{hostSetup}, args...)...).CombinedOutput()
+	return runHostSetupOn(t, hostState{}, args...)
+}
+
+// hostState is what the stub of `ip` reports to the host setup's guard of --test-interface, by interface
+// name: its default routes (`ip -4|-6 route show default dev IF`) and its addresses (`ip -o addr show dev
+// IF`); ssh is $SSH_CONNECTION. The tests never ask the real host, whose interfaces they do not know.
+type hostState struct {
+	routes4, routes6, addrs map[string]string
+	ssh                     string
+}
+
+const ipStub = `#!/bin/sh
+case "$*" in
+"-4 route show default dev "*) f=route4 ;;
+"-6 route show default dev "*) f=route6 ;;
+"-o addr show dev "*) f=addr ;;
+*) echo "ip stub: unexpected: $*" >&2; exit 1 ;;
+esac
+eval "dev=\${$#}"
+cat "$HOST_SETUP_TEST_IP/$f-$dev" 2>/dev/null || true
+`
+
+func runHostSetupOn(t *testing.T, h hostState, args ...string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bin/ip"), ipStub)
+	if err := os.Chmod(filepath.Join(dir, "bin/ip"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for kind, m := range map[string]map[string]string{"route4": h.routes4, "route6": h.routes6, "addr": h.addrs} {
+		for dev, v := range m {
+			writeFile(t, filepath.Join(dir, kind+"-"+dev), v)
+		}
+	}
+	cmd := exec.Command("sh", append([]string{hostSetup}, args...)...)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "PATH=") && !strings.HasPrefix(kv, "SSH_CONNECTION=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PATH="+filepath.Join(dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"), "HOST_SETUP_TEST_IP="+dir)
+	if h.ssh != "" {
+		cmd.Env = append(cmd.Env, "SSH_CONNECTION="+h.ssh)
+	}
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
@@ -287,7 +331,8 @@ func TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt(t *testing.T) {
 	}
 }
 
-// The new options refuse what is no interface name and do not mix the check, the undo and the setup.
+// The new options refuse what is no interface name and do not mix the check, the undo and the setup;
+// --test-interface refuses an interface with the default route, an IPv4 address or the SSH session.
 func TestHostSetupTestInterfaceOptions(t *testing.T) {
 	root := t.TempDir()
 	for _, args := range [][]string{
@@ -307,6 +352,56 @@ func TestHostSetupTestInterfaceOptions(t *testing.T) {
 	if len(treeOf(t, root)) != 0 {
 		t.Error("a refused run wrote a file")
 	}
+
+	// a --test-interface that carries the host's own connection is refused before anything is written:
+	// its networkd rule would make systemd-networkd drop the uplink or the management interface at once
+	fakeInterface(t, root, "eth0", "2c:cf:67:00:00:01", "macb", true)
+	fakeInterface(t, root, "eth1", "2c:cf:67:00:00:02", "r8152", true)
+	fakeInterface(t, root, "lan0", "2c:cf:67:00:00:03", "r8152", true)
+	before := treeOf(t, root)
+	host := hostState{
+		routes4: map[string]string{"eth0": "default via 192.168.1.1 proto dhcp src 192.168.1.20 metric 100 \n"},
+		addrs: map[string]string{
+			"eth0": "2: eth0    inet 192.168.1.20/24 metric 100 brd 192.168.1.255 scope global dynamic eth0\\       valid_lft 86000sec preferred_lft 86000sec\n",
+			"eth1": "3: eth1    inet 10.99.0.5/24 brd 10.99.0.255 scope global eth1\\       valid_lft forever preferred_lft forever\n" +
+				"3: eth1    inet6 fe80::2ecf:67ff:fe00:2/64 scope link \\       valid_lft forever preferred_lft forever\n",
+			"lan0": "4: lan0    inet6 fe80::2ecf:67ff:fe00:3/64 scope link \\       valid_lft forever preferred_lft forever\n",
+		},
+	}
+	setup := []string{"--prefix", root, "--skip-docker", "--skip-modprobe"}
+	for _, c := range []struct {
+		h    hostState
+		args []string
+		want string
+	}{
+		{host, []string{"--test-interface", "eth0"}, "--test-interface eth0: eth0 has the default route, it looks like the uplink."},
+		{hostState{routes6: map[string]string{"eth0": "default via fe80::1 proto ra metric 100 pref medium\n"}}, []string{"--test-interface", "eth0"}, "eth0 has the default route"},
+		{host, []string{"--test-interface", "lan0", "--test-interface", "eth1"}, "--test-interface eth1: eth1 has the IPv4 address 10.99.0.5/24, it looks like the uplink or the management interface."},
+		{hostState{addrs: map[string]string{"lan0": "4: lan0    inet6 2001:db8::5/64 scope global \\       valid_lft forever preferred_lft forever\n"}, ssh: "2001:db8::9 50022 2001:db8::5 22"},
+			[]string{"--test-interface", "lan0"}, "the SSH session that runs the setup comes in on lan0 (address 2001:db8::5)"},
+	} {
+		out, err := runHostSetupOn(t, c.h, append(setup, c.args...)...)
+		if exitCode(err) != 2 || !strings.Contains(out, c.want) || !strings.Contains(out, "nothing was changed") {
+			t.Errorf("%v: %v\n%s", c.args, err, out)
+		}
+		if fmt.Sprint(treeOf(t, root)) != fmt.Sprint(before) {
+			t.Fatalf("%v: a refused --test-interface wrote a file", c.args)
+		}
+	}
+	// a port with only a link-local address, and one the SSH session does not come in on, is a test port
+	if out, err := runHostSetupOn(t, host, append(setup, "--test-interface", "lan0")...); strings.Contains(out, "nothing was changed") ||
+		!strings.Contains(out, "wrote "+filepath.Join(root, "etc/systemd/network/10-chaosgw-lan0.network")) {
+		t.Errorf("lan0 was refused: %v\n%s", err, out)
+	}
+	host.ssh = "192.168.1.9 50022 192.168.1.20 22"
+	if out, _ := runHostSetupOn(t, host, append(setup, "--test-interface", "lan0")...); strings.Contains(out, "nothing was changed") {
+		t.Errorf("lan0 was refused for an SSH session on eth0:\n%s", out)
+	}
+	// the check changes nothing and is not refused
+	if out, _ := runHostSetupOn(t, host, "--prefix", root, "--check", "eth0"); strings.Contains(out, "nothing was changed") {
+		t.Errorf("--check eth0 was refused:\n%s", out)
+	}
+
 	if out, _ := runHostSetup(t, "--help"); !strings.Contains(out, "--test-interface IF") || !strings.Contains(out, "--check IF") || !strings.Contains(out, "--remove-test-interface IF") {
 		t.Errorf("help:\n%s", out)
 	}

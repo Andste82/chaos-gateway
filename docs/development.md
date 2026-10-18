@@ -880,7 +880,11 @@ two ports:    the management network lives behind the uplink interface; there is
 - **The test interfaces before the wizard (issue #64).** `host-setup.sh --test-interface IF` also writes
   `/etc/systemd/network/10-chaosgw-IF.network` (`[Match] Name=IF`, `[Link] Unmanaged=yes`; it sorts
   before netplan's generated `10-netplan-*` and every distribution default such as dracut's
-  `zzzz-dracut-default.network`), reloads systemd-networkd and then checks the interface;
+  `zzzz-dracut-default.network`), reloads systemd-networkd and then checks the interface. Before it changes
+  anything it refuses (exit 2) an interface that carries the host's own connection, because the rule would make
+  systemd-networkd drop it at once: the local address of `$SSH_CONNECTION` is one of its addresses, it has a
+  default route (`ip -4|-6 route show default dev IF`), or it has a global IPv4 address (`ip -o addr show dev
+  IF`); the message says to remove the port's configuration and address first if it really is a test port.
   `--remove-test-interface IF` removes the file again, only when its first line is the host setup's mark.
   `--check IF` changes nothing: the link (exists; no carrier is a warning), the netplan files that name the
   interface or its MAC (file and line; `/run` hides `/etc`, `/etc` hides `/lib`), the NetworkManager
@@ -899,8 +903,10 @@ two ports:    the management network lives behind the uplink interface; there is
   `TestThePreflightEvaluatesANetworkdMatch`, `TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup`
   (API, `GET /setup`), `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`,
   `TestHostSetupTestInterfaceOptions` and `TestHostSetupEvaluatesNetworkdLikeThePreflight` (the same table of
-  `[Match]` cases through the script, against a fake sysfs and root under `--prefix`); the appliance test
-  runs `--check` on its test port, which cloud-init's netplan entry keeps failing.
+  `[Match]` cases through the script, against a fake sysfs and root under `--prefix`, and a stub `ip` on `PATH`
+  for the routes and addresses the guard asks about); the appliance test runs `--check` on its test port, which
+  cloud-init's netplan entry keeps failing, and `--test-interface wan0`, which the guard refuses without
+  writing the rule.
 
 ## DHCP and devices (M6a)
 

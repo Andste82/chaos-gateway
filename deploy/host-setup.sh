@@ -2,7 +2,7 @@
 # Chaos Gateway host setup (plan §3.8). Run it once on the Ubuntu 24.04 or 26.04 host that will run
 # the containers; it is safe to run again.
 #
-#   docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --test-interface eth0
+#   docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --test-interface lan0
 #
 # What it does:
 #   - installs Docker Engine and the compose plugin when they are missing (Ubuntu's packages),
@@ -12,7 +12,9 @@
 #   - for every --test-interface: writes the rule that keeps systemd-networkd off it
 #     (/etc/systemd/network/10-chaosgw-<interface>.network, issue #64) and checks it (as --check),
 #   - prints the netplan changes the test interfaces need.
-# What it never does: touch the uplink or the management configuration, or any netplan file.
+# What it never does: touch the uplink or the management configuration, or any netplan file. It refuses a
+# --test-interface that carries the host's own connection (the default route, an IPv4 address, the SSH
+# session that runs it): the rule would make systemd-networkd drop that interface at once.
 #
 # Options:
 #   --test-interface IF          IF will be a test interface: write its networkd rule, then check it
@@ -80,7 +82,8 @@ while [ $# -gt 0 ]; do
 Chaos Gateway host setup: installs Docker if missing, loads the kernel modules and enables
 IPv4 forwarding now and at every boot, keeps systemd-networkd off the test interfaces and
 checks them, and prints the netplan hints for them. It never touches the uplink or the
-management configuration, or any netplan file.
+management configuration, or any netplan file, and refuses a --test-interface that has the
+default route, an IPv4 address or the SSH session that runs the setup.
 
   --test-interface IF          IF will be a test interface: write
                                /etc/systemd/network/10-chaosgw-IF.network ([Link] Unmanaged=yes),
@@ -96,7 +99,7 @@ management configuration, or any netplan file.
   --help                       this text
 
 From the image:
-  docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --check eth0
+  docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --check lan0
 HELP
 		exit 0
 		;;
@@ -123,6 +126,39 @@ if [ -z "$PREFIX" ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 say() { echo "host-setup: $*"; }
+
+# refuse_host_interface stops the setup, before it changes anything, when a --test-interface carries the
+# host's own connection: the SSH session that runs the setup comes in on it, it has the default route (the
+# uplink), or it has an IPv4 address (the management interface, or a port the operating system still
+# configures). Its networkd rule would make systemd-networkd drop the interface at once: no lease renewal,
+# no configuration after the next boot. The setup wizard keeps the uplink and the management interface out
+# of the test interfaces for the same reason; this script runs before the wizard and knows neither.
+refuse_host_interface() { # interface
+	command -v ip >/dev/null 2>&1 || return 0
+	addrs=$(ip -o addr show dev "$1" 2>/dev/null || true)
+	why=""
+	ssh_local=$(echo "${SSH_CONNECTION:-}" | awk '{print $3}')
+	if [ -n "$ssh_local" ] && echo "$addrs" | awk -v a="$ssh_local" '{split($4, p, "/"); if (p[1] == a) f = 1} END {exit !f}'; then
+		why="the SSH session that runs the setup comes in on $1 (address $ssh_local)"
+	elif [ -n "$(ip -4 route show default dev "$1" 2>/dev/null)$(ip -6 route show default dev "$1" 2>/dev/null)" ]; then
+		why="$1 has the default route, it looks like the uplink"
+	else
+		v4=$(echo "$addrs" | awk '$3 == "inet" && / scope global / {print $4; exit}')
+		if [ -n "$v4" ]; then
+			why="$1 has the IPv4 address $v4, it looks like the uplink or the management interface"
+		fi
+	fi
+	[ -n "$why" ] || return 0
+	echo "host-setup: --test-interface $1: $why. A test interface carries no connection of the host itself; nothing was changed." >&2
+	echo "host-setup: if $1 is a test port the operating system still configures, remove that configuration first (--check $1 names it) and its address (sudo ip addr flush dev $1)." >&2
+	exit 2
+}
+
+if [ "$MODE" = setup ]; then
+	for i in $TEST_IFS; do
+		refuse_host_interface "$i"
+	done
+fi
 
 write_if_changed() { # file, content on stdin
 	dir=$(dirname "$1")

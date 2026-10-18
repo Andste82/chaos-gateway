@@ -34,18 +34,20 @@ published multi-arch image comes with M28.)
 ## 2. Prepare the host
 
 Once, as root; safe to run again. Name every interface that will carry a test network with `--test-interface`
-(here `eth0`):
+(here `lan0`; `ip link` lists the names of the host's interfaces):
 
 ```sh
 docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh > host-setup.sh
-sudo sh host-setup.sh --test-interface eth0
+sudo sh host-setup.sh --test-interface lan0
 ```
 
 It installs Docker if missing, loads the kernel modules now and at boot
 (`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding (`/etc/sysctl.d/90-chaos-gateway.conf`),
 keeps systemd-networkd off each test interface (below), prints the netplan changes the test interfaces need and
 ends with the check of each test interface. It never touches the uplink or the management configuration, or any
-netplan file. `sh host-setup.sh --help` lists its options.
+netplan file, and it refuses, before it changes anything, a `--test-interface` that has the default route, an IPv4
+address or the SSH session it runs in: that is the uplink or the management interface named by mistake, which
+systemd-networkd would otherwise stop configuring. `sh host-setup.sh --help` lists its options.
 
 ### The test interfaces belong to the gateway alone
 
@@ -57,7 +59,7 @@ wizard:
    example in `/etc/netplan/50-cloud-init.yaml`:
 
    ```yaml
-       eth0:
+       lan0:
          optional: true
          dhcp4: false
          dhcp6: false
@@ -68,25 +70,25 @@ wizard:
    NetworkManager connection of the interface too, if there is one (`nmcli connection show`).
 2. **Keep systemd-networkd off the interface.** With the netplan entry gone, a default of the distribution may
    take the port: on Ubuntu for the Raspberry Pi, `/run/systemd/network/zzzz-dracut-default.network` runs DHCP on
-   every ethernet port no other file names. `--test-interface eth0` writes
-   `/etc/systemd/network/10-chaosgw-eth0.network`, which comes before every such default, and reloads
+   every ethernet port no other file names. `--test-interface lan0` writes
+   `/etc/systemd/network/10-chaosgw-lan0.network`, which comes before every such default, and reloads
    systemd-networkd:
 
    ```ini
    [Match]
-   Name=eth0
+   Name=lan0
 
    [Link]
    Unmanaged=yes
    ```
 
-   `networkctl list` then shows `eth0` as `unmanaged`. `sudo sh host-setup.sh --remove-test-interface eth0`
+   `networkctl list` then shows `lan0` as `unmanaged`. `sudo sh host-setup.sh --remove-test-interface lan0`
    removes the file again.
 
 Then check, until it says `the test interfaces are ready`:
 
 ```sh
-sudo sh host-setup.sh --check eth0
+sudo sh host-setup.sh --check lan0
 ```
 
 The check changes nothing. For each interface it reports whether it exists and has a carrier (no carrier is only a
@@ -169,11 +171,11 @@ goes through preview and apply like every other change. Things to know:
 
 A device on a test network gets no address. In this order:
 
-1. **The operating system leaves the port alone.** `sudo sh host-setup.sh --check eth0` (step 2) must say `the
+1. **The operating system leaves the port alone.** `sudo sh host-setup.sh --check lan0` (step 2) must say `the
    test interfaces are ready`. `networkctl list` must show the port as `unmanaged`; `configuring`,
    `configured` or `enslaved` mean systemd-networkd still runs DHCP on it: write the rule
-   (`--test-interface eth0`) and run `sudo networkctl reload`.
-2. **The port has a link and is in the network's bridge.** `ip link show eth0` shows `state UP` and
+   (`--test-interface lan0`) and run `sudo networkctl reload`.
+2. **The port has a link and is in the network's bridge.** `ip link show lan0` shows `state UP` and
    `master br-<network>` (the bridge of the network; the Linux view of the network in the UI names it).
 3. **Kea listens on the bridge.** Kea opens its packet socket on the bridge only while the bridge has a carrier,
    that is while one of its ports is up. It tries again for a minute after a failure, and the gateway configures it
@@ -185,7 +187,7 @@ A device on a test network gets no address. In this order:
 4. **The device asks again.** A device that gave up after its first tries waits a long time before the next:
    renew its lease (`sudo dhclient -r eth0 && sudo dhclient eth0`, `ipconfig /renew`, or unplug and plug the
    cable).
-5. **Capture on the port, not on the bridge.** `sudo tcpdump -eni eth0 port 67 or port 68` shows the device's
+5. **Capture on the port, not on the bridge.** `sudo tcpdump -eni lan0 port 67 or port 68` shows the device's
    requests and the gateway's answers on the wire. Frames the bridge forwards between its ports are not seen on
    the bridge device, so a capture on `br-<network>` can miss what the device sends or receives.
 
@@ -212,7 +214,7 @@ then:
 
 ```sh
 docker compose down -v
-sudo sh host-setup.sh --remove-test-interface eth0
+sudo sh host-setup.sh --remove-test-interface lan0
 sudo rm -f /etc/modules-load.d/chaos-gateway.conf /etc/sysctl.d/90-chaos-gateway.conf
 sudo reboot
 ```

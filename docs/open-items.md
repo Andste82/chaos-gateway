@@ -25,7 +25,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   code) is closed by the Nightly run on that branch (39084099383, green); P31-AUDIT-11 to -14 were decided by the maintainer on
   2026-10-18 and are closed on that branch (each implemented with its tests), and the audit's alternative to P31-AUDIT-01 was
   decided against (the entry stays allowed, no warning), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer).
-  Every item of the audit is closed. What the
+  A review of those decisions found six minor items, fixed on the branch (see the audit result). Every item of the audit is closed. What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
@@ -1496,6 +1496,35 @@ audit's alternative to P31-AUDIT-01. Six further findings were checked and rejec
 | P31-AUDIT-09 | minor | The device detail marked a deleted forward DELETED in the accent tone; the cards of the networks view mark it in the blocked tone (§2.17: red removed, blue as configured). | The device detail uses the blocked tone for DELETED like `ForwardList`. Test: e2e `port forwards: a deleted forward is marked in the blocked tone on the cards and the device detail alike`. |
 | P31-AUDIT-10 | minor | Documents behind the decisions of 2026-10-17: `docs/development.md` gave an `allow` rule into the management network as the example of an exception to the matrix, which the management guard now drops, and called mark bits 22–23 reserved after §3.3 gave bit 22 to the replies of a management-side forward; the M35a Scope accepted a forwarded connection "in from the uplink" only, though `management` is an entry side; `docs/install.md` did not say where the replies of a management-side forward can go; the Phase 3 bullet of this file put its open items "at the end of the file"; the M35a Status left out the three-port guard of P31-M35a-10. | The example uses a test network ("IoT may not reach Lab …") and names the guard as the exception; §3.3 is cited as bit 22 for the replies, bit 23 reserved; the Scope says "in on the forward's entry interface"; install.md's "Things to know" says that a management-side forward answers the management subnet and peers behind the management interface's default gateway only, and that the preview warns without a default route; the bullets point to the section after the audit result; the M35a Status names the guard. |
 
+**Review of the decisions (2026-10-18).** An independent review of the commits that implement the maintainer's decisions
+of 2026-10-18 (`a5f5ec0..83ef072`: P31-AUDIT-11 (b) to -14, I64-02, I64-05) found no blocker and no major finding and six
+minor ones, all fixed on the branch following the plan's existing rules, each with its tests:
+
+1. *Matrix precedence.* The extra matches of an entry towards `management` for the WireGuard networks of the role
+   management kept the management rank, so "IoT -> management: allow" won over "IoT -> admin: deny" (and the reverse
+   dropped). They rank after the networks now (`rankMgmtWG`), in `matrixRules` and in `explain`
+   (`domain.matrixEndpoint.rank`, `World.matrixEndpoints`), and in the three-port topology `ip daddr @mgmt_src` of a
+   `management` entry carries `meta oifname != <the management-role interfaces>`. Tests: the golden files
+   `access-{three,two}port-wg-specific-{deny,allow}`, `TestTheSpecificEntryWinsOverTheManagementEntryForAManagementRoleWireGuardNetwork`,
+   `TestExplainLetsTheSpecificEntryWinOverTheManagementEntryForAManagementRoleWireGuardNetwork` (domain),
+   `TestExplainRanksTheManagementEntryAfterAManagementRoleWireGuardNetwork` (engine).
+2. *Upgrade widening.* An existing "X -> management: allow" opens the management-role WireGuard networks now (in the
+   two-port topology they were not covered before). The compiler warns (`matrix_management_wireguard`) and names
+   them; plan §2.16 and docs/development.md carry the note. Test: `TestAManagementEntryWarnsThatItCoversTheManagementRoleWireGuardNetworks`.
+3. *Ineffective `reachable`.* A test client whose `reachable` list names a management-role network, its client or
+   `management` compiles to an accept the guard drops: the compiler warns (`reachable_guarded`), naming the client
+   and the endpoint and saying that an explicit matrix entry is needed. Test: `TestAReachableListThatTheGuardDropsWarns`.
+4. *I64-05 completeness.* `TestKeaAcceptsTheRenderedConfiguration` and `TestTheConfigurationIsSentAgainToAKeaThatRestarted`
+   are in `KEA_LEVEL1` (their packages have tagged tests, so the testbed runner builds them; both pass locally as root).
+5. *CI mounts job.* The job `mounts` lists `/host/usr/lib/systemd/network` in the started executor container and
+   fails otherwise; docs/install.md names `/usr/lib/systemd/network` as a requirement of the host.
+6. *Management as a source.* `explain` counted a management hub's tunnel subnet as `management` as a source while the
+   kernel's `management -> X` matched only the management interface. Following P31-AUDIT-11 (b), an entry
+   `management -> X` also matches what comes in through a management-role WireGuard interface (`iifname`, ranked
+   after the networks), in both topologies, and `explain` counts the networks behind its clients too (plan §2.16).
+   Tests: `TestAManagementEntryAlsoMatchesTrafficFromAManagementRoleWireGuardNetwork`,
+   `TestExplainCountsAManagementRoleWireGuardNetworkAsTheManagementSource` (domain), the engine test of item 1.
+
 ### Phase 3.1 audit items for the maintainer
 
 Found by the audit of 2026-10-17 and confirmed in the code (with a scratch compile or test where noted). Each needed a decision;
@@ -1514,7 +1543,7 @@ none blocked the round. The maintainer decided all four on 2026-10-18; each is c
   explicit entries return: the implicit entries are what the client may reach, while §2.16 names an explicit matrix
   entry as the one way into the management network; a test client that names a management-role network in
   `reachable` gets the matrix accept but is dropped by the guard). `explain` agrees with the kernel:
-  `World.endpointsTo` counts an address in such a network as the management network, the guard opens for an entry
+  `World.matrixEndpoints` counts an address in such a network as the management network, the guard opens for an entry
   towards the management network or towards the management-role network (or client) the destination lies in, and its
   reason names "a WireGuard network of the role management". Recorded in plan §2.2, §2.4 (the guard bullet) and §2.16,
   `api/openapi.yaml` (`AccessRuleBody`) and docs/development.md "Access rules (M9)". Code: `internal/compiler/rules.go`
@@ -1526,6 +1555,14 @@ none blocked the round. The maintainer decided all four on 2026-10-18; each is c
   `TestExplainGuardsAManagementRoleWireGuardNetworkInBothTopologies` (engine), the `wireguard` and `routing` goldens, and
   level 1 `TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt` (both topologies, in
   `M35A_LEVEL1`: the testbed's management hub with its administrator in the remote machine "site").
+  The review of the decisions (2026-10-18, see [Phase 3.1 audit result](#phase-31-audit-result)) completed it: what
+  `management` stands for through these networks ranks after the networks (the more specific endpoint first), in the
+  compiler and in `explain`, and the three-port address match of `management` leaves their interfaces out; and,
+  following this decision (they are part of the management network), an entry `management -> X` also matches what
+  comes in through their interfaces, in both topologies, as `explain` already counted their tunnel subnet as the
+  management source (recorded in plan §2.16). The compiler warns on an entry from or towards `management` that now
+  covers them (`matrix_management_wireguard`, the upgrade note of plan §2.16) and on a test client's `reachable` list
+  that names them or the management network (`reachable_guarded`).
 - Severity: major
 - Reason: needs-decision. `finishManagementSources` (`internal/compiler/wireguard.go`) adds the subnet of every management-role
   WireGuard network to the management sources, so it is in `mgmt_src`. The three-port guard drops every test interface's packet
@@ -2031,7 +2068,10 @@ work was not blocked. The maintainer decided I64-01 to I64-03 on 2026-10-18; eve
   which one skips or is not built fails. Before the move both passed against the real Kea as root in the devcontainer
   (`go test -tags testbed ./internal/kea -count=1 -v`, kea-dhcp4 of the devcontainer; no fix was needed).
   `TestKeaAcceptsTheRenderedConfiguration` stays untagged: it needs `kea-dhcp4` but no root, and runs `kea-dhcp4 -t`
-  only.
+  only. Completed by the review of the decisions (2026-10-18): `$KEA_LEVEL1` also names it and the engine's
+  `TestTheConfigurationIsSentAgainToAKeaThatRestarted` (root and Kea): both sit in packages with tagged tests, so the
+  testbed runner builds and runs them, and a skip fails the job; both passed locally as root
+  (`go test -tags testbed ./internal/kea ./internal/engine -run '...' -count=1 -v`).
 - Severity: low
 - Reason: found when the CI of the branch `close-phase-3-1` failed (run 39084143071): `TestKeaRetriesASocketItCouldNotOpen`
   was expected to pass in the testbed jobs but sat in an untagged file, so the testbed runner, which builds only packages

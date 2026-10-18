@@ -983,7 +983,10 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   that need root with `-expect-pass $I64_LEVEL1`. The older tests against the real Kea, `TestTheClientDrivesARealKea`
   and `TestLeasesArePagedPastTheLimit` (`startKea`), carry the build tag `testbed` in `internal/kea/kea_testbed_test.go`
   too, and both testbed jobs name them with `$KEA_LEVEL1`: before, they skipped at level 0 (no root, no Kea) and
-  had run only by hand since M6a (I64-05).
+  had run only by hand since M6a (I64-05). `$KEA_LEVEL1` also names the two tests against the real Kea without the
+  tag, `TestKeaAcceptsTheRenderedConfiguration` (internal/kea) and `TestTheConfigurationIsSentAgainToAKeaThatRestarted`
+  (internal/engine, root only): their packages have tagged tests, so the testbed runner builds and runs them, and a
+  skip there fails the job (the review of 2026-10-18).
 - **Observation.** `Engine.PollObserved` reads the neighbor table, conntrack and Kea's leases every
   second and when asked (`TriggerObserve`: netlink neighbor events through `FollowNeighbors`, lease
   events); a burst of triggers is one reading. The state owner's `tracker` (`devices.go`, a pure state
@@ -2173,7 +2176,7 @@ forward   jump cut_forward*
   return and one matrix rule more per interface), so "IoT -> management" opens them as it opens the management
   network itself. A client's `reachable` list does not open the guard: it is an implicit entry, and only an
   explicit matrix entry opens the management network (plan §2.16; a test client that names a management-role
-  network gets the matrix accept, but the guard drops it). `explain` agrees: `World.endpointsTo` counts an
+  network gets the matrix accept, but the guard drops it). `explain` agrees: `World.matrixEndpoints` counts an
   address in such a network (or behind its client) as the management network, and the guard's reason names "a
   WireGuard network of the role management". Tests: the golden files `access-threeport-wg` and
   `access-twoport-wg` (`TestGoldenTheGuardOfManagementRoleWireGuardNetworks`, also in the parser and kernel gate),
@@ -2190,6 +2193,37 @@ forward   jump cut_forward*
   `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (the domain layer), the `access-twoport` scenario of the kernel
   gate, and on the real kernel `TestNoAllowRuleOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` and
   `TestAnExplicitMatrixEntryStillOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` (`explain` against the packets).
+  **The review of these decisions (2026-10-18)** made the endpoint `management` follow the rule that the more
+  specific endpoint comes first, also for the WireGuard networks of the role management, and as a source as well:
+  - *Precedence.* What `management` stands for through such a network (`oifname "wg-admin"` as a destination,
+    `iifname "wg-admin"` as a source) has its own rank after the networks (`rankMgmtWG` in `matrixRules` and in
+    `domain.matrixEndpoint.rank`; an entry's rank is `from*5+to`), so "IoT -> admin: deny" wins over "IoT ->
+    management: allow" and the reverse, and the same from the other side. In the three-port topology the address
+    match of `management` as a destination (`ip daddr @mgmt_src`, which holds the tunnel subnets) leaves those
+    interfaces out (`meta oifname != "wg-admin"`), so it cannot decide first for them. `explain` agrees:
+    `World.matrixEndpoints` counts an address in such a network or behind its client as the management network
+    through the network (`mgmtViaWG`, the lower rank) instead of through the allowed sources.
+  - *Management as a source.* An entry `management -> X` also matches what comes in through a WireGuard network of
+    the role management (`iifname "wg-admin"`, its clients and the networks behind them), in both topologies, as
+    `explain` already counted the tunnel subnet as the management network when it was the source. Nothing of it
+    returns from the guard: such traffic comes in on no test interface.
+  - *Warnings.* An explicit entry from or towards `management` while WireGuard networks of the role management
+    exist gets the warning `matrix_management_wireguard` ("the access matrix entry network IoT -> management also
+    covers the WireGuard network of the role management admin, which is part of the management network"): an entry
+    written before 2026-10-18 covers more than it did, in the two-port topology a whole network more (the upgrade
+    note of plan §2.16). This is no warning on the entry to the management network as such (P31-AUDIT-01's
+    alternative stays not taken): without such a network it does not come. A client of a test-role network whose
+    `reachable` list names the management network, a WireGuard network of the role management or a client of one
+    gets the warning `reachable_guarded` ("the client rA (lab-hub) names network admin in its reachable list, but
+    the management guard drops a device under test there: only an explicit access matrix entry opens it").
+  Tests: the golden files `access-{three,two}port-wg-specific-{deny,allow}`
+  (`TestGoldenTheSpecificEntryWinsOverTheManagementEntryForAManagementRoleWireGuardNetwork`, two of them also in the
+  parser and kernel gate), `TestTheSpecificEntryWinsOverTheManagementEntryForAManagementRoleWireGuardNetwork`,
+  `TestAManagementEntryAlsoMatchesTrafficFromAManagementRoleWireGuardNetwork`,
+  `TestAManagementEntryWarnsThatItCoversTheManagementRoleWireGuardNetworks`, `TestAReachableListThatTheGuardDropsWarns`
+  (compiler, both topologies), `TestExplainLetsTheSpecificEntryWinOverTheManagementEntryForAManagementRoleWireGuardNetwork`
+  and `TestExplainCountsAManagementRoleWireGuardNetworkAsTheManagementSource` (domain, both orders and topologies),
+  `TestExplainRanksTheManagementEntryAfterAManagementRoleWireGuardNetwork` (engine).
 - **`allow` accepts, in input too.** In input an allow rule is `accept`: it opens the gateway's own ports that
   the protection of the test networks closes (the protection answers DHCP, DNS and ICMP echo and drops
   the rest) for the rule's selector, and the routing protocols' accepts behind the rules no longer
@@ -3466,7 +3500,8 @@ destination with the fault badge), which is drawn from those flows (P3-AUDIT-37)
   container's user cannot read them; the whole `/etc`, because a bind mount needs its source and a host without
   netplan or NetworkManager has no such directory), and systemd-networkd's defaults, `/usr/lib/systemd/network`
   read-only at `/host/usr/lib/systemd/network` (part of systemd's package, so always there; I64-02, decided
-  2026-10-18), so the shipped deployment reads `/etc/netplan`, `/etc/NetworkManager/system-connections` and the
+  2026-10-18; the CI job `mounts` lists it in the started executor container, and docs/install.md names it as a
+  requirement of the host), so the shipped deployment reads `/etc/netplan`, `/etc/NetworkManager/system-connections` and the
   `.network` files of `/etc` and `/usr/lib`, and sees nothing of `/run` and `/lib`; the keyfiles netplan's NetworkManager
   renderer generates under `/run` come from its YAML in `/etc`, which is read. The read operation `host_net` returns
   only the file, the section, the entry and what it selects (`executor.HostNetState`), never a file's content (no

@@ -22,7 +22,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
   items P31-AUDIT-01 to -03 and -05 to -10 are fixed on the branch `close-phase-3-1`; P31-AUDIT-04 (level 2 on the final
-  code) closes with the Nightly run on that branch; P31-AUDIT-11 to -14 wait for the maintainer (P31-AUDIT-14 fixed in
+  code) is closed by the Nightly run on that branch (39084099383, green); P31-AUDIT-11 to -14 wait for the maintainer (P31-AUDIT-14 fixed in
   part), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer). What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
@@ -1468,14 +1468,14 @@ security, the management guard in both topologies, regressions against the state
 (the compiled nftables, routing and conntrack against the executor's limits), the UI and its states (§2.17), the documents,
 and the tests and CI. Two review rounds of the fixes followed on the branch. Fixed on the branch `close-phase-3-1` (the "close
 Phase 3.1" round), each with a test that fails without the fix or with the corrected document: P31-AUDIT-01 to -03 and -05 to
--10 (table below; P31-AUDIT-04 closes with the Nightly run on the branch). P31-AUDIT-11 to -14 need the maintainer and are
+-10 (table below; P31-AUDIT-04 is closed by the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed). P31-AUDIT-11 to -14 need the maintainer and are
 recorded with options under [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer);
 P31-AUDIT-14 is fixed in part. Six further findings were checked and rejected.
 
 | Verdict | Items |
 |---|---|
 | Fixed on the branch, with a test or the corrected document | P31-AUDIT-01 to -03, -05 to -10 |
-| Closes with the Nightly run on the branch | P31-AUDIT-04 |
+| Closed by the Nightly run on the branch (39084099383, green) | P31-AUDIT-04 |
 | Open, needs the maintainer | P31-AUDIT-11, -12, -13; P31-AUDIT-14 (the case without any connection; the forwarded connections are fixed) |
 | Checked and rejected | 6 findings |
 
@@ -1484,7 +1484,7 @@ P31-AUDIT-14 is fixed in part. Six further findings were checked and rejected.
 | P31-AUDIT-01 | major | An explicit matrix entry to the management network could not open the three-port guard on the normal path: its return matched `oifname mgmt0`, but table 100 has no route to the management network, so the packet leaves through the uplink and the guard dropped it, while `explain` said allow. With allowed sources narrower than the management subnet, `explain` also counted the whole subnet as the management network in both topologies (two-port: a broker on the uplink's subnet was reported as guarded, the kernel let it through). | The three-port return and the matrix endpoint `management` as a destination match the destination only (`ip daddr @mgmt_src`), and an entry also returns for the management subnet the guard drops. `explain` uses the set the kernel matches: the allowed sources, in the three-port topology also the subnet (`AccessFacts.ManagementSubnet`). Tests: `TestAnExplicitMatrixEntryReturnsFromTheThreePortGuard`, the `access-threeport` golden, `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources`, `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources`, level 1 `TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink` (in `M35A_LEVEL1`). |
 | P31-AUDIT-02 | minor | The forwards' counting rules and the DNAT rule in the inet NAT chain also matched IPv6: an IPv6 connection to an entry interface's own address (link-local, SLAAC on the OS-owned uplink) on a forwarded port was counted, noted as the last match and, on the management side, marked with bit 22, although it is never forwarded. | `meta nfproto ipv4` in both rules. Tests: `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, the `forward` goldens, level 1 `TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel` (in `M35A_LEVEL1`). |
 | P31-AUDIT-03 | minor | Since `Identity.Current` was compared, a neighbor entry going STALE and back (with a connection still on its address) reordered a device's addresses and made a new generation, an applied event and an empty identity apply, also without any port forward. | The order counts only for a device that a forward sends to. Test: `TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget`. |
-| P31-AUDIT-04 | minor | Level 2 (the appliance smoke, M35a Tests) never ran on the final Phase 3.1 code: the last runs were on `97cd058` (before the counting rule in NAT, the replies by mark bit 22 and table 101, and the three-port guard) and on `main` before the merge. | The Nightly workflow runs on the branch `close-phase-3-1` before the round is merged; its run id is recorded in the PR of the round. |
+| P31-AUDIT-04 | minor | Level 2 (the appliance smoke, M35a Tests) never ran on the final Phase 3.1 code: the last runs were on `97cd058` (before the counting rule in NAT, the replies by mark bit 22 and table 101, and the three-port guard) and on `main` before the merge. | Closed: the Nightly run 39084099383 on `d9b5e87`: the appliance tests on Ubuntu 24.04 and 26.04 and the level-1b kernel matrix passed. |
 | P31-AUDIT-05 | minor | The status lines (`docs/plan.md`, this file, `README.md`) still said "on the branch … merges to main with the PR" and cited a CI run from before P31-M35a-05/-09/-10; P31-M35a-09's evidence named a test that no longer exists. | Status lines updated (merged as `0fb9176`, CI run 39057670486, audited); the test name in P31-M35a-09 marked as the state before the decision. |
 | P31-AUDIT-06 | minor | P31-M35a-08 named `chaosctl` as a way to explain a forwarded connection; `chaosctl` supports only `version` until M18. | The item names the API (`GET /explain`, or the generated clients); `chaosctl` gets `explain` with M18. |
 | P31-AUDIT-07 | major | The device detail said "No port forward leads to this device." while the active revision, which the forwards come from, was loading or had failed to load; the error of the revision was not shown (the class of P3-AUDIT-10). | The card shows "Loading the port forwards…" until the revision is there and "The port forwards are not loaded" with Try again when it failed; the empty sentence only with the revision loaded. Test: e2e `port forwards: the configuration not loaded says so with Try again on the cards and the device detail, never "none"`. |
@@ -1944,4 +1944,20 @@ work was not blocked.
 - Task: §3.4 and §3.8 say "netplan, NetworkManager or systemd-networkd", and §3.8 names the host setup's systemd-networkd
   rule and check of the test interfaces (done).
 - Needs maintainer: no
+- Effort: S
+
+### I64-05 The tests against the real Kea did not run in any CI job
+
+- Status: open; fixed for the new test only
+- Severity: low
+- Reason: found when the CI of the branch `close-phase-3-1` failed (run 39084143071): `TestKeaRetriesASocketItCouldNotOpen`
+  was expected to pass in the testbed jobs but sat in an untagged file, so the testbed runner, which builds only packages
+  with `testbed` tests, never ran it. It now carries the build tag (`internal/kea/kea_testbed_test.go`, commit `c834fd1`) and
+  passed in the level-1 job of run 39087710677. The older tests of `internal/kea/kea_test.go` that start the real Kea
+  (`startKea`) are untagged too: they skip at level 0 (no root, no Kea on the CI runner) and are not built at level 1, so they
+  have run only by hand since M6a.
+- Evidence: `internal/kea/kea_test.go` (`startKea` skips without `kea-dhcp4` or root), `internal/kea/kea_testbed_test.go`.
+- Task: move every test that calls `startKea` into the tagged file and add them to the testbed jobs' expected tests, so the
+  runner fails a run in which one skips; first check that each passes on the real Kea (they have not run in CI).
+- Needs maintainer: no (a test-coverage fix, no behavior change)
 - Effort: S

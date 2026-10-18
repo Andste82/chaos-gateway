@@ -168,6 +168,26 @@ goes through preview and apply like every other change. Things to know:
   preview warns when the management interface has no default route).
 - The status of each forward says why it is inactive, for example "the device has no address".
 
+## Packet captures
+
+Captures (`POST /api/v1/captures`, `capture: true` and the `capture` steps of a scenario) are recorded by the executor
+and kept in the volume `chaosgw-captures`, which the executor and the API container share (`--captures-dir
+/var/lib/chaosgw/captures` in both compose files). The image gives the directory to the API's user, so the volume
+starts with an owner that can make the directory of a capture. A volume of that name that exists already with another
+owner is given to the API's user the way the upgrade notes below do it for the other volumes.
+
+- A capture takes at most the **quota**, 5 GiB by default (`settings.retention.captures_quota` of the configuration,
+  or `--capture-quota` of `chaosgw api` when the configuration names none). The oldest stopped captures are deleted
+  first when a new capture needs the room.
+- Below **10 % free space** of the volume new captures are refused and running ones stop (`stop_reason: disk_low`,
+  the event `disk_low`); a run that records goes on and says so in its report (`capture_missing`).
+  `--capture-min-free` of the executor and of the API changes the limit.
+- Put the volume on a disk with room for it; a capture of a busy 1 Gbit/s link is 100 MB a second. A ring buffer
+  (`ring_buffer`) bounds a capture by the size of its files instead.
+- A capture of a local network is taken on the gateway's bridge (`br-<network>`): it holds what the gateway sends and
+  receives, in particular everything a device exchanges with the uplink or another network, before NAT. Frames the
+  bridge forwards between two devices of the same network never reach the bridge device and are not in it.
+
 ## Troubleshooting: DHCP does not answer
 
 A device on a test network gets no address. In this order:

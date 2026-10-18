@@ -136,6 +136,38 @@ func (h *harness) untilRestore(yaml string) model.Run {
 	return r
 }
 
+// The baseline poll finds connections that began before the window and connections that began after it opened and
+// before the poll: only the second kind is news (a device that retries as the fault is lifted would otherwise fail).
+func TestAConnectionThatBeganBetweenTheOpeningOfTheWindowAndTheBaselineCounts(t *testing.T) {
+	h := newHarness(t)
+	old, fresh := tcpFlow("old", 8883, "ESTABLISHED"), tcpFlow("fresh", 8883, "ESTABLISHED")
+	old.StartedAt, fresh.StartedAt = t0.Add(4*time.Second), t0.Add(5*time.Second) // the restore is applied at 5 s
+	fresh.SPort = 40001
+	h.obs.addFlow(old)
+	h.obs.addFlow(fresh)
+	r := h.start(outage)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.advance(5 * time.Second)
+	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	c := h.waitCheck(r.Id, 0, model.CheckResultStatusPassed)
+	if c.Evidence == nil || len(*c.Evidence) != 1 || (*c.Evidence)[0]["sport"] != 40001 {
+		t.Errorf("only the connection that began in the window is evidence: %v", c.Evidence)
+	}
+}
+
+// A connection that began before the window and is found by the baseline poll is not news.
+func TestAConnectionThatBeganBeforeTheWindowIsNotNewAtTheBaseline(t *testing.T) {
+	h := newHarness(t)
+	old := tcpFlow("old", 8883, "ESTABLISHED")
+	old.StartedAt = t0.Add(4 * time.Second)
+	h.obs.addFlow(old)
+	r := h.untilRestore(outage)
+	h.settle()
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPending {
+		t.Fatalf("the check was decided by %+v", c)
+	}
+}
+
 // A connection that the device establishes inside the window passes the check at once, the run lasts until then
 // and passes with it. A connection that is only trying (SYN sent) does not count, one that was there before the
 // window does not, one of another port or another device does not.
@@ -556,9 +588,14 @@ checks:
 }
 
 // The timeline is not held up by the checks: a step is applied on time while a check of an earlier window is open and
-// the observer is slow.
+// the observer is slow (here: it does not answer at all).
 func TestTheChecksNeverDelayTheSteps(t *testing.T) {
 	h := newHarness(t)
+	// every read of the connections hangs until the end of the test body: the check is stuck in its first poll
+	release := make(chan struct{})
+	h.obs.mu.Lock()
+	h.obs.block = release
+	h.obs.mu.Unlock()
 	r := h.start(`
 name: parallel
 target: {device: esp32-42}
@@ -574,6 +611,10 @@ checks:
 	h.waitStep(r.Id, "b", model.RunStepStatusApplied)
 	h.advance(3 * time.Second)
 	h.waitStep(r.Id, "c", model.RunStepStatusApplied)
+	if got := h.get(r.Id).Status; got != model.RunStatusRunning {
+		t.Errorf("the run is %s while its check has not been decided", got)
+	}
+	close(release)
 	done := h.waitStatus(r.Id, model.RunStatusPassed)
 	for id, off := range map[string]int{"a": 0, "b": 2000, "c": 5000} {
 		if got := *step(done, id).OffsetMs; got != off {

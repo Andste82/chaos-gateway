@@ -232,7 +232,7 @@ func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start time.D
 	}
 	if id, ok := r.byKey[key]; ok && r.owned[id].alive {
 		// the step replaces the overlay of an earlier one: the counters of that step end here
-		m.captureCounters(r)
+		m.captureCounters(r, stepCounterTimeout)
 	}
 	res, err := m.cfg.Gateway.PutOverlay(r.ctx, engine.OverlayWrite{Owner: r.owner, Run: &model.OverlayRunRef{Id: runID, Step: st.Id}, Request: req})
 	if err != nil {
@@ -252,7 +252,7 @@ func (m *Manager) removeStep(r *runState, pos int, st *model.Step, start time.Du
 	if !ok {
 		return m.skipStep(r, pos, st, start, fmt.Sprintf("step %s wrote no overlay", *st.Remove))
 	}
-	m.captureCounters(r)
+	m.captureCounters(r, stepCounterTimeout)
 	res, err := m.cfg.Gateway.DeleteOverlay(r.ctx, id, &r.owner, r.owner)
 	if errors.Is(err, engine.ErrOverlayNotFound) {
 		return m.skipStep(r, pos, st, start, "the overlay is gone already")
@@ -267,7 +267,7 @@ func (m *Manager) removeStep(r *runState, pos int, st *model.Step, start time.Du
 
 // restoreStep removes every overlay of the run.
 func (m *Manager) restoreStep(r *runState, pos int, st *model.Step, start time.Duration) error {
-	m.captureCounters(r)
+	m.captureCounters(r, stepCounterTimeout)
 	res, err := m.cfg.Gateway.ResetOverlays(r.ctx, &r.owner, r.owner)
 	if err != nil {
 		return m.failStep(r, pos, st, start, err)
@@ -340,9 +340,19 @@ func (r *runState) releaseAll() {
 	clear(r.overlays)
 }
 
+// stepCounterTimeout bounds the read of the counters that a step makes before it replaces or removes an overlay.
+// The read is on the timeline (the overlay must still be there), so it is the one place where observation can
+// delay a step; it is bounded well below the step precision of a run that matters (plan M15: +-100 ms is the
+// goal on a gateway that answers, and a read that does not answer in 2 s leaves the overlay without a final
+// reading, so it has no zero-hit verdict). finishCounterTimeout is for the end of the run, which is not timed.
+const (
+	stepCounterTimeout   = 2 * time.Second
+	finishCounterTimeout = 10 * time.Second
+)
+
 // captureCounters reads the counters of the overlays of the run that are still there, before something
 // removes them: the report holds the final counters of every overlay the run created.
-func (m *Manager) captureCounters(r *runState) {
+func (m *Manager) captureCounters(r *runState, timeout time.Duration) {
 	var alive []uuid.UUID
 	for _, id := range r.ownedOrder {
 		if r.owned[id].alive {
@@ -352,7 +362,7 @@ func (m *Manager) captureCounters(r *runState) {
 	if len(alive) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), timeout)
 	defer cancel()
 	for id, c := range m.cfg.Observer.Counters(ctx, alive) {
 		if o, ok := r.owned[id]; ok && c != nil {
@@ -380,7 +390,7 @@ func (r *runState) counterRecords() []counterRecord {
 func (m *Manager) finish(r *runState, status model.RunStatus, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), cleanupTimeout)
 	defer cancel()
-	m.captureCounters(r)
+	m.captureCounters(r, finishCounterTimeout)
 	status, reason = m.zeroHits(r, status, reason)
 	var cleanErr error
 	for attempt := 0; attempt < cleanupAttempts; attempt++ {

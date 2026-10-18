@@ -39,6 +39,13 @@ func (h *harness) waitLoss(dev string, id int, dir compiler.Direction, loss floa
 	h.wait(func() bool { return h.leafLoss(dev, id, dir) == loss }, what)
 }
 
+// waitToggles waits for the flapping log to hold n toggles: one leaf is in its new phase before the
+// executor has answered for every interface, and only that answer logs the toggle with its time.
+func (h *harness) waitToggles(n int, what string) {
+	h.t.Helper()
+	h.wait(func() bool { return len(h.e.FlapLog()) >= n }, what)
+}
+
 func TestAFlappingFaultStartsUpAndTogglesOnTheClock(t *testing.T) {
 	h := startedWithRevision(t)
 	h.mustPut(alice, flapBody)
@@ -69,6 +76,9 @@ func TestAFlappingFaultStartsUpAndTogglesOnTheClock(t *testing.T) {
 			h.waitLoss(dev, f.ID, dir, 1, fmt.Sprintf("%s %s did not black out at 20 s", dev, dir))
 		}
 	}
+	// a toggle is logged, with the clock's time, once the executor has answered for both directions:
+	// the clock moves on only after that, or a toggle still in flight is logged at the next boundary
+	h.waitToggles(2, "the toggle at 20 s was not logged for both directions")
 	h.verifyKernelWithOverlays() // the compiler writes the phase the engine holds
 	if fl := h.e.Flaps(); !fl[0].InDown || !fl[1].InDown {
 		t.Errorf("%+v", fl)
@@ -77,8 +87,10 @@ func TestAFlappingFaultStartsUpAndTogglesOnTheClock(t *testing.T) {
 	// and back up after 10 s, down again after 20 s more
 	h.clk.Advance(10 * time.Second)
 	h.waitLoss("br-iot", f.ID, compiler.Upload, 0, "the connection did not come back at 30 s")
+	h.waitToggles(4, "the toggle at 30 s was not logged for both directions")
 	h.clk.Advance(20 * time.Second)
 	h.waitLoss("br-iot", f.ID, compiler.Upload, 1, "the second blackout did not start at 50 s")
+	h.waitToggles(6, "the toggle at 50 s was not logged for both directions")
 	h.verifyKernelWithOverlays()
 
 	// every toggle was made at the moment the schedule asked for it (on the fake clock: exactly); the

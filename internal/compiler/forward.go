@@ -257,10 +257,17 @@ func (t *Target) forwardRefusal(f domain.Forward, st domain.ForwardState, twoPor
 			return fmt.Sprintf("the target %s lies in the management network %s", f.Address, p)
 		}
 	}
+	ports := f.ExtTo - f.ExtFrom + 1
 	for _, o := range t.Forwards {
 		if o.Protocol == f.Protocol && f.ExtFrom <= o.ExtTo && o.ExtFrom <= f.ExtTo {
 			return fmt.Sprintf("%s/%s overlaps the forward %s", f.Protocol, f.ExternalPorts(), o.ID)
 		}
+		ports += o.ExtTo - o.ExtFrom + 1
+	}
+	if ports > domain.MaxForwardedPorts {
+		// every forwarded port is an element of the DNAT map: past the limit the transaction of a device's
+		// move would exceed what the executor takes (P31-AUDIT-12)
+		return fmt.Sprintf("the forwards would forward %d ports together, at most %d are allowed", ports, domain.MaxForwardedPorts)
 	}
 	return ""
 }

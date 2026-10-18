@@ -550,3 +550,32 @@ func TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale(t *testing.T)
 		t.Errorf("status after a move = %+v", st)
 	}
 }
+
+// P31-AUDIT-12 (decided 2026-10-18, option (a)): the enabled forwards forward at most MaxForwardedPorts ports
+// together, since every port is an element of the DNAT map and the move of a device is one transaction of all
+// of them. The example's esp-web forwards one port; a range of the rest is allowed, one more port is refused at
+// the range of the forward that crosses the limit, and a disabled forward does not count.
+func TestTheEnabledForwardsForwardAtMostTheLimitOfPortsTogether(t *testing.T) {
+	if MaxForwardedPorts != 16384 {
+		t.Fatalf("the limit is %d", MaxForwardedPorts)
+	}
+	wantValid(t, withForward(t, `{name: wide, protocol: udp, entry: uplink, external_port: 1024, external_port_end: 17406, target: {address: 10.10.0.20}}`))
+	errs := withForward(t, `{name: wide, protocol: udp, entry: uplink, external_port: 1024, external_port_end: 17407, target: {address: 10.10.0.20}}`)
+	wantError(t, errs, fwdPath(idNew, "external_port_end"), CodeInvalidPortRange)
+	if !strings.Contains(dump(errs), "16385 ports together, at most 16384") {
+		t.Errorf("the message: %s", dump(errs))
+	}
+	wantValid(t, withForward(t, `{name: wide, protocol: udp, entry: uplink, external_port: 1024, external_port_end: 17407, target: {address: 10.10.0.20}, enabled: false}`))
+	// the forward that crosses the limit in the order of the names is refused: here esp-web, after "a-wide"
+	errs = withForward(t, `{name: a-wide, protocol: udp, entry: uplink, external_port: 1024, external_port_end: 17407, target: {address: 10.10.0.20}}`)
+	wantError(t, errs, fwdPath(idForward, "external_port"), CodeInvalidPortRange)
+
+	// the compiler's order is the same
+	cfg := stored(t)
+	end := 17407
+	(*cfg.PortForwards)[idNew] = model.PortForward{Name: ptr("a-wide"), Protocol: "udp", Entry: "uplink", ExternalPort: 1024, ExternalPortEnd: &end}
+	over := OverForwardedPorts(Forwards(cfg))
+	if len(over) != 1 || over[0].ID != idForward {
+		t.Errorf("over the limit: %+v", over)
+	}
+}

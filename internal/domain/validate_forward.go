@@ -72,6 +72,58 @@ func (v *validator) portForwards() {
 
 		v.forwardTarget(path+"/target", cfgF.Target)
 	}
+	v.forwardedPorts(fwds)
+}
+
+// MaxForwardedPorts is how many ports the enabled forwards of a configuration forward together (P31-AUDIT-12,
+// decided 2026-10-18). Every forwarded port is one element of the DNAT map (P31-M35a-06), and the move of a
+// device deletes and adds all of its elements in one nft transaction, which the executor takes up to 8 MiB
+// (executor.maxOperationBytes); 16384 ports are about 2.2 MB for such a move.
+const MaxForwardedPorts = 16384
+
+// OverForwardedPorts returns the forwards, in the order of Forwards, that take the enabled forwards past
+// MaxForwardedPorts: the first one whose ports cross the limit and every enabled one after it. The
+// validation refuses the first, and the compiler leaves out all of them.
+func OverForwardedPorts(fs []Forward) []Forward {
+	var out []Forward
+	n := 0
+	for _, f := range fs {
+		if !f.Enabled || f.ExtTo < f.ExtFrom {
+			continue
+		}
+		n += f.ExtTo - f.ExtFrom + 1
+		if n > MaxForwardedPorts {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// forwardedPorts refuses a configuration whose enabled forwards together forward more than MaxForwardedPorts
+// ports, at the range of the forward that crosses the limit (in the order of Forwards, by name).
+func (v *validator) forwardedPorts(fwds map[string]model.PortForward) {
+	over := OverForwardedPorts(Forwards(v.cfg))
+	if len(over) == 0 {
+		return
+	}
+	f := over[0]
+	id, field := f.ID, "/external_port"
+	for k, c := range fwds {
+		if lower(k) == f.ID {
+			id = k
+			if c.ExternalPortEnd != nil {
+				field = "/external_port_end"
+			}
+		}
+	}
+	total := 0
+	for _, o := range Forwards(v.cfg) {
+		if o.Enabled && o.ExtTo >= o.ExtFrom {
+			total += o.ExtTo - o.ExtFrom + 1
+		}
+	}
+	v.add(schema.Pointer("/port_forwards", id)+field, CodeInvalidPortRange,
+		"the enabled port forwards forward %d ports together, at most %d are allowed: every port is an element of the gateway's DNAT map", total, MaxForwardedPorts)
 }
 
 // forwardRanges checks that each range ends after it starts and lies in 1..65535, and that the target

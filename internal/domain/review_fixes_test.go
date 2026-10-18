@@ -310,8 +310,11 @@ func TestTheManagementNetworkIsNotReachedViaTheUplink(t *testing.T) {
 
 // ---- identity ----------------------------------------------------------------------------
 
+// A device no port forward sends to; for a forward's target a stale entry counts as well
+// (P31-AUDIT-14, TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale).
 func TestAStaleNeighborOnlyCountsWhileTheAddressCarriesConnections(t *testing.T) {
 	cfg := stored(t)
+	cfg.PortForwards = nil
 	n := Neighbor{IP: ip("10.10.0.80"), MAC: espMAC, Stale: true}
 	if _, owned := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{n}}, nil).Owner[n.IP]; owned {
 		t.Fatal("a stale entry without connections says nothing")

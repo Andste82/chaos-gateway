@@ -490,3 +490,63 @@ func TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn(t *tes
 		}
 	}
 }
+
+// P31-AUDIT-14 (decided 2026-10-18, option (a)): a device with a static address, known only from the neighbor
+// table (no lease, no reservation, no ipv4 identifier), keeps its address as long as an enabled forward sends to
+// it, also once its entry is stale and nothing has a connection on the address: an idle listener stays the
+// forward's target, and the kernel probes the entry when a connection comes. A device no enabled forward sends to
+// loses a stale entry without connections as before, and the forward's stale claim gives way to any claim of
+// another device on the address (the new holder wins).
+func TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale(t *testing.T) {
+	const otherID, otherMAC = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", "02:00:00:00:00:99"
+	staticOnly := func(c *model.Configuration) {
+		devs := *c.Devices
+		d := devs[idESP]
+		d.FixedIp = nil
+		devs[idESP] = d
+		macs := []string{otherMAC}
+		iot := idIoT
+		devs[otherID] = model.Device{Name: "other", Network: &iot, Identifiers: &model.DeviceIdentifiers{Macs: &macs}}
+	}
+	w, f := forwardWorld(t, staticOnly)
+	stale := Observed{Neighbors: []Neighbor{{IP: ip("10.10.0.42"), MAC: espMAC, Stale: true}}}
+	id := ResolveIdentity(w.Config, stale, nil)
+	if id.Owner[ip("10.10.0.42")] != idESP {
+		t.Fatalf("the forward's target lost its stale address: %v", id.Owner)
+	}
+	if st := w.Index.ForwardStatus(f, ForwardFacts{Identity: id}); !st.Active || st.Target != ip("10.10.0.42") {
+		t.Fatalf("status with a stale entry and no connection = %+v", st)
+	}
+
+	// without an enabled forward to the device the stale entry says nothing, as before
+	w2, _ := forwardWorld(t, func(c *model.Configuration) {
+		staticOnly(c)
+		fw := (*c.PortForwards)[idForward]
+		off := false
+		fw.Enabled = &off
+		(*c.PortForwards)[idForward] = fw
+	})
+	if id := ResolveIdentity(w2.Config, stale, nil); len(id.Addresses[idESP]) != 0 {
+		t.Errorf("a disabled forward keeps the stale address: %v", id.Addresses[idESP])
+	}
+
+	// another device that claims the address wins: a confirmed neighbor entry, a lease
+	for name, obs := range map[string]Observed{
+		"confirmed": {Neighbors: []Neighbor{stale.Neighbors[0], {IP: ip("10.10.0.42"), MAC: otherMAC}}},
+		"a lease":   {Neighbors: stale.Neighbors, Leases: []model.DhcpLease{lease("10.10.0.42", otherMAC, time.Hour)}},
+	} {
+		id := ResolveIdentity(w.Config, obs, nil)
+		if id.Owner[ip("10.10.0.42")] != otherID || len(id.Conflicts) != 0 {
+			t.Errorf("%s: owner %v, conflicts %v", name, id.Owner, id.Conflicts)
+		}
+		if st := w.Index.ForwardStatus(f, ForwardFacts{Identity: id}); st.Active || st.Reason != ForwardDeviceNoAddress {
+			t.Errorf("%s: status = %+v", name, st)
+		}
+	}
+
+	// the stale entry is the least current address: a newer one of the device is the target
+	moved := Observed{Neighbors: []Neighbor{stale.Neighbors[0], {IP: ip("10.10.0.61"), MAC: espMAC}}}
+	if st := w.Index.ForwardStatus(f, ForwardFacts{Identity: ResolveIdentity(w.Config, moved, nil)}); !st.Active || st.Target != ip("10.10.0.61") {
+		t.Errorf("status after a move = %+v", st)
+	}
+}

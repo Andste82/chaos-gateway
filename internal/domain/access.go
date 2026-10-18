@@ -61,24 +61,37 @@ type AccessExplanation struct {
 	RuleName string
 }
 
-// endpoint ranks of the compiler: the more specific one is evaluated first.
+// endpoint ranks of the compiler: the more specific one is evaluated first. rankMgmtWG is the endpoint
+// `management` as it stands for the WireGuard networks of the role management (P31-AUDIT-11): after the
+// networks, so an entry from or towards such a network or one of its clients decides first.
 const (
 	rankClient = iota
 	rankManagement
 	rankUplink
 	rankNetwork
+	rankMgmtWG
+	rankCount
 )
 
 type matrixEndpoint struct {
 	kind string // client, network, management, uplink
-	id   string
+	// id is the network's or the client's id; for the management network it is mgmtViaWG when the address
+	// lies in a WireGuard network of the role management (or behind one of its clients), where the compiler
+	// matches the endpoint by that network's interface
+	id string
 }
+
+// mgmtViaWG marks the management endpoint of an address in a WireGuard network of the role management.
+const mgmtViaWG = "wireguard"
 
 func (e matrixEndpoint) rank() int {
 	switch e.kind {
 	case "client":
 		return rankClient
 	case "management":
+		if e.id == mgmtViaWG {
+			return rankMgmtWG
+		}
 		return rankManagement
 	case "uplink":
 		return rankUplink
@@ -136,22 +149,39 @@ func (w *World) endpointsOf(ip netip.Addr, mgmt []netip.Prefix) []matrixEndpoint
 	return out
 }
 
-// endpointsTo returns the matrix endpoints of a destination: those of endpointsOf, and the management
-// network when the address lies in a WireGuard network of the role management or behind one of its clients.
-// Those networks are part of the management network for the guard and for the matrix endpoint `management`
-// as a destination, in both topologies (P31-AUDIT-11, decided 2026-10-18), as the compiler has it.
-func (w *World) endpointsTo(ip netip.Addr, f AccessFacts) []matrixEndpoint {
-	out := w.endpointsOf(ip, f.Management)
-	mgmt := matrixEndpoint{"management", ""}
-	if containsEndpoint(out, mgmt) {
-		return out
+// matrixEndpoints returns the matrix endpoints of a source or a destination: those of endpointsOf, where an address in a WireGuard network of the role management or behind one of its clients
+// belongs to the management network by that network's interface (mgmtViaWG), whether or not the allowed
+// sources contain it. Those networks are part of the management network for the guard and for the matrix
+// endpoint `management`, as a destination and as a source, in both topologies (P31-AUDIT-11, decided
+// 2026-10-18), as the compiler has it: it matches them by `oifname` and `iifname`, ranked after the networks,
+// and leaves them out of the endpoint's other matches (the management interface, the allowed sources).
+func (w *World) matrixEndpoints(ip netip.Addr, f AccessFacts) []matrixEndpoint {
+	eps := w.endpointsOf(ip, f.Management)
+	via := false
+	for _, e := range eps {
+		via = via || w.inMgmtWG(e)
 	}
-	for _, e := range out {
-		if w.inMgmtWG(e) {
-			return append(out, mgmt)
+	if !via {
+		return eps
+	}
+	var out []matrixEndpoint
+	for _, e := range eps {
+		if e.kind != "management" {
+			out = append(out, e)
 		}
 	}
-	return out
+	return append(out, matrixEndpoint{"management", mgmtViaWG})
+}
+
+// findEndpoint returns the element of set that the endpoint of an entry matches: the management endpoint
+// matches the management network however the address belongs to it.
+func findEndpoint(set []matrixEndpoint, e matrixEndpoint) (matrixEndpoint, bool) {
+	for _, x := range set {
+		if x == e || (e.kind == "management" && x.kind == "management") {
+			return x, true
+		}
+	}
+	return matrixEndpoint{}, false
 }
 
 // inMgmtWG reports whether an endpoint is a WireGuard network of the role management or a client of one.
@@ -316,7 +346,7 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 	if g, ok := w.mgmtGuard(src, dst, f); ok {
 		return g
 	}
-	from, to := w.endpointsOf(src, f.Management), w.endpointsTo(dst, f)
+	from, to := w.matrixEndpoints(src, f), w.matrixEndpoints(dst, f)
 
 	type entry struct {
 		rank     int
@@ -328,10 +358,15 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 	add := func(a, b model.MatrixEndpoint, policy model.MatrixEntryPolicy, implicit bool, why string) {
 		fe, ok1 := endpointOf(a)
 		te, ok2 := endpointOf(b)
-		if !ok1 || !ok2 || !containsEndpoint(from, fe) || !containsEndpoint(to, te) {
+		if !ok1 || !ok2 {
 			return
 		}
-		items = append(items, entry{rank: fe.rank()*4 + te.rank(), implicit: implicit, allow: policy != model.MatrixEntryPolicyDeny, why: why})
+		fm, ok1 := findEndpoint(from, fe)
+		tm, ok2 := findEndpoint(to, te)
+		if !ok1 || !ok2 {
+			return
+		}
+		items = append(items, entry{rank: fm.rank()*rankCount + tm.rank(), implicit: implicit, allow: policy != model.MatrixEntryPolicyDeny, why: why})
 	}
 	if w.Config.AccessMatrix != nil {
 		for i, e := range deref(w.Config.AccessMatrix.Entries) {
@@ -387,9 +422,10 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 // of the role management (or its client) the destination lies in. The clients' `reachable` lists do not:
 // they are implicit entries (plan §2.16, §2.2.1).
 func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation, bool) {
-	from, to := w.endpointsOf(src, f.Management), w.endpointsTo(dst, f)
+	from, to := w.matrixEndpoints(src, f), w.matrixEndpoints(dst, f)
 	mgmt := matrixEndpoint{"management", ""}
-	guarded := containsEndpoint(to, mgmt) || (!f.TwoPort && f.ManagementSubnet.IsValid() && f.ManagementSubnet.Contains(dst))
+	_, toMgmt := findEndpoint(to, mgmt)
+	guarded := toMgmt || (!f.TwoPort && f.ManagementSubnet.IsValid() && f.ManagementSubnet.Contains(dst))
 	if !guarded || !w.viaTestInterface(from) {
 		return AccessExplanation{}, false
 	}
@@ -400,7 +436,8 @@ func (w *World) mgmtGuard(src, dst netip.Addr, f AccessFacts) (AccessExplanation
 			// an entry to the management network, or to the WireGuard network of the role management (or the
 			// client of one) the destination lies in, opens it by the destination (P31-AUDIT-11)
 			opens := te == mgmt || (w.inMgmtWG(te) && containsEndpoint(to, te))
-			if ok1 && ok2 && e.Policy != model.MatrixEntryPolicyDeny && opens && containsEndpoint(from, fe) {
+			_, fromOK := findEndpoint(from, fe)
+			if ok1 && ok2 && e.Policy != model.MatrixEntryPolicyDeny && opens && fromOK {
 				return AccessExplanation{}, false
 			}
 		}

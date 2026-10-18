@@ -489,3 +489,44 @@ func TestExplainGuardsAManagementRoleWireGuardNetworkInBothTopologies(t *testing
 		}
 	}
 }
+
+// The review of 2026-10-18: `explain` ranks the endpoint `management` after a WireGuard network of the role
+// management, as the compiler does, so "IoT -> admin: deny" wins over "IoT -> management: allow" for the hub and
+// the network behind its client, in both topologies; and an entry `management -> IoT` matches what comes from the
+// management hub, the network behind its client included, as the compiler matches it by its interface.
+func TestExplainRanksTheManagementEntryAfterAManagementRoleWireGuardNetwork(t *testing.T) {
+	const wgAdmin, wgAdm, iot = "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9", "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	h, sec := newWGHarness(t)
+	mod := func(twoPort bool) func(*model.Configuration) {
+		return func(c *model.Configuration) {
+			n := (*c.Networks)[wgAdmin]
+			wg, _ := n.AsWireGuardNetwork()
+			gen := model.Generated
+			wg.Clients = &map[string]model.WireGuardClient{wgAdm: {Name: "adm", Address: "10.98.0.2", ClientNetworks: &[]string{"10.97.0.0/24"}, Key: &model.WireGuardKeySettings{Mode: &gen}}}
+			_ = n.FromWireGuardNetwork(wg)
+			(*c.Networks)[wgAdmin] = n
+			from, admin, m := iot, wgAdmin, model.MatrixEndpointManagement(true)
+			entries := append(*c.AccessMatrix.Entries,
+				model.MatrixEntry{From: model.MatrixEndpoint{Network: &from}, To: model.MatrixEndpoint{Network: &admin}, Policy: model.MatrixEntryPolicyDeny},
+				model.MatrixEntry{From: model.MatrixEndpoint{Network: &from}, To: model.MatrixEndpoint{Management: &m}, Policy: model.MatrixEntryPolicyAllow},
+				model.MatrixEntry{From: model.MatrixEndpoint{Management: &m}, To: model.MatrixEndpoint{Network: &from}, Policy: model.MatrixEntryPolicyAllow})
+			c.AccessMatrix.Entries = &entries
+			if twoPort {
+				wan := "wan0"
+				c.Management.Interface = model.InterfaceRef{Name: &wan}
+				c.Management.AllowedSources = &[]string{"203.0.113.5/32"}
+			}
+		}
+	}
+	for _, twoPort := range []bool{false, true} {
+		h.mustApply(wgRevision(t, h, sec, mod(twoPort)), engine.ApplyOptions{SkipConfirm: true})
+		for _, dst := range []string{"10.98.0.2", "10.97.0.10"} {
+			if ex := h.explain(engine.ExplainQuery{Src: netip.MustParseAddr("10.10.0.77"), Dst: dst, Protocol: "tcp", Port: 443}); ex.Access.Verdict != "drop" || !strings.Contains(ex.Access.Reason, "access matrix entry") || !strings.Contains(ex.Access.Reason, "(deny)") {
+				t.Errorf("two ports %v, IoT -> %s: %+v, want the entry towards the admin network", twoPort, dst, ex.Access)
+			}
+			if ex := h.explain(engine.ExplainQuery{Src: netip.MustParseAddr(dst), Dst: "10.10.0.77", Protocol: "tcp", Port: 443}); ex.Access.Verdict != "allow" || !strings.Contains(ex.Access.Reason, "access matrix entry") {
+				t.Errorf("two ports %v, %s -> IoT: %+v, want the entry from the management network", twoPort, dst, ex.Access)
+			}
+		}
+	}
+}

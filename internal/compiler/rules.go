@@ -406,12 +406,26 @@ func prefixValue(p netip.Prefix) any {
 	return map[string]any{"prefix": map[string]any{"addr": p.Addr().String(), "len": p.Bits()}}
 }
 
+// The ranks of the matrix endpoints: the more specific endpoint is evaluated first. rankMgmtWG is what the
+// endpoint `management` stands for through the WireGuard networks of the role management (P31-AUDIT-11): it
+// comes after the network rank, so an entry towards (or from) such a network or one of its clients decides
+// before an entry towards (or from) the management network as a whole.
+const (
+	rankClient = iota
+	rankManagement
+	rankUplink
+	rankNetwork
+	rankMgmtWG
+	rankCount
+)
+
 // matrixRules turns the access matrix into forward rules: the explicit entries first, then the
 // implicit allows of the clients' `reachable` lists. mgmtOpen are the explicit entries that allow
 // traffic to the management network, as rules that return from the management guard. Networks (bridges and WireGuard interfaces),
 // single WireGuard clients with the networks behind them, the uplink and the management network are
 // endpoints. The more specific endpoint comes first: a client before a network, the management
-// network (told apart from the uplink by its addresses) before the uplink.
+// network (told apart from the uplink by its addresses) before the uplink, and what the management network
+// stands for through its WireGuard networks of the role management after the networks (rankMgmtWG).
 func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string) (explicit, implicit, mgmtOpen []Rule) {
 	resolve := func(ep model.MatrixEndpoint, from bool) (endpoint, int, bool) {
 		dev := func(name string, addrs any) endpoint {
@@ -438,13 +452,13 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			if !ok {
 				return endpoint{}, 0, false
 			}
-			return dev(cm.dev, prefixes(cm.prefixes)), 0, true
+			return dev(cm.dev, prefixes(cm.prefixes)), rankClient, true
 		case ep.Network != nil:
 			d, ok := tp.netDev[*ep.Network]
 			if !ok {
 				return endpoint{}, 0, false
 			}
-			return dev(d, nil), 3, true
+			return dev(d, nil), rankNetwork, true
 		case ep.Management != nil && bool(*ep.Management):
 			if t.Management.Name == "" {
 				return endpoint{}, 0, false
@@ -453,15 +467,21 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 				// three-port topology: the management network as a destination is told by its addresses
 				// only. The policy table has no route to it (plan §2.2), so a packet that an entry lets
 				// through leaves through the uplink (a router behind it may know the management network),
-				// not through the management interface (P31-AUDIT-01).
-				return endpoint{oif: []any{eq(payload("ip", "daddr"), setRef(mgmtSet))}}, 1, true
+				// not through the management interface (P31-AUDIT-01). What leaves through a WireGuard network
+				// of the role management is left out: its tunnel subnet is one of the allowed sources, but it is
+				// matched by the interface with rankMgmtWG, after an entry towards the network itself.
+				oif := []any{eq(payload("ip", "daddr"), setRef(mgmtSet))}
+				if len(tp.mgmtWG) > 0 {
+					oif = append(oif, match(meta("oifname"), "!=", ifnames(tp.mgmtWG)))
+				}
+				return endpoint{oif: oif}, rankManagement, true
 			}
-			return dev(t.Management.Name, setRef(mgmtSet)), 1, true
+			return dev(t.Management.Name, setRef(mgmtSet)), rankManagement, true
 		case ep.Uplink != nil && bool(*ep.Uplink):
 			if t.Uplink.Name == "" {
 				return endpoint{}, 0, false
 			}
-			return dev(t.Uplink.Name, nil), 2, true
+			return dev(t.Uplink.Name, nil), rankUplink, true
 		}
 		return endpoint{}, 0, false
 	}
@@ -479,37 +499,51 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 			return
 		}
 		toMgmt := to.Management != nil && bool(*to.Management)
-		dests := []endpoint{d}
+		fromMgmt := from.Management != nil && bool(*from.Management)
+		type ranked struct {
+			e    endpoint
+			rank int
+		}
+		srcs, dests := []ranked{{f, fr}}, []ranked{{d, dr}}
+		// the WireGuard networks of role management are part of the management network (P31-AUDIT-11,
+		// decided 2026-10-18): the endpoint also stands for what leaves through their interfaces and for what
+		// comes in through them, in both topologies, ranked after the networks (rankMgmtWG)
 		if toMgmt {
-			// the WireGuard networks of role management are part of the management network (P31-AUDIT-11,
-			// decided 2026-10-18): the endpoint also stands for what leaves through their interfaces, in
-			// both topologies
 			for _, w := range tp.mgmtWG {
-				dests = append(dests, endpoint{oif: []any{oifname(w)}})
+				dests = append(dests, ranked{endpoint{oif: []any{oifname(w)}}, rankMgmtWG})
+			}
+		}
+		if fromMgmt {
+			for _, w := range tp.mgmtWG {
+				srcs = append(srcs, ranked{endpoint{iif: []any{iifname(w)}}, rankMgmtWG})
 			}
 		}
 		// an explicit entry that allows traffic to the management network, or to a WireGuard network of
 		// role management or one of its clients, returns from the management guard by its destination
 		opens := !implicit && policy != model.MatrixEntryPolicyDeny && (toMgmt || tp.inMgmtWG(to))
-		for i, d := range dests {
-			var expr []any
-			expr = append(expr, f.iif...)
-			expr = append(expr, d.oif...)
-			v := "accept"
-			if policy == model.MatrixEntryPolicyDeny {
-				expr = append(expr, counter("forward_drop"))
-				v = "drop"
-			}
-			if opens {
-				mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
-				if sub := t.Management.Subnet; i == 0 && toMgmt && !t.twoPort() && sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
-					// the three-port guard drops the management subnet too: the entry opens what the guard
-					// drops (P31-AUDIT-01)
-					mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), f.iif...), eq(payload("ip", "daddr"), prefixValue(sub)), verdict("return"))...))
+		for j, s := range srcs {
+			for i, d := range dests {
+				var expr []any
+				expr = append(expr, s.e.iif...)
+				expr = append(expr, d.e.oif...)
+				v := "accept"
+				if policy == model.MatrixEntryPolicyDeny {
+					expr = append(expr, counter("forward_drop"))
+					v = "drop"
 				}
+				// the guard drops only what comes in on a test interface: what comes in through a WireGuard
+				// network of the role management needs no return
+				if opens && j == 0 {
+					mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), expr...), verdict("return"))...))
+					if sub := t.Management.Subnet; i == 0 && toMgmt && !t.twoPort() && sub.IsValid() && !coveredBy(sub, t.Management.Sources) {
+						// the three-port guard drops the management subnet too: the entry opens what the guard
+						// drops (P31-AUDIT-01)
+						mgmtOpen = append(mgmtOpen, newRule(append(append([]any(nil), s.e.iif...), eq(payload("ip", "daddr"), prefixValue(sub)), verdict("return"))...))
+					}
+				}
+				expr = append(expr, verdict(v))
+				items = append(items, item{rank: s.rank*rankCount + d.rank, implicit: implicit, rule: newRule(expr...)})
 			}
-			expr = append(expr, verdict(v))
-			items = append(items, item{rank: fr*4 + dr, implicit: implicit, rule: newRule(expr...)})
 		}
 	}
 	if cfg.AccessMatrix != nil && cfg.AccessMatrix.Entries != nil {
@@ -535,4 +569,16 @@ func (t *Target) matrixRules(cfg *model.Configuration, tp *topo, mgmtSet string)
 		}
 	}
 	return explicit, implicit, mgmtOpen
+}
+
+// ifnames is the value of an interface name match: one name, or a set of them.
+func ifnames(names []string) any {
+	if len(names) == 1 {
+		return names[0]
+	}
+	vals := make([]any, len(names))
+	for i, n := range names {
+		vals[i] = n
+	}
+	return anon(vals...)
 }

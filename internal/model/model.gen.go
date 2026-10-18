@@ -4574,7 +4574,7 @@ type Management struct {
 	UiPort *int `json:"ui_port,omitempty"`
 }
 
-// MatrixEndpoint Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix).
+// MatrixEndpoint Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix). Since 2026-10-18 the management network also stands for the WireGuard networks of the role `management`, with their clients and the networks behind them, as a destination and as a source, in both topologies; an entry towards or from such a network or one of its clients is more specific and decides first.
 type MatrixEndpoint struct {
 	// Client UUID or name of an object. Stored configurations contain UUIDs only.
 	Client     *Ref                      `json:"client,omitempty"`
@@ -4594,11 +4594,11 @@ type MatrixEndpointUplink bool
 // MatrixEntry `from` and `to` must not name the same endpoint (`matrix_self_entry`), and the same pair
 // must not appear twice (`duplicate_matrix_entry`).
 type MatrixEntry struct {
-	// From Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix).
+	// From Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix). Since 2026-10-18 the management network also stands for the WireGuard networks of the role `management`, with their clients and the networks behind them, as a destination and as a source, in both topologies; an entry towards or from such a network or one of its clients is more specific and decides first.
 	From   MatrixEndpoint    `json:"from"`
 	Policy MatrixEntryPolicy `json:"policy"`
 
-	// To Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix).
+	// To Exactly one of: a network (local or WireGuard; for a hub incl. all clients and client networks; for a link incl. the remote prefixes), a single WireGuard client with its client networks, the uplink, or the management network (`Management.allowed_sources`, or the management interface subnet when none are given; the control plane itself is governed by gateway protection, not by the matrix). Since 2026-10-18 the management network also stands for the WireGuard networks of the role `management`, with their clients and the networks behind them, as a destination and as a source, in both topologies; an entry towards or from such a network or one of its clients is more specific and decides first.
 	To MatrixEndpoint `json:"to"`
 }
 

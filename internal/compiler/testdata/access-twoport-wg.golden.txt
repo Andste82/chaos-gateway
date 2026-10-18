@@ -7,9 +7,9 @@
   meta oifname @ifs_cg_bf4feb meta nfproto ipv6 counter "ipv6_drop" drop
   jump mgmt_guard
   meta iifname wg-site-b meta oifname wan0 ip daddr @mgmt_src_8743d6 accept
-  meta iifname wg-site-b meta oifname wg-admin accept
   meta iifname br-iot meta oifname wg-admin accept
   meta iifname br-iot meta oifname wg-lab-hub accept
+  meta iifname wg-site-b meta oifname wg-admin accept
   meta iifname wg-lab-hub ip saddr { 10.99.0.2/32, 10.50.0.0/24 } meta oifname wan0 accept
   meta iifname wg-lab-hub ip saddr { 10.99.0.2/32, 10.50.0.0/24 } meta oifname br-iot accept
   meta iifname wg-lab-hub ip saddr { 10.99.0.2/32, 10.50.0.0/24 } meta oifname wg-admin accept

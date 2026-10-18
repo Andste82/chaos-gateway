@@ -216,18 +216,33 @@ func (d *dhcpState) errorNow() string {
 // after is the kernel state the apply read back just before: the links of the next reading are compared
 // with it, so a bridge the apply created is not taken for one that came up (the server sees it when it
 // takes this configuration), while a carrier that changes from here on, during the send included, is.
+// Apply does not send a configuration the server runs already, so a served interface that came up or
+// was created again since the last reading (the apply created a deleted bridge again) is compared here
+// first, and the configuration is sent with Reopen for it (#64).
 func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target, after *apply.State) string {
 	if e.cfg.DHCP == nil {
 		return ""
 	}
 	e.dhcp.sending.Lock()
+	var came []string
 	if after != nil {
 		links := after.LinkStates()
 		e.dhcp.mu.Lock()
+		if prev := e.dhcp.links; e.dhcp.wanted && prev != nil {
+			// the interfaces the running configuration serves; a new one is in a changed configuration,
+			// which is sent anyway
+			came = cameUp(prev, servedLinks(e.dhcp.target, links))
+		}
 		e.dhcp.links = servedLinks(t.Kea, links)
 		e.dhcp.mu.Unlock()
 	}
-	err := e.cfg.DHCP.Apply(ctx, t.Kea)
+	var err error
+	if len(came) > 0 {
+		e.cfg.Log.Info("an interface of the DHCP server came up: the server is configured again to listen on it", "interfaces", came)
+		err = e.cfg.DHCP.Reopen(ctx, t.Kea)
+	} else {
+		err = e.cfg.DHCP.Apply(ctx, t.Kea)
+	}
 	msg := e.dhcpDescribe(err)
 	e.dhcp.set(t.Kea, msg)
 	e.dhcp.sending.Unlock()
@@ -294,23 +309,34 @@ func (e *Engine) followDHCPLinks(links map[string]apply.LinkState) {
 	if !wanted || t == nil || prev == nil {
 		return
 	}
-	came := false
-	for name, l := range now {
-		if p, ok := prev[name]; l.Running && (!ok || !p.Running || p.Index != l.Index || p.CarrierChanges != l.CarrierChanges) {
-			if e.dhcp.came == nil {
-				e.dhcp.came = map[string]bool{}
-			}
-			e.dhcp.came[name], came = true, true
-		}
-	}
-	if !came {
+	came := cameUp(prev, now)
+	if len(came) == 0 {
 		return
+	}
+	if e.dhcp.came == nil {
+		e.dhcp.came = map[string]bool{}
+	}
+	for _, name := range came {
+		e.dhcp.came[name] = true
 	}
 	e.dhcp.scheduled++
 	select {
 	case e.dhcp.reopen <- struct{}{}:
 	default: // already woken: it takes these interfaces too
 	}
+}
+
+// cameUp names the interfaces of now that are running and were not in prev: missing, down, with
+// another index (created again) or with another count of carrier changes (a flap in between).
+func cameUp(prev, now map[string]apply.LinkState) []string {
+	var came []string
+	for name, l := range now {
+		if p, ok := prev[name]; l.Running && (!ok || !p.Running || p.Index != l.Index || p.CarrierChanges != l.CarrierChanges) {
+			came = append(came, name)
+		}
+	}
+	sort.Strings(came)
+	return came
 }
 
 // servedLinks is the state of the interfaces the DHCP configuration serves.

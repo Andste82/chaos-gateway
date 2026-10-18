@@ -1746,7 +1746,8 @@ work was not blocked.
   the test port flaps leaves the bridge without a socket. That case is now prevented, not detected: Kea retries the sockets it
   could not open for a minute (`kea.SocketRetries`), and the engine configures Kea again whenever one of its interfaces comes
   up, is created again or had its carrier go and come back since the last reading or the send of the configuration
-  (`Engine.followDHCPLinks`, the kernel's `carrier_changes`, `DHCP.Reopen`). A socket lost in another way (Kea closing it
+  (`Engine.followDHCPLinks` and, for an apply that creates the bridge again, `Engine.syncDHCP`; the kernel's
+  `carrier_changes`, `DHCP.Reopen`). A socket lost in another way (Kea closing it
   after an error of its own) would still go unnoticed.
 - Evidence: `internal/kea/config.go`, `internal/engine/dhcp.go`, `TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply`,
   docs/development.md "Kea's packet sockets (issue #64)".

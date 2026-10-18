@@ -131,3 +131,50 @@ func TestADHCPServerThatHangsDoesNotHoldUpTheReadingOfTheHost(t *testing.T) {
 		t.Errorf("the uplink's new address was not observed while the DHCP server hangs: %+v", up)
 	}
 }
+
+// #64 review: an apply that creates a deleted bridge again leaves the DHCP configuration as it was, so
+// Apply would send nothing and Kea keep its socket on the old bridge. The apply compares its read-back
+// with the last reading and configures the server again (once: the reading after it has nothing to
+// do). The same holds for a bridge that was down at the last reading and came up before the apply.
+func TestAnApplyThatCreatesTheBridgeAgainConfiguresTheServerAgain(t *testing.T) {
+	h, f := dhcpHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	refresh := func() {
+		t.Helper()
+		if err := h.e.Refresh(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refresh()
+	h.mustApply(h.revision(withDHCPAndDevice))
+	refresh()
+	if n := f.reopened(); n != 0 {
+		t.Fatalf("the first apply configured the server again (%d)", n)
+	}
+
+	h.k.RemoveLink("br-iot")
+	refresh()
+	h.mustApply(h.revision(withDHCPAndDevice)) // the same DHCP configuration; the apply creates br-iot
+	if n := f.reopened(); n != 1 {
+		t.Fatalf("the apply that created the bridge again configured the server again %d times, want 1", n)
+	}
+	refresh()
+	if n := h.e.DHCPReopensScheduled(); n != 0 {
+		t.Errorf("the reading after that apply configures the server again (%d)", n)
+	}
+
+	h.k.SetCarrier("br-iot", false)
+	refresh()
+	h.k.SetCarrier("br-iot", true)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	if n := f.reopened(); n != 2 {
+		t.Fatalf("an apply after the bridge came up configured the server again %d times in all, want 2", n)
+	}
+
+	// an apply without a change of the served links only applies
+	h.mustApply(h.revision(withDHCPAndDevice))
+	if n := f.reopened(); n != 2 {
+		t.Errorf("an apply without a link change configured the server again (%d)", n)
+	}
+}

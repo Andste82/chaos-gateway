@@ -381,10 +381,10 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
 | ~~M5: `lockout_protected` never produced~~ — decided 2026-10-11 (P2-M9-08): the anti-lockout rule cannot be overridden and lockout-relevant configuration changes take commit-confirm, which is enough; the code stays reserved | decided |
 | ~~M5: `capacity_exceeded` never produced~~ — produced for classes, fault ids, map cells and rules since M8a; the preview refuses with it (M10 test) | M8a, M10 |
-| M5: `target_busy` never produced | M15 |
+| ~~M5: `target_busy` never produced~~ — produced since M15: 409 on `POST /runs?queue=false` for a target with a run | M15 |
 | M5: IPv6 management addresses never bound | M32 |
 | ~~M5: `counter_epoch` always 0~~ — done in M8b (P2-M8b-05 for what it means) | M8b |
-| M5: capabilities list `step_types` empty (`overlay_kinds` and `fault_families` are filled since M8a to M10, P2-AUDIT-16) | M15 |
+| ~~M5: capabilities list `step_types` empty~~ — filled since M15 (profile, fault, rule, wireguard, wait, remove, restore; the types of M17, M20, M21 and M23 are added by those milestones) | M15 |
 | M5b: netplan hints are static text | M28 |
 | M5b: only the executor is deployed, x86-64 only | M28 |
 | M0: S8 on real hardware (HTB with 500 classes, 50/250 faults, offloads, loss) | H1 |

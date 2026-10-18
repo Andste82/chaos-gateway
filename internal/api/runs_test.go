@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,11 +249,16 @@ func TestARunFromAFileAppliesItsStepsAndLeavesAReport(t *testing.T) {
 // A run goes on when the client that started it is gone: the request that made it is not what the run is.
 func TestARunKeepsGoingWhenTheRequestIsOver(t *testing.T) {
 	g, clk := readyRuns(t)
-	r := g.postRun(inlineRun("go-on", iotTarget,
+	// The request carries a context that is cancelled, and its connection closed, as soon as the
+	// response is read: the server sees the request end while the run is still waiting for step b.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := g.do("POST", "/runs", inlineRun("go-on", iotTarget,
 		step("a", "0s", "fault", map[string]any{"latency": "20ms"}),
 		step("b", "30s", "fault", map[string]any{"loss": "1%"}),
-	), "")
+	), nil, func(req *http.Request) { *req = *req.WithContext(ctx) })
 	id := r.json(t)["id"].(string)
+	cancel()
 	g.client.CloseIdleConnections()
 	g.waitStep(id, "a", "applied")
 	clk.Advance(30 * time.Second)

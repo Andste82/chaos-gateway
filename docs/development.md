@@ -4622,7 +4622,7 @@ real kernel and clock, within 100 ms of their schedule where timing is accurate 
 software emulation), the effect on the wire (a delayed ping, a dropped ping, a clean path afterwards), the
 counters in the report, an abort and an expired lease that take the overlays out. These three need root and
 namespaces; the unprivileged container of the development environment has no `/dev/kvm`, so they are built
-(`go vet -tags testbed ./internal/api`) and wired into CI but were not run there. No UI in this milestone (M19).
+(`go vet -tags testbed ./internal/api`) and wired into CI but were not run there: not run in the sandbox; run by CI. No UI in this milestone (M19).
 
 ### Acceptance map (plan M15 "Tests")
 

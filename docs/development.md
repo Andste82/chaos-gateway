@@ -16,7 +16,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
 | `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution and the classification tables built from it, overlays and their keys, the overlays a revision orphans or moves, observed state and device identity, candidate creation (merge patch), domain diff |
 | `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
-| `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports |
+| `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -4483,10 +4483,11 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   and resolves every reference to its UUID. That resolved scenario is the run's `snapshot`, with the revision
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
-  naming the milestone: `checks` (M16), `capture: true` or a `capture` step (M17), a `dns` step (M20), `tls`
+  naming the milestone: `capture: true` or a `capture` step (M17), a `dns` step (M20), `tls`
   (M21), `dhcp` (M23), a profile with a DNS or TLS part, and a `wait` for a host name (M20); `GET
-  /capabilities` lists `step_types` (profile, fault, rule, wireguard, wait, remove, restore) and an empty
-  `check_types`. Nothing is stored for a refused scenario.
+  /capabilities` lists `step_types` (profile, fault, rule, wireguard, wait, remove, restore) and, since M16, the
+  `check_types` (a check of `tls_rejected` or `tls_accepted` is M21, one for a host name M20). Nothing is stored
+  for a refused scenario.
 - **One run per target, the queue.** Two targets overlap when they share a device or a network
   (`scopeTokens`: the ids of a scope's devices from the snapshot, a group's members whether the snapshot knows
   them or not, and for a network the network itself; `global` overlaps everything). A run starts at once when
@@ -4515,7 +4516,7 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   are remembered), is established (TCP past the handshake, others answered) and matches the protocol, ports
   and destination (address, prefix, network, `uplink`; `matchFlow`). `dns_query`: the DNS log has a query for
   the name from a device of the target at or after the time the wait began. The run ends as `passed` right after its
-  last step (there are no checks yet; from M16 it also lasts until the last check window).
+  last step; since M16 it lasts until its last check is decided (see Checks and zero hits (M16)).
 - **Recording a step.** After the write returns (the engine answers when an apply containing it is
   verified) the step has `status: applied`, `applied_at` (the wall time, which stands for the executor's commit
   time stamp), `offset_ms` (monotonic, from the start of the timeline), `generation` (the one the engine
@@ -4566,7 +4567,7 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   suite named after the scenario with the run's id, status, revision, owner and reason as properties, a test
   case `run` (an `<error type="run_error">` for `error`, `run_aborted` for `aborted`, with the reason), a test
   case `step <id>` with an `<error>` for each step that failed, a test case per check (M16: failure for
-  `failed`, error for `error`), and the warnings, the timeline with queue waits and the final counters as
+  `failed`, error for `error`, skipped for one that was not decided), and the warnings, the timeline with queue waits and the final counters as
   `system-out`.
 - **Revisions.** A revision that deletes an object a queued or running run refers to (`Manager.Orphaned`:
   `domain.OrphanedScenario` over the run's snapshot) is refused with `validation_failed` listing the runs
@@ -4597,10 +4598,11 @@ Taken by best practice where the plan leaves room (none needs the maintainer, so
    than 100 ms"), not the scheduler's lateness.
 5. **A group or network target is online when one device is** (and `uses_gateway_dns` asks every online device),
    because a network that has a device that has been off for a month would otherwise never run.
-6. **Checks, capture, zero-hit warnings are M16 and M17.** A scenario that has them is refused with
+6. **Checks, capture, zero-hit warnings are M16 and M17.** (M16 delivered the checks and the zero-hit warnings; capture is M17.)
+   A scenario that has them was refused with
    `unsupported_feature` rather than run without them, because a `passed` run whose checks were not evaluated
-   would be a lie (the same reason as the zero-hit warning of plan §2.10). `RunWarning.zero_hit` and
-   `capture_missing` are in the spec and unused so far.
+   would be a lie (the same reason as the zero-hit warning of plan §2.10). `RunWarning.capture_missing` is in the spec
+   and unused so far (M17).
 7. **Aborting twice, and a report that is not there yet.** Aborting an ended run returns it (idempotent); a
    report, JUnit file or event file of a run that has not ended is `404 not_found`; renewing a run that has
    ended, or has no lease, is `422 validation_failed`. The error codes of the plan have no better ones.
@@ -4641,6 +4643,131 @@ namespaces; the unprivileged container of the development environment has no `/d
 | Scope: stored scenarios, `POST /scenarios/{id}/runs`, owner, snapshot, revisions | `TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName`, `TestAStoredScenarioNeedsAllItsMilestones`, `TestStepTypesAndChecksOfLaterMilestonesAreRefused`, `TestAScenarioWithAnUnknownReferenceIsRefused`, `TestAnIdempotencyKeyMakesOneRun`, `TestARevisionThatDeletesWhatARunRefersToOrphansIt`, `TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced`, `TestARevisionOrphansTheScenarioOfARunThatRefersToWhatItDeletes` |
 | Scope: queue and owner, scopes of tokens | `TestAnAbortIsLimitedToTheOwnerOfTheRunForAScopedCaller`, `TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns` |
 
+## Checks and zero hits (M16)
+
+Plan §2.10 and M16. A scenario's `checks` evaluate what the gateway observes of the scenario's target inside a window
+that is tied to a step, and a fault, rule or profile of a run that matched no packet is reported, because a `passed` run
+whose fault never hit proves nothing. M15 refused a scenario with checks (`unsupported_feature`, M16); this build runs
+them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `traffic_seen`, `traffic_not_seen` and
+`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` arrive with M21 and a check for a host name
+(a `destination` or an `except` with `hostname`) with M20: both are still `422 unsupported_feature`.
+
+### How it works
+
+- **A goroutine beside the timeline** (`Manager.runChecks`, `internal/run/checks.go`). The timeline never waits for a
+  check, so a slow read of the connections cannot delay a step. The goroutine starts with the timeline (after the
+  preconditions) when the scenario has checks, and the timeline waits for it after the last step: **a run lasts until
+  its last check is decided**, not only until its last step, and its overlays stay until then (a window may reach past
+  the last step: `from: restore, within: 30s` of the plan's example). A check that is decided early lets the run end
+  early: the run ends when every check is decided, never before its last step.
+- **Windows.** A check's window opens when the timeline has reached the step `window.from` (`start`: the beginning of
+  the timeline). A step counts as reached when it is applied or has nothing to do (a `remove` that finds no overlay is
+  `skipped`); a `wait` step when its condition held (`Manager.reached`, the actual monotonic offset and wall time, so a
+  wait that shifted the timeline moves the windows with it). It closes `within` after it opened, or when the step
+  `until` is reached. `CheckResult.window_start` and `window_end` are the wall times. Windows are checked by the domain
+  (`from` is `start` or a step; `until` comes after `from`; exactly one of `within` and `until`).
+- **What a poll sees.** While a window of a connection check is open the goroutine reads the tracked connections
+  (`Observer.Flows`, conntrack) every 250 ms (`checkPoll`) and keeps what it saw (`flowTracker`). What counts is what
+  **changed between two polls** inside the window: a connection that appeared (`created`), one that is established now
+  and was not before (`established`), one whose packet counts grew (`traffic`). The first poll after a window opened is
+  its baseline: connections that were there then, established or not, are not news. `StartedAt` of conntrack is not
+  used (it is not always reported): the same tuple with another start time, or fewer packets than before, is a new
+  connection. Only connections of the scenario's target count (`flowInScope`: the initiator is a device of the
+  target, or the connection starts in the target network) and only those the selector selects (`matchFlow`: protocol,
+  ports, port ranges, destination address, prefix, network or the uplink).
+- **The five types.**
+  `reconnected`: an `established` event inside the window (TCP past the handshake, any other flow once it was
+  answered; `established()` of M15's `wait: connected`). A SYN that is dropped never becomes one.
+  `no_connection`: the same event is a failure.
+  `traffic_seen`: any event (a new connection in any state, an established one that became answered, or packets on an
+  old one).
+  `traffic_not_seen`: the same event is a failure unless its destination matches an entry of `except`.
+  `dns_query_seen`: the DNS log has a query for the name (exact, or `*.suffix` for its subdomains, not the suffix
+  itself, as the spec's `Hostname`) by a device of the target, asked at or after the window opened and before it
+  closed (`Observer.DNSQueries`, new; the log's time stamps decide, not the polls).
+- **When a check is decided.** A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) is `passed` at the
+  first observation and `failed` when the window closes without one. A negative check (`no_connection`,
+  `traffic_not_seen`) is `failed` at the first observation and `passed` when the window closes. `error` is for a
+  connection check that cannot read the connections at the poll where its window closes (`could not be read`): it
+  cannot say either way. A result has a `message` that names the connection or query that decided it and when (offset
+  into the window), and up to ten observations as `evidence` (`kind: flow` with protocol, addresses, ports, state and
+  the time of the poll; `kind: dns_query`). The name of a check is the scenario's or one derived from the type, the
+  selector and the window (`reconnected tcp/8883, from restore within 30s`). A check is announced with the event
+  `run_check` (`check`, `check_name`, `status`, `message`) as it is decided and the record of the run is written, so a
+  client that polls `GET /runs/{id}` sees the results come in.
+- **How the run ends** (`Manager.verdict`). A check that is `error` makes the run `error` (reason: the check and its
+  message), else a check that is `failed` makes it `failed`, else it is `passed`. A run that ends otherwise (abort,
+  lease, a step that failed, a restart) leaves its undecided checks `pending` with the message `not decided: the run
+  ended as <status> (<reason>)`; the JUnit file shows them as skipped.
+- **Zero hits** (`internal/run/zerohit.go`). A step of the kind fault, rule or profile whose overlay matched no packet
+  is the run warning `zero_hit` (`step`, `overlay`, `message`). The counters are the overlays' counters (`Observer.Counters`,
+  the same ones `GET /overlays` shows), read before the overlay is replaced by a later step, before `remove` and
+  `restore` take overlays away, and at the end. A step that replaces the overlay of an earlier one (same key, same id)
+  is judged by what the overlay matched from the moment it took over: the reading before the replacement is its
+  baseline, and a counter whose epoch changed (it started over) counts from zero. So `lossy` is not excused by the
+  packets `slow` matched. The warnings are made when the run reaches its end as `passed` or `failed`; a run that ends
+  as `error` or `aborted` gets none, because its steps may never have had the time to match. With `zero_hit: error` in
+  the scenario a run that would have passed is `failed` (reason `zero hits: the overlay of step X matched no
+  packet`) and the JUnit file gets a failed test case for each such step; a run that failed anyway keeps its reason.
+  A step is not judged when its counter could not be read (no verdict, no warning), when it is a WireGuard action or
+  other kind without a packet counter, or when it is meant to match nothing: a profile with no parameter in any part,
+  like `normal`.
+- **API.** `runObserver.Counters` returns a zero counter for a fault, rule or profile that is in the store but has
+  nothing in the kernel (a rule that is not in the packet path, a fault that another one overrides), and nothing at all
+  when the counters could not be read (`overlayContext.countersFailed`), so a failed read is never taken for zero hits.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 4 item in
+`open-items.md` for M16):
+
+1. **Polls, not an event stream.** Observations are placed in a window by the poll that sees them, so they are exact
+   to 250 ms. A connection that is opened and gone between two polls would be missed; conntrack keeps a TCP connection
+   in TIME_WAIT for 120 s and a UDP flow for 30 s, so in practice only entries destroyed by a cut (`cut_existing`)
+   vanish quickly, and those are not what the checks look for. The cost is one conntrack read per 250 ms while a
+   connection window is open (none otherwise).
+2. **A positive check decides at the first observation.** This ends a run early (no waiting for the 30 s), as a test
+   suite would want; a negative check can only be decided when the window closes, or earlier if it fails.
+3. **A window of `within` starts at the actual time of its step.** It is not shifted or stretched by waits or late
+   steps; its length is the one in the scenario.
+4. **Error beats failed.** A check that cannot be decided is an infrastructure problem (`error`, exit code 2 of
+   `chaosctl`, M18), a failed check a verdict about the device (`failed`, exit code 1); a run with both is `error`
+   because its verdict is incomplete.
+5. **Traffic to the gateway's own services counts.** A device's DNS queries are connections to the gateway (redirected
+   into the service namespace) and appear in `traffic_seen` and `traffic_not_seen`; a `traffic_not_seen` without a
+   destination fails on them. Name the gateway in `except` (or select a destination) when that is not wanted.
+6. **`zero_hit: error` makes the run `failed`**, not `error`: the engine executed every step; the verdict is that the
+   scenario did not exercise what it set up. The warning stays in the list in both modes.
+7. **A fault that is overridden or a rule that is not in the packet path is a zero hit** (it matched nothing), and so is
+   an overlay with no kernel object, but a counter that could not be read is no verdict.
+8. **`*.suffix` in a check or a `wait` for a DNS query is the spec's `Hostname`** (subdomains only). The query log's
+   `?name=` filter (M6b) also takes the suffix itself; that was left as it is.
+
+### Tests
+
+Level 0 (all run here, with `-race`):
+`internal/run/checks_test.go` (a manager on a fake clock, a fake observer whose connections, DNS log and counters the
+test edits, and the observer's reads as the sync points of the tests), `internal/run/checks_internal_test.go` (the
+tracker, what a check observes, the derived names), `internal/domain/scenario_run_test.go` (`CheckKind`) and, over the
+API with the simulated kernel (conntrack text, the proxy's query log, bumped counters) and the fake clock of the API,
+`internal/api/runs_checks_test.go`. Level 1 (`internal/api/e2e_checks_test.go`, build tag `testbed`; both CI testbed jobs
+name the tests with `-expect-pass $M16_LEVEL1`): a scripted device (a Python client that holds a connection to a broker
+and retries every 500 ms after a reset) against the real gateway: the outage of the plan's example with the three
+connection checks passes when the device comes back and fails the reconnection when it gives up, and a fault that
+matches nothing next to one that the test's pings hit gives exactly one zero-hit warning, or a failed run with
+`zero_hit: error`. These need root and namespaces; the unprivileged container of the development environment has no
+`/dev/kvm`, so they are built and vetted (`go vet -tags testbed ./internal/api`), wired into CI and were not run
+there: not run in the sandbox; run by CI.
+
+### Acceptance map (plan M16 "Tests")
+
+| Plan M16 Tests | Test |
+|---|---|
+| checks pass and fail correctly with scripted client behavior in the testbed | level 1 `TestChecksPassForADeviceThatReconnectsOnTheRealKernel` (a scripted device reconnects after the cut: `reconnected`, `no_connection` and `traffic_seen` pass, the JUnit file has no failure), `TestChecksFailForADeviceThatDoesNotReconnectOnTheRealKernel` (the device gives up: `reconnected` and `traffic_seen` fail, `no_connection` passes, the run is `failed`, two failures in the JUnit file); not runnable here. The same behavior on the fake clock: `TestReconnectedPassesOnANewEstablishedConnectionInsideTheWindow` (a connection of before the window, of another port or device and a handshake that is not through do not count), `TestReconnectedFailsWhenTheWindowClosesWithoutAConnection` (the window is 30 s from the restore, the run `failed`, the failure case of the JUnit file), `TestAConnectionAnsweredInsideTheWindowCountsEvenIfItBeganBefore`, `TestTheSameTupleAgainAfterItsEntryWentIsANewConnection`, `TestNoConnectionFailsOnAnEstablishedConnectionAndNotOnAHandshake`, `TestNoConnectionPassesWhenTheWindowToItsEndStepCloses`, `TestTrafficSeenCountsNewConnectionsAndPacketsOfOldOnes`, `TestTrafficNotSeenIgnoresTheExceptionsAndFailsOnAnyOtherTraffic`, `TestADNSQueryIsSeenOnlyInsideTheWindowFromADeviceOfTheTarget`, `TestADNSQueryAfterTheWindowDoesNotCount`, `TestAWindowFromStartOpensWithTheTimeline`, `TestACheckThatCannotReadTheConnectionsIsAnErrorNotAPass`, `TestAnAbortedRunLeavesItsChecksPendingWithTheReason`, `TestAStepThatFailsEndsTheRunWithItsChecksPending`, `TestTheChecksNeverDelayTheSteps`, `TestTheDecisionOfACheckIsAnEventOfTheRun`, `TestTheNameOfACheckIsGivenOrDerived`; the helpers `TestTheFlowTrackerReportsWhatChangedBetweenTwoPolls`, `TestACheckObservesTheConnectionsOfItsKind`, `TestTheCheckKindsOfAScenarioAreNamedAndWindowsDescribed`, `TestCheckKindNamesTheOneTypeOfACheck`; over the API `TestChecksOfEveryTypeAreEvaluatedOverTheAPI` (the four types with windows of both kinds, the report, the JUnit file, the events), `TestAFailedCheckFailsTheRunAndIsAFailureInTheJUnitFile`, `TestAWildcardDNSCheckMatchesTheSubdomainsAndNotTheSuffix`, `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` (TLS checks M21, host names M20, `check_types` and the feature in the capabilities) |
+| a scenario whose fault never matches reports the zero-hit warning | level 1 `TestAFaultThatNeverMatchesIsAZeroHitWarningOnTheRealKernel` (the fault on the server is hit by the test's pings and gives no warning, the one on an unused address gives exactly one, and with `zero_hit: error` the run is `failed`); not runnable here. Level 0: `TestAFaultThatMatchedNoPacketIsAZeroHitWarning`, `TestAReplacingStepIsJudgedByWhatTheOverlayMatchedSinceItTookOver` (the counter goes on, grows, starts over), `TestZeroHitErrorFailsARunThatWouldHavePassed`, `TestNoZeroHitWarningWithoutAReadingOrForARunThatDidNotFinish`, `TestAFailedCheckKeepsItsReasonWhenAZeroHitIsAnErrorToo`, `TestAProfileThatImpairsNothingIsNoZeroHit`; over the API `TestAFaultThatMatchedNoPacketIsAZeroHitWarningOverTheAPI` (the counters of the simulated kernel, the warning in the report and the JUnit output, `zero_hit: error`) |
+| Scope: checks with windows relative to named steps (`from` a step or `start`, `within` or `until`) | `TestNoConnectionPassesWhenTheWindowToItsEndStepCloses`, `TestAWindowFromStartOpensWithTheTimeline`, `TestChecksOfEveryTypeAreEvaluatedOverTheAPI`; the window rules are the domain's (`TestScenarioCheckRules` of M15) |
+| Scope: zero-hit warnings (optionally errors) | as above; `RunWarning.zero_hit` and `Scenario.zero_hit` are in the spec since M15 and are described in it now |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -4676,8 +4803,8 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
-tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of Kea's packet socket after a link flap
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of Kea's packet socket after a link flap
 (issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 

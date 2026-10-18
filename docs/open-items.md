@@ -22,7 +22,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
   items P31-AUDIT-01 to -03 and -05 to -10 are fixed on the branch `close-phase-3-1`; P31-AUDIT-04 (level 2 on the final
-  code) closes with the Nightly run on that branch. What the
+  code) closes with the Nightly run on that branch; P31-AUDIT-11 to -14 wait for the maintainer (P31-AUDIT-14 fixed in
+  part), see [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer). What the
   implementation could not settle is under [Phase 3.1 open items](#phase-31-open-items), right after the Phase 3.1 audit result:
   P31-M35a-01 to P31-M35a-10, all closed on 2026-10-17: P31-M35a-05, -09 and -10 decided by the maintainer, the others decided
   by best practice in the context of the project with the maintainer's agreement.
@@ -1462,8 +1463,21 @@ plan:
 Date: 2026-10-17. Audited on `main` at `0fb9176` (PR #68 merged), against `docs/plan.md` §5 Phase 3.1 (M35a Scope and Tests),
 D34, D35, §2.2, §2.4, §2.15 to §2.17, §3.3, §3.4, §3.8, §3.11, `api/openapi.yaml`, the Phase 3.1 open items and
 `docs/development.md` "Port forwarding (M35a)". The last part of the phase, the three-port management guard and its
-follow-ups (P31-M35a-10), had had no independent review before. Fixed on the branch `close-phase-3-1` (the "close Phase 3.1"
-round), each with a test that fails without the fix or with the corrected document.
+follow-ups (P31-M35a-10), had had no independent review before. The audit read `main` through several lenses: backend and
+security, the management guard in both topologies, regressions against the state before Phase 3.1 (`3aa5767`), the kernel
+(the compiled nftables, routing and conntrack against the executor's limits), the UI and its states (§2.17), the documents,
+and the tests and CI. Two review rounds of the fixes followed on the branch. Fixed on the branch `close-phase-3-1` (the "close
+Phase 3.1" round), each with a test that fails without the fix or with the corrected document: P31-AUDIT-01 to -03 and -05 to
+-10 (table below; P31-AUDIT-04 closes with the Nightly run on the branch). P31-AUDIT-11 to -14 need the maintainer and are
+recorded with options under [Phase 3.1 audit items for the maintainer](#phase-31-audit-items-for-the-maintainer);
+P31-AUDIT-14 is fixed in part. Six further findings were checked and rejected.
+
+| Verdict | Items |
+|---|---|
+| Fixed on the branch, with a test or the corrected document | P31-AUDIT-01 to -03, -05 to -10 |
+| Closes with the Nightly run on the branch | P31-AUDIT-04 |
+| Open, needs the maintainer | P31-AUDIT-11, -12, -13; P31-AUDIT-14 (the case without any connection; the forwarded connections are fixed) |
+| Checked and rejected | 6 findings |
 
 | Item | Severity | Finding | Fix |
 |---|---|---|---|
@@ -1477,6 +1491,115 @@ round), each with a test that fails without the fix or with the corrected docume
 | P31-AUDIT-08 | minor | The uplink card and the management card listed no forward and said nothing when the active revision was not loaded; Add port forward was disabled without a reason. | Both cards say "Loading the port forwards…" or "The port forwards are not loaded" with Try again until the revision is there. Test: the same e2e case. |
 | P31-AUDIT-09 | minor | The device detail marked a deleted forward DELETED in the accent tone; the cards of the networks view mark it in the blocked tone (§2.17: red removed, blue as configured). | The device detail uses the blocked tone for DELETED like `ForwardList`. Test: e2e `port forwards: a deleted forward is marked in the blocked tone on the cards and the device detail alike`. |
 | P31-AUDIT-10 | minor | Documents behind the decisions of 2026-10-17: `docs/development.md` gave an `allow` rule into the management network as the example of an exception to the matrix, which the management guard now drops, and called mark bits 22–23 reserved after §3.3 gave bit 22 to the replies of a management-side forward; the M35a Scope accepted a forwarded connection "in from the uplink" only, though `management` is an entry side; `docs/install.md` did not say where the replies of a management-side forward can go; the Phase 3 bullet of this file put its open items "at the end of the file"; the M35a Status left out the three-port guard of P31-M35a-10. | The example uses a test network ("IoT may not reach Lab …") and names the guard as the exception; §3.3 is cited as bit 22 for the replies, bit 23 reserved; the Scope says "in on the forward's entry interface"; install.md's "Things to know" says that a management-side forward answers the management subnet and peers behind the management interface's default gateway only, and that the preview warns without a default route; the bullets point to the section after the audit result; the M35a Status names the guard. |
+
+### Phase 3.1 audit items for the maintainer
+
+Found by the audit of 2026-10-17 and confirmed in the code (with a scratch compile or test where noted). Each needs a decision;
+none blocked the round.
+
+#### P31-AUDIT-11 The three-port guard closes management-role WireGuard networks to their own matrix entries
+
+- Status: open
+- Severity: major
+- Reason: needs-decision. `finishManagementSources` (`internal/compiler/wireguard.go`) adds the subnet of every management-role
+  WireGuard network to the management sources, so it is in `mgmt_src`. The three-port guard drops every test interface's packet
+  to `@mgmt_src`, whatever it leaves through. An explicit entry `IoT → admin` (the WireGuard network of the role management)
+  compiles to an accept behind the guard and never takes effect, and a test-role client whose `reachable` list names that
+  network is cut off the same way; nothing warns. Before Phase 3.1 the three-port forward chain had no guard, and the two-port
+  guard still drops only `oifname <uplink> ip daddr @mgmt_src`, so the two topologies disagree. Since P31-AUDIT-01 an entry
+  `IoT → management` returns from the guard by `ip daddr @mgmt_src` and so opens the management-role WireGuard networks too.
+  `explain` agrees with the kernel (it sees the tunnel subnet as management with no management entry).
+- Evidence: a scratch compile of `testdata/wireguard.yaml` with the entry `IoT → admin`: `jump mgmt_guard`, then
+  `meta iifname br-iot meta oifname wg-admin accept`; `mgmt_guard` drops `iifname @ifs_test ip daddr @mgmt_src` with
+  `mgmt_src = {10.98.0.0/24, 192.168.56.0/24}`. `internal/compiler/rules.go` (the three-port branch of the guard).
+- Options: (a) the guard covers the management interface's sources and subnet only, as in the two-port topology and before
+  Phase 3.1; a management-role WireGuard network is closed by the matrix default like any other network; (b) the guard covers
+  management-role WireGuard networks in both topologies, and an explicit entry towards such a network returns from the guard by
+  its destination (as the entry `management` does since P31-AUDIT-01), recorded in plan §2.16; (c) as now, plus a compiler
+  warning on an entry the guard makes ineffective. Either way a three-port golden and a test for an entry towards a
+  management-role WireGuard network, and the same answer in both topologies.
+- Recommendation: (b): an admin tunnel is as much the management network as `mgmt0`, and an explicit entry stays the one way to
+  open it, as §2.16 says.
+- Needs maintainer: yes
+- Effort: S
+
+#### P31-AUDIT-12 Wide forwarded port ranges make an nft transaction the executor refuses
+
+- Status: open
+- Severity: major
+- Reason: needs-decision. Every forwarded port is one element of the DNAT map (P31-M35a-06), about 66 bytes of nft JSON, and
+  the whole transaction is one `NftApply`, which the executor refuses above 8 MiB (`maxOperationBytes`). The validation bounds a
+  range only by 1–65535, and `maxNftItems` does not count the elements of one `add element` command. tcp 1024–65535 plus udp
+  1024–65535 to one device is accepted by `PUT /draft` and its first full apply is 8495777 bytes, refused as a whole. tcp
+  1024–65535 plus udp 30000–51000 applies (5.6 MB), but when the device gets a new address the element transaction (delete and
+  add every element) is 8453568 bytes and is refused, so the forward stops following its device, and the fallback full apply
+  is as large. This reopens the reasoning of P31-M35a-06 (decided on the assumption that large ranges are only slow).
+- Evidence: a scratch test with `accessWorld`/`addForward` (both pass `domain.Validate`), `Nft.Transaction` and
+  `executor.Encode`/`Decode`: "invalid operation: 8495777 bytes exceed the limit of 8388608". `internal/compiler/forward.go`
+  (`compileForwards`), `internal/executor/op.go`, `internal/domain/validate_forward.go`.
+- Options: (a) refuse, with the pointer, a configuration whose enabled forwards together forward more than a fixed number of
+  ports (e.g. 16384, about 2.2 MB for a move; code `invalid_port_range`), with the same check in `forwardRefusal` as the
+  backstop, the limit in `api/openapi.yaml`, and a level 0 test that compiles the largest allowed configuration and a device
+  move and decodes both operations within the limit; (b) split the element transaction into several operations (gives up the
+  atomic move of a forward); (c) an unshifted range (target port = external port) as one interval element (P31-M35a-06 (c)),
+  which helps only unshifted ranges; (d) raise `maxOperationBytes` (only moves the limit).
+- Recommendation: (a) with 16384, and (c) later if wide unshifted ranges are needed.
+- Needs maintainer: yes (the limit)
+- Effort: S
+
+#### P31-AUDIT-13 After the last management forward goes, the replies of its open connections take the uplink
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. A forwarded connection lives on after its forward is deleted or disabled (P31-M35a-04, D11). For a
+  forward from the management side its replies are routed by mark bit 22 through `fwd_reply`, the policy rule 925 and table
+  101 (P31-M35a-05). Those are compiled only while a management forward exists; once the last one goes, the replies of a
+  connection that is still open are looked up in table 100, whose only way off the gateway is the uplink default, and leave
+  through the uplink with the management interface's address as source, although P31-M35a-10 promises that such a reply never
+  takes the uplink.
+- Evidence: `internal/compiler/forward.go` (`managementReplies`, `forwardReplyChain`, `forwardReplyRouting`), the forward
+  chain's `ct state established,related accept` (golden line 2).
+- Options: (a) on an apply that removes the last management forward (or any forward), delete the conntrack entries it
+  translated through the executor's `ConntrackDelete`, as the cut of an access rule does; (b) in the three-port topology compile
+  `fwd_reply`, rule 925 and table 101 always, so a reply carrying bit 22 never takes the uplink, whatever forwards exist;
+  (c) accept and document it.
+- Recommendation: (b): static, no conntrack work, and it keeps D11 (connections live on until they end) without the leak. A
+  level 1 test: an open management-forwarded connection after the delete sends no reply out of the uplink.
+- Needs maintainer: yes
+- Effort: S
+
+#### P31-AUDIT-14 A forward to a device known only from the neighbor table goes inactive once the entry is stale
+
+- Status: open in part. Fixed on the branch: a forwarded connection now marks the device it was sent to as in use (the
+  reply's source of a translated connection, `forwardTarget` in `internal/engine/observe.go`; test
+  `TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse`), so a device that only answers forwards keeps its stale neighbor
+  entry, and with it its forward, while it has forwarded connections. Open: the device without any connection.
+- Severity: major
+- Reason: needs-decision. `ResolveIdentity` keeps a neighbor claim in the kernel states STALE, DELAY or PROBE only while
+  the address is an active source; before the fix only a connection's original source counted, which for a forwarded
+  connection is the peer, not the device. A device with a static address, identified by its MAC (no lease, no reservation)
+  therefore lost its forward (`device_without_address`) about 15–45 s after its last own packet, and the entry cycles through
+  DELAY and PROBE even while forwarded traffic flows (forwarded packets give no neighbor confirmation). With the fix, an idle
+  listener still loses its forward once its entry is stale, and nothing sends to it any more, so the forward stays inactive
+  until the device itself sends.
+- Evidence: a scratch test with `forwardWorld` (esp32-42 without `fixed_ip`): a REACHABLE entry gives Active with target
+  10.10.0.42; the same entry Stale with `ActiveSources = {203.0.113.10}` gives `{Active:false Reason:device_without_address}`.
+  The testbed's device A in `startForwardLab` is this case; the comment and the retry loop of
+  `TestADeviceFaultDoesNotImpairAForwardedConnection` ("A's neighbor entry can lapse") hide it.
+- Options: (a) keep a stale neighbor claim as a lingering claim for a device that an enabled forward sends to, unless another
+  device claims the address (the new holder already wins); (b) document that a forward to a device needs a lease, a
+  reservation or `ipv4` identifiers. With (a): a domain test (a stale entry and no connection keeps the forward's target), a
+  level 1 test in `M35A_LEVEL1` (a short `base_reachable_time_ms` on the gateway, A's entry STALE with no connection, a new
+  forwarded connection still reaches A), and the retry loop of `TestADeviceFaultDoesNotImpairAForwardedConnection` dropped.
+- Recommendation: (a): the plan says the forward follows the device's address, and a server that only answers is the common
+  target of a forward.
+- Needs maintainer: yes
+- Effort: S
+
+### Phase 3.1 audit: checked and not recorded as items
+
+Six further findings of the lenses were checked and rejected (the behavior matched the plan or the spec, or the finding was a
+duplicate of an item above); they are not recorded as items.
 
 ## Phase 3.1 open items
 

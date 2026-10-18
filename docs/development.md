@@ -897,14 +897,16 @@ two ports:    the management network lives behind the uplink interface; there is
   interface. It exits 1 while a step is missing, with the fix for each. The preflight of the setup wizard
   reads the `.network` files too (`internal/preflight/networkd.go`, entries with Manager
   `systemd-networkd` and their `[Match]` conditions; `Configuring` takes only the first file that selects an
-  interface, and none when that one is `Unmanaged`), but only those under the host's `/etc` the executor
-  mounts (docs/open-items.md I64-02). Both evaluate `[Match]` alike: lists of globs (a list that starts with
+  interface, and none when that one is `Unmanaged`), those under the host's `/etc` and `/usr/lib/systemd/network`
+  the executor mounts, not `/run/systemd/network`, which exists only while networkd or netplan has written to it
+  (docs/open-items.md I64-02, decided 2026-10-18; the host setup's check reads it). Both evaluate `[Match]` alike: lists of globs (a list that starts with
   `!` is negated item by item, an empty setting clears it), MAC addresses, the driver, Type `ether` and no
   Kind (a physical port); a WLAN condition never holds, any other condition (Path, Property,
   Virtualization, ...) is taken to hold, and a file without a condition is ignored, as networkd ignores it.
   Tests: `TestThePreflightFindsTheNetworkdFileThatConfiguresAnInterface`,
   `TestThePreflightEvaluatesANetworkdMatch`, `TestThePreflightNamesTheNetworkdFileOfATestInterfaceBeforeTheSetup`
-  (API, `GET /setup`), `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`,
+  and `TestThePreflightNamesANetworkdDefaultUnderUsrLib` (API, `GET /setup`), `TestExecutorContainerHardeningProfile`
+  (the mount, read-only, at the directory the preflight reads below the host root), `TestHostSetupChecksATestInterfaceAndKeepsNetworkdOffIt`,
   `TestHostSetupTestInterfaceOptions` and `TestHostSetupEvaluatesNetworkdLikeThePreflight` (the same table of
   `[Match]` cases through the script, against a fake sysfs and root under `--prefix`, and stubs of `ip` and `ss` on
   `PATH` for the routes, addresses and connections the guard asks about; an SSH session found by `ss` alone,
@@ -978,7 +980,10 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   `TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply` (the switch side of the test port goes
   down, a changed scope is applied, Kea reports the bridge not running; the port comes back, a client
   gets a lease and the engine log shows the reconfiguration). Both testbed jobs name the four tests
-  that need root with `-expect-pass $I64_LEVEL1`.
+  that need root with `-expect-pass $I64_LEVEL1`. The older tests against the real Kea, `TestTheClientDrivesARealKea`
+  and `TestLeasesArePagedPastTheLimit` (`startKea`), carry the build tag `testbed` in `internal/kea/kea_testbed_test.go`
+  too, and both testbed jobs name them with `$KEA_LEVEL1`: before, they skipped at level 0 (no root, no Kea) and
+  had run only by hand since M6a (I64-05).
 - **Observation.** `Engine.PollObserved` reads the neighbor table, conntrack and Kea's leases every
   second and when asked (`TriggerObserve`: netlink neighbor events through `FollowNeighbors`, lease
   events); a burst of triggers is one reading. The state owner's `tracker` (`devices.go`, a pure state
@@ -2156,6 +2161,31 @@ forward   jump cut_forward*
   behind the uplink, also with allowed sources narrower than the subnet); with narrow allowed sources
   `TestTheGuardCoversWhatTheKernelGuardDropsWithNarrowAllowedSources` (domain) and
   `TestExplainUsesTheKernelsManagementSetWithNarrowAllowedSources` (engine, both topologies).
+  **The WireGuard networks of the role management are part of the management network for the guard, in both
+  topologies** (P31-AUDIT-11, option (b), decided 2026-10-18). Their tunnel subnets were always in `mgmt_src` (the
+  anti-lockout rule lets them reach the control plane), so the three-port guard dropped them while the two-port
+  guard, which drops only towards the uplink, did not, and a matrix entry towards such a network had no return.
+  Now the guard ends, in both topologies, with a drop of whatever a device under test sends out through the
+  interface of such a network (`meta iifname @ifs_test meta oifname "wg-admin" counter "forward_drop" drop`: its
+  clients and the networks behind them too), and an explicit allow entry returns by its destination: an entry
+  towards the network (`oifname "wg-admin"`) or towards one of its clients (`oifname` and the client's prefixes)
+  returns as it is, and the endpoint `management` as a destination also stands for each such interface (one
+  return and one matrix rule more per interface), so "IoT -> management" opens them as it opens the management
+  network itself. A client's `reachable` list does not open the guard: it is an implicit entry, and only an
+  explicit matrix entry opens the management network (plan §2.16; a test client that names a management-role
+  network gets the matrix accept, but the guard drops it). `explain` agrees: `World.endpointsTo` counts an
+  address in such a network (or behind its client) as the management network, and the guard's reason names "a
+  WireGuard network of the role management". Tests: the golden files `access-threeport-wg` and
+  `access-twoport-wg` (`TestGoldenTheGuardOfManagementRoleWireGuardNetworks`, also in the parser and kernel gate),
+  `TestAMatrixEntryTowardsAManagementRoleWireGuardNetworkReturnsFromTheGuard`,
+  `TestAManagementRoleWireGuardNetworkIsPartOfTheManagementNetworkForTheGuard` (domain, both topologies, the
+  network, its client and `management` as the entry, the reachable list),
+  `TestExplainGuardsAManagementRoleWireGuardNetworkInBothTopologies` (engine), and on the real kernel
+  `TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt` (both topologies: an
+  allow rule for everything does not carry A to the administrator's tunnel address, the guard counts, an entry
+  "IoT -> admin" opens it, `explain` agrees). The audit's alternative to P31-AUDIT-01, refusing or warning on an
+  explicit entry to the management network in the three-port topology, was not taken (decided 2026-10-18): such
+  an entry stays allowed without a warning.
   Tests: `TestNoAccessRuleCanOpenTheManagementNetworkBehindTheUplink`, `TestAnExplicitMatrixEntryReturnsFromTheTwoPortGuard`,
   `TestNoAccessRuleOpensTheManagementNetworkBehindTheUplink` (the domain layer), the `access-twoport` scenario of the kernel
   gate, and on the real kernel `TestNoAllowRuleOpensTheManagementNetworkBehindTheUplinkOnTheRealKernel` and
@@ -3432,10 +3462,12 @@ destination with the fault badge), which is drawn from those flows (P3-AUDIT-37)
   defaults outside these files, such as an auto-default "Wired connection N" without a file, is not seen) from the
   host root it is given
   (`chaosgw exec --host-root /host`), each directory only when it is there under that root. `deploy/compose.executor.yaml`
-  mounts only the host's `/etc`, read-only at `/host/etc` (netplan's and NetworkManager's files are root's and the API
+  mounts the host's `/etc`, read-only at `/host/etc` (netplan's and NetworkManager's files are root's and the API
   container's user cannot read them; the whole `/etc`, because a bind mount needs its source and a host without
-  netplan or NetworkManager has no such directory), so the shipped deployment reads `/etc/netplan` and
-  `/etc/NetworkManager/system-connections` and sees nothing of `/run` and `/lib`; the keyfiles netplan's NetworkManager
+  netplan or NetworkManager has no such directory), and systemd-networkd's defaults, `/usr/lib/systemd/network`
+  read-only at `/host/usr/lib/systemd/network` (part of systemd's package, so always there; I64-02, decided
+  2026-10-18), so the shipped deployment reads `/etc/netplan`, `/etc/NetworkManager/system-connections` and the
+  `.network` files of `/etc` and `/usr/lib`, and sees nothing of `/run` and `/lib`; the keyfiles netplan's NetworkManager
   renderer generates under `/run` come from its YAML in `/etc`, which is read. The read operation `host_net` returns
   only the file, the section, the entry and what it selects (`executor.HostNetState`), never a file's content (no
   address, no key, no Wi-Fi secret); a file that is not valid netplan YAML is named with the section and the line
@@ -4158,7 +4190,10 @@ on the entry side's address. The access rules decide forwarded connections with 
 responder; faults do not apply to them before M35b. Its open items in `docs/open-items.md` are closed: P31-M35a-01 to -04 and -06 to -08 as implemented
 (decided on 2026-10-17 by best practice; the explain card's source choice moves to M26), and
 P31-M35a-05, -09 and -10 (the routing of management-side replies and the forward's counter) were
-decided on 2026-10-17 and are implemented as described below.
+decided on 2026-10-17 and are implemented as described below. The audit's items P31-AUDIT-11 to -14 were decided
+on 2026-10-18 and are implemented as described below and in "Access rules (M9)" (the guard and the WireGuard networks
+of the role management, the limit of forwarded ports, the replies of a removed management forward, a forward's
+target with a stale neighbor entry).
 
 ### How it works
 
@@ -4190,11 +4225,13 @@ decided on 2026-10-17 and are implemented as described below.
   | ranges of different length | `port_range_length` | `/target_port_end` |
   | the UI/API port (`management.ui_port`, else the port the API listens on, passed as `domain.WithUIPort`; P31-M35a-03), a WireGuard listen port (udp), 22/tcp on the management side or the two-port topology's shared interface, 179/tcp while an enabled BGP protocol exists (P31-M35a-01) | `reserved_port` | `/external_port` |
   | `management` in the two-port topology | `management_is_uplink` | `/entry` |
+  | enabled forwards that forward more than `domain.MaxForwardedPorts` (16384) ports together (P31-AUDIT-12, option (a), decided 2026-10-18): every forwarded port is an element of the DNAT map, and the move of a target device deletes and adds all of them in one nft transaction, which the executor takes up to 8 MiB (`maxOperationBytes`; 16384 ports are about 1.6 MB for such a move with the example's faults) | `invalid_port_range` | `/external_port_end` (or `/external_port`) of the forward that crosses the limit, in the order of the names |
   | a target that is a WireGuard client, a device of a WireGuard network, in the management network, a gateway address, a network or broadcast address, or outside the local test networks | `invalid_target` | `/target/device`, `/target/address` |
 
   A forward is never lockout-relevant: the ports of the control plane are refused, so it never waits
   for commit-confirm. The compiler is the backstop: a forward the validation would refuse (an old
-  revision) is left out with the warning `forward_refused`, the others are compiled. `chaosgw apply
+  revision) is left out with the warning `forward_refused`, the others are compiled; that includes a forward
+  that would take the compiled forwards past `domain.MaxForwardedPorts` (`forwardRefusal`). `chaosgw apply
   --file` validates the file against the API's port it is given (`--ui-port`, default 443) and
   compiles with it, so a file cannot take the port of an API that listens elsewhere either
   (`TestApplyFileRefusesAForwardOnTheAPIsPort`).
@@ -4217,6 +4254,18 @@ decided on 2026-10-17 and are implemented as described below.
     addresses alone make a new generation; a neighbor entry going STALE and back reorders the others
     without one (P31-AUDIT-03, `TestTheOrderOfADevicesAddressesMattersOnlyForAForwardTarget`). A device without an address keeps its forward compiled, with no
     elements and the status `device_without_address`.
+  - *A forward's target keeps a stale neighbor entry* (P31-AUDIT-14, option (a), decided 2026-10-18). A neighbor
+    entry in STALE, DELAY or PROBE counts for a device's identity only while its address carries connections; a
+    forwarded connection counts for the device it was sent to (the reply's source of a translated connection,
+    `forwardTarget` in `internal/engine/observe.go`), and a device that an enabled forward sends to keeps a stale
+    entry also without any connection, as a lingering claim (the least current address) that gives way to any
+    claim of another device on the address (`ResolveIdentity`, `claim.forwardOnly`). So an idle listener known
+    only from the neighbor table (a static address, no lease, no reservation) stays the forward's target; the
+    kernel probes the entry when a forwarded connection comes, and an entry that fails leaves the table and the
+    forward goes inactive. Tests: `TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale`,
+    `TestAForwardedConnectionMarksTheDeviceItWasSentToAsInUse`, level 1
+    `TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale` (a short `base_reachable_time_ms` on the bridge,
+    A's entry STALE and its connections deleted, a new forwarded connection reaches A).
   - *Counting* (P31-M35a-09, option (b), decided 2026-10-17). One counting rule per forward in the
     same NAT chain, in front of the DNAT rule: IPv4, in on the forward's entry interface, to an address of
     that interface, its protocol and `th dport` in its external ports, the named counter
@@ -4257,16 +4306,28 @@ decided on 2026-10-17 and are implemented as described below.
     interface has no default route at all the compiler warns (`forward_replies_subnet_only`: "the
     replies of management forwards reach only <subnet>", `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`),
     and the form of a management forward in the UI says the same. The table, the rule and
-    the chain exist only while a forward from the management side is compiled (three-port topology;
-    the executor's scope already covers them: table 101 lies in Chaos Gateway's tables 100-110, the
-    route's device is the assigned management interface); bit 22 is read or written nowhere else.
+    the chain are compiled in the three-port topology whether or not a forward from the management side
+    exists (P31-AUDIT-13, option (b), decided 2026-10-18): a connection that came in through a management
+    forward lives on after the forward is deleted or disabled (D11, P31-M35a-04), and its replies, whose
+    conntrack mark still has the bit, would otherwise be looked up in table 100 and leave through the uplink.
+    Only a management forward's counting rule sets the bit, so without one the chain marks nothing new; the
+    warning `forward_replies_subnet_only` comes only with a management forward. The executor's scope already
+    covers them (table 101 lies in Chaos Gateway's tables 100-110, the route's device is the assigned
+    management interface); bit 22 is read or written nowhere else. Tests:
+    `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (also without a management forward and
+    without any forward; nothing in the two-port topology), level 1
+    `TestTheRepliesOfAManagementForwardedConnectionStayOffTheUplinkAfterTheForwardIsDeleted` (an open
+    connection through the management forward keeps getting its replies after the forward is deleted, and
+    nothing of it leaves through the uplink).
   - *DOCKER-USER.* The existing per-bridge accept rules (`-o <bridge>`) already cover the path from
     the entry side to a test-network bridge (plan §3.4); no new rule.
   - *Hairpin* (a device using the entry address) is not supported: the DNAT matches the entry
     interfaces only.
-  - *Without an enabled forward the output is byte-identical* to before M35a: no map, no counting
-    rule, no DNAT, no accept, no responder form, no `fwd_reply`, no table 101, the same hash (`TestWithoutAForwardInThePacketPathNothingChanges`; the
-    golden files of every other scenario are unchanged).
+  - *Without an enabled forward the forwards leave nothing*: no map, no counting rule, no DNAT, no accept, no
+    responder form, and a disabled forward gives the same output and hash as none
+    (`TestWithoutAForwardInThePacketPathNothingChanges`). Before P31-AUDIT-13 the output without a forward was
+    byte-identical to before M35a; since then the three-port topology always has `fwd_reply`, rule 925 and
+    table 101 (above), so the golden files of the three-port scenarios have them.
 - **Access rules with the device as responder** (plan §2.4, D34; `internal/compiler/access.go`). While
   a forward is compiled, every rule, configured and overlay, gets a second form right after its own,
   with the same counter and verdict: `ct status dnat`, the rule's source against `ct reply ip saddr`
@@ -4331,13 +4392,13 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 |---|---|
 | golden tests of the nftables output (DNAT map, forward accept, access rules with the device as responder) | `TestGoldenForwards`, `TestGoldenForwardNftTransaction` (`forward.golden.txt`, `forward.nft.golden.json`); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`, `TestTheDNATRuleStandsInThePreroutingNATChainNextToTheServiceRedirect`, `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`, `TestTheForwardAcceptStandsAfterTheAccessRulesAndBeforeTheMatrix`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the golden file shows the counting rules, `fwd_reply`, tables 100 and 101 and the fwmark rules), `TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder`, `TestTheCompiledRulesDecideForwardedConnectionsLikeTheDomainLayer`, `TestWithoutAForwardInThePacketPathNothingChanges`, `TestMapElementsWithInterfaceNamesAndConcatenatedValues`; the kernel takes the ruleset and its cut windows: `TestEveryTransactionIsAcceptedByNftsParser`, `TestEveryCompiledRulesetIsAcceptedByTheKernel`, `TestEveryCutWindowIsAcceptedByTheKernel` (scenario `forward`) |
 | level 1 — a server namespace behind the uplink reaches a TCP and a UDP listener of a test-network client through a forward, and without a forward its connection is dropped and counted | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`; through the engine `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` |
-| a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); the new address also while the old one lingers on with a connection of the device or its neighbor entry is still REACHABLE: `TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn`, `TestANeighborEntryKeepsWhenItWasFirstSeen`, `TestTheDNATMapSendsToTheDevicesMostCurrentAddress`; `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements` |
+| a forward to a device follows the device's new address within 1 s of an address change | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress` (the engine, measured), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` (the element update on the kernel); the new address also while the old one lingers on with a connection of the device or its neighbor entry is still REACHABLE: `TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn`, `TestANeighborEntryKeepsWhenItWasFirstSeen`, `TestTheDNATMapSendsToTheDevicesMostCurrentAddress`; `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestADeviceForwardFollowsTheAddressByAnElementUpdate`, `TestAFullApplyKeepsTheForwardsElements`; an idle device known only from a stale neighbor entry stays the target (P31-AUDIT-14): `TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale`, level 1 `TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale`; the move of the largest allowed forwards fits the executor's limit (P31-AUDIT-12): `TestTheLargestAllowedForwardsAndADeviceMoveFitTheExecutorsLimit` |
 | a drop, reject and reset rule on the device stops forwarded connections, and "also cut existing connections" resets an established one | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`, `TestACutWindowResetsAnEstablishedForwardedConnectionOnTheRealKernel`, `TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection`; `TestACutWindowAlsoResetsForwardedConnections`, `TestACutTakesTheForwardedConnectionsOfItsTarget` |
 | a device fault does not impair a forwarded connection, and the preview says so | `TestADeviceFaultDoesNotImpairAForwardedConnection`; `TestThePreviewListsTheForwardsAndSaysThatFaultsDoNotApply`, `TestThePreviewNotesTheFaultsThatDoNotApplyToAForward`; `port-forwards.spec.ts` "port forwards: the preview says that faults do not apply to forwarded connections, and names the fault of the target" |
 | an existing rule "device → uplink: drop" stops a forwarded connection to that device once the forward exists | `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel` (and not one from the management network, also with `allowed_sources` unset or narrower); `TestAnUplinkRuleDoesNotMatchAManagementPeerOfAForwardedConnection`, `TestAccessRulesJudgeAForwardedConnectionWithTheDeviceAsResponder`, `TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection` |
-| a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` |
+| a forward on the UI/API port, on a WireGuard listen port, on 22/tcp on the management side, on 179/tcp while a BGP neighbor is on its side, overlapping another forward, with ranges of different lengths, or with a target in the management network or on the gateway is rejected with its pointer | `TestAForwardNeverTakesTheUIPort`, `TestAForwardNeverTakesAWireGuardListenPort`, `TestAForwardTakesSSHOnlyOnAnUplinkOfItsOwn`, `TestAForwardLeavesTheBGPPortWhileBGPRuns`, `TestTwoForwardsOnTheSameProtocolMustNotOverlap`, `TestForwardRangesMustBeOrderedAndOfTheSameLength`, `TestAForwardTargetLiesInALocalTestNetwork`, at most 16384 forwarded ports together (P31-AUDIT-12) `TestTheEnabledForwardsForwardAtMostTheLimitOfPortsTogether`; over the API with the pointer `TestARefusedForwardIsReportedAtItsField`; the compiler's backstop `TestAForwardTheValidationRefusesIsLeftOutWithAWarning` (with "more ports than allowed") |
 | a port range is forwarded one to one | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel` (tcp 9049-9050 → 7049-7050); `TestTheDNATMapSendsEveryForwardedPortToTheTargetsCurrentAddress`; `port-forwards.spec.ts` "port forwards: a range to an address is shifted one to one; ranges of different length are refused under the field" |
-| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the mark, table 101 and its rule, no management subnet in table 100), `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`; a peer behind a router of the management network is answered, and a device with an allow rule without a destination does not reach the management network (P31-M35a-05, -10): `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`; the management guard keeps a device out also when table 100 has lost its default, and an explicit matrix entry opens it (decided 2026-10-17): `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork`, `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`; the warning when the management interface has no default route: `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
+| a forward from the management network (three-port topology) reaches the device, and `management` is refused in the two-port topology | `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`, `TestAManagementForwardRoutesItsRepliesToTheManagementNetwork` (the mark, table 101 and its rule, no management subnet in table 100), `TestTheReplyMarkOfAManagementForwardIsAFreeRoutingBit`; a peer behind a router of the management network is answered, and a device with an allow rule without a destination does not reach the management network (P31-M35a-05, -10): `TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`; the management guard keeps a device out also when table 100 has lost its default, and an explicit matrix entry opens it (decided 2026-10-17): `TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork`, `TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn`; the replies of a connection that outlives its management forward stay off the uplink (P31-AUDIT-13): `TestTheRepliesOfAManagementForwardedConnectionStayOffTheUplinkAfterTheForwardIsDeleted`; the WireGuard networks of the role management are part of the management network for the guard (P31-AUDIT-11): `TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt`; the warning when the management interface has no default route: `TestAManagementForwardWithoutAManagementDefaultRouteWarnsThatItsRepliesReachTheSubnetOnly`; `TestTheManagementSideIsRefusedInTheTwoPortTopology`, `TestAManagementForwardInTheTwoPortTopologyIsNotCompiled`; `port-forwards.spec.ts` "port forwards: from the management network in the three-port topology", "port forwards: in the two-port topology the management card offers no forward and the form only the uplink"; level 2 `TestSmokeOnCleanUbuntuHosts/<release>/three-ports`, `TestTheTwoPortConfigurationWouldRefuseAManagementForward` |
 | a forward follows a new uplink address (DHCP) within 1 s | `TestAForwardFollowsANewUplinkAddress` (the address replaced as a new lease does, measured, and the status follows), `TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel` |
 | a device without a known address leaves its forward inactive with its reason in the status | `TestAForwardFollowsItsDeviceAndSaysWhyItIsInactive`, `TestPortForwardsAreListedWithTheirStatus`, `TestADeviceForwardFollowsTheAddressByElementsOnly`, `TestAForwardOfAnEntryWithoutAddressIsInactive`; `port-forwards.spec.ts` "port forwards: the uplink and the management card list their forwards with target, ports, counter and status" |
 | the counters count the forwarded connections | `TestAForwardReachesTheListenersOfADeviceOnTheRealKernel`, `TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress`; also the connections an access `allow` rule accepts, and the ones a rule drops (P31-M35a-09): `TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel`, `TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks`, `TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel`; the counting rule in the NAT chain `TestEachForwardCountsItsConnectionsInTheNATChainInFrontOfTheDNAT`; an IPv6 connection to the entry interface is not counted (P31-AUDIT-02): `TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel`; over the API `TestAForwardCountsItsConnections`; level 2 `TestSmokeOnCleanUbuntuHosts`. The UI shows "N connections": `src/lib/forwards.test.ts` "the rows: …", `port-forwards.spec.ts` "port forwards: the uplink and the management card list …", "port forwards: the device detail lists …" |
@@ -4385,9 +4446,10 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$I64_LEVEL1` (the workflow's environment): the level 1
-tests of port forwarding and those of Kea's packet socket after a link flap (issue #64) must each pass, so
-one that is renamed or no longer built fails the job.
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+tests of port forwarding (with those of the Phase 3.1 audit), those of Kea's packet socket after a link flap
+(issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
+longer built fails the job.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

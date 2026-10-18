@@ -681,9 +681,9 @@ func TestGoldenForwardNftTransaction(t *testing.T) {
 // onto the packet mark of the replies from the test networks, and the rule `fwmark 0x400000/0x400000
 // lookup 101` (priority 925, before table 100's rules) sends them to table 101: the management subnet,
 // the default gateway of the management interface (a peer behind a router of the management network)
-// and a prohibit fallback, so such a reply never takes the uplink. Without a forward from the management
-// side none of it is compiled; without a default route of the management interface table 101 has the
-// subnet and the fallback.
+// and a prohibit fallback, so such a reply never takes the uplink. The chain, the rule and the table stay
+// without a forward from the management side (P31-AUDIT-13); without a default route of the management
+// interface table 101 has the subnet and the fallback.
 func TestAManagementForwardRoutesItsRepliesToTheManagementNetwork(t *testing.T) {
 	tg := forwardWorld(t).compile(nil)
 	for _, r := range tg.Routes {
@@ -737,25 +737,43 @@ func TestAManagementForwardRoutesItsRepliesToTheManagementNetwork(t *testing.T) 
 		t.Errorf("table 101 without a management gateway: %+v", got)
 	}
 
-	// without a forward from the management side (none, or a disabled one): nothing of it
+	// without a forward from the management side (none, a disabled one, or no forward at all) the chain, the
+	// rule and table 101 stay (P31-AUDIT-13, decided 2026-10-18, option (b)): a connection that came in through
+	// a management forward lives on after the forward goes (D11), and its replies, whose conntrack mark has the
+	// bit, still go back through the management interface instead of taking the uplink. Nothing sets the bit
+	// then: the conntrack mark is set by a management forward's counting rule only.
 	w := accessWorld(t)
 	w.addForward(fwdWeb, `{protocol: tcp, entry: uplink, external_port: 8080, target: {device: esp32-42}}`)
 	w.addForward(fwdMgmt, `{protocol: tcp, entry: management, external_port: 8443, target: {device: esp32-43}, enabled: false}`)
-	plain := w.compile(nil)
-	for _, r := range plain.Routes {
-		if r.Dev == "mgmt0" || r.Table == 101 {
-			t.Errorf("a route of the management side without a forward from there: %+v", r)
+	for name, plain := range map[string]*Target{"a disabled management forward": w.compile(nil), "no forward": accessWorld(t).compile(nil)} {
+		if got := routesOfTable(plain, 101); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: table 101: %+v, want %+v", name, got, want)
+		}
+		if !slices.Contains(plain.Rules, rule) {
+			t.Errorf("%s: no policy rule for the marked replies: %+v", name, plain.Rules)
+		}
+		if got := renderRules(chainOf(t, plain, ForwardReplyChain)); !slices.Equal(got, []string{fmt.Sprintf("meta iifname @%s ct direction reply ct mark & 0x400000 0x400000 meta mark set meta mark | 0x400000", setName(t, plain, "ifs_lan"))}) {
+			t.Errorf("%s: the chain %s: %v", name, ForwardReplyChain, got)
+		}
+		for _, ch := range plain.Nft.Chains {
+			if ch.Name != ForwardReplyChain && indexOfRule(ch, "ct mark set") >= 0 {
+				t.Errorf("%s: the chain %s sets the conntrack mark without a forward from the management side", name, ch.Name)
+			}
+		}
+		for _, r := range plain.Routes {
+			if r.Table == PolicyTable && (r.Dev == "mgmt0" || r.Dst == "192.168.56.0/24") {
+				t.Errorf("%s: the policy table routes to the management network: %+v", name, r)
+			}
 		}
 	}
-	for _, r := range plain.Rules {
-		if r.Fwmark == ForwardReplyMark || r.Table == 101 {
-			t.Errorf("a rule of the management side without a forward from there: %+v", r)
-		}
-	}
-	for _, ch := range plain.Nft.Chains {
-		if ch.Name == ForwardReplyChain || indexOfRule(ch, "ct mark") >= 0 {
-			t.Errorf("the chain %s has the mark of the management side without a forward from there", ch.Name)
-		}
+
+	// the two-port topology has no management side of its own: nothing of it
+	two := accessWorld(t)
+	two.cfg.Management.Interface = model.InterfaceRef{Name: ptr("wan0")}
+	two.cfg.Management.AllowedSources = nil
+	tp := two.compile(nil)
+	if len(routesOfTable(tp, 101)) != 0 || hasChain(tp, ForwardReplyChain) || slices.ContainsFunc(tp.Rules, func(r executor.Rule) bool { return r.Fwmark == ForwardReplyMark }) {
+		t.Errorf("the two-port topology routes the replies of management forwards: %+v %+v", tp.Routes, tp.Rules)
 	}
 }
 

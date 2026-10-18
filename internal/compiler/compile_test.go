@@ -6,10 +6,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -232,6 +234,9 @@ func TestPolicyRoutingTable100(t *testing.T) {
 	tg := compileBasic(t, nil)
 	var got []string
 	for _, r := range tg.Routes {
+		if r.Table == ForwardReplyTable {
+			continue // the replies of management forwards, in the three-port topology always (P31-AUDIT-13)
+		}
 		s := r.Dst
 		if r.Via != "" {
 			s += " via " + r.Via
@@ -250,7 +255,9 @@ func TestPolicyRoutingTable100(t *testing.T) {
 		t.Errorf("routes:\n%v\nwant\n%v", got, want)
 	}
 	// one rule per bridge, and one for the destination of every route behind a router: replies
-	// from the uplink to such a network arrive on the uplink interface
+	// from the uplink to such a network arrive on the uplink interface (and the rule of the marked
+	// replies of management forwards, P31-AUDIT-13)
+	tg.Rules = slices.DeleteFunc(tg.Rules, func(r executor.Rule) bool { return r.Fwmark == ForwardReplyMark })
 	if len(tg.Rules) != 3 || tg.Rules[0].Iif != "br-iot" || tg.Rules[1].Iif != "br-lab" || tg.Rules[0].Priority != 1000 || tg.Rules[1].Priority != 1000 || tg.Rules[0].Table != 100 || tg.Rules[2].To != "10.30.0.0/24" || tg.Rules[2].Iif != "" {
 		t.Errorf("rules %+v", tg.Rules)
 	}

@@ -3,7 +3,7 @@
     "revision": 2,
     "seq": 5
   },
-  "hash": "c0439fa1b98ccda2",
+  "hash": "32eebb8f624eab1c",
   "uplink": {
     "name": "wan0",
     "addr": "203.0.113.1/24",
@@ -229,6 +229,13 @@
     {
       "action": "replace",
       "family": 4,
+      "table": 101,
+      "dst": "192.168.56.0/24",
+      "dev": "mgmt0"
+    },
+    {
+      "action": "replace",
+      "family": 4,
       "table": 100,
       "dst": "203.0.113.0/24",
       "dev": "wan0"
@@ -240,6 +247,23 @@
       "dst": "default",
       "via": "203.0.113.10",
       "dev": "wan0"
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 101,
+      "dst": "default",
+      "via": "192.168.56.254",
+      "dev": "mgmt0",
+      "metric": 0
+    },
+    {
+      "action": "replace",
+      "family": 4,
+      "table": 101,
+      "dst": "default",
+      "type": "prohibit",
+      "metric": 4096
     },
     {
       "action": "replace",
@@ -305,6 +329,13 @@
       "priority": 1000,
       "iif": "wg-site-b",
       "table": 100
+    },
+    {
+      "action": "add",
+      "family": 4,
+      "priority": 925,
+      "fwmark": "0x400000/0x400000",
+      "table": 101
     },
     {
       "action": "add",
@@ -1099,6 +1130,79 @@
               }
             ],
             "comment": "4159606cfb8d"
+          }
+        ]
+      },
+      {
+        "name": "fwd_reply",
+        "base": {
+          "type": "filter",
+          "hook": "prerouting",
+          "prio": -140,
+          "policy": "accept"
+        },
+        "rules": [
+          {
+            "expr": [
+              {
+                "match": {
+                  "left": {
+                    "meta": {
+                      "key": "iifname"
+                    }
+                  },
+                  "op": "==",
+                  "right": "@ifs_lan_bf4feb"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "ct": {
+                      "key": "direction"
+                    }
+                  },
+                  "op": "==",
+                  "right": "reply"
+                }
+              },
+              {
+                "match": {
+                  "left": {
+                    "\u0026": [
+                      {
+                        "ct": {
+                          "key": "mark"
+                        }
+                      },
+                      4194304
+                    ]
+                  },
+                  "op": "==",
+                  "right": 4194304
+                }
+              },
+              {
+                "mangle": {
+                  "key": {
+                    "meta": {
+                      "key": "mark"
+                    }
+                  },
+                  "value": {
+                    "|": [
+                      {
+                        "meta": {
+                          "key": "mark"
+                        }
+                      },
+                      4194304
+                    ]
+                  }
+                }
+              }
+            ],
+            "comment": "78ef3c0a1f81"
           }
         ]
       },

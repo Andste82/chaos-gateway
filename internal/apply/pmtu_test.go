@@ -3,10 +3,12 @@ package apply_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 )
 
 // The PMTU mirror tables in the apply (M10, plan §2.5), on the simulated kernel: the routes with the size
@@ -36,7 +38,9 @@ func (x *tcEnv) ruleLines() string {
 	}
 	var out []string
 	for _, r := range s.Rules {
-		if r.Fwmark != "" {
+		// the rule of the replies of management forwards is there in the three-port topology whatever the
+		// faults (P31-AUDIT-13)
+		if r.Fwmark != "" && r.Table != strconv.Itoa(compiler.ForwardReplyTable) {
 			out = append(out, fmt.Sprintf("%d %s/%s -> %s", r.Priority, r.Fwmark, r.Fwmask, r.Table))
 		}
 	}

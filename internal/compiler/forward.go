@@ -56,8 +56,11 @@ import (
 // network is answered too), and a prohibit route as the fallback, so such a reply never leaves through
 // the uplink. Other routes of the management interface (a static route to an admin network while the
 // main default goes via the uplink) are not in the table: such a peer gets no reply, and the compiler
-// warns (CodeForwardRepliesSubnetOnly) when the management interface has no default route. Without a
-// forward from the management side none of this is compiled.
+// warns (CodeForwardRepliesSubnetOnly) when the management interface has no default route. The chain, the
+// rule and the table are compiled in the three-port topology whether or not a forward from the management
+// side exists: a connection outlives its forward (D11), and its replies, whose conntrack mark still has the
+// bit, must not take the uplink after the last management forward went (P31-AUDIT-13, decided 2026-10-18).
+// Only the counting rule of a management forward sets the bit, so without one the chain marks nothing new.
 //
 // Faults do not apply to forwarded connections (M35b): the classification chain runs before the DNAT on
 // the conntrack original tuple, whose ends (the peer and the entry address) lie in no test network, so it
@@ -341,17 +344,20 @@ func (t *Target) forwardAccepts(lanSet string) []Rule {
 }
 
 // managementReplies reports whether the replies of forwarded connections are routed back through the
-// management interface: while a forward from the management side is compiled, in the three-port
-// topology (the two-port one compiles no such forward) and with the management interface's subnet known.
+// management interface: in the three-port topology (the two-port one compiles no forward from the
+// management side) with the management interface's subnet known, whether or not a forward from the
+// management side is compiled now. A connection lives on after its forward is deleted or disabled (D11,
+// P31-M35a-04): without the chain, the rule and the table its replies, which still carry the bit in the
+// conntrack mark, would be looked up in the policy table and leave through the uplink (P31-AUDIT-13,
+// decided 2026-10-18, option (b)).
 func (t *Target) managementReplies() bool {
-	return t.Management.Name != "" && t.Management.Name != t.Uplink.Name && t.Management.Subnet.IsValid() &&
-		t.forwardsFrom(domain.EntryManagement)
+	return t.Management.Name != "" && t.Management.Name != t.Uplink.Name && t.Management.Subnet.IsValid()
 }
 
 // forwardReplyChain copies ForwardReplyMarkBit from the conntrack mark onto the packet mark of a reply
 // that comes in from a local test network, before the routing decision, so the policy rule of
-// ForwardReplyMark sends it to ForwardReplyTable. Every other bit of the packet mark is kept. Nil without
-// a forward from the management side.
+// ForwardReplyMark sends it to ForwardReplyTable. Every other bit of the packet mark is kept. Nil in the
+// two-port topology (managementReplies).
 func (t *Target) forwardReplyChain(lanSet string) *Chain {
 	if !t.managementReplies() {
 		return nil
@@ -375,7 +381,7 @@ func (t *Target) forwardReplyRouting() {
 	if m.gateway.IsValid() {
 		zero := 0
 		t.Routes = append(t.Routes, executor.Route{Action: "replace", Family: 4, Table: ForwardReplyTable, Dst: "default", Via: m.gateway.String(), Dev: m.Name, Metric: &zero})
-	} else {
+	} else if t.forwardsFrom(domain.EntryManagement) {
 		t.warn(CodeForwardRepliesSubnetOnly, "", "the replies of management forwards reach only %s: the management interface %s has no default route, so a peer behind another route of it gets no reply", m.Subnet, m.Name)
 	}
 	prohibitMetric := 4096

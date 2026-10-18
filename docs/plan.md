@@ -905,17 +905,20 @@ in M28):
     revisions/000042.status.json   its status (active/candidate/last-known-good, ...)
 /var/lib/chaosgw/secrets/          0600 (WireGuard keys, PSKs)
 /var/lib/chaosgw/api/              audit.jsonl, idempotency keys
+    runs/<id>/run.json             a run: record, report and final counters (M15)
+    runs/<id>/events.jsonl         its events, one JSON line each
 /var/lib/chaosgw/service/          service-namespace token and holder PID file
 ```
 
-Run/event history, captures and a dedicated audit-log volume are not in V1's actual layout; the audit
-log lives in `audit.jsonl` under the API's own data directory above, and the service log goes to the
-container log. (`runs/`, `captures/` and a separate `/var/log/chaos-gateway/` move to the milestones
-that produce them.)
+Captures and a dedicated audit-log volume are not in V1's actual layout; the audit log lives in
+`audit.jsonl` under the API's own data directory above, and the service log goes to the container log. The
+runs are in `runs/` below it since M15 (a run's record is rewritten as the run goes on; the event history of
+the bus as a whole is not kept, only the events of each run). (`captures/` and a separate
+`/var/log/chaos-gateway/` move to the milestones that produce them.)
 
 - Writes are atomic: write a temp file, fsync, rename.
 - Schema version in every file, with migrations on upgrade.
-- No database in V1. Run and event history are JSONL files with retention limits.
+- No database in V1. Run records are JSON files and their events JSONL files, with retention limits (M15: runs are deleted 30 days after they ended).
 - **Retention defaults** (configurable): 200 revisions; runs 30 days; captures 5 GB quota, oldest first; events 7 days; audit log 1 year.
 - **Disk low** (< 10 % free): new captures are refused and running captures stop; runs themselves continue and report the missing capture.
 

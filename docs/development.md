@@ -16,6 +16,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
 | `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution and the classification tables built from it, overlays and their keys, the overlays a revision orphans or moves, observed state and device identity, candidate creation (merge patch), domain diff |
 | `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
+| `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -4450,6 +4451,196 @@ appliance smoke test (see "Appliance VMs (test level 2)"). The UI: `web/src/lib/
 | Scope: the `DOCKER-USER` accept rule covers the path from the entry side to the test-network bridges | `TestAForwardPassesDockersForwardPolicyThroughDockerUser`, `TestDockerUserCoversThePathOfAForward`; level 2 |
 | Scope: the API resource, revisioned like the access rules | `TestPortForwardsAreListedWithTheirStatus`, `TestTheCapabilitiesNamePortForwarding`, `TestForwardsAreChangedThroughAMergePatchLikeAccessRules`, `TestForwardNamesAreUniqueAndTheKeysAreUUIDs`, `TestAForwardIsOfTcpOrUdpWithAKnownEntrySide`, `TestTheExampleForwardIsValidAndFillsItsDefaults`, `TestMatchForwardFindsTheEnabledForwardOfAPort` |
 
+## Scenarios and runs (M15)
+
+Plan §2.10 and M15. A scenario is a timeline of steps; it is part of every revision and the domain checks
+it (`domain.ValidateScenario`: step ids, kinds, narrowing, the order of `remove`, tunnel steps inside the
+target, check windows). M15 adds the engine that executes one, `internal/run`, and the API around it: the
+scenarios of the active revision (`GET /scenarios`, `…/{id}` as JSON or, with `Accept: application/yaml`, as the
+file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenarios/{id}/runs`, `GET /runs`,
+`…/{id}`, `…/abort`, `…/renew`, `…/report.json`, `…/report.xml`, `…/events`), `GET /system/busy`, the
+`runs_active` of `GET /state`, `aborted_runs` of `POST /reset`, and the step types of `GET /capabilities`.
+
+### How it works
+
+- **A run is a goroutine** (`Manager.execute`) that sends commands to the state owner through the engine
+  (`run.Gateway`, which `*engine.Engine` implements), like every other writer (plan §3.11). A step that
+  creates or replaces an overlay is an `OverlayWrite` whose owner is the run itself (`model.Owner{Type: run,
+  Id: <run id>}`, `OverlayWrite.Run` names the step); the overlay store already replaces an overlay with the
+  key *(owner, kind, target, selector)*, so "a step with the same key replaces the earlier one, its
+  parameters complete, never merged" needs no code of its own. `domain.StepRequest` turns a step into the
+  request (the step's target, else the scenario's; a tunnel fault and a WireGuard action have none).
+  `remove` deletes the overlay under the key of an earlier step (`DeleteOverlay`; if it is gone already the
+  step is `skipped` with the reason), `restore` resets the owner. A run never writes a revision.
+  The goroutine is the only writer of its own record's steps; the manager's mutex guards the table and
+  the records and is never held across a call out of the package.
+- **Creating a run** (`Manager.Create`). The scenario is the stored one (by name or UUID) or the inline one;
+  `domain.ParameterizeScenario` applies `parameters` (dotted paths, `domain.ApplyParameters`: a segment into
+  a list is a position or a step id, a value is a string except for `true`, `false`, whole numbers and
+  `[…]`/`{…}` JSON, a member of a `target` replaces the whole target) to the generic document and checks the
+  result against the `Scenario` schema, so an inline scenario may leave out what the parameters give;
+  `domain.ResolveScenario` validates it against the active configuration (discovered devices count as known)
+  and resolves every reference to its UUID. That resolved scenario is the run's `snapshot`, with the revision
+  that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
+  for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
+  naming the milestone: `checks` (M16), `capture: true` or a `capture` step (M17), a `dns` step (M20), `tls`
+  (M21), `dhcp` (M23), a profile with a DNS or TLS part, and a `wait` for a host name (M20); `GET
+  /capabilities` lists `step_types` (profile, fault, rule, wireguard, wait, remove, restore) and an empty
+  `check_types`. Nothing is stored for a refused scenario.
+- **One run per target, the queue.** Two targets overlap when they share a device or a network
+  (`scopeTokens`: the ids of a scope's devices from the snapshot, a group's members whether the snapshot knows
+  them or not, and for a network the network itself; `global` overlaps everything). A run starts at once when
+  no queued or running run overlaps it, else it is `queued` (`run_queued` event) or, with `?queue=false`,
+  refused with `409 target_busy` naming the run that holds the target. `schedule` starts queued runs in
+  creation order and **no run overtakes an earlier one it would have waited for**: a run is held back by every
+  running run and every earlier queued run it overlaps, so a long queue cannot starve its first member. At most
+  200 runs are queued or running (`capacity_exceeded`).
+- **Preconditions** (`Manager.preconditions`, before the first step; a failure ends the run as `error` with
+  `precondition <id> failed: …`; a scenario skips ids with `preconditions.skip`). `target_online`: a device
+  target must be online; for a group or network at least one of its devices must be (the snapshot's
+  `DeviceState.Online`). `uses_gateway_dns`, only when `domain.ScenarioUsesDNS` (a DNS step, a wait for a DNS
+  query, a host name in a step's or a check's destination): each device checked (the device, or every online
+  device of a group or network) has asked the gateway's DNS proxy (the query log) or has a lease from a
+  network whose DHCP options hand out the gateway (no `dns_servers`, or the gateway among them).
+  `no_foreign_overlays`: no overlay of another owner overlaps the target (`overlayTokens`: its target, or for
+  a tunnel fault or WireGuard action the client or link it names); overlays of a token are foreign to a
+  run, whoever started the run.
+- **The timeline** (`Manager.timeline`). Steps run in the order of `domain.TimelineOrder` (by `at`, list
+  order for equal `at`); each step is due at *start + at + shift* on the monotonic clock
+  (`sleepUntil` arms one timer, rechecks the clock after arming it, and ends on cancel). The report lists the
+  steps in that order. A `wait` step stops the timeline: it polls every 250 ms (`waitPoll`) until its
+  condition holds and then `shift` becomes the time it waited, so the later steps move by it; a timeout fails
+  the step and ends the run as `error`. `online`: at least one device of the step's target is online.
+  `connected`: a connection of the target that was not there when the wait began (the flow ids at that moment
+  are remembered), is established (TCP past the handshake, others answered) and matches the protocol, ports
+  and destination (address, prefix, network, `uplink`; `matchFlow`). `dns_query`: the DNS log has a query for
+  the name from a device of the target at or after the time the wait began. The run ends as `passed` right after its
+  last step (there are no checks yet; from M16 it also lasts until the last check window).
+- **Recording a step.** After the write returns (the engine answers when an apply containing it is
+  verified) the step has `status: applied`, `applied_at` (the wall time, which stands for the executor's commit
+  time stamp), `offset_ms` (monotonic, from the start of the timeline), `generation` (the one the engine
+  answered with, which can be newer than the change's own), the `overlay` and `queue_wait_ms`; `run_step`
+  announces it. A write that fails (`CompileError`, `apply_failed`, a validation problem) fails the step with
+  the error, the run is `error` with `step <id>: <error>`, the steps after it are `skipped` (`not run: …`) and
+  the run's overlays are removed.
+- **Queue wait and `step_late`.** `engine.OverlayResult.QueueWait` is new with M15: the time from the moment
+  the state owner took the write in until the apply loop took up the desired state that carries it (the wait
+  behind an apply in flight, `applyResult.started`), plus the time that apply's plan waited in the
+  executor's queue (`executor.Outcome.QueueWait`, plan §3.11's operation time stamps). It is what
+  `RunStep.queue_wait_ms` reports (added to the spec with this milestone); a step with more than
+  `run.StepLateThreshold` (100 ms) gets the run warning `step_late` naming the step and the overlay. The
+  scheduler's own lateness (the timer firing late) is not part of it: `offset_ms` shows it, and the level 1
+  test bounds it by 100 ms where timing is accurate.
+- **The end of a run, always the same way** (`Manager.finish`): read the final counters of the overlays that are
+  still there (they are also read before a `remove` or `restore` takes overlays away, so the report holds the
+  final counter of every overlay the run created, `RunReport.counters`), reset the run's owner through the
+  engine (up to three attempts a second apart; a run whose overlays cannot be removed is `error` even if it
+  passed), write the record, emit `run_finished`, wait until the recorder has written that event to the
+  run's event file, and start the runs that waited. Every way to end goes through it: the last step, an error,
+  a failed precondition, an abort.
+- **Abort, lease, reset, stop.** `POST /runs/{id}/abort` cancels the run's context with the reason
+  (`aborted by <token name>`; a queued run is finished at once, a running one finishes itself) and answers
+  when the overlays are gone, with the generation that removed them in `Chaos-Generation`; aborting an ended
+  run returns it unchanged. A **lease** (`lease`, at least 1 s) starts when the run is created and runs on
+  the monotonic clock (`clock.AfterFunc`, reset by `POST /runs/{id}/renew`, which answers `422` for a run
+  without a lease or one that has ended); when it runs out the run is `aborted` with the reason `lease
+  expired`, also while it is still queued. A client that disconnects changes nothing: the run does not
+  depend on the request that made it. A token with the scope `overlays` may abort and renew only its own runs
+  (`runLimit`), the scope `full` and the admin any. `POST /reset` aborts the caller's runs (every run with
+  `owner=all`) first, which removes their overlays, then resets the overlays that are left; `aborted_runs` counts
+  them. `Server.Close` (the shutdown of `chaosgw api`, before the engine closes) aborts what is left with
+  `service stopping`.
+- **Records, restart, retention.** `<data dir>/runs/<id>/run.json` (the run as the API shows it, the final
+  counters, schema version 1, written atomically each time the run changes, in order) and `events.jsonl` (the
+  events of the run, one API `Event` per line: the manager's own `run_queued`, `run_started`, `run_step`,
+  `run_finished` and the engine's overlay events of the run's overlays, which now carry `run`; a recorder
+  goroutine follows the event bus, a recorder the bus dropped subscribes again and says so in the log).
+  `Manager.Recover` (called by `api.New`, once the engine runs) loads the records: a run that was queued or
+  running ends as `aborted` with the reason `service restart` (its overlays died with the process, plan
+  §2.1.1) and an event, a record of an ended run older than `--run-retention` (30 days, plan §3.6) is
+  deleted, as are expired ones whenever a run ends, and a record that cannot be read is left alone with a
+  warning. `GET …/report.json`, `…/report.xml` and `…/events` of a run that has not ended answer `404
+  not_found` ("the report is there once the run has ended"); they wait for the end of the run to reach the
+  event file, so a client that sees `passed` reads a complete file.
+- **Reports.** `report.json` is the run with its `counters`. `report.xml` is JUnit (`junitOf`): one test
+  suite named after the scenario with the run's id, status, revision, owner and reason as properties, a test
+  case `run` (an `<error type="run_error">` for `error`, `run_aborted` for `aborted`, with the reason), a test
+  case `step <id>` with an `<error>` for each step that failed, a test case per check (M16: failure for
+  `failed`, error for `error`), and the warnings, the timeline with queue waits and the final counters as
+  `system-out`.
+- **Revisions.** A revision that deletes an object a queued or running run refers to (`Manager.Orphaned`:
+  `domain.OrphanedScenario` over the run's snapshot) is refused with `validation_failed` listing the runs
+  as `references` of `kind: run` next to the overlays it would orphan, and `preview` lists the same;
+  `apply?force=true` first aborts those runs (`AbortReferences`, reason `revision N deletes <object>`, which
+  removes their overlays) and then applies, so the engine finds nothing of the run's to orphan. The runs stay
+  aborted if the apply then fails. The check and the apply are not one step: a run started in between is not
+  seen.
+- **API details.** `Idempotency-Key` now also works on `POST /runs` and `POST /scenarios/{id}/runs`. The owner
+  of a run is `ownerOf(principal)`, like an overlay's (the token, or the admin user for the UI). A stored
+  scenario's YAML has UUIDs as references, like the export of a revision. `GET /runs` is newest first without
+  steps, checks and snapshot. `GetState.runs_active` and `GET /system/busy` count the running runs; the busy
+  answer also lists queued ones and the ids.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 4 item in
+`open-items.md` for M15):
+
+1. **Records on disk, not in memory only**, because the plan has a restart end runs as `aborted` and keeps the
+   reports of the last 30 days (§3.6); the layout is the plan's `runs/<id>/…` below the API's data directory.
+2. **`remove` removes the overlay under the key of the named step**, which a later step with the same key may
+   have replaced (`remove: slow` after `lossy` replaced `slow` removes the fault of `lossy`): the key is the
+   overlay's identity. A second `remove` of the same step finds nothing and is `skipped`.
+3. **`applied_at` is the time the verified write returns**; the executor's own commit time stamp is only a part
+   of `queue_wait_ms`.
+4. **`step_late` is the queue wait**, as the milestone's test says ("waits behind a revision apply for more
+   than 100 ms"), not the scheduler's lateness.
+5. **A group or network target is online when one device is** (and `uses_gateway_dns` asks every online device),
+   because a network that has a device that has been off for a month would otherwise never run.
+6. **Checks, capture, zero-hit warnings are M16 and M17.** A scenario that has them is refused with
+   `unsupported_feature` rather than run without them, because a `passed` run whose checks were not evaluated
+   would be a lie (the same reason as the zero-hit warning of plan §2.10). `RunWarning.zero_hit` and
+   `capture_missing` are in the spec and unused so far.
+7. **Aborting twice, and a report that is not there yet.** Aborting an ended run returns it (idempotent); a
+   report, JUnit file or event file of a run that has not ended is `404 not_found`; renewing a run that has
+   ended, or has no lease, is `422 validation_failed`. The error codes of the plan have no better ones.
+8. **A run that cannot remove its overlays at its end is `error`**, whatever it was, so the failure is not
+   hidden in a green report.
+9. **The runs of a revision that is applied with `force` are aborted before the apply**, not after: an
+   orphaned run would otherwise find its next step without its target.
+
+### Tests
+
+Level 0 (all run here, with `-race`): `internal/run` on a fake clock, a fake gateway and a fake observer
+(`steps_test.go`, `lifecycle_test.go`, `report_test.go`, `scope_internal_test.go`); the domain's
+(`internal/domain/scenario_run_test.go`: parameters, the run request, steps as overlay requests, the timeline, host
+names, orphans); the engine's (`internal/engine/queuewait_test.go`, a write behind a held apply on the fake
+clock); the API's on the simulated kernel with the real engine, a fake API clock and every response checked
+against the spec (`internal/api/runs_test.go`, `runs_hold_test.go`). Level 1 (`internal/api/e2e_runs_test.go`,
+build tag `testbed`; both CI testbed jobs name the tests with `-expect-pass $M15_LEVEL1`): the steps of a run on the
+real kernel and clock, within 100 ms of their schedule where timing is accurate (recorded without the bound under
+software emulation), the effect on the wire (a delayed ping, a dropped ping, a clean path afterwards), the
+counters in the report, an abort and an expired lease that take the overlays out. These three need root and
+namespaces; the unprivileged container of the development environment has no `/dev/kvm`, so they are built
+(`go vet -tags testbed ./internal/api`) and wired into CI but were not run there. No UI in this milestone (M19).
+
+### Acceptance map (plan M15 "Tests")
+
+| Plan M15 Tests | Test |
+|---|---|
+| step order and semantics with the fake clock | `TestStepsRunInTheOrderOfTheTimelineAtTheirTimes` (order by `at`, list order for equal `at`, nothing a millisecond early, the report in timeline order), `TestEveryStepRecordsTheGenerationItWasAppliedIn`, `TestAStepWithTheKeyOfAnEarlierOneReplacesItsOverlay`, `TestTheOverlaysOfAStepAreOwnedByTheRun`, `TestRemoveDeletesOneStepsOverlayAndRestoreAllOfThem`, `TestAStepNarrowsTheTargetAndATunnelStepHasNone`, `TestAWaitStepShiftsTheLaterSteps`, `TestAWaitThatTimesOutEndsTheRunAsError`, `TestAWaitForAConnectionNeedsANewEstablishedMatchingOne`, `TestAWaitForADNSQueryNeedsAQueryAfterTheWaitBegan`, `TestAStepThatCannotBeExecutedEndsTheRunAsError`; the helpers: `TestAConnectionIsEstablishedPastTheHandshake`, `TestAConnectionMatchesAProtocolPortsAndDestination`, `TestTheTimelineIsByOffsetAndThenByPosition`, `TestAStepIsTheOverlayItWrites`; over the API `TestARunFromAFileAppliesItsStepsAndLeavesAReport`, `TestEveryStepTypeOfThisBuildRunsOverTheAPI` (profile, fault, rule, WireGuard action, remove, restore against the real engine) |
+| step timing within ±100 ms on a machine with KVM | level 1 `TestAScenarioRunsOnTheRealKernelAndItsStepsAreOnTime` (every step's lateness is recorded and bounded where `testbed.Accurate()`); not runnable here |
+| abort removes the run's overlays | `TestAbortRemovesTheOverlaysOfTheRun`, `TestAnAbortOfAQueuedRunNeverStartsIt`, `TestAbortOwnedAbortsTheRunsOfOneOwnerOrAll`, `TestCloseAbortsTheRunsThatAreStillThere`; over the API `TestASecondRunOnTheSameTargetWaitsAndTheQueueFalseRefusesIt`, `TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns`; level 1 `TestAnAbortOnTheRealKernelTakesTheOverlaysOfTheRunOut` |
+| a disconnecting client does not stop a run, an expired lease does | `TestADisconnectingClientDoesNotStopARun`, `TestAnExpiredLeaseAbortsTheRunAndARenewalKeepsItAlive` (also with the wall clock jumping), `TestTheLeaseOfAQueuedRunRunsOut`, `TestARunWithoutALeaseCannotBeRenewed`; over the API `TestARunKeepsGoingWhenTheRequestIsOver`, `TestTheLeaseOfARunIsRenewedOverTheAPIAndExpires`; level 1 `TestAnExpiredLeaseOnTheRealKernelRemovesTheFault` |
+| a restart ends a running run as `aborted` | `TestARestartEndsARunningRunAsAbortedAndKeepsTheFinishedOnes` (running and queued records, retention, an unreadable record), `TestAFinishedRunSurvivesARestart`, `TestOldRecordsAreDeletedAsRunsEnd`; over the API `TestARestartEndsARunThatWasRunningAsAborted` |
+| a second run on the same target waits in `queued` | `TestASecondRunOnTheSameTargetWaitsInQueued`, `TestRunsOnOverlappingTargetsWaitInTheOrderTheyCameIn`, `TestTargetsOverlapWhenTheyShareADeviceOrANetwork`; over the API `TestASecondRunOnTheSameTargetWaitsAndTheQueueFalseRefusesIt` |
+| a failed precondition ends the run as `error` | `TestAFailedPreconditionEndsTheRunAsErrorWithTheReason`, `TestAScenarioMaySkipAPrecondition`, `TestAGroupOrNetworkTargetNeedsOneDeviceOnline`, `TestOverlaysOfOtherOwnersOnTheTargetFailTheBaseline`, `TestAnOverlayActsOnTheTunnelItNames`, `TestAScenarioWithHostNamesNeedsADeviceThatUsesTheGatewaysDNS`; over the API `TestAFailedPreconditionEndsTheRunAsErrorOverTheAPI` |
+| an inline scenario runs without changing the active revision | `TestARunFromAFileAppliesItsStepsAndLeavesAReport` (the active revision is the same after the run, nothing is stored), `TestParametersSetTheTargetOfAnInlineScenario`, `TestAParameterThatNamesNothingIsRefused`; the parameters and the request: `TestParametersChangeAScenarioByDottedPath`, `TestSettingAMemberOfATargetReplacesTheTarget`, `TestAParameterThatCannotBeAppliedIsReportedAtItsPath`, `TestParameterizeScenarioChecksTheResult`, `TestDecodeRunRequest`, `TestDecodeRunOptions`; `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` |
+| the report contains all steps with their queue wait (`RunStep.queue_wait_ms`) | `TestTheReportHasAllStepsTheirQueueWaitAndTheFinalCounters`, `TestTheJUnitReportOfAPassedRunHasOneSuccessfulCase`, `TestTheJUnitReportOfARunThatEndedAsErrorHasAnErrorCase`, `TestAStepErrorIsATestCaseOfItsOwn`, `TestAnAbortedRunIsAnErrorInTheJUnitReport`, `TestTheEventsOfARunAreKeptInItsFile`; over the API `TestARunFromAFileAppliesItsStepsAndLeavesAReport` (report.json, report.xml, events) |
+| a step that waits behind a revision apply for more than 100 ms gets `step_late` | `TestAStepThatWaitsMoreThan100msGetsTheWarningStepLate` (100 ms is not late, 130 ms is), `TestAWriteBehindAnApplyInFlightReportsItsQueueWait` (the engine's queue wait on the fake clock), over the API `TestAStepBehindARevisionApplyWaitsAndTheRunSaysSo` (a held apply of a real revision) |
+| Scope: stored scenarios, `POST /scenarios/{id}/runs`, owner, snapshot, revisions | `TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName`, `TestAStoredScenarioNeedsAllItsMilestones`, `TestStepTypesAndChecksOfLaterMilestonesAreRefused`, `TestAScenarioWithAnUnknownReferenceIsRefused`, `TestAnIdempotencyKeyMakesOneRun`, `TestARevisionThatDeletesWhatARunRefersToOrphansIt`, `TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced`, `TestARevisionOrphansTheScenarioOfARunThatRefersToWhatItDeletes` |
+| Scope: queue and owner, scopes of tokens | `TestAnAbortIsLimitedToTheOwnerOfTheRunForAScopedCaller`, `TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -4485,8 +4676,8 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
-tests of port forwarding (with those of the Phase 3.1 audit), those of Kea's packet socket after a link flap
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of Kea's packet socket after a link flap
 (issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 

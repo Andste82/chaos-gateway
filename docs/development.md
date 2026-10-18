@@ -131,7 +131,11 @@ Things to know:
   and a panic exit with 2, a VM that ended early leaves no completion marker) and finds no `panic:` and no `test timed
   out` in the log. Against the logs of the three runs the judgement fails the first two (the flapping tunnel) and
   passes the third; the log of 38158196621 with its one failure renamed to a known one fails it, as does a known
-  failure followed by a panic.
+  failure followed by a panic. The scheduled run 39110380996 on `0fb9176` (2026-10-18) failed
+  `TestANewFlowUpdatesTheDeviceWithoutWaitingForThePoll`, which is not on the list and was not a timing bound: the
+  udhcpc script of the DHCP tests logged the lease before it set the address, so the test's `ip route replace default
+  via 10.10.0.1` could run on an interface without one ("Nexthop has invalid gateway"). The script now logs after it
+  has set the address.
 - **Terminal.** `vng` refuses to start without a pseudo-terminal; the runner wraps it in
   `script(1)` when there is none, so it works from scripts and CI.
 - **Share.** `vng` shares the work directory with the explicit `--rwdir=<path>=<path>` form; with

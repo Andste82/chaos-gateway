@@ -955,10 +955,16 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   DHCP goroutine, sends, so a slow or hung Kea never holds up the following of the host (the uplink
   address, the forwards' entry addresses). The comparison starts from the links the apply read back just
   before it sent the configuration (`Result.After`), so a bridge the apply created is not configured a
-  second time, while a carrier that changes during the send is caught. A bridge going down, another
+  second time, while a carrier that changes during the send is caught. Because `DHCP.Apply` does not send
+  a configuration Kea runs already, the apply first compares its read-back with the last reading in the
+  same way: an interface of the running configuration that came up or was created again since then (an
+  apply that creates a deleted bridge again with an unchanged scope) is sent with `DHCP.Reopen`
+  (`Engine.syncDHCP`). A bridge going down, another
   interface and a reading without a change send nothing. Tests: `TestTheDHCPServerIsConfiguredAgainWhenItsBridgeComesUp`
   (engine: a carrier, a flap between two readings, a recreated bridge and the first reading after the
-  apply that created the bridge in the simulated kernel), `TestADHCPServerThatHangsDoesNotHoldUpTheReadingOfTheHost`
+  apply that created the bridge in the simulated kernel), `TestAnApplyThatCreatesTheBridgeAgainConfiguresTheServerAgain`
+  (engine: a deleted bridge the next apply creates again, and a bridge that came up before an apply, both
+  with an unchanged DHCP configuration, are sent with `Reopen` once), `TestADHCPServerThatHangsDoesNotHoldUpTheReadingOfTheHost`
   (a `Reopen` that hangs; the readings return and observe the uplink's new address),
   `TestTheHostReadingCountsACarrierFlapOnARealKernel` (testbed: a veth flap counts two carrier changes,
   same index, running before and after), `TestTheConfigurationLetsKeaRetryTheSocketsItCouldNotOpen`,

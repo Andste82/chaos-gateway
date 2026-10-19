@@ -328,10 +328,11 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (model.Capture, e
 	if rb := req.RingBuffer; rb != nil {
 		size, _ := domain.ParseByteSize(rb.FileSize)
 		open.RingFiles, open.RingFileSize = rb.Files, size
-		need = int64(rb.Files) * size
-		if need > quota {
-			return model.Capture{}, domain.ValidationErrors{{Path: "/ring_buffer", Code: domain.CodeCaptureLimit, Message: fmt.Sprintf("the ring buffer (%s) is larger than the quota (%s)", domain.FormatByteSize(need), domain.FormatByteSize(quota))}}
+		// compared before the multiplication: files x size does not fit an int64 for a size of up to 2^62 bytes
+		if rb.Files > 0 && size > quota/int64(rb.Files) {
+			return model.Capture{}, domain.ValidationErrors{{Path: "/ring_buffer", Code: domain.CodeCaptureLimit, Message: fmt.Sprintf("the ring buffer (%d files of %s) is larger than the quota (%s)", rb.Files, rb.FileSize, domain.FormatByteSize(quota))}}
 		}
+		need = int64(rb.Files) * size
 	} else {
 		want := int64(domain.DefaultCaptureMaxSize)
 		if req.MaxSize != nil {

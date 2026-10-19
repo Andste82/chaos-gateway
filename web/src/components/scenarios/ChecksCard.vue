@@ -9,6 +9,7 @@ import type { Check, CheckResult } from '../../api/generated/model';
 import { checkStatusText } from '../../lib/runs';
 import { checkName, checkText, checkType, checkTypeLabels, windowText, type ScenarioNames } from '../../lib/scenarios';
 import { formatClock } from '../../lib/format';
+import { focusAfterUpdate } from '../../lib/focus';
 import SectionCard from '../ui/SectionCard.vue';
 
 const props = defineProps<{
@@ -55,6 +56,13 @@ const tone = {
   error: 'border-block-border bg-block-tint text-block-text',
 };
 
+/** Deletes a check; the focus goes to the check that took its place, else the one before, else "Add check" (the button used is gone). */
+function remove(r: Row, pos: number) {
+  const target = pos + 1 < rows.value.length ? pos : pos - 1;
+  emit('remove', r.index);
+  focusAfterUpdate(target >= 0 ? `[data-testid="checks"] [data-edit-check="${target}"]` : '[data-testid="add-check"]');
+}
+
 function evidenceText(e: Record<string, unknown>): string {
   return Object.entries(e)
     .map(([k, v]) => `${k} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
@@ -65,7 +73,7 @@ function evidenceText(e: Record<string, unknown>): string {
 <template>
   <SectionCard title="Checks">
     <ul v-if="rows.length" class="m-0 flex list-none flex-col gap-3 p-0" data-testid="checks">
-      <li v-for="r in rows" :key="r.index" class="flex items-start gap-2.5" data-testid="check" :data-status="r.result?.status">
+      <li v-for="(r, pos) in rows" :key="r.index" class="flex items-start gap-2.5" data-testid="check" :data-status="r.result?.status">
         <span
           v-if="r.result"
           class="mt-0.5 shrink-0 rounded border px-1.5 text-xs font-semibold tracking-wide"
@@ -88,8 +96,8 @@ function evidenceText(e: Record<string, unknown>): string {
             </ul>
           </details>
           <div v-if="editable && !results" class="flex gap-2 pt-1">
-            <button type="button" class="btn btn-sm" :aria-label="`Edit check ${r.title}`" @click="emit('edit', r.index)">Edit</button>
-            <button type="button" class="btn btn-sm" :aria-label="`Delete check ${r.title}`" @click="emit('remove', r.index)">Delete</button>
+            <button type="button" class="btn btn-sm" :data-edit-check="pos" :aria-label="`Edit check ${r.title}`" @click="emit('edit', r.index)">Edit</button>
+            <button type="button" class="btn btn-sm" :aria-label="`Delete check ${r.title}`" @click="remove(r, pos)">Delete</button>
           </div>
         </div>
       </li>

@@ -8,6 +8,7 @@
 // the checks resolve to PASSED or FAILED when their windows close, the artifacts appear, and Abort removes
 // the run's overlays. A run keeps going when the tab closes.
 import { useQueryClient } from '@tanstack/vue-query';
+import { TabsContent, TabsList, TabsRoot, TabsTrigger } from 'reka-ui';
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError, errorMessage } from '../api/fetcher';
@@ -332,7 +333,7 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
             <template v-if="selected.config.description"> · {{ selected.config.description }}</template>
           </div>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap gap-2" data-focus-group>
           <template v-if="selected.deleted">
             <button type="button" class="btn" :aria-label="`Undo the deletion of ${selected.config.name}`" data-focus-swap @click="refocusAfterSwap($event); draft.restoreScenario(selected.id)">Undo</button>
           </template>
@@ -366,102 +367,106 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
         <li v-for="p in problems" :key="p.path + p.message"><span class="mono text-xs">{{ p.path }}</span> {{ p.message }}</li>
       </ul>
 
-      <div role="tablist" aria-label="Scenario views" class="flex gap-1 border-b border-border">
-        <button
-          v-for="t in tabs"
-          :key="t.value"
-          type="button"
-          role="tab"
-          :aria-selected="tab === t.value"
-          class="h-10 cursor-pointer border-0 border-b-2 bg-transparent px-3.5 text-sm"
-          :class="tab === t.value ? 'border-accent text-text' : 'border-transparent text-text-2 hover:text-text'"
-          @click="pickTab(t.value)"
-        >
-          {{ t.label }}
-        </button>
-      </div>
+      <!-- Reka's tabs: the tab pattern with its tab panels, roving tabindex and arrow keys; the tab is the address's -->
+      <TabsRoot :model-value="tab" class="flex min-w-0 flex-col gap-4" @update:model-value="pickTab($event as Tab)">
+        <TabsList aria-label="Scenario views" class="flex gap-1 border-b border-border">
+          <TabsTrigger
+            v-for="t in tabs"
+            :key="t.value"
+            :value="t.value"
+            class="h-10 cursor-pointer border-0 border-b-2 bg-transparent px-3.5 text-sm"
+            :class="tab === t.value ? 'border-accent text-text' : 'border-transparent text-text-2 hover:text-text'"
+          >
+            {{ t.label }}
+          </TabsTrigger>
+        </TabsList>
 
-      <template v-if="tab === 'timeline'">
-        <div v-if="runGone" class="card text-sm text-text-2" data-testid="run-gone">
-          This run is not there any more (the gateway keeps the runs of 30 days).
-          <button type="button" class="btn btn-sm ml-2" @click="hideRun">Back to the scenario</button>
-        </div>
-        <div v-else-if="runFailed" class="flex flex-col items-start gap-2" data-testid="run-failed">
-          <LoadError class="self-stretch" :error="runQuery.error.value" what="The run is not loaded" :retry="() => runQuery.refetch()" />
-          <button type="button" class="btn btn-sm" @click="hideRun">Back to the scenario</button>
-        </div>
-        <p v-else-if="runId && runQuery.isLoading.value" class="m-0 text-sm text-text-2" data-testid="run-loading">Loading the run…</p>
-        <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div class="flex min-w-0 flex-col gap-4">
-            <template v-if="run">
-              <RunProgress :run="run" :names="names" />
-              <div class="flex flex-wrap gap-2 text-[13px]">
-                <RouterLink :to="`/runs/${run.id}`" data-testid="run-page-link">Open the run page</RouterLink>
-                <button type="button" class="btn btn-sm" data-testid="hide-run" @click="hideRun">Back to the scenario</button>
-              </div>
-            </template>
-            <ScenarioTimeline
-              v-if="shown"
-              :steps="shown.steps"
-              :names="names"
-              :run="run"
-              :editable="!selected.deleted"
-              :protected-steps="protectedSteps"
-              @add="addStep"
-              @edit="editStep"
-              @remove="removeStep"
-            />
+        <TabsContent value="timeline" class="flex flex-col gap-4">
+          <div v-if="runGone" class="card text-sm text-text-2" data-testid="run-gone">
+            This run is not there any more (the gateway keeps the runs of 30 days).
+            <button type="button" class="btn btn-sm ml-2" @click="hideRun">Back to the scenario</button>
           </div>
-          <div class="flex min-w-0 flex-col gap-4">
-            <ChecksCard
-              :checks="checksShown"
-              :names="names"
-              :results="run?.checks"
-              :editable="!selected.deleted"
-              @add="addCheck"
-              @edit="editCheck"
-              @remove="removeCheck"
-            />
-            <ArtifactsCard :run="run" />
-            <p class="m-0 text-xs leading-relaxed text-text-3">A run keeps going if this tab closes. It stops at its last step and its last check, or when it is aborted; either way its overlays are removed.</p>
+          <div v-else-if="runFailed" class="flex flex-col items-start gap-2" data-testid="run-failed">
+            <LoadError class="self-stretch" :error="runQuery.error.value" what="The run is not loaded" :retry="() => runQuery.refetch()" />
+            <button type="button" class="btn btn-sm" @click="hideRun">Back to the scenario</button>
           </div>
-        </div>
-      </template>
+          <p v-else-if="runId && runQuery.isLoading.value" class="m-0 text-sm text-text-2" data-testid="run-loading">Loading the run…</p>
+          <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div class="flex min-w-0 flex-col gap-4">
+              <template v-if="run">
+                <RunProgress :run="run" :names="names" />
+                <div class="flex flex-wrap gap-2 text-[13px]">
+                  <RouterLink :to="`/runs/${run.id}`" data-testid="run-page-link">Open the run page</RouterLink>
+                  <button type="button" class="btn btn-sm" data-testid="hide-run" @click="hideRun">Back to the scenario</button>
+                </div>
+              </template>
+              <ScenarioTimeline
+                v-if="shown"
+                :steps="shown.steps"
+                :names="names"
+                :run="run"
+                :editable="!selected.deleted"
+                :protected-steps="protectedSteps"
+                @add="addStep"
+                @edit="editStep"
+                @remove="removeStep"
+              />
+            </div>
+            <div class="flex min-w-0 flex-col gap-4">
+              <ChecksCard
+                :checks="checksShown"
+                :names="names"
+                :results="run?.checks"
+                :editable="!selected.deleted"
+                @add="addCheck"
+                @edit="editCheck"
+                @remove="removeCheck"
+              />
+              <ArtifactsCard :run="run" />
+              <p class="m-0 text-xs leading-relaxed text-text-3">A run keeps going if this tab closes. It stops at its last step and its last check, or when it is aborted; either way its overlays are removed.</p>
+            </div>
+          </div>
+        </TabsContent>
 
-      <ScenarioYaml v-else-if="tab === 'yaml' && !selected.deleted" :scenario="{ id: selected.id, config: selected.config }" :index="index" :names="allNames.filter((n) => n !== selected!.config.name)" />
+        <TabsContent value="yaml">
+          <ScenarioYaml v-if="!selected.deleted" :scenario="{ id: selected.id, config: selected.config }" :index="index" :names="allNames.filter((n) => n !== selected!.config.name)" />
+        </TabsContent>
 
-      <section v-else-if="tab === 'runs'" class="card flex flex-col gap-2" aria-label="Runs" data-testid="runs-tab">
-        <p v-if="tabLoading" class="m-0 text-sm text-text-2" data-testid="runs-loading">Loading the runs…</p>
-        <LoadError v-else-if="tabUnknown" :error="scenarioRuns.error.value" what="The runs are not loaded" :retry="() => scenarioRuns.refetch()" />
-        <p v-else-if="ofScenario.length === 0" class="m-0 text-sm text-text-2" data-testid="runs-empty">This scenario has not been run yet.</p>
-        <table v-else class="w-full border-collapse text-[13px]">
-          <thead>
-            <tr class="text-left text-text-3">
-              <th class="py-1.5 pr-3 font-normal">Result</th>
-              <th class="py-1.5 pr-3 font-normal">Started</th>
-              <th class="py-1.5 pr-3 font-normal">Reason</th>
-              <th class="py-1.5 font-normal"><span class="sr-only">Show</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in ofScenario" :key="r.id" class="border-t border-border" data-testid="run-row" :data-status="r.status">
-              <td class="py-2 pr-3">
-                <span class="inline-flex items-center gap-2">
-                  <span class="inline-block h-2 w-2 rounded-full" :class="{ 'bg-accent': statusTone[r.status] === 'normal', 'bg-fault': statusTone[r.status] === 'fault', 'bg-block-text': statusTone[r.status] === 'block', 'bg-offline': statusTone[r.status] === 'offline', 'bg-unknown': statusTone[r.status] === 'unknown' }" aria-hidden="true" />
-                  {{ resultText(r) }}
-                </span>
-              </td>
-              <td class="py-2 pr-3 text-text-2">{{ formatAgo(r.started_at ?? r.created_at, now) }}<span v-if="r.scenario.inline"> · inline</span></td>
-              <td class="py-2 pr-3 text-text-2">{{ r.reason ?? '' }}</td>
-              <td class="py-2 text-right"><a href="#" :aria-label="`Show the run from ${formatAgo(r.started_at ?? r.created_at, now)}`" @click.prevent="showRun(r.id)">Show</a></td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-if="!tabLoading && !tabUnknown && scenarioRuns.more.value" class="flex items-center gap-3 pt-1 text-[13px] text-text-2">
-          <button v-if="runsShown < 500" type="button" class="btn btn-sm" data-testid="runs-more" @click="runsShown = Math.min(runsShown + 100, 500)">Show older runs</button>
-          <span v-else data-testid="runs-more-api">The newest 500 runs are shown; the API lists the older ones (<span class="mono">GET /runs?scenario=…</span>).</span>
-        </div>
-      </section>
+        <TabsContent value="runs">
+          <section class="card flex flex-col gap-2" aria-label="Runs" data-testid="runs-tab">
+            <p v-if="tabLoading" class="m-0 text-sm text-text-2" data-testid="runs-loading">Loading the runs…</p>
+            <LoadError v-else-if="tabUnknown" :error="scenarioRuns.error.value" what="The runs are not loaded" :retry="() => scenarioRuns.refetch()" />
+            <p v-else-if="ofScenario.length === 0" class="m-0 text-sm text-text-2" data-testid="runs-empty">This scenario has not been run yet.</p>
+            <table v-else class="w-full border-collapse text-[13px]">
+              <thead>
+                <tr class="text-left text-text-3">
+                  <th class="py-1.5 pr-3 font-normal">Result</th>
+                  <th class="py-1.5 pr-3 font-normal">Started</th>
+                  <th class="py-1.5 pr-3 font-normal">Reason</th>
+                  <th class="py-1.5 font-normal"><span class="sr-only">Show</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in ofScenario" :key="r.id" class="border-t border-border" data-testid="run-row" :data-status="r.status">
+                  <td class="py-2 pr-3">
+                    <span class="inline-flex items-center gap-2">
+                      <span class="inline-block h-2 w-2 rounded-full" :class="{ 'bg-accent': statusTone[r.status] === 'normal', 'bg-fault': statusTone[r.status] === 'fault', 'bg-block-text': statusTone[r.status] === 'block', 'bg-offline': statusTone[r.status] === 'offline', 'bg-unknown': statusTone[r.status] === 'unknown' }" aria-hidden="true" />
+                      {{ resultText(r) }}
+                    </span>
+                  </td>
+                  <td class="py-2 pr-3 text-text-2">{{ formatAgo(r.started_at ?? r.created_at, now) }}<span v-if="r.scenario.inline"> · inline</span></td>
+                  <td class="py-2 pr-3 text-text-2">{{ r.reason ?? '' }}</td>
+                  <td class="py-2 text-right"><a href="#" :aria-label="`Show the run from ${formatAgo(r.started_at ?? r.created_at, now)}`" @click.prevent="showRun(r.id)">Show</a></td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!tabLoading && !tabUnknown && scenarioRuns.more.value" class="flex items-center gap-3 pt-1 text-[13px] text-text-2">
+              <button v-if="runsShown < 500" type="button" class="btn btn-sm" data-testid="runs-more" @click="runsShown = Math.min(runsShown + 100, 500)">Show older runs</button>
+              <span v-else data-testid="runs-more-api">The newest 500 runs are shown; the API lists the older ones (<span class="mono">GET /runs?scenario=…</span>).</span>
+            </div>
+          </section>
+        </TabsContent>
+      </TabsRoot>
     </section>
 
     <section v-else-if="notFound" class="card text-sm text-text-2" data-testid="scenario-not-found">

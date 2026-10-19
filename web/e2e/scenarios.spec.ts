@@ -699,6 +699,80 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-37: the keyboard focus never falls to <body>, and the tabs are the tab pattern.
+
+test('the focus stays on the page when a scenario, a step or a check is deleted and when the deletion is undone', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  const focusedIsPage = () => page.evaluate(() => document.activeElement !== document.body);
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+
+  // Delete scenario, then Undo: the focus moves to the button that took its place, and back
+  const del = page.getByRole('button', { name: 'Delete mqtt-outage' });
+  await del.focus();
+  await page.keyboard.press('Enter');
+  const undo = page.getByRole('button', { name: 'Undo the deletion of mqtt-outage' });
+  await expect(undo).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(del).toBeFocused();
+
+  // Delete step: the step that took its place, else the one before it; the last one leaves "Add step"
+  await page.getByRole('button', { name: 'Delete step lossy' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(step(page, 'lossy')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Edit step cut' })).toBeFocused();
+
+  // Delete check: the check that took its place, else the one before it, else "Add check"
+  const checks = page.getByTestId('checks').getByTestId('check');
+  await expect(checks).toHaveCount(2);
+  await checks.first().getByRole('button', { name: /^Delete check/ }).focus();
+  await page.keyboard.press('Enter');
+  await expect(checks).toHaveCount(1);
+  await expect(checks.first().getByRole('button', { name: /^Edit check/ })).toBeFocused();
+  await checks.first().getByRole('button', { name: /^Delete check/ }).focus();
+  await page.keyboard.press('Enter');
+  await expect(checks).toHaveCount(0);
+  await expect(page.getByTestId('add-check')).toBeFocused();
+  expect(await focusedIsPage()).toBe(true);
+
+  // the only step of a scenario: its deletion leaves "Add step"
+  await page.goto(`/scenarios/${SCN_BOOT}`);
+  await page.getByRole('button', { name: 'Delete step back' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Edit step offline' })).toBeFocused();
+  await page.getByRole('button', { name: 'Delete step offline' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('add-step')).toBeFocused();
+});
+
+test('the Timeline, YAML and Runs tabs are tabs with their panels, one tab stop and the arrow keys', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+  const tabs = page.getByRole('tablist', { name: 'Scenario views' });
+  const [timeline, yaml, runs] = ['Timeline', 'YAML', 'Runs'].map((n) => tabs.getByRole('tab', { name: n }));
+  await expect(timeline).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tabpanel')).toHaveAccessibleName('Timeline');
+  await expect(timeline).toHaveAttribute('aria-controls', /.+/);
+  // one tab stop: the tab that has the focus; the others are reached with the arrow keys
+  await timeline!.focus();
+  await expect(timeline).toHaveAttribute('tabindex', '0');
+  await expect(yaml).toHaveAttribute('tabindex', '-1');
+  await expect(runs).toHaveAttribute('tabindex', '-1');
+  await page.keyboard.press('ArrowRight');
+  await expect(yaml).toBeFocused();
+  await expect(yaml).toHaveAttribute('aria-selected', 'true');
+  await expect(page).toHaveURL(/tab=yaml/);
+  await expect(page.getByRole('tabpanel')).toHaveAccessibleName('YAML');
+  await page.keyboard.press('ArrowRight');
+  await expect(runs).toBeFocused();
+  await expect(page.getByTestId('runs-tab')).toBeVisible();
+  await page.keyboard.press('Home');
+  await expect(timeline).toBeFocused();
+  await expect(page).not.toHaveURL(/tab=/);
+  await expect(page.getByTestId('timeline')).toBeVisible();
+});
+
 // P4-AUDIT-18: the timeline shows when a step was handed over (the accuracy of the timeline) and when it was applied.
 
 test('a slow apply handed over on time shows both moments, and only the hand-over is measured against the schedule', async ({ page }) => {

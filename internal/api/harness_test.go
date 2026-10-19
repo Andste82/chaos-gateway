@@ -121,6 +121,8 @@ type options struct {
 	// apiClock is the API server's clock (nil: the real one), for a test whose result must not depend on
 	// how fast the machine runs, e.g. a cache with a lifetime
 	apiClock clock.Clock
+	// maxRuns limits the queued and running runs (0: the default of the manager)
+	maxRuns int
 	// noCaptures leaves out the capture volume (M17): a deployment that cannot record
 	noCaptures bool
 	// captureQuota is the quota of the captures when the configuration names none (0: the default)
@@ -220,7 +222,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		}
 	}
 	apiCfg := api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock,
+		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock, RunMax: o.maxRuns,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers

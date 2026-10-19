@@ -494,6 +494,33 @@ func TestTheLeaseOfARunIsRenewedOverTheAPIAndExpires(t *testing.T) {
 	g.do("POST", "/runs/"+plain+"/abort", nil, nil, nil)
 }
 
+// The runs that are queued or running are limited; one more is `capacity_exceeded` (422) and frees up when a run ends.
+func TestTooManyRunsAreRefusedAsCapacityExceeded(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC))
+	g := newGW(t, func(o *options) { o.apiClock, o.maxRuns = clk, 1 })
+	g.finishSetup()
+	hold := func(name string) resp {
+		return g.postRun(inlineRun(name, iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "?queue=true")
+	}
+	first := hold("first")
+	if first.Status != 201 {
+		t.Fatalf("%d %s", first.Status, first.Body)
+	}
+	id := first.json(t)["id"].(string)
+	if r := hold("second"); r.Status != 422 || r.code(t) != "capacity_exceeded" {
+		t.Fatalf("a second run with a limit of 1: %d %s", r.Status, r.Body)
+	}
+	if n := len(g.do("GET", "/runs", nil, nil, nil).json(t)["items"].([]any)); n != 1 {
+		t.Errorf("the refused run left %d runs", n)
+	}
+	g.do("POST", "/runs/"+id+"/abort", nil, nil, nil)
+	if r := hold("third"); r.Status != 201 {
+		t.Errorf("after the first run ended: %d %s", r.Status, r.Body)
+	} else {
+		g.do("POST", "/runs/"+r.json(t)["id"].(string)+"/abort", nil, nil, nil)
+	}
+}
+
 // The record of an ended run is kept as long as `settings.retention.runs` of the active configuration says (the flag
 // --run-retention, 30 days, is only the default for a configuration that does not set it), and a change of the setting
 // counts for the runs that ended before it.

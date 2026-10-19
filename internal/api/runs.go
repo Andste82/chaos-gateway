@@ -44,7 +44,7 @@ func (s *Server) initRuns() error {
 	if s.captures != nil {
 		caps = captureAdapter{s}
 	}
-	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Captures: caps, Log: s.log, Retention: s.cfg.RunRetention, RetentionOf: s.runRetention, EncodeEvent: s.encodeRunEvent})
+	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Captures: caps, Log: s.log, Retention: s.cfg.RunRetention, RetentionOf: s.runRetention, MaxRuns: s.cfg.RunMax, EncodeEvent: s.encodeRunEvent})
 	if err != nil {
 		return err
 	}

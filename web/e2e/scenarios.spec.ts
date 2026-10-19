@@ -698,3 +698,70 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await page.goto(`/scenarios/${SCN_MQTT}`);
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
+
+// P4-AUDIT-12: a runs query that loads or failed is not an answer ("Never run", "has not been run yet", "not there any more").
+
+test('the runs are slow: the list and the Runs tab say they load, and never "Never run"', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(SCN_MQTT, { id: 'r1', status: 'passed', ended_at: new Date(Date.now() - 120_000).toISOString() })];
+  let release!: () => void;
+  gw.holding['/runs'] = new Promise<void>((r) => (release = r));
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}?tab=runs`);
+  await expect(page.getByTestId('scenario-item')).toHaveCount(2);
+  await expect(page.getByTestId('scenario-last')).toHaveText(['Loading…', 'Loading…']);
+  await expect(page.getByTestId('runs-loading')).toHaveText('Loading the runs…');
+  await expect(page.getByText('Never run')).toHaveCount(0);
+  await expect(page.getByTestId('runs-empty')).toHaveCount(0);
+  release();
+  await expect(item(page, 'mqtt-outage').getByTestId('scenario-last')).toHaveText(/^Passed · /);
+  await expect(item(page, 'boot-loop').getByTestId('scenario-last')).toHaveText('Never run');
+  await expect(page.getByTestId('run-row')).toHaveCount(1);
+});
+
+test('the runs failed: the list says the last result is unknown, the Runs tab shows the error, Try again reads them', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(SCN_MQTT, { id: 'r1', status: 'passed', ended_at: new Date(Date.now() - 120_000).toISOString() })];
+  gw.failing['/runs'] = 500;
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}?tab=runs`);
+  await expect(page.getByTestId('scenario-last')).toHaveText(['Last result unknown', 'Last result unknown']);
+  await expect(page.getByTestId('scenario-list').getByTestId('load-error')).toContainText('The last results are not loaded');
+  await expect(page.getByText('Never run')).toHaveCount(0);
+  const tab = page.getByTestId('runs-tab');
+  await expect(tab.getByTestId('load-error')).toContainText('The runs are not loaded');
+  await expect(page.getByTestId('runs-empty')).toHaveCount(0);
+  delete gw.failing['/runs'];
+  await tab.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('run-row')).toHaveCount(1);
+  await expect(item(page, 'mqtt-outage').getByTestId('scenario-last')).toHaveText(/^Passed · /);
+  await expect(page.getByTestId('load-error')).toHaveCount(0);
+});
+
+test('a run that cannot be read is not "gone": only a 404 says so; slow, it loads', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(SCN_MQTT, { id: 'r-x', status: 'passed', ended_at: new Date(Date.now() - 60_000).toISOString(), artifacts: artifactsOf('r-x') })];
+  gw.failing['/runs/r-x'] = 500;
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}?run=r-x`);
+  await expect(page.getByTestId('run-failed').getByTestId('load-error')).toContainText('The run is not loaded');
+  await expect(page.getByTestId('run-gone')).toHaveCount(0);
+  delete gw.failing['/runs/r-x'];
+  await page.getByTestId('run-failed').getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('run-status')).toHaveText('Passed');
+  await expect(page.getByTestId('run-failed')).toHaveCount(0);
+
+  // a run the gateway does not have (any more) is gone
+  await page.goto(`/scenarios/${SCN_MQTT}?run=nothing`);
+  await expect(page.getByTestId('run-gone')).toContainText('This run is not there any more');
+  await expect(page.getByTestId('run-failed')).toHaveCount(0);
+
+  // slow: neither
+  let release!: () => void;
+  gw.holding['/runs/r-x'] = new Promise<void>((r) => (release = r));
+  await page.goto(`/scenarios/${SCN_MQTT}?run=r-x`);
+  await expect(page.getByTestId('run-loading')).toBeVisible();
+  await expect(page.getByTestId('run-gone')).toHaveCount(0);
+  release();
+  await expect(page.getByTestId('run-status')).toHaveText('Passed');
+});

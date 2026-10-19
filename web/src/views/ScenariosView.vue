@@ -10,7 +10,7 @@
 import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { errorMessage } from '../api/fetcher';
+import { ApiError, errorMessage } from '../api/fetcher';
 import { abortRun } from '../api/generated/hooks/runs/runs';
 import type { Check, Run, Scenario, Step } from '../api/generated/model';
 import ChecksCard from '../components/scenarios/ChecksCard.vue';
@@ -135,7 +135,9 @@ watch(
 const runId = computed(() => (typeof route.query.run === 'string' ? route.query.run : followed.value));
 const runQuery = useRun(() => runId.value);
 const run = computed<Run | undefined>(() => (runId.value ? runQuery.data.value : undefined));
-const runGone = computed(() => !!runId.value && !!runQuery.error.value && !runQuery.data.value);
+// only the gateway's 404 says the run is gone (it keeps the runs of 30 days); any other failure is a failed read to retry
+const runGone = computed(() => !!runId.value && !runQuery.data.value && runQuery.error.value instanceof ApiError && runQuery.error.value.status === 404);
+const runFailed = computed(() => !!runId.value && !runQuery.data.value && !!runQuery.error.value && !runGone.value);
 
 function showRun(id: string) {
   dismissed.value = undefined;
@@ -247,6 +249,9 @@ function lastText(id: string, name: string): { text: string; tone: string } | un
   return { text, tone };
 }
 
+// the last results are answers only once the runs are read: until then, or when the read failed, the list says so instead of "Never run"
+const runsLoading = computed(() => runs.isLoading.value);
+const runsUnknown = computed(() => !!runs.error.value && runs.data.value === undefined);
 const retry = () => Promise.all([scenarios.refetch(), active.refetch(), runs.refetch()]);
 const selectedLength = computed(() => (selected.value ? lengthText(scenarioLength(selected.value.config)) : ''));
 const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
@@ -267,6 +272,7 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
   </EmptyState>
   <div v-else class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
     <nav aria-label="Scenarios" class="flex flex-col gap-2.5" data-testid="scenario-list">
+      <LoadError v-if="runsUnknown" :error="runs.error.value" what="The last results are not loaded" :retry="() => runs.refetch()" />
       <RouterLink
         v-for="i in items"
         :key="i.id"
@@ -284,6 +290,8 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
         </span>
         <span class="text-xs text-text-2" data-testid="scenario-meta">{{ describeScope(i.config.target, names) }} · {{ scenarioMeta(i.config) }}</span>
         <span v-if="lastText(i.id, i.config.name)" class="text-xs" :class="lastText(i.id, i.config.name)!.tone" data-testid="scenario-last">{{ lastText(i.id, i.config.name)!.text }}</span>
+        <span v-else-if="runsLoading" class="text-xs text-text-3" data-testid="scenario-last">Loading…</span>
+        <span v-else-if="runsUnknown" class="text-xs text-text-3" data-testid="scenario-last">Last result unknown</span>
         <span v-else class="text-xs text-text-3" data-testid="scenario-last">Never run</span>
       </RouterLink>
     </nav>
@@ -351,6 +359,11 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
           This run is not there any more (the gateway keeps the runs of 30 days).
           <button type="button" class="btn btn-sm ml-2" @click="hideRun">Back to the scenario</button>
         </div>
+        <div v-else-if="runFailed" class="flex flex-col items-start gap-2" data-testid="run-failed">
+          <LoadError class="self-stretch" :error="runQuery.error.value" what="The run is not loaded" :retry="() => runQuery.refetch()" />
+          <button type="button" class="btn btn-sm" @click="hideRun">Back to the scenario</button>
+        </div>
+        <p v-else-if="runId && runQuery.isLoading.value" class="m-0 text-sm text-text-2" data-testid="run-loading">Loading the run…</p>
         <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div class="flex min-w-0 flex-col gap-4">
             <template v-if="run">
@@ -391,7 +404,9 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
       <ScenarioYaml v-else-if="tab === 'yaml' && !selected.deleted" :scenario="{ id: selected.id, config: selected.config }" :index="index" :names="allNames.filter((n) => n !== selected!.config.name)" />
 
       <section v-else-if="tab === 'runs'" class="card flex flex-col gap-2" aria-label="Runs" data-testid="runs-tab">
-        <p v-if="ofScenario.length === 0" class="m-0 text-sm text-text-2" data-testid="runs-empty">This scenario has not been run yet.</p>
+        <p v-if="runsLoading" class="m-0 text-sm text-text-2" data-testid="runs-loading">Loading the runs…</p>
+        <LoadError v-else-if="runsUnknown" :error="runs.error.value" what="The runs are not loaded" :retry="() => runs.refetch()" />
+        <p v-else-if="ofScenario.length === 0" class="m-0 text-sm text-text-2" data-testid="runs-empty">This scenario has not been run yet.</p>
         <table v-else class="w-full border-collapse text-[13px]">
           <thead>
             <tr class="text-left text-text-3">

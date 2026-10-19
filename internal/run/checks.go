@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,12 @@ import (
 // checkPoll is how often an open window looks at the connections and the DNS log. An observation is placed
 // into the window by the poll that sees it, so it is exact to this interval.
 const checkPoll = waitPoll
+
+// dnsSettle is how long the final look of a `dns_query_seen` check waits after its window has closed. The DNS log
+// of the API arrives after the answer of a query, in batches (dnsproxy flushes every 500 ms) and one request, so a
+// query asked at the very end of the window is not in the log yet when the window closes; its time stamp, not the
+// moment of the poll, decides whether it was asked inside the window.
+const dnsSettle = time.Second
 
 // maxEvidence bounds the observations that a check keeps as its evidence.
 const maxEvidence = 10
@@ -110,6 +117,29 @@ func (c *liveCheck) closesAt(mm stepMoments) (stepTime, bool) {
 		return mm.reached, mm.hasReached
 	}
 	return mm.began, mm.hasBegan
+}
+
+// needsNets reports whether the selector of the check looks at where an address lies (a destination `network` or
+// `uplink`), which cannot be answered when the networks of the gateway cannot be resolved.
+func (c *liveCheck) needsNets() bool {
+	if destNeedsNets(c.match.Destination) {
+		return true
+	}
+	for i := range c.except {
+		if destNeedsNets(&c.except[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// decideAt is the offset from which a check whose window has closed is decided without the observation that
+// would have decided it earlier: the end of the window, for a `dns_query_seen` check a settle time later.
+func (c *liveCheck) decideAt() time.Duration {
+	if c.kind == "dns_query_seen" {
+		return c.wend + dnsSettle
+	}
+	return c.wend
 }
 
 // usesFlows reports whether the check looks at the connections (the others at the DNS log).
@@ -249,8 +279,13 @@ func (t *flowTracker) update(flows []engine.Flow) []flowEvent {
 // observes reports whether a connection event is one the check looks for: of the scenario's target, selected by
 // the check's selector, and of the kind that decides it (a connection that has been established for the two
 // connection checks, any packet for the two traffic checks).
-func (c *liveCheck) observes(snap *engine.Snapshot, target model.Scope, devices map[string]bool, ev flowEvent) bool {
-	if !flowInScope(devices, target, ev.flow) || !matchFlow(snap, c.match, ev.flow) {
+func (c *liveCheck) observes(nets *flowNets, target model.Scope, devices map[string]bool, ev flowEvent) bool {
+	if !flowInScope(devices, target, ev.flow) || !matchFlow(nets, c.match, ev.flow) {
+		return false
+	}
+	// a connection that began after the window closed is not the window's, however late the poll reads it (one
+	// without a start time cannot be dated)
+	if c.ended && !ev.flow.StartedAt.IsZero() && ev.flow.StartedAt.After(c.wendWall) {
 		return false
 	}
 	switch c.kind {
@@ -260,7 +295,7 @@ func (c *liveCheck) observes(snap *engine.Snapshot, target model.Scope, devices 
 		return true
 	case "traffic_not_seen":
 		for _, d := range c.except {
-			if matchFlow(snap, model.TrafficMatch{Destination: &d}, ev.flow) {
+			if matchFlow(nets, model.TrafficMatch{Destination: &d}, ev.flow) {
 				return false
 			}
 		}
@@ -306,6 +341,9 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 		checks = append(checks, newLiveCheck(m.cfg.Gateway.Snapshot().Config, i, &(*r.sc.Checks)[i]))
 	}
 	var tracker flowTracker
+	var prevEvents []flowEvent // the events of the last successful poll, for a check that opens in the iteration after it
+	var nets *flowNets
+	var netsOf *engine.Snapshot
 	for {
 		now, nowWall := m.clk.Monotonic()-start, m.clk.Now()
 		moments := m.stepMomentsOf(r)
@@ -332,6 +370,9 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 		}
 
 		snap := m.cfg.Gateway.Snapshot()
+		if snap != netsOf && anyNeedsNets(checks) {
+			nets, netsOf = newFlowNets(snap), snap
+		}
 		devs := scopeDevices(snap, r.sc.Target)
 		devSet := idSet(devs)
 		var events []flowEvent
@@ -350,27 +391,37 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 			if c.decided || !c.opened {
 				continue
 			}
+			if c.needsNets() && nets.err != nil {
+				// where an address lies cannot be told: the check cannot say either way
+				m.decide(r, c, model.CheckResultStatusError, "the networks of the gateway cannot be resolved: "+nets.err.Error())
+				continue
+			}
 			switch {
 			case c.usesFlows() && c.armed:
-				m.feed(r, c, snap, devSet, events, nowWall)
-			case c.usesFlows():
+				m.feed(r, c, nets, devSet, events, nowWall)
+			case c.usesFlows() && flowErr == nil:
 				// the baseline poll: a connection that conntrack says began at or after the opening of the
-				// window is news, one that the poll merely found is not
-				m.feed(r, c, snap, devSet, startedSince(events, c.wstartWall), nowWall)
+				// window is news, one that the poll merely found is not. The events that the poll before it
+				// consumed for other checks belong to this one as far as they began inside the window.
+				m.feed(r, c, nets, devSet, startedSince(append(slices.Clone(prevEvents), events...), c.wstartWall), nowWall)
 			case c.armed:
 				m.lookDNS(r, c, devs)
 			}
 			if c.decided {
 				continue
 			}
-			if c.ended && now >= c.wend {
+			if c.ended && now >= c.decideAt() {
 				m.endWindow(r, c, flowErr, devs)
 			}
 		}
 		for _, c := range checks {
-			if c.opened {
+			// the baseline of a connection check is behind it once a poll has read the connections
+			if c.opened && (!c.usesFlows() || flowErr == nil) {
 				c.armed = true
 			}
+		}
+		if flowErr == nil {
+			prevEvents = events
 		}
 
 		if allDecided(checks) {
@@ -409,6 +460,17 @@ func anyOpen(checks []*liveCheck, flows bool) bool {
 	return false
 }
 
+// anyNeedsNets reports whether a check that has not been decided and whose window is open looks at where an address
+// lies.
+func anyNeedsNets(checks []*liveCheck) bool {
+	for _, c := range checks {
+		if c.opened && !c.decided && c.needsNets() {
+			return true
+		}
+	}
+	return false
+}
+
 func allDecided(checks []*liveCheck) bool {
 	for _, c := range checks {
 		if !c.decided {
@@ -429,7 +491,7 @@ func nextWake(checks []*liveCheck, now time.Duration) time.Duration {
 		}
 		d := checkPoll
 		if c.ended {
-			d = min(d, max(c.wend-now, time.Millisecond))
+			d = min(d, max(c.decideAt()-now, time.Millisecond))
 		}
 		if wake == 0 || d < wake {
 			wake = d
@@ -446,10 +508,10 @@ func (m *Manager) closeWindow(r *runState, c *liveCheck, off time.Duration, wall
 
 // feed hands the connection events of a poll to a check whose window is open and decides it if they do:
 // a positive check passes on the first connection it looks for, a negative one fails on it.
-func (m *Manager) feed(r *runState, c *liveCheck, snap *engine.Snapshot, devices map[string]bool, events []flowEvent, at time.Time) {
+func (m *Manager) feed(r *runState, c *liveCheck, nets *flowNets, devices map[string]bool, events []flowEvent, at time.Time) {
 	var hits []flowEvent
 	for _, ev := range events {
-		if c.observes(snap, r.sc.Target, devices, ev) {
+		if c.observes(nets, r.sc.Target, devices, ev) {
 			hits = append(hits, ev)
 		}
 	}

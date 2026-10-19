@@ -265,7 +265,7 @@ change volumes that already exist. With no configuration applied yet, remove the
 (`docker compose down -v`, then step 3). To keep them instead, give them to the API's user:
 
 ```sh
-for v in state secrets api service; do
+for v in state secrets api service captures; do
   docker run --rm -v "${COMPOSE_PROJECT_NAME}_chaosgw-$v:/v" --entrypoint chown chaos-gateway:latest -R 65532:65532 /v
 done
 docker run --rm -v "${COMPOSE_PROJECT_NAME}_chaosgw-secrets:/v" --entrypoint chmod chaos-gateway:latest 0700 /v

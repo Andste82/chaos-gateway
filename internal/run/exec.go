@@ -105,23 +105,25 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 		}
 		var err error
 		kind := domain.StepKind(st)
-		if kind != "wait" && kind != "capture" {
-			// the change goes to the engine from here; the windows of the checks and the report tell it from the answer
-			m.began(r, st.Id, m.clk.Monotonic()-start, m.clk.Now())
-		}
+		// the steps that change the kernel hand their change over in their own function, after the reads they make first
 		switch kind {
 		case "remove":
-			err = m.removeStep(r, pos, st, start)
+			err = m.removeStep(r, pos, st, start, due)
 		case "restore":
-			err = m.restoreStep(r, pos, st, start)
+			err = m.restoreStep(r, pos, st, start, due)
 		case "capture":
+			now := m.clk.Monotonic()
+			m.warnIfLate(r, st, start, due, now, now)
 			err = m.captureStep(r, pos, st, start)
 		case "wait":
+			now := m.clk.Monotonic()
+			m.warnIfLate(r, st, start, due, now, now)
 			err = m.waitStep(r, pos, st, start, due)
 			shift = max(shift, m.clk.Monotonic()-start-at)
 		default:
-			err = m.overlayStep(r, pos, st, start)
+			err = m.overlayStep(r, pos, st, start, due)
 		}
+		r.prevStep, r.prevEnd = st.Id, m.clk.Monotonic()-start
 		if err != nil {
 			return m.outcome(r, err)
 		}
@@ -210,8 +212,7 @@ func (m *Manager) applied(r *runState, pos int, st *model.Step, start time.Durat
 		r.generation = max(r.generation, res.Generation)
 		m.mu.Unlock()
 		if res.QueueWait > StepLateThreshold {
-			m.addWarning(r, model.RunWarning{Code: model.StepLate, Step: &st.Id, Overlay: overlayID,
-				Message: fmt.Sprintf("step %s waited %d ms for the executor behind other changes (more than %d ms)", st.Id, res.QueueWait.Milliseconds(), StepLateThreshold.Milliseconds())})
+			m.warnLate(r, st.Id, overlayID, fmt.Sprintf("step %s waited %d ms for the executor behind other changes (more than %d ms)", st.Id, res.QueueWait.Milliseconds(), StepLateThreshold.Milliseconds()))
 		}
 	}
 	m.save(r)
@@ -220,6 +221,80 @@ func (m *Manager) applied(r *runState, pos int, st *model.Step, start time.Durat
 		data["generation"] = int64(res.Generation)
 	}
 	m.emit(r, engine.EventRunStep, data)
+}
+
+// warnLate gives the run the warning `step_late` for a step. A step has one: when it is late for both reasons (it was handed
+// over late and then waited in the engine's queue) the causes are told in the one warning.
+func (m *Manager) warnLate(r *runState, step string, overlay *uuid.UUID, msg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ws []model.RunWarning
+	if r.rec.Warnings != nil {
+		ws = *r.rec.Warnings
+	}
+	for i := range ws {
+		if ws[i].Code == model.StepLate && ws[i].Step != nil && *ws[i].Step == step {
+			ws[i].Message += "; " + msg
+			if ws[i].Overlay == nil {
+				ws[i].Overlay = overlay
+			}
+			return
+		}
+	}
+	ws = append(ws, model.RunWarning{Code: model.StepLate, Step: &step, Overlay: overlay, Message: msg})
+	r.rec.Warnings = &ws
+}
+
+// handOver is the moment the timeline gives the change of a step to the engine: it is stamped (the windows of the checks
+// and `start_offset_ms` of the report tell it from the answer), and a step that is handed over more than
+// StepLateThreshold behind its schedule gets the warning `step_late`. arrived is when the function of the step began, before
+// the reads it makes ahead of the change.
+func (m *Manager) handOver(r *runState, st *model.Step, start, due, arrived time.Duration) {
+	handed := m.clk.Monotonic()
+	m.began(r, st.Id, handed-start, m.clk.Now())
+	m.warnIfLate(r, st, start, due, arrived, handed)
+}
+
+// warnIfLate warns when a step is handed over (or, for a step that changes nothing in the kernel, reached) more than
+// StepLateThreshold after its due time (the schedule plus the shift of the waits before it), and names the cause: the apply
+// of the step before it was still running, the timeline itself woke late, or the counters that are read before the change
+// took their time. All times are on the monotonic clock.
+func (m *Manager) warnIfLate(r *runState, st *model.Step, start, due, arrived, handed time.Duration) {
+	late := handed - due
+	if late <= StepLateThreshold {
+		return
+	}
+	var cause string
+	switch {
+	case arrived-due > StepLateThreshold && r.prevStep != "" && r.prevEnd+start > due:
+		cause = fmt.Sprintf("the step %s before it was still being applied until %d ms", r.prevStep, r.prevEnd.Milliseconds())
+	case arrived-due > StepLateThreshold:
+		cause = fmt.Sprintf("the timeline reached the step %d ms late", (arrived - due).Milliseconds())
+	default:
+		cause = fmt.Sprintf("the counters of the overlays that go away were read for %d ms first", (handed - arrived).Milliseconds())
+	}
+	m.warnLate(r, st.Id, nil, fmt.Sprintf("step %s was handed to the executor %d ms late (due at %d ms, handed over at %d ms): %s",
+		st.Id, late.Milliseconds(), (due-start).Milliseconds(), (handed-start).Milliseconds(), cause))
+}
+
+// callFailed records the end of a call to the engine that did not work. A call that ended because the run was cancelled
+// is no failure of the step but not nothing either: the engine goes on after the context of its caller ends, so the change
+// may be in the kernel (and is removed with the run's overlays), and the report says the step was in flight.
+func (m *Manager) callFailed(r *runState, pos int, st *model.Step, start time.Duration, err error) error {
+	if r.ctx.Err() == nil {
+		return m.failStep(r, pos, st, start, err)
+	}
+	off := m.clk.Monotonic() - start
+	why := "cancelled while it was being applied: the change may have taken effect"
+	if cause := context.Cause(r.ctx); cause != nil {
+		why += " (" + cause.Error() + ")"
+	}
+	m.setStep(r, pos, func(s *model.RunStep) {
+		s.Status, s.Error, s.OffsetMs = model.RunStepStatusError, ptr(why), ptr(int(off/time.Millisecond))
+	})
+	m.save(r)
+	m.emit(r, engine.EventRunStep, map[string]any{"step": st.Id, "status": string(model.RunStepStatusError), "error": why})
+	return err // an abort: the run ends as aborted, with the reason of the abort
 }
 
 // failStep records a step the engine could not execute.
@@ -239,7 +314,8 @@ func (m *Manager) failStep(r *runState, pos int, st *model.Step, start time.Dura
 // overlayStep writes the overlay of a step (profile, fault, rule, WireGuard action). The overlay store
 // keeps the key (owner, kind, target, selector), so a step with the key of an earlier one replaces its
 // overlay and a step's parameters are never merged with the earlier ones.
-func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start time.Duration) error {
+func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start, due time.Duration) error {
+	arrived := m.clk.Monotonic()
 	req, err := domain.StepRequest(r.sc, st)
 	if err != nil {
 		return m.failStep(r, pos, st, start, err)
@@ -253,9 +329,10 @@ func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start time.D
 		// the step replaces the overlay of an earlier one: the counters of that step end here
 		m.captureCounters(r, stepCounterTimeout)
 	}
+	m.handOver(r, st, start, due, arrived)
 	res, err := m.cfg.Gateway.PutOverlay(r.ctx, engine.OverlayWrite{Owner: r.owner, Run: &model.OverlayRunRef{Id: runID, Step: st.Id}, Request: req})
 	if err != nil {
-		return m.failStep(r, pos, st, start, err)
+		return m.callFailed(r, pos, st, start, err)
 	}
 	id := res.Overlay.Id
 	r.overlays[st.Id] = id
@@ -266,18 +343,21 @@ func (m *Manager) overlayStep(r *runState, pos int, st *model.Step, start time.D
 }
 
 // removeStep deletes the overlay under the key of an earlier step.
-func (m *Manager) removeStep(r *runState, pos int, st *model.Step, start time.Duration) error {
+func (m *Manager) removeStep(r *runState, pos int, st *model.Step, start, due time.Duration) error {
+	arrived := m.clk.Monotonic()
 	id, ok := r.overlays[*st.Remove]
 	if !ok {
+		m.warnIfLate(r, st, start, due, arrived, arrived)
 		return m.skipStep(r, pos, st, start, fmt.Sprintf("step %s wrote no overlay", *st.Remove))
 	}
 	m.captureCounters(r, stepCounterTimeout)
+	m.handOver(r, st, start, due, arrived)
 	res, err := m.cfg.Gateway.DeleteOverlay(r.ctx, id, &r.owner, r.owner)
 	if errors.Is(err, engine.ErrOverlayNotFound) {
 		return m.skipStep(r, pos, st, start, "the overlay is gone already")
 	}
 	if err != nil {
-		return m.failStep(r, pos, st, start, err)
+		return m.callFailed(r, pos, st, start, err)
 	}
 	r.release(id)
 	m.applied(r, pos, st, start, &res, &id)
@@ -285,11 +365,13 @@ func (m *Manager) removeStep(r *runState, pos int, st *model.Step, start time.Du
 }
 
 // restoreStep removes every overlay of the run.
-func (m *Manager) restoreStep(r *runState, pos int, st *model.Step, start time.Duration) error {
+func (m *Manager) restoreStep(r *runState, pos int, st *model.Step, start, due time.Duration) error {
+	arrived := m.clk.Monotonic()
 	m.captureCounters(r, stepCounterTimeout)
+	m.handOver(r, st, start, due, arrived)
 	res, err := m.cfg.Gateway.ResetOverlays(r.ctx, &r.owner, r.owner)
 	if err != nil {
-		return m.failStep(r, pos, st, start, err)
+		return m.callFailed(r, pos, st, start, err)
 	}
 	r.releaseAll()
 	m.applied(r, pos, st, start, &res, nil)
@@ -363,7 +445,9 @@ func (r *runState) releaseAll() {
 // The read is on the timeline (the overlay must still be there), so it is the one place where observation can
 // delay a step; it is bounded well below the step precision of a run that matters (plan M15: +-100 ms is the
 // goal on a gateway that answers, and a read that does not answer in 2 s leaves the overlay without a final
-// reading, so it has no zero-hit verdict). finishCounterTimeout is for the end of the run, which is not timed.
+// reading, so it has no zero-hit verdict). The step is handed to the engine after the read (handOver), so the read
+// is part of the hand-over: `start_offset_ms` contains it and a read that takes more than 100 ms makes the step
+// `step_late`. finishCounterTimeout is for the end of the run, which is not timed.
 const (
 	stepCounterTimeout   = 2 * time.Second
 	finishCounterTimeout = 10 * time.Second

@@ -6038,7 +6038,8 @@ type RunStep struct {
 
 	// QueueWaitMs How long the step's change waited before the executor began to apply it, in milliseconds: the time behind the
 	// apply in flight (a revision apply, or the change of an earlier step or of another writer) and in the executor's
-	// queue (plan §3.11). A step that waited for more than 100 ms makes the run warning `step_late`. Absent for a
+	// queue (plan §3.11). A step that waited for more than 100 ms makes the run warning `step_late` (as does a step that was
+	// handed over more than 100 ms late, see `start_offset_ms`; the step has one warning for both). Absent for a
 	// step that changes nothing in the kernel (`wait`) and for one that was not applied.
 	QueueWaitMs *int `json:"queue_wait_ms,omitempty"`
 
@@ -6046,8 +6047,10 @@ type RunStep struct {
 	ScheduledOffset *Duration `json:"scheduled_offset,omitempty"`
 
 	// StartOffsetMs Offset from run start in milliseconds (monotonic clock) at which the timeline handed the step's change to the
-	// engine. Against `scheduled_offset` it is the accuracy of the timeline itself (a step is handed over late only
-	// when an earlier step is still being applied); `offset_ms` minus it is how long the apply took, which depends on
+	// engine. Against `scheduled_offset` (plus the time the `wait` steps before it shifted the timeline) it is the
+	// accuracy of the timeline itself (a step is handed over late only when an earlier step is still being applied,
+	// or the counters that are read before it takes an overlay away took their time; more than 100 ms makes the
+	// run warning `step_late`); `offset_ms` minus it is how long the apply took, which depends on
 	// the machine and on the size of the configuration (the queue wait is part of it). The change takes effect in
 	// the kernel at some moment between the two. Absent for a step that changes nothing in the kernel (`wait`,
 	// `capture`) and for one that was not applied.
@@ -6064,6 +6067,10 @@ type RunStepType string
 
 // RunWarning defines model for RunWarning.
 type RunWarning struct {
+	// Code `step_late`: the step was handed to the executor more than 100 ms after its scheduled time (plus the shift of
+	// the `wait` steps before it), or its change waited more than 100 ms for the executor (`queue_wait_ms`); one
+	// warning for the step, and its message names the cause (the step before it was still being applied, the counters
+	// read before the change took their time, the executor was busy with other changes).
 	Code    RunWarningCode `json:"code"`
 	Message string         `json:"message"`
 	Overlay *Uuid          `json:"overlay,omitempty"`
@@ -6072,7 +6079,10 @@ type RunWarning struct {
 	Step *StepId `json:"step,omitempty"`
 }
 
-// RunWarningCode defines model for RunWarning.Code.
+// RunWarningCode `step_late`: the step was handed to the executor more than 100 ms after its scheduled time (plus the shift of
+// the `wait` steps before it), or its change waited more than 100 ms for the executor (`queue_wait_ms`); one
+// warning for the step, and its message names the cause (the step before it was still being applied, the counters
+// read before the change took their time, the executor was busy with other changes).
 type RunWarningCode string
 
 // Scenario A timeline of steps; YAML is the import/export format. Every step creates or replaces

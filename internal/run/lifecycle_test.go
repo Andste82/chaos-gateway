@@ -64,6 +64,33 @@ func TestAbortRemovesTheOverlaysOfTheRun(t *testing.T) {
 	}
 }
 
+// The step that is being applied when the run is aborted is not "skipped, not run": the engine goes on after its caller
+// gave up, so the change may be in the kernel; the report says the step was cancelled while it was applied.
+func TestTheStepInFlightWhenARunIsAbortedSaysSo(t *testing.T) {
+	h := newHarness(t)
+	h.gw.block = make(chan struct{}) // the write of the first step does not come back
+	r := h.start(long("long", esp))
+	eventually(t, "the write of the first step", func() bool {
+		h.gw.mu.Lock()
+		defer h.gw.mu.Unlock()
+		return h.gw.putCalls == 1
+	})
+	got, err := h.m.Abort(context.Background(), r.Id, &token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := step(got.Run, "a")
+	if a.Status != model.RunStepStatusError || a.Error == nil || !has(*a.Error, "cancelled while it was being applied") || !has(*a.Error, "may have taken effect") || !has(*a.Error, "aborted by ci") {
+		t.Errorf("the step in flight: %+v", a)
+	}
+	if b := step(got.Run, "b"); b.Status != model.RunStepStatusSkipped {
+		t.Errorf("the step that never came: %+v", b)
+	}
+	if got.Run.Status != model.RunStatusAborted || *got.Run.Reason != "aborted by ci" {
+		t.Errorf("the run is %s (%v), the step in flight does not change how it ends", got.Run.Status, got.Run.Reason)
+	}
+}
+
 func TestAnAbortOfAQueuedRunNeverStartsIt(t *testing.T) {
 	h := newHarness(t)
 	first := h.start(long("first", esp))
@@ -252,33 +279,6 @@ func TestASecondRunOnTheSameTargetWaitsInQueued(t *testing.T) {
 	h.m.AbortOwned(context.Background(), nil, "test over")
 }
 
-// A group, a network and a device that lies in them overlap, and a run does not start ahead of an earlier one it
-// would have waited for.
-func TestRunsOnOverlappingTargetsWaitInTheOrderTheyCameIn(t *testing.T) {
-	h := newHarness(t)
-	a := h.start(long("a", esp))
-	h.waitStep(a.Id, "a", model.RunStepStatusApplied)
-	b := h.start(long("b", group)) // the group of esp32-42
-	c := h.start(long("c", esp))   // the device again
-	d := h.start(long("d", iot))   // the network the device lies in
-	e := h.start(long("e", host))  // another network
-	for id, want := range map[uuid.UUID]model.RunStatus{b.Id: model.RunStatusQueued, c.Id: model.RunStatusQueued, d.Id: model.RunStatusQueued, e.Id: model.RunStatusRunning} {
-		if st := h.get(id).Status; st != want {
-			t.Errorf("run %s is %s, want %s", id, st, want)
-		}
-	}
-	h.clk.BlockUntil(2) // the steps of a and e at 100 s
-	h.clk.Advance(100 * time.Second)
-	h.waitStatus(a.Id, model.RunStatusPassed)
-	// b is the first in line and stays for 100 s; c and d overlap it and stay queued
-	h.waitStatus(b.Id, model.RunStatusRunning)
-	for _, id := range []uuid.UUID{c.Id, d.Id} {
-		if st := h.get(id).Status; st != model.RunStatusQueued {
-			t.Errorf("a later run overtook b: %s", st)
-		}
-	}
-	h.waitStep(b.Id, "a", model.RunStepStatusApplied)
-	h.clk.BlockUntil(1)
 // The runs that are queued or running are limited (Config.MaxRuns); a slot is free again when a run has ended, and a run
 // that is refused for it leaves nothing behind.
 func TestTheNumberOfQueuedAndRunningRunsIsLimited(t *testing.T) {
@@ -311,6 +311,33 @@ func TestTheNumberOfQueuedAndRunningRunsIsLimited(t *testing.T) {
 	h.m.AbortOwned(context.Background(), nil, "test over")
 }
 
+// A group, a network and a device that lies in them overlap, and a run does not start ahead of an earlier one it
+// would have waited for.
+func TestRunsOnOverlappingTargetsWaitInTheOrderTheyCameIn(t *testing.T) {
+	h := newHarness(t)
+	a := h.start(long("a", esp))
+	h.waitStep(a.Id, "a", model.RunStepStatusApplied)
+	b := h.start(long("b", group)) // the group of esp32-42
+	c := h.start(long("c", esp))   // the device again
+	d := h.start(long("d", iot))   // the network the device lies in
+	e := h.start(long("e", host))  // another network
+	for id, want := range map[uuid.UUID]model.RunStatus{b.Id: model.RunStatusQueued, c.Id: model.RunStatusQueued, d.Id: model.RunStatusQueued, e.Id: model.RunStatusRunning} {
+		if st := h.get(id).Status; st != want {
+			t.Errorf("run %s is %s, want %s", id, st, want)
+		}
+	}
+	h.clk.BlockUntil(2) // the steps of a and e at 100 s
+	h.clk.Advance(100 * time.Second)
+	h.waitStatus(a.Id, model.RunStatusPassed)
+	// b is the first in line and stays for 100 s; c and d overlap it and stay queued
+	h.waitStatus(b.Id, model.RunStatusRunning)
+	for _, id := range []uuid.UUID{c.Id, d.Id} {
+		if st := h.get(id).Status; st != model.RunStatusQueued {
+			t.Errorf("a later run overtook b: %s", st)
+		}
+	}
+	h.waitStep(b.Id, "a", model.RunStepStatusApplied)
+	h.clk.BlockUntil(1)
 	h.clk.Advance(100 * time.Second)
 	h.waitStatus(b.Id, model.RunStatusPassed)
 	// c is next, d waits for c (both want the device)

@@ -406,6 +406,76 @@ func TestADownloadJoinsTheFilesOfARingAndCutsAFileThatIsBeingWritten(t *testing.
 	m.Close(context.Background())
 }
 
+// pcapFile is a pcap file with one packet of 60 bytes that all have the value fill.
+func pcapFile(t *testing.T, fill byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := capture.NewWriter(&buf, capture.PCAP, []capture.InterfaceInfo{{Name: "wan0", Link: capture.LinkEthernet, Snaplen: 65535}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.WritePacket(capture.Packet{Time: t0, Data: bytes.Repeat([]byte{fill}, 60), OrigLen: 60})
+	_ = w.Flush()
+	return buf.Bytes()
+}
+
+// The ring names its files with five digits up to 99999 and with more after that: those files are the capture too.
+func TestTheFilesOfARingBeyondNumber99999AreDownloadedInOrderAndCounted(t *testing.T) {
+	dir := t.TempDir()
+	m, _, _ := newManager(t, dir)
+	c, err := m.Start(context.Background(), capturemgr.StartRequest{CaptureRequest: model.CaptureRequest{Format: ptr(model.CaptureRequestFormatPcap),
+		Scope: model.CaptureScope{Uplink: ptr(model.CaptureScopeUplink(true))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, c.Id.String())
+	var size int64
+	// the ring has deleted the files below 99998, so the directory holds these
+	for i, name := range []string{"capture-99998.pcap", "capture-99999.pcap", "capture-100000.pcap", "capture-100001.pcap"} {
+		b := pcapFile(t, byte(i+1))
+		size += int64(len(b))
+		if err := os.WriteFile(filepath.Join(dst, name), b, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := m.Open(c.Id, "capture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := d.WriteTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	r, err := capture.NewReader(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for {
+		p, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, p.Data[0])
+	}
+	if !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Errorf("the download holds the packets %v, want the four files in the order they were written", got)
+	}
+	// a restart sizes a capture that was running from its files
+	m2, _, _ := newManager(t, dir)
+	if err := m2.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := m2.Get(c.Id)
+	if err != nil || got2.Status != model.CaptureStatusFailed || got2.SizeBytes == nil || *got2.SizeBytes != size {
+		t.Errorf("the recovered capture %+v (%v), want a size of %d bytes", got2, err, size)
+	}
+	m.Close(context.Background())
+}
+
 func TestTheCapturesOfARunAreDeletedWhenItsRecordIs(t *testing.T) {
 	dir := t.TempDir()
 	m, op, _ := newManager(t, dir)

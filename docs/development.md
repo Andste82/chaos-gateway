@@ -5358,18 +5358,34 @@ milestones and on the configuration draft of M13.
   passed, failed, error, aborted), who started it and when, the steps that are through, the time against the length of the
   timeline, a progress bar, the lease left, the reason of an `error`, `aborted` or `failed` run and the warnings of the report
   (`zero_hit`, `step_late`, `capture_missing`). On the timeline each step is pending, applied, skipped or error (a label, not
-  only a colour), with the time it was applied at against its schedule ("at 10.0 s (+37 ms) · generation 51"), the wait behind an
-  apply, "now" on the step in effect and "next in 6 s" on the next one. The checks show PENDING until their windows close, then
+  only a colour), with the two moments of a step: when the timeline handed it over, against its schedule, and when the engine answered that it was
+  applied ("handed over at 10.0 s (+3 ms), applied at 13.4 s (apply 3.4 s) · generation 51"; `start_offset_ms` and `offset_ms`,
+  P4-AUDIT-18), the wait behind an apply, "now" on the step in effect and "next in 6 s" on the next one; a pending `wait` says
+  "waiting for the condition (timeout 60 s)" once its time has come, and the steps after a finished wait count down against
+  the schedule shifted by the time it waited (P4-AUDIT-42). A run that the page cannot read is not "gone": only a 404 says that
+  (the gateway keeps the runs of 30 days), any other failure shows the error with Try again (P4-AUDIT-12). The checks show PENDING until their windows close, then
   PASSED, FAILED or ERROR, with the message and the observations that decided them. The artifacts are links to the API:
-  the capture (pcapng, with its size), `report.xml` (JUnit), `report.json`, `events.jsonl`, and the key log. Abort removes the
+  the capture (pcapng, with its size), `report.xml` (JUnit), `report.json`, `events.jsonl`, and the key log; they are saved as
+  `run-<first 8 characters of the run id>-<file>` (`run-0a1b2c3d-events.jsonl`), so the files of two runs differ (P4-AUDIT-41; the
+  `download` attribute of the link, because the events and the reports send no `Content-Disposition`). Abort removes the
   run's overlays (the toast quotes the gateway). A queued run says it waits.
 - **The page of a run** (`RunView.vue`, `/runs/:id`) is the same for any run, with the counters of the overlays the run made
   from `report.json` once it has ended (a rule that matched no packet shows in orange).
 - **Live.** A run is read every second while it is queued or running (`useRun`) and the events `run_queued`, `run_started`,
   `run_step`, `run_check` and `run_finished` invalidate the runs (`composables/eventStream.ts`; the end also the overlays, devices
-  and faults); the list of runs is read every 5 s. A revision invalidates the scenarios.
+  and faults); the lists of runs are read every 5 s. A revision invalidates the scenarios.
+- **The run lists are windows, and what must not be missed is asked for by the gateway's filters** (P4-AUDIT-39). `useRuns` returns
+  one page (the newest 200 for the list's last results). The runs that are going on come from `status=running` and `status=queued`
+  (`useActiveRuns`: the overview and the page's followed run), the Runs tab from `scenario=<id>` and `scenario=<name>` (the runs of
+  an inline scenario carry the name only) with 50 runs and "Show older runs" (100 more, up to 500), and a scenario that the
+  newest 200 do not reach, while the gateway has more, gets its last result with `scenario=<id>&limit=1` (`useLastRuns`). While
+  the runs load the list says "Loading…", and when they could not be read "Last result unknown" with Try again; "Never run" and
+  "has not been run yet" are answers of the gateway only (P4-AUDIT-12).
 - **The overview** has "Running scenarios" (`RunningScenarios.vue`): each queued or running run with its target, steps through,
-  the step in effect and a progress bar, linking to the scenario with the run shown (or the run's page for an inline scenario).
+  the step in effect and a progress bar, linking to the scenario with the run shown (or to the run's page for an inline scenario
+  and for a scenario that was deleted meanwhile: a run goes on after its scenario is deleted, on its own copy, so the preview does not
+  list it; the run's page offers "Open the scenario" only while the scenario exists, and the page of a scenario that is not there
+  links to `/runs/<id>` when the address names a run, P4-AUDIT-40).
 - **What the build runs.** The step types and the check types the editors offer come from `GET /capabilities`; a step of a type the
   build does not run yet (DNS, TLS, DHCP) is shown and kept, its dialog says it is edited in the YAML view.
 - **Other changes.** The custom traffic fields of the fault dialog moved into `TrafficFields.vue`, the pure part into `lib/trafficForm.ts`
@@ -5400,8 +5416,12 @@ Taken by best practice where the plan leaves room (the one that needs the mainta
    check window that reaches past the last step makes a run longer than its steps say. The steps that are through are shown next to it.
 9. **No Captures screen in M19.** The captures of a run are artifacts with download links; a screen of captures and the device
    detail's panel have no milestone and no design (open item P4-M19-01).
-10. **The lateness of a step is not shown after a `wait` step,** which moves every later step by the time it waited; the report
-    has the actual offset anyway.
+10. **The figure against the schedule is the hand-over, and it is not shown for or after a `wait` step,** which moves every later step by
+    the time it waited (the report has the actual offsets anyway). Until the Phase 4 audit the UI printed the apply time
+    (`offset_ms` minus the schedule) as the lateness, which read as a missed promise on a host where an apply takes seconds
+    (P4-AUDIT-18). It is `start_offset_ms` minus the scheduled offset (a run without `start_offset_ms` shows the apply moment as before),
+    and the apply time is the difference of the two. The countdown to the next step does add the shift of the waits that are through
+    (the largest of `offset_ms` minus the scheduled offset, as `exec.go` computes it), P4-AUDIT-42.
 11. **The browser tests run against the mocked API,** as plan M19 says. The engine's timing, checks and artifacts are covered by the
     level 0 and level 1 tests of M15 to M17; the fixtures use the generated types, so a change of the spec breaks them at compile time.
 

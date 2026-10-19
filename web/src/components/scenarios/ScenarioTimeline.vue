@@ -3,13 +3,14 @@
 // with its time, a chip for its type (orange for what impairs traffic, red for a rule, blue for the rest) and
 // what it does in words. With a run, the timeline shows how the run is going: a step that was applied, is still
 // pending, was skipped or failed (always with a label, never by color alone), the time it was applied at and
-// how far that is from its schedule, the time it waited behind an apply, the step in effect ("now") and the
-// next one with the time left. Without a run, and when it is editable, a step can be edited, deleted, or
+// when the timeline handed it over and how far that is from its schedule, when it was applied and how long the apply
+// took, the time it waited behind an apply, the step in effect ("now") and the next one with the time left (or
+// the condition a wait waits for). Without a run, and when it is editable, a step can be edited, deleted, or
 // added after the last one.
 import { computed } from 'vue';
 import type { Run, RunStep, Step } from '../../api/generated/model';
 import { formatDuration } from '../../lib/format';
-import { lateness, offsetText, signedMs, stepMarks } from '../../lib/runs';
+import { applyMs, lateness, offsetText, signedMs, stepMarks } from '../../lib/runs';
 import { narrowText, stepText, stepType, stepTypeLabels, stepTypeTone, timelineOrder, type ScenarioNames } from '../../lib/scenarios';
 import { useNow } from '../../composables/useNow';
 
@@ -38,8 +39,9 @@ interface Row {
   narrow?: string;
   run?: RunStep;
   late?: number;
+  apply?: number;
   current: boolean;
-  next?: { due: boolean; inMs: number };
+  next?: { due: boolean; inMs: number; waiting?: boolean };
 }
 
 const rows = computed<Row[]>(() =>
@@ -53,7 +55,7 @@ const rows = computed<Row[]>(() =>
       tone: t ? stepTypeTone[t] : 'normal',
       text: stepText(step, props.names),
       narrow: narrowText(step, props.names),
-      ...(run ? { run, late: lateness(run, earlier) } : {}),
+      ...(run ? { run, late: lateness(run, earlier), apply: applyMs(run) } : {}),
       current: marks.value.current === step.id,
       ...(marks.value.next?.id === step.id ? { next: marks.value.next } : {}),
     };
@@ -84,6 +86,12 @@ const statusWord: Record<RunStep['status'], string> = { pending: 'pending', appl
 function inText(ms: number): string {
   return `in ${offsetText(Math.ceil(ms / 100) * 100)}`;
 }
+
+function nextText(r: Row): string {
+  if (!r.next) return '';
+  if (r.next.waiting) return `waiting for the condition (timeout ${formatDuration(r.step.wait?.timeout)})`;
+  return r.next.due ? 'applying…' : `next ${inText(r.next.inMs)}`;
+}
 </script>
 
 <template>
@@ -108,7 +116,7 @@ function inText(ms: number): string {
             <span class="inline-block rounded border px-2 text-xs" :class="chipClass[r.tone]" data-testid="step-type">{{ r.type }}</span>
             <span class="text-sm" :class="r.run?.status === 'skipped' ? 'text-text-3' : ''" data-testid="step-text">{{ r.text }}</span>
             <span v-if="r.current" class="text-xs text-fault-text" data-testid="step-now">now</span>
-            <span v-if="r.next" class="text-xs text-text-2" data-testid="step-next">{{ r.next.due ? 'applying…' : `next ${inText(r.next.inMs)}` }}</span>
+            <span v-if="r.next" class="text-xs text-text-2" data-testid="step-next">{{ nextText(r) }}</span>
           </div>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-text-2">
             <span class="mono text-text-3">{{ r.step.id }}</span>
@@ -116,7 +124,10 @@ function inText(ms: number): string {
             <template v-if="r.run">
               <span class="rounded border border-border-strong px-1.5" data-testid="step-status">{{ statusWord[r.run.status] }}</span>
               <span v-if="r.run.status === 'applied'" class="mono" data-testid="step-timing">
-                at {{ offsetText(r.run.offset_ms) }}<template v-if="r.late !== undefined"> ({{ signedMs(r.late) }})</template
+                <template v-if="r.run.start_offset_ms !== undefined"
+                  >handed over at {{ offsetText(r.run.start_offset_ms) }}<template v-if="r.late !== undefined"> ({{ signedMs(r.late) }})</template>, applied at {{ offsetText(r.run.offset_ms)
+                  }}<template v-if="r.apply !== undefined"> (apply {{ offsetText(r.apply) }})</template></template
+                ><template v-else>at {{ offsetText(r.run.offset_ms) }}<template v-if="r.late !== undefined"> ({{ signedMs(r.late) }})</template></template
                 ><template v-if="r.run.generation !== undefined"> · generation {{ r.run.generation }}</template>
               </span>
               <span v-if="r.run.queue_wait_ms" class="mono" data-testid="step-queue-wait">waited {{ r.run.queue_wait_ms }} ms</span>

@@ -72,8 +72,23 @@ function fraction(r: Run, now: Date): number {
 export interface StepMarks {
   /** The step in effect: the last one that was applied. */
   current?: string;
-  /** The first one that is not through; `due` once its time has come (a wait that holds the timeline, or a step being applied). */
-  next?: { id: string; due: boolean; inMs: number };
+  /**
+   * The first one that is not through; `due` once its time has come. Then it is being applied, or, for a `wait`
+   * (`waiting`), it holds the timeline until its condition is met or its timeout is over.
+   */
+  next?: { id: string; due: boolean; inMs: number; waiting?: boolean };
+}
+
+/**
+ * How far the waits that are through moved the rest of the timeline in milliseconds: every step after a `wait`
+ * is due that much later than its `at` (the largest shift of the waits, plan §2.10; `exec.go`).
+ */
+export function waitShiftMs(steps: RunStep[]): number {
+  let shift = 0;
+  for (const s of steps) {
+    if (s.type === 'wait' && s.status === 'applied' && s.offset_ms !== undefined) shift = Math.max(shift, s.offset_ms - (durationMs(s.scheduled_offset) ?? 0));
+  }
+  return shift;
 }
 
 /** Which step is current and which comes next while the run runs. */
@@ -83,21 +98,33 @@ export function stepMarks(r: Run, now: Date): StepMarks {
   const applied = steps.filter((s) => s.status === 'applied');
   const pending = steps.find((s) => s.status === 'pending');
   const elapsed = elapsedMs(r, now);
-  const due = pending ? (durationMs(pending.scheduled_offset) ?? 0) : 0;
+  // a wait that took longer than its schedule moved the steps after it: they are due later than their `at`
+  const due = pending ? (durationMs(pending.scheduled_offset) ?? 0) + waitShiftMs(steps) : 0;
+  const waiting = pending?.type === 'wait' && due <= elapsed;
   return {
     ...(applied.length ? { current: applied[applied.length - 1]!.id } : {}),
-    ...(pending ? { next: { id: pending.id, due: due <= elapsed, inMs: Math.max(0, due - elapsed) } } : {}),
+    ...(pending ? { next: { id: pending.id, due: due <= elapsed, inMs: Math.max(0, due - elapsed), ...(waiting ? { waiting: true } : {}) } } : {}),
   };
 }
 
 /**
- * How late a step was against its schedule in milliseconds (negative: early). Unknown after a `wait` step,
- * which moves every later step by the time it waited.
+ * How late the timeline handed a step over against its schedule in milliseconds (negative: early): the
+ * accuracy of the timeline itself (`start_offset_ms`, plan §2.10), not the time the apply took. A step that has
+ * no hand-over moment (a run of an older gateway, a capture) falls back to the moment it was applied. Unknown for
+ * a `wait` step, whose offset is when its condition held, and after one, which moves every later step by the
+ * time it waited.
  */
 export function lateness(step: RunStep, earlier: RunStep[]): number | undefined {
-  if (step.offset_ms === undefined || step.scheduled_offset === undefined || step.status !== 'applied') return undefined;
-  if (earlier.some((s) => s.type === 'wait')) return undefined;
-  return Math.round(step.offset_ms - (durationMs(step.scheduled_offset) ?? 0));
+  const handedOver = step.start_offset_ms ?? step.offset_ms;
+  if (handedOver === undefined || step.scheduled_offset === undefined || step.status !== 'applied') return undefined;
+  if (step.type === 'wait' || earlier.some((s) => s.type === 'wait')) return undefined;
+  return Math.round(handedOver - (durationMs(step.scheduled_offset) ?? 0));
+}
+
+/** How long the apply of a step took in milliseconds (hand-over to verified, the queue wait included); undefined without both moments. */
+export function applyMs(step: RunStep): number | undefined {
+  if (step.start_offset_ms === undefined || step.offset_ms === undefined || step.status !== 'applied') return undefined;
+  return Math.max(0, step.offset_ms - step.start_offset_ms);
 }
 
 /** "+12 ms", "−3 ms". */

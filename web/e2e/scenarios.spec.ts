@@ -699,6 +699,74 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-18: the timeline shows when a step was handed over (the accuracy of the timeline) and when it was applied.
+
+test('a slow apply handed over on time shows both moments, and only the hand-over is measured against the schedule', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [
+    runOf(SCN_MQTT, {
+      id: 'r-slow',
+      status: 'passed',
+      ended_at: ended(10_000),
+      steps: [
+        { id: 'normal', type: 'profile', status: 'applied', scheduled_offset: '0s', start_offset_ms: 1, offset_ms: 2_100, generation: 50 },
+        { id: 'slow', type: 'fault', status: 'applied', scheduled_offset: '10s', start_offset_ms: 10_003, offset_ms: 13_400, generation: 51, queue_wait_ms: 0 },
+        { id: 'lossy', type: 'fault', status: 'applied', scheduled_offset: '20s', start_offset_ms: 20_250, offset_ms: 20_300, generation: 52 },
+        { id: 'cut', type: 'rule', status: 'applied', scheduled_offset: '30s', offset_ms: 30_040, generation: 53 },
+        { id: 'restore', type: 'restore', status: 'applied', scheduled_offset: '50s', start_offset_ms: 50_001, offset_ms: 50_120, generation: 54 },
+      ],
+    }),
+  ];
+  await gw.install(page);
+  await page.goto('/runs/r-slow');
+  await expect(step(page, 'slow').getByTestId('step-timing')).toHaveText('handed over at 10.0 s (+3 ms), applied at 13.4 s (apply 3.4 s) · generation 51');
+  await expect(step(page, 'normal').getByTestId('step-timing')).toHaveText('handed over at 1 ms (+1 ms), applied at 2.1 s (apply 2.1 s) · generation 50');
+  // a hand-over over 100 ms late shows as it is
+  await expect(step(page, 'lossy').getByTestId('step-timing')).toHaveText('handed over at 20.3 s (+250 ms), applied at 20.3 s (apply 50 ms) · generation 52');
+  // a run without the hand-over moment keeps the apply as its only moment
+  await expect(step(page, 'cut').getByTestId('step-timing')).toHaveText('at 30.0 s (+40 ms) · generation 53');
+});
+
+// P4-AUDIT-42: a wait holds the timeline and moves every later step; the countdown knows it.
+
+test('a pending wait says what it waits for, and the step after a wait is counted against the shifted schedule', async ({ page }) => {
+  const gw = lab();
+  const scenario: Scenario = {
+    name: 'wait-it',
+    target: { network: IOT },
+    steps: [
+      { id: 'go', at: '0s', profile: LTE_ID },
+      { id: 'hold', at: '30s', wait: { for: 'online', timeout: '60s' } },
+      { id: 'back', at: '40s', restore: true },
+    ],
+  };
+  gw.runs = [
+    runOf(SCN_BOOT, {
+      id: 'r-w',
+      scenario,
+      status: 'running',
+      started_at: ended(35_000),
+      steps: [
+        { id: 'go', type: 'profile', status: 'applied', scheduled_offset: '0s', start_offset_ms: 1, offset_ms: 4, generation: 5 },
+        { id: 'hold', type: 'wait', status: 'pending', scheduled_offset: '30s' },
+        { id: 'back', type: 'restore', status: 'pending', scheduled_offset: '40s' },
+      ],
+    }),
+  ];
+  await gw.install(page);
+  await page.goto('/runs/r-w');
+  await expect(step(page, 'hold').getByTestId('step-next')).toHaveText('waiting for the condition (timeout 60 s)');
+  await expect(step(page, 'back').getByTestId('step-next')).toHaveCount(0);
+
+  // the wait took 20 s: 50 s into the run, the step scheduled at 40 s is due at 60 s, not "applying"
+  await advance(gw, page, 'r-w', (r) => {
+    r.started_at = ended(50_000);
+    r.steps![1] = { id: 'hold', type: 'wait', status: 'applied', scheduled_offset: '30s', offset_ms: 50_000 };
+  });
+  await expect(step(page, 'hold').getByTestId('step-timing')).toHaveText('at 50 s');
+  await expect(step(page, 'back').getByTestId('step-next')).toHaveText(/^next in \d/);
+});
+
 // P4-AUDIT-41: the artifacts of two runs are not saved under the same name.
 
 test('the artifacts of a run are saved under the name of the kind and the run', async ({ page }) => {

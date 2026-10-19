@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Run, RunStep } from '../api/generated/model';
-import { artifactFileName, artifactLabels, elapsedMs, isActive, isRunOf, lastRunByScenario, lateness, mergeRuns, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone } from './runs';
+import { applyMs, artifactFileName, artifactLabels, elapsedMs, isActive, isRunOf, lastRunByScenario, lateness, mergeRuns, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone, waitShiftMs } from './runs';
 import { mqttOutage } from './scenarioFixtures';
 
 // The run in the UI (M19): its progress, the step in effect, the timing of a step against its schedule,
@@ -98,6 +98,65 @@ describe('the timing of a step', () => {
     expect(offsetText(10_040)).toBe('10.0 s');
     expect(offsetText(10_000)).toBe('10 s');
     expect(offsetText(undefined)).toBe('—');
+  });
+});
+
+describe('the timing of a step: the hand-over against the apply (P4-AUDIT-18)', () => {
+  const slowApply: RunStep = { id: 'slow', type: 'fault', status: 'applied', scheduled_offset: '10s', start_offset_ms: 10_003, offset_ms: 13_400, generation: 5 };
+
+  it('the figure against the schedule is the hand-over, not the apply: a slow apply handed over on time is not late', () => {
+    expect(lateness(slowApply, [])).toBe(3);
+    expect(applyMs(slowApply)).toBe(3397);
+    // a hand-over over 100 ms late shows as it is, whatever the apply took
+    expect(lateness({ ...slowApply, start_offset_ms: 10_250, offset_ms: 10_300 }, [])).toBe(250);
+    expect(applyMs({ ...slowApply, start_offset_ms: 10_250, offset_ms: 10_300 })).toBe(50);
+    expect(lateness({ ...slowApply, start_offset_ms: 9_990 }, [])).toBe(-10);
+  });
+
+  it('a step without a hand-over moment falls back to its apply; the apply time is then unknown', () => {
+    const old: RunStep = { id: 'x', status: 'applied', scheduled_offset: '10s', offset_ms: 10_040 };
+    expect(lateness(old, [])).toBe(40);
+    expect(applyMs(old)).toBeUndefined();
+    expect(applyMs({ id: 'p', status: 'pending', start_offset_ms: 1, offset_ms: 2 })).toBeUndefined();
+  });
+
+  it('no figure for a wait (its offset is when the condition held) and none after one', () => {
+    const wait: RunStep = { id: 'w', type: 'wait', status: 'applied', scheduled_offset: '10s', offset_ms: 25_000 };
+    expect(lateness(wait, [])).toBeUndefined();
+    expect(lateness({ ...slowApply, scheduled_offset: '30s', start_offset_ms: 40_001, offset_ms: 40_100 }, [wait])).toBeUndefined();
+    // the apply time is still known after a wait
+    expect(applyMs({ ...slowApply, start_offset_ms: 40_001, offset_ms: 40_100 })).toBe(99);
+  });
+});
+
+describe('the next step after and at a wait (P4-AUDIT-42)', () => {
+  const wait = (over: Partial<RunStep>): RunStep => ({ id: 'w', type: 'wait', status: 'pending', scheduled_offset: '30s', ...over });
+  const after = (over: Partial<RunStep> = {}): RunStep => ({ id: 'cut', type: 'rule', status: 'pending', scheduled_offset: '40s', ...over });
+  const first: RunStep = { id: 'a', type: 'profile', status: 'applied', scheduled_offset: '0s', offset_ms: 3 };
+
+  it('a pending wait counts down to its time, then waits for its condition instead of "applying"', () => {
+    const steps = [first, wait({}), after()];
+    expect(stepMarks(run({ steps }), at(20_000)).next).toEqual({ id: 'w', due: false, inMs: 10_000 });
+    expect(stepMarks(run({ steps }), at(35_000)).next).toEqual({ id: 'w', due: true, inMs: 0, waiting: true });
+    expect(stepMarks(run({ steps }), at(90_000)).next).toEqual({ id: 'w', due: true, inMs: 0, waiting: true });
+  });
+
+  it('a step that is not a wait is "applying" when due, never "waiting"', () => {
+    expect(stepMarks(run({ steps: [first, after({ scheduled_offset: '5s' })] }), at(9_000)).next).toEqual({ id: 'cut', due: true, inMs: 0 });
+  });
+
+  it('the steps after a wait that took 20 s are due 20 s later than their time', () => {
+    const steps = [first, wait({ status: 'applied', offset_ms: 50_000 }), after()];
+    // 55 s: the unshifted schedule would say "applying" since 40 s; the engine runs the step at 60 s
+    expect(stepMarks(run({ steps }), at(55_000))).toEqual({ current: 'w', next: { id: 'cut', due: false, inMs: 5_000 } });
+    expect(stepMarks(run({ steps }), at(61_000)).next).toEqual({ id: 'cut', due: true, inMs: 0 });
+  });
+
+  it('a wait that ended on time moves nothing, and the largest shift counts', () => {
+    expect(waitShiftMs([first, wait({ status: 'applied', offset_ms: 30_000 })])).toBe(0);
+    expect(waitShiftMs([first, wait({ status: 'applied', offset_ms: 29_000 })])).toBe(0);
+    expect(waitShiftMs([wait({ status: 'applied', offset_ms: 50_000 }), wait({ id: 'w2', status: 'applied', scheduled_offset: '60s', offset_ms: 75_000 })])).toBe(20_000);
+    expect(waitShiftMs([wait({})])).toBe(0);
   });
 });
 

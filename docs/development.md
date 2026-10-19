@@ -5260,7 +5260,10 @@ deleting one, through the preview to the patch that is sent; renaming a step; th
 the import; running a scenario and following it to a failed run (the step in effect, timing, queue wait, warning, checks, evidence,
 artifacts, the Runs tab, the page of the run with its counters); a passed run; abort; a queued run and a refused busy target; refused
 parameters; running a draft inline; the overview; a step of a type the build cannot edit; no run while a revision waits for
-confirmation. The whole Playwright suite (208 tests) passed with them, and `go build ./...` and `go vet ./...` are unchanged (no Go
+confirmation. The whole Playwright suite (208 tests) passed with them. One test keeps the browser and the gateway together:
+`lib/scenarioYaml.test.ts` compares the YAML that the UI writes for the example of plan §2.10 with `internal/domain/testdata/scenario-ui-export.yaml`
+byte for byte, and `TestTheYamlOfTheScenarioUiIsAcceptedByTheGateway` (`internal/domain`) decodes and validates the same file against the
+example configuration (the device is found by its name). Apart from that test, `go build ./...` and `go vet ./...` are unchanged (no Go
 code changed). There is no test that needs a VM: nothing of M19 runs in the testbed, and no browser flow of the testbed was added (decision 11).
 
 ### Acceptance map (plan M19 "Tests" and Scope)

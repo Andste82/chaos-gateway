@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"os"
 	"testing"
 )
 
@@ -256,5 +257,27 @@ func TestDecodeScenarioReportsSchemaProblemsWithPointers(t *testing.T) {
 	var ve ValidationErrors
 	if !asValidation(err, &ve) || !ve.Has("/steps/0/oops", "unknown_field") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The scenario UI (M19) writes the YAML of a scenario in the browser. This is the file it writes for the
+// example of plan §2.10 (web/src/lib/scenarioYaml.test.ts compares the UI's output with the same file byte
+// for byte), so the two sides cannot drift apart: the gateway decodes it, finds the device by its name and
+// validates it.
+func TestTheYamlOfTheScenarioUiIsAcceptedByTheGateway(t *testing.T) {
+	raw, err := os.ReadFile("testdata/scenario-ui-export.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := DecodeScenario(raw, FormatYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.Name != "mqtt-outage" || len(sc.Steps) != 5 || sc.Checks == nil || len(*sc.Checks) != 2 || sc.Capture == nil || !*sc.Capture {
+		t.Fatalf("decoded as %+v", sc)
+	}
+	cfg := exampleConfiguration(t)
+	if errs := ValidateScenario(cfg, sc); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
 	}
 }

@@ -209,7 +209,8 @@ func TestTwoHundredConcurrentOverlayWritesCostFarFewerApplies(t *testing.T) {
 // the owner checks a burst with a few compiles, not one per write. The plan's target (§3.10: 100
 // writes within 1 to 2 s) is one of real hardware; the bound here is looser, because this runs on
 // the simulated kernel under the race detector on whatever CI machine, and it guards against the
-// cost growing with the square of the burst, which is what one compile per write was.
+// cost growing with the square of the burst, which is what one compile per write was (checked as
+// the number of applies, not as time).
 func TestAHundredWritesWithoutAHeldExecutorAreQuick(t *testing.T) {
 	h, g := gatedHarness(t, engine.Config{})
 	base := g.count()
@@ -225,8 +226,15 @@ func TestAHundredWritesWithoutAHeldExecutorAreQuick(t *testing.T) {
 			t.Fatalf("write %d: %v", i, o.err)
 		}
 	}
-	t.Logf("100 writes in %v with %d applies", took, g.count()-base)
-	if took > 5*time.Second {
+	applies := g.count() - base
+	t.Logf("100 writes in %v with %d applies", took, applies)
+	// The cost that grows with the square of the burst shows as one apply per write; that is what
+	// is checked hard. The time is only a bound against a hang, because on a loaded machine under
+	// the race detector the burst takes several seconds without anything being wrong.
+	if applies > 10 {
+		t.Errorf("100 concurrent writes took %d applies, want a few", applies)
+	}
+	if took > 30*time.Second {
 		t.Errorf("100 concurrent writes took %v", took)
 	}
 	h.barrier()

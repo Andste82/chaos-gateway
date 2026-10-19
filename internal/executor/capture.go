@@ -115,6 +115,10 @@ func WithCaptures(dir string, minFreePercent float64) Option {
 // WithCaptureClock sets the clock of the captures' durations and checks (tests); the executor's clock otherwise.
 func WithCaptureClock(c clock.Clock) Option { return func(e *Executor) { e.capClock = c } }
 
+// maxCaptureBytes is the largest size a capture can name (2^62 bytes, the largest a ByteSize of the API reads); a ring
+// buffer's files together stay below it, so their total does not overflow.
+const maxCaptureBytes = 1 << 62
+
 var captureDirName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // ifaceName is what the kernel accepts as the name of an interface (IFNAMSIZ 16 with the terminator).
@@ -152,12 +156,16 @@ func (o *CaptureOpen) Validate() error {
 		return errors.New("a ring buffer has 2 to 100 files")
 	case o.RingFiles != 0 && o.RingFileSize <= 0:
 		return errors.New("a ring buffer needs a file size")
+	case o.RingFiles != 0 && o.RingFileSize > maxCaptureBytes/int64(o.RingFiles):
+		return errors.New("the files of a ring buffer take more than the largest size of a capture")
 	case o.RingFiles == 0 && o.RingFileSize != 0:
 		return errors.New("a file size needs a ring buffer")
 	case o.RingFiles != 0 && o.MaxSize != 0:
 		return errors.New("a ring buffer is bounded by its files: it takes no maximum size")
 	case o.MaxSize < 0 || o.DurationMS < 0:
 		return errors.New("a limit is not negative")
+	case o.MaxSize > maxCaptureBytes:
+		return errors.New("the maximum size is larger than the largest size of a capture")
 	}
 	return nil
 }

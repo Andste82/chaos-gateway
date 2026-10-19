@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -402,6 +403,44 @@ func TestADownloadJoinsTheFilesOfARingAndCutsAFileThatIsBeingWritten(t *testing.
 	}
 	if _, err := m.Open(uuid.New(), "capture"); !errors.Is(err, capturemgr.ErrNotFound) {
 		t.Errorf("an unknown capture: %v", err)
+	}
+	m.Close(context.Background())
+}
+
+// ringRequest is a request for a capture of the uplink in a ring buffer.
+func ringRequest(t *testing.T, files int, size string) capturemgr.StartRequest {
+	t.Helper()
+	var req capturemgr.StartRequest
+	doc := fmt.Sprintf(`{"scope":{"uplink":true},"ring_buffer":{"files":%d,"file_size":%q}}`, files, size)
+	if err := jsonUnmarshal([]byte(doc), &req.CaptureRequest); err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
+// A ring buffer of huge files wrapped the int64 of the product of the files and the size, so that the quota check passed.
+func TestARingBufferWhoseFilesOverflowTheQuotaCheckIsRefused(t *testing.T) {
+	m, op, _ := newManager(t, t.TempDir())
+	for name, req := range map[string]capturemgr.StartRequest{
+		"two files of 2^62 bytes": ringRequest(t, 2, "4194304TiB"),
+		"100 files of 2^62 bytes": ringRequest(t, 100, "4194304TiB"),
+		"files beyond the quota":  ringRequest(t, 3, "2GiB"),
+	} {
+		_, err := m.Start(context.Background(), req)
+		var ve domain.ValidationErrors
+		if !errors.As(err, &ve) || len(ve) != 1 || ve[0].Path != "/ring_buffer" || ve[0].Code != domain.CodeCaptureLimit {
+			t.Errorf("%s: %v, want invalid_capture_limit at /ring_buffer", name, err)
+		}
+	}
+	op.mu.Lock()
+	n := len(op.streams)
+	op.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d captures reached the executor", n)
+	}
+	// the exact fit is no overflow: two files of half the quota (5 GiB) are accepted
+	if _, err := m.Start(context.Background(), ringRequest(t, 2, "2560MiB")); err != nil {
+		t.Errorf("two files that make exactly the quota: %v", err)
 	}
 	m.Close(context.Background())
 }

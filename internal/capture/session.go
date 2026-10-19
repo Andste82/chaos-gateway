@@ -239,7 +239,9 @@ func (s *Session) end(reason StopReason, err error) {
 
 // control looks at the clock: the duration, the disk, the flushing of the file.
 func (s *Session) control(ctx context.Context) {
+	defer close(s.done)
 	defer func() {
+		defer s.recoverPanic("control")
 		s.readers.Wait()
 		if err := s.out.Close(); err != nil {
 			// the first reason stays, but the error that the last block could not be written must not get lost
@@ -253,8 +255,8 @@ func (s *Session) control(ctx context.Context) {
 		for _, ps := range s.socks {
 			ps.close()
 		}
-		close(s.done)
 	}()
+	defer s.recoverPanic("control")
 	tick := s.clk.NewTicker(checkEvery)
 	defer tick.Stop()
 	var dur <-chan time.Time
@@ -288,6 +290,14 @@ func (s *Session) control(ctx context.Context) {
 	}
 }
 
+// recoverPanic is deferred by the goroutines of a session: a panic ends this capture with an error and does not take
+// the process, which runs the other captures and the rest of the executor, down with it.
+func (s *Session) recoverPanic(where string) {
+	if r := recover(); r != nil {
+		s.end(ReasonError, fmt.Errorf("capture: internal error in %s: %v", where, r))
+	}
+}
+
 // fail ends the session for a write error: a full disk is the disk-low reason.
 func (s *Session) fail(err error) {
 	if errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT) {
@@ -300,6 +310,7 @@ func (s *Session) fail(err error) {
 // read is the goroutine of one interface.
 func (s *Session) read(idx int, ps *packetSocket) {
 	defer s.readers.Done()
+	defer s.recoverPanic("read")
 	buf := make([]byte, maxSnaplen)
 	oob := make([]byte, 256)
 	n, after := 0, 0

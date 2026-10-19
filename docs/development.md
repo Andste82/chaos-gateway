@@ -4543,8 +4543,8 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   scheduler's own lateness (the timer firing late) is not part of it: `start_offset_ms` minus the step's
   `scheduled_offset` shows it, and the level 1 test bounds it by 100 ms where timing is accurate.
 - **The accuracy of a step is where it is handed over, not when its apply is done** (decided while fixing CI run
-  39208509316; to be confirmed by the maintainer, because plan §2.10 says "applied at the executor's commit time
-  stamp, within ±100 ms"). An overlay write returns when the apply that carries it is verified. The apply reads the
+  39208509316; confirmed by the maintainer on 2026-10-19, option 3: plan §2.10 now says that the ±100 ms promise is
+  about the hand-over, and that the report holds both moments, so the apply time shows). An overlay write returns when the apply that carries it is verified. The apply reads the
   kernel, plans, writes and reads back: about 0.1 to 0.2 s on a native kernel with the configuration of the testbed
   (container job: 136, 159 and 193 ms) and 2 to 5 s in the VM of the CI on a shared runner (nested virtualization
   makes every `nft`, `tc` and `ip` of the apply slow; the steps were 3.4, 4.4 and 6.3 s late with a queue wait of
@@ -4721,7 +4721,9 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
   ports, port ranges, destination address, prefix, network or the uplink).
 - **The five types.**
   `reconnected`: an `established` event inside the window (TCP past the handshake, any other flow once it was
-  answered; `established()` of M15's `wait: connected`). A SYN that is dropped never becomes one.
+  answered; `established()` of M15's `wait: connected`). A SYN that is dropped never becomes one, nor does a
+  refused attempt: a TCP entry in CLOSE counts only when the originator sent two packets or more, a handshake
+  and not one SYN answered by a RST.
   `no_connection`: the same event is a failure.
   `traffic_seen`: any event (a new connection in any state, an established one that became answered, or packets on an
   old one).

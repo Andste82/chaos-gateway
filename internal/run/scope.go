@@ -201,13 +201,18 @@ func overlayTokens(snap *engine.Snapshot, ov model.Overlay) map[string]bool {
 // ---- connections
 
 // established reports whether a tracked connection has been established: a TCP connection past the
-// handshake, any other flow that has been answered.
+// handshake, any other flow that has been answered. A TCP entry in CLOSE is over, but it ended in two
+// ways: after a handshake (a connection that was reset) or in place of one (a refused attempt, one SYN
+// answered by a RST). Only the first one counts, and the two differ in what the originator sent: a
+// refused attempt is one packet, a handshake is at least two (the SYN and the ACK or the RST that follows).
 func established(f engine.Flow) bool {
 	st := strings.ToUpper(f.State)
 	if f.Protocol == "tcp" {
 		switch st {
 		case "", "SYN_SENT", "SYN_RECV", "NONE":
 			return false
+		case "CLOSE":
+			return f.Upload.Packets >= 2 && f.Download.Packets >= 1
 		}
 		return true
 	}

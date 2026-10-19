@@ -18,6 +18,11 @@ func TestAConnectionIsEstablishedPastTheHandshake(t *testing.T) {
 	}{
 		{engine.Flow{Protocol: "tcp", State: "ESTABLISHED"}, true},
 		{engine.Flow{Protocol: "tcp", State: "TIME_WAIT"}, true},
+		// a refused attempt (one SYN, answered by a RST) is over, but it was never established
+		{engine.Flow{Protocol: "tcp", State: "CLOSE", Upload: engine.Traffic{Packets: 1}, Download: engine.Traffic{Packets: 1}}, false},
+		{engine.Flow{Protocol: "tcp", State: "CLOSE"}, false},
+		// a connection that was reset after its handshake was
+		{engine.Flow{Protocol: "tcp", State: "CLOSE", Upload: engine.Traffic{Packets: 4}, Download: engine.Traffic{Packets: 3}}, true},
 		{engine.Flow{Protocol: "tcp", State: "SYN_SENT"}, false},
 		{engine.Flow{Protocol: "tcp", State: "SYN_RECV"}, false},
 		{engine.Flow{Protocol: "tcp", State: ""}, false},

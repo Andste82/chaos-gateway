@@ -209,9 +209,23 @@ func (s *stream) end(ev executor.CaptureEvent) {
 type opener struct {
 	mu      sync.Mutex
 	streams []*stream
+	// err is what the executor refuses the next captures with
+	err error
+}
+
+func (o *opener) refuseWith(err error) {
+	o.mu.Lock()
+	o.err = err
+	o.mu.Unlock()
 }
 
 func (o *opener) OpenCapture(_ context.Context, _ executor.CaptureOpen) (executor.CaptureStream, error) {
+	o.mu.Lock()
+	err := o.err
+	o.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	s := &stream{events: make(chan executor.CaptureEvent, 16)}
 	s.events <- executor.CaptureEvent{Kind: executor.CaptureStarted, Interfaces: []capture.InterfaceInfo{{Name: "wan0", Link: capture.LinkEthernet}}, Files: []string{"capture.pcapng"}}
 	o.mu.Lock()
@@ -228,9 +242,15 @@ func (o *opener) last() *stream {
 
 func newManager(t *testing.T, dir string) (*capturemgr.Manager, *opener, *gateway) {
 	t.Helper()
+	return newManagerWithQuota(t, dir, 0)
+}
+
+// newManagerWithQuota is a manager with a quota of that many bytes (the default when zero).
+func newManagerWithQuota(t *testing.T, dir string, quota int64) (*capturemgr.Manager, *opener, *gateway) {
+	t.Helper()
 	gw := &gateway{snap: snapshot(t)}
 	op := &opener{}
-	m, err := capturemgr.New(capturemgr.Config{Clock: clock.NewFake(t0), Dir: dir, Opener: op, Gateway: gw})
+	m, err := capturemgr.New(capturemgr.Config{Clock: clock.NewFake(t0), Dir: dir, Opener: op, Gateway: gw, Quota: func() int64 { return quota }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,6 +461,56 @@ func TestARingBufferWhoseFilesOverflowTheQuotaCheckIsRefused(t *testing.T) {
 	// the exact fit is no overflow: two files of half the quota (5 GiB) are accepted
 	if _, err := m.Start(context.Background(), ringRequest(t, 2, "2560MiB")); err != nil {
 		t.Errorf("two files that make exactly the quota: %v", err)
+	}
+	m.Close(context.Background())
+}
+
+const mib = 1 << 20
+
+// The oldest stopped captures are the evidence of runs: a request that cannot be served leaves every one of them.
+func TestARefusedCaptureDeletesNoStoppedCapture(t *testing.T) {
+	dir := t.TempDir()
+	m, op, _ := newManagerWithQuota(t, dir, 10*mib)
+	ctx := context.Background()
+	stopped, err := m.Start(ctx, uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.last().end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 5, Size: 6 * mib})
+	eventually(t, "the capture stops", func() bool { got, _ := m.Get(stopped.Id); return got.Status == model.CaptureStatusStopped })
+	running, err := m.Start(ctx, uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.last().events <- executor.CaptureEvent{Kind: executor.CaptureStats, Packets: 1, Size: 3 * mib}
+	eventually(t, "the counters", func() bool { got, _ := m.Get(running.Id); return *got.SizeBytes == 3*mib })
+	kept := func(what string) {
+		t.Helper()
+		if got, err := m.Get(stopped.Id); err != nil || got.Status != model.CaptureStatusStopped {
+			t.Errorf("%s: the stopped capture is gone (%v)", what, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, stopped.Id.String())); err != nil {
+			t.Errorf("%s: its directory is gone: %v", what, err)
+		}
+	}
+	// 4 + 4 MiB cannot fit next to the 3 MiB of the running capture, whatever is deleted
+	if _, err := m.Start(ctx, ringRequest(t, 2, "4MiB")); !errors.Is(err, capturemgr.ErrQuota) {
+		t.Errorf("a ring buffer that the running capture leaves no room for: %v", err)
+	}
+	kept("a ring buffer beyond the room")
+	// 3 + 3 MiB fits once the stopped capture is gone, but the executor refuses it
+	op.refuseWith(executor.ErrDiskLow)
+	if _, err := m.Start(ctx, ringRequest(t, 2, "3MiB")); !errors.Is(err, capturemgr.ErrDiskLow) {
+		t.Errorf("a capture the executor refuses: %v", err)
+	}
+	kept("a capture the executor refused")
+	// accepted, the capture takes the room: the stopped capture goes
+	op.refuseWith(nil)
+	if _, err := m.Start(ctx, ringRequest(t, 2, "3MiB")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(stopped.Id); !errors.Is(err, capturemgr.ErrNotFound) {
+		t.Errorf("the stopped capture stays although the new one needs its room: %v", err)
 	}
 	m.Close(context.Background())
 }

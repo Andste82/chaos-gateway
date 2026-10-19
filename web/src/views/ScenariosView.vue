@@ -26,13 +26,13 @@ import StepDialog from '../components/scenarios/StepDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
-import { firstError, useActiveConfig, useGatewayState, useNames, useRun, useRuns, useScenarios } from '../composables/gateway';
+import { firstError, useActiveConfig, useActiveRuns, useGatewayState, useLastRuns, useNames, useRun, useRuns, useScenarioRuns, useScenarios } from '../composables/gateway';
 import { useRefIndex } from '../composables/scenarioTargets';
 import { useNow } from '../composables/useNow';
 import { describeScope } from '../lib/faults';
 import { formatAgo } from '../lib/format';
 import { refocusAfterSwap } from '../lib/focus';
-import { isActive, lastRunByScenario, resultText, statusLabels, statusTone } from '../lib/runs';
+import { isActive, isRunOf, lastRunByScenario, mergeRuns, resultText, statusLabels, statusTone } from '../lib/runs';
 import { scenarioLength, scenarioMeta, scenarioProblems, stepReferences, withoutCheck, withoutStep, lengthText } from '../lib/scenarios';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -110,14 +110,20 @@ function pickTab(t: Tab) {
 }
 
 // ---- the runs of the scenario
-const allRuns = computed(() => runs.data.value ?? []);
+// `runs` is a window (the newest 200): it gives the last results of the list; the runs that are going on and the
+// runs of the scenario shown are asked for by the gateway, so a run behind many newer ones is not missed
+const activeRuns = useActiveRuns();
+const allRuns = computed(() => mergeRuns(runs.data.value?.items ?? [], activeRuns.data.value ?? []));
 const last = computed(() => lastRunByScenario(allRuns.value));
-const ofScenario = computed(() => {
-  const s = selected.value;
-  if (!s) return [];
-  return allRuns.value.filter((r) => r.scenario.id === s.id || (r.scenario.inline && r.scenario.name === s.config.name));
-});
-const activeRun = computed(() => ofScenario.value.find((r) => isActive(r)));
+const ref0 = computed(() => (selected.value ? { id: selected.value.id, name: selected.value.config.name } : undefined));
+const RUNS_PAGE = 50;
+const runsShown = ref(RUNS_PAGE);
+watch(() => selected.value?.id, () => (runsShown.value = RUNS_PAGE));
+const scenarioRuns = useScenarioRuns(() => ref0.value, () => runsShown.value, () => tab.value === 'runs');
+const ofScenario = computed(() => scenarioRuns.data.value ?? []);
+const tabLoading = computed(() => scenarioRuns.isLoading.value);
+const tabUnknown = computed(() => !!scenarioRuns.error.value && scenarioRuns.data.value === undefined);
+const activeRun = computed(() => (ref0.value ? activeRuns.data.value?.find((r) => isRunOf(r, ref0.value!)) : undefined));
 /** The run the page follows: asked for in the address, else the one that is going on, and after it ended the same one. */
 const followed = ref<string>();
 const dismissed = ref<string>();
@@ -240,19 +246,38 @@ async function abort() {
   }
 }
 
-function lastText(id: string, name: string): { text: string; tone: string } | undefined {
-  const r = last.value.get(id) ?? last.value.get(name);
-  if (!r) return undefined;
+// The last result of each scenario: the newest run of the window; a scenario with none in it, while the gateway
+// has more runs than the window holds, is asked for by itself, so "Never run" is only said when it is true.
+const beyond = computed(() =>
+  runs.data.value?.next_cursor ? items.value.filter((i) => !i.isNew && !last.value.has(i.id) && !last.value.has(i.config.name)).map((i) => ({ id: i.id, name: i.config.name })) : [],
+);
+const beyondRuns = useLastRuns(() => beyond.value);
+
+type LastResult = { state: 'run'; text: string; tone: string } | { state: 'loading' | 'unknown' | 'never' };
+function lastResult(i: Item): LastResult {
+  let r = last.value.get(i.id) ?? last.value.get(i.config.name);
+  if (!r) {
+    if (runs.isLoading.value) return { state: 'loading' };
+    if (runs.error.value && runs.data.value === undefined) return { state: 'unknown' };
+    const k = beyond.value.findIndex((b) => b.id === i.id);
+    if (k >= 0) {
+      const q = beyondRuns.value[k];
+      if (!q || q.isLoading) return { state: 'loading' };
+      if (q.data === undefined) return { state: 'unknown' };
+      r = q.data ?? undefined;
+    }
+  }
+  if (!r) return { state: 'never' };
   const when = r.ended_at ?? r.started_at ?? r.created_at;
   const text = isActive(r) ? statusLabels[r.status] : `${resultText(r)} · ${formatAgo(when, now.value)}`;
   const tone = r.status === 'passed' ? 'text-accent-text' : r.status === 'running' ? 'text-fault-text' : r.status === 'failed' || r.status === 'error' ? 'text-block-text' : 'text-text-2';
-  return { text, tone };
+  return { state: 'run', text, tone };
 }
+const lastById = computed(() => new Map(items.value.map((i) => [i.id, lastResult(i)])));
 
 // the last results are answers only once the runs are read: until then, or when the read failed, the list says so instead of "Never run"
-const runsLoading = computed(() => runs.isLoading.value);
 const runsUnknown = computed(() => !!runs.error.value && runs.data.value === undefined);
-const retry = () => Promise.all([scenarios.refetch(), active.refetch(), runs.refetch()]);
+const retry = () => Promise.all([scenarios.refetch(), active.refetch(), runs.refetch(), activeRuns.refetch()]);
 const selectedLength = computed(() => (selected.value ? lengthText(scenarioLength(selected.value.config)) : ''));
 const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
 </script>
@@ -289,10 +314,12 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
           <span v-else-if="i.changed" class="rounded border border-accent-strong px-1.5 text-xs text-[#cfe6ff]" data-testid="scenario-mark">CHANGED</span>
         </span>
         <span class="text-xs text-text-2" data-testid="scenario-meta">{{ describeScope(i.config.target, names) }} · {{ scenarioMeta(i.config) }}</span>
-        <span v-if="lastText(i.id, i.config.name)" class="text-xs" :class="lastText(i.id, i.config.name)!.tone" data-testid="scenario-last">{{ lastText(i.id, i.config.name)!.text }}</span>
-        <span v-else-if="runsLoading" class="text-xs text-text-3" data-testid="scenario-last">Loading…</span>
-        <span v-else-if="runsUnknown" class="text-xs text-text-3" data-testid="scenario-last">Last result unknown</span>
-        <span v-else class="text-xs text-text-3" data-testid="scenario-last">Never run</span>
+        <template v-for="l in [lastById.get(i.id)!]" :key="l.state">
+          <span v-if="l.state === 'run'" class="text-xs" :class="l.tone" data-testid="scenario-last">{{ l.text }}</span>
+          <span v-else-if="l.state === 'loading'" class="text-xs text-text-3" data-testid="scenario-last">Loading…</span>
+          <span v-else-if="l.state === 'unknown'" class="text-xs text-text-3" data-testid="scenario-last">Last result unknown</span>
+          <span v-else class="text-xs text-text-3" data-testid="scenario-last">Never run</span>
+        </template>
       </RouterLink>
     </nav>
 
@@ -404,8 +431,8 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
       <ScenarioYaml v-else-if="tab === 'yaml' && !selected.deleted" :scenario="{ id: selected.id, config: selected.config }" :index="index" :names="allNames.filter((n) => n !== selected!.config.name)" />
 
       <section v-else-if="tab === 'runs'" class="card flex flex-col gap-2" aria-label="Runs" data-testid="runs-tab">
-        <p v-if="runsLoading" class="m-0 text-sm text-text-2" data-testid="runs-loading">Loading the runs…</p>
-        <LoadError v-else-if="runsUnknown" :error="runs.error.value" what="The runs are not loaded" :retry="() => runs.refetch()" />
+        <p v-if="tabLoading" class="m-0 text-sm text-text-2" data-testid="runs-loading">Loading the runs…</p>
+        <LoadError v-else-if="tabUnknown" :error="scenarioRuns.error.value" what="The runs are not loaded" :retry="() => scenarioRuns.refetch()" />
         <p v-else-if="ofScenario.length === 0" class="m-0 text-sm text-text-2" data-testid="runs-empty">This scenario has not been run yet.</p>
         <table v-else class="w-full border-collapse text-[13px]">
           <thead>
@@ -430,6 +457,10 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
             </tr>
           </tbody>
         </table>
+        <div v-if="!tabLoading && !tabUnknown && scenarioRuns.more.value" class="flex items-center gap-3 pt-1 text-[13px] text-text-2">
+          <button v-if="runsShown < 500" type="button" class="btn btn-sm" data-testid="runs-more" @click="runsShown = Math.min(runsShown + 100, 500)">Show older runs</button>
+          <span v-else data-testid="runs-more-api">The newest 500 runs are shown; the API lists the older ones (<span class="mono">GET /runs?scenario=…</span>).</span>
+        </div>
       </section>
     </section>
 

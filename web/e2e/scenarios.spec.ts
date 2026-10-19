@@ -699,6 +699,64 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-39: the lists of runs are windows; what must not be missed is asked for by the gateway's filters.
+
+const ended = (ms: number) => new Date(Date.now() - ms).toISOString();
+const passedRuns = (n: number, scenario: string, prefix: string) =>
+  Array.from({ length: n }, (_, i) =>
+    runOf(scenario, { id: `${prefix}-${String(i).padStart(3, '0')}`, status: 'passed', ended_at: ended(60_000), ...(scenario === SCN_BOOT ? { scenario: lab().config.scenarios![SCN_BOOT]! } : {}) }),
+  );
+
+test('the overview finds a queued run behind more than 50 newer runs, by asking for the status', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(SCN_MQTT, { id: 'r-queued', status: 'queued' }), ...passedRuns(60, SCN_BOOT, 'r-new')];
+  await gw.install(page);
+  await page.goto('/');
+  const card = page.getByTestId('running-scenarios');
+  await expect(card.getByTestId('running-scenario')).toHaveCount(1);
+  await expect(card).toContainText('mqtt-outage');
+  const asked = gw.requestsTo('GET', '/runs').map((r) => r.query.status);
+  expect(asked).toEqual(expect.arrayContaining(['running', 'queued']));
+});
+
+test('the last result of a scenario older than the newest 200 runs is asked for, not read as "Never run"', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [
+    runOf(SCN_BOOT, { id: 'r-old', scenario: lab().config.scenarios![SCN_BOOT]!, status: 'failed', ended_at: ended(3_600_000) }),
+    ...passedRuns(210, SCN_MQTT, 'r-new'),
+  ];
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+  await expect(item(page, 'mqtt-outage').getByTestId('scenario-last')).toHaveText(/^Passed · /);
+  await expect(item(page, 'boot-loop').getByTestId('scenario-last')).toHaveText(/^Failed · /);
+  await expect(page.getByText('Never run')).toHaveCount(0);
+  expect(gw.requestsTo('GET', '/runs').some((r) => r.query.scenario === SCN_BOOT && r.query.limit === '1')).toBe(true);
+});
+
+test('the Runs tab asks for the runs of the scenario and pages them', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [
+    runOf(SCN_BOOT, { id: 'r-boot', scenario: lab().config.scenarios![SCN_BOOT]!, status: 'passed', ended_at: ended(3_600_000) }),
+    ...passedRuns(130, SCN_MQTT, 'r-mqtt'),
+    ...passedRuns(210, SCN_BOOT, 'r-other'),
+  ];
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_BOOT}?tab=runs`);
+  // all 211 runs of boot-loop are older than 50 newer ones of its own: 50 are shown, the rest on request
+  await expect(page.getByTestId('run-row')).toHaveCount(50);
+  expect(gw.requestsTo('GET', '/runs').some((r) => r.query.scenario === SCN_BOOT && r.query.limit === '50')).toBe(true);
+  await page.getByTestId('runs-more').click();
+  await expect(page.getByTestId('run-row')).toHaveCount(150);
+  await page.getByTestId('runs-more').click();
+  await expect(page.getByTestId('run-row')).toHaveCount(211);
+  await expect(page.getByTestId('runs-more')).toHaveCount(0);
+  // the other scenario's runs do not appear
+  await page.goto(`/scenarios/${SCN_MQTT}?tab=runs`);
+  await expect(page.getByTestId('run-row')).toHaveCount(50);
+  await page.getByTestId('runs-more').click();
+  await expect(page.getByTestId('run-row')).toHaveCount(130);
+});
+
 // P4-AUDIT-12: a runs query that loads or failed is not an answer ("Never run", "has not been run yet", "not there any more").
 
 test('the runs are slow: the list and the Runs tab say they load, and never "Never run"', async ({ page }) => {

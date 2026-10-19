@@ -3,17 +3,17 @@
 // is queued or running with its scenario, its target, the step in effect and a progress bar; every run links to
 // its page (the scenario's, with the run shown, or the page of the run for an inline scenario).
 import { computed } from 'vue';
-import { useNames, useRuns } from '../../composables/gateway';
+import { useActiveRuns, useNames } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
-import { isActive } from '../../lib/runs';
 import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
 import RunningScenarioRow from './RunningScenarioRow.vue';
 
-const runs = useRuns(() => ({}), 50);
+// the runs that are queued or running, asked for by status: not the newest runs, among which they may not be
+const runs = useActiveRuns();
 const { names } = useNames();
 const now = useNow();
-const activeRuns = computed(() => (runs.data.value ?? []).filter((r) => isActive(r)));
+const activeRuns = computed(() => runs.data.value ?? []);
 </script>
 
 <template>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Run, RunStep } from '../api/generated/model';
-import { artifactLabels, elapsedMs, isActive, lastRunByScenario, lateness, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone } from './runs';
+import { artifactLabels, elapsedMs, isActive, isRunOf, lastRunByScenario, lateness, mergeRuns, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone } from './runs';
 import { mqttOutage } from './scenarioFixtures';
 
 // The run in the UI (M19): its progress, the step in effect, the timing of a step against its schedule,
@@ -124,5 +124,23 @@ describe('artifacts and results', () => {
     expect(m.get('try-it')?.id).toBe('c');
     expect(resultText(run({ status: 'failed', checks: [{ index: 0, name: 'x', type: 'reconnected', status: 'failed' }, { index: 1, name: 'y', type: 'reconnected', status: 'passed' }] }))).toBe('Failed · 1 check');
     expect(resultText(run({ status: 'passed' }))).toBe('Passed');
+  });
+});
+
+describe('the runs of a scenario', () => {
+  it('a run is of a scenario by its id, a run of an inline scenario by its name', () => {
+    const s = { id: 'c1', name: 'mqtt-outage' };
+    expect(isRunOf(run(), s)).toBe(true);
+    expect(isRunOf(run({ scenario: { id: 'c2', name: 'mqtt-outage', inline: false } }), s)).toBe(false);
+    expect(isRunOf(run({ scenario: { name: 'mqtt-outage', inline: true } }), s)).toBe(true);
+    expect(isRunOf(run({ scenario: { name: 'other', inline: true } }), s)).toBe(false);
+  });
+
+  it('lists asked for apart are one list, newest first, each run once', () => {
+    const a = run({ id: 'a', created_at: at(-3000).toISOString() });
+    const b = run({ id: 'b', created_at: at(-1000).toISOString() });
+    const c = run({ id: 'c', created_at: at(-2000).toISOString() });
+    expect(mergeRuns([a, b], [c, b]).map((r) => r.id)).toEqual(['b', 'c', 'a']);
+    expect(mergeRuns([], [])).toEqual([]);
   });
 });

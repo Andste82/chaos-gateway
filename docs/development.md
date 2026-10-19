@@ -5146,7 +5146,11 @@ what they leave out.
 - **The gateway and the token** come from flags or the environment: `--url`/`CHAOSGW_URL` (default `https://127.0.0.1:8443`,
   with or without `/api/v1`), `--token`/`CHAOSGW_TOKEN`, `--token-file`/`CHAOSGW_TOKEN_FILE`. The certificate of a gateway with
   a self-signed certificate is trusted by `--fingerprint` (SHA-256 of the certificate, which pins it without a copy of it),
-  by `--ca-cert` (a PEM file), or not verified with `--insecure`; the default is the system's trust store. A token with the
+  by `--ca-cert` (a PEM file), or not verified with `--insecure`; the default is the system's trust store. The three (and
+  `CHAOSGW_FINGERPRINT`, `CHAOSGW_CA_CERT`, `CHAOSGW_INSECURE`) are one setting whose source is decided as a whole: a trust flag on
+  the command line (`--insecure=false` included) means the trust variables are not read, so a variable of the shell cannot
+  override a pin; `--insecure` next to a pin or a CA file from the same source is a usage error (2), and `--insecure` prints a
+  warning on standard error (P4-AUDIT-11). A token with the
   scope `overlays` does everything except `wg export` (scope `full`) and `reset --all`.
 - **Output.** Standard output is the result and nothing else: the id of the overlay or run a command created (so
   `id=$(chaosctl fault set …)` works), the result of a waited run, a table. Progress and explanations go to standard error
@@ -5271,7 +5275,7 @@ environment has not: vetted with `-tags testbed`; not run in the sandbox; run by
 | Scope: `wait device <name> --online [--connected tcp/8883] --timeout …` | `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected`, `TestChaosctlOverlays/WaitsForADeviceThatComesOnline`, `TestAConnectionIsGivenAsProtocolAndPort`, `TestOnlyAnEstablishedConnectionMatches` |
 | Scope: `with --profile … --ttl … -- <command>` | as the second row |
 | Scope: generated TypeScript and Python clients; examples for pytest and Jest | `make check-clients` (they compile and import), `TestTheExampleSuitesPassAgainstTheGateway` (`clients/examples`) |
-| Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
+| Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestTheTrustFlagsWinOverTheTrustVariablesAndInsecureNeverMixesWithAPin`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
 | `wg export` | `TestChaosctlExportsAWireGuardClient` |
 
 ## Scenario UI (M19)

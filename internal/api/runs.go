@@ -118,7 +118,7 @@ func (o runObserver) DNSQuerySeen(devices []string, name string, since time.Time
 	for i := len(o.s.dns.entries) - 1; i >= 0; i-- {
 		q := o.s.dns.entries[i].e
 		if q.Time.Before(since) {
-			break // the log is oldest first
+			continue // the log is in the order of arrival, not of the time of the query: a slow query is logged after the ones that began later
 		}
 		if q.Device != nil && want[strings.ToLower(q.Device.String())] && hostnameMatches(name, q.Name) {
 			return true
@@ -138,7 +138,7 @@ func (o runObserver) DNSQueries(devices []string, name string, since time.Time) 
 	for i := len(o.s.dns.entries) - 1; i >= 0; i-- {
 		q := o.s.dns.entries[i].e
 		if q.Time.Before(since) {
-			break // the log is oldest first
+			continue // the log is in the order of arrival, not of the time of the query: a slow query is logged after the ones that began later
 		}
 		if q.Device != nil && want[strings.ToLower(q.Device.String())] && hostnameMatches(name, q.Name) {
 			out = append(out, run.DNSQuery{Device: strings.ToLower(q.Device.String()), Name: q.Name, Type: q.Type, Time: q.Time})

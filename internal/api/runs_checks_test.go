@@ -292,3 +292,32 @@ func TestAWildcardDNSCheckMatchesTheSubdomainsAndNotTheSuffix(t *testing.T) {
 	})
 	g.waitRun(id, "passed")
 }
+
+// The DNS log is in the order of arrival, not of the time of the query (the proxy logs a query after its answer): a
+// slow query that began before the window and was logged last must not hide a matching query inside the window.
+func TestASlowQueryLoggedLastDoesNotHideAQueryInTheWindow(t *testing.T) {
+	g, clk, service := checksGateway(t)
+	body := inlineRun("slow", map[string]any{"device": "esp32-42"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
+	sc := body["inline"].(map[string]any)
+	sc["preconditions"] = map[string]any{"skip": []string{"target_online", "uses_gateway_dns"}}
+	sc["checks"] = []any{map[string]any{"dns_query_seen": map[string]any{"name": "broker.example.com"}, "window": map[string]any{"from": "start", "within": "1h"}}}
+	id := g.postRun(body, "").json(t)["id"].(string)
+	g.waitStep(id, "a", "applied")
+	// one batch, so that no poll sees the match without the entry behind it: [in the window, before the window]
+	admin := g.token
+	g.token = service
+	entry := func(at time.Time, name string) map[string]any {
+		return map[string]any{"time": at.UTC().Format(time.RFC3339Nano), "client": "10.10.0.31", "name": name, "type": "A", "rcode": "NOERROR", "protocol": "udp"}
+	}
+	r := g.do("POST", "/internal/dns/queries", []any{entry(clk.Now(), "broker.example.com"), entry(clk.Now().Add(-time.Minute), "other.example.com")}, nil, nil)
+	g.token = admin
+	if r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	eventuallyTrue(t, "the check to pass", func() bool {
+		clk.Advance(250 * time.Millisecond)
+		time.Sleep(3 * time.Millisecond)
+		return g.run(id)["checks"].([]any)[0].(map[string]any)["status"] == "passed"
+	})
+	g.waitRun(id, "passed")
+}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -131,15 +132,84 @@ func sameMultiset(t *testing.T, what string, got, want []string) {
 		t.Fatalf("%s: the ground truth is empty: the test proves nothing", what)
 	}
 	if len(got) != len(want) {
-		t.Errorf("%s: %d packets, the capture on the device itself has %d", what, len(got), len(want))
+		onlyGot, onlyWant := multisetDiff(got, want)
+		t.Errorf("%s: %d packets, the capture on the device itself has %d\nonly in the capture:\n%s\nonly on the device:\n%s",
+			what, len(got), len(want), frameLines(onlyGot), frameLines(onlyWant))
 		return
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("%s: packet %d of the sorted captures differs from the one of the device", what, i)
+			onlyGot, onlyWant := multisetDiff(got, want)
+			t.Errorf("%s: packet %d of the sorted captures differs from the one of the device\nonly in the capture:\n%s\nonly on the device:\n%s",
+				what, i, frameLines(onlyGot), frameLines(onlyWant))
 			return
 		}
 	}
+}
+
+// multisetDiff returns the frames that one of two sorted multisets holds more often than the other.
+func multisetDiff(got, want []string) (onlyGot, onlyWant []string) {
+	count := map[string]int{}
+	for _, f := range got {
+		count[f]++
+	}
+	for _, f := range want {
+		count[f]--
+	}
+	for f, n := range count {
+		for ; n > 0; n-- {
+			onlyGot = append(onlyGot, f)
+		}
+		for ; n < 0; n++ {
+			onlyWant = append(onlyWant, f)
+		}
+	}
+	sort.Strings(onlyGot)
+	sort.Strings(onlyWant)
+	return onlyGot, onlyWant
+}
+
+func frameLines(frames []string) string {
+	if len(frames) == 0 {
+		return "  (none)"
+	}
+	var b strings.Builder
+	for i, f := range frames {
+		if i == 20 {
+			fmt.Fprintf(&b, "  and %d more\n", len(frames)-i)
+			break
+		}
+		fmt.Fprintf(&b, "  %s\n", frameSummary([]byte(f)))
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// frameSummary says what a frame is in a line: the addresses and ports of an IPv4 packet, the operation of an ARP
+// packet, and the first bytes of anything else.
+func frameSummary(b []byte) string {
+	if len(b) < 14 {
+		return fmt.Sprintf("short frame % x", b)
+	}
+	eth := fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x > %02x:%02x:%02x:%02x:%02x:%02x", b[6], b[7], b[8], b[9], b[10], b[11], b[0], b[1], b[2], b[3], b[4], b[5])
+	switch binary.BigEndian.Uint16(b[12:14]) {
+	case 0x0806:
+		if len(b) >= 42 {
+			return fmt.Sprintf("%s ARP op %d, sender %d.%d.%d.%d, target %d.%d.%d.%d", eth, b[21], b[28], b[29], b[30], b[31], b[38], b[39], b[40], b[41])
+		}
+	case 0x0800:
+		if len(b) >= 34 {
+			ip := fmt.Sprintf("%s IPv4 %d.%d.%d.%d > %d.%d.%d.%d proto %d, %d bytes", eth, b[26], b[27], b[28], b[29], b[30], b[31], b[32], b[33], b[23], len(b))
+			if (b[23] == 6 || b[23] == 17) && len(b) >= 38 {
+				ip += fmt.Sprintf(", ports %d > %d", binary.BigEndian.Uint16(b[34:36]), binary.BigEndian.Uint16(b[36:38]))
+				if b[23] == 6 && len(b) >= 48 {
+					ip += fmt.Sprintf(", tcp flags %#02x", b[47])
+				}
+			}
+			return ip
+		}
+	}
+	n := min(len(b), 48)
+	return fmt.Sprintf("%s ethertype %#04x, %d bytes: % x", eth, binary.BigEndian.Uint16(b[12:14]), len(b), b[:n])
 }
 
 // traffic makes a device open a connection to the broker and send a few datagrams to the server.
@@ -284,10 +354,13 @@ func TestAWireGuardNetworkIsCapturedAsRawIPOnTheRealKernel(t *testing.T) {
 		t.Fatalf("%d", r.Status)
 	}
 	rd, err := capture.NewReader(bytes.NewReader(r.Body))
-	if err != nil || rd.Interfaces() == nil {
+	if err != nil {
 		t.Fatalf("reader: %v", err)
 	}
-	_, _ = rd.Next()
+	// the interface blocks of a pcapng file are read with the first packet: the reader knows no interface before
+	if _, err := rd.Next(); err != nil {
+		t.Fatalf("the first packet of the file: %v", err)
+	}
 	if ifs := rd.Interfaces(); len(ifs) != 1 || ifs[0].Link != capture.LinkRaw || ifs[0].Name != "wg-lab-hub" {
 		t.Errorf("interfaces of the file: %+v", ifs)
 	}
@@ -306,6 +379,20 @@ func writeTemp(t *testing.T, b []byte) string {
 	return p
 }
 
+// captureWarnings are the codes of the warnings of a run that say something about its captures or its steps. A
+// step_late says that the engine was busy with another change when the step came (it waited more than 100 ms, which
+// the identity update after a first sighting of the device or a slow apply in a virtual machine does) and is no
+// statement about the capture.
+func captureWarnings(run map[string]any) []string {
+	var out []string
+	for _, c := range warningCodes(run) {
+		if c != "step_late" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // A run with `capture: true` records its target for the whole run on the real kernel and offers the file in its
 // report.
 func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *testing.T) {
@@ -314,16 +401,19 @@ func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *test
 		step("normal", "0s", "profile", "normal"),
 		step("end", "6s", "restore", true))
 	body["inline"].(map[string]any)["capture"] = true
+	// the ground truth runs from before the run to after its end, so that it holds everything the capture of the run
+	// holds, and the traffic of the test is all that either has (nothing else of the device is on the wire for those
+	// seconds)
+	truth := startTruth(t, top.A, "eth0", capture.Filter{MACs: []string{testbed.ClientAMAC}})
 	r := g.postRun(body, "")
 	if r.Status != 201 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	id := r.json(t)["id"].(string)
 	g.waitStep(id, "normal", "applied")
-	truth := startTruth(t, top.A, "eth0", capture.Filter{MACs: []string{testbed.ClientAMAC}})
 	makeTraffic(t, top)
-	want := multiset(truth.stop(), ipOrARP)
 	run := g.waitRun(id, "passed", "failed", "error")
+	want := multiset(truth.stop(), ipOrARP)
 	if run["status"] != "passed" {
 		t.Fatalf("%v %v", run["status"], run["reason"])
 	}
@@ -340,7 +430,7 @@ func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *test
 		t.Fatalf("%d", dl.Status)
 	}
 	sameMultiset(t, "capture of the run", multiset(readPackets(t, dl.Body), ipOrARP), want)
-	if len(warningCodes(run)) != 0 {
+	if len(captureWarnings(run)) != 0 {
 		t.Errorf("warnings %v", run["warnings"])
 	}
 }
@@ -389,7 +479,7 @@ print("done")
 	if run["status"] != "passed" {
 		t.Fatalf("the run ended as %v (%v)", run["status"], run["reason"])
 	}
-	if codes := warningCodes(run); len(codes) != 1 || codes[0] != "capture_missing" {
+	if codes := captureWarnings(run); len(codes) != 1 || codes[0] != "capture_missing" {
 		t.Fatalf("warnings %v", run["warnings"])
 	}
 	arts := artifactsOfKind(run, "capture")

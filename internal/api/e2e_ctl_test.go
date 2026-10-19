@@ -101,7 +101,10 @@ func TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel(t *testin
 	junit := filepath.Join(t.TempDir(), "junit.xml")
 
 	j := g.startCtl(nil, "run", "-f", file, "--wait", "--junit", junit)
-	eventuallyTrue(t, "the cut", func() bool { return kernelHasFaultChain(top) })
+	// the cut is a rule, not a fault: it has no chain mark_<id>, the port of the broker is in the table while it is on
+	eventuallyTrue(t, "the cut", func() bool {
+		return strings.Contains(top.GW.Must("nft", "list", "table", "inet", "chaosgw"), "8883")
+	})
 	device.Stop() // the device gives up
 	r := j.wait(t)
 	if r.code != 1 || !strings.Contains(r.out, "FAILED") || !strings.Contains(r.out, "back at the broker: failed") {

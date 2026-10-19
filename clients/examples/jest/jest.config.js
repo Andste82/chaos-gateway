@@ -7,4 +7,7 @@ module.exports = {
   testMatch: ['<rootDir>/*.test.ts'],
   // a run of a scenario lasts seconds
   testTimeout: 60000,
+  // one test file at a time: they share one device, and the precondition of a scenario run (no foreign overlay on the
+  // target) fails while a fault of another file is on it
+  maxWorkers: 1,
 };

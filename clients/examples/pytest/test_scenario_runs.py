@@ -60,7 +60,8 @@ def test_chaosctl_returns_2_for_a_scenario_the_gateway_refuses(chaosctl, tmp_pat
     result = chaosctl("run", "-f", str(SCENARIOS / "link-outage.yaml"), "--set", "target.device=no-such-device", "--wait")
 
     assert result.returncode == 2
-    assert "no-such-device" in result.stderr or "not_found" in result.stderr or "validation_failed" in result.stderr
+    assert "422 validation_failed" in result.stderr
+    assert 'there is no device "no-such-device"' in result.stderr
 
 
 @pytest.mark.cli

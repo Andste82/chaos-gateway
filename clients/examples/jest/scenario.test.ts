@@ -52,7 +52,8 @@ test('chaosctl runs a scenario and the exit code is the result', () => {
 test('chaosctl returns 2 for a scenario the gateway refuses', () => {
   const result = chaosctl('run', '-f', scenarioFile, '--set', 'target.device=no-such-device', '--wait');
   expect(result.status).toBe(2);
-  expect(result.stderr).toMatch(/no-such-device|not_found|validation_failed/);
+  expect(result.stderr).toContain('422 validation_failed');
+  expect(result.stderr).toContain('there is no device "no-such-device"');
 });
 
 test('chaosctl with cleans up when the command fails', async () => {

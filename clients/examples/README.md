@@ -27,6 +27,9 @@ cd clients/examples/pytest && pip install -r requirements.txt ../../python/chaos
 cd clients/examples/jest && npm ci && npx jest
 ```
 
+The tests share one device, so Jest runs its files one after the other (`maxWorkers: 1`): a scenario run is refused while
+another test's fault is on its target.
+
 The scenario sets a slow link, cuts MQTT's port for two seconds and restores everything; the device must be online
 (a precondition of every run). Replace the placeholder comments in the tests with the check of your device, and add
 `checks` to the scenario (the commented example in the file) to let the gateway decide whether the device came back.

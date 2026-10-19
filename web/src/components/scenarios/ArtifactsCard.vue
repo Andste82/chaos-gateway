@@ -2,11 +2,12 @@
 // The artifacts of a run (plan §2.10, §2.11, §2.17 "Scenarios"): the capture of the target's traffic
 // (pcapng, from a scenario with `capture: true` or its capture steps), the JUnit and JSON reports, the events
 // of the run as JSON Lines, and the TLS key log of a capture the proxy was involved in. They appear as the run
-// produces them: a capture while it runs, the reports when it has ended. Each is a download from the API.
+// produces them: a capture while it runs, the reports when it has ended. Each is a download from the API, saved under a name of the run
+// (the events and the reports have none of their own, so two runs would save as the same file).
 import { computed } from 'vue';
 import type { Run } from '../../api/generated/model';
 import { formatBytes } from '../../lib/format';
-import { artifactLabels, isActive, sortedArtifacts } from '../../lib/runs';
+import { artifactFileName, artifactLabels, isActive, sortedArtifacts } from '../../lib/runs';
 import SectionCard from '../ui/SectionCard.vue';
 
 const props = defineProps<{ run?: Run }>();
@@ -25,7 +26,7 @@ const hint = computed(() => {
         <span class="mono min-w-0 break-words">
           {{ artifactLabels[a.kind].title }}<span v-if="artifactLabels[a.kind].note" class="font-sans text-text-2"> · {{ artifactLabels[a.kind].note }}</span>
         </span>
-        <a :href="a.url" download :aria-label="`Download ${artifactLabels[a.kind].title}`">{{ a.size_bytes !== undefined ? formatBytes(a.size_bytes) : 'Download' }}</a>
+        <a :href="a.url" :download="artifactFileName(run!, a)" :aria-label="`Download ${artifactLabels[a.kind].title}`">{{ a.size_bytes !== undefined ? formatBytes(a.size_bytes) : 'Download' }}</a>
       </li>
     </ul>
     <p v-else class="m-0 text-[13px] leading-relaxed text-text-2" data-testid="artifacts-empty">{{ hint }}</p>

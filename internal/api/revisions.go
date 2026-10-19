@@ -39,6 +39,9 @@ type applyResultBody struct {
 	ConfirmDeadline *time.Time `json:"confirm_deadline,omitempty"`
 	// RemovedOverlays are the overlays a forced apply removed (event overlay_orphaned).
 	RemovedOverlays []model.Uuid `json:"removed_overlays,omitempty"`
+	// AbortedRuns are the runs a forced apply aborted because they referred to what the revision deletes; their own
+	// overlays went with them and are not in RemovedOverlays.
+	AbortedRuns []model.Uuid `json:"aborted_runs,omitempty"`
 }
 
 func applyResult(a engine.Applied) applyResultBody {
@@ -373,8 +376,16 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 		return
 	}
 	force := params.Force != nil && *params.Force
+	// an apply that the engine would refuse at once (another revision waits for confirmation, this one is no candidate,
+	// or its base is not the active revision) changes nothing, also not the runs: they are aborted below, and that
+	// cannot be taken back
+	if err := s.cfg.Engine.CheckApplicable(revisionId); err != nil {
+		s.fail(c, err)
+		return
+	}
 	// a revision that deletes what a queued or running run refers to is refused with the overlays it would orphan, or,
 	// forced, aborts the runs first (their overlays go with them): the engine only knows the overlays
+	var abortedRuns []uuid.UUID
 	if _, cand, gerr := s.cfg.Store.Get(revisionId); gerr == nil {
 		if refs := s.runReferences(cand); len(refs) > 0 {
 			if !force {
@@ -383,8 +394,8 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 					len(pv.References), len(refs)).with(func(b *model.Problem) { b.References = &all }))
 				return
 			}
-			n := s.runs.AbortReferences(context.WithoutCancel(contextOf(c)), refs, revisionId)
-			s.record(c, "run.abort", nil, revisionId, fmt.Sprintf("%d runs, revision %d deletes what they refer to", n, revisionId))
+			abortedRuns = s.runs.AbortReferences(context.WithoutCancel(contextOf(c)), refs, revisionId)
+			s.record(c, "run.abort", nil, revisionId, fmt.Sprintf("%d runs, revision %d deletes what they refer to", len(abortedRuns), revisionId))
 		}
 	}
 	// the apply is not the client's to cancel: the engine goes on, and so does the record of it
@@ -403,7 +414,9 @@ func (s *Server) ApplyRevision(c *gin.Context, revisionId model.RevisionId, para
 	s.cfg.Engine.Emit("revision_applied", map[string]any{"revision": revisionId, "status": res.Status,
 		"actor": actorOf(principalOf(c)), "subject": engine.Subject{Kind: "revision", ID: itoa(revisionId)}})
 	c.Header("Chaos-Generation", itoa(int64(res.Generation)))
-	c.JSON(200, applyResult(res))
+	body := applyResult(res)
+	body.AbortedRuns = abortedRuns
+	c.JSON(200, body)
 }
 
 // blockingReferences are the overlays a revision would orphan, as the spec's BlockingReference.

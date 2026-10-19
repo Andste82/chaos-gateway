@@ -724,8 +724,8 @@ func (m *Manager) Orphaned(current, next *model.Configuration, discovered ...str
 }
 
 // AbortReferences aborts the runs of references, for the revision that deletes what they refer to
-// (`apply?force=true`). It returns when their overlays are gone.
-func (m *Manager) AbortReferences(ctx context.Context, refs []Reference, revision int64) int {
+// (`apply?force=true`), and returns their ids in the order the runs were made. It returns when their overlays are gone.
+func (m *Manager) AbortReferences(ctx context.Context, refs []Reference, revision int64) []uuid.UUID {
 	seen := map[uuid.UUID]string{}
 	for _, ref := range refs {
 		if _, ok := seen[ref.Run.Id]; !ok {
@@ -739,18 +739,21 @@ func (m *Manager) AbortReferences(ctx context.Context, refs []Reference, revisio
 			rs = append(rs, r)
 		}
 	}
+	sort.Slice(rs, func(i, j int) bool { return rs[i].n < rs[j].n })
 	m.mu.Unlock()
+	ids := make([]uuid.UUID, 0, len(rs))
 	for _, r := range rs {
+		ids = append(ids, r.id)
 		m.abortNoWait(r, &abortCause{fmt.Sprintf("revision %d deletes %s, which the run refers to", revision, seen[r.id])})
 	}
 	for _, r := range rs {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			return len(rs)
+			return ids
 		}
 	}
-	return len(rs)
+	return ids
 }
 
 // ---- finishing a run

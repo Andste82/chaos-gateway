@@ -428,7 +428,7 @@ func TestARevisionThatDeletesWhatARunRefersToOrphansIt(t *testing.T) {
 		t.Errorf("%v", again)
 	}
 
-	if n := h.m.AbortReferences(context.Background(), refs, 4); n != 2 {
+	if n := h.m.AbortReferences(context.Background(), refs, 4); len(n) != 2 {
 		t.Errorf("aborted %d", n)
 	}
 	done := h.get(r.Id)

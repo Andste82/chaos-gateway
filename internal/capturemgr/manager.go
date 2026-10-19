@@ -267,10 +267,25 @@ func (m *Manager) Close(ctx context.Context) {
 	for _, c := range running {
 		c.stream.Stop("user")
 	}
+	expired := false
 	for _, c := range running {
 		select {
 		case <-c.done:
+			continue
 		case <-ctx.Done():
+			expired = true
+		}
+		break
+	}
+	if expired {
+		// an executor that is connected but does not answer the stop would keep follow, and so the shutdown, waiting
+		// for ever: closing the stream ends the capture on this side (the executor stops it when the connection goes)
+		for _, c := range running {
+			select {
+			case <-c.done:
+			default:
+				c.stream.Close()
+			}
 		}
 	}
 	m.wg.Wait()

@@ -469,7 +469,14 @@ func TestTheLeaseOfARunIsRenewedOverTheAPIAndExpires(t *testing.T) {
 	if g.run(id)["status"] != "running" {
 		t.Fatal("the run ended inside its lease")
 	}
-	clk.Advance(time.Second)
+	// The lease timer cancels the run inside Advance, but the run says `running` until it has cleaned up, so the status
+	// proves nothing yet; a renewal is refused for a cancelled run, so this one works only if the first deadline (30 s)
+	// was moved, and it moves the deadline again, to 12:01:19.
+	rn = g.do("POST", "/runs/"+id+"/renew", nil, nil, nil)
+	if rn.Status != 200 || rn.json(t)["lease_expires_at"] != "2026-10-18T12:01:19Z" {
+		t.Fatalf("the renewal inside the lease: %d %s", rn.Status, rn.Body)
+	}
+	clk.Advance(30 * time.Second)
 	done := g.waitRun(id, "aborted")
 	if done["reason"] != "lease expired" {
 		t.Errorf("reason %v", done["reason"])

@@ -4571,7 +4571,7 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   be removed the answer is the problem `apply_failed` naming the run, `run.CleanupError`: the run is recorded as
   `aborted` with the reason, and never a clean 200 with generation 0); aborting an ended run returns it unchanged. A **lease** (`lease`, at least 1 s) starts when the run is created and runs on
   the monotonic clock (`clock.AfterFunc`, reset by `POST /runs/{id}/renew`, which answers `422` for a run
-  without a lease or one that has ended); when it runs out the run is `aborted` with the reason `lease
+  without a lease, one that has ended and one that is being aborted: it is cancelled but stays `running` until it has cleaned up); when it runs out the run is `aborted` with the reason `lease
   expired`, also while it is still queued. A client that disconnects changes nothing: the run does not
   depend on the request that made it. A token with the scope `overlays` may abort and renew only its own runs
   (`runLimit`), the scope `full` and the admin any. `POST /reset` aborts the caller's runs (every run with

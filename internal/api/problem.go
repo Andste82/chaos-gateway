@@ -212,7 +212,7 @@ func (s *Server) problemFor(err error) *problem {
 	case errors.Is(err, run.ErrNoLease):
 		return newProblem(model.ErrorCodeValidationFailed, "the run has no lease to renew")
 	case errors.Is(err, run.ErrEnded):
-		return newProblem(model.ErrorCodeValidationFailed, "the run has ended: there is nothing to renew")
+		return newProblem(model.ErrorCodeValidationFailed, "the run has ended or is being aborted: there is nothing to renew")
 	case errors.Is(err, run.ErrTooManyRuns):
 		return newProblem(model.ErrorCodeCapacityExceeded, "too many queued or running runs: abort some, or wait for them")
 	case errors.Is(err, run.ErrClosed):

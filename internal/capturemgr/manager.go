@@ -359,9 +359,10 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (model.Capture, e
 		m.mu.Unlock()
 		return model.Capture{}, ErrTooMany
 	}
+	// What the quota allows is decided before anything is deleted or started: the oldest stopped captures that
+	// would have to go are only picked here, and go once the executor has accepted the capture.
+	victims, used := m.roomLocked(quota, need)
 	m.mu.Unlock()
-	// the oldest stopped captures go until this one fits
-	used := m.makeRoom(quota, need)
 	avail := quota - used
 	if req.RingBuffer != nil {
 		if need > avail {
@@ -393,6 +394,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (model.Capture, e
 		_ = os.RemoveAll(dir)
 		return model.Capture{}, ErrUnavailable
 	}
+	m.deleteCaptures(victims, quota)
 	now := m.clk.Now()
 	rec := model.Capture{
 		Id: id, Name: req.Name, Scope: req.Scope, Format: ptr(model.CaptureFormat(format)), Snaplen: req.Snaplen,
@@ -596,36 +598,56 @@ func (m *Manager) usageLocked() int64 {
 	return n
 }
 
+// roomLocked picks the oldest stopped captures that have to go for the captures to take at most quota-need bytes, oldest
+// first (running captures never go), and returns them with what the captures take without them. It deletes nothing.
+func (m *Manager) roomLocked(quota, need int64) ([]*capState, int64) {
+	used := m.usageLocked()
+	if used+need <= quota {
+		return nil, used
+	}
+	var stopped []*capState
+	for _, c := range m.caps {
+		if c.rec.Status != model.CaptureStatusRunning {
+			stopped = append(stopped, c)
+		}
+	}
+	sort.Slice(stopped, func(i, j int) bool { return stoppedAt(stopped[i]).Before(stoppedAt(stopped[j])) })
+	var victims []*capState
+	for _, c := range stopped {
+		if used+need <= quota {
+			break
+		}
+		victims = append(victims, c)
+		used -= deref(c.rec.SizeBytes)
+	}
+	return victims, used
+}
+
+// deleteCaptures deletes the captures roomLocked picked, as far as they are still there.
+func (m *Manager) deleteCaptures(victims []*capState, quota int64) {
+	for _, c := range victims {
+		m.mu.Lock()
+		_, ok := m.caps[c.id]
+		delete(m.caps, c.id)
+		m.mu.Unlock()
+		if !ok {
+			continue
+		}
+		m.log.Info("a capture is deleted: the captures take more than their quota", "capture", c.id, "quota", quota)
+		if err := os.RemoveAll(c.dir); err != nil {
+			m.log.Warn("cannot delete a capture", "capture", c.id, "error", err)
+		}
+	}
+}
+
 // makeRoom deletes the oldest stopped captures until the captures take at most quota-need bytes, and returns
 // what they take then (running captures are never deleted).
 func (m *Manager) makeRoom(quota, need int64) int64 {
-	for {
-		m.mu.Lock()
-		used := m.usageLocked()
-		if used+need <= quota {
-			m.mu.Unlock()
-			return used
-		}
-		var oldest *capState
-		for _, c := range m.caps {
-			if c.rec.Status == model.CaptureStatusRunning {
-				continue
-			}
-			if oldest == nil || stoppedAt(c).Before(stoppedAt(oldest)) {
-				oldest = c
-			}
-		}
-		if oldest == nil {
-			m.mu.Unlock()
-			return used
-		}
-		delete(m.caps, oldest.id)
-		m.mu.Unlock()
-		m.log.Info("a capture is deleted: the captures take more than their quota", "capture", oldest.id, "quota", quota)
-		if err := os.RemoveAll(oldest.dir); err != nil {
-			m.log.Warn("cannot delete a capture", "capture", oldest.id, "error", err)
-		}
-	}
+	m.mu.Lock()
+	victims, used := m.roomLocked(quota, need)
+	m.mu.Unlock()
+	m.deleteCaptures(victims, quota)
+	return used
 }
 
 func stoppedAt(c *capState) time.Time {

@@ -552,6 +552,37 @@ func TestACandidateOnAnOutdatedBaseIsPrunedAndNotFound(t *testing.T) {
 	}
 }
 
+// CheckApplicable answers with the errors an apply would refuse with, and changes nothing: a caller that does
+// something irreversible before an apply (the aborts of a forced apply) asks it first.
+func TestCheckApplicableNamesWhyAnApplyWouldBeRefused(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	h.mustApply(h.revision(nil))
+	r2 := h.revision(lockoutChange)
+	r3 := h.revision(func(c *model.Configuration) { c.Uplink.Gateway = ptr("203.0.113.20") })
+	if err := h.e.CheckApplicable(r3); err != nil {
+		t.Fatalf("a candidate on the active revision: %v", err)
+	}
+	if err := h.e.CheckApplicable(999); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("no such revision: %v", err)
+	}
+	h.mustApply(r2) // waits for confirmation
+	var cp *store.ErrConfirmPending
+	if err := h.e.CheckApplicable(r3); !errors.As(err, &cp) || cp.Pending != r2 {
+		t.Errorf("with a revision waiting for confirmation: %v", err)
+	}
+	if err := h.e.Confirm(context.Background(), r2, model.Actor{Id: "admin", Type: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	var nc *store.ErrNotACandidate
+	if err := h.e.CheckApplicable(r2); !errors.As(err, &nc) {
+		t.Errorf("an active revision: %v", err)
+	}
+	if h.st.ActiveID() != r2 {
+		t.Errorf("active revision %d, CheckApplicable changed something", h.st.ActiveID())
+	}
+}
+
 func TestConcurrentAppliesOfCandidatesOnTheSameBaseExactlyOneSucceeds(t *testing.T) {
 	h := newHarness(t)
 	h.start()

@@ -631,6 +631,10 @@ func TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced(t *testing.T)
 	if r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
+	// the result names the runs it aborted, in the order they were made; their overlays went with them
+	if got, _ := r.json(t)["aborted_runs"].([]any); len(got) != 2 || got[0] != id || got[1] != queued {
+		t.Errorf("aborted_runs %v, want [%s %s]", got, id, queued)
+	}
 	for _, rid := range []string{id, queued} {
 		got := g.run(rid)
 		if got["status"] != "aborted" || !strings.Contains(got["reason"].(string), "deletes /devices/"+devID) {
@@ -640,6 +644,55 @@ func TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced(t *testing.T)
 	if n := len(g.e.Snapshot().Overlays); n != 0 {
 		t.Errorf("%d overlays are left", n)
 	}
+}
+
+// A forced apply that the engine refuses at once aborts no run: with another revision waiting for confirmation the runs
+// go on and the answer is the engine's own (confirm_pending), also without force, and so they do when the candidate is
+// gone. (The not-a-candidate and base checks of the engine have their own test, TestCheckApplicable.)
+func TestARefusedForcedApplyLeavesTheRunsAlone(t *testing.T) {
+	g, _ := readyRuns(t)
+	devID := "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	add := g.mustPatch(map[string]any{"devices": map[string]any{devID: map[string]any{
+		"name": "esp32-42", "identifiers": map[string]any{"macs": []string{"02:00:00:00:00:31"}},
+	}}})
+	if r := g.apply(add); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := g.postRun(inlineRun("refers", map[string]any{"device": "esp32-42"},
+		step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "").json(t)["id"].(string)
+	g.waitStep(id, "a", "applied")
+
+	// both candidates are based on the active revision: the first deletes the device, the second waits for confirmation
+	del := g.mustPatch(map[string]any{"devices": map[string]any{devID: nil}})
+	lock := g.mustPatch(map[string]any{"management": map[string]any{"allowed_sources": []any{"192.168.56.0/24", "172.16.0.0/12"}}})
+	if r := g.apply(lock); r.Status != 200 || r.json(t)["status"] != "pending_confirm" {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	stays := func(when string) {
+		t.Helper()
+		if got := g.run(id); got["status"] != "running" || stepOf(got, "a")["status"] != "applied" {
+			t.Errorf("%s: the run is %v", when, got["status"])
+		}
+		if n := len(g.overlaysOf(id)); n != 1 {
+			t.Errorf("%s: %d overlays of the run", when, n)
+		}
+	}
+	for _, q := range []string{"?force=true", ""} {
+		if r := g.do("POST", "/revisions/"+itoa(del)+"/apply"+q, nil, nil, nil); r.Status != 409 || r.code(t) != "confirm_pending" {
+			t.Fatalf("apply%s with a revision waiting for confirmation: %d %s", q, r.Status, r.Body)
+		}
+		stays("pending confirmation" + q)
+	}
+
+	// confirmed, the active revision moved on: the store reclaimed the candidate, so it is gone and the runs stay
+	if r := g.do("POST", "/revisions/"+itoa(lock)+"/confirm", nil, nil, nil); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	if r := g.do("POST", "/revisions/"+itoa(del)+"/apply?force=true", nil, nil, nil); r.Status != 404 {
+		t.Fatalf("apply of a reclaimed candidate: %d %s", r.Status, r.Body)
+	}
+	stays("reclaimed candidate")
+	g.do("POST", "/runs/"+id+"/abort", nil, nil, nil)
 }
 
 // The runs of an earlier process: one that was running ends as aborted when the next process starts.

@@ -546,27 +546,44 @@ func (o *owner) fail(c cmdApply, err error) {
 	o.startQueued()
 }
 
-func (o *owner) startApply(c cmdApply) {
-	e := o.e
-	rev, cfg, err := e.cfg.Store.Get(c.rev)
+// applicable returns the configuration of a revision that an apply may start from, or the reason it may not: there is
+// no such revision, another one waits for confirmation, it is not a candidate, or it was made on a revision that is not
+// the active one any more. startApply refuses with exactly these errors.
+func (e *Engine) applicable(id int64) (*model.Configuration, error) {
+	rev, cfg, err := e.cfg.Store.Get(id)
 	if err != nil {
-		o.fail(c, err)
-		return
+		return nil, err
 	}
 	if p, ok := e.cfg.Store.PendingConfirm(); ok {
-		o.fail(c, &store.ErrConfirmPending{Pending: p.Revision})
-		return
+		return nil, &store.ErrConfirmPending{Pending: p.Revision}
 	}
 	if string(rev.Status) != store.StatusCandidate {
-		o.fail(c, &store.ErrNotACandidate{ID: c.rev, Status: string(rev.Status), Want: store.StatusCandidate})
-		return
+		return nil, &store.ErrNotACandidate{ID: id, Status: string(rev.Status), Want: store.StatusCandidate}
 	}
 	var base int64 // a candidate of the first revision has no base
 	if rev.Base != nil {
 		base = *rev.Base
 	}
 	if active := e.cfg.Store.ActiveID(); base != active {
-		o.fail(c, &store.ErrRevisionConflict{Active: active})
+		return nil, &store.ErrRevisionConflict{Active: active}
+	}
+	return cfg, nil
+}
+
+// CheckApplicable returns why Apply would refuse the revision before it changes anything (it does not exist, another
+// revision waits for confirmation, it is not a candidate, or its base is not the active revision), nil when it would
+// start. A caller that must do something irreversible before an apply asks first; the answer holds only until the
+// next apply or confirmation, so Apply still decides.
+func (e *Engine) CheckApplicable(id int64) error {
+	_, err := e.applicable(id)
+	return err
+}
+
+func (o *owner) startApply(c cmdApply) {
+	e := o.e
+	cfg, err := e.applicable(c.rev)
+	if err != nil {
+		o.fail(c, err)
 		return
 	}
 	// the overlays: a revision that deletes what an overlay refers to is refused, or removes the

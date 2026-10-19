@@ -4597,9 +4597,15 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   `domain.OrphanedScenario` over the run's snapshot) is refused with `validation_failed` listing the runs
   as `references` of `kind: run` next to the overlays it would orphan, and `preview` lists the same;
   `apply?force=true` first aborts those runs (`AbortReferences`, reason `revision N deletes <object>`, which
-  removes their overlays) and then applies, so the engine finds nothing of the run's to orphan. The runs stay
-  aborted if the apply then fails. The check and the apply are not one step: a run started in between is not
-  seen.
+  removes their overlays) and then applies, so the engine finds nothing of the run's to orphan; the answer names
+  them in `aborted_runs` (in the order the runs were made), and their overlays are not in `removed_overlays`.
+  Nothing is aborted for an apply the engine would refuse at once: `ApplyRevision` asks `Engine.CheckApplicable`
+  (another revision waits for confirmation, this one is no candidate or not on the active base: the checks
+  `startApply` makes first, the same function) before it looks at the references, so a refused apply, forced or not,
+  answers `confirm_pending` and the like and leaves the runs alone. A hook inside the engine's owner loop would
+  close the gap between the question and the apply, but the owner cannot wait for the runs to remove their
+  overlays (they do it through the owner), so the question is asked first. The runs stay aborted if the apply
+  then fails at the kernel. The check and the apply are not one step: a run started in between is not seen.
 - **API details.** `Idempotency-Key` now also works on `POST /runs` and `POST /scenarios/{id}/runs`. The owner
   of a run is `ownerOf(principal)`, like an overlay's (the token, or the admin user for the UI). A stored
   scenario's YAML has UUIDs as references, like the export of a revision. `GET /runs` is newest first without

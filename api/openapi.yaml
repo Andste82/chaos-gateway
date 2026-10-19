@@ -4321,6 +4321,9 @@ components:
           items: {$ref: '#/components/schemas/Uuid'}
         aborted_runs:
           type: array
+          description: |
+            Queued and running runs that `force=true` aborted because they refer to what the revision deletes, in the
+            order the runs were made. Their overlays went with them and are not in `removed_overlays`.
           items: {$ref: '#/components/schemas/Uuid'}
 
     # ============================================================ system

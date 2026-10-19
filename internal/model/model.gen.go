@@ -2811,6 +2811,8 @@ type ApiTokenPage struct {
 
 // ApplyResult defines model for ApplyResult.
 type ApplyResult struct {
+	// AbortedRuns Queued and running runs that `force=true` aborted because they refer to what the revision deletes, in the
+	// order the runs were made. Their overlays went with them and are not in `removed_overlays`.
 	AbortedRuns     *[]Uuid    `json:"aborted_runs,omitempty"`
 	ConfirmDeadline *time.Time `json:"confirm_deadline,omitempty"`
 	DurationMs      *int       `json:"duration_ms,omitempty"`

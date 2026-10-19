@@ -224,7 +224,7 @@ func (f failingHostNet) Do(ctx context.Context, ops ...executor.Operation) (exec
 	return f.inner.Do(ctx, ops...)
 }
 
-// syncBuffer is a log destination the server's goroutines can share.
+// syncBuffer is a log destination the server's goroutines can share, or the output of a process that still runs.
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -234,6 +234,12 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func (s *syncBuffer) count(sub string) int {

@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,7 +25,9 @@ import (
 
 // M17 on a real kernel, over the API: the executor captures with AF_PACKET sockets in the namespace of the gateway.
 // The ground truth of each test is a capture on the interface of the device itself (spike S9: "exact against a
-// capture on the device itself"), made by a session of the same package in the device's namespace.
+// capture on the device itself"). For a device, a selector and a run it is made by tcpdump in the device's namespace,
+// a program that shares no code with the capture engine, with a filter written by hand in the tcpdump language; for a
+// WireGuard interface it is a session of the engine itself. Wireshark's tshark reads the files the API serves.
 
 const clientA = "client-a"
 
@@ -82,6 +86,110 @@ func (c *truthCapture) stop() []capture.Packet {
 		out = append(out, readPackets(c.t, b)...)
 	}
 	return out
+}
+
+// tcpdumpTruth is a capture by `tcpdump -w` in a namespace. tcpdump shares no code with the engine under test (the
+// AF_PACKET reader, the generator of the BPF filter, the writers and the reader of the files), so a fault of one of them
+// cannot cancel out against itself the way it does when a second session of the engine is the ground truth. The filter
+// is an expression in the tcpdump language that is written by hand, not generated from the Filter that is tested.
+type tcpdumpTruth struct {
+	t      *testing.T
+	cmd    *exec.Cmd
+	log    syncBuffer
+	path   string
+	done   chan error
+	exited bool
+}
+
+// startTcpdump starts tcpdump on the interface of the namespace and returns when it listens: the packets that come
+// after that are in its file.
+func startTcpdump(t *testing.T, ns *testbed.Namespace, iface, expr string) *tcpdumpTruth {
+	t.Helper()
+	if _, err := exec.LookPath("tcpdump"); err != nil {
+		t.Fatalf("the ground truth of the capture tests is tcpdump, which is not installed (the devcontainer image has it): %v", err)
+	}
+	c := &tcpdumpTruth{t: t, path: filepath.Join(t.TempDir(), "truth.pcap"), done: make(chan error, 1)}
+	// -Z root: tcpdump drops to the user "tcpdump" after it opened the socket, which may not write to the directory of
+	// the test; -U and --immediate-mode hand every packet on at once
+	c.cmd = ns.Command(context.Background(), "tcpdump", "-n", "-i", iface, "-U", "-s", "0", "-Z", "root", "--immediate-mode", "-w", c.path, expr)
+	c.cmd.Stdout, c.cmd.Stderr = &c.log, &c.log
+	c.cmd.WaitDelay = 5 * time.Second
+	if err := c.cmd.Start(); err != nil {
+		t.Fatalf("start tcpdump in %s: %v", ns.Short, err)
+	}
+	go func() { c.done <- c.cmd.Wait() }()
+	t.Cleanup(c.kill)
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(c.log.String(), "listening on") {
+		select {
+		case err := <-c.done:
+			c.exited = true
+			t.Fatalf("tcpdump on %s of %s ended before it listened: %v\n%s", iface, ns.Short, err, c.log.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tcpdump on %s of %s does not listen after 10 s:\n%s", iface, ns.Short, c.log.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return c
+}
+
+func (c *tcpdumpTruth) kill() {
+	if c.exited {
+		return
+	}
+	c.exited = true
+	_ = c.cmd.Process.Kill()
+	<-c.done
+}
+
+// stop ends tcpdump the way a user does (SIGINT, so that it writes what it has) and returns the packets of its file.
+func (c *tcpdumpTruth) stop() []capture.Packet {
+	c.t.Helper()
+	time.Sleep(300 * time.Millisecond) // the last packets reach tcpdump
+	_ = c.cmd.Process.Signal(syscall.SIGINT)
+	select {
+	case err := <-c.done:
+		c.exited = true
+		if err != nil {
+			c.t.Fatalf("tcpdump ended with an error: %v\n%s", err, c.log.String())
+		}
+	case <-time.After(10 * time.Second):
+		c.kill()
+		c.t.Fatalf("tcpdump does not end after SIGINT:\n%s", c.log.String())
+	}
+	b, err := os.ReadFile(c.path)
+	if err != nil {
+		c.t.Fatalf("the file of tcpdump: %v\n%s", err, c.log.String())
+	}
+	return readPackets(c.t, b)
+}
+
+// tsharkFields runs tshark over a capture file and returns the value of a field for each packet that passes the display
+// filter. A file that tshark rejects, or any other failure of tshark, fails the test with tshark's own message; only
+// a missing tshark skips it (the devcontainer image has one).
+func tsharkFields(t *testing.T, file []byte, display, field string) []string {
+	t.Helper()
+	exe, err := exec.LookPath("tshark")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("tshark is not installed: the file was not checked with Wireshark's dissector")
+		}
+		t.Fatalf("tshark: %v", err)
+	}
+	args := []string{"-r", writeTemp(t, file), "-T", "fields", "-e", field}
+	if display != "" {
+		args = append(args, "-Y", display)
+	}
+	cmd := exec.Command(exe, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("tshark does not read the capture file: %v\n%s", err, stderr.String())
+	}
+	return strings.Fields(string(out))
 }
 
 func readPackets(t *testing.T, b []byte) []capture.Packet {
@@ -239,7 +347,7 @@ func makeTraffic(t *testing.T, top *testbed.Topology) {
 // answers to it, ARP included, with the addresses before NAT, and nothing of device B.
 func TestACaptureOfADeviceIsExactlyTheCaptureOnTheDeviceItselfOnTheRealKernel(t *testing.T) {
 	g, top := bedCapture(t)
-	truth := startTruth(t, top.A, "eth0", capture.Filter{MACs: []string{testbed.ClientAMAC}})
+	truth := startTcpdump(t, top.A, "eth0", "ether host "+strings.ToLower(testbed.ClientAMAC))
 	c := g.mustStartCapture(map[string]any{"name": "a", "scope": map[string]any{"device": clientA}})
 	id := c["id"].(string)
 	ifs := c["interfaces"].([]any)
@@ -269,19 +377,23 @@ func TestACaptureOfADeviceIsExactlyTheCaptureOnTheDeviceItselfOnTheRealKernel(t 
 	if got := g.capture(id); got["packets"].(float64) < 10 || got["dropped"] != nil && got["dropped"].(float64) != 0 {
 		t.Errorf("%v", got)
 	}
+	// Wireshark's dissector reads every packet of the file the API serves
+	if n := len(tsharkFields(t, r.Body, "", "frame.number")); n != len(pkts) {
+		t.Errorf("tshark reads %d packets of the download, which holds %d", n, len(pkts))
+	}
 }
 
 // A selector holds the packets of its source to its destination, protocol and port: the TCP connections of A to the
 // broker, from the SYN to the FIN, in both directions.
 func TestASelectorCaptureHoldsTheConnectionsItNamesOnTheRealKernel(t *testing.T) {
 	g, top := bedCapture(t)
-	truth := startTruth(t, top.A, "eth0", capture.Filter{MACs: []string{testbed.ClientAMAC}, Protocol: capture.TCP, Ports: []capture.PortRange{{From: 8883, To: 8883}}})
+	truth := startTcpdump(t, top.A, "eth0", "ether host "+strings.ToLower(testbed.ClientAMAC)+" and tcp port 8883")
 	c := g.mustStartCapture(map[string]any{"scope": map[string]any{"selector": map[string]any{
 		"source": map[string]any{"device": clientA}, "protocol": "tcp", "ports": []int{8883}, "destination": map[string]any{"cidr": testbed.ServerAddr + "/32"}}}})
 	makeTraffic(t, top)
 	g.stopCapture(c["id"].(string))
 	want := multiset(truth.stop(), ipOrARP)
-	_, pkts := g.download(c["id"].(string), "")
+	dl, pkts := g.download(c["id"].(string), "")
 	sameMultiset(t, "selector capture", multiset(pkts, ipOrARP), want)
 	syn, fin := false, false
 	for _, p := range pkts {
@@ -292,6 +404,10 @@ func TestASelectorCaptureHoldsTheConnectionsItNamesOnTheRealKernel(t *testing.T)
 	}
 	if !syn || !fin {
 		t.Errorf("the connection is not in the capture from its SYN to its FIN (syn %v, fin %v)", syn, fin)
+	}
+	// Wireshark finds exactly these packets in the file by their port
+	if n := len(tsharkFields(t, dl.Body, "tcp.port == 8883", "frame.number")); n != len(pkts) {
+		t.Errorf("tshark finds %d packets of port 8883 in the download, which holds %d", n, len(pkts))
 	}
 }
 
@@ -365,8 +481,9 @@ func TestAWireGuardNetworkIsCapturedAsRawIPOnTheRealKernel(t *testing.T) {
 		t.Errorf("interfaces of the file: %+v", ifs)
 	}
 	sameMultiset(t, "WireGuard capture", multiset(pkts, icmp), want)
-	if out, err := exec.Command("tshark", "-r", writeTemp(t, r.Body), "-Y", "icmp", "-T", "fields", "-e", "ip.src").Output(); err == nil && !strings.Contains(string(out), "10.99.0.4") {
-		t.Errorf("Wireshark does not find the ping of the client in the file: %q", out)
+	// Wireshark's dissector finds the ping of the client in the file the API serves
+	if src := tsharkFields(t, r.Body, "icmp", "ip.src"); !slices.Contains(src, "10.99.0.4") {
+		t.Errorf("Wireshark does not find the ping of the client in the file: %q", src)
 	}
 }
 
@@ -404,7 +521,7 @@ func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *test
 	// the ground truth runs from before the run to after its end, so that it holds everything the capture of the run
 	// holds, and the traffic of the test is all that either has (nothing else of the device is on the wire for those
 	// seconds)
-	truth := startTruth(t, top.A, "eth0", capture.Filter{MACs: []string{testbed.ClientAMAC}})
+	truth := startTcpdump(t, top.A, "eth0", "ether host "+strings.ToLower(testbed.ClientAMAC))
 	r := g.postRun(body, "")
 	if r.Status != 201 {
 		t.Fatalf("%d %s", r.Status, r.Body)

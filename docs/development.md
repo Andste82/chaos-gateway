@@ -5040,6 +5040,16 @@ truth now spans the whole run. Whether that was the whole difference the log doe
 prints the frames that only one of them holds (`sameMultiset`, `frameSummary`): if the test fails again, the next run
 names the extra packet.
 
+P4-AUDIT-52: the ground truth of the device, selector and run tests was a second `capture.Session` read back with
+`capture.NewReader`, so a common fault of the read loop, the BPF generator, the writers or the reader would have cancelled
+out. It is now `tcpdump -w` in the device's namespace (`startTcpdump`: `-Z root`, `--immediate-mode`, ended with SIGINT, the
+filter an expression written by hand: `ether host <mac>`, plus `and tcp port 8883` for the selector); only the test of the
+WireGuard interface still uses a session of the engine. The files the API serves are read by Wireshark (`tsharkFields`):
+the device download must have as many packets for tshark as for the reader, the selector download as many packets of
+`tcp.port == 8883`, and the ping of the WireGuard client must be found. A file that tshark rejects, or any other failure of
+tshark, fails the test with tshark's message; only a missing tshark skips it (the CI jobs name these tests with
+`-expect-pass`, so a skip fails them there). tcpdump is part of the devcontainer image, a missing one fails the test.
+
 ### Acceptance map (plan M17 "Tests")
 
 | Plan M17 Tests | Test |

@@ -4586,8 +4586,12 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   goroutine follows the event bus, a recorder the bus dropped subscribes again and says so in the log).
   `Manager.Recover` (called by `api.New`, once the engine runs) loads the records: a run that was queued or
   running ends as `aborted` with the reason `service restart` (its overlays died with the process, plan
-  §2.1.1) and an event, a record of an ended run older than `--run-retention` (30 days, plan §3.6) is
-  deleted, as are expired ones whenever a run ends, and a record that cannot be read is left alone with a
+  §2.1.1) and an event, a record of an ended run older than the retention (30 days, plan §3.6) is
+  deleted, as are expired ones whenever a run ends. The retention is `settings.retention.runs` of the active
+  configuration, asked again each time (`Config.RetentionOf`, `Server.runRetention`, as `captureQuota` does for the
+  captures), else `--run-retention`, which stays as the default of a deployment for a configuration that does not
+  set it (it is not deprecated: it applies at recovery before the first configuration is active and to every
+  configuration without the setting; the default of the flag and of the spec, 720 h, is the same); and a record that cannot be read is left alone with a
   warning. `GET …/report.json`, `…/report.xml` and `…/events` of a run that has not ended answer `404
   not_found` ("the report is there once the run has ended"); they wait for the end of the run to reach the
   event file, so a client that sees `passed` reads a complete file.

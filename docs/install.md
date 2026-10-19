@@ -197,6 +197,11 @@ chaosctl with --device esp32-42 --profile bad-lte --ttl 10m -- pytest tests/
 (0 passed, 1 a check failed, 2 error or aborted) and the example suites for pytest and Jest are in
 [`clients/examples`](../clients/examples/README.md).
 
+The record, the report and the events of an ended run are kept for 30 days by default and then deleted, together with the
+captures of the run. `settings.retention.runs` of the active configuration (a duration such as `2160h` for 90 days, 1 hour
+at least) sets it and takes effect at the next run that ends, also for the runs that ended before. The flag
+`--run-retention` of `chaosgw api` is only the default for a configuration that does not set it.
+
 ## Packet captures
 
 Captures (`POST /api/v1/captures`, `capture: true` and the `capture` steps of a scenario) are recorded by the executor

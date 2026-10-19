@@ -120,6 +120,16 @@ func New(cfg Config) (*Manager, error) {
 	return m, nil
 }
 
+// retention is how long the record of an ended run is kept now: what Config.RetentionOf says, else Config.Retention.
+func (m *Manager) retention() time.Duration {
+	if m.cfg.RetentionOf != nil {
+		if d := m.cfg.RetentionOf(); d > 0 {
+			return d
+		}
+	}
+	return m.cfg.Retention
+}
+
 func defaultEncode(ev engine.Event) ([]byte, bool) {
 	b, err := json.Marshal(map[string]any{"type": ev.Type, "time": ev.Time.UTC(), "data": ev.Data})
 	return b, err == nil
@@ -171,7 +181,7 @@ func (m *Manager) Recover() error {
 			m.log.Warn("cannot read the record of a run: it is left alone", "run", id, "error", err)
 			continue
 		}
-		if endedBefore(f.Run, now.Add(-m.cfg.Retention)) {
+		if endedBefore(f.Run, now.Add(-m.retention())) {
 			if err := removeRun(m.cfg.Dir, id); err != nil {
 				m.log.Warn("cannot delete an expired run", "run", id, "error", err)
 			}
@@ -854,7 +864,7 @@ func artifactsOf(r *runState) *[]model.Artifact {
 
 // prune deletes the records of runs that ended before the retention time.
 func (m *Manager) prune() {
-	cut := m.clk.Now().Add(-m.cfg.Retention)
+	cut := m.clk.Now().Add(-m.retention())
 	m.mu.Lock()
 	var gone []uuid.UUID
 	for id, r := range m.runs {

@@ -44,7 +44,7 @@ func (s *Server) initRuns() error {
 	if s.captures != nil {
 		caps = captureAdapter{s}
 	}
-	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Captures: caps, Log: s.log, Retention: s.cfg.RunRetention, EncodeEvent: s.encodeRunEvent})
+	m, err := run.New(run.Config{Clock: s.clk, Dir: dir, Gateway: s.cfg.Engine, Observer: runObserver{s}, Captures: caps, Log: s.log, Retention: s.cfg.RunRetention, RetentionOf: s.runRetention, EncodeEvent: s.encodeRunEvent})
 	if err != nil {
 		return err
 	}
@@ -54,6 +54,19 @@ func (s *Server) initRuns() error {
 	}
 	s.runs = m
 	return nil
+}
+
+// runRetention is how long the record of an ended run is kept: the setting `settings.retention.runs` of the active
+// configuration, else (0, so that the manager uses) the default of the service, the flag `--run-retention`.
+func (s *Server) runRetention() time.Duration {
+	if snap := s.cfg.Engine.Snapshot(); snap != nil && snap.Config != nil && snap.Config.Settings != nil && snap.Config.Settings.Retention != nil {
+		if r := snap.Config.Settings.Retention.Runs; r != nil {
+			if d, err := time.ParseDuration(*r); err == nil && d > 0 {
+				return d
+			}
+		}
+	}
+	return 0
 }
 
 // closeRuns aborts the runs that are left, which removes their overlays through the engine, and waits for them.

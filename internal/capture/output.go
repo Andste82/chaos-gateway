@@ -47,6 +47,9 @@ type Output struct {
 	sizes   map[string]int64 // sizes of the closed files
 	packets int64            // of all files, also the ones the ring deleted
 	closed  bool
+	// err is the first failure of a rotation. It is sticky: a failed rotation can leave the Output without a file,
+	// so every later Write returns it instead of touching the missing writer.
+	err error
 }
 
 // NewOutput creates the first file.
@@ -124,10 +127,14 @@ func (o *Output) Write(p Packet) error {
 	if o.closed {
 		return os.ErrClosed
 	}
+	if o.err != nil {
+		return o.err
+	}
 	size := int64(PacketSize(o.cfg.Format, len(p.Data), true))
 	if o.ring() {
 		if o.w.Size()+size > o.cfg.FileSize && o.w.Packets() > 0 {
 			if err := o.rotate(); err != nil {
+				o.err = err
 				return err
 			}
 		}
@@ -164,7 +171,7 @@ func (o *Output) Flush() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.w == nil {
-		return nil
+		return o.err
 	}
 	return o.w.Flush()
 }
@@ -174,7 +181,12 @@ func (o *Output) Close() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.closed = true
-	return o.closeCurrent()
+	err := o.closeCurrent()
+	if err == nil {
+		// the failure of a rotation is not lost because the file it left behind is closed already
+		err = o.err
+	}
+	return err
 }
 
 // Size is the number of bytes of the files that exist, also the ones still in the buffer.

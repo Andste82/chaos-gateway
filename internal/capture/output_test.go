@@ -211,3 +211,65 @@ func TestTheFileCanBeReadWhileItIsWritten(t *testing.T) {
 	}
 	_, _ = f.Seek(0, io.SeekStart)
 }
+
+func TestAFailedRotationIsStickyAndLeavesNoNilWriter(t *testing.T) {
+	root, dir := openRoot(t)
+	o, err := NewOutput(OutputConfig{Root: root, Format: PCAPNG, Ifaces: []InterfaceInfo{ethIface}, Files: 2, FileSize: 2000, UID: -1, GID: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the name of the second file is taken: the first rotation cannot open it
+	if err := os.WriteFile(filepath.Join(dir, "capture-00002.pcapng"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var first error
+	for i := 0; i < 20 && first == nil; i++ {
+		first = o.Write(bigPacket(i, 400))
+	}
+	if !errors.Is(first, os.ErrExist) {
+		t.Fatalf("the failed rotation: %v, want ErrExist", first)
+	}
+	written := o.Packets()
+	// before the fix the second write evaluated the size of a writer that was nil
+	for i := 0; i < 3; i++ {
+		if err := o.Write(bigPacket(i, 400)); !errors.Is(err, os.ErrExist) {
+			t.Errorf("write %d after the failed rotation: %v, want the error of the rotation", i, err)
+		}
+	}
+	if o.Packets() != written {
+		t.Errorf("%d packets counted after the failed rotation, were %d", o.Packets(), written)
+	}
+	if err := o.Flush(); !errors.Is(err, os.ErrExist) {
+		t.Errorf("flush after the failed rotation: %v, want the error of the rotation", err)
+	}
+	if err := o.Close(); !errors.Is(err, os.ErrExist) {
+		t.Errorf("close after the failed rotation: %v, want the error of the rotation", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "capture-00002.pcapng")); string(b) != "old" {
+		t.Errorf("the file of the next number was written: %q", b)
+	}
+	// what was written before the rotation failed is a complete file
+	b, err := os.ReadFile(filepath.Join(dir, "capture-00001.pcapng"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, got := readAll(t, b); int64(len(got)) != written {
+		t.Errorf("the first file holds %d packets, %d were written", len(got), written)
+	}
+}
+
+func TestAPanicInAGoroutineOfASessionEndsOnlyThatSession(t *testing.T) {
+	s := &Session{done: make(chan struct{}), cancel: func() {}}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer s.recoverPanic("read")
+		var o *Output
+		_ = o.Write(Packet{})
+	}()
+	<-finished
+	r := s.Result()
+	if r.Reason != ReasonError || r.Err == nil || !s.stopping.Load() {
+		t.Errorf("result %+v, stopping %v: a panic must end the session with an error", r, s.stopping.Load())
+	}
+}

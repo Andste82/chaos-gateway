@@ -368,6 +368,29 @@ func TestAFullDiskIsTheDiskLowReason(t *testing.T) {
 	}
 }
 
+func TestAFailedRotationEndsTheCaptureWithAnErrorAndNotTheProcess(t *testing.T) {
+	sink := udpSink(t)
+	s, _ := startOnLo(t, func(c *SessionConfig) {
+		c.Ring = &RingConfig{Files: 2, FileSize: 2000}
+		c.Interfaces[0].Filter = Filter{Protocol: UDP, Ports: []PortRange{{portOf(sink), portOf(sink)}}}
+		// the name of the second file is taken: the first rotation fails
+		f, err := c.Dir.OpenFile("capture-00002.pcapng", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	})
+	sendUDP(t, sink, 50, 300)
+	select {
+	case <-s.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the capture did not end after the failed rotation")
+	}
+	if r := s.Result(); r.Reason != ReasonError || !errors.Is(r.Err, os.ErrExist) {
+		t.Errorf("result %+v, want reason error with the error of the rotation", r)
+	}
+}
+
 func TestStopIsIdempotentAndTheFirstReasonStays(t *testing.T) {
 	s, _ := startOnLo(t, nil)
 	s.Stop(ReasonRunEnd)

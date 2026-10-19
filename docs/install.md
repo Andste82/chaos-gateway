@@ -168,6 +168,35 @@ goes through preview and apply like every other change. Things to know:
   preview warns when the management interface has no default route).
 - The status of each forward says why it is inactive, for example "the device has no address".
 
+## Command line client
+
+`chaosctl` is in the image next to `chaosgw` (`/usr/local/bin/chaosctl`). It talks to the API with a token, so it runs
+anywhere that reaches the management network: copy the binary out of the image
+(`docker create --name tmp chaos-gateway && docker cp tmp:/usr/local/bin/chaosctl . && docker rm tmp`), or build it with
+`go build ./cmd/chaosctl`. Create a token once, with the scope `overlays` (faults, profiles, runs, captures; enough for a CI job):
+
+```sh
+GW=https://gateway.example:8443
+curl -sk -c jar -H 'Content-Type: application/json' -d '{"password":"<admin password>"}' $GW/api/v1/auth/login | jq -r .csrf_token > csrf
+curl -sk -b jar -H "X-CSRF-Token: $(cat csrf)" -H 'Content-Type: application/json' \
+     -d '{"name":"ci","scope":"overlays"}' $GW/api/v1/auth/tokens | jq -r .token > token
+```
+
+The token is shown once; keep it in the CI system's secrets. The gateway's certificate is self-signed until M29: give the
+client its SHA-256 fingerprint (`--fingerprint`, `CHAOSGW_FINGERPRINT`), the certificate (`--ca-cert`), or `--insecure`.
+
+```sh
+export CHAOSGW_URL=$GW CHAOSGW_TOKEN_FILE=token
+chaosctl wait device esp32-42 --online --connected tcp/8883 --timeout 90s
+chaosctl run -f mqtt-outage.yaml --set target.device=esp32-42 --wait --junit report.xml --artifacts out/
+chaosctl with --device esp32-42 --profile bad-lte --ttl 10m -- pytest tests/
+```
+
+`chaosctl help` lists the commands. A run that is waited for has a lease of 30 s that the client renews, and the overlays of
+`chaosctl with` have one too, so a CI job that is killed leaves no fault on the lab: the gateway removes it. The exit codes
+(0 passed, 1 a check failed, 2 error or aborted) and the example suites for pytest and Jest are in
+[`clients/examples`](../clients/examples/README.md).
+
 ## Packet captures
 
 Captures (`POST /api/v1/captures`, `capture: true` and the `capture` steps of a scenario) are recorded by the executor

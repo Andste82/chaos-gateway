@@ -969,8 +969,8 @@ the privilege for the raw sockets, writes the packet files into it as the owner 
 chaos-gateway/
   api/                openapi.yaml (source of truth), examples/ (fixtures + validate.py)
   cmd/
-    chaosgw/          subcommands: api, exec, dns, kea-hook, svcns, admin (tls, chaosctl are stubs: M21, M18)
-    chaosctl/         CLI
+    chaosgw/          subcommands: api, exec, dns, kea-hook, svcns, admin (tls is a stub: M21)
+    chaosctl/         CLI (a main over internal/ctl, M18)
   internal/
     clock/            injectable clock
     preflight/        kernel version, the one shared kernel-module list, namespace capability

@@ -8,7 +8,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; the other subcommands and the CLI are skeletons until M5/M6b/M18/M21) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is a skeleton until M21; `cmd/chaosctl` is a `main` over `internal/ctl`) |
+| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with` |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM |
@@ -40,7 +41,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
 | `web/` | the web app (M12): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
-| `clients/` | generated TypeScript and Python clients (not committed) |
+| `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
 
 ## Setup
@@ -70,6 +71,7 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |
 | – | `make test-e2e` | Playwright tests of the web app | `npx playwright install chromium` once |
+| – | `make test-examples` | the example suites of `clients/examples` (pytest with the generated Python client, Jest with the generated TypeScript client, both also driving `chaosctl`) against a gateway on the simulated kernel (M18; test tag `examples`) | network access for `pip` and `npm ci`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
 
 **Which level where.** The devcontainer is unprivileged on purpose: network tests must not be able
@@ -4995,6 +4997,150 @@ vetted with `-tags testbed` and wired into both CI testbed jobs, but were not ru
 | Scope: ring buffer, quotas, retention, disk-low behavior, download (also while running) | as the second and fourth rows; `TestCopyCompleteCutsARecordThatIsBeingWritten`, `TestADownloadJoinsTheFilesOfARingAndCutsAFileThatIsBeingWritten`, `TestTheRecordsOfCapturesSurviveARestart`, `TestARestartEndsACaptureThatWasRunningAsFailed`, `TestCapturesFollowTheScopesOfTokens`, `TestAnIdempotencyKeyMakesOneCapture`, `TestOnlyEightCapturesRunAtOnce` |
 | Scope: capture step type; attachment to runs | as the third row |
 
+## Command line client and example suites (M18)
+
+Plan §2.15 and M18. `chaosctl` is the client of the REST API for CI pipelines: it applies a profile or a fault with a TTL,
+runs a scenario from a file and returns its result as the exit code, waits for a device, and runs a command under a fault
+that is always taken away again. It has no other access to the gateway than the API with a bearer token. M18 also adds the
+example suites for pytest and Jest that use the generated clients, and runs them in CI. The generated TypeScript and Python
+clients themselves exist since M5 (`make generate`, "Generated code" below); M18 gave them their examples and documented
+what they leave out.
+
+### How it works
+
+- **The commands are package `internal/ctl`, `cmd/chaosctl` is a three-line `main`.** The plan names Cobra (§3.7), which is
+  what the package uses. `ctl.Run(args, Env)` takes the streams, the environment, the signal channel, the clock and the
+  poll interval as arguments, so the tests run the whole CLI in-process against an `httptest` server of the API
+  (`internal/api/ctl_test.go`) and no test needs a binary on the `PATH`.
+- **The gateway and the token** come from flags or the environment: `--url`/`CHAOSGW_URL` (default `https://127.0.0.1:8443`,
+  with or without `/api/v1`), `--token`/`CHAOSGW_TOKEN`, `--token-file`/`CHAOSGW_TOKEN_FILE`. The certificate of a gateway with
+  a self-signed certificate is trusted by `--fingerprint` (SHA-256 of the certificate, which pins it without a copy of it),
+  by `--ca-cert` (a PEM file), or not verified with `--insecure`; the default is the system's trust store. A token with the
+  scope `overlays` does everything except `wg export` (scope `full`) and `reset --all`.
+- **Output.** Standard output is the result and nothing else: the id of the overlay or run a command created (so
+  `id=$(chaosctl fault set …)` works), the result of a waited run, a table. Progress and explanations go to standard error
+  (`[  12.3s] step cut applied at +10.0s`). `--json` prints the API's JSON where a command has a result.
+- **Commands.** `profile apply <profile>` and `fault set` (impairment flags, or `--body` for a whole fault) create an
+  overlay for `--device`, `--group`, `--network` or `--global` with `--ttl` and `--lease`; `overlay create -f`, `overlay
+  list`, `overlay delete`, `overlay renew`, `reset [--all]`; `run [scenario] [-f file] [--set k=v] [--wait] …`, `abort`, `wait run`, `wait
+  device`; `with`; `wg export`; `version`. Every command's `--help` has the details and examples.
+- **`run`.** The scenario is a stored one (by name or UUID) or a YAML/JSON file (`-f`, `-` for standard input), sent as
+  `inline` with the `parameters` of `--set`; the server validates it (the CLI interprets nothing of it). Without `--wait` the
+  command prints the run id and returns 0. With `--wait` it polls the run (every second), reports the steps, checks and
+  warnings as they change, prints the result and returns 0 for `passed`, 1 for `failed` (a check), 2 for `error` and
+  `aborted`. `--junit <file>` saves `report.xml`; `--artifacts <dir>` saves `report.json`, `report.xml`, `events.jsonl` and
+  the captures of the run as `capture-<id>.pcap[ng]` (a key log as `keylog-<id>.txt`; a 403 on an artifact that needs scope
+  `full` is a warning, any other failed download makes a passed run return 2). Files are written through a `.part` file.
+  `--no-queue` is `?queue=false` (`409 target_busy`).
+- **The lease is renewed automatically.** A run that is waited for gets a lease (30 s unless `--lease` says otherwise, `0`
+  for none) and the CLI renews it at a third of its length until the run has ended, so a CI job that is killed leaves no
+  fault behind: the gateway aborts the run when the renewals stop (plan §2.10). `--lease` without `--wait` is refused, as
+  nobody would renew it.
+- **Interrupts and timeouts.** A SIGINT or SIGTERM during `run --wait`, and `--timeout`, abort the run (and wait for the
+  gateway to say that its overlays are gone) and return 2. `wait run` does not own the run: a signal or its `--timeout` only
+  stops waiting (2). Ten failed polls in a row (a gateway that does not answer; a 404/401/403 ends at once) end the wait
+  with 2.
+- **`wait device <name> [--online] [--connected tcp/8883]`.** Polls `GET /devices/{name}` and, for `--connected`,
+  `GET /flows?device=`: the device is online (the observed state of the API: a confirmed neighbor entry, a connection or a
+  WireGuard handshake) and has a connection in the state `ESTABLISHED` to the port (`udp/…`: an answered flow), optionally to
+  one address (`tcp/10.0.0.5:8883`). A device the gateway does not know yet is waited for. 0 when it holds, 1 at
+  `--timeout` (default 60 s) naming what is missing, 2 when the gateway cannot be asked.
+- **`with [flags] -- command args`.** Creates the overlays (`--profile`, the fault flags, `--overlay <file>` any number of
+  times), runs the command with the streams of chaosctl, and removes the overlays however the command ends. They get a lease
+  (30 s, `--lease 0` for none) that is renewed while the command runs, so the gateway removes them if chaosctl itself is
+  killed without a chance to clean up (SIGKILL, a lost machine), and the TTL of `--ttl`. The command's environment has
+  `CHAOSCTL_OVERLAYS`. A SIGTERM goes on to the command as it came; a SIGINT does not (it is the terminal's Ctrl-C, which reaches the
+  command in the same process group, and passing it on would interrupt the command twice); a second signal kills it.
+  Either way chaosctl waits for the command to end and then cleans up. If the second overlay is
+  refused the first is removed again and the command does not run.
+- **The exit code of `with`** is the command's (128 + n when a signal n ended it). Failures of chaosctl itself are **125**, a
+  command that cannot be run **126**, one that is not found **127** (the conventions of `timeout(1)` and `env(1)`), because
+  `with` is the one command whose result is somebody else's exit code and 2 could be the command's own. If the command
+  succeeded but an overlay could not be removed, the result is 125; if the command failed, its code stays and the failed
+  removal is reported on standard error. An overlay that is gone already (its TTL ran out) is not an error.
+- **`wg export <network> <client>`** (plan §2.2.1) downloads a client's configuration (`conf`, `png`, `svg`) from the API;
+  the file is written with mode 0600 because it holds the private key.
+
+### Example suites
+
+`clients/examples` (see its README): `pytest/` (the generated Python client; fixtures for the client, the device, and a
+`degraded` helper that applies faults with a TTL and removes them in the teardown), `jest/` (the generated TypeScript client;
+`setup.ts` points its relative `fetch('/overlays')` calls at the gateway and adds the token), `scenarios/link-outage.yaml`.
+Both suites also drive `chaosctl run … --wait` and `chaosctl with …` as a CI job would. `make test-examples` generates the
+clients, installs the suites' dependencies (`.venv`, `npm ci` in `clients/examples/jest`) and runs
+`TestTheExampleSuitesPassAgainstTheGateway` (`internal/api/examples_test.go`, build tag `examples`): the test starts a gateway on
+the simulated kernel with the real engine and the real clock, mints a token with the scope `overlays`, builds `chaosctl`,
+runs pytest and Jest as subprocesses with `CHAOSGW_URL`, `CHAOSGW_TOKEN`, `CHAOSGW_DEVICE` and `CHAOSCTL` in their environment
+and reads their JUnit files: at least eight tests each, none failed, **none skipped** (the pytest fixture of the CLI skips
+when `chaosctl` is missing in a user's environment; in CI that would fail the test). Afterwards the gateway must hold no
+overlay. The `level0` CI job runs `make test-examples` after `make test`.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 4 item in `open-items.md`
+for M18):
+
+1. **Standard output is data, standard error is talk.** A CI script captures the id or the result; progress lines in the
+   output would break `id=$(…)`.
+2. **A waited run has a lease by default (30 s).** The plan lists "automatic lease renewal" among the CLI's features; a CLI
+   that can be killed and a run that goes on forever are what the lease is for, and renewal costs one request per 10 s.
+   `--lease 0` opts out. A run that nobody waits for has none (nobody could renew it).
+3. **A signal or `--timeout` aborts the run the CLI started,** and returns 2 (`aborted`); a cancelled CI job must not leave a
+   fault on a lab device. The run the CLI only waits for (`wait run`) is left alone.
+4. **`with` returns the command's exit code and uses 125/126/127 for itself.** The plan's exit codes 0/1/2 are those of `run`
+   and the waits; a wrapper that returns the wrapped command's code cannot also use 1 and 2 for itself.
+5. **The lease of `with` is on by default as well,** for the same reason as 2: `with` is cleaned up by its `defer` and by the
+   signals it catches, the lease covers the cases it cannot (SIGKILL, power loss).
+6. **`wait device --connected` wants the state `ESTABLISHED`,** not "past the handshake" as the checks of a run do: a wait asks
+   whether the device holds its connection now; a connection in `TIME_WAIT` after the device went away must not satisfy it.
+7. **A device that is not known yet is waited for** (a discovered device appears when it first speaks), so `wait device` can
+   be the first command of a job that powers a device on.
+8. **`wg export` is in the CLI** because §2.2.1 names it (`chaosctl wg export <client>`; the network is the first argument as
+   a client is addressed within its network in the API). The offline `chaosgw wg export` of M4b stays for the host.
+9. **The CLI sends no `Idempotency-Key`.** It does not retry a request; a CI job that retries a step starts a new run.
+10. **The generated clients are used as they are,** not extended. What they cannot do is documented in `clients/README.md`:
+    they read every answer as JSON (the JUnit report and the capture downloads are fetched with `fetch`/`httpx`), and the
+    TypeScript client calls `fetch` with a path relative to the API and no credentials, which the Jest example's `setup.ts`
+    supplies. A change to the Orval configuration (a base URL, a mutator) would also change the web app's hooks, which are
+    generated from the same spec.
+11. **The example suites run in the level 0 CI job against the simulated gateway,** not in the testbed: they need no kernel
+    and test the integration with the clients (typing, authentication, the pattern of a fixture that cleans up), not the
+    kernel. The testbed's level 1 tests of the CLI are for the effects on the wire.
+
+### Tests
+
+Level 0 (all run here, with `-race`): `internal/ctl/ctl_test.go` (the address, fingerprints, the certificate checks against a TLS
+server, the flags of a fault, documents, `--set`, connections, the exit code of a run, and the commands against a fake
+gateway that fails on request: a gateway that stops answering, an overlay that cannot be removed, a refused second overlay,
+renewals at a third of the lease, a second signal), `cmd/chaosctl/main_test.go`, and `internal/api/ctl_test.go`: the whole CLI
+in-process against the API on the simulated kernel with the real engine (a run on the fake clock of the API, or paced in real
+time where the lease matters; every command of the list above, the files it writes, the exit codes, the state of the
+gateway afterwards). Its tests are groups of subtests on one gateway (`TestChaosctlOverlays`, `TestChaosctlRuns`,
+`TestChaosctlWith`: a gateway's setup takes seconds under `-race`, a command milliseconds), so the package, which needs
+nearly ten minutes under `-race` in the development container, grows by a minute and not by two; `make test` gives
+`go test` a timeout of 20 minutes for the same reason. Turning the renewals off fails the two lease tests. The example suites:
+`make test-examples` (8 pytest and 8 Jest tests; ran here). Level 1 (`internal/api/e2e_ctl_test.go`, build tag `testbed`, both
+CI testbed jobs name the tests with `-expect-pass $M18_LEVEL1`): `chaosctl with` under a delay on the wire with a failing
+command and a missing one, runs from a file with exit code 0 and 1 against a scripted device, an abort on a signal, `wait
+device`, and a fault whose lease is not renewed; these need namespaces, which the unprivileged container of the development
+environment has not: vetted with `-tags testbed`, not run here, run by CI.
+
+### Acceptance map (plan M18 "Tests")
+
+| Plan M18 Tests | Test |
+|---|---|
+| CLI tests against the testbed incl. exit codes | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports` (0), `TestChaosctlRuns/Returns1ForAFailedCheck` (1), `TestChaosctlRuns/Returns2ForARunThatEndsAsError`, `TestChaosctlRuns/AbortsTheRunWhenTheTimeoutRunsOut`, `TestChaosctlRuns/AbortsItsRunOnASignalAndLeavesAnotherRunAlone` (2), `TestChaosctlRuns/ReportsAScenarioTheGatewayRefuses`, `TestChaosctlOverlays/ShowsWhatTheGatewayRefusesAndExitsWith2`, `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected` (0 and 1), `TestTheExitCodeOfARunIsItsStatus`; on the real kernel (the testbed proper) `TestChaosctlRunPassesForADeviceThatReconnectsOnTheRealKernel` (0), `TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel` (1), `TestChaosctlAbortsARunOnASignalAndTakesTheFaultOutOnTheRealKernel` (2), `TestChaosctlWaitsForADeviceAndItsConnectionOnTheRealKernel`; not runnable here |
+| cleanup of `chaosctl with` when the command fails | `TestChaosctlWith/WithRunsACommandUnderAFaultAndCleansUp` (exit 3, overlays gone), `TestChaosctlWith/WithCleansUpWhenTheCommandCannotRun` (not found 127, not executable 126, killed 137), `TestChaosctlWith/WithPassesASignalOnAndFailsWith125` (signal, refused setup, the first overlay removed when the second is refused), `TestWithRemovesTheFirstOverlayWhenTheSecondIsRefused`, `TestWithReportsAnOverlayItCannotRemove`, `TestASecondSignalKillsACommandThatIgnoresTheFirst`, `TestAnInterruptIsNotPassedOnToTheCommand`; on the real kernel `TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel` (the delay on the wire while the command runs, a clean path after it); not runnable here |
+| the example test suites run in CI | `TestTheExampleSuitesPassAgainstTheGateway` (`make test-examples`, the `level0` job) |
+| Scope: apply profile, set fault with TTL | `TestChaosctlOverlays/AppliesAProfileAndAFaultWithATTLAndRemovesThem`, `TestChaosctlOverlays/ResetAndTheReplacementOfAFault`, `TestChaosctlOverlays/CreatesAnOverlayFromARequestFile`, `TestTheFlagsOfAFaultBecomeItsBody` |
+| Scope: `run -f <file> --set …`, `--wait`, `--junit`, `--artifacts` | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports`, `TestChaosctlRuns/StartsAStoredScenarioAndWaitsForItLater`, `TestChaosctlRuns/QueuesBehindARunAndNoQueueRefuses`, `TestChaosctlSavesTheCapturesOfARunInTheArtifactsDirectory`, `TestSetArgumentsAreKeyValuePairs`, `TestDocumentsAreReadAsYAMLOrJSON` |
+| Scope: automatic lease renewal | `TestChaosctlRuns/RenewsTheLeaseOfTheRunItWaitsFor` (a 1 s lease outlives a 3 s run), `TestChaosctlOverlays/RenewsTheLeaseOfAnOverlayItDoesNotKeepAlive` (`overlay renew`), `TestChaosctlWith/WithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires`, `TestWithRenewsAtAThirdOfTheLease`; on the real kernel `TestAFaultWhoseLeaseIsNotRenewedLeavesTheRealKernelOnItsOwn`; not runnable here |
+| Scope: `wait device <name> --online [--connected tcp/8883] --timeout …` | `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected`, `TestChaosctlOverlays/WaitsForADeviceThatComesOnline`, `TestAConnectionIsGivenAsProtocolAndPort`, `TestOnlyAnEstablishedConnectionMatches` |
+| Scope: `with --profile … --ttl … -- <command>` | as the second row |
+| Scope: generated TypeScript and Python clients; examples for pytest and Jest | `make check-clients` (they compile and import), `TestTheExampleSuitesPassAgainstTheGateway` (`clients/examples`) |
+| Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
+| `wg export` | `TestChaosctlExportsAWireGuardClient` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -5011,7 +5157,7 @@ Python clients and checks that they compile and import. CI runs all three.
 
 ## CI
 
-`.github/workflows/ci.yml`: level 0 with the generated-code checks, the Playwright tests, the
+`.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the Playwright tests, the
 testbed tests in a VM and in a privileged container, the browser flows of the web app against the real stack
 (`testbed-ui`, a privileged container that builds the app and installs Chromium first; the flows of M12, M13 and M14), and the arm64 job (multi-arch image build,
 unit tests under `qemu-user`). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
@@ -5030,9 +5176,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of Kea's packet socket after a link flap
 (issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 

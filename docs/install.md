@@ -184,6 +184,9 @@ curl -sk -b jar -H "X-CSRF-Token: $(cat csrf)" -H 'Content-Type: application/jso
 
 The token is shown once; keep it in the CI system's secrets. The gateway's certificate is self-signed until M29: give the
 client its SHA-256 fingerprint (`--fingerprint`, `CHAOSGW_FINGERPRINT`), the certificate (`--ca-cert`), or `--insecure`.
+These three are one setting: a flag on the command line replaces the `CHAOSGW_*` variables of the same setting as a group
+(a `CHAOSGW_INSECURE=1` in the shell does not weaken a `--fingerprint`), `--insecure` together with a fingerprint or a CA file
+is refused (exit 2), and `--insecure` prints a warning.
 
 ```sh
 export CHAOSGW_URL=$GW CHAOSGW_TOKEN_FILE=token

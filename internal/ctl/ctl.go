@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/version"
@@ -74,6 +75,8 @@ type app struct {
 	// asJSON prints the API's JSON where a command prints a result
 	asJSON bool
 	cl     *client
+	// flags are the global flags, to tell which of them the command line set
+	flags *pflag.FlagSet
 }
 
 // Run is chaosctl: args are the arguments after the program name. It returns the exit code.
@@ -140,6 +143,11 @@ The gateway and its token come from the flags or the environment:
   CHAOSGW_FINGERPRINT  the SHA-256 fingerprint of the gateway's certificate (trusts a self-signed one)
   CHAOSGW_INSECURE     1: do not verify the certificate
 
+A flag wins over the environment. The three ways to trust a gateway (--insecure, --fingerprint, --ca-cert) are
+one setting: when the command line names any of them, CHAOSGW_INSECURE, CHAOSGW_FINGERPRINT and CHAOSGW_CA_CERT
+are not read, so a variable of the shell cannot switch off what a flag pins. --insecure cannot be combined with
+a fingerprint or a CA file (exit 2), and it prints a warning.
+
 Exit codes: 0 it holds / the run passed, 1 it does not hold in time / a check failed, 2 the run ended as error
 or aborted, or the command itself failed. 'chaosctl with' returns the code of its command, and 125 when
 chaosctl failed, 126 when the command cannot be run, 127 when it is not found.`,
@@ -150,6 +158,7 @@ chaosctl failed, 126 when the command cannot be run, 127 when it is not found.`,
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
 	f := root.PersistentFlags()
+	a.flags = f
 	f.StringVar(&a.conn.url, "url", "", "address of the gateway (default $CHAOSGW_URL or "+defaultURL+")")
 	f.StringVar(&a.conn.token, "token", "", "API token (default $CHAOSGW_TOKEN; --token-file keeps it out of the process list)")
 	f.StringVar(&a.conn.tokenFile, "token-file", "", "file that holds the API token (default $CHAOSGW_TOKEN_FILE)")
@@ -187,17 +196,31 @@ func (a *app) client() (*client, error) {
 	pick(&c.url, "CHAOSGW_URL")
 	pick(&c.token, "CHAOSGW_TOKEN")
 	pick(&c.tokenFile, "CHAOSGW_TOKEN_FILE")
-	pick(&c.caCert, "CHAOSGW_CA_CERT")
-	pick(&c.fingerprint, "CHAOSGW_FINGERPRINT")
-	if !c.insecure {
+	// How the gateway is trusted is one setting with three spellings, so the source is decided for all of them
+	// together: a flag on the command line replaces the trust variables of the environment, which must not
+	// override a pinned fingerprint or a CA file, or be overridden half way (CHAOSGW_INSECURE=1 next to
+	// --fingerprint would send the token to a peer that was never checked).
+	source := "environment variables"
+	if a.flags != nil && (a.flags.Changed("insecure") || a.flags.Changed("fingerprint") || a.flags.Changed("ca-cert")) {
+		source = "flags"
+	} else {
+		pick(&c.caCert, "CHAOSGW_CA_CERT")
+		pick(&c.fingerprint, "CHAOSGW_FINGERPRINT")
 		switch strings.ToLower(a.env.Getenv("CHAOSGW_INSECURE")) {
 		case "1", "true", "yes":
 			c.insecure = true
 		}
 	}
+	if c.insecure && (c.fingerprint != "" || c.caCert != "") {
+		return nil, &exitError{code: ExitError, err: fmt.Errorf("insecure (no verification of the certificate) cannot be combined with a fingerprint or a CA file; the %s say both: "+
+			"drop one (--insecure, or --fingerprint / --ca-cert)", source)}
+	}
 	cl, err := newClient(c)
 	if err != nil {
 		return nil, &exitError{code: ExitError, err: err}
+	}
+	if c.insecure && strings.HasPrefix(cl.base, "https://") {
+		fmt.Fprintln(a.env.Stderr, "chaosctl: warning: the certificate of the gateway is not verified (insecure); the token goes to whoever answers")
 	}
 	a.cl = cl
 	return cl, nil

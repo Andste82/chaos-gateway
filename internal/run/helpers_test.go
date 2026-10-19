@@ -66,10 +66,12 @@ type fakeGateway struct {
 	queueWait time.Duration
 	putErr    func(w engine.OverlayWrite) error
 	resetErr  error
-	// block, when set, holds every write until it is closed or the context ends
-	block chan struct{}
-	seq   uint64
-	subs  map[chan engine.Event]struct{}
+	// block, when set, holds every write until it is closed or the context ends; resetBlock does the same for the
+	// resets (the `restore` steps and the end of a run)
+	block      chan struct{}
+	resetBlock chan struct{}
+	seq        uint64
+	subs       map[chan engine.Event]struct{}
 	// foreign are overlays of other owners that the snapshot shows besides the runs'
 	foreign []model.Overlay
 }
@@ -196,7 +198,17 @@ func (g *fakeGateway) DeleteOverlay(_ context.Context, id uuid.UUID, by *model.O
 	return engine.OverlayResult{Overlay: ov, Generation: g.gen, QueueWait: g.queueWait}, nil
 }
 
-func (g *fakeGateway) ResetOverlays(_ context.Context, owner *model.Owner, _ model.Actor) (engine.OverlayResult, error) {
+func (g *fakeGateway) ResetOverlays(ctx context.Context, owner *model.Owner, _ model.Actor) (engine.OverlayResult, error) {
+	g.mu.Lock()
+	hold := g.resetBlock
+	g.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return engine.OverlayResult{}, ctx.Err()
+		}
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.resetErr != nil {

@@ -533,6 +533,17 @@ func TestTheRetentionOfRunsIsTheSettingOfTheActiveConfiguration(t *testing.T) {
 		return id
 	}
 	gone := func(id string) bool { return g.do("GET", "/runs/"+id, nil, nil, nil).Status == 404 }
+	// the run says `passed` a moment before the manager has pruned, so a record that must stay is watched for a while and
+	// one that must go is waited for
+	stays := func(id, why string) {
+		t.Helper()
+		for i := 0; i < 30; i++ {
+			if gone(id) {
+				t.Fatal(why)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	setRetention := func(d string) {
 		t.Helper()
 		if r := g.apply(g.mustPatch(map[string]any{"settings": map[string]any{"retention": map[string]any{"runs": d}}})); r.Status != 200 {
@@ -545,17 +556,14 @@ func TestTheRetentionOfRunsIsTheSettingOfTheActiveConfiguration(t *testing.T) {
 	first := finished("first")
 	clk.Advance(31 * 24 * time.Hour)
 	second := finished("second") // the end of a run prunes
-	if gone(first) {
-		t.Fatal("the record of a run was deleted after 31 days, with a retention of 90 days")
-	}
+	stays(first, "the record of a run was deleted after 31 days, with a retention of 90 days")
 
 	// shorter: both older runs go when the next one ends
 	setRetention("24h")
 	clk.Advance(25 * time.Hour)
 	third := finished("third")
-	if !gone(first) || !gone(second) || gone(third) {
-		t.Errorf("with a retention of 24 h: first gone %v, second gone %v, third gone %v", gone(first), gone(second), gone(third))
-	}
+	eventuallyTrue(t, "the records older than the retention of 24 h to go", func() bool { return gone(first) && gone(second) })
+	stays(third, "the record of the run that just ended was deleted")
 }
 
 func withLease(body map[string]any, lease string) map[string]any {

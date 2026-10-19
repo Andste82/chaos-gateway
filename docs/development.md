@@ -5340,9 +5340,15 @@ milestones and on the configuration draft of M13.
   (`lib/checkForm.ts`) has the type, the traffic or the name of the query, the allowed destinations of "traffic not seen" and the
   window (opens at the start or a step; closes after a time or at a step). `ScenarioDialog.vue` (`lib/scenarioForm.ts`) has name,
   description, target, capture, how a zero-hit fault is reported and the preconditions to skip. Each message stands under its field
-  (the checks mirror `domain.ValidateScenario`'s structural rules: `scenarioProblems` in `lib/scenarios.ts`), appears once a field was
+  (the checks mirror `domain.ValidateScenario`'s structural rules: `scenarioProblems` in `lib/scenarios.ts`, and the seven that
+  need the target or the other steps in `lib/scenarioRules.ts` — a step that widens the target, a `remove` of a step that makes no
+  overlay, the reserved id `start`, a `capture: stop` without the start of the same target before it, a tunnel outside the target,
+  a `reset` with another protocol than TCP, and a wait timeout or a window of `0s`; P4-AUDIT-36; each case is a case of the Go
+  tests with the same pointer, and what the configuration does not tell — is the device in the group — is not a problem in the UI,
+  the gateway has the last word), appears once a field was
   changed or the button was pressed, and the gateway's refusal (422) of a candidate opens the dialog with it under the field its pointer
-  names. Every dialog shows the request its button leads to under `</> API`.
+  names. The step editor also offers only what passes them: "Acts on" lists the scenario's target and what lies inside it, the
+  tunnels are those inside the target, and a `remove` lists the earlier steps that made an overlay. Every dialog shows the request its button leads to under `</> API`.
 - **The YAML tab** (`ScenarioYaml.vue`, `lib/scenarioYaml.ts`) shows the scenario as the file `chaosctl run -f` takes, with the
   names of the objects where the configuration has UUIDs, in the order of the spec. The text can be edited; while it is typed it is
   read (syntax with the line, a mapping at the top, names resolved to UUIDs, the generated Zod schema of the spec, the fields the
@@ -5427,19 +5433,22 @@ Taken by best practice where the plan leaves room (the one that needs the mainta
 
 ### Tests
 
-Level 0, all run here. Web unit tests (`make test-web`, vitest, 321 tests in 32 files with the older ones): `lib/scenarios.test.ts` (types, order, length, words, the problems of a
+Level 0, all run here. Web unit tests (`make test-web`, vitest, 352 tests in 34 files with the older ones): `lib/scenarioRules.test.ts` (the rules of the gateway in a scenario, in the step and check forms, case by case after the Go tests), `typeScale.test.ts` (no size outside the type scale of §2.17 in the sources), `lib/scenarios.test.ts` (types, order, length, words, the problems of a
 scenario including a text that is wrong in its types, editing, the changes in words), `lib/scenarioYaml.test.ts` (the references both
 ways, the plan's example in and out, the problems by line and by pointer), `lib/runs.test.ts`, `lib/stepForm.test.ts` and
 `lib/checkForm.test.ts` (every step and check of the example through the form and back, the checks under the fields, the pointers of
 the gateway's messages), `lib/scenarioForm.test.ts` (settings, parameters of a run, the selector of traffic), `stores/draft.scenarios.test.ts`
 (changes, patch, held-back apply, messages by pointer, overlaps and reapply) and the routes in `router.test.ts`. Playwright against the mocked
-API (`make test-e2e`, `e2e/scenarios.spec.ts`, 18 tests): the list; the empty state; editing a step, adding a step and a check and
+API (`make test-e2e`, `e2e/scenarios.spec.ts`, 33 tests): the list; the empty state; editing a step, adding a step and a check and
 deleting one, through the preview to the patch that is sent; renaming a step; the fields' messages; building a scenario from nothing
 (settings, three steps, a check, the apply held back until it has a step); delete and Undo and a refused candidate; the YAML tab and
 the import; running a scenario and following it to a failed run (the step in effect, timing, queue wait, warning, checks, evidence,
 artifacts, the Runs tab, the page of the run with its counters); a passed run; abort; a queued run and a refused busy target; refused
 parameters; running a draft inline; the overview; a step of a type the build cannot edit; no run while a revision waits for
-confirmation. The whole Playwright suite (208 tests) passed with them. One test keeps the browser and the gateway together:
+confirmation. The Phase 4 audit added: the runs that load or fail and a followed run that cannot be read (P4-AUDIT-12), the run lists that are asked
+for by status and scenario and paged (P4-AUDIT-39), the hand-over and the apply of a step and a wait that holds the countdown
+(P4-AUDIT-18, -42), the names of the downloads (P4-AUDIT-41), a run of a deleted scenario (P4-AUDIT-40), the focus after a deletion and the
+tab keys (P4-AUDIT-37), and the editors' rules (P4-AUDIT-36). The whole Playwright suite (223 tests) passed with them. One test keeps the browser and the gateway together:
 `lib/scenarioYaml.test.ts` compares the YAML that the UI writes for the example of plan §2.10 with `internal/domain/testdata/scenario-ui-export.yaml`
 byte for byte, and `TestTheYamlOfTheScenarioUiIsAcceptedByTheGateway` (`internal/domain`) decodes and validates the same file against the
 example configuration (the device is found by its name). Apart from that test, `go build ./...` and `go vet ./...` are unchanged (no Go

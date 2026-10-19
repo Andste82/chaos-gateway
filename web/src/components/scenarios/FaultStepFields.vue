@@ -4,18 +4,19 @@
 // run ends — the kind (an impairment, MTU / PMTUD, or the tunnel of a WireGuard client or link), the traffic,
 // and the parameters (latency, jitter, loss and, under Advanced, the rest).
 import { computed, useId } from 'vue';
-import { useNames } from '../../composables/gateway';
 import { familyLabels, mtuModes, trafficPresets, type FaultForm } from '../../lib/faultForm';
-import { tunnelOptions } from '../../lib/scopes';
+import type { ScopeOption } from '../../lib/scopes';
 import ImpairmentFields from '../faults/ImpairmentFields.vue';
 import TrafficFields from '../faults/TrafficFields.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 
-defineProps<{ errors: Partial<Record<string, string>> }>();
+defineProps<{
+  errors: Partial<Record<string, string>>;
+  /** The tunnels the fault may impair: those inside the scenario's target. */
+  tunnels: ScopeOption[];
+}>();
 const form = defineModel<FaultForm>({ required: true });
 const uid = useId();
-const { networks } = useNames();
-const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
 const families = (['impairment', 'mtu', 'tunnel'] as const).map((value) => ({ value, label: familyLabels[value] }));
 const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMode)?.hint);
 const fid = (f: string) => `${uid}-${f}`;

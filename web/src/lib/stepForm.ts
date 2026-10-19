@@ -10,8 +10,11 @@ import {
   createRunBodyTwoInlineOneStepsItemAtRegExp as durationRegExp,
 } from '../api/generated/zod/runs/runs';
 import { emptyForm, faultFormErrors, faultToForm, fieldOf as faultFieldOf, formToFault, scopeOf, targetOf, tunnelOf, type FaultField, type FaultForm } from './faultForm';
+import { durationMs } from './format';
+import { resetError } from './rules';
 import { remoteCidrError } from './scopes';
 import { stepType, type StepType } from './scenarios';
+import { createsOverlay, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
 import { emptyTraffic, trafficErrors, trafficFieldOf, trafficFromMatch, trafficMatch, type TrafficForm } from './trafficForm';
 import { createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp } from '../api/generated/zod/overlays/overlays';
 
@@ -182,6 +185,13 @@ export interface StepContext {
   others: string[];
   /** The ids of the steps that come before this one on the timeline: a `remove` names one of them. */
   earlier: string[];
+  /**
+   * For the rules that need the rest of the scenario (P4-AUDIT-36): its steps (the one edited among them), its target
+   * and what is known of the configuration. Without them those rules are not checked here; the gateway checks them.
+   */
+  steps?: Step[];
+  target?: Scope;
+  topology?: Topology;
 }
 
 /** The problems of the form, by field; empty when the step can go into the scenario. */
@@ -190,13 +200,18 @@ export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<St
   const id = f.id.trim();
   if (!id) e.id = 'Give the step an id.';
   else if (!stepIdRegExp.test(id)) e.id = 'Letters, digits, dash and underscore; starting with a lower-case letter; at most 32.';
+  else if (id === reservedStepId) e.id = messages.reservedId;
   else if (ctx.others.includes(id)) e.id = 'Another step has this id.';
   if (!durationRegExp.test(f.at.trim())) e.at = 'A time like 0s, 10s or 1m30s.';
   if (f.narrow) {
     const remote = remoteCidrError(f.narrow);
     if (remote) e.narrow = remote;
+    // a step may narrow the scenario's target, never widen it (`target_widened`)
+    else if (ctx.target && !f.kept && narrowOf(f) && !scopeWithin(narrowOf(f)!, ctx.target, ctx.topology)) e.narrow = messages.widened;
   }
   if (f.kept) return e;
+  // the scope the step acts on, for the rules about the target
+  const acts = narrowOf(f) ?? ctx.target;
   switch (f.type) {
     case 'profile':
       if (!f.profile) e.profile = 'Choose a profile.';
@@ -206,23 +221,36 @@ export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<St
       // the target and the name belong to the step, not to the fault
       delete e.target;
       delete e.name;
+      if (f.fault.family === 'tunnel' && !e.tunnel && acts && tunnelOutsideTarget(tunnelOf(f.fault.tunnel), acts, ctx.topology)) e.tunnel = messages.tunnel;
       break;
-    case 'rule':
+    case 'rule': {
       Object.assign(e, trafficErrors(f.traffic));
+      const reset = resetError(f.action, f.traffic.protocol);
+      if (reset) e.action = reset;
       if (f.cutExisting && f.action === 'allow') e.cutExisting = 'An allow rule cuts nothing.';
       else if (f.cutExisting && f.traffic.protocol !== 'tcp' && f.traffic.protocol !== 'any') e.cutExisting = 'Cutting connections needs the protocol TCP or any.';
       break;
+    }
     case 'wireguard':
       if (!tunnelOf(f.who)) e.who = 'Choose the WireGuard client or link.';
+      else if (acts && tunnelOutsideTarget(tunnelOf(f.who), acts, ctx.topology)) e.who = messages.tunnel;
+      break;
+    case 'capture':
+      if (f.capture === 'stop' && ctx.steps && ctx.target) {
+        const before = ctx.steps.filter((s) => ctx.earlier.includes(s.id));
+        if (!startsCapture(before, ctx.target, acts!)) e.capture = messages.captureStop;
+      }
       break;
     case 'wait':
       if (!durationRegExp.test(f.timeout.trim())) e.timeout = 'A time like 30s or 2m.';
+      else if (durationMs(f.timeout.trim()) === 0) e.timeout = messages.zeroTimeout;
       if (f.waitFor === 'connected') Object.assign(e, trafficErrors(f.traffic));
       if (f.waitFor === 'dns_query' && !hostnameRegExp.test(f.name.trim())) e.name = 'A host name like broker.example.com.';
       break;
     case 'remove':
       if (!f.remove) e.remove = 'Choose the step whose overlay is removed.';
       else if (!ctx.earlier.includes(f.remove)) e.remove = 'Choose a step that comes before this one.';
+      else if (ctx.steps?.some((s) => s.id === f.remove && !createsOverlay(s))) e.remove = messages.noOverlay(f.remove);
       break;
   }
   return e;

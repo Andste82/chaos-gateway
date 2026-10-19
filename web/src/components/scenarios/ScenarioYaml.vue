@@ -6,6 +6,7 @@
 // edit what the forms leave out (the DNS, TLS and DHCP steps of later milestones). "Download" saves the text.
 import { computed, ref, watch } from 'vue';
 import type { Scenario } from '../../api/generated/model';
+import { useTopology } from '../../composables/scenarioTargets';
 import { jsonEqual } from '../../lib/mergePatch';
 import { parseScenarioYaml, scenarioToYaml, type RefIndex } from '../../lib/scenarioYaml';
 import { useDraftStore } from '../../stores/draft';
@@ -17,6 +18,7 @@ const props = defineProps<{
   names: string[];
 }>();
 const draft = useDraftStore();
+const topology = useTopology();
 
 /** The text the scenario has as YAML now. */
 const current = computed(() => scenarioToYaml(props.scenario.config, props.index));
@@ -35,7 +37,7 @@ watch(
   },
 );
 
-const result = computed(() => parseScenarioYaml(text.value, props.index, props.names));
+const result = computed(() => parseScenarioYaml(text.value, props.index, props.names, topology.value));
 const unchanged = computed(() => !!result.value.scenario && jsonEqual(result.value.scenario, props.scenario.config));
 
 function onInput() {

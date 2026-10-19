@@ -699,6 +699,75 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-36: the step editor offers what the gateway accepts and shows the rules it always refuses under the field.
+
+test('the step editor offers only the targets inside the scenario and the steps whose overlay can be removed', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  // boot-loop acts on the IoT network: its devices, not those of the Test network
+  await page.goto(`/scenarios/${SCN_BOOT}`);
+  await page.getByTestId('add-step').click();
+  const d = dialog(page, 'Add step');
+  const acts = d.getByLabel('Acts on');
+  await expect(acts.locator('option')).toHaveText(["The scenario's target (Network IoT)", 'Device · ESP32-42', 'Device · Sensor-07', 'Device · Sensor-09', 'Network · IoT']);
+  // a remove names a step that made an overlay (the restore did not)
+  await d.getByLabel('Type', { exact: true }).selectOption('remove');
+  await d.getByLabel('At', { exact: true }).fill('30s');
+  await expect(d.getByLabel('Remove the overlay of step').locator('option')).toHaveText(['Choose a step', 'offline · at 0s']);
+  await d.getByRole('button', { name: 'Cancel' }).click();
+
+  // a scenario about one device offers nothing wider
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+  await page.getByTestId('add-step').click();
+  await expect(dialog(page, 'Add step').getByLabel('Acts on').locator('option')).toHaveText(["The scenario's target (ESP32-42)", 'Device · ESP32-42']);
+});
+
+test('the rules the gateway always refuses are shown under the fields of the step', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_BOOT}`);
+  await page.getByTestId('add-step').click();
+  const d = dialog(page, 'Add step');
+  const save = d.getByRole('button', { name: 'Add to the changes' });
+
+  // the id start is reserved for the beginning of the run
+  await d.getByLabel('Type', { exact: true }).selectOption('restore');
+  await d.getByLabel('Id', { exact: true }).fill('start');
+  await expect(d.getByLabel('Id', { exact: true })).toHaveAccessibleDescription('start is reserved for the beginning of the run.');
+  await d.getByLabel('Id', { exact: true }).fill('end');
+
+  // a TCP reset needs the protocol TCP
+  await d.getByLabel('Type', { exact: true }).selectOption('rule');
+  await d.getByLabel('Access', { exact: true }).selectOption('reset');
+  await expect(d.getByLabel('Access', { exact: true })).toHaveAccessibleDescription('A TCP reset needs the protocol TCP.');
+  await d.getByLabel('Protocol', { exact: true }).selectOption('tcp');
+  await expect(d.locator('.field-error')).toHaveCount(0);
+
+  // a capture stop needs the start of a capture of the same target before it
+  await d.getByLabel('Type', { exact: true }).selectOption('capture');
+  await d.getByLabel('Stop').check();
+  await expect(d.locator('.field-error')).toHaveText('No step before this one starts a capture of the same target.');
+  await save.click();
+  await expect(d).toBeVisible();
+
+  // a wait that never times out
+  await d.getByLabel('Type', { exact: true }).selectOption('wait');
+  await d.getByLabel('Timeout').fill('0s');
+  await expect(d.getByLabel('Timeout')).toHaveAccessibleDescription('The timeout must be longer than zero.');
+  await d.getByLabel('Timeout').fill('10s');
+  await expect(d.locator('.field-error')).toHaveCount(0);
+  await save.click();
+  await expect(d).toBeHidden();
+  await expect(step(page, 'end')).toContainText('Wait until the target is online · timeout 10 s');
+
+  // a check window of zero length
+  await page.getByTestId('add-check').click();
+  const c = dialog(page, 'Add check');
+  await c.getByLabel('Within', { exact: true }).fill('0s');
+  await c.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(c.getByLabel('Within', { exact: true })).toHaveAccessibleDescription('The window must be longer than zero.');
+});
+
 // P4-AUDIT-37: the keyboard focus never falls to <body>, and the tabs are the tab pattern.
 
 test('the focus stays on the page when a scenario, a step or a check is deleted and when the deletion is undone', async ({ page }) => {

@@ -779,10 +779,14 @@ func TestARestartEndsACaptureThatWasRunningAsFailed(t *testing.T) {
 	g.cap.streams()[0].end("error", "closed")
 	eventuallyTrue(t, "the capture is failed", func() bool { return g.capture(id)["status"] == "failed" })
 	dir := filepath.Join(root, "captures", id)
-	rec, err := os.ReadFile(filepath.Join(dir, "capture.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// the API shows the end before the record is written: the record is changed back to running only once it says failed,
+	// or the write that is still to come puts failed over the change
+	var rec []byte
+	eventuallyTrue(t, "the record says failed", func() bool {
+		b, err := os.ReadFile(filepath.Join(dir, "capture.json"))
+		rec = b
+		return err == nil && strings.Contains(string(b), `"status": "failed"`)
+	})
 	running := strings.Replace(string(rec), `"status": "stopped"`, `"status": "running"`, 1)
 	running = strings.Replace(running, `"status": "failed"`, `"status": "running"`, 1)
 	if err := os.WriteFile(filepath.Join(dir, "capture.json"), []byte(running), 0o640); err != nil {

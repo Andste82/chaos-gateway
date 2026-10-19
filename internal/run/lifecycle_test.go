@@ -279,6 +279,38 @@ func TestRunsOnOverlappingTargetsWaitInTheOrderTheyCameIn(t *testing.T) {
 	}
 	h.waitStep(b.Id, "a", model.RunStepStatusApplied)
 	h.clk.BlockUntil(1)
+// The runs that are queued or running are limited (Config.MaxRuns); a slot is free again when a run has ended, and a run
+// that is refused for it leaves nothing behind.
+func TestTheNumberOfQueuedAndRunningRunsIsLimited(t *testing.T) {
+	h := newHarness(t, func(c *run.Config) { c.MaxRuns = 2 })
+	first := h.start(long("first", esp))
+	queued := h.start(long("queued", esp)) // a queued run counts, too
+	if queued.Status != model.RunStatusQueued {
+		t.Fatalf("%s", queued.Status)
+	}
+	for _, queue := range []bool{true, false} {
+		_, err := h.m.Create(context.Background(), run.CreateRequest{Inline: inline(t, long("third", host)), Queue: queue, Owner: token})
+		if !errors.Is(err, run.ErrTooManyRuns) {
+			t.Fatalf("a third run (queue %v) with a limit of 2: %v", queue, err)
+		}
+	}
+	if got := len(h.m.List(run.Filter{})); got != 2 {
+		t.Errorf("a refused run left %d runs", got)
+	}
+	if _, err := h.m.Abort(context.Background(), first.Id, nil); err != nil {
+		t.Fatal(err)
+	}
+	// the first run's slot is free: the queued run is running, and one more fits
+	h.waitStatus(queued.Id, model.RunStatusRunning)
+	if _, err := h.m.Create(context.Background(), run.CreateRequest{Inline: inline(t, long("third", host)), Queue: true, Owner: token}); err != nil {
+		t.Fatalf("a slot is free after a run ended: %v", err)
+	}
+	if _, err := h.m.Create(context.Background(), run.CreateRequest{Inline: inline(t, long("fourth", "{device: lab-rA}")), Queue: true, Owner: token}); !errors.Is(err, run.ErrTooManyRuns) {
+		t.Fatalf("and the slot is taken again: %v", err)
+	}
+	h.m.AbortOwned(context.Background(), nil, "test over")
+}
+
 	h.clk.Advance(100 * time.Second)
 	h.waitStatus(b.Id, model.RunStatusPassed)
 	// c is next, d waits for c (both want the device)

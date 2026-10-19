@@ -65,6 +65,8 @@ type Config struct {
 	TrafficInterval, TrafficPeriod time.Duration
 	// RunRetention is how long the record of an ended run is kept (plan §3.6); zero takes run.DefaultRetention.
 	RunRetention time.Duration
+	// RunMax limits the runs that are queued or running at the same time; zero takes run.DefaultMaxRuns.
+	RunMax int
 	// CapturesDir is the volume of the packet captures (M17), shared with the executor, which writes the files; empty
 	// for a deployment without one (the operations of captures answer `unsupported_feature`). Capturer starts the
 	// captures: the executor behind Exec when it can, unless a test gives another.

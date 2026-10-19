@@ -80,6 +80,11 @@ type runState struct {
 	caps    []*runCapture
 	capArts []model.Artifact
 
+	// prevStep is the step the timeline handled last and prevEnd the offset at which that ended (the goroutine of the run
+	// only): the cause of a step that is handed over late
+	prevStep string
+	prevEnd  time.Duration
+
 	// moments are the moments at which the timeline began and reached each step (and "start"), guarded by Manager.mu;
 	// progress wakes the goroutine of the checks when it did (capacity one: a wake that is already pending is enough)
 	moments  map[string]stepMoments

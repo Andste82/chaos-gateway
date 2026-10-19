@@ -4533,15 +4533,26 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   answered with, which can be newer than the change's own), the `overlay` and `queue_wait_ms`; `run_step`
   announces it. A write that fails (`CompileError`, `apply_failed`, a validation problem) fails the step with
   the error, the run is `error` with `step <id>: <error>`, the steps after it are `skipped` (`not run: …`) and
-  the run's overlays are removed.
+  the run's overlays are removed. A call that ends because the run was cancelled is no failure of the step, but the
+  engine goes on after its caller's context ends, so the step in flight is recorded as `error` with "cancelled while
+  it was being applied: the change may have taken effect (<reason of the abort>)" (`callFailed`) and not as "skipped,
+  not run"; the run still ends `aborted` with the reason of the abort.
 - **Queue wait and `step_late`.** `engine.OverlayResult.QueueWait` is new with M15: the time from the moment
   the state owner took the write in until the apply loop took up the desired state that carries it (the wait
   behind an apply in flight, `applyResult.started`), plus the time that apply's plan waited in the
   executor's queue (`executor.Outcome.QueueWait`, plan §3.11's operation time stamps). It is what
   `RunStep.queue_wait_ms` reports (added to the spec with this milestone); a step with more than
   `run.StepLateThreshold` (100 ms) gets the run warning `step_late` naming the step and the overlay. The
-  scheduler's own lateness (the timer firing late) is not part of it: `start_offset_ms` minus the step's
-  `scheduled_offset` shows it, and the level 1 test bounds it by 100 ms where timing is accurate.
+  hand-over lateness is the second trigger (P4-AUDIT-14, decided on 2026-10-19): the moment the timeline hands the change
+  over (`start_offset_ms`) minus the scheduled offset plus the shift of the waits before the step (`due`) is compared
+  with the same threshold, in `handOver` for the steps that change the kernel and in the timeline for `wait` and
+  `capture`, also for a `remove` that is skipped. A step has one warning: when it is late for both reasons `warnLate`
+  appends the second cause to the message. The message names the cause: the step before it was still being applied
+  (its end is on the timeline), the timeline woke late (a clock that jumps, an overloaded host), or the counters
+  that are read before a replace, a remove or a restore took their time. That read is on the timeline: the stamp
+  `began` is taken after it, immediately before the engine call (P4-AUDIT-17), so `start_offset_ms`, the windows of
+  checks that open at the step and the warning contain it, and `offset_ms - start_offset_ms` is again only the
+  apply.
 - **The accuracy of a step is where it is handed over, not when its apply is done** (decided while fixing CI run
   39208509316; confirmed by the maintainer on 2026-10-19, option 3: plan §2.10 now says that the ±100 ms promise is
   about the hand-over, and that the report holds both moments, so the apply time shows). An overlay write returns when the apply that carries it is verified. The apply reads the
@@ -4632,8 +4643,11 @@ Taken by best practice where the plan leaves room (none needs the maintainer, so
    overlay's identity. A second `remove` of the same step finds nothing and is `skipped`.
 3. **`applied_at` is the time the verified write returns**; the executor's own commit time stamp is only a part
    of `queue_wait_ms`.
-4. **`step_late` is the queue wait**, as the milestone's test says ("waits behind a revision apply for more
-   than 100 ms"), not the scheduler's lateness.
+4. **`step_late` is the queue wait and the hand-over lateness.** The milestone's test says "waits behind a revision
+   apply for more than 100 ms", and that stays a trigger. Until the Phase 4 audit the scheduler's lateness was only in
+   the report (`start_offset_ms` against `scheduled_offset`), although plan §2.10 says that a step handed over late
+   because the one before is still being applied gets the warning; the maintainer decided on 2026-10-19 (P4-AUDIT-14,
+   option a) that it warns too, one warning per step naming the cause.
 5. **A group or network target is online when one device is** (and `uses_gateway_dns` asks every online device),
    because a network that has a device that has been off for a month would otherwise never run.
 6. **Checks, capture, zero-hit warnings are M16 and M17.** (M16 delivered the checks and the zero-hit warnings, M17 the
@@ -4677,7 +4691,7 @@ namespaces; the unprivileged container of the development environment has no `/d
 | a failed precondition ends the run as `error` | `TestAFailedPreconditionEndsTheRunAsErrorWithTheReason`, `TestAScenarioMaySkipAPrecondition`, `TestAGroupOrNetworkTargetNeedsOneDeviceOnline`, `TestOverlaysOfOtherOwnersOnTheTargetFailTheBaseline`, `TestAnOverlayActsOnTheTunnelItNames`, `TestAScenarioWithHostNamesNeedsADeviceThatUsesTheGatewaysDNS`; over the API `TestAFailedPreconditionEndsTheRunAsErrorOverTheAPI` |
 | an inline scenario runs without changing the active revision | `TestARunFromAFileAppliesItsStepsAndLeavesAReport` (the active revision is the same after the run, nothing is stored), `TestParametersSetTheTargetOfAnInlineScenario`, `TestAParameterThatNamesNothingIsRefused`; the parameters and the request: `TestParametersChangeAScenarioByDottedPath`, `TestSettingAMemberOfATargetReplacesTheTarget`, `TestAParameterThatCannotBeAppliedIsReportedAtItsPath`, `TestParameterizeScenarioChecksTheResult`, `TestDecodeRunRequest`, `TestDecodeRunOptions`; `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` |
 | the report contains all steps with their queue wait (`RunStep.queue_wait_ms`) | `TestTheReportHasAllStepsTheirQueueWaitAndTheFinalCounters`, `TestTheJUnitReportOfAPassedRunHasOneSuccessfulCase`, `TestTheJUnitReportOfARunThatEndedAsErrorHasAnErrorCase`, `TestAStepErrorIsATestCaseOfItsOwn`, `TestAnAbortedRunIsAnErrorInTheJUnitReport`, `TestTheEventsOfARunAreKeptInItsFile`; over the API `TestARunFromAFileAppliesItsStepsAndLeavesAReport` (report.json, report.xml, events) |
-| a step that waits behind a revision apply for more than 100 ms gets `step_late` | `TestAStepThatWaitsMoreThan100msGetsTheWarningStepLate` (100 ms is not late, 130 ms is), `TestAWriteBehindAnApplyInFlightReportsItsQueueWait` (the engine's queue wait on the fake clock), over the API `TestAStepBehindARevisionApplyWaitsAndTheRunSaysSo` (a held apply of a real revision) |
+| a step that waits behind a revision apply for more than 100 ms gets `step_late` | `TestAStepThatWaitsMoreThan100msGetsTheWarningStepLate` (100 ms is not late, 130 ms is), `TestAStepHandedOverMoreThan100msLateGetsTheWarningStepLate`, `TestAStepHandedOver100msLateIsNotLate`, `TestAStepLateForBothReasonsHasOneWarning`, `TestAStepTheTimelineReachesLateSaysSo` and `TestTheReadOfCountersBeforeAStepIsPartOfItsHandOver` (the hand-over, on the fake clock with `putDelay` and `readDelay`), `TestAWriteBehindAnApplyInFlightReportsItsQueueWait` (the engine's queue wait on the fake clock), over the API `TestAStepBehindARevisionApplyWaitsAndTheRunSaysSo` (a held apply of a real revision) |
 | Scope: stored scenarios, `POST /scenarios/{id}/runs`, owner, snapshot, revisions | `TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName`, `TestAStoredScenarioNeedsAllItsMilestones`, `TestStepTypesAndChecksOfLaterMilestonesAreRefused`, `TestAScenarioWithAnUnknownReferenceIsRefused`, `TestAnIdempotencyKeyMakesOneRun`, `TestARevisionThatDeletesWhatARunRefersToOrphansIt`, `TestARevisionThatDeletesWhatARunRefersToIsRefusedUnlessForced`, `TestARevisionOrphansTheScenarioOfARunThatRefersToWhatItDeletes` |
 | Scope: queue and owner, scopes of tokens | `TestAnAbortIsLimitedToTheOwnerOfTheRunForAScopedCaller`, `TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns` |
 

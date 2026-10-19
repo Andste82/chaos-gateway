@@ -255,6 +255,172 @@ steps:
 	}
 }
 
+// A step that falls due while the apply of the one before is still running is handed over late; more than 100 ms behind
+// its schedule it gets the warning step_late too, one for the step, naming the step it waited for (plan §2.10).
+func TestAStepHandedOverMoreThan100msLateGetsTheWarningStepLate(t *testing.T) {
+	h := newHarness(t)
+	h.gw.putDelay = func(step string) time.Duration {
+		if step == "slow" {
+			return 3 * time.Second
+		}
+		return 0
+	}
+	r := h.start(`
+name: behind
+target: {device: esp32-42}
+steps:
+  - {id: slow,  at: 0s, fault: {latency: 10ms}}
+  - {id: after, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+`)
+	h.clk.BlockUntil(1) // the write of the first step is in the executor
+	h.clk.Advance(3 * time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+
+	after := step(done, "after")
+	if after.StartOffsetMs == nil || *after.StartOffsetMs != 3000 || *after.ScheduledOffset != "1s" {
+		t.Fatalf("the step behind the apply: %+v", after)
+	}
+	if after.QueueWaitMs == nil || *after.QueueWaitMs != 0 {
+		t.Errorf("queue wait %v: the executor was not busy with the step, the timeline was", after.QueueWaitMs)
+	}
+	ws := warnings(done)
+	if len(ws) != 1 || ws[0].Code != model.StepLate || ws[0].Step == nil || *ws[0].Step != "after" {
+		t.Fatalf("warnings %+v", ws)
+	}
+	for _, want := range []string{"2000 ms late", "due at 1000 ms", "handed over at 3000 ms", "the step slow before it was still being applied until 3000 ms"} {
+		if !has(ws[0].Message, want) {
+			t.Errorf("the warning %q does not say %q", ws[0].Message, want)
+		}
+	}
+	if ws[0].Overlay != nil {
+		t.Errorf("a step that was not delayed by the executor names the overlay %v", ws[0].Overlay)
+	}
+}
+
+// A step that is late for both reasons has one warning with both causes.
+func TestAStepLateForBothReasonsHasOneWarning(t *testing.T) {
+	h := newHarness(t)
+	h.gw.queueWait = 130 * time.Millisecond // (the fake gateway reports it for every write)
+	h.gw.putDelay = func(step string) time.Duration {
+		if step == "slow" {
+			return 3 * time.Second
+		}
+		return 0
+	}
+	r := h.start(`
+name: both
+target: {device: esp32-42}
+steps:
+  - {id: slow,   at: 0s, fault: {latency: 10ms}}
+  - {id: behind, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+`)
+	h.clk.BlockUntil(1)
+	h.clk.Advance(3 * time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	byStep := map[string][]model.RunWarning{}
+	for _, w := range warnings(done) {
+		byStep[*w.Step] = append(byStep[*w.Step], w)
+	}
+	if len(byStep) != 2 || len(byStep["slow"]) != 1 || len(byStep["behind"]) != 1 {
+		t.Fatalf("one warning for each of the two steps, got %+v", warnings(done))
+	}
+	if m := byStep["slow"][0].Message; has(m, "handed to the executor") || !has(m, "waited 130 ms") {
+		t.Errorf("the step that was on time: %q", m)
+	}
+	m := byStep["behind"][0]
+	if !has(m.Message, "handed to the executor 2000 ms late") || !has(m.Message, "waited 130 ms for the executor") || m.Overlay == nil {
+		t.Errorf("the step that is late twice: %+v", m)
+	}
+}
+
+// 100 ms late is not late, as for the queue wait.
+func TestAStepHandedOver100msLateIsNotLate(t *testing.T) {
+	h := newHarness(t)
+	h.gw.putDelay = func(step string) time.Duration {
+		if step == "slow" {
+			return 1100 * time.Millisecond
+		}
+		return 0
+	}
+	r := h.start(`
+name: edge
+target: {device: esp32-42}
+steps:
+  - {id: slow, at: 0s, fault: {latency: 10ms}}
+  - {id: edge, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+`)
+	h.clk.BlockUntil(1)
+	h.clk.Advance(1100 * time.Millisecond)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	if s := step(done, "edge"); *s.StartOffsetMs != 1100 || len(warnings(done)) != 0 {
+		t.Errorf("start %v, warnings %+v", *s.StartOffsetMs, warnings(done))
+	}
+}
+
+// A clock that jumps over the time of a step hands it over late, and the warning says the timeline woke late, not that
+// an apply was running.
+func TestAStepTheTimelineReachesLateSaysSo(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(`
+name: jump
+target: {device: esp32-42}
+steps:
+  - {id: one, at: 0s, fault: {latency: 10ms}}
+  - {id: two, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+`)
+	h.waitStep(r.Id, "one", model.RunStepStatusApplied)
+	h.advance(5 * time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	ws := warnings(done)
+	if len(ws) != 1 || *ws[0].Step != "two" || !has(ws[0].Message, "4000 ms late") || !has(ws[0].Message, "the timeline reached the step 4000 ms late") {
+		t.Fatalf("warnings %+v", ws)
+	}
+}
+
+// The counters that are read before a step takes an overlay away are on the timeline: the step is handed to the engine
+// after them, `start_offset_ms` says so (and not the moment before the read), and a read that takes more than 100 ms
+// makes the step late, with that as the cause.
+func TestTheReadOfCountersBeforeAStepIsPartOfItsHandOver(t *testing.T) {
+	for name, back := range map[string]string{
+		"restore": "restore: true",
+		"remove":  "remove: one",
+		"replace": "fault: {latency: 20ms}", // the key of the first step: it replaces the overlay and ends its counters
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.obs.mu.Lock()
+			h.obs.readDelay = 1500 * time.Millisecond
+			h.obs.mu.Unlock()
+			r := h.start(`
+name: slowread
+target: {device: esp32-42}
+steps:
+  - {id: one,  at: 0s, fault: {latency: 10ms}}
+  - {id: back, at: 1s, ` + back + `}
+`)
+			h.waitStep(r.Id, "one", model.RunStepStatusApplied)
+			h.advance(time.Second) // the step is due; its read of the counters begins
+			h.clk.BlockUntil(1)
+			if st := h.stepStatus(r.Id, "back"); st != model.RunStepStatusPending {
+				t.Fatalf("the step is %s while the counters are read", st)
+			}
+			h.clk.Advance(1500 * time.Millisecond)
+			h.waitStep(r.Id, "back", model.RunStepStatusApplied)
+			// (a run that ends with an overlay reads its counters once more, slowly, at the end)
+			h.advanceUntil("the end of the run", func() bool { return h.get(r.Id).Status == model.RunStatusPassed })
+			done := h.get(r.Id)
+			got := step(done, "back")
+			if got.StartOffsetMs == nil || *got.StartOffsetMs != 2500 {
+				t.Errorf("start_offset_ms %v, want 2500: the moment the change goes to the engine, after the read", got.StartOffsetMs)
+			}
+			ws := warnings(done)
+			if len(ws) != 1 || *ws[0].Step != "back" || !has(ws[0].Message, "1500 ms late") || !has(ws[0].Message, "the counters of the overlays that go away were read for 1500 ms first") {
+				t.Fatalf("warnings %+v", ws)
+			}
+		})
+	}
+}
+
 // A step the engine refuses ends the run as error with the reason; the steps after it do not run, and
 // whatever the run wrote is removed.
 func TestAStepThatCannotBeExecutedEndsTheRunAsError(t *testing.T) {

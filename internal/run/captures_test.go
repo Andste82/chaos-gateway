@@ -250,7 +250,9 @@ steps:
 	if got := fc.startedCalls(); len(got) != 1 || got[0].scope.Device == nil || *got[0].scope.Device != idESP || got[0].name != "part rec" {
 		t.Fatalf("starts: %+v", got)
 	}
-	h.advance(10 * time.Second)
+	h.advance(5 * time.Second)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied) // (a clock that jumps over a step hands it over late, and says so)
+	h.advance(5 * time.Second)
 	h.waitStep(r.Id, "halt", model.RunStepStatusApplied)
 	if calls := fc.stoppedCalls(); len(calls) != 1 || calls[0].reason != model.CaptureStopReasonUser {
 		t.Fatalf("stops: %+v", calls)
@@ -309,8 +311,6 @@ steps:
 	}
 }
 
-// Starting a capture of a target that one already records, and stopping where none runs, change nothing.
-func TestCaptureStepsThatHaveNothingToDoAreSkipped(t *testing.T) {
 // `POST /captures/{id}/stop` ends any capture, a run's too. The reason `user` is the run's own only for a capture that its
 // `capture: stop` step ended; for the capture of the whole run, or of a step whose stop has not run, the rest of the run
 // is not recorded and the run says so.
@@ -368,6 +368,8 @@ steps:
 	}
 }
 
+// Starting a capture of a target that one already records, and stopping where none runs, change nothing.
+func TestCaptureStepsThatHaveNothingToDoAreSkipped(t *testing.T) {
 	h, fc := capHarness(t)
 	r := h.start(`
 name: idle

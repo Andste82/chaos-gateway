@@ -142,6 +142,13 @@ func Start(ctx context.Context, cfg SessionConfig) (*Session, error) {
 			return nil, ErrDiskLow
 		}
 	}
+	// A filter that no interface can use is refused before any socket is opened, so the answer does
+	// not depend on the privilege to open one; what depends on the link type is checked at the open.
+	for _, ic := range cfg.Interfaces {
+		if err := ic.Filter.Validate(LinkEthernet); err != nil {
+			return nil, err
+		}
+	}
 	for _, ic := range cfg.Interfaces {
 		ps, err := openPacketSocket(cfg.Namespace, ic.Name, ic.Filter, cfg.Snaplen)
 		if err != nil {

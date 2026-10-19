@@ -4556,8 +4556,12 @@ components:
       type: object
       required: [removed_overlays, aborted_runs, generation]
       properties:
-        removed_overlays: {type: integer}
-        aborted_runs: {type: integer}
+        removed_overlays:
+          type: integer
+          description: Overlays removed, including the ones that the aborted runs removed when they ended.
+        aborted_runs:
+          type: integer
+          description: Queued and running runs that were aborted (the caller's, or every run with `owner=all`).
         generation: {type: integer, format: int64}
 
     # ============================================================ auth and setup

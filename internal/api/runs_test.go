@@ -549,7 +549,7 @@ func TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns(t *testing.T) {
 	own := g.postRun(inlineRun("own", map[string]any{"network": "lab-hub"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "").json(t)["id"].(string)
 	g.waitStep(own, "a", "applied")
 	r := g.do("POST", "/reset", nil, nil, nil)
-	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) || r.json(t)["removed_overlays"] != float64(0) {
+	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) || r.json(t)["removed_overlays"] != float64(1) {
 		t.Fatalf("reset of the admin token: %d %s", r.Status, r.Body)
 	}
 	if st := g.run(own); st["status"] != "aborted" {
@@ -559,7 +559,7 @@ func TestRunsFollowTheTokenScopesAndResetStopsTheCallersRuns(t *testing.T) {
 		t.Errorf("the other token's run was stopped by the admin's own reset")
 	}
 	r = g.do("POST", "/reset?owner=all", nil, nil, nil)
-	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) {
+	if r.Status != 200 || r.json(t)["aborted_runs"] != float64(1) || r.json(t)["removed_overlays"] != float64(1) {
 		t.Fatalf("reset of all: %d %s", r.Status, r.Body)
 	}
 	if st := g.run(mine); st["status"] != "aborted" {

@@ -4576,7 +4576,8 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   depend on the request that made it. A token with the scope `overlays` may abort and renew only its own runs
   (`runLimit`), the scope `full` and the admin any. `POST /reset` aborts the caller's runs (every run with
   `owner=all`) first, which removes their overlays, then resets the overlays that are left; `aborted_runs` counts
-  them. `Server.Close` (the shutdown of `chaosgw api`, before the engine closes) aborts what is left with
+  them, and `removed_overlays` counts the overlays of those runs too (`Manager.AbortOwned` returns how many their
+  removal took away) next to the ones the reset removed. `Server.Close` (the shutdown of `chaosgw api`, before the engine closes) aborts what is left with
   `service stopping`.
 - **Records, restart, retention.** `<data dir>/runs/<id>/run.json` (the run as the API shows it, the final
   counters, schema version 1, written atomically each time the run changes, in order) and `events.jsonl` (the

@@ -55,6 +55,7 @@ type runState struct {
 	counters   []counterRecord
 	generation uint64 // of the last change of the run's overlays, for Abort
 	cleanupErr error  // why the overlays could not be removed when the run ended, nil when they were
+	removed    int    // how many overlays the removal at the end took away, for AbortOwned
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -622,8 +623,9 @@ func (m *Manager) Abort(ctx context.Context, id uuid.UUID, by *model.Actor) (Abo
 }
 
 // AbortOwned aborts every queued or running run of an owner (every run when by is nil) and returns how many
-// it aborted and the newest generation that removed overlays: `POST /reset`.
-func (m *Manager) AbortOwned(ctx context.Context, by *model.Actor, reason string) (int, uint64) {
+// it aborted, how many overlays their removal took away and the newest generation that removed overlays:
+// `POST /reset`.
+func (m *Manager) AbortOwned(ctx context.Context, by *model.Actor, reason string) (aborted, removed int, generation uint64) {
 	m.mu.Lock()
 	var rs []*runState
 	for _, r := range m.runs {
@@ -635,18 +637,18 @@ func (m *Manager) AbortOwned(ctx context.Context, by *model.Actor, reason string
 	for _, r := range rs {
 		m.abortNoWait(r, &abortCause{reason})
 	}
-	var gen uint64
 	for _, r := range rs {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			return len(rs), gen
+			return len(rs), removed, generation
 		}
 		m.mu.Lock()
-		gen = max(gen, r.generation)
+		generation = max(generation, r.generation)
+		removed += r.removed
 		m.mu.Unlock()
 	}
-	return len(rs), gen
+	return len(rs), removed, generation
 }
 
 // abortNoWait ends a run for the reason and returns at once: a queued run is finished here, a running one

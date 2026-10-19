@@ -493,7 +493,7 @@ func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 		by = &o
 	}
 	ctx := context.WithoutCancel(contextOf(c))
-	aborted, abortGen := s.runs.AbortOwned(ctx, by, "stopped by a reset")
+	aborted, byRuns, abortGen := s.runs.AbortOwned(ctx, by, "stopped by a reset")
 	res, err := s.cfg.Engine.ResetOverlays(ctx, by, actorOf(p))
 	if err != nil {
 		s.fail(c, err)
@@ -504,10 +504,11 @@ func (s *Server) Reset(c *gin.Context, params model.ResetParams) {
 		detail = "all"
 	}
 	// the overlays of the runs went with the runs: they count as removed overlays too
-	s.record(c, "overlay.reset", nil, 0, fmt.Sprintf("owner=%s removed=%d aborted_runs=%d", detail, res.Removed, aborted))
+	removed := res.Removed + byRuns
+	s.record(c, "overlay.reset", nil, 0, fmt.Sprintf("owner=%s removed=%d aborted_runs=%d", detail, removed, aborted))
 	gen := max(int64(res.Generation), int64(abortGen))
 	c.Header("Chaos-Generation", itoa(gen))
-	c.JSON(200, resetBody{RemovedOverlays: res.Removed, AbortedRuns: aborted, Generation: gen})
+	c.JSON(200, resetBody{RemovedOverlays: removed, AbortedRuns: aborted, Generation: gen})
 }
 
 // ---- faults

@@ -311,6 +311,63 @@ steps:
 
 // Starting a capture of a target that one already records, and stopping where none runs, change nothing.
 func TestCaptureStepsThatHaveNothingToDoAreSkipped(t *testing.T) {
+// `POST /captures/{id}/stop` ends any capture, a run's too. The reason `user` is the run's own only for a capture that its
+// `capture: stop` step ended; for the capture of the whole run, or of a step whose stop has not run, the rest of the run
+// is not recorded and the run says so.
+func TestACaptureThatAUserStopsBeforeTheRunEndsIsMissing(t *testing.T) {
+	h, fc := capHarness(t)
+	r := h.start(`
+name: stopped
+target: {device: esp32-42}
+capture: true
+steps:
+  - {id: rec,  at: 0s,  capture: start}
+  - {id: halt, at: 8s,  capture: stop}
+  - {id: end,  at: 10s, restore: true}
+`)
+	h.waitStep(r.Id, "rec", model.RunStepStatusApplied)
+	fc.endEarly(0, model.CaptureStopReasonUser, "") // someone stops the capture of the whole run at 0 s
+	h.advance(8 * time.Second)
+	h.waitStep(r.Id, "halt", model.RunStepStatusApplied)
+	h.advance(2 * time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	ws := warnings(done)
+	if len(ws) != 1 || ws[0].Code != model.CaptureMissing || ws[0].Step != nil || !has(ws[0].Message, "stopped by a user before the run ended") {
+		t.Fatalf("warnings %+v", ws)
+	}
+	if len(capArtifacts(done)) != 2 {
+		t.Errorf("what was recorded is still offered: %+v", deref(done.Artifacts))
+	}
+}
+
+// The same for a capture of a step that a user stops before the step that would: the stop step finds it stopped and the
+// run says it was not the step's.
+func TestACaptureOfAStepThatAUserStopsBeforeItsStopStepIsMissing(t *testing.T) {
+	h, fc := capHarness(t)
+	r := h.start(`
+name: stopped
+target: {device: esp32-42}
+steps:
+  - {id: rec,  at: 0s, capture: start}
+  - {id: halt, at: 8s, capture: stop}
+`)
+	h.waitStep(r.Id, "rec", model.RunStepStatusApplied)
+	fc.endEarly(0, model.CaptureStopReasonUser, "")
+	h.advance(8 * time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	ws := warnings(done)
+	if len(ws) != 1 || ws[0].Code != model.CaptureMissing || ws[0].Step == nil || *ws[0].Step != "rec" ||
+		!has(ws[0].Message, "stopped by a user before the step halt stopped it") {
+		t.Fatalf("warnings %+v", ws)
+	}
+	if calls := fc.stoppedCalls(); len(calls) != 0 {
+		t.Errorf("the run stopped a capture that had ended: %+v", calls)
+	}
+	if s := step(done, "halt"); s.Status != model.RunStepStatusApplied {
+		t.Errorf("the stop step %+v", s)
+	}
+}
+
 	h, fc := capHarness(t)
 	r := h.start(`
 name: idle

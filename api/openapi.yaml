@@ -1602,7 +1602,8 @@ paths:
         a failed precondition ends it as `error`). With `queue=false` a busy target is `409 target_busy` instead. The
         scenario is validated against the active revision (references by name or UUID, resolved in the stored
         snapshot); an inline scenario is stored with the run only and changes no revision. A step type or check type
-        this build does not have (`GET /capabilities`: `step_types`, `check_types`) is `422 unsupported_feature`.
+        this build does not have (`GET /capabilities`: `step_types`, `check_types`) is `422 unsupported_feature`. With
+        200 runs queued or running a new one is `422 capacity_exceeded`: abort some, or wait for them.
         The owner of the run is the token, or the admin user for the UI.
       x-milestone: M15
       x-required-scope: overlays
@@ -1670,6 +1671,10 @@ paths:
       tags: [runs]
       operationId: renewRun
       summary: Renew a run's lease (heartbeat)
+      description: |
+        Extends the lease of a run started with a `lease` (the run is aborted when the lease runs out unrenewed). A
+        token with the scope `overlays` may renew only its own runs (`403 forbidden`). A run without a lease, and
+        a run that has ended or is being aborted, is `422 validation_failed`.
       x-milestone: M15
       x-required-scope: overlays
       parameters:
@@ -1686,6 +1691,7 @@ paths:
       tags: [runs]
       operationId: getRunReportJson
       summary: Final report as JSON
+      description: A run that has not ended has no report yet; the answer is `404 not_found`.
       x-milestone: M15
       x-required-scope: read
       parameters:
@@ -1702,6 +1708,7 @@ paths:
       tags: [runs]
       operationId: getRunReportJunit
       summary: Final report as JUnit XML (one testsuite per run, one testcase per check, step errors as errors, zero-hit warnings as system-out or failures)
+      description: A run that has not ended has no report yet; the answer is `404 not_found`.
       x-milestone: M15
       x-required-scope: read
       parameters:
@@ -1718,6 +1725,7 @@ paths:
       tags: [runs]
       operationId: getRunEvents
       summary: All events of the run as JSON Lines
+      description: While the run goes on, the events written so far.
       x-milestone: M15
       x-required-scope: read
       parameters:
@@ -1775,7 +1783,7 @@ paths:
         group or selector source that reaches one is `422 validation_failed` with the code `management_network`
         (`global` leaves them out). A `pcap` file holds one link type; a
         scope that spans Ethernet and raw IP interfaces needs `pcapng`. A hostname destination arrives with M20
-        (`422 unsupported_feature`). Without `max_size`, `duration` or `ring_buffer` the capture stops at 1 GiB.
+        (`422 unsupported_feature`). Without `max_size` the capture stops at 1 GiB, also when a `duration` is given; a ring buffer is bounded by its files.
 
         `422 validation_failed` names the field (a scope that selects no interface, a device that has no
         address yet, a ring buffer next to a `max_size`); `422 capacity_exceeded` is the disk below 10 % free space
@@ -1793,6 +1801,9 @@ paths:
       responses:
         '201':
           description: Started
+          headers:
+            Location:
+              schema: {type: string}
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Capture'}
@@ -3785,12 +3796,22 @@ components:
       type: object
       description: |
         Exactly one check type besides `window` and `name`. Checks observe the scenario
-        target (flows, DNS log, TLS handshake events) inside the window, which opens when the step
-        `window.from` has been applied (`start`: when the timeline begins) and closes after `within` or
-        when the step `until` has been applied. Observations are made every 250 ms; one counts for the
-        window if the poll that sees it lies inside it. A connection that began after the window closed does
-        not count, however late the poll reads it; one without a start time in the connection table cannot
-        be dated and is judged by the poll. A positive check (`reconnected`, `traffic_seen`,
+        target (flows, DNS log, TLS handshake events) inside the window. A step has two moments: the timeline
+        hands its change to the engine, and the engine answers that the apply is verified; the change takes effect
+        in the kernel somewhere between the two. The window is placed so that this cannot make the check wrong.
+        A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) looks for what the change makes possible:
+        its window opens when `window.from` is handed over and, with `until`, closes at the answer of that step.
+        A negative check (`no_connection`, `traffic_not_seen`) claims that nothing happens while the change is in
+        force: its window opens at the answer of `window.from` and, with `until`, closes when that step is handed over.
+        With `within` the window is that long from its opening; `start` opens at the beginning of the timeline.
+        `CheckResult.window_start` and `window_end` are the wall times of these moments.
+
+        Connections are read every 250 ms. What counts is what changed between two polls inside the window; the
+        first poll after the window opened is the baseline, and a connection it finds is not news unless its start
+        time in the connection table (conntrack) is at or after `window_start`. After the window has closed, a
+        connection that began after `window_end` does not count, however late the poll reads it. A connection
+        without a start time cannot be dated and is judged by the poll. DNS queries are placed by the time stamp
+        in the DNS log, not by the moment the log is read. A positive check (`reconnected`, `traffic_seen`,
         `dns_query_seen`) passes at its first observation and fails when the window closes without one;
         a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
         the window closes. A run lasts until its last check is decided, so a window may reach past the last
@@ -3863,13 +3884,16 @@ components:
         from:
           type: string
           pattern: '^([a-z][a-z0-9_-]{0,31})$'
-          description: Step id whose application starts the window, or `start` (run start).
+          description: |
+            Step id whose hand-over (positive checks) or answer (negative checks) opens the window, or `start` (the beginning
+            of the timeline); see `Check`.
         within:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           description: Window length. Exactly one of `within` and `until`.
         until:
           allOf: [{$ref: '#/components/schemas/StepId'}]
-          description: Window ends when this step is applied.
+          description: |
+            Step that ends the window: its answer for a positive check, its hand-over for a negative one (see `Check`).
 
     # ============================================================ actors and overlays (plan §2.1.1)
     Actor:
@@ -5359,8 +5383,8 @@ components:
           type: string
           description: '`pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.'
           enum: [pending, passed, failed, error]
-        window_start: {type: string, format: date-time}
-        window_end: {type: string, format: date-time}
+        window_start: {type: string, format: date-time, description: 'Wall time at which the window opened (see `Check`). Absent while the window has not opened.'}
+        window_end: {type: string, format: date-time, description: 'Wall time at which the window closed (see `Check`). Absent while it is open.'}
         message: {type: string}
         evidence:
           type: array

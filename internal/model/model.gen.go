@@ -3121,12 +3121,22 @@ type CertificateUpload struct {
 }
 
 // Check Exactly one check type besides `window` and `name`. Checks observe the scenario
-// target (flows, DNS log, TLS handshake events) inside the window, which opens when the step
-// `window.from` has been applied (`start`: when the timeline begins) and closes after `within` or
-// when the step `until` has been applied. Observations are made every 250 ms; one counts for the
-// window if the poll that sees it lies inside it. A connection that began after the window closed does
-// not count, however late the poll reads it; one without a start time in the connection table cannot
-// be dated and is judged by the poll. A positive check (`reconnected`, `traffic_seen`,
+// target (flows, DNS log, TLS handshake events) inside the window. A step has two moments: the timeline
+// hands its change to the engine, and the engine answers that the apply is verified; the change takes effect
+// in the kernel somewhere between the two. The window is placed so that this cannot make the check wrong.
+// A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) looks for what the change makes possible:
+// its window opens when `window.from` is handed over and, with `until`, closes at the answer of that step.
+// A negative check (`no_connection`, `traffic_not_seen`) claims that nothing happens while the change is in
+// force: its window opens at the answer of `window.from` and, with `until`, closes when that step is handed over.
+// With `within` the window is that long from its opening; `start` opens at the beginning of the timeline.
+// `CheckResult.window_start` and `window_end` are the wall times of these moments.
+//
+// Connections are read every 250 ms. What counts is what changed between two polls inside the window; the
+// first poll after the window opened is the baseline, and a connection it finds is not news unless its start
+// time in the connection table (conntrack) is at or after `window_start`. After the window has closed, a
+// connection that began after `window_end` does not count, however late the poll reads it. A connection
+// without a start time cannot be dated and is judged by the poll. DNS queries are placed by the time stamp
+// in the DNS log, not by the moment the log is read. A positive check (`reconnected`, `traffic_seen`,
 // `dns_query_seen`) passes at its first observation and fails when the window closes without one;
 // a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
 // the window closes. A run lasts until its last check is decided, so a window may reach past the last
@@ -3184,10 +3194,14 @@ type CheckResult struct {
 	Name     string                    `json:"name"`
 
 	// Status `pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.
-	Status      CheckResultStatus `json:"status"`
-	Type        CheckResultType   `json:"type"`
-	WindowEnd   *time.Time        `json:"window_end,omitempty"`
-	WindowStart *time.Time        `json:"window_start,omitempty"`
+	Status CheckResultStatus `json:"status"`
+	Type   CheckResultType   `json:"type"`
+
+	// WindowEnd Wall time at which the window closed (see `Check`). Absent while it is open.
+	WindowEnd *time.Time `json:"window_end,omitempty"`
+
+	// WindowStart Wall time at which the window opened (see `Check`). Absent while the window has not opened.
+	WindowStart *time.Time `json:"window_start,omitempty"`
 }
 
 // CheckResultStatus `pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.
@@ -3198,10 +3212,11 @@ type CheckResultType string
 
 // CheckWindow defines model for CheckWindow.
 type CheckWindow struct {
-	// From Step id whose application starts the window, or `start` (run start).
+	// From Step id whose hand-over (positive checks) or answer (negative checks) opens the window, or `start` (the beginning
+	// of the timeline); see `Check`.
 	From string `json:"from"`
 
-	// Until Window ends when this step is applied.
+	// Until Step that ends the window: its answer for a positive check, its hand-over for a negative one (see `Check`).
 	Until *StepId `json:"until,omitempty"`
 
 	// Within Window length. Exactly one of `within` and `until`.

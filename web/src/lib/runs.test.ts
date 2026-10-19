@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Run, RunStep } from '../api/generated/model';
-import { artifactLabels, elapsedMs, isActive, isRunOf, lastRunByScenario, lateness, mergeRuns, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone } from './runs';
+import { artifactFileName, artifactLabels, elapsedMs, isActive, isRunOf, lastRunByScenario, lateness, mergeRuns, offsetText, progressPercent, resultText, signedMs, sortedArtifacts, stepMarks, stepsDone } from './runs';
 import { mqttOutage } from './scenarioFixtures';
 
 // The run in the UI (M19): its progress, the step in effect, the timing of a step against its schedule,
@@ -113,6 +113,17 @@ describe('artifacts and results', () => {
     expect(list.map((a) => a.kind)).toEqual(['capture', 'keylog', 'report_xml', 'report_json', 'events']);
     expect(sortedArtifacts(undefined)).toEqual([]);
     expect(artifactLabels.report_xml.note).toBe('JUnit');
+  });
+
+  it('a downloaded artifact is saved under the name of its kind and the start of the run id', () => {
+    const a = run({ id: '0a1b2c3d-0000-4000-8000-000000000001' });
+    const b = run({ id: '9f8e7d6c-0000-4000-8000-000000000002' });
+    expect(artifactFileName(a, { kind: 'events' })).toBe('run-0a1b2c3d-events.jsonl');
+    expect(artifactFileName(a, { kind: 'report_json' })).toBe('run-0a1b2c3d-report.json');
+    expect(artifactFileName(a, { kind: 'report_xml' })).toBe('run-0a1b2c3d-report.xml');
+    expect(artifactFileName(a, { kind: 'capture' })).toBe('run-0a1b2c3d-capture.pcapng');
+    expect(artifactFileName(a, { kind: 'keylog' })).toBe('run-0a1b2c3d-keylog.txt');
+    expect(artifactFileName(b, { kind: 'events' })).not.toBe(artifactFileName(a, { kind: 'events' }));
   });
 
   it('the newest run of a scenario is its last result, by id or by the name of an inline one', () => {

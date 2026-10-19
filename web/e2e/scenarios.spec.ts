@@ -699,6 +699,29 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-41: the artifacts of two runs are not saved under the same name.
+
+test('the artifacts of a run are saved under the name of the kind and the run', async ({ page }) => {
+  const gw = lab();
+  const ids = ['0a1b2c3d-0000-4000-8000-0000000000aa', '9f8e7d6c-0000-4000-8000-0000000000bb'];
+  gw.runs = ids.map((id) => runOf(SCN_MQTT, { id, status: 'passed', ended_at: ended(60_000), artifacts: artifactsOf(id) }));
+  await gw.install(page);
+  const saved: string[] = [];
+  for (const id of ids) {
+    await page.goto(`/runs/${id}`);
+    for (const label of ['events.jsonl', 'report.json', 'report.xml']) {
+      const link = page.getByRole('link', { name: `Download ${label}` });
+      const download = page.waitForEvent('download');
+      await link.click();
+      saved.push((await download).suggestedFilename());
+    }
+  }
+  expect(saved).toEqual([
+    'run-0a1b2c3d-events.jsonl', 'run-0a1b2c3d-report.json', 'run-0a1b2c3d-report.xml',
+    'run-9f8e7d6c-events.jsonl', 'run-9f8e7d6c-report.json', 'run-9f8e7d6c-report.xml',
+  ]);
+});
+
 // P4-AUDIT-40: a run outlives the deletion of its scenario; nothing links into a scenario page that is not there.
 
 const GONE = 'dead0000-0000-4000-8000-00000000d00d';

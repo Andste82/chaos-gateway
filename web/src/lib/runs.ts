@@ -120,6 +120,11 @@ export const artifactLabels: Record<Artifact['kind'], { title: string; file: str
   keylog: { title: 'TLS key log', file: 'keylog.txt', note: 'decrypts the capture' },
 };
 
+/** The name a downloaded artifact is saved under: the run's first eight characters keep the files of two runs apart ("run-0a1b2c3d-events.jsonl"). */
+export function artifactFileName(run: Pick<Run, 'id'>, a: Pick<Artifact, 'kind'>): string {
+  return `run-${run.id.slice(0, 8)}-${artifactLabels[a.kind].file}`;
+}
+
 /** The artifacts of a run in the order of the prototype: capture, JUnit, JSON, events (the key log with the capture). */
 export function sortedArtifacts(list: Artifact[] | undefined): Artifact[] {
   const rank: Record<Artifact['kind'], number> = { capture: 0, keylog: 1, report_xml: 2, report_json: 3, events: 4 };

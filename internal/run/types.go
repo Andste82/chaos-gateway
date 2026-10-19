@@ -161,8 +161,13 @@ type Config struct {
 	// Captures records the traffic of a run (`capture: true`, the `capture` steps); nil for a build that cannot.
 	Captures Captures
 	Log      *slog.Logger
-	// Retention is how long the record of an ended run is kept; DefaultRetention when zero.
+	// Retention is how long the record of an ended run is kept; DefaultRetention when zero. It is the retention until
+	// RetentionOf has an answer.
 	Retention time.Duration
+	// RetentionOf, when set, is asked whenever the retention is needed (recovery, the end of every run) and wins when it
+	// returns more than zero: the setting of the active configuration (`settings.retention.runs`) that can change
+	// while the service runs.
+	RetentionOf func() time.Duration
 	// MaxRuns limits the runs that are queued or running; DefaultMaxRuns when zero.
 	MaxRuns int
 	// EncodeEvent turns an engine event into the line of a run's event file (the API's Event); false

@@ -494,6 +494,43 @@ func TestTheLeaseOfARunIsRenewedOverTheAPIAndExpires(t *testing.T) {
 	g.do("POST", "/runs/"+plain+"/abort", nil, nil, nil)
 }
 
+// The record of an ended run is kept as long as `settings.retention.runs` of the active configuration says (the flag
+// --run-retention, 30 days, is only the default for a configuration that does not set it), and a change of the setting
+// counts for the runs that ended before it.
+func TestTheRetentionOfRunsIsTheSettingOfTheActiveConfiguration(t *testing.T) {
+	g, clk := readyRuns(t)
+	finished := func(name string) string {
+		t.Helper()
+		id := g.postRun(inlineRun(name, iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "0s", "restore", true)), "").json(t)["id"].(string)
+		g.waitRun(id, "passed")
+		return id
+	}
+	gone := func(id string) bool { return g.do("GET", "/runs/"+id, nil, nil, nil).Status == 404 }
+	setRetention := func(d string) {
+		t.Helper()
+		if r := g.apply(g.mustPatch(map[string]any{"settings": map[string]any{"retention": map[string]any{"runs": d}}})); r.Status != 200 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+	}
+
+	// longer than the 30 days of the default: the record outlives them
+	setRetention("2160h")
+	first := finished("first")
+	clk.Advance(31 * 24 * time.Hour)
+	second := finished("second") // the end of a run prunes
+	if gone(first) {
+		t.Fatal("the record of a run was deleted after 31 days, with a retention of 90 days")
+	}
+
+	// shorter: both older runs go when the next one ends
+	setRetention("24h")
+	clk.Advance(25 * time.Hour)
+	third := finished("third")
+	if !gone(first) || !gone(second) || gone(third) {
+		t.Errorf("with a retention of 24 h: first gone %v, second gone %v, third gone %v", gone(first), gone(second), gone(third))
+	}
+}
+
 func withLease(body map[string]any, lease string) map[string]any {
 	body["lease"] = lease
 	return body

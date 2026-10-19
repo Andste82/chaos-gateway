@@ -66,7 +66,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
 	keaEventsSocket := fs.String("kea-events-socket", "/run/chaosgw-kea-events/events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
-	runRetention := fs.Duration("run-retention", 30*24*time.Hour, "how long the record and the report of an ended run are kept")
+	runRetention := fs.Duration("run-retention", 30*24*time.Hour, "how long the record and the report of an ended run are kept when the active configuration does not set settings.retention.runs (which wins)")
 	capturesDir := fs.String("captures-dir", "", "volume of the packet captures, shared with the executor (one directory per capture); empty runs without captures")
 	captureQuota := fs.String("capture-quota", "5GiB", "total size of all captures when the configuration names none (settings.retention.captures_quota); the oldest stopped captures are deleted first")
 	captureMinFree := fs.Float64("capture-min-free", capturemgr.DefaultMinFreePercent, "percent of free space of the capture volume below which captures stop and new ones are refused")

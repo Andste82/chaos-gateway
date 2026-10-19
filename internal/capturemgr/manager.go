@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -692,7 +693,9 @@ func dirSize(dir string) (int64, error) {
 	return n, nil
 }
 
-var packetFile = regexp.MustCompile(`^capture(-[0-9]{5})?\.(pcap|pcapng)$`)
+// packetFile matches the files of a capture: capture.pcapng, or capture-00001.pcapng, … of a ring buffer. The number
+// has five digits up to 99999 and grows after that, so it is matched with five or more.
+var packetFile = regexp.MustCompile(`^capture(-[0-9]{5,})?\.(pcap|pcapng)$`)
 
 // ---- reading
 
@@ -890,6 +893,19 @@ func packetFiles(dir string) ([]string, error) {
 			names = append(names, e.Name())
 		}
 	}
-	sort.Strings(names)
+	// the numbers are compared as numbers: file 100000 comes after file 99999
+	sort.Slice(names, func(i, j int) bool {
+		return fileNumber(names[i]) < fileNumber(names[j])
+	})
 	return names, nil
+}
+
+// fileNumber is the number in the name of a file of a ring buffer, zero for the one file of a capture.
+func fileNumber(name string) int {
+	i, j := strings.IndexByte(name, '-'), strings.IndexByte(name, '.')
+	if i < 0 || j < i {
+		return 0
+	}
+	n, _ := strconv.Atoi(name[i+1 : j])
+	return n
 }

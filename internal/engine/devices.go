@@ -362,6 +362,30 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		}
 		next[d.ID] = st
 	}
+	// the network of a device that does not declare one: that of its DHCP lease, else the one its address
+	// lies in, so that every consumer (the scope of a run, a capture, a wait) agrees on where it is
+	var world *domain.World
+	for _, st := range next {
+		if st.Network != "" {
+			continue
+		}
+		if st.Lease != nil && st.Lease.Network != uuid.Nil {
+			st.Network = strings.ToLower(st.Lease.Network.String())
+			continue
+		}
+		if world == nil {
+			world, _ = domain.NewWorld(cfg, nil)
+		}
+		if world == nil {
+			break
+		}
+		for _, a := range st.Addresses {
+			if n, ok := world.NetworkOf(a); ok {
+				st.Network = n
+				break
+			}
+		}
+	}
 	for did, st := range next {
 		if p := t.devices[did]; p != nil {
 			st.LastSeen = p.LastSeen

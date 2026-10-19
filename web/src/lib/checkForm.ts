@@ -4,6 +4,8 @@
 import type { Check, Destination } from '../api/generated/model';
 import { createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp } from '../api/generated/zod/overlays/overlays';
 import { createRunBodyTwoInlineOneStepsItemAtRegExp as durationRegExp } from '../api/generated/zod/runs/runs';
+import { durationMs } from './format';
+import { messages } from './scenarioRules';
 import { checkType, type CheckType } from './scenarios';
 import {
   destinationOf,
@@ -103,6 +105,7 @@ export function checkFormErrors(f: CheckForm, ctx: CheckContext): Partial<Record
   if (f.from !== 'start' && !ctx.steps.includes(f.from)) e.from = 'Choose the step that opens the window, or the start.';
   if (f.windowKind === 'within') {
     if (!durationRegExp.test(f.within.trim())) e.within = 'A time like 30s or 2m.';
+    else if (durationMs(f.within.trim()) === 0) e.within = messages.zeroWindow;
   } else if (!ctx.steps.includes(f.until)) e.until = 'Choose the step that closes the window.';
   return e;
 }

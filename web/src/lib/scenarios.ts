@@ -3,13 +3,14 @@
 // preview like a profile. This module reads a scenario in the user's words (step and check types, the line
 // each step and check gets, the length of the timeline), orders and edits its steps, finds the problems the
 // gateway would refuse before the draft is sent, and says what changed between two versions of a scenario.
-import type { Check, Scenario, Step } from '../api/generated/model';
+import type { Check, Scenario, Scope, Step } from '../api/generated/model';
 import {
   createRunBodyTwoInlineOneNameRegExp as nameRegExp,
   createRunBodyTwoInlineOneStepsItemAtRegExp as durationRegExp,
   createRunBodyTwoInlineOneStepsItemIdRegExp as stepIdRegExp,
 } from '../api/generated/zod/runs/runs';
-import { accessLabel, describeDestination, type FieldChange } from './rules';
+import { accessLabel, describeDestination, resetError, type FieldChange } from './rules';
+import { createsOverlay, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
 import { describeMatch, describeScope, faultChips, type Names } from './faults';
 import { durationMs, formatDuration } from './format';
 import { jsonEqual } from './mergePatch';
@@ -219,10 +220,14 @@ function present(o: object, keys: readonly string[]): string[] {
 /**
  * What the gateway would refuse in a scenario that the UI can see without it (the checks of
  * `domain.ValidateScenario` that need nothing of the rest of the configuration): the name, one type per
- * step and check, the step ids and offsets, a `remove` of a step that comes earlier, and the windows of the
- * checks. `others` are the names of the other scenarios (names are unique, case-insensitive).
+ * step and check, the step ids (not `start`) and offsets, a `remove` of an earlier step that makes an overlay, a
+ * `capture: stop` after the start of the same target, a step that stays inside the target, a tunnel inside it, a
+ * reset of TCP, a timeout and a window longer than zero, and the windows of the checks. `others` are the names of
+ * the other scenarios (names are unique, case-insensitive). What needs the configuration (is a device in the
+ * group or the network of the target, is a client in the target's network) is checked as far as `topology` tells;
+ * without it only the certain cases are problems.
  */
-export function scenarioProblems(sc: Scenario, others: string[] = []): ScenarioProblem[] {
+export function scenarioProblems(sc: Scenario, others: string[] = [], topology: Topology = {}): ScenarioProblem[] {
   // the scenario may come from a text (the YAML view, an import): whatever is not where it should be is a problem, not an error
   const out: ScenarioProblem[] = [];
   const add = (path: string, message: string) => out.push({ path, message });
@@ -261,19 +266,46 @@ export function scenarioProblems(sc: Scenario, others: string[] = []): ScenarioP
     }
     const id = str(s.id) ?? '';
     if (!stepIdRegExp.test(id)) add(`${p}/id`, 'Letters, digits, dash and underscore; starting with a lower-case letter; at most 32.');
-    else if (ids.has(id)) add(`${p}/id`, `The id ${id} is used by another step.`);
-    else ids.set(id, i);
+    else {
+      if (id === reservedStepId) add(`${p}/id`, messages.reservedId);
+      else if (ids.has(id)) add(`${p}/id`, `The id ${id} is used by another step.`);
+      if (!ids.has(id)) ids.set(id, i);
+    }
     if (!durationRegExp.test(str(s.at) ?? '')) add(`${p}/at`, 'A time like 0s, 10s or 1m30s.');
     const types = present(s, stepKeys);
     if (types.length === 0) add(p, 'A step needs one of: ' + stepKeys.join(', ') + '.');
     else if (types.length > 1) add(p, `A step has exactly one of its types; this one has ${types.join(' and ')}.`);
   });
+  // the rules about the target and what a step does (the gateway reports them for a step with exactly one type)
+  const scenarioTarget = target && Object.keys(target).length === 1 ? (target as Scope) : undefined;
   steps.forEach((s, i) => {
-    if (!s || s.remove === undefined) return;
+    if (!s || present(s, stepKeys).length !== 1) return;
+    const p = `/steps/${i}`;
+    const own = obj(s.target) as Scope | undefined;
+    if (own && scenarioTarget && !scopeWithin(own, scenarioTarget, topology)) add(`${p}/target`, messages.widened);
+    const effective = own ?? scenarioTarget;
+    const rule = obj(s.rule);
+    const reset = rule ? resetError(str(rule.action), str(rule.protocol)) : undefined;
+    if (reset) add(`${p}/rule/action`, reset);
+    const wait = obj(s.wait);
+    if (wait && durationRegExp.test(str(wait.timeout) ?? '') && durationMs(str(wait.timeout)) === 0) add(`${p}/wait/timeout`, messages.zeroTimeout);
+    if (s.capture === 'stop' && effective) {
+      const before = steps.flatMap((x, j) => (x && j !== i && (rank.get(j) ?? 0) < (rank.get(i) ?? 0) ? [x as unknown as Step] : []));
+      if (!startsCapture(before, scenarioTarget!, effective)) add(`${p}/capture`, messages.captureStop);
+    }
+    const fault = obj(s.fault);
+    const tunnel = fault?.family === 'tunnel' ? obj(fault.tunnel) : obj(s.wireguard);
+    if (effective && tunnel && tunnelOutsideTarget({ client: str(tunnel.client), link: str(tunnel.link) }, effective, topology)) {
+      add(fault?.family === 'tunnel' ? `${p}/fault/tunnel` : `${p}/wireguard`, messages.tunnel);
+    }
+  });
+  steps.forEach((s, i) => {
+    if (!s || s.remove === undefined || present(s, stepKeys).length !== 1) return;
     const named = str(s.remove) ?? '';
     const at = ids.get(named);
     if (at === undefined) add(`/steps/${i}/remove`, `There is no step ${named}.`);
     else if (named === s.id || (rank.get(at) ?? 0) >= (rank.get(i) ?? 0)) add(`/steps/${i}/remove`, `Step ${named} does not come before this one.`);
+    else if (steps[at] && !createsOverlay(steps[at] as unknown as Step)) add(`/steps/${i}/remove`, messages.noOverlay(named));
   });
   checks.forEach((c, i) => {
     const p = `/checks/${i}`;
@@ -294,6 +326,7 @@ export function scenarioProblems(sc: Scenario, others: string[] = []): ScenarioP
     if (from !== 'start' && !ids.has(from)) add(`${p}/window/from`, from ? `There is no step ${from}.` : 'Choose the step that opens the window, or the start.');
     if ((w.within === undefined) === (w.until === undefined)) add(`${p}/window`, 'A window has exactly one of within and until.');
     else if (w.within !== undefined && !durationRegExp.test(str(w.within) ?? '')) add(`${p}/window/within`, 'A time like 30s or 2m.');
+    else if (w.within !== undefined && durationMs(str(w.within)) === 0) add(`${p}/window/within`, messages.zeroWindow);
     else if (w.until !== undefined) {
       const until = str(w.until) ?? '';
       const to = ids.get(until);

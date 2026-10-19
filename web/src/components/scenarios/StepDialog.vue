@@ -10,11 +10,12 @@ import { computed, ref, useId, watch } from 'vue';
 import type { Scenario, Step } from '../../api/generated/model';
 import { useCapabilities, useProfiles } from '../../composables/gateway';
 import { useScenarioApi } from '../../composables/draftApi';
-import { useScenarioTargets } from '../../composables/scenarioTargets';
+import { useScenarioTargets, useTopology } from '../../composables/scenarioTargets';
 import { durationMs } from '../../lib/format';
 import { accessLabels, rejectLabels } from '../../lib/rules';
 import { describeScope } from '../../lib/faults';
-import { scopeOf } from '../../lib/faultForm';
+import { scopeOf, tunnelOf } from '../../lib/faultForm';
+import { createsOverlay, scopeWithin, tunnelOutsideTarget } from '../../lib/scenarioRules';
 import { freeStepId, stepsBefore, stepTypeLabels, withStep, type StepType, stepTypes } from '../../lib/scenarios';
 import { profileTitle } from '../../lib/profileNames';
 import {
@@ -49,6 +50,7 @@ const open = defineModel<boolean>('open', { required: true });
 const draft = useDraftStore();
 const uid = useId();
 const targets = useScenarioTargets();
+const topology = useTopology();
 const profiles = useProfiles();
 const capabilities = useCapabilities();
 const { networks } = useNames();
@@ -124,13 +126,21 @@ function lastAt(sc: Scenario): string {
 
 const others = computed(() => props.scenario.config.steps.filter((s) => s.id !== was).map((s) => s.id));
 const earlier = computed(() => stepsBefore(props.scenario.config, form.value.at.trim(), was));
-const clientErrors = computed(() => stepFormErrors(form.value, { others: others.value, earlier: earlier.value }));
+const clientErrors = computed(() =>
+  stepFormErrors(form.value, {
+    others: others.value,
+    earlier: earlier.value,
+    steps: props.scenario.config.steps,
+    target: props.scenario.config.target,
+    topology: topology.value,
+  }),
+);
 function touched(f: string): boolean {
   const was0 = JSON.parse(openedForm || '{}') as Record<string, unknown>;
   const differs = (k: string) => JSON.stringify((form.value as unknown as Record<string, unknown>)[k]) !== JSON.stringify(was0[k]);
   if (f === 'id' || f === 'at' || f === 'narrow') return differs(f);
   if (f === 'profile') return differs('profile');
-  return differs('fault') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('type');
+  return differs('fault') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('capture') || differs('type');
 }
 const shownClientErrors = computed(() =>
   tried.value ? clientErrors.value : (Object.fromEntries(Object.entries(clientErrors.value).filter(([f]) => touched(f))) as typeof clientErrors.value),
@@ -144,7 +154,8 @@ useScenarioApi(open, () => title.value, () => props.scenario.id, () => result.va
 const narrowable = computed(() => form.value.type !== 'wireguard' && !(form.value.type === 'fault' && form.value.fault.family === 'tunnel') && !form.value.kept);
 const narrowOptions = computed(() => [
   { value: '', label: `The scenario's target (${describeScope(props.scenario.config.target, targets.names.value)})` },
-  ...targets.options.value,
+  // a step narrows the scenario's target, never widens it
+  ...targets.options.value.filter((o) => scopeWithin(scopeOf(o.value), props.scenario.config.target, topology.value)),
 ]);
 const narrowName = computed(() => (form.value.narrow ? describeScope(scopeOf(form.value.narrow), targets.names.value) : ''));
 
@@ -154,8 +165,9 @@ const profileOptions = computed(() => {
   for (const [id, p] of Object.entries(draft.effectiveProfiles)) if (!out.some((o) => o.value === id)) out.push({ value: id, label: `${profileTitle(p.name)} (not applied yet)` });
   return out;
 });
-const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
-const removable = computed(() => props.scenario.config.steps.filter((s) => earlier.value.includes(s.id)));
+// the tunnels inside the scenario's target, and the earlier steps that made an overlay
+const tunnels = computed(() => tunnelOptions(networks.data.value ?? []).filter((t) => !tunnelOutsideTarget(tunnelOf(t.value), props.scenario.config.target, topology.value)));
+const removable = computed(() => props.scenario.config.steps.filter((s) => earlier.value.includes(s.id) && createsOverlay(s)));
 
 function submit() {
   tried.value = true;
@@ -254,15 +266,22 @@ const typeHints: Record<string, string> = {
           <p v-if="errors.profile" :id="eid('profile')" class="field-error">{{ errors.profile }}</p>
         </div>
 
-        <FaultStepFields v-else-if="form.type === 'fault'" v-model="form.fault" :errors="errors" />
+        <FaultStepFields v-else-if="form.type === 'fault'" v-model="form.fault" :errors="errors" :tunnels="tunnels" />
 
         <template v-else-if="form.type === 'rule'">
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="label" :for="fid('action')">Access</label>
-              <select :id="fid('action')" v-model="form.action" class="input">
+              <select
+                :id="fid('action')"
+                v-model="form.action"
+                class="input"
+                :aria-invalid="!!errors.action"
+                :aria-describedby="errors.action ? eid('action') : undefined"
+              >
                 <option v-for="(label, a) in accessLabels" :key="a" :value="a">{{ label }}</option>
               </select>
+              <p v-if="errors.action" :id="eid('action')" class="field-error">{{ errors.action }}</p>
             </div>
             <div v-if="form.action === 'reject'" class="col-span-2">
               <label class="label" :for="fid('rejectWith')">Reject with</label>
@@ -315,6 +334,7 @@ const typeHints: Record<string, string> = {
             <label class="flex items-center gap-2"><input v-model="form.capture" type="radio" value="start" />Start</label>
             <label class="flex items-center gap-2"><input v-model="form.capture" type="radio" value="stop" />Stop</label>
           </div>
+          <p v-if="errors.capture" class="field-error">{{ errors.capture }}</p>
         </div>
 
         <template v-else-if="form.type === 'wait'">

@@ -3,6 +3,7 @@
 // `chaosctl run -f` takes it, or choose the file. References may be names or UUIDs. The scenario goes into the
 // draft as a new one, like one made with the forms; the preview and the apply take it to the gateway.
 import { computed, ref, useId, watch } from 'vue';
+import { useTopology } from '../../composables/scenarioTargets';
 import { newId } from '../../lib/ids';
 import { parseScenarioYaml, type RefIndex } from '../../lib/scenarioYaml';
 import { useDraftStore } from '../../stores/draft';
@@ -13,6 +14,7 @@ const open = defineModel<boolean>('open', { required: true });
 const emit = defineEmits<{ saved: [id: string] }>();
 
 const draft = useDraftStore();
+const topology = useTopology();
 const uid = useId();
 const text = ref('');
 const tried = ref(false);
@@ -24,7 +26,7 @@ watch(open, (o) => {
   }
 });
 
-const result = computed(() => parseScenarioYaml(text.value, props.index, props.names));
+const result = computed(() => parseScenarioYaml(text.value, props.index, props.names, topology.value));
 
 async function pick(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0];

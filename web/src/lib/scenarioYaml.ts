@@ -7,6 +7,7 @@ import { parseDocument, stringify } from 'yaml';
 import type { Scenario } from '../api/generated/model';
 import { GetScenarioResponse } from '../api/generated/zod/config/config';
 import { cloneJSON } from './mergePatch';
+import type { Topology } from './scenarioRules';
 import { scenarioProblems, type ScenarioProblem } from './scenarios';
 
 /** An object a reference can name: its UUID and its name. */
@@ -179,9 +180,10 @@ const pointer = (p: PropertyKey[]): string => p.map((s) => `/${String(s)}`).join
 /**
  * Reads a scenario from YAML (a file as `chaosctl run -f` takes it, or what the YAML tab holds): the syntax, a
  * mapping at the top, the references as names or UUIDs, the schema, the fields the format has and the
- * problems `scenarioProblems` finds. `others` are the names of the other scenarios.
+ * problems `scenarioProblems` finds. `others` are the names of the other scenarios, `topology` what is known of the
+ * configuration for the rules about the target.
  */
-export function parseScenarioYaml(text: string, index: RefIndex, others: string[] = []): YamlResult {
+export function parseScenarioYaml(text: string, index: RefIndex, others: string[] = [], topology: Topology = {}): YamlResult {
   const doc = parseDocument(text, { prettyErrors: true, uniqueKeys: true });
   if (doc.errors.length) {
     return {
@@ -204,7 +206,7 @@ export function parseScenarioYaml(text: string, index: RefIndex, others: string[
     problems.push(p);
   };
   const sc = scenario as Scenario;
-  scenarioProblems(sc, others).forEach(add);
+  scenarioProblems(sc, others, topology).forEach(add);
   const parsed = GetScenarioResponse.shape.config.safeParse(scenario);
   if (parsed.success) {
     const stripped: ScenarioProblem[] = [];

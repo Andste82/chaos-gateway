@@ -28,7 +28,7 @@ import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import { firstError, useActiveConfig, useActiveRuns, useGatewayState, useLastRuns, useNames, useRun, useRuns, useScenarioRuns, useScenarios } from '../composables/gateway';
-import { useRefIndex } from '../composables/scenarioTargets';
+import { useRefIndex, useTopology } from '../composables/scenarioTargets';
 import { useNow } from '../composables/useNow';
 import { describeScope } from '../lib/faults';
 import { formatAgo } from '../lib/format';
@@ -47,6 +47,7 @@ const runs = useRuns();
 const active = useActiveConfig();
 const { names } = useNames();
 const index = useRefIndex();
+const topology = useTopology();
 const state = useGatewayState();
 const connection = useConnectionStore();
 const queryClient = useQueryClient();
@@ -161,7 +162,7 @@ function started(r: Run) {
 
 // the definition shown: the run's own snapshot while a run is shown (what it executes), else the scenario as the draft has it
 const shown = computed<Scenario | undefined>(() => (run.value?.snapshot ?? selected.value?.config) as Scenario | undefined);
-const problems = computed(() => (selected.value && !selected.value.deleted ? scenarioProblems(selected.value.config, allNames.value.filter((n) => n !== selected.value!.config.name)) : []));
+const problems = computed(() => (selected.value && !selected.value.deleted ? scenarioProblems(selected.value.config, allNames.value.filter((n) => n !== selected.value!.config.name), topology.value) : []));
 const refused = computed(() => (selected.value ? Object.entries(draft.serverErrors[selected.value.id] ?? {}) : []));
 
 // ---- the editors

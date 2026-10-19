@@ -31,10 +31,13 @@ type dnsBed struct {
 	direct func() (string, error)
 }
 
-func newDNSBed(t *testing.T) *dnsBed {
+func newDNSBed(t *testing.T) *dnsBed { return newDNSBedOn(t, newBedGW) }
+
+// newDNSBedOn is newDNSBed on the gateway that start brings up (newBedGW, or bedCapture with the device client-a).
+func newDNSBedOn(t *testing.T, start func(*testing.T, ...func(*options)) (*gw, *testbed.Topology)) *dnsBed {
 	ns := fmt.Sprintf("svc%06x", rand.Intn(1<<24))
 	t.Cleanup(func() { _ = exec.Command("ip", "netns", "delete", ns).Run() })
-	g, top := newBedGW(t, func(o *options) {
+	g, top := start(t, func(o *options) {
 		o.serviceNS = ns
 		o.resolvers = []netip.Addr{netip.MustParseAddr(testbed.ServerAddr)}
 	})

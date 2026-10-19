@@ -214,3 +214,161 @@ func TestAFaultThatNeverMatchesIsAZeroHitWarningOnTheRealKernel(t *testing.T) {
 		}
 	}
 }
+
+// brokerRun is a run of the device client-a with one check, a window from the step go (at 1 s) to the step end.
+func brokerRun(name, endAt string, check map[string]any) map[string]any {
+	body := inlineRun(name, map[string]any{"device": clientA},
+		step("go", "1s", "fault", map[string]any{"latency": "5ms", "destination": map[string]any{"cidr": testbed.ServerAddr + "/32"}}),
+		step("end", endAt, "restore", true))
+	body["inline"].(map[string]any)["checks"] = []any{check}
+	return body
+}
+
+// P4-AUDIT-51: `traffic_not_seen` with `except` on the real kernel: a device that talks to the allowed server passes
+// it, one that also talks to another server fails it, and the message names the connection.
+func TestTrafficNotSeenWithExceptDecidesOnTheRealKernel(t *testing.T) {
+	g, top := bedCapture(t)
+	g.mintToken("overlays")
+	check := map[string]any{"traffic_not_seen": map[string]any{"except": []any{map[string]any{"cidr": testbed.ServerAddr + "/32"}}},
+		"window": map[string]any{"from": "go", "until": "end"}}
+	for _, c := range []struct{ name, server, status string }{
+		{"except-allowed", testbed.ServerAddr, "passed"},
+		{"except-other", testbed.ServerAddr2, "failed"},
+	} {
+		r := g.postRun(brokerRun(c.name, "8s", check), "")
+		if r.Status != 201 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+		id := r.json(t)["id"].(string)
+		g.waitStep(id, "go", "applied")
+		if out, err := top.A.Run(context.Background(), "python3", "-c", tryScript, c.server); err != nil || strings.TrimSpace(out) != "ok" {
+			t.Fatalf("%s: the device does not reach %s: %q %v", c.name, c.server, out, err)
+		}
+		done := g.waitRun(id, "passed", "failed", "error")
+		got := done["checks"].([]any)[0].(map[string]any)
+		if got["status"] != c.status {
+			t.Errorf("%s: the check is %v: %v", c.name, got["status"], got["message"])
+		}
+		if c.status == "failed" && !strings.Contains(got["message"].(string), c.server+":8883") {
+			t.Errorf("%s: the message does not name the connection: %v", c.name, got["message"])
+		}
+	}
+}
+
+// P4-AUDIT-51: `dns_query_seen` on the real kernel: a device that resolves a name through the gateway's DNS inside the
+// window passes it, and the log of the proxy assigns the query to the device (the check ignores a query without one);
+// a device that does not ask fails it.
+func TestDNSQuerySeenDecidesForADeviceOnTheRealKernel(t *testing.T) {
+	bed := newDNSBedOn(t, bedCapture)
+	g, top := bed.g, bed.top
+	g.mintToken("overlays")
+	check := func(within string) map[string]any {
+		return map[string]any{"dns_query_seen": map[string]any{"name": "example.test"}, "window": map[string]any{"from": "go", "within": within}}
+	}
+
+	r := g.postRun(brokerRun("dns-asked", "10s", check("8s")), "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := r.json(t)["id"].(string)
+	g.waitStep(id, "go", "applied")
+	if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
+		t.Fatalf("A does not resolve through the gateway: %q %v", out, err)
+	}
+	done := g.waitRun(id, "passed", "failed", "error")
+	c := done["checks"].([]any)[0].(map[string]any)
+	if c["status"] != "passed" {
+		t.Fatalf("the check is %v: %v", c["status"], c["message"])
+	}
+	if ev, _ := c["evidence"].([]any); len(ev) == 0 || ev[0].(map[string]any)["device"] != espID {
+		t.Errorf("the query is not the device's: %v", c["evidence"])
+	}
+	// the entries of the log carry the device that the client address maps to
+	items := g.do("GET", "/dns/queries?name=example.test", nil, nil, nil).json(t)["items"].([]any)
+	seen := 0
+	for _, it := range items {
+		e := it.(map[string]any)
+		if e["client"] != testbed.ClientAAddr {
+			continue
+		}
+		seen++
+		if e["device"] != espID {
+			t.Errorf("a query of A is logged for the device %v: %v", e["device"], e)
+		}
+	}
+	if seen == 0 {
+		t.Errorf("no query of A in the log: %v", items)
+	}
+
+	r = g.postRun(brokerRun("dns-silent", "6s", check("3s")), "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	done = g.waitRun(r.json(t)["id"].(string), "passed", "failed", "error")
+	c = done["checks"].([]any)[0].(map[string]any)
+	if c["status"] != "failed" || !strings.Contains(c["message"].(string), "no device of the target asked for example.test") {
+		t.Errorf("a device that asked nothing in the window: %v: %v", c["status"], c["message"])
+	}
+}
+
+// P4-AUDIT-15: the checks read the connections of the kernel, and a packet that the gateway drops in the forward path
+// leaves no entry there. With a drop rule in force and a device that keeps trying, `traffic_not_seen` and `no_connection`
+// pass and `traffic_seen` fails, although the rule counts the packets: the limit that the spec and the M16 decisions
+// state.
+func TestTheTrafficChecksDoNotSeeWhatTheGatewayDropsOnTheRealKernel(t *testing.T) {
+	g, top := bedCapture(t)
+	g.mintToken("overlays")
+	server := map[string]any{"cidr": testbed.ServerAddr + "/32"}
+	body := inlineRun("drop-limit", map[string]any{"device": clientA},
+		step("drop", "1s", "rule", map[string]any{"action": "drop", "protocol": "tcp", "ports": []int{8883}, "destination": server}),
+		step("end", "25s", "restore", true))
+	window := map[string]any{"from": "drop", "within": "6s"}
+	body["inline"].(map[string]any)["checks"] = []any{
+		map[string]any{"traffic_not_seen": map[string]any{"destination": server}, "window": window},
+		map[string]any{"no_connection": map[string]any{"protocol": "tcp", "ports": []int{8883}}, "window": window},
+		map[string]any{"traffic_seen": map[string]any{"destination": server}, "window": window},
+	}
+	r := g.postRun(body, "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := r.json(t)["id"].(string)
+	g.waitStep(id, "drop", "applied")
+	// a device that starts only now: every attempt meets the drop, nothing is established before the restore
+	device := top.A.Start("python3", "-c", deviceScript, testbed.ServerAddr, "8883")
+	statuses := func() map[string]string {
+		out := map[string]string{}
+		for _, c := range g.run(id)["checks"].([]any) {
+			m := c.(map[string]any)
+			out[m["type"].(string)] = m["status"].(string)
+		}
+		return out
+	}
+	eventuallyTrue(t, "the checks to be decided", func() bool {
+		for _, s := range statuses() {
+			if s == "pending" {
+				return false
+			}
+		}
+		return true
+	})
+	if strings.Contains(device.Output(), "connected") {
+		t.Fatalf("the drop does not hold, the device is connected: %s", device.Output())
+	}
+	st := statuses()
+	if st["traffic_not_seen"] != "passed" || st["no_connection"] != "passed" || st["traffic_seen"] != "failed" {
+		t.Errorf("check results %v", st)
+	}
+	done := g.waitRun(id, "passed", "failed", "error")
+	rep := g.do("GET", "/runs/"+id+"/report.json", nil, nil, nil).json(t)
+	var dropped float64
+	for _, c := range rep["counters"].([]any) {
+		m := c.(map[string]any)
+		if m["step"] == "drop" {
+			dropped = m["counters"].(map[string]any)["packets"].(float64)
+		}
+	}
+	if dropped < 1 {
+		t.Errorf("the rule dropped no packet, so the device did not try (run %v): %v", done["status"], rep["counters"])
+	}
+}

@@ -467,6 +467,33 @@ func TestARingBufferWhoseFilesOverflowTheQuotaCheckIsRefused(t *testing.T) {
 
 const mib = 1 << 20
 
+// An error of the files at the end is a failure, whatever stopped the capture; a full disk stays the reason disk_low.
+func TestAnErrorWhileClosingTheFilesFailsTheCaptureWhateverStoppedIt(t *testing.T) {
+	for _, c := range []struct {
+		reason string
+		failed bool
+	}{{"user", true}, {"duration", true}, {"size", true}, {"run_end", true}, {"disk_low", false}} {
+		m, op, _ := newManager(t, t.TempDir())
+		cp, err := m.Start(context.Background(), uplinkRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		op.last().end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: c.reason, Packets: 7, Size: 700, Error: "flush: input/output error"})
+		got, err := m.Wait(context.Background(), cp.Id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.failed {
+			if got.Status != model.CaptureStatusFailed || *got.StopReason != model.CaptureStopReasonError || got.Message == nil || !strings.Contains(*got.Message, "input/output error") {
+				t.Errorf("%s: %+v, want failed with the error in the message", c.reason, got)
+			}
+		} else if got.Status != model.CaptureStatusStopped || *got.StopReason != model.CaptureStopReasonDiskLow {
+			t.Errorf("%s: %+v, want stopped for a full disk", c.reason, got)
+		}
+		m.Close(context.Background())
+	}
+}
+
 // The oldest stopped captures are the evidence of runs: a request that cannot be served leaves every one of them.
 func TestARefusedCaptureDeletesNoStoppedCapture(t *testing.T) {
 	dir := t.TempDir()

@@ -296,18 +296,11 @@ func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testi
 		t.Fatal("an event before any")
 	}
 
-	// a burst of large events: far more than the buffers of the connection and the bus hold
+	// The fast one reads while the burst is published, as a reader that is fast does. One that starts to read only
+	// when the burst is over makes the server's write wait for it, and on a loaded host (the container job of the CI
+	// runs the tests of other packages beside this one) the burst takes longer than the write timeout, so the server
+	// drops it as a slow subscriber (CI run 39208509316: 18 of 200 events).
 	const n = 200
-	big := strings.Repeat("x", 256*1024)
-	start := time.Now()
-	for i := 0; i < n; i++ {
-		g.e.Emit("network_degraded", map[string]any{"network": "n", "reason": big, "i": i})
-		time.Sleep(3 * time.Millisecond) // a reader that is not starved by the burst must keep up
-	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("publishing %d events took %v: a slow subscriber delays the publisher", n, d)
-	}
-	// the fast one gets every event, in order
 	var wg sync.WaitGroup
 	wg.Add(1)
 	got := 0
@@ -323,6 +316,17 @@ func TestASubscriberThatStopsReadingIsDisconnectedWithoutDelayingOthers(t *testi
 			}
 		}
 	}()
+	// a burst of large events: far more than the buffers of the connection and the bus hold
+	big := strings.Repeat("x", 256*1024)
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		g.e.Emit("network_degraded", map[string]any{"network": "n", "reason": big, "i": i})
+		time.Sleep(3 * time.Millisecond) // a reader that is not starved by the burst must keep up
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("publishing %d events took %v: a slow subscriber delays the publisher", n, d)
+	}
+	// the fast one gets every event, in order
 	wg.Wait()
 	if got != n {
 		t.Errorf("the fast subscriber got %d of %d events", got, n)

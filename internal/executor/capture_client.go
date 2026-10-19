@@ -23,31 +23,41 @@ func (c *Client) OpenCapture(ctx context.Context, o CaptureOpen) (CaptureStream,
 	if err != nil {
 		return nil, err
 	}
+	// The open ends with the context: a request that is cancelled, or runs out of time, closes the connection and so
+	// ends the read of an executor that does not answer. The hook is removed once the capture is open; the stream
+	// lives on without the context.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	cc, err := handshake(ctx, conn, c.opt)
 	if err != nil {
+		stop()
 		_ = conn.Close()
-		return nil, err
+		return nil, ctxOr(ctx, err)
 	}
 	if err := cc.codec.write(&Frame{Capture: &o}); err != nil {
+		stop()
 		_ = cc.Close()
-		return nil, err
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetReadDeadline(dl)
+		return nil, ctxOr(ctx, err)
 	}
 	f, err := cc.codec.read()
-	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
+		stop()
 		_ = cc.Close()
 		return nil, ctxOr(ctx, err)
 	}
 	if f.Error != nil {
+		stop()
 		_ = cc.Close()
 		return nil, captureErr(f.Error)
 	}
 	if f.CaptureEvent == nil || f.CaptureEvent.Kind != CaptureStarted {
+		stop()
 		_ = cc.Close()
 		return nil, errors.New("executor sent an unexpected message")
+	}
+	if !stop() {
+		// the context ended while the answer arrived: the connection is closed, which stops the capture
+		_ = cc.Close()
+		return nil, ctx.Err()
 	}
 	s := &remoteStream{c: cc, events: make(chan CaptureEvent, 16), done: make(chan struct{})}
 	s.events <- *f.CaptureEvent

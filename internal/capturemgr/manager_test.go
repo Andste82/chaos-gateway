@@ -183,16 +183,31 @@ type stream struct {
 	stops  []string
 	closed bool
 	ended  bool
+	// hang makes a stream of an executor that does not answer a stop: only Close ends it
+	hang bool
 }
 
 func (s *stream) Events() <-chan executor.CaptureEvent { return s.events }
 func (s *stream) Stop(r string) {
 	s.mu.Lock()
 	s.stops = append(s.stops, r)
+	hang := s.hang
 	s.mu.Unlock()
+	if hang {
+		return
+	}
 	s.end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: r, Packets: 4, Size: 400})
 }
-func (s *stream) Close() { s.mu.Lock(); s.closed = true; s.mu.Unlock() }
+func (s *stream) Close() {
+	s.mu.Lock()
+	s.closed = true
+	if s.hang && !s.ended {
+		// the connection is gone: the events end without an end
+		s.ended = true
+		close(s.events)
+	}
+	s.mu.Unlock()
+}
 
 // end sends the end of the capture, once.
 func (s *stream) end(ev executor.CaptureEvent) {
@@ -211,6 +226,8 @@ type opener struct {
 	streams []*stream
 	// err is what the executor refuses the next captures with
 	err error
+	// hang makes the next captures ones whose executor does not answer a stop
+	hang bool
 }
 
 func (o *opener) refuseWith(err error) {
@@ -226,7 +243,10 @@ func (o *opener) OpenCapture(_ context.Context, _ executor.CaptureOpen) (executo
 	if err != nil {
 		return nil, err
 	}
-	s := &stream{events: make(chan executor.CaptureEvent, 16)}
+	o.mu.Lock()
+	hang := o.hang
+	o.mu.Unlock()
+	s := &stream{events: make(chan executor.CaptureEvent, 16), hang: hang}
 	s.events <- executor.CaptureEvent{Kind: executor.CaptureStarted, Interfaces: []capture.InterfaceInfo{{Name: "wan0", Link: capture.LinkEthernet}}, Files: []string{"capture.pcapng"}}
 	o.mu.Lock()
 	o.streams = append(o.streams, s)
@@ -296,6 +316,37 @@ func TestAStreamThatEndsWithoutAnEndFailsTheCapture(t *testing.T) {
 		t.Errorf("events %v", ev)
 	}
 	eventually(t, "the stream is closed", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.closed })
+}
+
+// An executor that is connected but does not answer the stop must not hold the shutdown for ever.
+func TestClosingTheManagerEndsTheStreamsOfAnExecutorThatDoesNotAnswerWhenTheContextExpires(t *testing.T) {
+	m, op, _ := newManager(t, t.TempDir())
+	op.mu.Lock()
+	op.hang = true
+	op.mu.Unlock()
+	c, err := m.Start(context.Background(), uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	closed := make(chan struct{})
+	go func() {
+		m.Close(ctx)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close still waits for the executor after its context expired")
+	}
+	got, _ := m.Get(c.Id)
+	if got.Status != model.CaptureStatusFailed || got.Message == nil || !strings.Contains(*got.Message, "service stopped") {
+		t.Errorf("%+v, want the capture failed with the service stopped", got)
+	}
+	if s := op.last(); !s.closed {
+		t.Error("the stream was not closed")
+	}
 }
 
 // A service that stops ends its captures, and says so.

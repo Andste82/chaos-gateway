@@ -34,7 +34,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   wording that the issue made outdated (fixed), and I64-05 (the tests against the real Kea in the testbed jobs) is closed;
   all are closed, see [Issue #64 open items](#issue-64-open-items) further down.
 - **Phase 4** (M15–M19, branch `worktree-phase-4`): what the implementation could not settle and that no later milestone
-  completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. Open: P4-M19-01 (the Captures screen has no milestone).
+  completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. P4-M19-01 (the Captures screen has no milestone) was decided on 2026-10-19: option (a), milestone M23a in Phase 5; every Phase 4 item is closed.
 
 ## Phase 1 audit result
 
@@ -2094,7 +2094,7 @@ found that no later milestone of the plan completes and that need a decision of 
 
 ### P4-M19-01 The Captures screen and the capture panel of the device detail have no milestone
 
-- Status: new
+- Status: closed (2026-10-19): decided by the maintainer, option (a): the screen is the new milestone M23a (Captures UI, S) in Phase 5 of `docs/plan.md`, part of V1; its design is part of that milestone
 - Severity: medium
 - Reason: needs-decision. The plan's navigation (§2.17) lists Captures, and the device detail is to show the device's captures
   (§2.17, "Everything is connected: a device shows its … captures"), but the section "Not yet designed" names Captures, and no
@@ -2118,5 +2118,5 @@ found that no later milestone of the plan completes and that need a decision of 
 - Recommendation: (a): a small, self-contained screen whose backend is done and tested; tests need the capture of a run, which
   M19's artifacts already show.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and its design.
-- Needs maintainer: yes (scope of V1, design of the screen)
+- Needs maintainer: no (decided 2026-10-19: option (a))
 - Effort: M

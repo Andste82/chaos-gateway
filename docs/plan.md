@@ -1304,7 +1304,7 @@ Sizes: **S** ≈ up to 1 week, **M** ≈ 1–2 weeks, **L** ≈ 2–4 weeks for 
 | 3 Web UI | M12 (L), M13 (L), M14 (M) | interactive use |
 | 3.1 Port forwarding | M35a (L) | devices in test networks reachable from behind the uplink or the management network (pulled forward, D34) |
 | 4 Automation | M15 (L), M16 (M), M17 (M), M18 (S), M19 (M) | scenarios, checks, capture, CLI |
-| 5 Application layer | M20 (M), M21 (M), M22 (L), M23 (S) | DNS, TLS, DHCP test actions |
+| 5 Application layer | M20 (M), M21 (M), M22 (L), M23 (S), M23a (S) | DNS, TLS, DHCP test actions, Captures UI |
 | 6 Diagnostics | M24 (M), M25 (S), M26 (S) | diagnostics, probes, metrics |
 | 7 Production | M27 (M), M28 (M), M29 (M), M30 (S) | recovery, container deployment, hardening, release |
 
@@ -1453,7 +1453,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 ## Phase 4 — Automation
 
-**Status:** M15 to M19 done on the branch `worktree-phase-4` (not merged yet); Phase 4 is complete. Open: P4-M19-01 (the Captures screen has no milestone, `docs/open-items.md`).
+**Status:** M15 to M19 done on the branch `worktree-phase-4` (not merged yet); Phase 4 is complete. The Captures screen, which no milestone built, is M23a in Phase 5 (decided 2026-10-19, P4-M19-01 in `docs/open-items.md`, closed).
 
 **M15 — Scenario engine and runs** (L)
 - **Status:** done — committed on the branch worktree-phase-4 (`3902e34`, `4970d01`, `c853440`, `95a9956`, `daf8602`). Reviewed; all level 0 tests pass here. The level 1 tests (`internal/api/e2e_runs_test.go`, among them the +-100 ms step timing, abort and lease on the real kernel) are written, vetted with `-tags testbed` and wired into both CI testbed jobs with `M15_LEVEL1`, but were not run here (no KVM, no namespaces): run by CI. Hardware step timing stays with H1.
@@ -1511,6 +1511,11 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Tests: `udhcpc` in the testbed observes each behavior; a device fault stays attached after the forced new IP.
 - Depends on: M6a, M15.
 
+**M23a — Captures UI** (S)
+- Scope: the Captures screen of §2.17 and the capture panel of the device detail, on the API and the engine of M17: a list of captures (name, scope, state, size, packets, dropped, started, the run it belongs to), "New capture" (the scope as the capture request has it: network, device, selector or the uplink; format, snap length, duration, size or ring buffer), stop, download (the key log only with scope `full`), delete, the quota and the free space; the device detail's panel lists the device's captures with a "Capture" action; the events `capture_started`, `capture_stopped` and `disk_low` keep the list live; the navigation entry Captures becomes a link. The design of the screen is part of the milestone and is added to §2.17 (it is listed under "Not yet designed" until then).
+- Tests: Playwright — start a capture on a device, see it running in the list and in the device detail, stop it and download it; a capture that hit the quota or the free-space limit is shown as such; deleting a capture removes it from both places.
+- Depends on: M12, M17, M19.
+
 ## Phase 6 — Diagnostics and Observability
 
 **M24 — Diagnostics** (M)
@@ -1566,7 +1571,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 V1 = Phases 1–4 (incl. M4b WireGuard, M4c dynamic routing and M5b), plus M35a (port forwarding, pulled forward, D34), M20, M21, M24, M25, M27, M28, M29, M30 — deployed as containers on Ubuntu 24.04/26.04, x86-64 and ARM64.
 
-M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optional for V1. H1 runs when hardware is available; V1 can be released without it, with the ARM64 performance targets marked as unvalidated. No further features from §8 are in V1 (D27).
+M23a (Captures UI) is part of V1 (decided 2026-10-19, P4-M19-01). M22 (interception), M23 (DHCP actions) and M26 (metrics and flow view) are optional for V1. H1 runs when hardware is available; V1 can be released without it, with the ARM64 performance targets marked as unvalidated. No further features from §8 are in V1 (D27).
 
 ---
 

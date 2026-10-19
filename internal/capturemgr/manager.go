@@ -550,6 +550,15 @@ func (m *Manager) finish(c *capState, ev *executor.CaptureEvent) {
 	case ev.Reason == "error" && ev.Error != "":
 		msg = ev.Error
 	}
+	if ev.Error != "" && reason != model.CaptureStopReasonDiskLow && !strings.Contains(msg, ev.Error) {
+		// the capture ended as asked, but its files could not be closed completely (the last flush failed): the tail
+		// is missing, so it is a failure whatever stopped it. A full disk is the disk_low reason and stays one.
+		reason = model.CaptureStopReasonError
+		if msg != "" {
+			msg += "; "
+		}
+		msg += "the files could not be written completely: " + ev.Error
+	}
 	if reason == model.CaptureStopReasonError {
 		status = model.CaptureStatusFailed
 		if msg == "" {

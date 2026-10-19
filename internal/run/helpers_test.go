@@ -3,6 +3,7 @@ package run_test
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,11 @@ type fakeGateway struct {
 	queueWait time.Duration
 	putErr    func(w engine.OverlayWrite) error
 	resetErr  error
+	// putCalls counts the writes that came in, whatever became of them
+	putCalls int
+	// putDelay, when set, holds a write for as long as it returns for the step on the fake clock (an apply that takes its time)
+	putDelay func(step string) time.Duration
+	clk      clock.Clock
 	// resetFailures is how many of the next resets fail with errTransient before they work
 	resetFailures int
 	// block, when set, holds every write until it is closed or the context ends; resetBlock does the same for the
@@ -74,6 +80,11 @@ type fakeGateway struct {
 	resetBlock chan struct{}
 	seq        uint64
 	subs       map[chan engine.Event]struct{}
+	// events are the events published, for the replay (the newest replayMax when that is set); subBuffer is the buffer of
+	// a subscriber (1024 when zero)
+	events    []engine.Event
+	replayMax int
+	subBuffer int
 	// foreign are overlays of other owners that the snapshot shows besides the runs'
 	foreign []model.Overlay
 }
@@ -135,8 +146,18 @@ func (g *fakeGateway) publishOverlays() {
 
 func (g *fakeGateway) PutOverlay(ctx context.Context, w engine.OverlayWrite) (engine.OverlayResult, error) {
 	g.mu.Lock()
-	block, putErr := g.block, g.putErr
+	g.putCalls++
+	block, putErr, delay := g.block, g.putErr, g.putDelay
 	g.mu.Unlock()
+	if delay != nil {
+		if d := delay(w.Run.Step); d > 0 {
+			select {
+			case <-g.clk.After(d):
+			case <-ctx.Done():
+				return engine.OverlayResult{}, ctx.Err()
+			}
+		}
+	}
 	if block != nil {
 		select {
 		case <-block:
@@ -238,32 +259,54 @@ func (g *fakeGateway) ResetOverlays(ctx context.Context, owner *model.Owner, _ m
 	return engine.OverlayResult{Removed: n, Generation: g.gen, QueueWait: g.queueWait}, nil
 }
 
+// Emit publishes an event as the bus does: it is kept for replay (the last replayMax of them, when that is set), and a
+// subscriber whose buffer is full is dropped and its channel closed.
 func (g *fakeGateway) Emit(typ string, data map[string]any) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.seq++
 	ev := engine.Event{Seq: g.seq, Time: t0, Type: typ, Data: data}
-	var subs []chan engine.Event
-	for c := range g.subs {
-		subs = append(subs, c)
+	g.events = append(g.events, ev)
+	if g.replayMax > 0 && len(g.events) > g.replayMax {
+		g.events = g.events[len(g.events)-g.replayMax:]
 	}
-	g.mu.Unlock()
-	for _, c := range subs {
+	for c := range g.subs {
 		select {
 		case c <- ev:
 		default:
+			delete(g.subs, c)
+			close(c)
 		}
 	}
 }
 
 func (g *fakeGateway) Subscribe() (<-chan engine.Event, func()) {
-	c := make(chan engine.Event, 1024)
+	_, c, unsub := g.SubscribeFrom(math.MaxUint64)
+	return c, unsub
+}
+
+func (g *fakeGateway) SubscribeFrom(last uint64) ([]engine.Event, <-chan engine.Event, func()) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	size := g.subBuffer
+	if size == 0 {
+		size = 1024
+	}
+	c := make(chan engine.Event, size)
+	var replay []engine.Event
+	for _, ev := range g.events {
+		if ev.Seq > last {
+			replay = append(replay, ev)
+		}
+	}
 	g.subs[c] = struct{}{}
-	g.mu.Unlock()
-	return c, func() {
+	return replay, c, func() {
 		g.mu.Lock()
-		delete(g.subs, c)
-		g.mu.Unlock()
+		defer g.mu.Unlock()
+		if _, ok := g.subs[c]; ok {
+			delete(g.subs, c)
+			close(c)
+		}
 	}
 }
 
@@ -297,6 +340,9 @@ type fakeObserver struct {
 	flowPolls    int
 	// block, when set, holds every read of the connections until it is closed or the read is cancelled
 	block chan struct{}
+	// readDelay holds every read of the counters for that long on the fake clock (a slow executor)
+	readDelay time.Duration
+	clk       clock.Clock
 }
 
 type query struct {
@@ -364,7 +410,17 @@ func (o *fakeObserver) DNSClientSeen(device string) bool {
 	return o.dns[device]
 }
 
-func (o *fakeObserver) Counters(_ context.Context, ids []uuid.UUID) map[uuid.UUID]*model.Counter {
+func (o *fakeObserver) Counters(ctx context.Context, ids []uuid.UUID) map[uuid.UUID]*model.Counter {
+	o.mu.Lock()
+	delay := o.readDelay
+	o.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-o.clk.After(delay):
+		case <-ctx.Done():
+			return nil
+		}
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	out := map[uuid.UUID]*model.Counter{}
@@ -412,7 +468,8 @@ func newHarnessIn(t *testing.T, dir string, opts ...option) *harness {
 	t.Helper()
 	clk := clock.NewFake(t0)
 	gw := newGateway(testConfig(t))
-	obs := &fakeObserver{dns: map[string]bool{}, counters: map[uuid.UUID]*model.Counter{}, stepCounters: map[string]*model.Counter{}, gw: gw}
+	gw.clk = clk
+	obs := &fakeObserver{dns: map[string]bool{}, counters: map[uuid.UUID]*model.Counter{}, stepCounters: map[string]*model.Counter{}, gw: gw, clk: clk}
 	cfg := run.Config{Clock: clk, Dir: dir, Gateway: gw, Observer: obs}
 	for _, o := range opts {
 		o(&cfg)

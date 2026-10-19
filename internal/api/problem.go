@@ -155,8 +155,11 @@ func (s *Server) problemFor(err error) *problem {
 		orphans  *engine.ErrOverlaysOrphaned
 		busy     *run.TargetBusyError
 		unsupRun *run.UnsupportedError
+		cleanup  *run.CleanupError
 	)
 	switch {
+	case errors.As(err, &cleanup):
+		return newProblem(model.ErrorCodeApplyFailed, "%s", firstLine(cleanup.Error()))
 	case errors.As(err, &conflict):
 		return newProblem(model.ErrorCodeRevisionConflict, "%s", err).with(func(b *model.Problem) { a := conflict.Active; b.ActiveRevision = &a })
 	case errors.As(err, &pending):

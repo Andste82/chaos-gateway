@@ -4560,13 +4560,16 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   still there (they are also read before a `remove` or `restore` takes overlays away, so the report holds the
   final counter of every overlay the run created, `RunReport.counters`), reset the run's owner through the
   engine (up to three attempts a second apart; a run whose overlays cannot be removed is `error` even if it
-  passed), write the record, emit `run_finished`, wait until the recorder has written that event to the
+  passed, and an `aborted` or `error` run says so next to its own reason, `...; the overlays of the run could not be
+  removed: <why>`; the manager then keeps trying every 10 s, `retryCleanup`, until it works, the record is pruned or
+  the manager closes, so the overlays do not wait for the next successful apply or `POST /reset`), write the record, emit `run_finished`, wait until the recorder has written that event to the
   run's event file, and start the runs that waited. Every way to end goes through it: the last step, an error,
   a failed precondition, an abort.
 - **Abort, lease, reset, stop.** `POST /runs/{id}/abort` cancels the run's context with the reason
   (`aborted by <token name>`; a queued run is finished at once, a running one finishes itself) and answers
-  when the overlays are gone, with the generation that removed them in `Chaos-Generation`; aborting an ended
-  run returns it unchanged. A **lease** (`lease`, at least 1 s) starts when the run is created and runs on
+  when the overlays are gone, with the generation that removed them in `Chaos-Generation` (when they could not
+  be removed the answer is the problem `apply_failed` naming the run, `run.CleanupError`: the run is recorded as
+  `aborted` with the reason, and never a clean 200 with generation 0); aborting an ended run returns it unchanged. A **lease** (`lease`, at least 1 s) starts when the run is created and runs on
   the monotonic clock (`clock.AfterFunc`, reset by `POST /runs/{id}/renew`, which answers `422` for a run
   without a lease or one that has ended); when it runs out the run is `aborted` with the reason `lease
   expired`, also while it is still queued. A client that disconnects changes nothing: the run does not

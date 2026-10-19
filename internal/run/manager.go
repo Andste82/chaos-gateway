@@ -54,6 +54,7 @@ type runState struct {
 	leaseTimer clock.Timer
 	counters   []counterRecord
 	generation uint64 // of the last change of the run's overlays, for Abort
+	cleanupErr error  // why the overlays could not be removed when the run ended, nil when they were
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -612,8 +613,11 @@ func (m *Manager) Abort(ctx context.Context, id uuid.UUID, by *model.Actor) (Abo
 		return Abort{}, ctx.Err()
 	}
 	m.mu.Lock()
-	v, gen := r.view(), r.generation
+	v, gen, cleanup := r.view(), r.generation, r.cleanupErr
 	m.mu.Unlock()
+	if cleanup != nil {
+		return Abort{Run: m.sized(v)}, &CleanupError{Run: m.sized(v), Err: cleanup}
+	}
 	return Abort{Run: m.sized(v), Generation: gen}, nil
 }
 

@@ -277,6 +277,8 @@ func record(status model.RunStatus, ended *time.Time) model.Run {
 func TestARestartEndsARunningRunAsAbortedAndKeepsTheFinishedOnes(t *testing.T) {
 	dir := t.TempDir()
 	running, queued := record(model.RunStatusRunning, nil), record(model.RunStatusQueued, nil)
+	// a check that was not decided when the process died
+	running.Checks = &[]model.CheckResult{{Index: 0, Name: "reconnects", Type: model.Reconnected, Status: model.CheckResultStatusPending}}
 	ended := t0.Add(-time.Minute)
 	passed := record(model.RunStatusPassed, &ended)
 	oldEnd := t0.Add(-31 * 24 * time.Hour)
@@ -313,6 +315,11 @@ func TestARestartEndsARunningRunAsAbortedAndKeepsTheFinishedOnes(t *testing.T) {
 		if _, err := h.m.Report(id); err != nil {
 			t.Errorf("the report of an aborted run: %v", err)
 		}
+	}
+	// the check says why it has no result
+	if cs := deref(h.get(running.Id).Checks); len(cs) != 1 || cs[0].Status != model.CheckResultStatusPending ||
+		cs[0].Message == nil || *cs[0].Message != "not decided: the run ended as aborted (service restart)" {
+		t.Errorf("the check of the run the restart ended: %+v", cs)
 	}
 	if got := h.get(passed.Id); got.Status != model.RunStatusPassed {
 		t.Errorf("%+v", got)

@@ -62,6 +62,11 @@ func TestTheFlowTrackerReportsWhatChangedBetweenTwoPolls(t *testing.T) {
 	later := flowOf("a", "ESTABLISHED", 2, 1)
 	later.StartedAt = time.Unix(1700000000, 0)
 	eq(kinds(tr.update([]engine.Flow{later, flowOf("b", "ESTABLISHED", 1, 1)})), map[string]string{"a": "created established traffic"})
+	// the same key (id and start time) that is still in the table but whose counters started over is a new connection too
+	// (the entry was replaced between two polls)
+	restarted := flowOf("a", "ESTABLISHED", 1, 0)
+	restarted.StartedAt = later.StartedAt
+	eq(kinds(tr.update([]engine.Flow{restarted, flowOf("b", "ESTABLISHED", 1, 1)})), map[string]string{"a": "created established traffic"})
 }
 
 // What a check looks at: the target's connections that its selector selects, of the kind that decides it.

@@ -246,9 +246,10 @@ func TestAFaultThatMatchedNoPacketIsAZeroHitWarningOverTheAPI(t *testing.T) {
 	}
 	id := hit("zero-hit", "")
 	done := g.waitRun(id, "passed")
-	ws := done["warnings"].([]any)
-	if len(ws) != 1 || ws[0].(map[string]any)["code"] != "zero_hit" || ws[0].(map[string]any)["step"] != "cut" || ws[0].(map[string]any)["overlay"] == nil {
-		t.Fatalf("warnings %v", ws)
+	// (a step_late is no part of the question: the engine of this test runs on the real clock)
+	ws := warningsOf(done, "zero_hit")
+	if len(warningCodes(done)) != 1 || len(ws) != 1 || ws[0]["step"] != "cut" || ws[0]["overlay"] == nil {
+		t.Fatalf("warnings %v", done["warnings"])
 	}
 	if x := string(g.do("GET", "/runs/"+id+"/report.xml", nil, nil, nil).Body); !strings.Contains(x, "warning zero_hit: the rule of step cut matched no packet") || strings.Contains(x, "<failure") {
 		t.Errorf("the JUnit file:\n%s", x)

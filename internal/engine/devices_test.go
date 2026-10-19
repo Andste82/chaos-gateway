@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -107,6 +109,37 @@ func TestAConfiguredDeviceIsNotDiscoveredAndGetsItsLease(t *testing.T) {
 	}
 	if !strings.Contains(types(ev), EventDeviceOnline) {
 		t.Errorf("%v", types(ev))
+	}
+}
+
+// P4-AUDIT-05: a configured device that declares no network is in the network of its lease, else in the one its address
+// lies in, so a network scope, a capture and a wait agree with explain on where it is.
+func TestAConfiguredDeviceWithoutANetworkIsInTheNetworkOfItsLeaseOrAddress(t *testing.T) {
+	cfg := trackerConfig(t)
+	lan := model.LanNetwork{Type: model.LanNetworkTypeLan, Name: "IoT", Address: "10.10.0.1/24", Interfaces: []model.InterfaceRef{}}
+	var n model.Network
+	if err := n.FromLanNetwork(lan); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Networks = &map[string]model.Network{tIoT: n}
+	state := model.DhcpLeaseState("active")
+	for name, obs := range map[string]observation{
+		"lease":   {Leases: []model.DhcpLease{{Ip: "10.10.0.31", Mac: macCf, ExpiresAt: t0.Add(time.Hour), State: &state, Network: uuid.MustParse(tIoT)}}},
+		"address": {Neighbors: []domain.Neighbor{{IP: addr("10.10.0.31"), MAC: macCf, Interface: "br-iot"}}},
+	} {
+		tr := newTracker()
+		tr.step(cfg, observation{At: t0})
+		obs.At = t0.Add(time.Second)
+		_, states, _ := tr.step(cfg, obs)
+		var d *DeviceState
+		for i := range states {
+			if states[i].ID == tDev {
+				d = &states[i]
+			}
+		}
+		if d == nil || d.Network != tIoT {
+			t.Errorf("%s: %+v", name, d)
+		}
 	}
 }
 

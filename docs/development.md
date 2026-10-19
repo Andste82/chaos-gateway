@@ -5155,7 +5155,7 @@ milestones and on the configuration draft of M13.
 
 - **Routes** (`src/router.ts`): `/scenarios` (the list; the first scenario is shown), `/scenarios/:id` (id or name; `?tab=yaml|runs`,
   `?run=<id>` shows a run) and `/runs/:id` (the page of one run, also of an inline run that has no scenario of its own). The
-  navigation entry Scenarios is a link now; Captures stays a disabled entry (open item P4-M19-01).
+  navigation entry Scenarios is a link now; Captures stays a disabled entry until M23a (P4-M19-01, closed).
 - **A scenario is an object of the configuration,** so it is changed like a profile (M13): the dialogs "Add to the changes" put the
   scenario into the draft (`useDraftStore().setScenario`, `scenarios`), the unapplied-changes bar counts it ("2 changes in 1
   scenario"), the preview drawer and the concurrent-change dialog take it to the gateway as a merge patch (`scenarios` in

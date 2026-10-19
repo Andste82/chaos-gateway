@@ -2,9 +2,11 @@ package api_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -173,6 +175,31 @@ func ctlAppliesAProfileAndAFaultWithATTLAndRemovesThem(t *testing.T, g *gw, clk 
 	}
 	if r = g.ctl("overlay", "delete", pid); r.code != 0 || !strings.Contains(r.err, "gone already") {
 		t.Errorf("deleting an overlay twice: %+v", r)
+	}
+}
+
+// explain shows the verdict and the winning fault of the real engine for a device towards a destination, and the same as
+// the API's JSON.
+func ctlExplainsTheTrafficOfADevice(t *testing.T, g *gw, clk *clock.Fake) {
+	id := strings.TrimSpace(g.ctl("fault", "set", "--device", "esp32-42", "--latency", "200ms", "--protocol", "tcp", "--port", "8883", "--to", "uplink", "--ttl", "5m").out)
+	defer g.ctl("overlay", "delete", id)
+	r := g.ctl("explain", "--device", "esp32-42", "--dst", "203.0.113.10", "--protocol", "tcp", "--port", "8883")
+	if r.code != 0 || !strings.Contains(r.out, "esp32-42 (10.10.0.31, network IoT) -> 203.0.113.10 tcp/8883") || !strings.Contains(r.out, "access: ALLOW") ||
+		!strings.Contains(r.out, "impairment: ") || !strings.Contains(r.out, "[overlay]") {
+		t.Errorf("%+v", r)
+	}
+	// traffic the fault does not select has no impairment winner
+	if r = g.ctl("explain", "--src", "10.10.0.31", "--dst", "203.0.113.10", "--protocol", "udp", "--port", "53"); r.code != 0 || strings.Contains(r.out, "[overlay]") {
+		t.Errorf("%+v", r)
+	}
+	j := g.ctl("explain", "--device", "esp32-42", "--dst", "203.0.113.10", "--protocol", "tcp", "--port", "8883", "--json").out
+	api := g.do("GET", "/explain?device=esp32-42&dst=203.0.113.10&protocol=tcp&port=8883", nil, nil, nil).json(t)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(j), &got); err != nil || !reflect.DeepEqual(got["faults"], api["faults"]) || !reflect.DeepEqual(got["access"], api["access"]) {
+		t.Errorf("--json is the API's answer: %s vs %v", j, api)
+	}
+	if r = g.ctl("explain", "--device", "nobody", "--dst", "203.0.113.10"); r.code != 2 || !strings.Contains(r.err, "404") {
+		t.Errorf("an unknown device: %+v", r)
 	}
 }
 
@@ -789,6 +816,7 @@ func TestChaosctlOverlays(t *testing.T) {
 	sub("AppliesAProfileAndAFaultWithATTLAndRemovesThem", ctlAppliesAProfileAndAFaultWithATTLAndRemovesThem)
 	sub("RenewsTheLeaseOfAnOverlayItDoesNotKeepAlive", ctlRenewsTheLeaseOfAnOverlayItDoesNotKeepAlive)
 	sub("ResetAndTheReplacementOfAFault", ctlResetAndTheReplacementOfAFault)
+	sub("ExplainsTheTrafficOfADevice", ctlExplainsTheTrafficOfADevice)
 	sub("CreatesAnOverlayFromARequestFile", ctlCreatesAnOverlayFromARequestFile)
 	sub("ReadsTheTokenFromAFile", ctlReadsTheTokenFromAFile)
 	sub("WaitsForADeviceToBeOnlineAndConnected", ctlWaitsForADeviceToBeOnlineAndConnected)

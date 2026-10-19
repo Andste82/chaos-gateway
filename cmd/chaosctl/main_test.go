@@ -27,7 +27,7 @@ func TestHelpListsTheCommands(t *testing.T) {
 	if code := run([]string{"help"}, strings.NewReader(""), &out, &errb); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	for _, c := range []string{"profile", "fault", "overlay", "reset", "run", "abort", "wait", "with", "wg", "version"} {
+	for _, c := range []string{"profile", "fault", "overlay", "reset", "run", "abort", "wait", "with", "explain", "wg", "version"} {
 		if !strings.Contains(out.String(), c) {
 			t.Errorf("the help does not name %q:\n%s", c, out.String())
 		}

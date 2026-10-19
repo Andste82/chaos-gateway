@@ -5505,11 +5505,13 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1` (the workflow's environment): the level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of Kea's packet socket after a link flap
 (issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
+
+The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

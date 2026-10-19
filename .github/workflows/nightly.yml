@@ -88,8 +88,9 @@ jobs:
           if-no-files-found: ignore
 
   # Nightly kernel matrix (plan §4.4, M1-02): the same level 1b tests ci.yml's testbed-vm job
-  # runs on every commit, once per kernel the devcontainer carries. The kernel list must match
-  # .devcontainer/Dockerfile's ARG KERNELS. 26.04 has no HWE kernel of its own yet (plan §4.4); as
+  # runs on every commit, once per kernel the devcontainer carries, with the same `-expect-pass` lists
+  # (.github/level1-tests.env): a level 1 test that skips on one kernel fails the night. The kernel list must
+  # match .devcontainer/Dockerfile's ARG KERNELS. 26.04 has no HWE kernel of its own yet (plan §4.4); as
   # of this writing 24.04's HWE kernel is version-identical to 26.04's GA kernel (both
   # 7.0.0-38-generic), so there is no third, distinct kernel to add here today — once they
   # diverge, add its version both here and to ARG KERNELS.
@@ -115,6 +116,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
           if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi
+      - name: Load the lists of level 1 tests that must pass
+        run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       - name: Run the testbed tests in a VM with this kernel
         # The same budget as ci.yml's testbed-vm job: the engine package alone needs about 50 minutes under KVM, and
         # the slower kernel of the matrix has less headroom than the default one.
@@ -122,7 +125,7 @@ jobs:
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
-            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl"
+            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the nights.
       - name: Summarize the measurement record

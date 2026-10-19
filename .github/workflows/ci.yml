@@ -14,38 +14,6 @@ concurrency:
 
 env:
   GOLANGCI_LINT_VERSION: v2.14.0
-  # The level 1 tests of port forwarding (M35a): both testbed jobs name them with -expect-pass, so a renamed or
-  # vanished test fails the job instead of leaving it green (the acceptance map in docs/development.md).
-  M35A_LEVEL1: TestAForwardReachesTheListenersOfADeviceOnTheRealKernel,TestAForwardDoesNotCountIPv6ConnectionsToItsEntryInterfaceOnTheRealKernel,TestRulesOnTheTargetDecideForwardedConnectionsOnTheRealKernel,TestACutWindowResetsAnEstablishedForwardedConnectionOnTheRealKernel,TestAForwardFollowsANewEntryAddressAndANewDeviceAddressOnTheRealKernel,TestAForwardPassesDockersForwardPolicyThroughDockerUser,TestForwardsReachTheDeviceFromBothSidesAndFollowItsAddress,TestAForwardFollowsANewUplinkAddress,TestADeviceFaultDoesNotImpairAForwardedConnection,TestARuleOnTheDeviceCutsAnEstablishedForwardedConnection,TestAForwardCountsTheConnectionsAnAllowRuleAcceptsOnTheRealKernel,TestAnAllowAllRuleDoesNotOpenTheManagementNetworkWhileAManagementForwardWorks,TestAManagementForwardAnswersAPeerBehindARouterOfTheManagementNetwork,TestWithoutTheUplinkDefaultAnAllowAllRuleStillDoesNotOpenTheManagementNetwork,TestAMatrixEntryOpensTheManagementNetworkBehindAManagementInterfaceOfItsOwn,TestAMatrixEntryOpensTheManagementNetworkThroughTheUplink,TestAForwardReachesAnIdleDeviceWhoseNeighborEntryIsStale,TestTheRepliesOfAManagementForwardedConnectionStayOffTheUplinkAfterTheForwardIsDeleted,TestTheGuardKeepsADeviceOutOfAManagementRoleWireGuardNetworkUntilAMatrixEntryOpensIt
-
-  # The level 1 tests of scenario runs (M15): the steps of a run on the real kernel and the real clock, within 100 ms of
-  # their schedule where the machine is accurate, an abort and an expired lease that take the run's overlays out.
-  M15_LEVEL1: TestAScenarioRunsOnTheRealKernelAndItsStepsAreOnTime,TestAnAbortOnTheRealKernelTakesTheOverlaysOfTheRunOut,TestAnExpiredLeaseOnTheRealKernelRemovesTheFault
-
-  # The level 1 tests of checks and zero-hit warnings (M16): a scripted device that comes back after a cut or gives up, a
-  # device that resolves a name or talks to an allowed and a disallowed server, the limit of the traffic checks under a drop, and a
-  # fault that matches nothing, on the real kernel.
-  M16_LEVEL1: TestChecksPassForADeviceThatReconnectsOnTheRealKernel,TestChecksFailForADeviceThatDoesNotReconnectOnTheRealKernel,TestAFaultThatNeverMatchesIsAZeroHitWarningOnTheRealKernel,TestTrafficNotSeenWithExceptDecidesOnTheRealKernel,TestDNSQuerySeenDecidesForADeviceOnTheRealKernel,TestTheTrafficChecksDoNotSeeWhatTheGatewayDropsOnTheRealKernel
-
-  # The level 1 tests of packet captures (M17): the AF_PACKET sockets of the executor on the loopback interface, the
-  # executor protocol over its socket (these need CAP_NET_RAW, so they carry the build tag testbed and run in the
-  # testbed jobs only), and the captures over the API on the real kernel against a capture on the device itself.
-  M17_LEVEL1: TestACaptureOnTheLoopbackHoldsExactlyTheSelectedTraffic,TestTheSnapLengthCutsPacketsAndKeepsTheOriginalLength,TestACaptureOfThePcapFormatIsReadableAndHasTheLinkType,TestTheSizeLimitEndsTheCaptureAndTheFileStaysWithinIt,TestTheDurationEndsTheCapture,TestACaptureStopsWhenTheDiskIsAlmostFullAndRefusesToStartOnOne,TestARingBufferCaptureKeepsTheNewestPackets,TestAMissingInterfaceAndABadFilterAreRefusedAtTheStart,TestACanceledContextEndsTheCaptureWithAnError,TestAFullDiskIsTheDiskLowReason,TestStopIsIdempotentAndTheFirstReasonStays,TestADeviceCaptureHoldsTheFramesOfItsAddressInBothDirectionsAndNoOthers,TestASelectorCaptureHoldsOnlyTheMatchingTrafficOfTheDevice,TestAFilterTooLargeForTheKernelIsAppliedInUserSpace,TestACaptureStartsStreamsItsCountersAndEndsWhenItIsStopped,TestAStopForTheEndOfARunIsPassedOn,TestOnlyMaxCapturesRunAtOnceAndASlotComesBackWithTheEnd,TestACaptureOnAFullDiskIsRefusedAndStopsWhenTheDiskFills,TestTheFilesOfACaptureBelongToTheOwnerOfItsDirectory,TestACaptureOverTheSocketHasTheSameEventsAndEndsWithAStop,TestAConnectionThatBreaksEndsItsCaptureAndGivesTheSlotBack,TestTheSocketNamesTheReasonsACaptureIsRefused,TestTheSocketRefusesACaptureWithTheErrorAndKeepsServing,TestARedialingClientOpensCapturesToo,TestACaptureOfADeviceIsExactlyTheCaptureOnTheDeviceItselfOnTheRealKernel,TestASelectorCaptureHoldsTheConnectionsItNamesOnTheRealKernel,TestTheUplinkCaptureShowsThePacketsAfterNATOnTheRealKernel,TestAWireGuardNetworkIsCapturedAsRawIPOnTheRealKernel,TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel,TestALowDiskStopsTheCaptureButNotTheRunOnTheRealKernel,TestTheExecutorRefusesACaptureOnAVolumeBelowItsLimitOnTheRealKernel
-
-  # The level 1 tests of chaosctl (M18): `with` under a delay on the wire and its cleanup after a failing command, runs from a
-  # file with the exit codes 0 and 1 against a scripted device, an abort on a signal, `wait device`, and a fault whose
-  # lease is not renewed, on the real kernel.
-  M18_LEVEL1: TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel,TestChaosctlRunPassesForADeviceThatReconnectsOnTheRealKernel,TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel,TestChaosctlAbortsARunOnASignalAndTakesTheFaultOutOnTheRealKernel,TestChaosctlWaitsForADeviceAndItsConnectionOnTheRealKernel,TestAFaultWhoseLeaseIsNotRenewedLeavesTheRealKernelOnItsOwn
-
-  # The level 1 tests of Kea's packet socket after a link flap of a test port (#64), named the same way: the testbed
-  # test and the tests against the real Kea, which run as root only.
-  I64_LEVEL1: TestDHCPAnswersAgainAfterTheTestPortFlappedDuringAnApply,TestTheHostReadingCountsACarrierFlapOnARealKernel,TestReopenConfiguresKeaAgainWithAnUnchangedConfiguration,TestKeaRetriesASocketItCouldNotOpen
-
-  # The older tests against the real Kea (internal/kea/kea_testbed_test.go, startKea; I64-05): they run as root
-  # only, so they carry the build tag testbed and are named the same way, and a run in which one skips fails. The
-  # tests against the real Kea without the tag (TestKeaAcceptsTheRenderedConfiguration, and the engine's restart
-  # test, which runs as root only) are in packages with tagged tests, so the testbed runner builds and runs them too.
-  KEA_LEVEL1: TestTheClientDrivesARealKea,TestLeasesArePagedPastTheLimit,TestKeaAcceptsTheRenderedConfiguration,TestTheConfigurationIsSentAgainToAKeaThatRestarted
 
 jobs:
   # Level 0 (plan §4.5): everything that needs no root. Generated code is checked here too:
@@ -114,6 +82,8 @@ jobs:
           if [ -w /dev/kvm ]; then echo kvm=yes; else echo "::warning title=No KVM::level 1b runs emulated"; fi
       # Without /dev/kvm the VM runs in software emulation: functional assertions only, minutes
       # of boot time (plan §4.3, open question Q1 in §7.2).
+      - name: Load the lists of level 1 tests that must pass
+        run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       - name: Run the testbed tests in a VM
         run: |
           kvm=()
@@ -160,6 +130,8 @@ jobs:
           tags: chaos-gateway-dev
           cache-from: type=gha,scope=dev
           cache-to: type=gha,scope=dev,mode=max
+      - name: Load the lists of level 1 tests that must pass
+        run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       # The engine package alone needs more than the default 20 minutes since M10 (about 25 native):
       # its measurement tests send thousands of probes through delays of 100 to 600 ms each.
       - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1"
@@ -249,7 +221,7 @@ jobs:
           cache-from: type=gha,scope=image
       - name: the API container writes its fresh volumes
         run: |
-          for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /run/chaosgw-kea-events; do
+          for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /var/lib/chaosgw/captures /run/chaosgw-kea-events; do
             vol="ci-$(basename "$dir")"
             docker volume rm -f "$vol" >/dev/null
             docker volume create "$vol" >/dev/null

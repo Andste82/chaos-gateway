@@ -10,6 +10,7 @@
 import { computed } from 'vue';
 import type { Run, RunStep, Step } from '../../api/generated/model';
 import { formatDuration } from '../../lib/format';
+import { focusAfterUpdate } from '../../lib/focus';
 import { applyMs, lateness, offsetText, signedMs, stepMarks } from '../../lib/runs';
 import { narrowText, stepText, stepType, stepTypeLabels, stepTypeTone, timelineOrder, type ScenarioNames } from '../../lib/scenarios';
 import { useNow } from '../../composables/useNow';
@@ -87,6 +88,13 @@ function inText(ms: number): string {
   return `in ${offsetText(Math.ceil(ms / 100) * 100)}`;
 }
 
+/** Deletes a step; the focus goes to the step that took its place, else the one before, else "Add step" (the button used is gone). */
+function remove(r: Row, i: number) {
+  const next = rows.value[i + 1] ?? rows.value[i - 1];
+  emit('remove', r.step);
+  focusAfterUpdate(next ? `[data-testid="timeline-step"][data-step="${next.step.id}"] [data-edit-step]` : '[data-testid="add-step"]');
+}
+
 function nextText(r: Row): string {
   if (!r.next) return '';
   if (r.next.waiting) return `waiting for the condition (timeout ${formatDuration(r.step.wait?.timeout)})`;
@@ -136,14 +144,14 @@ function nextText(r: Row): string {
           </div>
           <p v-if="r.run?.error" class="m-0 text-xs text-block-text" data-testid="step-error">{{ r.run.error }}</p>
           <div v-if="editable && !run" class="flex gap-2 pt-0.5">
-            <button type="button" class="btn btn-sm" :aria-label="`Edit step ${r.step.id}`" @click="emit('edit', r.step)">Edit</button>
+            <button type="button" class="btn btn-sm" data-edit-step :aria-label="`Edit step ${r.step.id}`" @click="emit('edit', r.step)">Edit</button>
             <button
               type="button"
               class="btn btn-sm"
               :aria-label="`Delete step ${r.step.id}`"
               :disabled="!!protectedSteps?.[r.step.id]"
               :title="protectedSteps?.[r.step.id]"
-              @click="emit('remove', r.step)"
+              @click="remove(r, i)"
             >
               Delete
             </button>

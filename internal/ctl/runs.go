@@ -1,9 +1,9 @@
 package ctl
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -463,12 +463,12 @@ func (a *app) saveReports(ctx context.Context, cl *client, r *model.Run, o await
 	id := r.Id.String()
 	var problems []string
 	if o.junit != "" {
-		if err := fetchTo(ctx, cl, "/runs/"+id+"/report.xml", nil, filepath.Dir(o.junit), filepath.Base(o.junit), false); err != nil {
+		if err := fetchTo(ctx, cl, "/runs/"+id+"/report.xml", nil, filepath.Dir(o.junit), filepath.Base(o.junit), false, false); err != nil {
 			problems = append(problems, fmt.Sprintf("--junit %s: %v", o.junit, err))
 		}
 	}
 	if o.artifacts != "" {
-		if err := os.MkdirAll(o.artifacts, 0o755); err != nil {
+		if err := os.MkdirAll(o.artifacts, privateDirMode); err != nil {
 			problems = append(problems, fmt.Sprintf("--artifacts: %v", err))
 		} else {
 			problems = append(problems, a.saveArtifacts(ctx, cl, r, o.artifacts)...)
@@ -509,7 +509,7 @@ func (a *app) saveArtifacts(ctx context.Context, cl *client, r *model.Run, dir s
 		case model.ArtifactKindKeylog:
 			name = "keylog-" + captureID(art) + ".txt"
 		}
-		err = fetchTo(ctx, cl, strings.TrimPrefix(u.Path, "/api/v1"), u.Query(), dir, name, art.Kind == model.ArtifactKindCapture)
+		err = fetchTo(ctx, cl, strings.TrimPrefix(u.Path, "/api/v1"), u.Query(), dir, name, art.Kind == model.ArtifactKindCapture, true)
 		if ae := asAPIError(err); ae != nil && ae.Status == http.StatusForbidden && art.Kind != model.ArtifactKindReportJson && art.Kind != model.ArtifactKindReportXml {
 			fmt.Fprintf(a.env.Stderr, "artifact %s is not saved: the token may not download it (%v)\n", art.Kind, err)
 			continue
@@ -528,15 +528,16 @@ func captureID(a model.Artifact) string {
 	return "unknown"
 }
 
-// fetchTo downloads a path of the API into dir/name, through a temporary file so a failed download leaves nothing
-// half written. With addExt the extension of the file name the gateway suggests (.pcap or .pcapng of a capture)
-// is added to the name.
-func fetchTo(ctx context.Context, cl *client, apiPath string, query url.Values, dir, name string, addExt bool) error {
-	var buf bytes.Buffer
-	suggested, err := cl.download(ctx, apiPath, query, &buf)
+// fetchTo streams a path of the API into dir/name through a temporary file, so a failed download leaves nothing half
+// written and a capture of any size does not sit in memory. With addExt the extension of the file name the gateway
+// suggests (.pcap or .pcapng of a capture) is added to the name. A private file (and the directory made for it) is
+// readable by its owner alone.
+func fetchTo(ctx context.Context, cl *client, apiPath string, query url.Values, dir, name string, addExt, private bool) error {
+	res, suggested, err := cl.open(ctx, apiPath, query)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = res.Body.Close() }()
 	if addExt {
 		ext := filepath.Ext(filepath.Base(suggested))
 		if ext == "" {
@@ -544,17 +545,21 @@ func fetchTo(ctx context.Context, cl *client, apiPath string, query url.Values, 
 		}
 		name += ext
 	}
+	mode, dirMode := os.FileMode(publicFileMode), os.FileMode(publicDirMode)
+	if private {
+		mode, dirMode = privateFileMode, privateDirMode
+	}
 	if dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, dirMode); err != nil {
 			return err
 		}
 	}
-	path := filepath.Join(dir, name)
-	tmp := path + ".part"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomic(filepath.Join(dir, name), mode, func(w io.Writer) error {
+		if _, err := io.Copy(w, res.Body); err != nil {
+			return fmt.Errorf("GET %s: %w", apiPath, err)
+		}
+		return nil
+	})
 }
 
 func (a *app) abortCmd() *cobra.Command {

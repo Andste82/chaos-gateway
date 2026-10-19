@@ -345,6 +345,9 @@ func (f *fakeGateway) handler() http.Handler {
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/export"):
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = secret\n"))
 		case r.Method == http.MethodPost && path == "/runs":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(fakeRun("running")))

@@ -2,7 +2,7 @@
 
 > **A programmable network test gateway.**
 
-Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -14 in `docs/open-items.md`; -01 to -03 and -05 to -10 fixed on the branch `close-phase-3-1`, level 2 passed there (Nightly 39084099383, P31-AUDIT-04 closed); -11 to -14 decided by the maintainer on 2026-10-18 and implemented on that branch; the branch merged to main with PR #69, 2026-10-18, `4ec8987`, CI run 39140329787 green, closing issues #57, #63 and #64); the decisions I64-01 to I64-03 from issue #64 made on 2026-10-18 (I64-02 implemented), I64-05 closed; Phase 4: M15, M16 and M17 done on the branch `worktree-phase-4` (level 1 tests run by CI); next: M18 · October 2026
+Status: Phase 1 complete; Phase 2 complete, the items of its audit closed (P2-AUDIT-01 to P2-AUDIT-17); both audits in `docs/open-items.md`; Phase 3 complete: M12, M13 and M14 merged (PR #56, 2026-10-15, with the follow-up PR #58; CI run 38744189903 on `16824f8` green), audited 2026-10-14, the audit's items P3-AUDIT-01 to P3-AUDIT-38 closed (P3-AUDIT-37 and P3-AUDIT-38 decided 2026-10-15); open: P3-M12-05 (waits for M27/M30); Phase 3.1 complete: M35a merged to main (PR #68, 2026-10-17, `0fb9176`; CI run 39057670486 on `0fb9176` green), its open items P31-M35a-01 to -10 closed on 2026-10-17, audited 2026-10-17 (P31-AUDIT-01 to -14 in `docs/open-items.md`; -01 to -03 and -05 to -10 fixed on the branch `close-phase-3-1`, level 2 passed there (Nightly 39084099383, P31-AUDIT-04 closed); -11 to -14 decided by the maintainer on 2026-10-18 and implemented on that branch; the branch merged to main with PR #69, 2026-10-18, `4ec8987`, CI run 39140329787 green, closing issues #57, #63 and #64); the decisions I64-01 to I64-03 from issue #64 made on 2026-10-18 (I64-02 implemented), I64-05 closed; Phase 4: M15, M16, M17 and M18 done on the branch `worktree-phase-4` (level 1 tests run by CI); next: M19 · October 2026
 
 ---
 
@@ -1453,7 +1453,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 
 ## Phase 4 — Automation
 
-**Status:** M15, M16 and M17 done on the branch `worktree-phase-4` (not merged yet); M18 and M19 open.
+**Status:** M15, M16, M17 and M18 done on the branch `worktree-phase-4` (not merged yet); M19 open.
 
 **M15 — Scenario engine and runs** (L)
 - **Status:** done — committed on the branch worktree-phase-4 (`3902e34`, `4970d01`, `c853440`, `95a9956`, `daf8602`). Reviewed; all level 0 tests pass here. The level 1 tests (`internal/api/e2e_runs_test.go`, among them the +-100 ms step timing, abort and lease on the real kernel) are written, vetted with `-tags testbed` and wired into both CI testbed jobs with `M15_LEVEL1`, but were not run here (no KVM, no namespaces): run by CI. Hardware step timing stays with H1.
@@ -1474,6 +1474,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Depends on: M7, M15, S9.
 
 **M18 — CLI and clients** (S)
+- **Status:** done — committed on the branch worktree-phase-4 (`9a8ae08`, `4035d6f`, `a1d19e7` and the review fixes of the commit that marks it done). Reviewed; all level 0 tests pass here, including the whole CLI in-process against the API on the simulated kernel and the example suites for pytest and Jest (`make test-examples`: 8 + 8 tests, none skipped). The six level 1 tests on the real kernel (`internal/api/e2e_ctl_test.go`) are written, vetted with `-tags testbed` and wired into both CI testbed jobs with `M18_LEVEL1`, but were not run here (no KVM, no namespaces): run by CI (`docs/development.md`, "Command line client and example suites (M18)").
 - Scope: `chaosctl` in Go for CI: apply profile, set fault with TTL, `run -f <file> --set …`, `--wait`, `--junit <file>`, `--artifacts <dir>`, exit codes 0 passed / 1 failed / 2 error or aborted, automatic lease renewal; `chaosctl wait device <name> --online [--connected tcp/8883] --timeout …`; `chaosctl with --profile … --ttl … -- <command>` (applies, runs the command, always cleans up); generated TypeScript and Python clients; examples for pytest and Jest.
 - Tests: CLI tests against the testbed incl. exit codes and cleanup of `chaosctl with` when the command fails; the example test suites run in CI.
 - Depends on: M15.

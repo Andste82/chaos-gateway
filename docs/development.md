@@ -5037,7 +5037,8 @@ what they leave out.
   fault behind: the gateway aborts the run when the renewals stop (plan §2.10). `--lease` without `--wait` is refused, as
   nobody would renew it.
 - **Interrupts and timeouts.** A SIGINT or SIGTERM during `run --wait`, and `--timeout`, abort the run (and wait for the
-  gateway to say that its overlays are gone) and return 2. `wait run` does not own the run: a signal or its `--timeout` only
+  gateway to say that its overlays are gone) and return 2; if the run has ended in the meantime and the abort is refused, the
+  command reads the run once more and returns the code of its real result. `wait run` does not own the run: a signal or its `--timeout` only
   stops waiting (2). Ten failed polls in a row (a gateway that does not answer; a 404/401/403 ends at once) end the wait
   with 2.
 - **`wait device <name> [--online] [--connected tcp/8883]`.** Polls `GET /devices/{name}` and, for `--connected`,
@@ -5066,7 +5067,8 @@ what they leave out.
 `clients/examples` (see its README): `pytest/` (the generated Python client; fixtures for the client, the device, and a
 `degraded` helper that applies faults with a TTL and removes them in the teardown), `jest/` (the generated TypeScript client;
 `setup.ts` points its relative `fetch('/overlays')` calls at the gateway and adds the token), `scenarios/link-outage.yaml`.
-Both suites also drive `chaosctl run … --wait` and `chaosctl with …` as a CI job would. `make test-examples` generates the
+Both suites also drive `chaosctl run … --wait` and `chaosctl with …` as a CI job would. The tests of a suite share one device, so Jest runs its files one after the other (`maxWorkers: 1`): in parallel, a
+fault of `degraded.test.ts` on the device made the precondition of the scenario run (no foreign overlay on the target) fail. `make test-examples` generates the
 clients, installs the suites' dependencies (`.venv`, `npm ci` in `clients/examples/jest`) and runs
 `TestTheExampleSuitesPassAgainstTheGateway` (`internal/api/examples_test.go`, build tag `examples`): the test starts a gateway on
 the simulated kernel with the real engine and the real clock, mints a token with the scope `overlays`, builds `chaosctl`,
@@ -5112,7 +5114,7 @@ for M18):
 Level 0 (all run here, with `-race`): `internal/ctl/ctl_test.go` (the address, fingerprints, the certificate checks against a TLS
 server, the flags of a fault, documents, `--set`, connections, the exit code of a run, and the commands against a fake
 gateway that fails on request: a gateway that stops answering, an overlay that cannot be removed, a refused second overlay,
-renewals at a third of the lease, a second signal), `cmd/chaosctl/main_test.go`, and `internal/api/ctl_test.go`: the whole CLI
+renewals at a third of the lease, a second signal, a run that ends between the timeout and the abort), `cmd/chaosctl/main_test.go`, and `internal/api/ctl_test.go`: the whole CLI
 in-process against the API on the simulated kernel with the real engine (a run on the fake clock of the API, or paced in real
 time where the lease matters; every command of the list above, the files it writes, the exit codes, the state of the
 gateway afterwards). Its tests are groups of subtests on one gateway (`TestChaosctlOverlays`, `TestChaosctlRuns`,
@@ -5123,13 +5125,13 @@ nearly ten minutes under `-race` in the development container, grows by a minute
 CI testbed jobs name the tests with `-expect-pass $M18_LEVEL1`): `chaosctl with` under a delay on the wire with a failing
 command and a missing one, runs from a file with exit code 0 and 1 against a scripted device, an abort on a signal, `wait
 device`, and a fault whose lease is not renewed; these need namespaces, which the unprivileged container of the development
-environment has not: vetted with `-tags testbed`, not run here, run by CI.
+environment has not: vetted with `-tags testbed`; not run in the sandbox; run by CI.
 
 ### Acceptance map (plan M18 "Tests")
 
 | Plan M18 Tests | Test |
 |---|---|
-| CLI tests against the testbed incl. exit codes | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports` (0), `TestChaosctlRuns/Returns1ForAFailedCheck` (1), `TestChaosctlRuns/Returns2ForARunThatEndsAsError`, `TestChaosctlRuns/AbortsTheRunWhenTheTimeoutRunsOut`, `TestChaosctlRuns/AbortsItsRunOnASignalAndLeavesAnotherRunAlone` (2), `TestChaosctlRuns/ReportsAScenarioTheGatewayRefuses`, `TestChaosctlOverlays/ShowsWhatTheGatewayRefusesAndExitsWith2`, `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected` (0 and 1), `TestTheExitCodeOfARunIsItsStatus`; on the real kernel (the testbed proper) `TestChaosctlRunPassesForADeviceThatReconnectsOnTheRealKernel` (0), `TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel` (1), `TestChaosctlAbortsARunOnASignalAndTakesTheFaultOutOnTheRealKernel` (2), `TestChaosctlWaitsForADeviceAndItsConnectionOnTheRealKernel`; not runnable here |
+| CLI tests against the testbed incl. exit codes | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports` (0), `TestChaosctlRuns/Returns1ForAFailedCheck` (1), `TestChaosctlRuns/Returns2ForARunThatEndsAsError`, `TestChaosctlRuns/AbortsTheRunWhenTheTimeoutRunsOut`, `TestTimeoutRacingTheEndOfTheRunUsesTheFinalStatus`, `TestChaosctlRuns/AbortsItsRunOnASignalAndLeavesAnotherRunAlone` (2), `TestChaosctlRuns/ReportsAScenarioTheGatewayRefuses`, `TestChaosctlOverlays/ShowsWhatTheGatewayRefusesAndExitsWith2`, `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected` (0 and 1), `TestTheExitCodeOfARunIsItsStatus`; on the real kernel (the testbed proper) `TestChaosctlRunPassesForADeviceThatReconnectsOnTheRealKernel` (0), `TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel` (1), `TestChaosctlAbortsARunOnASignalAndTakesTheFaultOutOnTheRealKernel` (2), `TestChaosctlWaitsForADeviceAndItsConnectionOnTheRealKernel`; not runnable here |
 | cleanup of `chaosctl with` when the command fails | `TestChaosctlWith/WithRunsACommandUnderAFaultAndCleansUp` (exit 3, overlays gone), `TestChaosctlWith/WithCleansUpWhenTheCommandCannotRun` (not found 127, not executable 126, killed 137), `TestChaosctlWith/WithPassesASignalOnAndFailsWith125` (signal, refused setup, the first overlay removed when the second is refused), `TestWithRemovesTheFirstOverlayWhenTheSecondIsRefused`, `TestWithReportsAnOverlayItCannotRemove`, `TestASecondSignalKillsACommandThatIgnoresTheFirst`, `TestAnInterruptIsNotPassedOnToTheCommand`; on the real kernel `TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel` (the delay on the wire while the command runs, a clean path after it); not runnable here |
 | the example test suites run in CI | `TestTheExampleSuitesPassAgainstTheGateway` (`make test-examples`, the `level0` job) |
 | Scope: apply profile, set fault with TTL | `TestChaosctlOverlays/AppliesAProfileAndAFaultWithATTLAndRemovesThem`, `TestChaosctlOverlays/ResetAndTheReplacementOfAFault`, `TestChaosctlOverlays/CreatesAnOverlayFromARequestFile`, `TestTheFlagsOfAFaultBecomeItsBody` |

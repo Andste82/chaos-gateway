@@ -267,7 +267,15 @@ func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOpti
 			_, err := cl.call(actx, http.MethodPost, "/runs/"+id+"/abort", nil, nil, &ab)
 			acancel()
 			if err != nil {
-				return failf(ExitError, "%s, and the run could not be aborted: %v (the lease takes it down if it has one)", interrupted, err)
+				// the run may have ended between the signal and the abort: read its result once more
+				rctx, rcancel := cleanupContext()
+				var last model.Run
+				_, gerr := cl.call(rctx, http.MethodGet, "/runs/"+id, nil, nil, &last)
+				rcancel()
+				if gerr != nil || !ended(last.Status) {
+					return failf(ExitError, "%s, and the run could not be aborted: %v (the lease takes it down if it has one)", interrupted, err)
+				}
+				ab = last
 			}
 			cur = &ab
 			progress.update(cur)

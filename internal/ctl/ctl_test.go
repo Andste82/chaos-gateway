@@ -313,6 +313,9 @@ type fakeGateway struct {
 	runDown int
 	gets    int
 	renews  int
+	// abortStatus, when not 0, is the status of POST /runs/{id}/abort; the run is then passed for later GETs
+	abortStatus int
+	aborted     bool
 }
 
 func (f *fakeGateway) handler() http.Handler {
@@ -342,6 +345,16 @@ func (f *fakeGateway) handler() http.Handler {
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && path == "/runs":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(fakeRun("running")))
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/abort"):
+			if f.abortStatus != 0 {
+				f.aborted = true
+				problem(f.abortStatus, "conflict", "the run has ended")
+				return
+			}
+			_, _ = w.Write([]byte(fakeRun("aborted")))
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/renew"):
 			f.renews++
 			_, _ = w.Write([]byte(`{}`))
@@ -351,11 +364,19 @@ func (f *fakeGateway) handler() http.Handler {
 				problem(503, "unavailable", "the executor is down")
 				return
 			}
-			_, _ = w.Write([]byte(`{"id":"00000000-0000-4000-8000-000000000001","scenario":{"name":"x","inline":true},"revision":1,"target":{"device":"d"},"owner":{"type":"token","id":"t"},"status":"running","created_at":"2026-10-18T12:00:00Z"}`))
+			if f.aborted {
+				_, _ = w.Write([]byte(fakeRun("passed")))
+				return
+			}
+			_, _ = w.Write([]byte(fakeRun("running")))
 		default:
 			problem(404, "not_found", "no "+path)
 		}
 	})
+}
+
+func fakeRun(status string) string {
+	return `{"id":"00000000-0000-4000-8000-000000000001","scenario":{"name":"x","inline":true},"revision":1,"target":{"device":"d"},"owner":{"type":"token","id":"t"},"status":"` + status + `","created_at":"2026-10-18T12:00:00Z"}`
 }
 
 func (f *fakeGateway) calls() []string {
@@ -488,5 +509,19 @@ func TestAnInterruptIsNotPassedOnToTheCommand(t *testing.T) {
 	}
 	if last := f.calls()[len(f.calls())-1]; !strings.HasPrefix(last, "DELETE /overlays/") {
 		t.Errorf("the overlay is removed after the command ended: %v", f.calls())
+	}
+}
+
+// A run that ends between the timeout and the abort: the abort is refused, chaosctl reads the real result and returns
+// its exit code instead of reporting an abort that did not happen.
+func TestTimeoutRacingTheEndOfTheRunUsesTheFinalStatus(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "s.yaml")
+	if err := os.WriteFile(file, []byte("name: x\ntarget: {device: d}\nsteps: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeGateway{t: t, abortStatus: 409}
+	code, out, errb := f.run(t, nil, "run", "-f", file, "--wait", "--lease", "0", "--timeout", "20ms")
+	if code != ExitOK || !strings.Contains(out, "PASSED") || strings.Contains(errb, "could not be aborted") {
+		t.Errorf("%d\n%s\n%s", code, out, errb)
 	}
 }

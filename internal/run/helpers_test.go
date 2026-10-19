@@ -66,6 +66,8 @@ type fakeGateway struct {
 	queueWait time.Duration
 	putErr    func(w engine.OverlayWrite) error
 	resetErr  error
+	// resetFailures is how many of the next resets fail with errTransient before they work
+	resetFailures int
 	// block, when set, holds every write until it is closed or the context ends; resetBlock does the same for the
 	// resets (the `restore` steps and the end of a run)
 	block      chan struct{}
@@ -213,6 +215,10 @@ func (g *fakeGateway) ResetOverlays(ctx context.Context, owner *model.Owner, _ m
 	defer g.mu.Unlock()
 	if g.resetErr != nil {
 		return engine.OverlayResult{}, g.resetErr
+	}
+	if g.resetFailures > 0 {
+		g.resetFailures--
+		return engine.OverlayResult{}, errTransient
 	}
 	n := 0
 	for id, ov := range g.byID {
@@ -519,6 +525,26 @@ func (h *harness) advance(d time.Duration) {
 	h.clk.Advance(d)
 }
 
+// advanceUntil moves the fake clock a second at a time, with a moment for the goroutines of the runs between the moves,
+// until the condition holds: for the waits of a run that has no timer to wait for with BlockUntil.
+func (h *harness) advanceUntil(what string, cond func() bool) {
+	h.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("timed out waiting for %s", what)
+		}
+		h.clk.Advance(time.Second)
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (g *fakeGateway) setResetErr(err error) {
+	g.mu.Lock()
+	g.resetErr = err
+	g.mu.Unlock()
+}
+
 func step(r model.Run, id string) model.RunStep {
 	for _, s := range *r.Steps {
 		if s.Id == id {
@@ -550,6 +576,9 @@ func (g *fakeGateway) written() []engine.OverlayWrite {
 	defer g.mu.Unlock()
 	return append([]engine.OverlayWrite(nil), g.writes...)
 }
+
+// errTransient is what a reset that fails a few times answers (fakeGateway.resetFailures).
+var errTransient = errors.New("apply failed, try again")
 
 // failStep makes every overlay write fail with the message.
 func failStep(msg string) func(engine.OverlayWrite) error {

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -305,6 +307,107 @@ steps:
 	done := h.waitStatus(r.Id, model.RunStatusError)
 	if done.Reason == nil || !has(*done.Reason, "could not be removed") {
 		t.Errorf("reason %v", done.Reason)
+	}
+}
+
+// A removal of the overlays that does not work is part of the end of the run whatever its status: an abort answers with the
+// problem and not as a clean abort, the reason of the aborted, lease-expired and failed runs names it, and the manager
+// keeps trying until the overlays are gone (plan §2.10: either way, its overlays are removed).
+func TestARunWhoseOverlaysCannotBeRemovedSaysSoWhateverItsEnd(t *testing.T) {
+	stuck := func(h *harness) { h.gw.setResetErr(fmt.Errorf("apply failed")) }
+	removed := func(t *testing.T, h *harness, id uuid.UUID, status model.RunStatus, reasonStart string) {
+		t.Helper()
+		h.advanceUntil("the end of the run", func() bool { return h.get(id).Status == status })
+		got := h.get(id)
+		if got.Reason == nil || !strings.HasPrefix(*got.Reason, reasonStart) || !has(*got.Reason, "; the overlays of the run could not be removed: apply failed") {
+			t.Errorf("reason %v", got.Reason)
+		}
+		if n := len(h.gw.overlays()); n != 1 {
+			t.Fatalf("%d overlays are left, want the one the run could not remove", n)
+		}
+		// the overlays carry no lease of their own: the manager removes them once the engine lets it
+		h.gw.setResetErr(nil)
+		h.advanceUntil("the retry of the removal", func() bool { return len(h.gw.overlays()) == 0 })
+	}
+
+	t.Run("abort", func(t *testing.T) {
+		h := newHarness(t)
+		r := h.start(long("long", esp))
+		h.waitStep(r.Id, "a", model.RunStepStatusApplied)
+		stuck(h)
+		type answer struct {
+			a   run.Abort
+			err error
+		}
+		ch := make(chan answer, 1)
+		go func() {
+			a, err := h.m.Abort(context.Background(), r.Id, &token)
+			ch <- answer{a, err}
+		}()
+		var got answer
+		h.advanceUntil("the answer of the abort", func() bool {
+			select {
+			case got = <-ch:
+				return true
+			default:
+				return false
+			}
+		})
+		ce, ok := errAs[*run.CleanupError](got.err)
+		if !ok || ce.Run.Status != model.RunStatusAborted || ce.Run.Id != r.Id {
+			t.Fatalf("an abort whose overlays stay answered %v", got.err)
+		}
+		removed(t, h, r.Id, model.RunStatusAborted, "aborted by ci")
+	})
+
+	t.Run("lease", func(t *testing.T) {
+		h := newHarness(t)
+		r := h.start(long("long", esp), func(c *run.CreateRequest) { c.Lease = 30 * time.Second })
+		h.waitStep(r.Id, "a", model.RunStepStatusApplied)
+		stuck(h)
+		h.clk.Advance(30 * time.Second)
+		removed(t, h, r.Id, model.RunStatusAborted, "lease expired")
+	})
+
+	t.Run("error", func(t *testing.T) {
+		h := newHarness(t)
+		h.gw.putErr = func(w engine.OverlayWrite) error {
+			if w.Run.Step == "bad" {
+				return fmt.Errorf("class limit reached")
+			}
+			return nil
+		}
+		r := h.start(`
+name: bad
+target: {device: esp32-42}
+steps:
+  - {id: ok,  at: 0s, fault: {latency: 10ms}}
+  - {id: bad, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+`)
+		h.waitStep(r.Id, "ok", model.RunStepStatusApplied)
+		stuck(h)
+		h.advance(time.Second)
+		removed(t, h, r.Id, model.RunStatusError, "step bad: class limit reached")
+	})
+}
+
+// A removal that works on a later attempt is no failure: the run keeps its verdict.
+func TestARemovalOfTheOverlaysThatWorksOnALaterAttemptKeepsTheVerdict(t *testing.T) {
+	h := newHarness(t)
+	h.gw.resetFailures = 1
+	r := h.start(`
+name: flaky
+target: {device: esp32-42}
+steps:
+  - {id: one, at: 0s, fault: {latency: 10ms}}
+`)
+	h.advanceUntil("the end of the run", func() bool { return h.get(r.Id).Status != model.RunStatusRunning })
+	done := h.get(r.Id)
+	if done.Status != model.RunStatusPassed || done.Reason != nil {
+		t.Errorf("%s %v", done.Status, done.Reason)
+	}
+	if n := len(h.gw.overlays()); n != 0 {
+		t.Errorf("%d overlays are left", n)
 	}
 }
 

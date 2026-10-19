@@ -1647,7 +1647,10 @@ paths:
       summary: Abort a queued or running run; its overlays are removed
       description: |
         Returns when the run has ended and its overlays are gone (`Chaos-Generation` is the generation that removed
-        them). Aborting a run that has ended already changes nothing and returns it. A token with the scope
+        them). If the overlays cannot be removed (the executor does not answer) the answer is the problem
+        `apply_failed`: the run is recorded as `aborted` and its `reason` says the overlays stayed, and the gateway
+        keeps trying to remove them every 10 seconds. Aborting a run that has ended already changes nothing and
+        returns it. A token with the scope
         `overlays` may only abort its own runs.
       x-milestone: M15
       x-required-scope: overlays

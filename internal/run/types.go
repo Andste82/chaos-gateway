@@ -67,6 +67,18 @@ func (e *TargetBusyError) Error() string {
 	return fmt.Sprintf("the target is busy: run %s (%s) is queued or running on it", e.Run, e.Scenario)
 }
 
+// CleanupError is returned by Abort for a run that has ended but whose overlays could not be removed: the run is
+// recorded (Run), and the manager keeps trying to remove the overlays.
+type CleanupError struct {
+	Run model.Run
+	Err error
+}
+
+func (e *CleanupError) Error() string {
+	return fmt.Sprintf("run %s ended as %s, but its overlays could not be removed (the gateway keeps trying): %v", e.Run.Id, e.Run.Status, e.Err)
+}
+func (e *CleanupError) Unwrap() error { return e.Err }
+
 // UnsupportedError is returned by Create for a scenario that needs a milestone this build does not have
 // (`422 unsupported_feature`).
 type UnsupportedError struct {

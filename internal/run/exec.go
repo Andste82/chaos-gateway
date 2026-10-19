@@ -22,6 +22,11 @@ const cleanupTimeout = 2 * time.Minute
 // cleanupAttempts is how often the removal is tried when the engine refuses it (a failed apply).
 const cleanupAttempts = 3
 
+// cleanupRetry is how often the manager tries again to remove the overlays of an ended run whose removal failed, until
+// it works, the record of the run is deleted or the manager closes: the overlays carry no TTL of their own, and every
+// later run on the target would fail the baseline `no_foreign_overlays` naming a run that has ended.
+const cleanupRetry = 10 * time.Second
+
 // stepError is a step that the engine could not execute: the run ends as `error`.
 type stepError struct {
 	step string
@@ -431,15 +436,65 @@ func (m *Manager) finish(r *runState, status model.RunStatus, reason string) {
 		case <-ctx.Done():
 		}
 	}
-	if cleanErr != nil && !errors.Is(cleanErr, engine.ErrClosed) && (status == model.RunStatusPassed || status == model.RunStatusFailed) {
-		status, reason = model.RunStatusError, "the overlays of the run could not be removed: "+cleanErr.Error()
+	failed := cleanErr != nil && !errors.Is(cleanErr, engine.ErrClosed)
+	if failed {
+		// part of the end whatever the status: a run that would have passed or failed did not end well, an aborted or
+		// failed one says so next to its own reason
+		msg := "the overlays of the run could not be removed: " + cleanErr.Error()
+		switch {
+		case status == model.RunStatusPassed || status == model.RunStatusFailed:
+			status, reason = model.RunStatusError, msg
+		case reason == "":
+			reason = msg
+		default:
+			reason += "; " + msg
+		}
 	}
 	r.releaseAll()
 	m.mu.Lock()
+	if failed {
+		r.cleanupErr = cleanErr
+	}
 	m.finishLocked(r, status, reason, r.counterRecords())
 	m.mu.Unlock()
 	r.cancel(nil)
 	m.afterFinish(r)
+	if failed {
+		m.retryCleanup(r)
+	}
+}
+
+// retryCleanup goes on removing the overlays of an ended run whose removal failed, every cleanupRetry. It stops when
+// the removal works, when the engine is gone, when the record of the run is deleted and when the manager closes.
+func (m *Manager) retryCleanup(r *runState) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		for {
+			select {
+			case <-m.clk.After(cleanupRetry):
+			case <-m.ctx.Done():
+				return
+			}
+			m.mu.Lock()
+			_, kept := m.runs[r.id]
+			m.mu.Unlock()
+			if !kept {
+				return
+			}
+			ctx, cancel := context.WithTimeout(m.ctx, cleanupTimeout)
+			_, err := m.cfg.Gateway.ResetOverlays(ctx, &r.owner, r.owner)
+			cancel()
+			switch {
+			case err == nil:
+				m.log.Info("the overlays of an ended run are removed now", "run", r.id)
+				return
+			case errors.Is(err, engine.ErrClosed):
+				return
+			}
+			m.log.Warn("cannot remove the overlays of an ended run", "run", r.id, "error", err)
+		}
+	}()
 }
 
 // ---- preconditions

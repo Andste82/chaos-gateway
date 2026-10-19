@@ -30,11 +30,27 @@ func artifactsOfKind(run map[string]any, kind string) []map[string]any {
 	return out
 }
 
+// warningCodes are the codes of the warnings of a run, without step_late: the engine of these tests runs on the real
+// clock, so any step whose first apply waits more than 100 ms (under -race it does now and then) gets that warning,
+// and the tests are about the others. step_late has its deterministic tests in internal/run.
 func warningCodes(run map[string]any) []string {
 	var out []string
+	for _, w := range warningsOf(run, "") {
+		if c := w["code"].(string); c != "step_late" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// warningsOf are the warnings of a run with the code (all of them for ""), in the order the run recorded them.
+func warningsOf(run map[string]any, code string) []map[string]any {
+	var out []map[string]any
 	ws, _ := run["warnings"].([]any)
 	for _, w := range ws {
-		out = append(out, w.(map[string]any)["code"].(string))
+		if m := w.(map[string]any); code == "" || m["code"] == code {
+			out = append(out, m)
+		}
 	}
 	return out
 }
@@ -170,7 +186,7 @@ func TestALowDiskStopsTheCaptureOfARunButNotTheRun(t *testing.T) {
 	if codes := warningCodes(run); len(codes) != 1 || codes[0] != "capture_missing" {
 		t.Fatalf("warnings %v", run["warnings"])
 	}
-	w := run["warnings"].([]any)[0].(map[string]any)["message"].(string)
+	w := warningsOf(run, "capture_missing")[0]["message"].(string)
 	if !strings.Contains(w, "disk_low") || !strings.Contains(w, "10 %") {
 		t.Errorf("the warning: %s", w)
 	}
@@ -201,7 +217,7 @@ func TestARunWhoseCaptureCannotStartRunsWithoutItAndSaysSo(t *testing.T) {
 	clk.BlockUntil(1)
 	clk.Advance(10 * time.Second)
 	run := g.waitRun(id, "passed")
-	if codes := warningCodes(run); len(codes) != 1 || codes[0] != "capture_missing" || !strings.Contains(run["warnings"].([]any)[0].(map[string]any)["message"].(string), "free space") {
+	if codes := warningCodes(run); len(codes) != 1 || codes[0] != "capture_missing" || !strings.Contains(warningsOf(run, "capture_missing")[0]["message"].(string), "free space") {
 		t.Errorf("warnings %v", run["warnings"])
 	}
 	if len(artifactsOfKind(run, "capture")) != 0 || len(g.cap.Opened()) != 0 {

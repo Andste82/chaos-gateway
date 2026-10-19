@@ -4583,7 +4583,7 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   counters, schema version 1, written atomically each time the run changes, in order) and `events.jsonl` (the
   events of the run, one API `Event` per line: the manager's own `run_queued`, `run_started`, `run_step`,
   `run_finished` and the engine's overlay events of the run's overlays, which now carry `run`; a recorder
-  goroutine follows the event bus, a recorder the bus dropped subscribes again and says so in the log).
+  goroutine follows the event bus; a recorder the bus dropped subscribes again with `SubscribeFrom` the newest event it took and writes what the bus replays first, so the file loses nothing unless the bus has not kept it any more (then the log says how many events are missing)).
   `Manager.Recover` (called by `api.New`, once the engine runs) loads the records: a run that was queued or
   running ends as `aborted` with the reason `service restart` (its overlays died with the process, plan
   §2.1.1) and an event, a record of an ended run older than the retention (30 days, plan §3.6) is

@@ -14,24 +14,40 @@ const recordWait = 5 * time.Second
 // startRecorder follows the event bus and writes the events of every run, the ones the manager emits for it
 // and the ones the engine emits for its overlays (they carry the run's id in `run`), to the run's event
 // file. A recorder that falls behind is dropped by the bus, as any subscriber is (plan §3.11): it subscribes
-// again and the events in between are lost; the log says so.
+// again from the newest event it took, so the bus replays what came in between, and writes those first. Only events the
+// bus has not kept any more (more than its replay window passed) are lost, and the log says so.
 func (m *Manager) startRecorder() {
 	ch, unsub := m.cfg.Gateway.Subscribe()
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
 		defer func() { unsub() }()
+		var last uint64 // the sequence number of the newest event the recorder took
 		for {
 			select {
 			case <-m.ctx.Done():
 				return
 			case ev, ok := <-ch:
 				if !ok {
-					m.log.Warn("the event recorder of the runs fell behind: events of runs may be missing from their event files")
-					ch, unsub = m.cfg.Gateway.Subscribe()
+					var replay []engine.Event
+					if last == 0 { // it has taken none: nothing to continue from
+						ch, unsub = m.cfg.Gateway.Subscribe()
+						m.log.Warn("the event recorder of the runs fell behind: events of runs may be missing from their event files")
+						continue
+					}
+					replay, ch, unsub = m.cfg.Gateway.SubscribeFrom(last)
+					if len(replay) > 0 && replay[0].Seq > last+1 {
+						m.log.Warn("the event recorder of the runs fell behind further than the bus keeps events: events of runs are missing from their event files",
+							"lost", replay[0].Seq-last-1)
+					}
+					for _, ev := range replay {
+						m.record(ev)
+						last = ev.Seq
+					}
 					continue
 				}
 				m.record(ev)
+				last = ev.Seq
 			}
 		}
 	}()

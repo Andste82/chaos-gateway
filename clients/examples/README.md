@@ -20,8 +20,12 @@ export CHAOSGW_TOKEN=...                          # a token with the scope overl
 export CHAOSGW_DEVICE=esp32-42                    # the device under test (it must be online)
 export CHAOSCTL=/path/to/chaosctl                 # for the tests of the command line
 
-# a gateway with a self-signed certificate: CHAOSGW_CA_CERT=<its certificate as PEM> (pytest),
-# NODE_EXTRA_CA_CERTS=<the same file> (Jest), or CHAOSGW_INSECURE=1 (pytest)
+# a gateway with a self-signed certificate: its certificate as PEM, for the client of the suite and for chaosctl.
+#   pytest: CHAOSGW_CA_CERT=<the PEM file> (or CHAOSGW_INSECURE=1)
+#   Jest:   NODE_EXTRA_CA_CERTS=<the PEM file>; Node ignores CHAOSGW_CA_CERT for its own fetch
+# chaosctl, which both suites run, is a Go program: it reads neither NODE_EXTRA_CA_CERTS nor the clients' settings but
+# CHAOSGW_CA_CERT=<the PEM file>, CHAOSGW_FINGERPRINT=<SHA-256 of the certificate> or CHAOSGW_INSECURE=1 (the same variables
+# pytest reads). The Jest helper passes NODE_EXTRA_CA_CERTS on as CHAOSGW_CA_CERT when none of the three is set.
 
 cd clients/examples/pytest && pip install -r requirements.txt ../../python/chaosgw-client && pytest
 cd clients/examples/jest && npm ci && npx jest

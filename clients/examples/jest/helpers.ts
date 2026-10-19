@@ -29,9 +29,17 @@ export async function withFault<T>(fault: NonNullable<OverlayRequest['fault']>, 
   }
 }
 
-/** Runs chaosctl (CHAOSCTL, default: the one on the PATH) with the environment of the suite. */
+/**
+ * Runs chaosctl (CHAOSCTL, default: the one on the PATH) with the environment of the suite. chaosctl is a Go program: it
+ * ignores NODE_EXTRA_CA_CERTS, which Node uses for the fetch of the generated client, and trusts a gateway with a
+ * self-signed certificate only through CHAOSGW_CA_CERT, CHAOSGW_FINGERPRINT or CHAOSGW_INSECURE. So the file of
+ * NODE_EXTRA_CA_CERTS is handed on as CHAOSGW_CA_CERT unless the environment names a way of its own.
+ */
 export function chaosctl(...args: string[]): SpawnSyncReturns<string> {
-  return spawnSync(process.env.CHAOSCTL ?? 'chaosctl', args, { encoding: 'utf8', timeout: 120_000 });
+  const env = { ...process.env };
+  const own = env.CHAOSGW_CA_CERT || env.CHAOSGW_FINGERPRINT || env.CHAOSGW_INSECURE;
+  if (!own && env.NODE_EXTRA_CA_CERTS) env.CHAOSGW_CA_CERT = env.NODE_EXTRA_CA_CERTS;
+  return spawnSync(process.env.CHAOSCTL ?? 'chaosctl', args, { encoding: 'utf8', timeout: 120_000, env });
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

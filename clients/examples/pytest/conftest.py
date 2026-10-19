@@ -47,7 +47,7 @@ def gateway():
     token = os.environ.get("CHAOSGW_TOKEN")
     if not url or not token:
         pytest.fail("set CHAOSGW_URL and CHAOSGW_TOKEN (clients/examples/README.md)")
-    verify = os.environ.get("CHAOSGW_CA_CERT") or os.environ.get("CHAOSGW_INSECURE") not in ("1", "true")
+    verify = os.environ.get("CHAOSGW_CA_CERT") or os.environ.get("CHAOSGW_INSECURE", "").lower() not in ("1", "true", "yes")
     with AuthenticatedClient(base_url=url.rstrip("/") + "/api/v1", token=token, verify_ssl=verify) as client:
         yield client
 

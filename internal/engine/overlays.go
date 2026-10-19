@@ -383,6 +383,7 @@ func (o *owner) lastCheckpoint() *overlay.Checkpoint {
 // returns the problems an overlay can cause: a capacity limit, a fault that cannot be compiled.
 // The same compile as the apply loop's; a problem of the configuration itself is not the overlay's.
 func (o *owner) compileProblems() []compiler.Problem {
+	o.e.dryCompiles.Add(1)
 	cfg, rev := o.liveConfig(), o.liveRevision()
 	var id *domain.Identity
 	if o.identity != nil {

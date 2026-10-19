@@ -7,3 +7,7 @@ func (e *Engine) DHCPReopensScheduled() int {
 	defer e.dhcp.mu.Unlock()
 	return e.dhcp.scheduled
 }
+
+// DryCompiles is how many compiles the state owner made only to check overlay writes: one per batch of writes (or
+// per write that is checked alone), never one per write of a burst.
+func (e *Engine) DryCompiles() int { return int(e.dryCompiles.Load()) }

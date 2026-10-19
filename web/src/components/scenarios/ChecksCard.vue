@@ -68,12 +68,12 @@ function evidenceText(e: Record<string, unknown>): string {
       <li v-for="r in rows" :key="r.index" class="flex items-start gap-2.5" data-testid="check" :data-status="r.result?.status">
         <span
           v-if="r.result"
-          class="mt-0.5 shrink-0 rounded border px-1.5 text-[11px] font-semibold tracking-wide"
+          class="mt-0.5 shrink-0 rounded border px-1.5 text-xs font-semibold tracking-wide"
           :class="tone[r.result.status]"
           data-testid="check-state"
           >{{ checkStatusText[r.result.status] }}</span
         >
-        <span v-else class="mt-0.5 shrink-0 rounded border border-border-strong px-1.5 text-[11px] font-semibold tracking-wide text-text-2">CHECK</span>
+        <span v-else class="mt-0.5 shrink-0 rounded border border-border-strong px-1.5 text-xs font-semibold tracking-wide text-text-2">CHECK</span>
         <div class="min-w-0 flex-1 text-sm leading-relaxed">
           <div class="break-words" data-testid="check-name">{{ r.title }}</div>
           <div class="text-xs text-text-2">{{ r.detail }}</div>

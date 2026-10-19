@@ -3197,7 +3197,7 @@ type CheckResult struct {
 	Status CheckResultStatus `json:"status"`
 	Type   CheckResultType   `json:"type"`
 
-	// WindowEnd Wall time at which the window closed (see `Check`). Absent while it is open.
+	// WindowEnd Wall time at which the window closes (see `Check`). For a window of `within` it is set when the window opens, as the planned end; for a window with `until` it is set when that step reaches its moment. Absent until then.
 	WindowEnd *time.Time `json:"window_end,omitempty"`
 
 	// WindowStart Wall time at which the window opened (see `Check`). Absent while the window has not opened.

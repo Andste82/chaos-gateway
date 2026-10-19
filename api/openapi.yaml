@@ -5384,7 +5384,7 @@ components:
           description: '`pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.'
           enum: [pending, passed, failed, error]
         window_start: {type: string, format: date-time, description: 'Wall time at which the window opened (see `Check`). Absent while the window has not opened.'}
-        window_end: {type: string, format: date-time, description: 'Wall time at which the window closed (see `Check`). Absent while it is open.'}
+        window_end: {type: string, format: date-time, description: 'Wall time at which the window closes (see `Check`). For a window of `within` it is set when the window opens, as the planned end; for a window with `until` it is set when that step reaches its moment. Absent until then.'}
         message: {type: string}
         evidence:
           type: array

@@ -1,10 +1,12 @@
 package run
 
 import (
+	"errors"
 	"net/netip"
 	"sort"
 	"strings"
 
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -222,7 +224,7 @@ func established(f engine.Flow) bool {
 // matchFlow reports whether a connection is one the match selects: the protocol, a destination port, and
 // the destination address (an address or prefix, a network, the uplink). A host name needs the resolver
 // (M20) and is refused when the scenario is checked, so it never reaches here.
-func matchFlow(snap *engine.Snapshot, m model.TrafficMatch, f engine.Flow) bool {
+func matchFlow(nets *flowNets, m model.TrafficMatch, f engine.Flow) bool {
 	if p := deref(m.Protocol); p != "" && p != model.ProtocolAny && string(p) != f.Protocol {
 		return false
 	}
@@ -251,47 +253,59 @@ func matchFlow(snap *engine.Snapshot, m model.TrafficMatch, f engine.Flow) bool 
 		a, err := netip.ParseAddr(*d.Cidr)
 		return err == nil && a == f.Dst
 	case d.Network != nil:
-		for _, p := range networkPrefixes(snap, *d.Network) {
+		for _, p := range nets.network(*d.Network) {
 			if p.Contains(f.Dst) {
 				return true
 			}
 		}
 		return false
 	case d.Uplink != nil:
-		for _, p := range allLocalPrefixes(snap) {
-			if p.Contains(f.Dst) {
-				return false
-			}
-		}
-		return true
+		return nets != nil && nets.world != nil && nets.viaUplink(f.Dst)
 	}
 	return false
 }
 
-func networkPrefixes(snap *engine.Snapshot, id string) []netip.Prefix {
-	var out []netip.Prefix
-	for _, b := range snap.Bridges {
-		if lower(b.NetworkID) == lower(id) {
-			out = append(out, b.Address.Masked())
-		}
-	}
-	for _, w := range snap.WireGuardInterfaces {
-		if lower(w.NetworkID) == lower(id) {
-			out = append(out, w.Address.Masked())
-		}
-	}
-	return out
+// flowNets answers where an address lies for the destinations `network` and `uplink` of a check or a wait, from the
+// same world the rules and the capture selector use (domain.World): the prefixes of a network are its subnet,
+// the networks behind a hub's clients, a link's routes and a LAN's downstream routes, and what is not uplink is
+// every network and the management prefixes. One is built per snapshot; err is set when the world cannot be built.
+type flowNets struct {
+	world     *domain.World
+	nonUplink []netip.Prefix
+	err       error
 }
 
-func allLocalPrefixes(snap *engine.Snapshot) []netip.Prefix {
-	var out []netip.Prefix
-	for _, b := range snap.Bridges {
-		out = append(out, b.Address.Masked())
+func newFlowNets(snap *engine.Snapshot) *flowNets {
+	if snap == nil || snap.Config == nil {
+		return &flowNets{err: errors.New("the gateway has no configuration")}
 	}
-	for _, w := range snap.WireGuardInterfaces {
-		out = append(out, w.Address.Masked())
+	w, err := domain.NewWorld(snap.Config, snap.Overlays)
+	if err != nil {
+		return &flowNets{err: err}
 	}
-	return out
+	return &flowNets{world: w, nonUplink: w.NonUplinkPrefixes()}
+}
+
+func (n *flowNets) network(id string) []netip.Prefix {
+	if n == nil || n.world == nil {
+		return nil
+	}
+	return n.world.NetworkPrefixes(id)
+}
+
+func (n *flowNets) viaUplink(a netip.Addr) bool {
+	for _, p := range n.nonUplink {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
+}
+
+// destNeedsNets reports whether a destination looks at where an address lies (`network` or `uplink`), which cannot
+// be answered when the world of the gateway cannot be built.
+func destNeedsNets(d *model.Destination) bool {
+	return d != nil && (d.Network != nil || d.Uplink != nil)
 }
 
 // flowInScope reports whether the connection's initiator is in the scope's set of devices (or in a

@@ -114,6 +114,13 @@ func (h *harness) check(id uuid.UUID, i int) model.CheckResult {
 	return (*r.Checks)[i]
 }
 
+// windowEnd waits for the window of a check to be closed on the timeline and returns its end.
+func (h *harness) windowEnd(id uuid.UUID, i int) time.Time {
+	h.t.Helper()
+	eventually(h.t, "the end of the window", func() bool { return h.check(id, i).WindowEnd != nil })
+	return *h.check(id, i).WindowEnd
+}
+
 func (h *harness) waitCheck(id uuid.UUID, i int, want model.CheckResultStatus) model.CheckResult {
 	h.t.Helper()
 	var c model.CheckResult
@@ -483,7 +490,7 @@ func TestADNSQueryIsSeenOnlyInsideTheWindowFromADeviceOfTheTarget(t *testing.T) 
 	h.waitStatus(r.Id, model.RunStatusPassed)
 }
 
-// A query that comes after the window has closed does not pass the check.
+// A query that is stamped after the window has closed does not pass the check, one stamped at its last moment does.
 func TestADNSQueryAfterTheWindowDoesNotCount(t *testing.T) {
 	h := newHarness(t)
 	h.obs.dns[idESP] = true
@@ -491,14 +498,54 @@ func TestADNSQueryAfterTheWindowDoesNotCount(t *testing.T) {
 	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
 	h.advance(2 * time.Second)
 	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	end := h.windowEnd(r.Id, 0)
+	// the query is in the log (the observer does not look at the time), but it was asked after the window had closed
+	h.obs.mu.Lock()
+	h.obs.queries = append(h.obs.queries, query{device: idESP, name: "broker.example.com", at: end.Add(500 * time.Millisecond)})
+	h.obs.mu.Unlock()
 	h.tickUntil("the end of the run", func() bool { return h.get(r.Id).Status != model.RunStatusRunning })
-	// the query arrives only now: too late, and the run is over
 	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusFailed || !strings.Contains(*c.Message, "no device of the target asked for broker.example.com in the window of 3s") {
 		t.Errorf("%+v", c)
 	}
 	if done := h.get(r.Id); done.Status != model.RunStatusFailed {
 		t.Errorf("%s", done.Status)
 	}
+}
+
+func TestADNSQueryAtTheLastMomentOfTheWindowCounts(t *testing.T) {
+	h := newHarness(t)
+	h.obs.dns[idESP] = true
+	r := h.start(strings.Replace(dnsOutage, "within: 20s", "within: 3s", 1))
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.advance(2 * time.Second)
+	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	end := h.windowEnd(r.Id, 0)
+	h.obs.mu.Lock()
+	h.obs.queries = append(h.obs.queries, query{device: idESP, name: "broker.example.com", at: end})
+	h.obs.mu.Unlock()
+	h.tickUntil("the check", func() bool { return h.check(r.Id, 0).Status != model.CheckResultStatusPending })
+	h.waitCheck(r.Id, 0, model.CheckResultStatusPassed)
+}
+
+// The DNS log arrives after the query (the proxy logs it after the answer, in batches): a query asked inside the window
+// that is in the log shortly after the window closed still passes the check; its time stamp decides, not the poll.
+func TestADNSQueryOfTheWindowThatIsLoggedAfterItsEndStillCounts(t *testing.T) {
+	h := newHarness(t)
+	h.obs.dns[idESP] = true
+	r := h.start(strings.Replace(dnsOutage, "within: 20s", "within: 3s", 1))
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.advance(2 * time.Second)
+	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	end := h.windowEnd(r.Id, 0)
+	h.tickUntil("the end of the window", func() bool { return !h.clk.Now().Before(end.Add(250 * time.Millisecond)) })
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPending {
+		t.Fatalf("the check was decided at the end of the window, before the log could arrive: %+v", c)
+	}
+	h.obs.mu.Lock()
+	h.obs.queries = append(h.obs.queries, query{device: idESP, name: "broker.example.com", at: end.Add(-200 * time.Millisecond)})
+	h.obs.mu.Unlock()
+	h.tickUntil("the check", func() bool { return h.check(r.Id, 0).Status != model.CheckResultStatusPending })
+	h.waitCheck(r.Id, 0, model.CheckResultStatusPassed)
 }
 
 // A window from `start` is open from the beginning of the timeline.
@@ -951,4 +998,122 @@ checks:
 	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPassed {
 		t.Errorf("the connection of the apply is not in the window: %+v", c)
 	}
+}
+
+// P4-AUDIT-02: a poll that fails where the window opens does not arm the check. The first poll that works is the
+// baseline, so a connection that began before the window (established before the cut) does not pass
+// `reconnected from restore`.
+func TestAFailedReadWhereTheWindowOpensDoesNotArmTheCheck(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(outage)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.obs.failFlows(errors.New("conntrack: timeout"))
+	h.advance(5 * time.Second)
+	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	h.afterPoll() // the read that fails
+	h.obs.failFlows(nil)
+	old := tcpFlow("old", 8883, "ESTABLISHED")
+	old.StartedAt = t0.Add(4 * time.Second) // before the restore
+	h.obs.addFlow(old)
+	h.settle()
+	h.settle()
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPending {
+		t.Fatalf("a connection from before the window decided the check: %+v", c)
+	}
+	// a connection that begins inside the window does
+	fresh := tcpFlow("fresh", 8883, "ESTABLISHED")
+	fresh.SPort = 40001
+	fresh.StartedAt = h.clk.Now()
+	h.obs.addFlow(fresh)
+	h.afterPoll()
+	h.waitCheck(r.Id, 0, model.CheckResultStatusPassed)
+}
+
+// P4-AUDIT-19: a connection that began after the window of a fixed length closed is not one of the window, although the
+// poll that reads it comes before the check is decided.
+func TestAConnectionThatBeganAfterTheWindowClosedDoesNotFailNoConnection(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(`
+name: short
+target: {device: esp32-42}
+steps:
+  - {id: cut,  at: 0s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+  - {id: done, at: 5s, restore: true}
+checks:
+  - {no_connection: {protocol: tcp, ports: [8883]}, window: {from: cut, within: 1s}}
+`)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.afterPoll() // the baseline
+	late := tcpFlow("late", 8883, "ESTABLISHED")
+	late.StartedAt = h.get(r.Id).StartedAt.Add(1100 * time.Millisecond) // the restored path lets it through after the window
+	h.obs.addFlow(late)
+	h.tickUntil("the check", func() bool { return h.check(r.Id, 0).Status != model.CheckResultStatusPending })
+	c := h.check(r.Id, 0)
+	if c.Status != model.CheckResultStatusPassed || c.Evidence != nil {
+		t.Errorf("a connection after the window decided the check: %+v", c)
+	}
+}
+
+// P4-AUDIT-19, the mirror: a connection that began inside the window and was consumed by a poll before the check opened
+// (another check was open, the read was under way while the step was handed over) belongs to the check that opens in
+// the next iteration.
+func TestAConnectionOfThePollBeforeTheOpeningBelongsToTheCheckThatOpens(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(`
+name: mirror
+target: {device: esp32-42}
+steps:
+  - {id: cut,     at: 0s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+  - {id: restore, at: 5s, restore: true}
+checks:
+  - {traffic_seen: {destination: {cidr: 198.51.100.0/24}}, window: {from: start, within: 1h}}
+  - {reconnected: {protocol: tcp, ports: [8883]}, window: {from: restore, within: 30s}}
+`)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.afterPoll()
+	// the loop is held in a read that begins before the step is handed over
+	release := make(chan struct{})
+	h.obs.mu.Lock()
+	h.obs.block = release
+	h.obs.mu.Unlock()
+	n := h.obs.polls()
+	h.tickUntil("the read", func() bool { return h.obs.polls() > n })
+	h.advance(5 * time.Second)
+	h.waitStep(r.Id, "restore", model.RunStepStatusApplied)
+	back := tcpFlow("back", 8883, "ESTABLISHED")
+	back.StartedAt = h.clk.Now()
+	h.obs.addFlow(back)
+	close(release)
+	h.waitCheck(r.Id, 1, model.CheckResultStatusPassed)
+}
+
+// P4-AUDIT-04: `uplink` and `network` are what the rules and the capture selector say: the networks behind a hub's
+// clients are the hub's and not uplink, and so are the management prefixes.
+func TestTheUplinkAndNetworkDestinationsOfACheckAreTheOnesOfTheRules(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(`
+name: nets
+target: {device: esp32-42}
+steps:
+  - {id: a, at: 0s, fault: {latency: 10ms}}
+  - {id: b, at: 60s, restore: true}
+checks:
+  - {traffic_not_seen: {destination: {uplink: true}}, window: {from: a, until: b}}
+  - {traffic_seen: {destination: {network: lab-hub}}, window: {from: a, until: b}}
+`)
+	h.waitStep(r.Id, "a", model.RunStepStatusApplied)
+	h.afterPoll()
+	behindClient, management := tcpFlow("behind-client", 22, "ESTABLISHED"), tcpFlow("management", 443, "ESTABLISHED")
+	behindClient.Dst, management.Dst = netip.MustParseAddr("10.50.0.9"), netip.MustParseAddr("192.168.88.5")
+	management.SPort = 40001
+	h.obs.addFlow(behindClient)
+	h.obs.addFlow(management)
+	h.settle()
+	h.waitCheck(r.Id, 1, model.CheckResultStatusPassed)
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPending {
+		t.Fatalf("traffic to a network behind a client or to a management address is uplink traffic: %+v", c)
+	}
+	h.advance(60 * time.Second)
+	h.waitCheck(r.Id, 0, model.CheckResultStatusPassed)
+	h.waitStatus(r.Id, model.RunStatusPassed)
 }

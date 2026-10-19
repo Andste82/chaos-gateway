@@ -4,7 +4,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -36,39 +35,80 @@ func TestAConnectionIsEstablishedPastTheHandshake(t *testing.T) {
 	}
 }
 
-func TestAConnectionMatchesAProtocolPortsAndDestination(t *testing.T) {
-	snap := &engine.Snapshot{
-		Bridges:             []compiler.Bridge{{NetworkID: "net-iot", Address: netip.MustParsePrefix("10.10.0.1/24")}},
-		WireGuardInterfaces: []compiler.WGInterface{{NetworkID: "net-hub", Address: netip.MustParsePrefix("10.99.0.1/24")}},
+const (
+	netIoT = "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	netHub = "4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54"
+	netRA  = "9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+)
+
+// netsSnapshot is a gateway with a test network 10.10.0.0/24 (and a downstream route 10.20.0.0/24 behind it), a hub
+// 10.99.0.0/24 with a client that has the network 192.168.50.0/24 behind it, and the management prefix 192.168.1.0/24.
+func netsSnapshot(t *testing.T) *engine.Snapshot {
+	t.Helper()
+	lan := model.LanNetwork{Type: model.LanNetworkTypeLan, Name: "IoT", Address: "10.10.0.1/24", Interfaces: []model.InterfaceRef{},
+		Routes: &[]model.DownstreamRoute{{Destination: "10.20.0.0/24", Via: "10.10.0.2"}}}
+	hub := model.WireGuardNetwork{Type: model.WireGuardNetworkTypeWireguard, Kind: model.Hub, Name: "lab-hub", Address: "10.99.0.1/24", ListenPort: 51820,
+		Clients: &map[string]model.WireGuardClient{netRA: {Name: "rA", Address: "10.99.0.2", ClientNetworks: &[]string{"192.168.50.0/24"}}}}
+	var n1, n2 model.Network
+	if err := n1.FromLanNetwork(lan); err != nil {
+		t.Fatal(err)
 	}
-	f := engine.Flow{Protocol: "tcp", Dst: netip.MustParseAddr("203.0.113.9"), DPort: 8883}
-	lan := engine.Flow{Protocol: "udp", Dst: netip.MustParseAddr("10.10.0.77"), DPort: 5353}
+	if err := n2.FromWireGuardNetwork(hub); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &model.Configuration{Networks: &map[string]model.Network{netIoT: n1, netHub: n2}}
+	cfg.Management.AllowedSources = &[]string{"192.168.1.0/24"}
+	return &engine.Snapshot{Config: cfg}
+}
+
+func TestAConnectionMatchesAProtocolPortsAndDestination(t *testing.T) {
+	nets := newFlowNets(netsSnapshot(t))
+	if nets.err != nil {
+		t.Fatal(nets.err)
+	}
+	flow := func(proto, dst string, port int) engine.Flow {
+		return engine.Flow{Protocol: proto, Dst: netip.MustParseAddr(dst), DPort: port}
+	}
+	f := flow("tcp", "203.0.113.9", 8883)
+	lan := flow("udp", "10.10.0.77", 5353)
 	tcp, udp, any := model.Protocol("tcp"), model.Protocol("udp"), model.Protocol("any")
+	up := &model.Destination{Uplink: ptrTo(model.DestinationUplink(true))}
 	for name, c := range map[string]struct {
 		m    model.TrafficMatch
 		f    engine.Flow
 		want bool
 	}{
-		"everything":            {model.TrafficMatch{}, f, true},
-		"the protocol":          {model.TrafficMatch{Protocol: &tcp}, f, true},
-		"another protocol":      {model.TrafficMatch{Protocol: &udp}, f, false},
-		"any protocol":          {model.TrafficMatch{Protocol: &any}, f, true},
-		"a port":                {model.TrafficMatch{Ports: &[]int{443, 8883}}, f, true},
-		"another port":          {model.TrafficMatch{Ports: &[]int{443}}, f, false},
-		"a port range":          {model.TrafficMatch{PortRanges: &[]model.PortRange{{From: 8000, To: 9000}}}, f, true},
-		"outside the range":     {model.TrafficMatch{PortRanges: &[]model.PortRange{{From: 1, To: 1024}}}, f, false},
-		"an address":            {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.9")}}, f, true},
-		"another address":       {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.8")}}, f, false},
-		"a prefix":              {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.0/24")}}, f, true},
-		"a network":             {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo("net-iot")}}, lan, true},
-		"another network":       {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo("net-hub")}}, lan, false},
-		"the uplink":            {model.TrafficMatch{Destination: &model.Destination{Uplink: ptrTo(model.DestinationUplink(true))}}, f, true},
-		"not the uplink":        {model.TrafficMatch{Destination: &model.Destination{Uplink: ptrTo(model.DestinationUplink(true))}}, lan, false},
-		"a host name needs M20": {model.TrafficMatch{Destination: &model.Destination{Hostname: ptrTo("broker.example.com")}}, f, false},
+		"everything":        {model.TrafficMatch{}, f, true},
+		"the protocol":      {model.TrafficMatch{Protocol: &tcp}, f, true},
+		"another protocol":  {model.TrafficMatch{Protocol: &udp}, f, false},
+		"any protocol":      {model.TrafficMatch{Protocol: &any}, f, true},
+		"a port":            {model.TrafficMatch{Ports: &[]int{443, 8883}}, f, true},
+		"another port":      {model.TrafficMatch{Ports: &[]int{443}}, f, false},
+		"a port range":      {model.TrafficMatch{PortRanges: &[]model.PortRange{{From: 8000, To: 9000}}}, f, true},
+		"outside the range": {model.TrafficMatch{PortRanges: &[]model.PortRange{{From: 1, To: 1024}}}, f, false},
+		"an address":        {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.9")}}, f, true},
+		"another address":   {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.8")}}, f, false},
+		"a prefix":          {model.TrafficMatch{Destination: &model.Destination{Cidr: ptrTo("203.0.113.0/24")}}, f, true},
+		"a network":         {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo(netIoT)}}, lan, true},
+		"another network":   {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo(netHub)}}, lan, false},
+		"the uplink":        {model.TrafficMatch{Destination: up}, f, true},
+		"not the uplink":    {model.TrafficMatch{Destination: up}, lan, false},
+		// P4-AUDIT-04: the rules and the capture selector see more than the subnets of the interfaces
+		"a network behind a hub's client is the hub's": {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo(netHub)}}, flow("tcp", "192.168.50.7", 22), true},
+		"and not the uplink":                           {model.TrafficMatch{Destination: up}, flow("tcp", "192.168.50.7", 22), false},
+		"a downstream route is the network's":          {model.TrafficMatch{Destination: &model.Destination{Network: ptrTo(netIoT)}}, flow("tcp", "10.20.0.5", 22), true},
+		"and not the uplink either":                    {model.TrafficMatch{Destination: up}, flow("tcp", "10.20.0.5", 22), false},
+		"a management address is not the uplink":       {model.TrafficMatch{Destination: up}, flow("tcp", "192.168.1.20", 443), false},
+		"a host name needs M20":                        {model.TrafficMatch{Destination: &model.Destination{Hostname: ptrTo("broker.example.com")}}, f, false},
 	} {
-		if got := matchFlow(snap, c.m, c.f); got != c.want {
+		if got := matchFlow(nets, c.m, c.f); got != c.want {
 			t.Errorf("%s: %v", name, got)
 		}
+	}
+	// without the networks of the gateway a destination that needs them selects nothing (the check is refused before)
+	broken := newFlowNets(&engine.Snapshot{})
+	if broken.err == nil || matchFlow(broken, model.TrafficMatch{Destination: up}, f) || matchFlow(broken, model.TrafficMatch{Destination: &model.Destination{Network: ptrTo(netIoT)}}, lan) {
+		t.Error("a missing world selected a connection")
 	}
 }
 

@@ -765,8 +765,12 @@ func (m *Manager) condition(r *runState, w *model.WaitCondition, target model.Sc
 		}
 		set := idSet(devs)
 		match := model.TrafficMatch{Destination: w.Destination, PortRanges: w.PortRanges, Ports: w.Ports, Protocol: w.Protocol}
+		nets := newFlowNets(snap)
+		if nets.err != nil && destNeedsNets(match.Destination) {
+			return false, "the networks of the gateway cannot be resolved: " + nets.err.Error()
+		}
 		for _, f := range flows {
-			if !known[f.ID] && flowInScope(set, target, f) && matchFlow(snap, match, f) && established(f) {
+			if !known[f.ID] && flowInScope(set, target, f) && matchFlow(nets, match, f) && established(f) {
 				return true, ""
 			}
 		}

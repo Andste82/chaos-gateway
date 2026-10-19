@@ -71,7 +71,7 @@ func TestTheFlowTrackerReportsWhatChangedBetweenTwoPolls(t *testing.T) {
 
 // What a check looks at: the target's connections that its selector selects, of the kind that decides it.
 func TestACheckObservesTheConnectionsOfItsKind(t *testing.T) {
-	snap := &engine.Snapshot{}
+	nets := newFlowNets(&engine.Snapshot{})
 	target := model.Scope{Device: ptrTo("dev-1")}
 	devices := map[string]bool{"dev-1": true}
 	to := func(addr string) engine.Flow {
@@ -102,7 +102,38 @@ func TestACheckObservesTheConnectionsOfItsKind(t *testing.T) {
 		"an exception is allowed":                  {quiet, flowEvent{flow: to("203.0.113.77"), traffic: true}, false},
 		"anything else is not":                     {quiet, flowEvent{flow: to("198.51.100.1"), traffic: true}, true},
 	} {
-		if got := c.check.observes(snap, target, devices, c.ev); got != c.want {
+		if got := c.check.observes(nets, target, devices, c.ev); got != c.want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
+// P4-AUDIT-19: a connection that began after the window closed is not the window's; one without a start time cannot be
+// dated and is kept.
+func TestACheckWhoseWindowHasClosedIgnoresConnectionsThatBeganAfterIt(t *testing.T) {
+	nets := newFlowNets(&engine.Snapshot{})
+	target := model.Scope{Device: ptrTo("dev-1")}
+	devices := map[string]bool{"dev-1": true}
+	end := time.Unix(1700000000, 0)
+	flow := func(started time.Time) flowEvent {
+		f := flowOf("x", "ESTABLISHED", 1, 1)
+		f.Device = "dev-1"
+		f.StartedAt = started
+		return flowEvent{flow: f, created: true, established: true, traffic: true}
+	}
+	for name, c := range map[string]struct {
+		check *liveCheck
+		ev    flowEvent
+		want  bool
+	}{
+		"inside the window":                {&liveCheck{kind: "no_connection", ended: true, wendWall: end}, flow(end.Add(-time.Second)), true},
+		"at its last moment":               {&liveCheck{kind: "no_connection", ended: true, wendWall: end}, flow(end), true},
+		"after its end":                    {&liveCheck{kind: "no_connection", ended: true, wendWall: end}, flow(end.Add(time.Millisecond)), false},
+		"after the end of a traffic check": {&liveCheck{kind: "traffic_not_seen", ended: true, wendWall: end}, flow(end.Add(time.Millisecond)), false},
+		"without a start time":             {&liveCheck{kind: "no_connection", ended: true, wendWall: end}, flow(time.Time{}), true},
+		"a window that is still open":      {&liveCheck{kind: "no_connection"}, flow(end.Add(time.Hour)), true},
+	} {
+		if got := c.check.observes(nets, target, devices, c.ev); got != c.want {
 			t.Errorf("%s: %v", name, got)
 		}
 	}

@@ -135,10 +135,19 @@ func TestAnExpiredLeaseAbortsTheRunAndARenewalKeepsItAlive(t *testing.T) {
 	// the wall clock jumping does not matter
 	h.clk.JumpWall(time.Hour)
 	h.clk.Advance(29 * time.Second)
-	if st := h.get(r.Id).Status; st != model.RunStatusRunning {
-		t.Fatalf("the run is %s 29 s after the renewal", st)
+	// The timer fires inside Advance and cancels the run there, but the run is `running` until it has cleaned up, so the
+	// status says nothing yet. A renewal does: it is refused for a run that is cancelled, so it works only if the
+	// original deadline (30 s) did not fire, and it moves the deadline to 49 s + 30 s.
+	want := h.clk.Now().Add(30 * time.Second)
+	again, err := h.m.Renew(r.Id, &token)
+	if err != nil || !again.LeaseExpiresAt.Equal(want) || again.Status != model.RunStatusRunning {
+		t.Fatalf("the renewal 29 s after the last one: %v %+v", err, again)
 	}
-	h.clk.Advance(time.Second)
+	h.clk.Advance(30*time.Second - time.Nanosecond)
+	if _, err := h.m.Renew(r.Id, &token); err != nil {
+		t.Fatalf("the lease ran out a nanosecond early: %v", err)
+	}
+	h.clk.Advance(30 * time.Second)
 	done := h.waitStatus(r.Id, model.RunStatusAborted)
 	if done.Reason == nil || *done.Reason != "lease expired" {
 		t.Errorf("reason %v", done.Reason)
@@ -148,6 +157,32 @@ func TestAnExpiredLeaseAbortsTheRunAndARenewalKeepsItAlive(t *testing.T) {
 	}
 	if _, err := h.m.Renew(r.Id, nil); !errors.Is(err, run.ErrEnded) {
 		t.Errorf("renewing an ended run: %v", err)
+	}
+}
+
+// A run whose lease has run out (or that is being aborted) is cancelled but stays `running` until it has removed its
+// overlays; a renewal in that time is refused and does not give it a new lease.
+func TestARunThatIsBeingAbortedCannotBeRenewed(t *testing.T) {
+	h := newHarness(t)
+	r := h.start(long("long", esp), func(c *run.CreateRequest) { c.Lease = 30 * time.Second })
+	h.waitStep(r.Id, "a", model.RunStepStatusApplied)
+	hold := make(chan struct{})
+	h.gw.setResetBlock(hold) // the removal of the overlays waits, so the run is cancelled and still running
+	h.clk.Advance(30 * time.Second)
+	if got := h.get(r.Id); got.Status != model.RunStatusRunning {
+		t.Fatalf("the run is %s while its overlays are still there", got.Status)
+	}
+	_, err := h.m.Renew(r.Id, &token)
+	if !errors.Is(err, run.ErrEnded) || !has(err.Error(), "lease expired") {
+		t.Errorf("renewing a run that is being aborted: %v", err)
+	}
+	if got := h.get(r.Id); !got.LeaseExpiresAt.Equal(t0.Add(30 * time.Second)) {
+		t.Errorf("the lease of the run moved to %v", got.LeaseExpiresAt)
+	}
+	close(hold)
+	done := h.waitStatus(r.Id, model.RunStatusAborted)
+	if *done.Reason != "lease expired" {
+		t.Errorf("reason %v", *done.Reason)
 	}
 }
 

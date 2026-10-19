@@ -45,7 +45,7 @@ var (
 	ErrForbidden = errors.New("run: the run belongs to another owner")
 	// ErrNoLease is returned when renewing a run that has no lease.
 	ErrNoLease = errors.New("run: has no lease to renew")
-	// ErrEnded is returned when renewing a run that has ended.
+	// ErrEnded is returned (wrapped, with the reason, for a run that is being aborted) when renewing a run that has ended.
 	ErrEnded = errors.New("run: has ended")
 	// ErrNotEnded is returned for the report of a run that has not ended.
 	ErrNotEnded = errors.New("run: has not ended yet")

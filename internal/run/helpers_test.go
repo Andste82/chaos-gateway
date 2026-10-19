@@ -539,6 +539,12 @@ func (h *harness) advanceUntil(what string, cond func() bool) {
 	}
 }
 
+func (g *fakeGateway) setResetBlock(c chan struct{}) {
+	g.mu.Lock()
+	g.resetBlock = c
+	g.mu.Unlock()
+}
+
 func (g *fakeGateway) setResetErr(err error) {
 	g.mu.Lock()
 	g.resetErr = err

@@ -4744,9 +4744,24 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
   the step that opened the window began inside the window, however late the baseline poll read it, and counts (a
   device that retries every 500 ms would otherwise fail `reconnected` now and then when its connection is made
   between the step and the baseline). Without a start time a connection found by the baseline poll is never news. The
-  same tuple with another start time, or fewer packets than before, is a new connection. Only connections of the scenario's target count (`flowInScope`: the initiator is a device of the
+  same tuple with another start time, or fewer packets than before, is a new connection. The baseline is the first poll
+  that **worked**: a check is armed (`liveCheck.armed`) only when the connections could be read, so a read that fails
+  where the window opens does not make the next poll's pre-window connections news (P4-AUDIT-02,
+  `TestAFailedReadWhereTheWindowOpensDoesNotArmTheCheck`). The events of the poll before a check opened (consumed for
+  another check, while the step was being handed over) are kept for one iteration and given to the check as far as the
+  connection began inside its window (`prevEvents`; `TestAConnectionOfThePollBeforeTheOpeningBelongsToTheCheckThatOpens`).
+  The other end is dated too: once a window has closed (`ended`; a fixed-length window from the start, an `until` window
+  from the hand-over of the closing step), a connection whose `StartedAt` is after the end of the window is not the window's,
+  however late the poll reads it (`observes`; the read takes seconds in a nested virtual machine and the restored path lets
+  a connection through right after the hand-over; P4-AUDIT-19). Only connections of the scenario's target count (`flowInScope`: the initiator is a device of the
   target, or the connection starts in the target network) and only those the selector selects (`matchFlow`: protocol,
-  ports, port ranges, destination address, prefix, network or the uplink).
+  ports, port ranges, destination address, prefix, network or the uplink). The two address destinations use the
+  same sets as the rules and the capture selector (`domain.World`, built once per snapshot as `flowNets`): `network` is
+  `World.NetworkPrefixes` (the subnet, the networks behind a hub's clients, a link's routes and a LAN's downstream
+  routes), `uplink` is "not in `World.NonUplinkPrefixes()`" (every network and the management prefixes; P4-AUDIT-04). A
+  check that needs them when the world cannot be built (a configuration that is not normalized) is an `error`. A
+  configured device that declares no network is in the network of its DHCP lease, else the one its address lies in
+  (resolved once in `tracker.step`), so a network target covers it as `explain` does (P4-AUDIT-05).
 - **The five types.**
   `reconnected`: an `established` event inside the window (TCP past the handshake, any other flow once it was
   answered; `established()` of M15's `wait: connected`). A SYN that is dropped never becomes one, nor does a
@@ -4758,7 +4773,13 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
   `traffic_not_seen`: the same event is a failure unless its destination matches an entry of `except`.
   `dns_query_seen`: the DNS log has a query for the name (exact, or `*.suffix` for its subdomains, not the suffix
   itself, as the spec's `Hostname`) by a device of the target, asked at or after the window opened and before it
-  closed (`Observer.DNSQueries`, new; the log's time stamps decide, not the polls).
+  closed (`Observer.DNSQueries`, new; the log's time stamps decide, not the polls). The log is in the order of arrival,
+  not of time: the proxy stamps a query with its start and logs it after the answer, so the scan of
+  `runObserver.DNSQuerySeen` and `DNSQueries` goes through the whole log and never stops at an older entry
+  (P4-AUDIT-03). The same reason makes the last look at the end of the window late: the log arrives in batches every
+  500 ms and by one request, so the decision of a `dns_query_seen` check waits `dnsSettle` (1 s) after the window has
+  closed, still filtering on the time stamp (a query asked at the end of the window counts, one stamped after it does
+  not; P4-AUDIT-20).
 - **When a check is decided.** A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) is `passed` at the
   first observation and `failed` when the window closes without one. A negative check (`no_connection`,
   `traffic_not_seen`) is `failed` at the first observation and `passed` when the window closes. `error` is for a
@@ -4792,8 +4813,8 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
 
 ### Decisions
 
-Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 4 item in
-`open-items.md` for M16):
+Taken by best practice where the plan leaves room (decision 9 was put to the maintainer in the Phase 4 audit,
+P4-AUDIT-15):
 
 1. **Polls, not an event stream.** Observations are placed in a window by the poll that sees them, so they are exact
    to 250 ms. A connection that is opened and gone between two polls would be missed; conntrack keeps a TCP connection
@@ -4816,6 +4837,15 @@ Taken by best practice where the plan leaves room (none needs the maintainer, so
    an overlay with no kernel object, but a counter that could not be read is no verdict.
 8. **`*.suffix` in a check or a `wait` for a DNS query is the spec's `Hostname`** (subdomains only). The query log's
    `?name=` filter (M6b) also takes the suffix itself; that was left as it is.
+9. **The traffic checks see the connection table, not the packets.** `reconnected`, `no_connection`, `traffic_seen` and
+   `traffic_not_seen` read conntrack, and a packet that is dropped in the forward path (a `drop` rule, a cut) is
+   never confirmed and leaves no entry (the same limit as the counters of a port forward). So while a drop is in force
+   `traffic_not_seen {destination: broker}` passes for a device that hammers the broker, and `traffic_seen` of the same
+   destination fails; the rule's own counter (the zero-hit counters of the run) is what counts such packets. This
+   is documented in the spec (`Check`, `traffic_seen`, `TrafficNotSeenCheck`) and pinned by the level 1 test
+   `TestTheTrafficChecksDoNotSeeWhatTheGatewayDropsOnTheRealKernel`; reading the counters of the run's drop rules as
+   traffic (a second observation source with windows of its own), or NFLOG (plan §2.11, after V1), is left (P4-AUDIT-15,
+   decided by the maintainer).
 
 ### Tests
 
@@ -4829,7 +4859,11 @@ name the tests with `-expect-pass $M16_LEVEL1`): a scripted device (a Python cli
 and retries every 500 ms after a reset) against the real gateway: the outage of the plan's example with the three
 connection checks passes when the device comes back and fails the reconnection when it gives up, and a fault that
 matches nothing next to one that the test's pings hit gives exactly one zero-hit warning, or a failed run with
-`zero_hit: error`. These need root and namespaces; the unprivileged container of the development environment has no
+`zero_hit: error`. Since the Phase 4 audit also `TestTrafficNotSeenWithExceptDecidesOnTheRealKernel` (a device that talks
+to the allowed server passes, one that also talks to another fails, the message names the connection),
+`TestDNSQuerySeenDecidesForADeviceOnTheRealKernel` (a device that resolves a name through the gateway's DNS inside the
+window passes and the log entry carries the device, one that does not ask fails; on the DNS bed of the access tests with
+the configured device client-a) and `TestTheTrafficChecksDoNotSeeWhatTheGatewayDropsOnTheRealKernel` (decision 9). These need root and namespaces; the unprivileged container of the development environment has no
 `/dev/kvm`, so they are built and vetted (`go vet -tags testbed ./internal/api`), wired into CI and were not run
 there: not run in the sandbox; run by CI.
 

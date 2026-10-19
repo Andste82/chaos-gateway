@@ -3871,15 +3871,25 @@ type StartCaptureResponseObject interface {
 	VisitStartCaptureResponse(w http.ResponseWriter) error
 }
 
-type StartCapture201JSONResponse Capture
+type StartCapture201ResponseHeaders struct {
+	Location *string
+}
+
+type StartCapture201JSONResponse struct {
+	Body    Capture
+	Headers StartCapture201ResponseHeaders
+}
 
 func (response StartCapture201JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
 	w.WriteHeader(201)
 	_, err := buf.WriteTo(w)
 	return err

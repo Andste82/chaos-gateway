@@ -1,0 +1,17 @@
+# A scenario for a CI job (plan §2.10): a slow link, a cut of the MQTT port, then everything back to normal.
+#
+#   chaosctl run -f link-outage.yaml --set target.device=$DUT --wait --junit report.xml
+#
+# `target.device` is a placeholder that the job overrides with --set. The scenario is sent with the request and
+# becomes no part of the gateway's configuration. A scenario that checks the device's behavior adds `checks`, e.g.
+#
+#   checks:
+#     - name: the device reconnects within 30 s
+#       reconnected: {protocol: tcp, ports: [8883]}
+#       window: {from: back, within: 30s}
+name: link-outage
+target: {device: placeholder}
+steps:
+  - {id: slow, at: 0s, fault: {latency: 200ms, jitter: 50ms}}
+  - {id: cut, at: 1s, rule: {action: drop, protocol: tcp, ports: [8883], cut_existing: true}}
+  - {id: back, at: 3s, restore: true}

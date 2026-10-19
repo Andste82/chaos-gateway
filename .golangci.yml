@@ -6,6 +6,7 @@ run:
   build-tags:
     - testbed
     - appliance
+    - examples
 
 linters:
   default: standard

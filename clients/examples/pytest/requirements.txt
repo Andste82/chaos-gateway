@@ -1,0 +1,4 @@
+# The example suite for pytest (clients/examples/README.md). The generated client is installed next to it:
+#   pip install -r requirements.txt ../../python/chaosgw-client
+pytest>=8,<10
+PyYAML>=6

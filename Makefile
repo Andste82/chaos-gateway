@@ -2,6 +2,7 @@
 #
 # Test levels (docs/development.md, plan §4.5):
 #   make test             level 0: unit tests, no root, every commit
+#   make test-examples    the example suites for pytest and Jest (clients/examples) against a simulated gateway
 #   make test-testbed     levels 1/1b: the namespace testbed, directly or in a VM, chosen automatically
 #   make test-vm          level 1b: always in a QEMU VM (the unprivileged devcontainer)
 #   make test-privileged  level 1: directly (needs a privileged container or a VM)
@@ -22,7 +23,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients lint test fuzz test-web test-testbed test-vm test-appliance \
+        check-spec check-generated check-clients lint test fuzz test-web test-examples test-testbed test-vm test-appliance \
         test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image image-local clean
 
 help: ## list the targets
@@ -84,8 +85,9 @@ lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 
 # ---- tests ------------------------------------------------------------------------------------
 
+# internal/api alone needs nearly ten minutes under -race on a small machine, which is the default timeout of go test
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
-	$(GO) test $(RACE) -count=1 ./...
+	$(GO) test $(RACE) -count=1 -timeout 20m ./...
 
 # Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
 # target: the default 100s makes the three targets of the executor decoder and connection handling
@@ -101,6 +103,17 @@ fuzz: ## fuzz the executor's operation decoder and request handling (FUZZTIME pe
 
 test-web: $(WEBDEPS)
 	cd web && npm test
+
+# The example suites of clients/examples (M18) against a gateway on the simulated kernel: pytest with the generated
+# Python client and Jest with the generated TypeScript client, both also driving chaosctl. The Go test starts the
+# gateway, builds chaosctl and runs the two suites; this target installs what they need.
+EXAMPLES := clients/examples
+
+test-examples: generate-web generate-python ## the example suites for pytest and Jest, against a simulated gateway
+	$(VENV)/bin/pip install -q -r $(EXAMPLES)/pytest/requirements.txt clients/python/chaosgw-client
+	cd $(EXAMPLES)/jest && npm ci --no-audit --no-fund && node_modules/.bin/tsc -p tsconfig.json
+	EXAMPLES_PYTHON=$(CURDIR)/$(VENV)/bin/python EXAMPLES_PYTEST_DIR=$(CURDIR)/$(EXAMPLES)/pytest EXAMPLES_JEST_DIR=$(CURDIR)/$(EXAMPLES)/jest \
+	  $(GO) test -tags examples -count=1 -timeout 15m -v -run TestTheExampleSuitesPassAgainstTheGateway ./internal/api
 
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)
@@ -158,4 +171,4 @@ image-local: ## container image for this machine's architecture, loaded as chaos
 	  -t chaos-gateway:latest -t chaos-gateway:$(VERSION) .
 
 clean: ## remove build output and generated, uncommitted code
-	rm -rf bin web/dist web/src/api/generated clients/typescript/src clients/python/chaosgw-client
+	rm -rf bin web/dist web/src/api/generated clients/typescript/src clients/python/chaosgw-client clients/examples/jest/node_modules

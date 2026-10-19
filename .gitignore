@@ -13,3 +13,4 @@ __pycache__/
 /web/playwright-report/
 /clients/typescript/src/
 /clients/python/chaosgw-client/
+.pytest_cache/

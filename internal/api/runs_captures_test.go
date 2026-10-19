@@ -209,6 +209,31 @@ func TestARunWhoseCaptureCannotStartRunsWithoutItAndSaysSo(t *testing.T) {
 	}
 }
 
+// The tunnel of the management network is not recorded, for a run neither: the run goes on without the capture and says
+// so, and nothing reaches the executor.
+func TestARunWhoseTargetIsAManagementNetworkIsNotRecorded(t *testing.T) {
+	g, _ := capGateway(t)
+	body := inlineRun("admin", map[string]any{"network": "admin"}, step("slow", "0s", "profile", "normal"))
+	body["inline"].(map[string]any)["capture"] = true
+	r := g.postRun(body, "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	run := g.waitRun(r.json(t)["id"].(string), "passed", "failed", "error")
+	var missing string
+	for _, w := range run["warnings"].([]any) {
+		if m := w.(map[string]any); m["code"] == "capture_missing" {
+			missing, _ = m["message"].(string)
+		}
+	}
+	if !strings.Contains(missing, "management") {
+		t.Errorf("warnings %v: the run does not say that the management network is not recorded", run["warnings"])
+	}
+	if len(artifactsOfKind(run, "capture")) != 0 || len(g.cap.Opened()) != 0 {
+		t.Errorf("artifacts %v, %d requests", run["artifacts"], len(g.cap.Opened()))
+	}
+}
+
 // An executor that does not answer is no reason to end the run either.
 func TestARunGoesOnWhenTheExecutorRefusesItsCapture(t *testing.T) {
 	g, clk := capGateway(t)

@@ -485,7 +485,7 @@ The scenario format is defined normatively as a JSON Schema inside the OpenAPI s
 
 ## 2.11 Capture
 
-- Record by network, device or selector.
+- Record by network, device or selector. The WireGuard networks of the role `management` (§2.16) are the admin's tunnel and are not recorded by any scope; `global` skips them, the others are refused with `management_network`.
 - Mechanism (spike S9, exact against a capture on the device itself): AF_PACKET (libpcap) on the network's interface with a BPF filter — full Ethernet frames with pre-NAT addresses on local networks, raw IP on WireGuard interfaces.
 - Captures on the uplink cannot be attributed to devices after NAT and are offered only as "uplink capture".
 - After V1: rule captures via NFLOG ("capture everything this fault affects", S9) and live streaming to Wireshark.

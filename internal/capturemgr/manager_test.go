@@ -125,7 +125,60 @@ func TestAScopeIsResolvedToTheInterfacesAndFiltersOfTheSnapshot(t *testing.T) {
 	}
 }
 
-func groupSelector(t *testing.T, group string) *struct {
+// A WireGuard network of the role management is the admin's tunnel: no scope records it, as `global` does not.
+func TestNoScopeResolvesToAWireGuardNetworkOfTheRoleManagement(t *testing.T) {
+	const netAdmin = "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d"
+	snap := snapshot(t)
+	nets := *snap.Config.Networks
+	nets[netAdmin] = network(t, `{"type":"wireguard","name":"admin","kind":"hub","role":"management","address":"10.98.0.1/24","listen_port":51822}`)
+	groups := *snap.Config.Groups
+	groups["g2"] = model.Group{Name: "mixed", Members: &[]model.Ref{"d-mac", "d-admin"}}
+	snap.WireGuardInterfaces = append(snap.WireGuardInterfaces, compiler.WGInterface{Name: "wg-admin", NetworkID: netAdmin, NetworkName: "admin", Kind: "hub", Role: "management", Address: netip.MustParsePrefix("10.98.0.1/24")})
+	snap.Devices = append(snap.Devices, engine.DeviceState{ID: "d-admin", Name: "admin-laptop", Network: netAdmin, Addresses: []netip.Addr{netip.MustParseAddr("10.98.0.2")}})
+	ref := func(s string) *model.Ref { return &s }
+	var viaGroup, viaNetwork, viaDevice model.CaptureScope
+	for scope, doc := range map[*model.CaptureScope]string{
+		&viaGroup:   `{"selector":{"source":{"group":"mixed"}}}`,
+		&viaNetwork: `{"selector":{"source":{"network":"admin"},"protocol":"tcp"}}`,
+		&viaDevice:  `{"selector":{"source":{"device":"admin-laptop"}}}`,
+	} {
+		if err := jsonUnmarshal([]byte(doc), scope); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, c := range map[string]struct {
+		scope model.CaptureScope
+		path  string
+	}{
+		"the network":                    {model.CaptureScope{Network: ref("admin")}, "/scope/network"},
+		"the network by its id":          {model.CaptureScope{Network: ref(netAdmin)}, "/scope/network"},
+		"a device on it":                 {model.CaptureScope{Device: ref("admin-laptop")}, "/scope/device"},
+		"a group with a device on it":    {viaGroup, "/scope/selector/source/group"},
+		"a selector with it as source":   {viaNetwork, "/scope/selector/source/network"},
+		"a selector with a device on it": {viaDevice, "/scope/selector/source/device"},
+	} {
+		_, err := capturemgr.Resolve(snap, c.scope)
+		var ve domain.ValidationErrors
+		if !errors.As(err, &ve) || len(ve) != 1 || ve[0].Path != c.path || ve[0].Code != capturemgr.CodeManagementNetwork {
+			t.Errorf("%s: %v, want management_network at %s", name, err, c.path)
+		}
+	}
+	// global leaves it out, and the test networks next to it still resolve
+	p, err := capturemgr.Resolve(snap, model.CaptureScope{Selector: groupSelectorOf(t, `{"selector":{"source":{"global":true}}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range p.Interfaces {
+		if i.Name == "wg-admin" {
+			t.Errorf("global records the admin tunnel: %+v", p.Interfaces)
+		}
+	}
+	if _, err := capturemgr.Resolve(snap, model.CaptureScope{Network: ref("lab-hub")}); err != nil {
+		t.Errorf("a test network next to the management network: %v", err)
+	}
+}
+
+func groupSelectorOf(t *testing.T, doc string) *struct {
 	Destination *model.Destination `json:"destination,omitempty"`
 	PortRanges  *[]model.PortRange `json:"port_ranges,omitempty"`
 	Ports       *[]int             `json:"ports,omitempty"`
@@ -134,10 +187,21 @@ func groupSelector(t *testing.T, group string) *struct {
 } {
 	t.Helper()
 	var cs model.CaptureScope
-	if err := jsonUnmarshal([]byte(`{"selector":{"source":{"group":"`+group+`"}}}`), &cs); err != nil {
+	if err := jsonUnmarshal([]byte(doc), &cs); err != nil {
 		t.Fatal(err)
 	}
 	return cs.Selector
+}
+
+func groupSelector(t *testing.T, group string) *struct {
+	Destination *model.Destination `json:"destination,omitempty"`
+	PortRanges  *[]model.PortRange `json:"port_ranges,omitempty"`
+	Ports       *[]int             `json:"ports,omitempty"`
+	Protocol    *model.Protocol    `json:"protocol,omitempty"`
+	Source      model.Scope        `json:"source"`
+} {
+	t.Helper()
+	return groupSelectorOf(t, `{"selector":{"source":{"group":"`+group+`"}}}`)
 }
 
 func TestAScopeThatSelectsNothingIsRefusedWithItsPointer(t *testing.T) {

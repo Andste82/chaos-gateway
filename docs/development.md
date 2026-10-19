@@ -5165,7 +5165,9 @@ what they leave out.
   warnings as they change, prints the result and returns 0 for `passed`, 1 for `failed` (a check), 2 for `error` and
   `aborted`. `--junit <file>` saves `report.xml`; `--artifacts <dir>` saves `report.json`, `report.xml`, `events.jsonl` and
   the captures of the run as `capture-<id>.pcap[ng]` (a key log as `keylog-<id>.txt`; a 403 on an artifact that needs scope
-  `full` is a warning, any other failed download makes a passed run return 2). Files are written through a `.part` file.
+  `full` is a warning, any other failed download makes a passed run return 2). A download is streamed to `<name>.part` and renamed when it is complete (removed on an
+  error; nothing is buffered in memory, a capture can be larger than the runner's memory), the name taken from the headers; the artifacts
+  directory is made with mode 0700 and its files have 0600 (captures hold raw traffic, a key log is a secret), the JUnit file 0644 (P4-AUDIT-30).
   `--no-queue` is `?queue=false` (`409 target_busy`).
 - **The lease is renewed automatically.** A run that is waited for gets a lease (30 s unless `--lease` says otherwise, `0`
   for none) and the CLI renews it at a third of its length until the run has ended, so a CI job that is killed leaves no
@@ -5195,7 +5197,9 @@ what they leave out.
   succeeded but an overlay could not be removed, the result is 125; if the command failed, its code stays and the failed
   removal is reported on standard error. An overlay that is gone already (its TTL ran out) is not an error.
 - **`wg export <network> <client>`** (plan §2.2.1) downloads a client's configuration (`conf`, `png`, `svg`) from the API;
-  the file is written with mode 0600 because it holds the private key.
+  the file is written with mode 0600 because it holds the private key, also over an existing file (it is made anew next to the
+  target and renamed over it, so the mode of what was there does not count and a symbolic link is replaced, not followed; as
+  `chaosgw wg export` does; P4-AUDIT-31).
 
 ### Example suites
 
@@ -5270,13 +5274,13 @@ environment has not: vetted with `-tags testbed`; not run in the sandbox; run by
 | cleanup of `chaosctl with` when the command fails | `TestChaosctlWith/WithRunsACommandUnderAFaultAndCleansUp` (exit 3, overlays gone), `TestChaosctlWith/WithCleansUpWhenTheCommandCannotRun` (not found 127, not executable 126, killed 137), `TestChaosctlWith/WithPassesASignalOnAndFailsWith125` (signal, refused setup, the first overlay removed when the second is refused), `TestWithRemovesTheFirstOverlayWhenTheSecondIsRefused`, `TestWithReportsAnOverlayItCannotRemove`, `TestASecondSignalKillsACommandThatIgnoresTheFirst`, `TestAnInterruptIsNotPassedOnToTheCommand`; on the real kernel `TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel` (the delay on the wire while the command runs, a clean path after it); not runnable here |
 | the example test suites run in CI | `TestTheExampleSuitesPassAgainstTheGateway` (`make test-examples`, the `level0` job) |
 | Scope: apply profile, set fault with TTL | `TestChaosctlOverlays/AppliesAProfileAndAFaultWithATTLAndRemovesThem`, `TestChaosctlOverlays/ResetAndTheReplacementOfAFault`, `TestChaosctlOverlays/CreatesAnOverlayFromARequestFile`, `TestTheFlagsOfAFaultBecomeItsBody` |
-| Scope: `run -f <file> --set …`, `--wait`, `--junit`, `--artifacts` | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports`, `TestChaosctlRuns/StartsAStoredScenarioAndWaitsForItLater`, `TestChaosctlRuns/QueuesBehindARunAndNoQueueRefuses`, `TestChaosctlSavesTheCapturesOfARunInTheArtifactsDirectory`, `TestSetArgumentsAreKeyValuePairs`, `TestDocumentsAreReadAsYAMLOrJSON` |
+| Scope: `run -f <file> --set …`, `--wait`, `--junit`, `--artifacts` | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports`, `TestChaosctlRuns/StartsAStoredScenarioAndWaitsForItLater`, `TestChaosctlRuns/QueuesBehindARunAndNoQueueRefuses`, `TestChaosctlSavesTheCapturesOfARunInTheArtifactsDirectory`, `TestAnArtifactIsStreamedToItsFileAndIsPrivate`, `TestSetArgumentsAreKeyValuePairs`, `TestDocumentsAreReadAsYAMLOrJSON` |
 | Scope: automatic lease renewal | `TestChaosctlRuns/RenewsTheLeaseOfTheRunItWaitsFor` (a 1 s lease outlives a 3 s run), `TestChaosctlOverlays/RenewsTheLeaseOfAnOverlayItDoesNotKeepAlive` (`overlay renew`), `TestChaosctlWith/WithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires`, `TestWithRenewsAtAThirdOfTheLease`; on the real kernel `TestAFaultWhoseLeaseIsNotRenewedLeavesTheRealKernelOnItsOwn`; not runnable here |
 | Scope: `wait device <name> --online [--connected tcp/8883] --timeout …` | `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected`, `TestChaosctlOverlays/WaitsForADeviceThatComesOnline`, `TestAConnectionIsGivenAsProtocolAndPort`, `TestOnlyAnEstablishedConnectionMatches` |
 | Scope: `with --profile … --ttl … -- <command>` | as the second row |
 | Scope: generated TypeScript and Python clients; examples for pytest and Jest | `make check-clients` (they compile and import), `TestTheExampleSuitesPassAgainstTheGateway` (`clients/examples`) |
 | Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestTheTrustFlagsWinOverTheTrustVariablesAndInsecureNeverMixesWithAPin`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
-| `wg export` | `TestChaosctlExportsAWireGuardClient` |
+| `wg export` | `TestChaosctlExportsAWireGuardClient`, `TestWgExportWritesTheKeyWithMode0600OverAnExistingFileAndALink` |
 
 ## Scenario UI (M19)
 

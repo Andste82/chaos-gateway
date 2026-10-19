@@ -211,22 +211,32 @@ func (c *client) call(ctx context.Context, method, path string, query url.Values
 	return res.Header, nil
 }
 
-// download streams the body of a GET to w and returns the file name the gateway suggests ("" for none). The
-// path is relative to the API (`/captures/<id>/download`).
-func (c *client) download(ctx context.Context, path string, query url.Values, w io.Writer) (string, error) {
+// open starts a GET and returns the response with a body that is still to be read (the caller closes it) and
+// the file name the gateway suggests ("" for none). The path is relative to the API (`/captures/<id>/download`).
+func (c *client) open(ctx context.Context, path string, query url.Values) (*http.Response, string, error) {
 	res, err := c.send(ctx, http.MethodGet, path, query, nil, false)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		return "", problemOf(res.StatusCode, raw)
+		_ = res.Body.Close()
+		return nil, "", problemOf(res.StatusCode, raw)
 	}
 	name := ""
 	if _, params, err := mime.ParseMediaType(res.Header.Get("Content-Disposition")); err == nil {
 		name = params["filename"]
 	}
+	return res, name, nil
+}
+
+// download streams the body of a GET to w and returns the file name the gateway suggests ("" for none).
+func (c *client) download(ctx context.Context, path string, query url.Values, w io.Writer) (string, error) {
+	res, name, err := c.open(ctx, path, query)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = res.Body.Close() }()
 	if _, err := io.Copy(w, res.Body); err != nil {
 		return name, fmt.Errorf("GET %s: %w", path, err)
 	}

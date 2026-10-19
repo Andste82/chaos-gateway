@@ -3,8 +3,8 @@ package ctl
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/url"
-	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -17,7 +17,7 @@ func (a *app) wgCmd() *cobra.Command {
 		Short: "Download the configuration of a WireGuard client (wg-quick file or QR code)",
 		Long: `Downloads the configuration of a client of a WireGuard network from the gateway: a wg-quick file, or its QR code
 as PNG or SVG. The file holds the client's private key if the gateway generated it and keeps it, so it is
-secret: it is written with mode 0600, and the call needs a token with scope full and is recorded in the audit
+secret: it is written with mode 0600 (also over an existing file), and the call needs a token with scope full and is recorded in the audit
 log. Without --out the file goes to standard output.`,
 		Example: `  chaosctl wg export lab-wg laptop-1 --out laptop-1.conf`,
 		Args:    cobra.ExactArgs(2),
@@ -40,7 +40,7 @@ log. Without --out the file goes to standard output.`,
 				_, err := a.env.Stdout.Write(buf.Bytes())
 				return err
 			}
-			if err := os.WriteFile(out, buf.Bytes(), 0o600); err != nil {
+			if err := writeFileAtomic(out, privateFileMode, func(w io.Writer) error { _, err := w.Write(buf.Bytes()); return err }); err != nil {
 				return failf(ExitError, "%v", err)
 			}
 			fmt.Fprintf(a.env.Stderr, "wrote %s\n", out)

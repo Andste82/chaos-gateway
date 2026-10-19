@@ -129,6 +129,16 @@ func (m *Manager) captureStep(r *runState, pos int, st *model.Step, start time.D
 		if !c.running || c.step == "" || c.key != key {
 			continue
 		}
+		if cp, err := m.cfg.Captures.Get(c.id); err == nil && cp.Status != model.CaptureStatusRunning {
+			// it ended before the step: a stop through the API is the user's, not the run's. Any other end is reported
+			// when the run ends, as for a capture that nobody stops.
+			if deref(cp.StopReason) == model.CaptureStopReasonUser {
+				m.missingCapture(r, c.step, fmt.Sprintf("the capture %s was stopped by a user before the step %s stopped it; what came after is not recorded", c.id, st.Id))
+			}
+			c.running = false
+			stopped++
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), captureTimeout)
 		_, err := m.cfg.Captures.Stop(ctx, c.id, model.CaptureStopReasonUser)
 		cancel()
@@ -168,9 +178,16 @@ func (m *Manager) finishCaptures(r *runState) {
 				continue
 			}
 		}
+		// `user` is the run's own only when its `capture: stop` step ended the capture (c.running is false then); a stop
+		// through the API ends any capture, and for one that the run still meant to have it leaves the rest of the run
+		// unrecorded
+		stoppedByRun := !c.running
 		c.running = false
-		if reason := deref(cp.StopReason); reason != model.CaptureStopReasonRunEnd && reason != model.CaptureStopReasonUser {
+		if reason := deref(cp.StopReason); reason != model.CaptureStopReasonRunEnd && (reason != model.CaptureStopReasonUser || !stoppedByRun) {
 			why := fmt.Sprintf("the capture %s ended before the run (%s)", c.id, reason)
+			if reason == model.CaptureStopReasonUser {
+				why = fmt.Sprintf("the capture %s was stopped by a user before the run ended", c.id)
+			}
 			if cp.Message != nil {
 				why += ": " + *cp.Message
 			}

@@ -4982,7 +4982,11 @@ operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`
   target before it, `invalid_step_reference`). `capture: true` is stopped by no step. A capture that cannot be started
   (the executor refuses, the disk is low) never ends the run: `capture_missing` names it (with the step) and the step is
   `skipped`; a capture that stops before its run ends (`disk_low`, `size`, `error`) is reported the same way at the end,
-  with its reason and message, and keeps what it recorded. The captures of a run are its artifacts (`kind: capture`, the download URL, the
+  with its reason and message, and keeps what it recorded. `POST /captures/{id}/stop` has no owner (decision 10) and records
+  the reason `user` as the `capture: stop` step does, so `user` is the run's own only for a capture whose stop step
+  has run (`runCapture.running` is false); a capture that a user stopped before that, in `finishCaptures` or when the stop
+  step finds it stopped, is `capture_missing` ("stopped by a user before the run ended", "...before the step X stopped
+  it"). The captures of a run are its artifacts (`kind: capture`, the download URL, the
   size as of reading, the capture's id) in the report, also the ones that ended early; the record of a run that a restart
   aborted gets the captures that process left. A gateway without a capture volume refuses a scenario that records
   (`unsupported_feature`, "the gateway has no capture volume") instead of running it without.

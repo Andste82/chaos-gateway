@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,7 @@ import (
 )
 
 // Checks (plan §2.10, M16) evaluate what the gateway observes of the scenario's target inside a window
-// that starts when a named step has been applied. They run in a goroutine of their own next to the timeline
+// that starts and ends with named steps (opensAt and closesAt say at which moment of the step). They run in a goroutine of their own next to the timeline
 // (checkRun), which polls the connections and the DNS log, so the timeline's steps are never late because of
 // a check. A positive check (a connection was established, traffic was seen, a name was asked) passes as
 // soon as it is observed and fails when its window closes without; a negative check (no connection, no
@@ -75,6 +76,40 @@ func newLiveCheck(cfg *model.Configuration, idx int, c *model.Check) *liveCheck 
 		lc.what = describeMatch(cfg, lc.match)
 	}
 	return lc
+}
+
+// positive reports whether the check passes on an observation (a connection, traffic or a query was seen) and
+// fails without; the others fail on one.
+func (c *liveCheck) positive() bool {
+	switch c.kind {
+	case "reconnected", "traffic_seen", "dns_query_seen":
+		return true
+	}
+	return false
+}
+
+// opensAt is the moment the window of the check starts, once the timeline has come to the step it starts at. The
+// change of a step takes effect somewhere between the moment the timeline handed it over and the moment the
+// engine answered (stepMoments), and the window is placed so that this cannot make the check wrong: a positive
+// check looks for what the change makes possible (a device that comes back), which cannot happen before it takes
+// effect and may happen before the answer, so its window starts when the step was handed over; a negative check
+// claims that nothing happens while the change is in force, so its window starts when the answer says it is.
+func (c *liveCheck) opensAt(mm stepMoments) (stepTime, bool) {
+	if c.positive() {
+		return mm.began, mm.hasBegan
+	}
+	return mm.reached, mm.hasReached
+}
+
+// closesAt is the moment a window that ends with a step (`until`) ends. A negative check ends when the step is
+// handed over, because its change may be in force before the answer and take the condition of the window away
+// (the connection a restore allows again is not one the cut let through); a positive check ends at the answer, so
+// that what the change brought about is not missed.
+func (c *liveCheck) closesAt(mm stepMoments) (stepTime, bool) {
+	if c.positive() {
+		return mm.reached, mm.hasReached
+	}
+	return mm.began, mm.hasBegan
 }
 
 // usesFlows reports whether the check looks at the connections (the others at the DNS log).
@@ -273,7 +308,7 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 	var tracker flowTracker
 	for {
 		now, nowWall := m.clk.Monotonic()-start, m.clk.Now()
-		times := m.stepTimes(r)
+		moments := m.stepMomentsOf(r)
 
 		// windows that open or close with a step
 		for _, c := range checks {
@@ -281,7 +316,7 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 				continue
 			}
 			if !c.opened {
-				if t, ok := times[c.from]; ok {
+				if t, ok := c.opensAt(moments[c.from]); ok {
 					c.opened, c.wstart, c.wstartWall = true, t.off, t.wall
 					m.setCheck(r, c.idx, func(cr *model.CheckResult) { cr.WindowStart = ptr(t.wall) })
 					if c.until == "" {
@@ -290,7 +325,7 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 				}
 			}
 			if c.opened && !c.ended && c.until != "" {
-				if t, ok := times[c.until]; ok {
+				if t, ok := c.closesAt(moments[c.until]); ok {
 					m.closeWindow(r, c, t.off, t.wall)
 				}
 			}
@@ -511,37 +546,65 @@ func (m *Manager) setCheck(r *runState, idx int, f func(*model.CheckResult)) {
 	m.mu.Unlock()
 }
 
-// ---- when the steps were reached
+// ---- when the steps were handed over and reached
 
-// stepTime is when the timeline reached a step: the offset from its start (monotonic) and the wall time.
+// stepTime is a moment of the timeline: the offset from its start (monotonic) and the wall time.
 type stepTime struct {
 	off  time.Duration
 	wall time.Time
+}
+
+// stepMoments are the two moments of a step that a window can start or end at. The change of a step takes effect in
+// the kernel at some moment between them: the timeline hands it to the engine (began), and the engine answers when
+// the apply that carries it is verified (reached). An apply takes from a few hundred milliseconds to seconds, on a
+// machine with slow processes (a nested virtual machine) the longer; a connection can be made, or end, inside it.
+// A step that changes nothing in the kernel (`wait`, `capture`, a `remove` that found nothing) is reached when it
+// is done and has no time of its own: began is then reached.
+type stepMoments struct {
+	began, reached       stepTime
+	hasBegan, hasReached bool
+}
+
+// began records that the timeline hands the change of a step to the engine, and wakes the checks.
+func (m *Manager) began(r *runState, id string, off time.Duration, wall time.Time) {
+	m.mu.Lock()
+	mm := r.moments[id]
+	if !mm.hasBegan {
+		mm.began, mm.hasBegan = stepTime{off, wall}, true
+		r.moments[id] = mm
+	}
+	m.mu.Unlock()
+	m.wakeChecks(r)
 }
 
 // reached records that the timeline has reached a step (it is applied, or had nothing to do), and wakes the
 // checks, whose windows start and end with steps.
 func (m *Manager) reached(r *runState, id string, off time.Duration, wall time.Time) {
 	m.mu.Lock()
-	if _, ok := r.reachedAt[id]; !ok {
-		r.reachedAt[id] = stepTime{off, wall}
+	mm := r.moments[id]
+	if !mm.hasReached {
+		mm.reached, mm.hasReached = stepTime{off, wall}, true
+		if !mm.hasBegan {
+			mm.began, mm.hasBegan = mm.reached, true
+		}
+		r.moments[id] = mm
 	}
 	m.mu.Unlock()
+	m.wakeChecks(r)
+}
+
+func (m *Manager) wakeChecks(r *runState) {
 	select {
 	case r.progress <- struct{}{}:
 	default:
 	}
 }
 
-// stepTimes returns the steps reached so far and the start of the timeline, as "start".
-func (m *Manager) stepTimes(r *runState) map[string]stepTime {
+// stepMomentsOf returns the steps handed over and reached so far, and "start", the beginning of the timeline.
+func (m *Manager) stepMomentsOf(r *runState) map[string]stepMoments {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make(map[string]stepTime, len(r.reachedAt))
-	for k, v := range r.reachedAt {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(r.moments)
 }
 
 // verdict is how a run whose steps and checks are done ends: `error` when a check could not be decided,

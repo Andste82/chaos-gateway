@@ -99,7 +99,12 @@ func (m *Manager) timeline(r *runState) (model.RunStatus, string) {
 			return m.outcome(r, err)
 		}
 		var err error
-		switch domain.StepKind(st) {
+		kind := domain.StepKind(st)
+		if kind != "wait" && kind != "capture" {
+			// the change goes to the engine from here; the windows of the checks and the report tell it from the answer
+			m.began(r, st.Id, m.clk.Monotonic()-start, m.clk.Now())
+		}
+		switch kind {
 		case "remove":
 			err = m.removeStep(r, pos, st, start)
 		case "restore":
@@ -175,14 +180,19 @@ func (m *Manager) addWarning(r *runState, w model.RunWarning) {
 // applied records a step as applied and announces it.
 func (m *Manager) applied(r *runState, pos int, st *model.Step, start time.Duration, res *engine.OverlayResult, overlayID *uuid.UUID) {
 	now, off := m.clk.Now(), m.clk.Monotonic()-start
-	var queueMs *int
+	var queueMs, startMs *int
 	if res != nil {
 		queueMs = ptr(int(res.QueueWait / time.Millisecond))
+		m.mu.Lock()
+		if mm := r.moments[st.Id]; mm.hasBegan {
+			startMs = ptr(int(mm.began.off / time.Millisecond))
+		}
+		m.mu.Unlock()
 	}
 	m.reached(r, st.Id, off, now)
 	m.setStep(r, pos, func(s *model.RunStep) {
 		s.Status = model.RunStepStatusApplied
-		s.AppliedAt, s.OffsetMs, s.QueueWaitMs = &now, ptr(int(off/time.Millisecond)), queueMs
+		s.AppliedAt, s.OffsetMs, s.QueueWaitMs, s.StartOffsetMs = &now, ptr(int(off/time.Millisecond)), queueMs, startMs
 		if res != nil {
 			s.Generation = ptr(int64(res.Generation))
 		}

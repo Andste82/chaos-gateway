@@ -863,3 +863,92 @@ steps:
 		t.Errorf("warnings %+v", ws)
 	}
 }
+
+// holdingTheRestore is the outage with its two windows, and the restore held in the engine: the moment the
+// kernel lets the device through again and the moment the engine answers that it has, which on a machine that is
+// slow to apply (a nested virtual machine, seconds) are far apart.
+const holdingTheRestore = `
+name: outage
+target: {device: esp32-42}
+steps:
+  - {id: cut,     at: 0s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+  - {id: restore, at: 5s, restore: true}
+checks:
+  - {name: nothing while cut, no_connection: {protocol: tcp, ports: [8883]}, window: {from: cut, until: restore}}
+  - {name: back, reconnected: {protocol: tcp, ports: [8883]}, window: {from: restore, within: 30s}}
+`
+
+// A step takes effect somewhere between the moment the timeline hands it to the engine and the moment the engine
+// answers. A connection that the device makes inside the apply of the restore is no failure of "nothing while cut"
+// (the window of a negative check ends when the restore is handed over) and counts for "back" (the window of a
+// positive check starts then): both checks looked at the answer once, and failed a device that was fine on a
+// machine where an apply takes seconds.
+func TestAConnectionMadeWhileTheRestoreIsBeingAppliedBelongsToTheWindowAfterIt(t *testing.T) {
+	h := newHarness(t)
+	h.gw.resetBlock = make(chan struct{})
+	r := h.start(holdingTheRestore)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.advance(5 * time.Second) // the restore is handed over and held
+	h.tickUntil("the end of the window of the cut", func() bool { return h.check(r.Id, 0).Status != model.CheckResultStatusPending })
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPassed {
+		t.Fatalf("the window of the cut closes when the restore is handed over: %+v", c)
+	}
+	if st := h.stepStatus(r.Id, "restore"); st != model.RunStepStatusPending {
+		t.Fatalf("the restore was answered before the test let it: %s", st)
+	}
+
+	back := tcpFlow("back", 8883, "ESTABLISHED")
+	back.StartedAt = h.clk.Now()
+	h.obs.addFlow(back)
+	h.tickUntil("the check back", func() bool { return h.check(r.Id, 1).Status != model.CheckResultStatusPending })
+	c := h.check(r.Id, 1)
+	if c.Status != model.CheckResultStatusPassed {
+		t.Fatalf("a connection made while the restore is applied: %+v", c)
+	}
+
+	close(h.gw.resetBlock)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	s := step(done, "restore")
+	if s.StartOffsetMs == nil || *s.StartOffsetMs < 5000 || s.OffsetMs == nil || *s.OffsetMs <= *s.StartOffsetMs {
+		t.Fatalf("the step records when it was handed over (not before 5 s) and, later, when it was answered: %+v", s)
+	}
+	if start := time.Duration(*s.StartOffsetMs) * time.Millisecond; c.WindowStart == nil || c.WindowStart.Sub(*done.StartedAt) != start {
+		t.Errorf("the window starts when the restore is handed over (%v after the start), not when it is answered (%v): %v", start, time.Duration(*s.OffsetMs)*time.Millisecond, c.WindowStart)
+	}
+}
+
+// The other direction: a connection made while the cut is being applied is still the cut's business, and a
+// negative check does not count it (its window starts at the answer); a positive check of the same step counts it.
+func TestAConnectionMadeWhileTheCutIsBeingAppliedIsNotInTheWindowOfANegativeCheck(t *testing.T) {
+	h := newHarness(t)
+	h.gw.block = make(chan struct{})
+	r := h.start(`
+name: cut
+target: {device: esp32-42}
+steps:
+  - {id: cut, at: 0s, rule: {action: drop, protocol: tcp, ports: [8883]}}
+  - {id: restore, at: 5s, restore: true}
+checks:
+  - {name: quiet, no_connection: {protocol: tcp, ports: [8883]}, window: {from: cut, until: restore}}
+  - {name: seen, traffic_seen: {protocol: tcp, ports: [8883]}, window: {from: cut, within: 10s}}
+`)
+	// the cut is handed over and held: the window of the second check is open, the one of the first is not
+	eventually(t, "the second check to open", func() bool { return h.check(r.Id, 1).WindowStart != nil })
+	if c := h.check(r.Id, 0); c.WindowStart != nil {
+		t.Fatalf("the window of a negative check opens when the cut is answered: %+v", c)
+	}
+	early := tcpFlow("early", 8883, "ESTABLISHED")
+	early.StartedAt = h.clk.Now()
+	h.obs.addFlow(early)
+	h.tickUntil("the check seen", func() bool { return h.check(r.Id, 1).Status != model.CheckResultStatusPending })
+	if c := h.check(r.Id, 1); c.Status != model.CheckResultStatusPassed {
+		t.Fatalf("%+v", c)
+	}
+	close(h.gw.block)
+	h.waitStep(r.Id, "cut", model.RunStepStatusApplied)
+	h.advance(5 * time.Second)
+	h.waitStatus(r.Id, model.RunStatusPassed)
+	if c := h.check(r.Id, 0); c.Status != model.CheckResultStatusPassed {
+		t.Errorf("the connection of the apply is not in the window: %+v", c)
+	}
+}

@@ -78,10 +78,10 @@ type runState struct {
 	caps    []*runCapture
 	capArts []model.Artifact
 
-	// reachedAt is when the timeline reached each step (and "start"), guarded by Manager.mu; progress wakes the
-	// goroutine of the checks when it did (capacity one: a wake that is already pending is enough)
-	reachedAt map[string]stepTime
-	progress  chan struct{}
+	// moments are the moments at which the timeline began and reached each step (and "start"), guarded by Manager.mu;
+	// progress wakes the goroutine of the checks when it did (capacity one: a wake that is already pending is enough)
+	moments  map[string]stepMoments
+	progress chan struct{}
 }
 
 // abortCause is why a run is cancelled; context.Cause(run.ctx) returns it.
@@ -247,7 +247,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (model.Run, err
 	id := m.cfg.NewID()
 	r := &runState{id: id, sc: resolved, actor: req.Owner, lease: req.Lease, order: domain.TimelineOrder(resolved.Steps),
 		overlays: map[string]uuid.UUID{}, byKey: map[string]uuid.UUID{},
-		reachedAt: map[string]stepTime{}, progress: make(chan struct{}, 1), done: make(chan struct{}), recorded: make(chan struct{})}
+		moments: map[string]stepMoments{}, progress: make(chan struct{}, 1), done: make(chan struct{}), recorded: make(chan struct{})}
 	name := resolved.Name
 	r.owner = model.Owner{Type: model.ActorTypeRun, Id: id.String(), Name: &name}
 	r.ctx, r.cancel = context.WithCancelCause(m.ctx)

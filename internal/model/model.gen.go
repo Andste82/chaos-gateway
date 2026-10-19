@@ -6025,7 +6025,7 @@ type RunStep struct {
 	// Id Unique within a scenario. `start` is reserved (check windows).
 	Id StepId `json:"id"`
 
-	// OffsetMs Actual offset from run start in milliseconds (monotonic clock). For a `wait` step, when its condition held.
+	// OffsetMs Actual offset from run start in milliseconds (monotonic clock), when the engine answered that the step's change is applied and verified. For a `wait` step, when its condition held.
 	OffsetMs *int `json:"offset_ms,omitempty"`
 
 	// Overlay The overlay the step created or replaced, or removed (`remove`).
@@ -6038,9 +6038,17 @@ type RunStep struct {
 	QueueWaitMs *int `json:"queue_wait_ms,omitempty"`
 
 	// ScheduledOffset Example: 90s
-	ScheduledOffset *Duration     `json:"scheduled_offset,omitempty"`
-	Status          RunStepStatus `json:"status"`
-	Type            *RunStepType  `json:"type,omitempty"`
+	ScheduledOffset *Duration `json:"scheduled_offset,omitempty"`
+
+	// StartOffsetMs Offset from run start in milliseconds (monotonic clock) at which the timeline handed the step's change to the
+	// engine. Against `scheduled_offset` it is the accuracy of the timeline itself (a step is handed over late only
+	// when an earlier step is still being applied); `offset_ms` minus it is how long the apply took, which depends on
+	// the machine and on the size of the configuration (the queue wait is part of it). The change takes effect in
+	// the kernel at some moment between the two. Absent for a step that changes nothing in the kernel (`wait`,
+	// `capture`) and for one that was not applied.
+	StartOffsetMs *int          `json:"start_offset_ms,omitempty"`
+	Status        RunStepStatus `json:"status"`
+	Type          *RunStepType  `json:"type,omitempty"`
 }
 
 // RunStepStatus defines model for RunStep.Status.

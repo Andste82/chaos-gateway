@@ -297,9 +297,13 @@ func TestAbortOwnedAbortsTheRunsOfOneOwnerOrAll(t *testing.T) {
 	queued := h.start(long("queued", esp))
 	h.waitStep(mine.Id, "a", model.RunStepStatusApplied)
 
-	n, gen := h.m.AbortOwned(context.Background(), &token, "reset")
+	n, removed, gen := h.m.AbortOwned(context.Background(), &token, "reset")
 	if n != 2 || gen == 0 {
 		t.Errorf("aborted %d runs, generation %d", n, gen)
+	}
+	// the overlay of the run that had written one; the queued run had none
+	if removed != 1 {
+		t.Errorf("the aborted runs removed %d overlays, want 1", removed)
 	}
 	if h.get(mine.Id).Status != model.RunStatusAborted || h.get(queued.Id).Status != model.RunStatusAborted {
 		t.Error("the owner's runs are not aborted")
@@ -307,7 +311,7 @@ func TestAbortOwnedAbortsTheRunsOfOneOwnerOrAll(t *testing.T) {
 	if st := h.get(theirs.Id).Status; st != model.RunStatusRunning {
 		t.Errorf("another owner's run is %s", st)
 	}
-	if n, _ := h.m.AbortOwned(context.Background(), nil, "reset"); n != 1 {
+	if n, _, _ := h.m.AbortOwned(context.Background(), nil, "reset"); n != 1 {
 		t.Errorf("all: %d", n)
 	}
 	if st := h.get(theirs.Id).Status; st != model.RunStatusAborted {

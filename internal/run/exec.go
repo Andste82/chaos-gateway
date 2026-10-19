@@ -420,6 +420,7 @@ func (m *Manager) finish(r *runState, status model.RunStatus, reason string) {
 			cleanErr = nil
 			m.mu.Lock()
 			r.generation = max(r.generation, res.Generation)
+			r.removed = res.Removed
 			m.mu.Unlock()
 			break
 		}

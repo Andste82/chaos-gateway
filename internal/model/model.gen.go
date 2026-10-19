@@ -5705,9 +5705,12 @@ type RemoteNetworkRef struct {
 
 // ResetResult defines model for ResetResult.
 type ResetResult struct {
-	AbortedRuns     int   `json:"aborted_runs"`
-	Generation      int64 `json:"generation"`
-	RemovedOverlays int   `json:"removed_overlays"`
+	// AbortedRuns Queued and running runs that were aborted (the caller's, or every run with `owner=all`).
+	AbortedRuns int   `json:"aborted_runs"`
+	Generation  int64 `json:"generation"`
+
+	// RemovedOverlays Overlays removed, including the ones that the aborted runs removed when they ended.
+	RemovedOverlays int `json:"removed_overlays"`
 }
 
 // RetentionSettings defines model for RetentionSettings.

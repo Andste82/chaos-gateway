@@ -3,7 +3,7 @@
 // is queued or running with its scenario, its target, the step in effect and a progress bar; every run links to
 // its page (the scenario's, with the run shown, or the page of the run for an inline scenario).
 import { computed } from 'vue';
-import { useActiveRuns, useNames } from '../../composables/gateway';
+import { useActiveRuns, useNames, useScenarios } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
 import LoadError from '../ui/LoadError.vue';
 import SectionCard from '../ui/SectionCard.vue';
@@ -14,6 +14,9 @@ const runs = useActiveRuns();
 const { names } = useNames();
 const now = useNow();
 const activeRuns = computed(() => runs.data.value ?? []);
+// a run links to its scenario's page only while the scenario exists: the run of a deleted scenario, or of an inline one, to its own page
+const scenarios = useScenarios();
+const stored = computed(() => new Set((scenarios.data.value ?? []).map((s) => s.id)));
 </script>
 
 <template>
@@ -27,7 +30,7 @@ const activeRuns = computed(() => runs.data.value ?? []);
         <RunningScenarioRow
           :id="r.id"
           :name="r.scenario.name"
-          :to="r.scenario.id ? { path: `/scenarios/${r.scenario.id}`, query: { run: r.id } } : `/runs/${r.id}`"
+          :to="r.scenario.id && stored.has(r.scenario.id) ? { path: `/scenarios/${r.scenario.id}`, query: { run: r.id } } : `/runs/${r.id}`"
           :names="names"
           :now="now"
         />

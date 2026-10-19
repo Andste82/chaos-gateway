@@ -699,6 +699,48 @@ test('while a revision waits for confirmation, a scenario cannot be run', async 
   await expect(page.getByTestId('run-scenario')).toBeDisabled();
 });
 
+// P4-AUDIT-40: a run outlives the deletion of its scenario; nothing links into a scenario page that is not there.
+
+const GONE = 'dead0000-0000-4000-8000-00000000d00d';
+
+test('a run of a deleted scenario is reached by its own page, not by a dead end of the scenario page', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(GONE, { id: 'r-orphan', status: 'running' })];
+  await gw.install(page);
+
+  // the overview links to the run page, the run page does not offer the scenario
+  await page.goto('/');
+  const row = page.getByTestId('running-scenarios').getByRole('link', { name: 'mqtt-outage' });
+  await expect(row).toHaveAttribute('href', '/runs/r-orphan');
+  await row.click();
+  await expect(page).toHaveURL(/\/runs\/r-orphan$/);
+  await expect(page.getByTestId('run-status')).toHaveText('Running');
+  await expect(page.getByTestId('run-scenario-link')).toHaveCount(0);
+
+  // the old link into the scenario still ends at the run
+  await page.goto(`/scenarios/${GONE}?run=r-orphan`);
+  await expect(page.getByTestId('scenario-not-found')).toContainText(`There is no scenario "${GONE}"`);
+  await page.getByTestId('not-found-run-link').click();
+  await expect(page).toHaveURL(/\/runs\/r-orphan$/);
+
+  // a stored scenario keeps the links to its page
+  gw.runs = [runOf(SCN_MQTT, { id: 'r-live', status: 'running' })];
+  await page.goto('/');
+  await expect(page.getByTestId('running-scenarios').getByRole('link', { name: 'mqtt-outage' })).toHaveAttribute('href', new RegExp(`/scenarios/${SCN_MQTT}\\?run=r-live`));
+  await page.goto('/runs/r-live');
+  await expect(page.getByTestId('run-scenario-link')).toBeVisible();
+});
+
+test('deleting a scenario says that its runs go on', async ({ page }) => {
+  const gw = lab();
+  gw.runs = [runOf(SCN_MQTT, { id: 'r-live', status: 'running' })];
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+  await page.getByRole('button', { name: 'Delete mqtt-outage' }).click();
+  await expect(detail(page)).toContainText('A run of it that is queued or running is not stopped by that: it keeps going on its own copy of the scenario');
+  await expect(detail(page)).not.toContainText('listed by the preview');
+});
+
 // P4-AUDIT-39: the lists of runs are windows; what must not be missed is asked for by the gateway's filters.
 
 const ended = (ms: number) => new Date(Date.now() - ms).toISOString();

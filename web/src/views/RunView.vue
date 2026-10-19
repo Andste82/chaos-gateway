@@ -15,7 +15,7 @@ import PageHeader from '../components/layout/PageHeader.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import { ApiError } from '../api/fetcher';
-import { useNames, useRun } from '../composables/gateway';
+import { useNames, useRun, useScenarios } from '../composables/gateway';
 import { formatCount } from '../lib/format';
 import { isActive } from '../lib/runs';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
@@ -38,6 +38,9 @@ useApiScreen('the run', () => [
 ]);
 
 const data = computed(() => run.data.value);
+// the scenario's page exists only while the scenario does (a run outlives its scenario's deletion)
+const scenarios = useScenarios();
+const scenarioExists = computed(() => !!data.value?.scenario.id && (scenarios.data.value ?? []).some((s) => s.id === data.value!.scenario.id));
 const notFound = computed(() => run.error.value instanceof ApiError && run.error.value.status === 404);
 
 // the final report has the counters of every overlay the run made (zero hits show there); it exists once the run has ended
@@ -71,7 +74,7 @@ async function abort() {
       <RouterLink to="/scenarios" class="text-[13px]">← Scenarios</RouterLink>
     </template>
     <template #actions>
-      <RouterLink v-if="data?.scenario.id" :to="{ path: `/scenarios/${data.scenario.id}`, query: { run: data.id } }" class="btn" data-testid="run-scenario-link">Open the scenario</RouterLink>
+      <RouterLink v-if="data?.scenario.id && scenarioExists" :to="{ path: `/scenarios/${data.scenario.id}`, query: { run: data.id } }" class="btn" data-testid="run-scenario-link">Open the scenario</RouterLink>
       <button v-if="data && isActive(data)" type="button" class="btn !border-block-border !bg-block-tint !text-block-text" :disabled="aborting || connection.offline" data-testid="abort-run" @click="abort">
         {{ aborting ? 'Aborting…' : 'Abort run' }}
       </button>

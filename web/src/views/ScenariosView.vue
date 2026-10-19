@@ -357,7 +357,7 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
         </div>
       </header>
 
-      <p v-if="selected.deleted" class="m-0 text-[13px] text-text-2">Removed when the changes are applied. Runs that are queued or running are listed by the preview, which asks first.</p>
+      <p v-if="selected.deleted" class="m-0 text-[13px] text-text-2">Removed when the changes are applied. A run of it that is queued or running is not stopped by that: it keeps going on its own copy of the scenario and stays reachable from the overview and from the page of the run.</p>
 
       <ul v-if="refused.length" class="m-0 flex list-none flex-col gap-1 rounded-md border border-block-border bg-block-tint p-3 text-[13px] text-block-text" data-testid="scenario-refused">
         <li v-for="[path, message] in refused" :key="path"><span class="mono text-xs">{{ path === 'scenario' ? 'scenario' : path }}</span> {{ message }}</li>
@@ -465,7 +465,9 @@ const checksShown = computed<Check[]>(() => shown.value?.checks ?? []);
     </section>
 
     <section v-else-if="notFound" class="card text-sm text-text-2" data-testid="scenario-not-found">
-      There is no scenario "{{ id }}". <RouterLink to="/scenarios">Back to the scenarios</RouterLink>
+      There is no scenario "{{ id }}".
+      <template v-if="typeof route.query.run === 'string'"><RouterLink :to="`/runs/${route.query.run}`" data-testid="not-found-run-link">Open the run</RouterLink> · </template>
+      <RouterLink to="/scenarios">Back to the scenarios</RouterLink>
     </section>
   </div>
 

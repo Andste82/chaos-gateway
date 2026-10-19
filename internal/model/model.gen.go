@@ -3124,14 +3124,27 @@ type CertificateUpload struct {
 // target (flows, DNS log, TLS handshake events) inside the window, which opens when the step
 // `window.from` has been applied (`start`: when the timeline begins) and closes after `within` or
 // when the step `until` has been applied. Observations are made every 250 ms; one counts for the
-// window if the poll that sees it lies inside it. A positive check (`reconnected`, `traffic_seen`,
+// window if the poll that sees it lies inside it. A connection that began after the window closed does
+// not count, however late the poll reads it; one without a start time in the connection table cannot
+// be dated and is judged by the poll. A positive check (`reconnected`, `traffic_seen`,
 // `dns_query_seen`) passes at its first observation and fails when the window closes without one;
 // a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
 // the window closes. A run lasts until its last check is decided, so a window may reach past the last
 // step; the overlays of the run stay until then. A run with a failed check ends as `failed`; one with a
 // check that could not be decided (`error`) ends as `error`.
+//
+// **What the traffic checks see.** `reconnected`, `no_connection`, `traffic_seen` and `traffic_not_seen`
+// read the connection table of the gateway (conntrack). A packet that the gateway drops in the forward
+// path (a `drop` rule, a cut) leaves no entry there, so it is invisible to them: while a drop is in force
+// `traffic_not_seen` passes for a device that keeps sending to the blocked destination, and `traffic_seen`
+// of that destination fails. Counting such packets is what the zero-hit counters of the run's own rules
+// do. A destination `network` is the network's whole address set (its subnet, the networks behind a hub's
+// clients, a link's routes and a LAN's downstream routes), and `uplink` is every address outside every
+// network and outside the management prefixes, as in the rules.
 type Check struct {
-	// DnsQuerySeen A device of the target asks the gateway's DNS proxy for the name inside the window.
+	// DnsQuerySeen A device of the target asks the gateway's DNS proxy for the name inside the window. The time stamp of the
+	// query in the DNS log decides, not the moment it is read; the log arrives after the answer, so the check is
+	// decided about a second after its window has closed, and a query asked at the end of the window still counts.
 	DnsQuerySeen *DnsQueryCheck `json:"dns_query_seen,omitempty"`
 
 	// Name Name in the report (JUnit testcase). Default derived from the type.
@@ -3152,9 +3165,12 @@ type Check struct {
 	TlsRejected *TrafficMatch `json:"tls_rejected,omitempty"`
 
 	// TrafficNotSeen No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
+	// Only the connection table is read: a packet that the gateway drops in the forward path is not seen (see `Check`).
 	TrafficNotSeen *TrafficNotSeenCheck `json:"traffic_not_seen,omitempty"`
 
-	// TrafficSeen A packet of a connection of the target matching the selector is seen inside the window - a new connection in any state, or an old one that carries packets.
+	// TrafficSeen A packet of a connection of the target matching the selector is seen inside the window - a new connection in
+	// any state, or an old one that carries packets. The connection table is what is read: a packet that the
+	// gateway drops in the forward path leaves no entry, so a blocked destination is never "seen" (see `Check`).
 	TrafficSeen *TrafficMatch `json:"traffic_seen,omitempty"`
 	Window      CheckWindow   `json:"window"`
 }
@@ -3670,7 +3686,9 @@ type DnsFault struct {
 // DnsFaultAction defines model for DnsFault.Action.
 type DnsFaultAction string
 
-// DnsQueryCheck A device of the target asks the gateway's DNS proxy for the name inside the window.
+// DnsQueryCheck A device of the target asks the gateway's DNS proxy for the name inside the window. The time stamp of the
+// query in the DNS log decides, not the moment it is read; the log arrives after the answer, so the check is
+// decided about a second after its window has closed, and a query asked at the end of the window still counts.
 type DnsQueryCheck struct {
 	// Name Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
 	Name Hostname `json:"name"`
@@ -6484,6 +6502,7 @@ type TrafficMatch struct {
 }
 
 // TrafficNotSeenCheck No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
+// Only the connection table is read: a packet that the gateway drops in the forward path is not seen (see `Check`).
 type TrafficNotSeenCheck struct {
 	// Destination Exactly one property. Omit the whole destination for "any".
 	Destination *Destination `json:"destination,omitempty"`

@@ -22,9 +22,10 @@ env:
   # their schedule where the machine is accurate, an abort and an expired lease that take the run's overlays out.
   M15_LEVEL1: TestAScenarioRunsOnTheRealKernelAndItsStepsAreOnTime,TestAnAbortOnTheRealKernelTakesTheOverlaysOfTheRunOut,TestAnExpiredLeaseOnTheRealKernelRemovesTheFault
 
-  # The level 1 tests of checks and zero-hit warnings (M16): a scripted device that comes back after a cut or gives up, and a
+  # The level 1 tests of checks and zero-hit warnings (M16): a scripted device that comes back after a cut or gives up, a
+  # device that resolves a name or talks to an allowed and a disallowed server, the limit of the traffic checks under a drop, and a
   # fault that matches nothing, on the real kernel.
-  M16_LEVEL1: TestChecksPassForADeviceThatReconnectsOnTheRealKernel,TestChecksFailForADeviceThatDoesNotReconnectOnTheRealKernel,TestAFaultThatNeverMatchesIsAZeroHitWarningOnTheRealKernel
+  M16_LEVEL1: TestChecksPassForADeviceThatReconnectsOnTheRealKernel,TestChecksFailForADeviceThatDoesNotReconnectOnTheRealKernel,TestAFaultThatNeverMatchesIsAZeroHitWarningOnTheRealKernel,TestTrafficNotSeenWithExceptDecidesOnTheRealKernel,TestDNSQuerySeenDecidesForADeviceOnTheRealKernel,TestTheTrafficChecksDoNotSeeWhatTheGatewayDropsOnTheRealKernel
 
   # The level 1 tests of packet captures (M17): the AF_PACKET sockets of the executor on the loopback interface, the
   # executor protocol over its socket (these need CAP_NET_RAW, so they carry the build tag testbed and run in the

@@ -66,6 +66,14 @@ describe('the router', () => {
     await r.push('/linux');
     expect(r.currentRoute.value.name).toBe('linux');
     await r.push('/scenarios');
+    expect(r.currentRoute.value.name).toBe('scenarios');
+    await r.push('/scenarios/mqtt-outage?tab=yaml');
+    expect(r.currentRoute.value.name).toBe('scenario');
+    expect(r.currentRoute.value.params.id).toBe('mqtt-outage');
+    await r.push('/runs/0a1b2c3d');
+    expect(r.currentRoute.value.name).toBe('run');
+    expect(r.currentRoute.value.params.id).toBe('0a1b2c3d');
+    await r.push('/captures');
     expect(r.currentRoute.value.name).toBe('not-found');
   });
 

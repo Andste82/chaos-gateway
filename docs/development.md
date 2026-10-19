@@ -39,7 +39,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
-| `web/` | the web app (M12): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
+| `web/` | the web app (M12; scenarios M19): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
@@ -5142,6 +5142,141 @@ environment has not: vetted with `-tags testbed`; not run in the sandbox; run by
 | Scope: generated TypeScript and Python clients; examples for pytest and Jest | `make check-clients` (they compile and import), `TestTheExampleSuitesPassAgainstTheGateway` (`clients/examples`) |
 | Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
 | `wg export` | `TestChaosctlExportsAWireGuardClient` |
+
+## Scenario UI (M19)
+
+Plan §2.10, §2.17 "Scenarios" and M19. The screen of the scenarios: the list with target, length, steps and last result; for
+the chosen scenario the tabs Timeline, YAML and Runs; the editors of its settings, steps and checks; running it and following
+the run with its progress, results and artifacts; the page of one run; and the running scenarios on the overview. M19 adds no
+backend: the scenarios, runs, checks and captures are those of M15 to M17, and the screen is built on the API of those
+milestones and on the configuration draft of M13.
+
+### How it works
+
+- **Routes** (`src/router.ts`): `/scenarios` (the list; the first scenario is shown), `/scenarios/:id` (id or name; `?tab=yaml|runs`,
+  `?run=<id>` shows a run) and `/runs/:id` (the page of one run, also of an inline run that has no scenario of its own). The
+  navigation entry Scenarios is a link now; Captures stays a disabled entry (open item P4-M19-01).
+- **A scenario is an object of the configuration,** so it is changed like a profile (M13): the dialogs "Add to the changes" put the
+  scenario into the draft (`useDraftStore().setScenario`, `scenarios`), the unapplied-changes bar counts it ("2 changes in 1
+  scenario"), the preview drawer and the concurrent-change dialog take it to the gateway as a merge patch (`scenarios` in
+  `POST /revisions`), and the list marks a scenario NEW, CHANGED or DELETED (with Undo). The steps and the checks are lists,
+  which a merge patch replaces whole. A scenario the gateway would refuse as it is (no step, a check whose window names a step that
+  is gone, a name that is taken) holds back Preview & apply (`draft.invalidScenarios`, the bar says "a scenario needs fixing
+  first") and is listed on the scenario's page; what the gateway says about a candidate is kept by pointer
+  (`draft.serverErrors[<id>]["steps/2/at"]`) and shown on the scenario and under the fields of the step or check dialog it names.
+- **The list** (`ScenariosView.vue`): name, target, "5 steps · 1 min 15 s · 2 checks" (`scenarioMeta`; the length is the last
+  step or the end of the last check window, without the time a `wait` step will take), and the last result from `GET /runs`
+  ("Failed · 2 min ago", "Never run"; the list of runs has no checks, so no count).
+- **The timeline** (`ScenarioTimeline.vue`) shows the steps in the order the engine runs them (by `at`, then by the list), each
+  with its time, a chip for its type (orange for what impairs traffic, red for a rule, blue for the rest) and a line in words
+  (`stepText`: "↑↓ 200 ms ±50 → TCP 8883", "Drop · cut existing → TCP 8883", "Wait for a DNS query for … · timeout 60 s"). The
+  checks stand next to it (`ChecksCard.vue`: "Reconnected: TCP 8883 · within 30 s of step restore") and the artifacts below
+  (`ArtifactsCard.vue`). Edit and Delete are on each step and check, Add step and Add check under them. A step a check or
+  a `remove` step refers to cannot be deleted (the button says why), and a step that is renamed takes those references along.
+- **The editors.** `StepDialog.vue` (`lib/stepForm.ts`) has the id, the time, "Acts on" (the scenario's target or a narrower one:
+  devices, groups and networks) and the fields of the type: a profile, a fault (the fault dialog's fields without target and
+  duration: kind, traffic, parameters; `FaultStepFields.vue`, `TrafficFields.vue`, which the fault dialog uses now too), an access
+  rule (access, reject type, traffic, also cut existing), a WireGuard action, a capture start or stop, a wait (online, a new
+  connection, a DNS query; timeout), the removal of an earlier step's overlay, or the restore. `CheckDialog.vue`
+  (`lib/checkForm.ts`) has the type, the traffic or the name of the query, the allowed destinations of "traffic not seen" and the
+  window (opens at the start or a step; closes after a time or at a step). `ScenarioDialog.vue` (`lib/scenarioForm.ts`) has name,
+  description, target, capture, how a zero-hit fault is reported and the preconditions to skip. Each message stands under its field
+  (the checks mirror `domain.ValidateScenario`'s structural rules: `scenarioProblems` in `lib/scenarios.ts`), appears once a field was
+  changed or the button was pressed, and the gateway's refusal (422) of a candidate opens the dialog with it under the field its pointer
+  names. Every dialog shows the request its button leads to under `</> API`.
+- **The YAML tab** (`ScenarioYaml.vue`, `lib/scenarioYaml.ts`) shows the scenario as the file `chaosctl run -f` takes, with the
+  names of the objects where the configuration has UUIDs, in the order of the spec. The text can be edited; while it is typed it is
+  read (syntax with the line, a mapping at the top, names resolved to UUIDs, the generated Zod schema of the spec, the fields the
+  format does not have, `scenarioProblems`) and "Apply to the changes" puts a valid text into the draft. "Download" saves it,
+  "Import YAML" (list header) makes a new scenario of a pasted text or a file. The library is `yaml` (2.9.1, in the scenario's chunk
+  only, it loads with the lazy route).
+- **Run** (`RunDialog.vue`, `lib/runForm.ts`): parameters as `path=value` lines (`chaosctl run --set`), "wait in the queue when the
+  target is busy" (off: `?queue=false`, `409 target_busy`). A scenario of the active revision starts with
+  `POST /scenarios/{id}/runs`; one with changes that are not applied yet is sent as `inline` with `POST /runs` and stored with the
+  run only, no revision is made. The gateway's refusals appear in the dialog (parameter paths under the field).
+- **Following a run.** The scenario's page follows the run it started, an active run of the scenario, or the one named by `?run=`
+  (the Runs tab's "Show"); "Back to the scenario" lets go of it. `RunProgress.vue` shows the state with a label (queued, running,
+  passed, failed, error, aborted), who started it and when, the steps that are through, the time against the length of the
+  timeline, a progress bar, the lease left, the reason of an `error`, `aborted` or `failed` run and the warnings of the report
+  (`zero_hit`, `step_late`, `capture_missing`). On the timeline each step is pending, applied, skipped or error (a label, not
+  only a colour), with the time it was applied at against its schedule ("at 10.0 s (+37 ms) · generation 51"), the wait behind an
+  apply, "now" on the step in effect and "next in 6 s" on the next one. The checks show PENDING until their windows close, then
+  PASSED, FAILED or ERROR, with the message and the observations that decided them. The artifacts are links to the API:
+  the capture (pcapng, with its size), `report.xml` (JUnit), `report.json`, `events.jsonl`, and the key log. Abort removes the
+  run's overlays (the toast quotes the gateway). A queued run says it waits.
+- **The page of a run** (`RunView.vue`, `/runs/:id`) is the same for any run, with the counters of the overlays the run made
+  from `report.json` once it has ended (a rule that matched no packet shows in orange).
+- **Live.** A run is read every second while it is queued or running (`useRun`) and the events `run_queued`, `run_started`,
+  `run_step`, `run_check` and `run_finished` invalidate the runs (`composables/eventStream.ts`; the end also the overlays, devices
+  and faults); the list of runs is read every 5 s. A revision invalidates the scenarios.
+- **The overview** has "Running scenarios" (`RunningScenarios.vue`): each queued or running run with its target, steps through,
+  the step in effect and a progress bar, linking to the scenario with the run shown (or the run's page for an inline scenario).
+- **What the build runs.** The step types and the check types the editors offer come from `GET /capabilities`; a step of a type the
+  build does not run yet (DNS, TLS, DHCP) is shown and kept, its dialog says it is edited in the YAML view.
+- **Other changes.** The custom traffic fields of the fault dialog moved into `TrafficFields.vue`, the pure part into `lib/trafficForm.ts`
+  (the fault dialog's checks and tests are unchanged); `GET /runs`, `GET /scenarios` and `GET /capabilities` have composables in
+  `composables/gateway.ts`; the entry Captures says "Arrives with a later milestone" (it said M17, whose backend is done).
+
+### Decisions
+
+Taken by best practice where the plan leaves room (the one that needs the maintainer is `P4-M19-01` in `open-items.md`):
+
+1. **Scenarios are edited through the draft, not written to the API one by one.** They are objects of the revision (§2.1.1), there is
+   no write endpoint for them, and the draft gives preview, apply, undo and the concurrent-change dialog for free.
+2. **The timeline editor is a list of forms, not a canvas.** Times are typed (`10s`), the order follows from them; a dragged bar
+   would be less exact than the `±100 ms` the engine keeps, and every field of the spec needs a form anyway.
+3. **A scenario with unapplied changes is run from the draft (`inline`),** so a change can be tried before a revision is made;
+   its run is marked "inline scenario, not stored".
+4. **A run from the UI has no lease.** A lease needs a client that renews it, and a browser tab may close; plan §2.10 says a run
+   keeps going when the client disconnects. Abort, the scenario's end and the overlay TTLs are the safety net, as without a lease.
+5. **A new scenario needs a step before it can be applied** (and the other structural rules): the UI mirrors them so that the
+   mistake is found at the field and not as a refusal of the whole candidate. The references (does the device exist) the gateway checks.
+6. **The YAML view shows names, not UUIDs,** and reads names or UUIDs, so a file from a repository and the view are the same
+   format. A name that two objects share is shown as the UUID; a reference that matches nothing is refused in the view, because
+   the candidate would be (`unknown_reference`). Fields the format does not have are refused too, as the API's strict decoding does.
+7. **When a revision applied meanwhile and the draft both changed the steps (or the checks) of a scenario, the draft's list wins as a
+   whole,** and the concurrent-change dialog names `steps` with both lists (the ids). A merge patch replaces a list whole, so a merge
+   member by member would invent a timeline neither side wrote. Changes to other members (description, target) merge as for the other objects.
+8. **The progress of a running run is the time against the timeline's length, below 100 % until the run ends:** a `wait` step or a
+   check window that reaches past the last step makes a run longer than its steps say. The steps that are through are shown next to it.
+9. **No Captures screen in M19.** The captures of a run are artifacts with download links; a screen of captures and the device
+   detail's panel have no milestone and no design (open item P4-M19-01).
+10. **The lateness of a step is not shown after a `wait` step,** which moves every later step by the time it waited; the report
+    has the actual offset anyway.
+11. **The browser tests run against the mocked API,** as plan M19 says. The engine's timing, checks and artifacts are covered by the
+    level 0 and level 1 tests of M15 to M17; the fixtures use the generated types, so a change of the spec breaks them at compile time.
+
+### Tests
+
+Level 0, all run here. Web unit tests (`make test-web`, vitest, 321 tests in 32 files with the older ones): `lib/scenarios.test.ts` (types, order, length, words, the problems of a
+scenario including a text that is wrong in its types, editing, the changes in words), `lib/scenarioYaml.test.ts` (the references both
+ways, the plan's example in and out, the problems by line and by pointer), `lib/runs.test.ts`, `lib/stepForm.test.ts` and
+`lib/checkForm.test.ts` (every step and check of the example through the form and back, the checks under the fields, the pointers of
+the gateway's messages), `lib/scenarioForm.test.ts` (settings, parameters of a run, the selector of traffic), `stores/draft.scenarios.test.ts`
+(changes, patch, held-back apply, messages by pointer, overlaps and reapply) and the routes in `router.test.ts`. Playwright against the mocked
+API (`make test-e2e`, `e2e/scenarios.spec.ts`, 18 tests): the list; the empty state; editing a step, adding a step and a check and
+deleting one, through the preview to the patch that is sent; renaming a step; the fields' messages; building a scenario from nothing
+(settings, three steps, a check, the apply held back until it has a step); delete and Undo and a refused candidate; the YAML tab and
+the import; running a scenario and following it to a failed run (the step in effect, timing, queue wait, warning, checks, evidence,
+artifacts, the Runs tab, the page of the run with its counters); a passed run; abort; a queued run and a refused busy target; refused
+parameters; running a draft inline; the overview; a step of a type the build cannot edit; no run while a revision waits for
+confirmation. The whole Playwright suite (208 tests) passed with them, and `go build ./...` and `go vet ./...` are unchanged (no Go
+code changed). There is no test that needs a VM: nothing of M19 runs in the testbed, and no browser flow of the testbed was added (decision 11).
+
+### Acceptance map (plan M19 "Tests" and Scope)
+
+| Plan M19 | Test |
+|---|---|
+| Tests: Playwright — build a scenario | `a new scenario: settings, steps and a check, then the preview and the apply`, `edit a step, add a step and a check, delete a step …`, `the YAML view …`, `import a scenario from YAML …`, `a step that is renamed …`, `a step id that another step has …`; the unit tests of the forms and of the draft |
+| Tests: … and run it | `run a scenario and follow it …`, `a scenario with changes that are not applied yet runs from the draft …`, `a queued run waits for the target …`, `the gateway refuses the parameters of a run …`, `abort a run …` |
+| Tests: … then check the result | `run a scenario and follow it …` (state Failed, reason, PENDING then FAILED and PASSED with message and evidence, timing, warning, counters on the run's page), `a run that passed …` |
+| Tests: … and the artifact display | `run a scenario and follow it …` (capture 1.8 MB, JUnit, JSON, events and their links; none before the run ended), `a run that passed …` |
+| Scope: scenario list | `the list: target, steps, length, last result …`, `no scenarios …`, `delete a scenario and undo it …` |
+| Scope: timeline editor | the editing tests above; `lib/stepForm.test.ts`, `lib/checkForm.test.ts`, `lib/scenarios.test.ts` |
+| Scope: YAML view | `the YAML view …`, `import a scenario from YAML …`, `lib/scenarioYaml.test.ts` |
+| Scope: run view with live progress, results and artifacts | `run a scenario and follow it …`, `abort a run …`, `the overview shows the running scenarios …`, `lib/runs.test.ts` |
+| §2.17 run states, Abort removes the run's overlays | `run a scenario and follow it …` (Running, Failed), `a queued run waits …` (Queued), `abort a run …` (Aborted); the removal of the overlays is the engine's (`TestAbortRemovesTheOverlaysOfTheRun`, M15) |
+| §2.17 concurrent change, unapplied changes | `stores/draft.scenarios.test.ts` |
 
 ## Generated code
 

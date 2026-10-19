@@ -1,0 +1,269 @@
+// The step editor of the timeline (plan §2.10, §2.17 "Scenarios"; M19): the form of one step — its id, its
+// time on the timeline, whether it narrows the scenario's target, and the fields of its type (a profile, a
+// fault with the fault dialog's fields, an access rule, a WireGuard action, a capture start or stop, a wait,
+// the removal of an earlier step's overlay, or the restore) — the checks under the fields, the step it becomes
+// and the field a problem the gateway reported names. A step of a type this build cannot edit (DNS, TLS, DHCP)
+// is kept as it is and edited in the YAML view.
+import type { AccessAction, RejectType, Scope, Step, WaitCondition, WireGuardAction } from '../api/generated/model';
+import {
+  createRunBodyTwoInlineOneStepsItemIdRegExp as stepIdRegExp,
+  createRunBodyTwoInlineOneStepsItemAtRegExp as durationRegExp,
+} from '../api/generated/zod/runs/runs';
+import { emptyForm, faultFormErrors, faultToForm, fieldOf as faultFieldOf, formToFault, scopeOf, targetOf, tunnelOf, type FaultField, type FaultForm } from './faultForm';
+import { remoteCidrError } from './scopes';
+import { stepType, type StepType } from './scenarios';
+import { emptyTraffic, trafficErrors, trafficFieldOf, trafficFromMatch, trafficMatch, type TrafficForm } from './trafficForm';
+import { createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp } from '../api/generated/zod/overlays/overlays';
+
+export type WireGuardWho = string;
+export type WaitFor = WaitCondition['for'];
+
+export interface StepForm {
+  id: string;
+  /** The offset on the timeline: a duration like `10s`. */
+  at: string;
+  /** `''`: the scenario's target; else a scope text of `faultForm.targetOf` that narrows it. */
+  narrow: string;
+  type: StepType;
+  /** The profile (its id, or the name of a built-in one). */
+  profile: string;
+  fault: FaultForm;
+  action: AccessAction;
+  rejectWith: RejectType | '';
+  cutExisting: boolean;
+  /** The traffic a rule selects or a wait for a connection waits for. */
+  traffic: TrafficForm;
+  /** `client:<id>` or `link:<id>`. */
+  who: WireGuardWho;
+  wgAction: WireGuardAction['action'];
+  capture: 'start' | 'stop';
+  waitFor: WaitFor;
+  timeout: string;
+  /** The name a wait for a DNS query waits for. */
+  name: string;
+  /** The step whose overlay is removed. */
+  remove: string;
+  /** A step the editor does not make (DNS, TLS, DHCP): kept as it is. */
+  kept?: Step;
+}
+
+export type StepField =
+  | 'id'
+  | 'at'
+  | 'narrow'
+  | 'type'
+  | 'profile'
+  | FaultField
+  | 'action'
+  | 'rejectWith'
+  | 'cutExisting'
+  | 'ports'
+  | 'destination'
+  | 'who'
+  | 'wgAction'
+  | 'capture'
+  | 'waitFor'
+  | 'timeout'
+  | 'name'
+  | 'remove';
+
+export function emptyStepForm(type: StepType, id: string, at = '0s'): StepForm {
+  const fault = emptyForm('global');
+  fault.latency = '200';
+  fault.jitter = '50';
+  return {
+    id,
+    at,
+    narrow: '',
+    type,
+    profile: '',
+    fault,
+    action: 'drop',
+    rejectWith: '',
+    cutExisting: false,
+    traffic: emptyTraffic(),
+    who: '',
+    wgAction: 'disable',
+    capture: 'start',
+    waitFor: 'online',
+    timeout: '60s',
+    name: '',
+    remove: '',
+  };
+}
+
+/** The step types the editor makes; the others (DNS, TLS, DHCP) arrive with their milestones and are edited as YAML. */
+export const editableTypes: ReadonlySet<StepType> = new Set(['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore']);
+
+/** The form of a step. */
+export function stepToForm(s: Step): StepForm {
+  const type = stepType(s) ?? 'restore';
+  const f = emptyStepForm(type, s.id, s.at);
+  f.narrow = s.target ? targetOf(s.target) : '';
+  if (!editableTypes.has(type)) f.kept = s;
+  if (s.profile !== undefined) f.profile = s.profile;
+  if (s.fault) f.fault = faultToForm(s.fault, undefined);
+  if (s.rule) {
+    f.action = s.rule.action;
+    f.rejectWith = s.rule.reject_with ?? '';
+    f.cutExisting = s.rule.cut_existing === true;
+    f.traffic = trafficFromMatch(s.rule);
+  }
+  if (s.wireguard) {
+    f.who = s.wireguard.client ? `client:${s.wireguard.client}` : s.wireguard.link ? `link:${s.wireguard.link}` : '';
+    f.wgAction = s.wireguard.action;
+  }
+  if (s.capture) f.capture = s.capture;
+  if (s.wait) {
+    f.waitFor = s.wait.for;
+    f.timeout = s.wait.timeout;
+    f.name = s.wait.name ?? '';
+    f.traffic = trafficFromMatch(s.wait);
+  }
+  if (s.remove !== undefined) f.remove = s.remove;
+  return f;
+}
+
+/** The scope a step narrows to; a tunnel fault and a WireGuard action have none (they act on the tunnel). */
+function narrowOf(f: StepForm): Scope | undefined {
+  if (!f.narrow || f.type === 'wireguard' || (f.type === 'fault' && f.fault.family === 'tunnel')) return undefined;
+  return scopeOf(f.narrow);
+}
+
+/** The step of the form. */
+export function formToStep(f: StepForm): Step {
+  if (f.kept) return { ...f.kept, id: f.id.trim(), at: f.at.trim(), ...(narrowOf(f) ? { target: narrowOf(f)! } : {}) };
+  const step: Step = { id: f.id.trim(), at: f.at.trim() };
+  const target = narrowOf(f);
+  if (target) step.target = target;
+  switch (f.type) {
+    case 'profile':
+      step.profile = f.profile;
+      break;
+    case 'fault':
+      step.fault = formToFault(f.fault);
+      break;
+    case 'rule':
+      step.rule = {
+        action: f.action,
+        ...trafficMatch(f.traffic),
+        ...(f.action === 'reject' && f.rejectWith ? { reject_with: f.rejectWith } : {}),
+        ...(f.cutExisting ? { cut_existing: true } : {}),
+      };
+      break;
+    case 'wireguard': {
+      const who = tunnelOf(f.who);
+      step.wireguard = { ...(who ?? {}), action: f.wgAction } as WireGuardAction;
+      break;
+    }
+    case 'capture':
+      step.capture = f.capture;
+      break;
+    case 'wait':
+      step.wait = {
+        for: f.waitFor,
+        timeout: f.timeout.trim(),
+        ...(f.waitFor === 'connected' ? trafficMatch(f.traffic) : {}),
+        ...(f.waitFor === 'dns_query' ? { name: f.name.trim() } : {}),
+      };
+      break;
+    case 'remove':
+      step.remove = f.remove;
+      break;
+    case 'restore':
+      step.restore = true;
+      break;
+  }
+  return step;
+}
+
+export interface StepContext {
+  /** The ids of the other steps (the step edited is not among them). */
+  others: string[];
+  /** The ids of the steps that come before this one on the timeline: a `remove` names one of them. */
+  earlier: string[];
+}
+
+/** The problems of the form, by field; empty when the step can go into the scenario. */
+export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<StepField, string>> {
+  const e: Partial<Record<StepField, string>> = {};
+  const id = f.id.trim();
+  if (!id) e.id = 'Give the step an id.';
+  else if (!stepIdRegExp.test(id)) e.id = 'Letters, digits, dash and underscore; starting with a lower-case letter; at most 32.';
+  else if (ctx.others.includes(id)) e.id = 'Another step has this id.';
+  if (!durationRegExp.test(f.at.trim())) e.at = 'A time like 0s, 10s or 1m30s.';
+  if (f.narrow) {
+    const remote = remoteCidrError(f.narrow);
+    if (remote) e.narrow = remote;
+  }
+  if (f.kept) return e;
+  switch (f.type) {
+    case 'profile':
+      if (!f.profile) e.profile = 'Choose a profile.';
+      break;
+    case 'fault':
+      Object.assign(e, faultFormErrors(f.fault, 'config'));
+      // the target and the name belong to the step, not to the fault
+      delete e.target;
+      delete e.name;
+      break;
+    case 'rule':
+      Object.assign(e, trafficErrors(f.traffic));
+      if (f.cutExisting && f.action === 'allow') e.cutExisting = 'An allow rule cuts nothing.';
+      else if (f.cutExisting && f.traffic.protocol !== 'tcp' && f.traffic.protocol !== 'any') e.cutExisting = 'Cutting connections needs the protocol TCP or any.';
+      break;
+    case 'wireguard':
+      if (!tunnelOf(f.who)) e.who = 'Choose the WireGuard client or link.';
+      break;
+    case 'wait':
+      if (!durationRegExp.test(f.timeout.trim())) e.timeout = 'A time like 30s or 2m.';
+      if (f.waitFor === 'connected') Object.assign(e, trafficErrors(f.traffic));
+      if (f.waitFor === 'dns_query' && !hostnameRegExp.test(f.name.trim())) e.name = 'A host name like broker.example.com.';
+      break;
+    case 'remove':
+      if (!f.remove) e.remove = 'Choose the step whose overlay is removed.';
+      else if (!ctx.earlier.includes(f.remove)) e.remove = 'Choose a step that comes before this one.';
+      break;
+  }
+  return e;
+}
+
+/**
+ * The field of the form a problem the gateway reported for the step names, by the pointer below the step
+ * ("at", "fault/jitter", "rule/ports", "wait/timeout", "target/device"); undefined for the step as a whole.
+ */
+export function stepFieldOf(rest: string, each = false): StepField | undefined {
+  const segments = rest.split('/').filter(Boolean);
+  switch (segments[0]) {
+    case 'id':
+    case 'at':
+      return segments[0];
+    case 'target':
+      return 'narrow';
+    case 'profile':
+      return 'profile';
+    case 'fault':
+      return faultFieldOf(`/${segments.slice(1).join('/')}`, each);
+    case 'rule': {
+      const last = segments[1];
+      if (last === 'action') return 'action';
+      if (last === 'reject_with') return 'rejectWith';
+      if (last === 'cut_existing') return 'cutExisting';
+      return trafficFieldOf(`/${segments.slice(1).join('/')}`);
+    }
+    case 'wireguard':
+      return segments[1] === 'action' ? 'wgAction' : 'who';
+    case 'capture':
+      return 'capture';
+    case 'wait': {
+      if (segments[1] === 'timeout') return 'timeout';
+      if (segments[1] === 'name') return 'name';
+      if (segments[1] === 'for') return 'waitFor';
+      return trafficFieldOf(`/${segments.slice(1).join('/')}`);
+    }
+    case 'remove':
+      return 'remove';
+    default:
+      return undefined;
+  }
+}

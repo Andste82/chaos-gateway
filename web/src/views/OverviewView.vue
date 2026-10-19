@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // Overview (plan §2.17): topology with the fault badge on the path, the active faults, the uplink
-// traffic and the recent events; every item links to its detail. The running scenario arrives with
-// the scenario engine (M15, M19).
+// traffic and the recent events; every item links to its detail; the running scenarios with their
+// progress (M19).
 import { computed } from 'vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import RecentEventsCard from '../components/overview/RecentEventsCard.vue';
+import RunningScenarios from '../components/overview/RunningScenarios.vue';
 import TopologyCard from '../components/overview/TopologyCard.vue';
 import UplinkTrafficCard from '../components/overview/UplinkTrafficCard.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
@@ -52,6 +53,7 @@ const deviceCounts = computed(() => {
       <ActiveFaultList v-else :items="faults.items.value" show-target />
     </SectionCard>
   </div>
+  <RunningScenarios />
   <div class="grid grid-cols-1 gap-5 xl:grid-cols-3">
     <div class="min-w-0 xl:col-span-2"><UplinkTrafficCard /></div>
     <RecentEventsCard />

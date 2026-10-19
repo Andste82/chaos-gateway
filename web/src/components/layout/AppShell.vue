@@ -38,7 +38,7 @@ async function confirm() {
     toasts.push('success', `Revision ${rev} confirmed`, 'It is the last known good revision now.');
     // the confirmed revision is the active one now: the views of the configuration change with it
     await Promise.all(
-      ['state', 'revisions', 'networks', 'devices', 'groups', 'rules', 'faults', 'profiles', 'uplink', 'routing'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
+      ['state', 'revisions', 'networks', 'devices', 'groups', 'rules', 'faults', 'profiles', 'scenarios', 'uplink', 'routing'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
     );
   } catch (e) {
     toasts.push('error', `Revision ${rev} could not be confirmed`, errorMessage(e));

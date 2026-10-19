@@ -32,7 +32,9 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
 - **Issue #64** (branch `close-phase-3-1`, merged with PR #69, which closed issues #57, #63 and #64 on 2026-10-18): I64-01 to I64-03 were decided by the maintainer on 2026-10-18 (I64-01 and I64-03
   as implemented, I64-02 by mounting the host's `/usr/lib/systemd/network` into the executor), I64-04 records the plan's
   wording that the issue made outdated (fixed), and I64-05 (the tests against the real Kea in the testbed jobs) is closed;
-  all are closed, see [Issue #64 open items](#issue-64-open-items) at the end of the file.
+  all are closed, see [Issue #64 open items](#issue-64-open-items) further down.
+- **Phase 4** (M15–M19, branch `worktree-phase-4`): what the implementation could not settle and that no later milestone
+  completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. Open: P4-M19-01 (the Captures screen has no milestone).
 
 ## Phase 1 audit result
 
@@ -2084,3 +2086,37 @@ work was not blocked. The maintainer decided I64-01 to I64-03 on 2026-10-18; eve
   runner fails a run in which one skips; first check that each passes on the real Kea (they have not run in CI).
 - Needs maintainer: no (a test-coverage fix, no behavior change; closed 2026-10-18 without a decision)
 - Effort: S
+
+## Phase 4 open items
+
+Phase 4 (M15 to M19, automation) is implemented on the branch `worktree-phase-4`. Items below are what the implementation
+found that no later milestone of the plan completes and that need a decision of the maintainer.
+
+### P4-M19-01 The Captures screen and the capture panel of the device detail have no milestone
+
+- Status: new
+- Severity: medium
+- Reason: needs-decision. The plan's navigation (§2.17) lists Captures, and the device detail is to show the device's captures
+  (§2.17, "Everything is connected: a device shows its … captures"), but the section "Not yet designed" names Captures, and no
+  milestone builds either. M17 delivered the engine and the API (`/captures`, download, quota), M19 shows the captures of a
+  run as artifacts of the run (the capture of `capture: true` or of the capture steps is a download on the run's page and the
+  scenario's), and M12 left the device detail's capture panel out "until its backend comes". With M19 done the backend is
+  there and the UI for it is not: a capture of a device, a network or a selector can be started and stopped only over the API or
+  with `chaosctl` (which has no capture command either), and the nav entry says "Arrives with a later milestone". Whether this
+  is a milestone of its own before V1, a part of M24 (diagnostics), or left to the API until after V1 is a decision about the
+  scope of V1 and about the screen's design, which does not exist.
+- Evidence: `web/src/components/layout/SidebarNav.vue` (Captures is not a link), plan §2.17 "Screens" (no row for Captures) and
+  "Not yet designed", `docs/development.md` "Scenario UI (M19)" (decision 9).
+- Task: decide when the screen is built and what it has. A proposal to design against: a list of captures (name, scope,
+  state, size, packets, dropped, started, the run it belongs to), "New capture" (the scope as the capture request has it:
+  network, device, selector or the uplink; format, snap length, duration, size or ring buffer), stop, download (the key log
+  only with scope `full`), delete, the quota and the free space; the device detail's panel lists the device's captures with
+  a "Capture" action; the events `capture_started` and `capture_stopped` keep the list live (the event stream already
+  invalidates the runs on them).
+- Options: (a) a new milestone "Captures UI" (S) in Phase 5 or 6, before V1; (b) part of M24, which adds the diagnostics panel
+  to the same screens; (c) after V1, the API and the run's artifacts being enough for the first release.
+- Recommendation: (a): a small, self-contained screen whose backend is done and tested; tests need the capture of a run, which
+  M19's artifacts already show.
+- Acceptance: the plan has the milestone (or the decision to leave it out) and its design.
+- Needs maintainer: yes (scope of V1, design of the screen)
+- Effort: M

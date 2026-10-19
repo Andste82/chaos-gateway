@@ -87,9 +87,11 @@ function where(path: string | undefined): string {
     return `Port forward ${p ? forwardTitle(p) : f[1]}${rest(f[2])}`;
   }
   if (path === '/routing' || path?.startsWith('/routing/')) return `Routing${rest(path.slice('/routing/'.length))}`;
-  const o = /^\/(groups|probes|scenarios)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  const sc = /^\/scenarios\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (sc) return `Scenario ${draft.effectiveScenarios[sc[1]!]?.name ?? draft.baseScenarios[sc[1]!]?.name ?? sc[1]}${rest(sc[2])}`;
+  const o = /^\/(groups|probes)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (o) {
-    const kind = { groups: 'Group', probes: 'Probe', scenarios: 'Scenario' }[o[1] as 'groups'];
+    const kind = { groups: 'Group', probes: 'Probe' }[o[1] as 'groups'];
     const name = (draft.baseConfig?.[o[1] as 'groups']?.[o[2]!] as { name?: string } | undefined)?.name ?? o[2];
     return `${kind} ${name}${rest(o[3])}`;
   }
@@ -211,7 +213,7 @@ async function apply() {
     // edits made while it waits for confirmation move onto it once it is confirmed
     if (res.status === 'pending_confirm') draft.notePending(res.revision);
     draft.drawerOpen = false;
-    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink', 'port-forwards'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
+    await Promise.all(['state', 'revisions', 'rules', 'faults', 'overlays', 'devices', 'profiles', 'networks', 'routing', 'uplink', 'port-forwards', 'scenarios'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
   } catch (e) {
     apiPanel.record(`Preview & apply revision ${id} (refused: ${errorMessage(e)})`, [...calls, applyCall]);
     if (e instanceof ApiError && e.code === 'revision_conflict' && draft.base !== undefined) {

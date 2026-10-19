@@ -230,12 +230,14 @@ type Engine struct {
 	events *bus
 	sup    *supervisor.Supervisor
 
-	ctx             context.Context
-	cancel          context.CancelFunc
-	core            sync.WaitGroup // the state owner and the apply loop
-	done            chan struct{}  // closed when both have returned
-	ready           chan struct{}  // closed when the state owner has published its first snapshot
-	started         bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	core    sync.WaitGroup // the state owner and the apply loop
+	done    chan struct{}  // closed when both have returned
+	ready   chan struct{}  // closed when the state owner has published its first snapshot
+	started bool
+	// dryCompiles counts the compiles that only check overlay writes (compileProblems): a burst of writes costs a few.
+	dryCompiles     atomic.Int64
 	polling         atomic.Bool
 	pollingRouting  atomic.Bool
 	pollingObserved atomic.Bool

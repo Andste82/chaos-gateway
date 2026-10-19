@@ -207,13 +207,17 @@ func TestTwoHundredConcurrentOverlayWritesCostFarFewerApplies(t *testing.T) {
 
 // The same burst without anyone holding the executor: the writers do not wait for each other, and
 // the owner checks a burst with a few compiles, not one per write. The plan's target (§3.10: 100
-// writes within 1 to 2 s) is one of real hardware; the bound here is looser, because this runs on
-// the simulated kernel under the race detector on whatever CI machine, and it guards against the
-// cost growing with the square of the burst, which is what one compile per write was (checked as
-// the number of applies, not as time).
+// writes within 1 to 2 s) is one of real hardware, so time cannot be the guard here: this runs on
+// the simulated kernel under the race detector on whatever CI machine, and the burst takes seconds
+// on a loaded one without anything being wrong. What the test guards against is a cost that grows
+// with the square of the burst, a compile of the whole store per write, and it measures that
+// directly: the dry compiles that check the writes (compileProblems; the writes themselves are
+// validated without a compile) and the applies they cause are counted, and both must be far
+// fewer than the 100 writes. The time is only a bound against a hang (P4-AUDIT-59).
 func TestAHundredWritesWithoutAHeldExecutorAreQuick(t *testing.T) {
 	h, g := gatedHarness(t, engine.Config{})
 	base := g.count()
+	baseCompiles := h.e.DryCompiles()
 	bodies := make([]string, 100)
 	for i := range bodies {
 		bodies[i] = globalLatency(i)
@@ -227,10 +231,11 @@ func TestAHundredWritesWithoutAHeldExecutorAreQuick(t *testing.T) {
 		}
 	}
 	applies := g.count() - base
-	t.Logf("100 writes in %v with %d applies", took, applies)
-	// The cost that grows with the square of the burst shows as one apply per write; that is what
-	// is checked hard. The time is only a bound against a hang, because on a loaded machine under
-	// the race detector the burst takes several seconds without anything being wrong.
+	compiles := h.e.DryCompiles() - baseCompiles
+	t.Logf("100 writes in %v with %d dry compiles and %d applies", took, compiles, applies)
+	if compiles > 10 {
+		t.Errorf("100 concurrent writes took %d dry compiles, want a few (one per write is a cost that grows with the square of the burst)", compiles)
+	}
 	if applies > 10 {
 		t.Errorf("100 concurrent writes took %d applies, want a few", applies)
 	}

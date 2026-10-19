@@ -57,6 +57,7 @@ import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import ImpairmentFields from './ImpairmentFields.vue';
+import TrafficFields from './TrafficFields.vue';
 
 const props = defineProps<{
   /** A fixed target (the device page): `device:<id>`. */
@@ -128,10 +129,6 @@ const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
 const families = computed(() =>
   (['impairment', 'mtu', 'tunnel'] as const).filter((f) => f !== 'tunnel' || !props.fixedTarget).map((value) => ({ value, label: familyLabels[value] })),
 );
-/** Another kind of destination starts with its first network, or an empty address or name. */
-function destKindChanged() {
-  form.value.destination = form.value.destKind === 'network' ? (networks.data.value?.[0]?.id ?? '') : '';
-}
 const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMode)?.hint);
 
 const targets = computed(() => {
@@ -337,62 +334,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         </div>
       </div>
 
-      <div v-if="form.family !== 'tunnel' && form.traffic === 'custom'" class="grid grid-cols-4 gap-3">
-        <div>
-          <label class="label" :for="fieldId('protocol')">Protocol</label>
-          <select :id="fieldId('protocol')" v-model="form.protocol" class="input">
-            <option value="any">Any</option>
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-            <option value="icmp">ICMP</option>
-          </select>
-        </div>
-        <div>
-          <label class="label" :for="fieldId('ports')">Ports</label>
-          <input
-            :id="fieldId('ports')"
-            v-model="form.ports"
-            class="input mono"
-            placeholder="any"
-            :aria-invalid="!!errors.ports"
-            :aria-describedby="errors.ports ? errId('ports') : undefined"
-          />
-          <p v-if="errors.ports" :id="errId('ports')" class="field-error">{{ errors.ports }}</p>
-        </div>
-        <div>
-          <label class="label" :for="fieldId('destKind')">Destination</label>
-          <select :id="fieldId('destKind')" v-model="form.destKind" class="input" @change="destKindChanged">
-            <option value="any">Anywhere</option>
-            <option value="uplink">Uplink (Internet)</option>
-            <option value="network">A network</option>
-            <option value="cidr">An address or prefix</option>
-            <option value="hostname">A host name</option>
-          </select>
-        </div>
-        <div v-if="form.destKind === 'network' || form.destKind === 'cidr' || form.destKind === 'hostname'">
-          <label class="label" :for="fieldId('destination')">{{ { network: 'Network', cidr: 'Address or prefix', hostname: 'Host name' }[form.destKind] }}</label>
-          <select
-            v-if="form.destKind === 'network'"
-            :id="fieldId('destination')"
-            v-model="form.destination"
-            class="input"
-            :aria-invalid="!!errors.destination"
-            :aria-describedby="errors.destination ? errId('destination') : undefined"
-          >
-            <option v-for="n in networks.data.value ?? []" :key="n.id" :value="n.id">{{ names.network?.(n.id) ?? n.id }}</option>
-          </select>
-          <input
-            v-else
-            :id="fieldId('destination')"
-            v-model="form.destination"
-            class="input mono"
-            :placeholder="form.destKind === 'cidr' ? '203.0.113.0/24' : 'broker.example.com'"
-            :aria-invalid="!!errors.destination"
-            :aria-describedby="errors.destination ? errId('destination') : undefined"
-          />
-          <p v-if="errors.destination" :id="errId('destination')" class="field-error">{{ errors.destination }}</p>
-        </div>
-      </div>
+      <TrafficFields v-if="form.family !== 'tunnel' && form.traffic === 'custom'" v-model="form" :errors="errors" />
 
       <template v-if="form.family === 'mtu'">
         <div class="grid grid-cols-3 gap-3">

@@ -6,11 +6,12 @@ import { useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
 import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
-import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles } from '../api/generated/hooks/config/config';
+import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles, listScenarios } from '../api/generated/hooks/config/config';
+import { getRun, listRuns } from '../api/generated/hooks/runs/runs';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
-import { useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, NetworkView, Overlay, PortForwardView, ProfileView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
+import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { useDraftStore } from '../stores/draft';
@@ -97,6 +98,48 @@ export function useProfiles() {
     queryKey: ['profiles', 'all'],
     queryFn: ({ signal }) => fetchAll<ProfileView>((cursor) => listProfiles({ limit: 500, cursor }, { signal }), signal),
     staleTime: 60_000,
+  });
+}
+
+/** The scenarios of the active revision (M19). */
+export function useScenarios() {
+  return useQuery({
+    queryKey: ['scenarios', 'all'],
+    queryFn: ({ signal }) => fetchAll<ScenarioView>((cursor) => listScenarios({ limit: 500, cursor }, { signal }), signal),
+  });
+}
+
+/** What this build can do: the step types and the check types a scenario may use (`GET /capabilities`). */
+export function useCapabilities() {
+  return useQuery({ queryKey: ['capabilities'], queryFn: ({ signal }) => getCapabilities({ signal }), staleTime: 5 * 60_000 });
+}
+
+/**
+ * The runs, newest first, without their timelines. A queued or running run changes without an event of
+ * the list's own (the events of a run invalidate it), so the list is also polled.
+ */
+export function useRuns(params: () => Omit<ListRunsParams, 'cursor' | 'limit'> = () => ({}), limit = 200) {
+  return useQuery({
+    queryKey: computed(() => ['runs', 'all', params(), limit]),
+    // the newest `limit` runs: one page, not the whole history (the gateway keeps the runs of 30 days)
+    queryFn: ({ signal }) => listRuns({ ...params(), limit: Math.min(limit, 500) }, { signal }).then((page) => page.items),
+    refetchInterval: 5_000,
+  });
+}
+
+/**
+ * One run with its timeline, checks and artifacts. While it is queued or running it is read every second
+ * (the elapsed time and the next step move without an event); the events of the run read it at once.
+ */
+export function useRun(id: () => string | undefined) {
+  return useQuery({
+    queryKey: computed(() => ['runs', 'one', id()]),
+    queryFn: ({ signal }) => getRun(id()!, { signal }),
+    enabled: computed(() => !!id()),
+    refetchInterval: (q) => {
+      const s = q.state.data?.status;
+      return s === 'queued' || s === 'running' ? 1_000 : false;
+    },
   });
 }
 

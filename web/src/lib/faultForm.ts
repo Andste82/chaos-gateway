@@ -4,11 +4,7 @@
 // impairment of a WireGuard client's or a link's encrypted traffic, M10) — the presets to start
 // from, the checks under the fields, the live preview sentence, and the request it becomes: an
 // overlay (`POST /overlays`) or a configured fault in a candidate revision.
-import type { ConfigFault, Destination, FaultBody, MtuParams, OverlayRequest, Protocol, Scope, TunnelRef } from '../api/generated/model';
-import {
-  createOverlayBodyFaultOneDestinationCidrRegExp as cidrRegExp,
-  createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp,
-} from '../api/generated/zod/overlays/overlays';
+import type { ConfigFault, FaultBody, MtuParams, OverlayRequest, Protocol, Scope, TunnelRef } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { gatewayNow } from './clock';
 import { faultChips, type Names } from './faults';
@@ -23,14 +19,15 @@ import {
   type ImpairmentField,
   type ImpairmentForm,
 } from './netemForm';
-import { describeDestination, formatPorts, parsePorts } from './rules';
+import { describeDestination, formatPorts } from './rules';
 import { remoteCidrError } from './scopes';
+import { destinationOf, trafficErrors, trafficMatch, type DestKind } from './trafficForm';
 
 export { parseRate, presets, rateText, type Direction } from './netemForm';
 
 export type FaultFamily = 'impairment' | 'mtu' | 'tunnel';
 export type MtuMode = NonNullable<MtuParams['mode']>;
-export type DestKind = 'any' | 'uplink' | 'network' | 'cidr' | 'hostname';
+export type { DestKind } from './trafficForm';
 
 export interface FaultForm extends ImpairmentForm {
   family: FaultFamily;
@@ -217,15 +214,7 @@ export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'ove
     // packet order alone changes nothing either
     Object.assign(e, impairmentErrors(f, f.family === 'tunnel'));
   }
-  if (f.family !== 'tunnel' && f.traffic === 'custom') {
-    const p = parsePorts(f.ports);
-    if (p.error) e.ports = p.error;
-    else if ((p.ports || p.port_ranges) && f.protocol !== 'tcp' && f.protocol !== 'udp') e.ports = 'Ports need the protocol TCP or UDP.';
-    const d = f.destination.trim();
-    if (f.destKind === 'cidr' && !cidrRegExp.test(d)) e.destination = 'An IPv4 address or a prefix like 203.0.113.0/24.';
-    if (f.destKind === 'hostname' && !hostnameRegExp.test(d)) e.destination = 'A host name like broker.example.com or *.example.com.';
-    if (f.destKind === 'network' && !d) e.destination = 'Choose a network.';
-  }
+  if (f.family !== 'tunnel' && f.traffic === 'custom') Object.assign(e, trafficErrors(f));
   if (layer === 'config' && f.name && !nameRegExp.test(f.name)) e.name = 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.';
   if (f.family === 'tunnel') {
     if (!tunnelOf(f.tunnel)) e.tunnel = 'Choose the WireGuard client or link whose tunnel is impaired.';
@@ -237,36 +226,13 @@ export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'ove
   return e;
 }
 
-function destinationOf(f: FaultForm): Destination | undefined {
-  const d = f.destination.trim();
-  switch (f.destKind) {
-    case 'uplink':
-      return { uplink: true };
-    case 'network':
-      return { network: d };
-    case 'cidr':
-      return { cidr: d };
-    case 'hostname':
-      return { hostname: d };
-    default:
-      return undefined;
-  }
-}
-
 /** The selector of the traffic: protocol, ports and destination. */
 function match(f: FaultForm): Pick<FaultBody, 'protocol' | 'ports' | 'port_ranges' | 'destination'> {
   if (f.traffic !== 'custom') {
     const t = trafficPresets[f.traffic] ?? trafficPresets.all!;
     return t.protocol === 'any' ? {} : { protocol: t.protocol, ports: [...t.ports] };
   }
-  const out: Pick<FaultBody, 'protocol' | 'ports' | 'port_ranges' | 'destination'> = {};
-  if (f.protocol !== 'any') out.protocol = f.protocol;
-  const p = parsePorts(f.ports);
-  if (p.ports) out.ports = p.ports;
-  if (p.port_ranges) out.port_ranges = p.port_ranges;
-  const d = destinationOf(f);
-  if (d) out.destination = d;
-  return out;
+  return trafficMatch(f);
 }
 
 /**

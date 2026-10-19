@@ -25,9 +25,11 @@ const { names: known } = useNames();
 // when the device list does not have it (yet)
 const names = computed(() => ({ ...known.value, device: (id: string) => known.value.device?.(id) ?? draft.clientName(id) }));
 
-const invalidCount = computed(() => Object.keys(draft.invalid).length);
+const invalidRules = computed(() => Object.keys(draft.invalid).length);
+const invalidScenarios = computed(() => Object.keys(draft.invalidScenarios).length);
+const invalidCount = computed(() => invalidRules.value + invalidScenarios.value);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
-const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Device', client: 'WireGuard client', matrix: 'Access', network: 'Network', routing: 'Routing', forward: 'Port forward' };
+const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Device', client: 'WireGuard client', matrix: 'Access', network: 'Network', routing: 'Routing', forward: 'Port forward', scenario: 'Scenario' };
 const inWords = (c: DraftChange) => `${[kinds[c.kind], c.name, c.field].filter(Boolean).join(' ')}: ${c.from} → ${c.to}`;
 const yours = computed(() => draft.changes(names.value).map(inWords));
 const overlaps = (theirs: Configuration) => draft.overlaps(theirs, names.value).map(inWords);
@@ -81,7 +83,10 @@ function discardMine() {
     <span class="inline-flex items-center gap-2.5" data-testid="unapplied-bar">
       <span class="inline-block h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
       {{ draft.summary(names) }} · not applied yet
-      <span v-if="invalidCount" class="text-block-text">· {{ invalidCount === 1 ? 'a rule needs' : `${invalidCount} rules need` }} fixing first</span>
+      <span v-if="invalidRules" class="text-block-text">· {{ invalidRules === 1 ? 'a rule needs' : `${invalidRules} rules need` }} fixing first</span>
+      <span v-if="invalidScenarios" class="text-block-text" data-testid="unapplied-invalid-scenarios"
+        >· {{ invalidScenarios === 1 ? 'a scenario needs' : `${invalidScenarios} scenarios need` }} fixing first</span
+      >
     </span>
     <template #actions>
       <button type="button" class="btn" @click="draft.discard()">Discard</button>

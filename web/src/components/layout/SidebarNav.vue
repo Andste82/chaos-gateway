@@ -20,8 +20,8 @@ const items: NavItem[] = [
   { label: 'Access rules', icon: 'rules', to: '/rules' },
   { label: 'Faults', icon: 'faults', to: '/faults' },
   { label: 'Profiles', icon: 'profiles', to: '/profiles' },
-  { label: 'Scenarios', icon: 'scenarios', later: 'M19' },
-  { label: 'Captures', icon: 'captures', later: 'M17' },
+  { label: 'Scenarios', icon: 'scenarios', to: '/scenarios' },
+  { label: 'Captures', icon: 'captures', later: 'a later milestone' },
   { label: 'Diagnostics', icon: 'diagnostics', later: 'M24' },
   { label: 'Activity', icon: 'activity', later: 'a later milestone' },
 ];

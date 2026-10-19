@@ -14,6 +14,7 @@ import type {
   Profile,
   RevisionWithConfiguration,
   Routing,
+  Scenario,
   RoutingProtocol,
   WireGuardClient,
   WireGuardNetwork,
@@ -24,10 +25,14 @@ import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch 
 import { networkChanges, protocolChanges, routingSettingsChanges, withoutClients } from '../lib/networkChanges';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
 import { profileChips } from '../lib/profiles';
+import { scenarioChanges, scenarioProblems, scenarioTitle, type ScenarioProblem } from '../lib/scenarios';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
 
-/** The members compared and reapplied as a whole when both sides changed an object: a scope or a destination is one choice. */
-const atomicMembers = new Set(['source', 'target', 'destination']);
+/**
+ * The members compared and reapplied as a whole when both sides changed an object: a scope or a destination is
+ * one choice, and the steps and the checks of a scenario are lists (a merge patch replaces a list whole).
+ */
+const atomicMembers = new Set(['source', 'target', 'destination', 'steps', 'checks']);
 
 /**
  * The impairment parameter set of a configured fault (its flat netem parameters and its directions)
@@ -82,6 +87,9 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
   if (key === 'source' || key === 'target') return describeScope(v as Parameters<typeof describeScope>[0], names);
   if (key === 'destination') return describeDestination(v as Parameters<typeof describeDestination>[0], names);
   if (key === 'action') return accessLabels[v as keyof typeof accessLabels] ?? String(v);
+  // a scenario's steps by their ids, its checks by their number
+  if (key === 'steps' && Array.isArray(v)) return v.map((x) => (x as { id?: string }).id ?? '?').join(', ') || '—';
+  if (key === 'checks' && Array.isArray(v)) return v.length ? `${v.length} ${v.length === 1 ? 'check' : 'checks'}` : '—';
   if (Array.isArray(v)) {
     return v
       .map((x) => (typeof x === 'object' && x !== null && 'from' in x && 'to' in x ? `${(x as { from: number }).from}-${(x as { to: number }).to}` : typeof x === 'object' ? JSON.stringify(x) : String(x)))
@@ -111,7 +119,7 @@ export interface EditOrigin {
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward';
+  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward' | 'scenario';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -120,7 +128,7 @@ export interface DraftChange extends FieldChange {
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
  * access rules, their order, configured faults, custom profiles, adopted devices, networks (P3-M14-01), WireGuard clients, the access
- * matrix, the routing (P3-M14-01) and the port forwards (M35a), edited
+ * matrix, the routing (P3-M14-01), the port forwards (M35a) and the scenarios (M19), edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -153,6 +161,8 @@ export const useDraftStore = defineStore('draft', () => {
   const routing = ref<Routing>();
   /** Port forwards added, changed or deleted (`null`), by id (M35a). */
   const forwards = ref<Record<string, PortForward | null>>({});
+  /** Scenarios added, changed or deleted (`null`), by id (M19). */
+  const scenarios = ref<Record<string, Scenario | null>>({});
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
@@ -167,6 +177,7 @@ export const useDraftStore = defineStore('draft', () => {
       Object.keys(networks.value).length > 0 ||
       routing.value !== undefined ||
       Object.keys(forwards.value).length > 0 ||
+      Object.keys(scenarios.value).length > 0 ||
       matrix.value !== undefined,
   );
 
@@ -517,6 +528,35 @@ export const useDraftStore = defineStore('draft', () => {
     if (before) setForward(id, before);
   }
 
+  const baseScenarios = computed<Record<string, Scenario>>(() => baseConfig.value?.scenarios ?? {});
+  /** The scenarios as the draft has them: base with the edits. */
+  const effectiveScenarios = computed<Record<string, Scenario>>(() => {
+    const out: Record<string, Scenario> = { ...baseScenarios.value };
+    for (const [id, sc] of Object.entries(scenarios.value)) {
+      if (sc === null) delete out[id];
+      else out[id] = sc;
+    }
+    return out;
+  });
+
+  /** A scenario added, changed or deleted (`null`); a scenario back at its base is no change. */
+  function setScenario(id: string, scenario: Scenario | null) {
+    clearServerErrors(id);
+    const before = baseScenarios.value[id];
+    if ((scenario === null && before === undefined) || (scenario !== null && before !== undefined && jsonEqual(before, scenario))) {
+      const { [id]: _drop, ...rest } = scenarios.value;
+      scenarios.value = rest;
+    } else {
+      scenarios.value = { ...scenarios.value, [id]: scenario === null ? null : cloneJSON(scenario) };
+    }
+  }
+
+  /** Undoes the edit or the deletion of a scenario of the base. */
+  function restoreScenario(id: string) {
+    const before = baseScenarios.value[id];
+    if (before) setScenario(id, before);
+  }
+
   /** Flips the policy of one pair of the matrix (`toggleCell`); a matrix back at its base is no change. */
   function toggleMatrix(from: string, to: string) {
     const next = toggleCell(effectiveMatrix.value, from, to, baseNetworks.value);
@@ -652,6 +692,11 @@ export const useDraftStore = defineStore('draft', () => {
       const name = forwardTitle(f ?? before!);
       for (const c of forwardChanges(before, f, names.device)) out.push({ kind: 'forward', id, name, ...c });
     }
+    for (const [id, sc] of Object.entries(scenarios.value)) {
+      const before = baseScenarios.value[id];
+      const name = scenarioTitle(sc ?? before!);
+      for (const c of scenarioChanges(before, sc, names)) out.push({ kind: 'scenario', id, name, ...c });
+    }
     if (matrix.value) {
       for (const c of matrixChanges(baseMatrix.value, matrix.value, baseNetworks.value, { network: netName, client: clientName })) {
         out.push({ kind: 'matrix', id: c.field, name: 'Access between networks', ...c });
@@ -670,6 +715,7 @@ export const useDraftStore = defineStore('draft', () => {
     const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
     const networkIds = new Set(cs.filter((c) => c.kind === 'network').map((c) => c.id));
     const forwardIds = new Set(cs.filter((c) => c.kind === 'forward').map((c) => c.id));
+    const scenarioIds = new Set(cs.filter((c) => c.kind === 'scenario').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
@@ -678,6 +724,7 @@ export const useDraftStore = defineStore('draft', () => {
       networkIds.size ? `${networkIds.size} ${networkIds.size === 1 ? 'network' : 'networks'}` : '',
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
       forwardIds.size ? `${forwardIds.size} port ${forwardIds.size === 1 ? 'forward' : 'forwards'}` : '',
+      scenarioIds.size ? `${scenarioIds.size} ${scenarioIds.size === 1 ? 'scenario' : 'scenarios'}` : '',
       cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
       cs.some((c) => c.kind === 'routing') ? 'the routing' : '',
     ].filter(Boolean);
@@ -696,13 +743,31 @@ export const useDraftStore = defineStore('draft', () => {
     return out;
   });
 
+  /**
+   * The scenarios of the draft that the gateway would refuse as they are, with their problems (a scenario
+   * without steps, a check whose window names a step that is gone): Preview & apply waits until they are fixed.
+   */
+  const invalidScenarios = computed(() => {
+    const out: Record<string, ScenarioProblem[]> = {};
+    const all = effectiveScenarios.value;
+    for (const [id, sc] of Object.entries(scenarios.value)) {
+      if (!sc) continue;
+      const others = Object.entries(all)
+        .filter(([k]) => k !== id)
+        .map(([, o]) => o.name);
+      const p = scenarioProblems(sc, others);
+      if (p.length) out[id] = p;
+    }
+    return out;
+  });
+
   /** The JSON Merge Patch against the base: whole objects for what changed, null for what went. */
   /**
    * The merge patch the preview sends for one configured fault or custom profile edited into `value`
    * (the whole object when it is new; `{}` when nothing changed), for the editors' `</> API` panel.
    */
-  function objectPatch(kind: 'fault' | 'profile', id: string, value: ConfigFault | Profile): unknown {
-    const before = kind === 'fault' ? baseFaults.value[id] : baseProfiles.value[id];
+  function objectPatch(kind: 'fault' | 'profile' | 'scenario', id: string, value: ConfigFault | Profile | Scenario): unknown {
+    const before = kind === 'fault' ? baseFaults.value[id] : kind === 'scenario' ? baseScenarios.value[id] : baseProfiles.value[id];
     return createMergePatch(before, value) ?? {};
   }
 
@@ -752,6 +817,12 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) wp[id] = p;
     }
     if (Object.keys(wp).length) out.port_forwards = wp;
+    const sp: Record<string, unknown> = {};
+    for (const [id, sc] of Object.entries(scenarios.value)) {
+      const p = createMergePatch(baseScenarios.value[id], sc);
+      if (p !== undefined) sp[id] = p;
+    }
+    if (Object.keys(sp).length) out.scenarios = sp;
     if (routing.value) {
       const p = createMergePatch(baseConfig.value?.routing, routing.value);
       if (p !== undefined) out.routing = p as ConfigurationPatch;
@@ -818,6 +889,7 @@ export const useDraftStore = defineStore('draft', () => {
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
     compare('network', networks.value, networkSettings(old), networkSettings(theirs), named);
     compare('forward', forwards.value, old?.port_forwards ?? {}, theirs.port_forwards ?? {}, forwardTitle);
+    compare('scenario', scenarios.value, old?.scenarios ?? {}, theirs.scenarios ?? {}, named);
     if (routing.value) {
       const count = out.length;
       compare('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: theirs.routing ?? {} }, () => 'routing');
@@ -905,6 +977,7 @@ export const useDraftStore = defineStore('draft', () => {
     devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
     networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
     forwards.value = reapply('forward', forwards.value, old?.port_forwards ?? {}, rev.configuration.port_forwards ?? {});
+    scenarios.value = reapply('scenario', scenarios.value, old?.scenarios ?? {}, rev.configuration.scenarios ?? {});
     if (routing.value) {
       const r = reapply('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: rev.configuration.routing ?? {} }).routing;
       routing.value = r && !jsonEqual(r, rev.configuration.routing ?? {}) ? r : undefined;
@@ -957,6 +1030,7 @@ export const useDraftStore = defineStore('draft', () => {
     networks.value = {};
     routing.value = undefined;
     forwards.value = {};
+    scenarios.value = {};
     matrix.value = undefined;
     portsText.value = {};
     serverErrors.value = {};
@@ -1007,6 +1081,12 @@ export const useDraftStore = defineStore('draft', () => {
         (out[f[1]!] ??= {})[f[2] ?? 'forward'] = e.message ?? 'not valid';
         continue;
       }
+      // a scenario keeps the pointer below it (its editors map it to steps and checks; `scenario` for the scenario as a whole)
+      const sc = /^\/scenarios\/([^/]+)(?:\/(.+))?$/.exec(e.path ?? '');
+      if (sc) {
+        (out[sc[1]!] ??= {})[sc[2] ?? 'scenario'] = e.message ?? 'not valid';
+        continue;
+      }
       const r = /^\/routing(?:\/protocols\/([^/]+))?(?:\/(.+))?$/.exec(e.path ?? '');
       if (r) {
         (out[r[1] ?? 'routing'] ??= {})[r[2] ?? (r[1] ? 'protocol' : 'routing')] = e.message ?? 'not valid';
@@ -1042,6 +1122,7 @@ export const useDraftStore = defineStore('draft', () => {
     networks,
     routing,
     forwards,
+    scenarios,
     matrix,
     portsText,
     dirty,
@@ -1055,10 +1136,13 @@ export const useDraftStore = defineStore('draft', () => {
     effectiveRouting,
     effectiveForwards,
     baseForwards,
+    effectiveScenarios,
+    baseScenarios,
     baseNetwork,
     baseRouting,
     baseClient,
     invalid,
+    invalidScenarios,
     track,
     notePending,
     editOrigin,
@@ -1080,6 +1164,8 @@ export const useDraftStore = defineStore('draft', () => {
     restoreProtocol,
     setForward,
     restoreForward,
+    setScenario,
+    restoreScenario,
     toggleMatrix,
     clientName,
     setPortsText,

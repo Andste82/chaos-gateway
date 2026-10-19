@@ -8,8 +8,10 @@ import type {
   AccessRuleView,
   Actor,
   ApplyResult,
+  Artifact,
   AuditEntry,
   BlockingReference,
+  Capabilities,
   Configuration,
   DhcpLease,
   DomainChange,
@@ -37,6 +39,12 @@ import type {
   RouteEntry,
   Routing,
   RoutingStatus,
+  Run,
+  RunReport,
+  RunRequest,
+  RunStep,
+  Scenario,
+  ScenarioView,
   Session,
   SetupStatus,
   SystemInfo,
@@ -234,6 +242,81 @@ export function withForwards(m: MockGateway): MockGateway {
   return m;
 }
 
+export const SCN_MQTT = '5c000000-0000-4000-8000-000000000001';
+export const SCN_BOOT = '5c000000-0000-4000-8000-000000000002';
+export const ESP32 = 'a1b2c3d4-0000-4000-8000-000000000042';
+/** The built-in profile lte of the mock (its UUID is what a stored scenario refers to). */
+export const LTE_ID = 'b0000000-0000-5000-8000-0000000000e1';
+
+/** The scenario of plan §2.10: the broker is slowed, made lossy and cut, then everything is restored. */
+export function mqttOutage(): Scenario {
+  return {
+    name: 'mqtt-outage',
+    description: 'The broker gets slow, lossy and then unreachable; the device must reconnect.',
+    target: { device: ESP32 },
+    capture: true,
+    steps: [
+      { id: 'normal', at: '0s', profile: LTE_ID },
+      { id: 'slow', at: '10s', fault: { latency: '200ms', jitter: '50ms' } },
+      { id: 'lossy', at: '20s', fault: { latency: '200ms', jitter: '50ms', loss: '10%' } },
+      { id: 'cut', at: '30s', rule: { action: 'drop', protocol: 'tcp', ports: [8883], cut_existing: true } },
+      { id: 'restore', at: '45s', restore: true },
+    ],
+    checks: [
+      { reconnected: { protocol: 'tcp', ports: [8883] }, window: { from: 'restore', within: '30s' } },
+      { dns_query_seen: { name: 'broker.example.com' }, window: { from: 'restore', within: '30s' } },
+    ],
+  };
+}
+
+/**
+ * Two scenarios of the sample lab (M19): mqtt-outage (steps, two checks, capture) and boot-loop (two steps on
+ * the IoT network, no check).
+ */
+export function withScenarios(m: MockGateway): MockGateway {
+  m.config = {
+    ...m.config,
+    scenarios: {
+      [SCN_MQTT]: mqttOutage(),
+      [SCN_BOOT]: { name: 'boot-loop', target: { network: IOT }, steps: [{ id: 'offline', at: '0s', profile: LTE_ID }, { id: 'back', at: '20s', restore: true }] },
+    },
+  };
+  return m;
+}
+
+const stepKind = (o: object): string | undefined => Object.keys(o).find((k) => !['id', 'at', 'target', 'window', 'name'].includes(k));
+
+/** A run of a scenario as the gateway reports it: every step and check pending until a test moves it on. */
+export function runOf(scenarioId: string, over: Partial<Omit<Run, 'scenario'>> & { id: string; scenario?: Scenario }): Run {
+  const sc = over.scenario ?? mqttOutage();
+  const started = new Date(Date.now() - 1500).toISOString();
+  const { scenario: _drop, ...rest } = over;
+  const status = over.status ?? 'running';
+  return {
+    scenario: { id: scenarioId, name: sc.name, inline: false },
+    snapshot: sc,
+    revision: 42,
+    target: sc.target,
+    owner: { type: 'user', id: 'admin', name: 'admin' },
+    status,
+    created_at: started,
+    ...(status === 'queued' ? {} : { started_at: started }),
+    steps: sc.steps.map((st) => ({ id: st.id, status: 'pending' as const, scheduled_offset: st.at, type: stepKind(st) as RunStep['type'] })),
+    checks: (sc.checks ?? []).map((c, index) => ({ index, name: `${stepKind(c)} ${index + 1}`, type: stepKind(c) as never, status: 'pending' as const })),
+    ...rest,
+  };
+}
+
+/** The artifacts a finished run has (report.json, report.xml, events) and, with `capture`, its capture. */
+export function artifactsOf(runId: string, capture?: { id: string; size: number }): Artifact[] {
+  return [
+    ...(capture ? [{ kind: 'capture' as const, url: `/api/v1/captures/${capture.id}/download`, capture: capture.id, size_bytes: capture.size }] : []),
+    { kind: 'report_json', url: `/api/v1/runs/${runId}/report.json` },
+    { kind: 'report_xml', url: `/api/v1/runs/${runId}/report.xml` },
+    { kind: 'events', url: `/api/v1/runs/${runId}/events` },
+  ];
+}
+
 export const HUB = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';
 export const ADMIN_HUB = '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
 export const LINK = 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f';
@@ -425,6 +508,22 @@ export class MockGateway {
   overlays: Overlay[] = [];
   faults: FaultView[] = [];
   audit: AuditEntry[] = [];
+  /** The runs, oldest first (GET /runs lists them newest first, without their timelines). */
+  runs: Run[] = [];
+  /** The final reports by run (GET /runs/{id}/report.json). */
+  reports: Record<string, Partial<RunReport>> = {};
+  /** The next POST that starts a run is refused with 422 and these errors. */
+  rejectRun?: ValidationError[];
+  /** What the gateway can do (GET /capabilities). */
+  capabilities: Capabilities = {
+    version: 'test',
+    features: ['runs', 'checks', 'captures'],
+    overlay_kinds: ['fault', 'profile', 'rule', 'wireguard'],
+    fault_families: ['impairment', 'mtu', 'tunnel'],
+    step_types: ['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
+    check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen'],
+  };
+  private nextRun = 1;
   uplink: UplinkView = {
     config: { interface: { name: 'eth0' } },
     status: { interface: 'eth0', address: '192.168.1.57/24', gateway: '192.168.1.1', link_up: true, rx_bytes: 1_000_000, tx_bytes: 200_000 },
@@ -736,6 +835,75 @@ export class MockGateway {
       const f = this.forwardList().find((x) => x.id === fwd[1] || x.config.name === decodeURIComponent(fwd[1]!));
       return f ? json(200, f) : problem(404, 'not_found', 'no such port forward');
     }
+    if (path === '/capabilities') return json(200, this.capabilities);
+    if (path === '/scenarios' && method === 'GET') return json(200, this.page(this.scenarioList(), url));
+    const scn = /^\/scenarios\/([^/]+)$/.exec(path);
+    if (scn) {
+      const v = this.scenarioList().find((x) => x.id === scn[1] || x.config.name === decodeURIComponent(scn[1]!));
+      return v ? json(200, v) : problem(404, 'not_found', 'no such scenario');
+    }
+    const startRun = /^\/scenarios\/([^/]+)\/runs$/.exec(path);
+    if ((startRun || path === '/runs') && method === 'POST') {
+      if (this.rejectRun) {
+        const errors = this.rejectRun;
+        this.rejectRun = undefined;
+        return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: 'the run is not valid', errors });
+      }
+      const req = (startRun ? { scenario: decodeURIComponent(startRun[1]!), ...(body as object) } : body) as RunRequest;
+      let sc: Scenario | undefined;
+      let id: string | undefined;
+      if (req.inline) sc = req.inline;
+      else {
+        const v = this.scenarioList().find((x) => x.id === req.scenario || x.config.name === req.scenario);
+        if (!v) return problem(404, 'not_found', `no such scenario ${req.scenario}`);
+        sc = v.config;
+        id = v.id;
+      }
+      const busy = this.runs.find((r) => r.status === 'running' || r.status === 'queued');
+      if (busy && url.searchParams.get('queue') === 'false') return problem(409, 'target_busy', `the target is busy: run ${busy.id} holds it`);
+      const rid = `0a1b2c3d-0000-4000-8000-${String(this.nextRun++).padStart(12, '0')}`;
+      const run = runOf(id ?? '', { id: rid, scenario: sc, status: busy ? 'queued' : 'running' });
+      if (!id) run.scenario = { name: sc.name, inline: true };
+      this.runs.push(run);
+      return route.fulfill({ status: 201, headers: { ...headers, Location: `/api/v1/runs/${rid}` }, contentType: 'application/json', body: JSON.stringify(run) });
+    }
+    if (path === '/runs' && method === 'GET') {
+      const status = url.searchParams.get('status');
+      const scenario = url.searchParams.get('scenario');
+      const list = [...this.runs]
+        .reverse()
+        .filter((r) => (!status || r.status === status) && (!scenario || r.scenario.id === scenario || r.scenario.name === scenario))
+        .map(({ steps: _s, checks: _c, snapshot: _n, ...r }) => r);
+      return json(200, this.page(list, url));
+    }
+    const runOne = /^\/runs\/([^/]+)(?:\/(abort|renew|report\.json|report\.xml|events))?$/.exec(path);
+    if (runOne) {
+      const run = this.runs.find((r) => r.id === runOne[1]);
+      if (!run) return problem(404, 'not_found', `no such run ${runOne[1]}`);
+      switch (runOne[2]) {
+        case 'abort':
+          if (run.status === 'queued' || run.status === 'running') {
+            run.status = 'aborted';
+            run.reason = 'aborted by admin';
+            run.ended_at = new Date().toISOString();
+            run.artifacts = artifactsOf(run.id);
+          }
+          return json(200, run);
+        case 'report.json': {
+          if (run.status === 'queued' || run.status === 'running') return problem(404, 'not_found', 'the report is there once the run has ended');
+          const rep = this.reports[run.id];
+          if (rep === undefined) return problem(404, 'not_found', 'no report');
+          return json(200, { ...run, ...rep });
+        }
+        case 'report.xml':
+        case 'events':
+          return route.fulfill({ status: 200, contentType: 'text/plain', body: '' });
+        case undefined:
+          return json(200, run);
+        default:
+          return problem(404, 'not_found', 'the mock has no such run call');
+      }
+    }
     if (path === '/routing') return json(200, this.config.routing ?? this.routing);
     if (path === '/system/interfaces') return json(200, this.page(this.hostInterfaces, url));
     if (path === '/routing/status') return json(200, this.routingStatus);
@@ -991,6 +1159,12 @@ export class MockGateway {
       const op = v === null ? 'removed' : before ? 'changed' : 'added';
       domain.push({ op, kind: 'profile', id: key, name, path: `/profiles/${key}`, summary: `profile ${name} ${op}` });
     }
+    for (const [key, v] of Object.entries((patch as { scenarios?: Record<string, { name?: string } | null> }).scenarios ?? {})) {
+      const before = this.config.scenarios?.[key];
+      const name = String(v?.name ?? before?.name ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'scenario', id: key, name, path: `/scenarios/${key}`, summary: `scenario ${name} ${op}` });
+    }
     for (const [key, v] of Object.entries((patch as { devices?: Record<string, { name?: string } | null> }).devices ?? {})) {
       const name = String(v?.name ?? key);
       domain.push({ op: v === null ? 'removed' : 'added', kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${v === null ? 'removed' : 'added'}` });
@@ -1045,6 +1219,11 @@ export class MockGateway {
       ...(port_forwards.length ? { port_forwards } : {}),
       ...(warnings.length ? { warnings } : {}),
     };
+  }
+
+  /** The scenarios of the active configuration. */
+  scenarioList(): ScenarioView[] {
+    return Object.entries(this.config.scenarios ?? {}).map(([id, config]) => ({ id, config }));
   }
 
   /** The forward's target in words, as the gateway says it: "device ESP32-42", "10.20.0.50". */

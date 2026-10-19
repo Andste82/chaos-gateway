@@ -2,10 +2,12 @@ package ctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -89,10 +91,13 @@ a lease alone does not count) and, with --connected, has an established connecti
 and returns 0. A device the gateway does not know yet is waited for too: it may be discovered while waiting.
 The connection must exist when it is looked at (the wait polls the gateway's connection table).
 
-Returns 1 when the time runs out and 2 when the gateway cannot be asked.`,
+Returns 1 when the time runs out, and 2 when the gateway cannot be asked (ten polls in a row fail, or the time
+runs out while the latest poll failed or none was answered).`,
 		Example: `  chaosctl wait device esp32-42 --online --connected tcp/8883 --timeout 90s`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sigs, stop := a.signals()
+			defer stop()
 			if !online && connected == "" {
 				return failf(ExitError, "say what to wait for: --online and/or --connected")
 			}
@@ -108,7 +113,7 @@ Returns 1 when the time runs out and 2 when the gateway cannot be asked.`,
 			if err != nil {
 				return err
 			}
-			return a.waitDevice(cmd.Context(), cl, args[0], online, want, timeout)
+			return a.waitDevice(cmd.Context(), cl, args[0], online, want, timeout, sigs)
 		},
 	}
 	cmd.Flags().BoolVar(&online, "online", false, "the device is online")
@@ -117,75 +122,112 @@ Returns 1 when the time runs out and 2 when the gateway cannot be asked.`,
 	return cmd
 }
 
-func (a *app) waitDevice(ctx context.Context, cl *client, name string, online bool, conn *connSpec, timeout time.Duration) error {
-	sigs, stop := a.signals()
-	defer stop()
+// slowPoll is how long a poll that the end of the wait cut off must have been going on to count as unanswered.
+const slowPoll = time.Second
+
+func (a *app) waitDevice(ctx context.Context, cl *client, name string, online bool, conn *connSpec, timeout time.Duration, sigs <-chan os.Signal) error {
 	started := a.clk().Monotonic()
 	deadline := a.clk().NewTimer(timeout)
 	defer deadline.Stop()
+	wctx, endWatch := watch(ctx, sigs, deadline.C(), fmt.Errorf("timed out after %v", timeout))
+	defer endWatch(context.Canceled)
 	tick := a.clk().NewTicker(a.env.Poll)
 	defer tick.Stop()
 	var onlineSince, connectedSince bool
 	var missing string
+	// lastErr is why the latest poll failed (nil: it was answered); asked: some poll was answered
+	var lastErr error
+	asked := false
 	failures := 0
 	for {
-		dev, err := a.lookDevice(ctx, cl, name)
-		var flows []model.Flow
-		if err == nil && dev != nil && conn != nil {
-			flows, err = listAll[model.Flow](ctx, cl, "/flows", url.Values{"device": {dev.Id.String()}})
-		}
-		if err != nil {
-			if ae := asAPIError(err); ae != nil && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden) {
-				return apiFail(err)
+		// no poll after the wait has ended: it would be cut off at once and say nothing about the gateway
+		if wctx.Err() == nil {
+			began := a.clk().Monotonic()
+			pctx, pcancel := context.WithTimeout(wctx, a.pollTimeout())
+			dev, err := a.lookDevice(pctx, cl, name)
+			var flows []model.Flow
+			if err == nil && dev != nil && conn != nil {
+				flows, err = listAll[model.Flow](pctx, cl, "/flows", url.Values{"device": {dev.Id.String()}})
 			}
-			failures++
-			fmt.Fprintf(a.env.Stderr, "the gateway does not answer (%d of %d): %v\n", failures, pollFailures, err)
-			if failures >= pollFailures {
-				return failf(ExitError, "lost the gateway while waiting for device %s: %v", name, err)
-			}
-		} else {
-			failures = 0
-			missing = ""
-			switch {
-			case dev == nil:
-				missing = "the gateway does not know the device"
-			case online && !dev.Observed.Online:
-				missing = "the device is not online"
-			}
-			if dev != nil && online && dev.Observed.Online && !onlineSince {
-				onlineSince = true
-				fmt.Fprintf(a.env.Stderr, "[%6.1fs] device %s is online\n", a.since(started), name)
-			}
-			if missing == "" && conn != nil {
-				hit := false
-				for _, f := range flows {
-					if conn.matches(f) {
-						hit = true
-						break
+			pcancel()
+			if err != nil {
+				if ae := asAPIError(err); ae != nil && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden) {
+					return apiFail(err)
+				}
+				if wctx.Err() != nil {
+					// what ended the wait cut the poll off: it says something about the gateway only if the poll had
+					// had time to be answered in (a healthy gateway answers in milliseconds; one that happened to be in
+					// flight when the time ran out is no evidence)
+					if a.clk().Monotonic()-began >= slowPoll {
+						lastErr = errors.New("the poll was not answered when the time ran out")
+					}
+				} else {
+					lastErr = err
+					failures++
+					fmt.Fprintf(a.env.Stderr, "the gateway does not answer (%d of %d): %v\n", failures, pollFailures, err)
+					if failures >= pollFailures {
+						return failf(ExitError, "lost the gateway while waiting for device %s: %v", name, err)
 					}
 				}
-				if hit && !connectedSince {
-					connectedSince = true
-					fmt.Fprintf(a.env.Stderr, "[%6.1fs] device %s has a connection %s\n", a.since(started), name, conn)
+			} else {
+				asked, lastErr = true, nil
+				failures = 0
+				missing = ""
+				switch {
+				case dev == nil:
+					missing = "the gateway does not know the device"
+				case online && !dev.Observed.Online:
+					missing = "the device is not online"
 				}
-				if !hit {
-					missing = fmt.Sprintf("the device has no established connection %s", conn)
+				if dev != nil && online && dev.Observed.Online && !onlineSince {
+					onlineSince = true
+					fmt.Fprintf(a.env.Stderr, "[%6.1fs] device %s is online\n", a.since(started), name)
 				}
-			}
-			if missing == "" {
-				fmt.Fprintf(a.env.Stdout, "device %s is ready after %.1fs\n", name, a.since(started))
-				return nil
+				if missing == "" && conn != nil {
+					hit := false
+					for _, f := range flows {
+						if conn.matches(f) {
+							hit = true
+							break
+						}
+					}
+					if hit && !connectedSince {
+						connectedSince = true
+						fmt.Fprintf(a.env.Stderr, "[%6.1fs] device %s has a connection %s\n", a.since(started), name, conn)
+					}
+					if !hit {
+						missing = fmt.Sprintf("the device has no established connection %s", conn)
+					}
+				}
+				if missing == "" {
+					fmt.Fprintf(a.env.Stdout, "device %s is ready after %.1fs\n", name, a.since(started))
+					return nil
+				}
 			}
 		}
 		select {
 		case <-tick.C():
-		case <-deadline.C():
-			return failf(ExitFailed, "timed out after %v: %s", timeout, missing)
-		case sig := <-sigs:
-			return failf(ExitError, "%v received while waiting for device %s", sig, name)
-		case <-ctx.Done():
-			return failf(ExitError, "interrupted while waiting for device %s", name)
+		case <-wctx.Done():
 		}
+		if wctx.Err() == nil {
+			continue
+		}
+		var se *signalError
+		var de *deadlineError
+		switch cause := context.Cause(wctx); {
+		case errors.As(cause, &se):
+			return failf(ExitError, "%v received while waiting for device %s", se.sig, name)
+		case errors.As(cause, &de):
+			// a time that ran out while the gateway could not be asked is no verdict on the device
+			if lastErr != nil || !asked {
+				if lastErr == nil {
+					lastErr = errors.New("no poll was answered")
+				}
+				return failf(ExitError, "%v, and the gateway could not be asked: %v", cause, lastErr)
+			}
+			return failf(ExitFailed, "%v: %s", cause, missing)
+		}
+		return failf(ExitError, "interrupted while waiting for device %s", name)
 	}
 }
 

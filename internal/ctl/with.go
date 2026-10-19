@@ -33,11 +33,11 @@ func (a *app) withCmd() *cobra.Command {
 		Short: "Run a command under a profile or fault and always clean up",
 		Long: `Applies a profile and/or a fault (and any overlay request files), runs the command, and removes what it applied
 when the command ends, whatever way it ends: it succeeds, it fails, it is not found, or chaosctl is interrupted.
-The command's standard input, output and error are chaosctl's; a terminate signal is passed to it (an interrupt is the
+The command's standard input, output and error are chaosctl's; a terminate or hang-up signal is passed to it (an interrupt is the
 terminal's Ctrl-C, which reaches the command itself), and a second signal kills it.
 
-The overlays have a lease (30s unless --lease says otherwise; --lease 0: none) that chaosctl renews while the
-command runs, so the gateway takes them away on its own if chaosctl is killed. They get the TTL from --ttl too,
+The overlays have a lease (30s unless --lease says otherwise; --lease 0: none; an --overlay file keeps the lease it
+names unless --lease is given) that chaosctl renews while the command runs, so the gateway takes them away on its own if chaosctl is killed. They get the TTL from --ttl too,
 if given. The environment of the command has CHAOSCTL_OVERLAYS, the ids of the overlays, comma separated.
 
 The exit code is the command's, or 128 plus the signal that ended it. chaosctl's own failure (a bad argument, a
@@ -95,26 +95,29 @@ command that cannot be run 126, and a command that is not found 127.`,
 			if len(reqs) == 0 {
 				return failf(ExitInternal, "apply something: --profile, a fault (--latency, --loss, --blackout, …) or --overlay <file>")
 			}
-			if lf.lease == "" {
-				lf.lease = defaultWithLease
-			}
-			var lease time.Duration
-			for _, r := range reqs {
+			// The default lease is for the requests that name none: a lease in an --overlay file is its author's
+			// choice, an explicit --lease replaces it (0 takes it away) as it does for 'overlay create'.
+			leases := make([]time.Duration, len(reqs))
+			for i, r := range reqs {
+				if _, has := r["lease"]; !has && lf.lease == "" {
+					r["lease"] = defaultWithLease
+				}
 				if err := lf.apply(r); err != nil {
 					return asInternal(err)
 				}
-			}
-			if l, ok := reqs[0]["lease"].(string); ok {
-				lease, _ = time.ParseDuration(l)
-				if lease < time.Second {
-					return failf(ExitInternal, "--lease must be at least 1s (0: none)")
+				if l, ok := r["lease"].(string); ok {
+					d, err := time.ParseDuration(l)
+					if err != nil || d < time.Second {
+						return failf(ExitInternal, "the lease %q of an overlay must be a duration of at least 1s (--lease 0: none)", l)
+					}
+					leases[i] = d
 				}
 			}
 			cl, err := a.client()
 			if err != nil {
 				return asInternal(err)
 			}
-			return a.runWith(cmd.Context(), cl, reqs, lease, argv)
+			return a.runWith(cmd.Context(), cl, reqs, leases, argv)
 		},
 	}
 	// every failure of chaosctl itself, usage included, is 125 here: 2 may be the command's own code
@@ -124,13 +127,13 @@ command that cannot be run 126, and a command that is not found 127.`,
 	ff.add(f)
 	f.StringVar(&profile, "profile", "", "activate this profile")
 	f.StringArrayVar(&files, "overlay", nil, "also create the overlay of this request file (repeatable; --device and the like replace its target)")
-	lf.add(f, "", "the gateway removes the overlays when they are not renewed within this time; chaosctl renews them (default "+defaultWithLease+", 0: no lease)")
+	lf.add(f, "", "the gateway removes the overlays when they are not renewed within this time; chaosctl renews them (default "+defaultWithLease+" for the requests without a lease, 0: no lease)")
 	f.SetInterspersed(false)
 	return cmd
 }
 
 // runWith creates the overlays, runs the command and removes the overlays again.
-func (a *app) runWith(ctx context.Context, cl *client, reqs []map[string]any, lease time.Duration, argv []string) error {
+func (a *app) runWith(ctx context.Context, cl *client, reqs []map[string]any, leases []time.Duration, argv []string) error {
 	// listen from the start: a signal while the overlays are created must not kill chaosctl before it cleans up
 	sigs, stopSignals := a.signals()
 	defer stopSignals()
@@ -175,12 +178,12 @@ func (a *app) runWith(ctx context.Context, cl *client, reqs []map[string]any, le
 
 	rctx, stopRenewing := context.WithCancel(ctx)
 	var renewing sync.WaitGroup
-	if lease > 0 {
-		for _, id := range ids {
+	for i, id := range ids {
+		if leases[i] > 0 {
 			renewing.Add(1)
 			go func() {
 				defer renewing.Done()
-				a.renewOverlay(rctx, cl, id, lease)
+				a.renewOverlay(rctx, cl, id, leases[i])
 			}()
 		}
 	}
@@ -230,7 +233,9 @@ func (a *app) renewOverlay(ctx context.Context, cl *client, id string, lease tim
 			return
 		case <-t.C():
 		}
-		_, err := cl.call(ctx, http.MethodPost, "/overlays/"+url.PathEscape(id)+"/renew", nil, nil, nil)
+		pctx, cancel := context.WithTimeout(ctx, a.pollTimeout())
+		_, err := cl.call(pctx, http.MethodPost, "/overlays/"+url.PathEscape(id)+"/renew", nil, nil, nil)
+		cancel()
 		switch {
 		case err == nil:
 			failing = false

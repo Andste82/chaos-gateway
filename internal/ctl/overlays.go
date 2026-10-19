@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -74,7 +76,8 @@ func (l *lifetimeFlags) add(fs *pflag.FlagSet, leaseDefault, leaseHelp string) {
 	fs.StringVar(&l.lease, "lease", leaseDefault, leaseHelp)
 }
 
-// apply puts the lifetime into an overlay request; a lease of 0 means none.
+// apply puts the lifetime flags that were given into an overlay request, replacing the ones the request has; a lease
+// of 0 means none and removes the request's own.
 func (l *lifetimeFlags) apply(req map[string]any) error {
 	if l.ttl != "" {
 		if _, err := time.ParseDuration(l.ttl); err != nil {
@@ -87,8 +90,13 @@ func (l *lifetimeFlags) apply(req map[string]any) error {
 		if err != nil {
 			return failf(ExitError, "--lease %q is not a duration like 30s", l.lease)
 		}
+		if d < 0 {
+			return failf(ExitError, "--lease %q must not be negative", l.lease)
+		}
 		if d > 0 {
 			req["lease"] = l.lease
+		} else {
+			delete(req, "lease")
 		}
 	}
 	return nil
@@ -185,7 +193,7 @@ func (f *faultFlags) add(fs *pflag.FlagSet) {
 	fs.StringVar(&f.flap, "flapping", "", "alternate up and down, 'up/down' (20s/10s)")
 	fs.StringVar(&f.protocol, "protocol", "", "only this protocol: tcp, udp, icmp")
 	fs.IntSliceVar(&f.ports, "port", nil, "only these destination ports (repeat or comma separated)")
-	fs.StringVar(&f.to, "to", "", "only traffic to this destination: an address or prefix, 'uplink', or a network")
+	fs.StringVar(&f.to, "to", "", "only traffic to this destination: an address or prefix, a hostname (mqtt.example.com, *.example.com), 'uplink', or a network (network:<name> / hostname:<name> when the form is ambiguous)")
 	fs.StringVar(&f.body, "body", "", "the fault as a JSON or YAML document, or @file (the flags above are added to it)")
 }
 
@@ -237,19 +245,36 @@ func (f *faultFlags) faultBody(read func(string) (any, error)) (map[string]any, 
 	return body, nil
 }
 
-// destinationOf reads a destination: `uplink`, an address or prefix, else the name of a network.
+// destinationOf reads a destination: `uplink`, an address or prefix (a bare address is a host route, /32 or /128 by
+// family), a hostname (a valid name with a dot, or `*.suffix`), else the name of a network. `network:<name>` and
+// `hostname:<name>` say which one is meant where the form is ambiguous (a network may be called lab.net).
 func destinationOf(s string) map[string]any {
 	switch {
 	case s == "uplink":
 		return map[string]any{"uplink": true}
-	case strings.ContainsAny(s, "./:") && !strings.ContainsAny(s, " "):
-		if strings.Contains(s, "/") {
-			return map[string]any{"cidr": s}
-		}
-		return map[string]any{"cidr": s + "/32"}
+	case strings.HasPrefix(s, "network:"):
+		return map[string]any{"network": strings.TrimPrefix(s, "network:")}
+	case strings.HasPrefix(s, "hostname:"):
+		return map[string]any{"hostname": strings.TrimPrefix(s, "hostname:")}
+	}
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return map[string]any{"cidr": p.String()}
+	}
+	if ip, err := netip.ParseAddr(s); err == nil {
+		return map[string]any{"cidr": netip.PrefixFrom(ip, ip.BitLen()).String()}
+	}
+	switch {
+	case strings.Contains(s, "/") && !strings.ContainsAny(s, " "), strings.Contains(s, ".") && strings.Trim(s, "0123456789.") == "":
+		// an address or prefix that does not parse (10.0.0, 10.0.0.0/33): the gateway says what is wrong with it
+		return map[string]any{"cidr": s}
+	case hostnamePattern.MatchString(s) && (strings.Contains(s, ".") || strings.HasPrefix(s, "*.")):
+		return map[string]any{"hostname": s}
 	}
 	return map[string]any{"network": s}
 }
+
+// hostnamePattern is the Hostname of the API: an exact name or `*.suffix`.
+var hostnamePattern = regexp.MustCompile(`^(\*\.)?([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$`)
 
 func (a *app) faultCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "fault", Short: "Faults of the gateway"}

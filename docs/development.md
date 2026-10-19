@@ -5158,7 +5158,7 @@ what they leave out.
 - **Commands.** `profile apply <profile>` and `fault set` (impairment flags, or `--body` for a whole fault) create an
   overlay for `--device`, `--group`, `--network` or `--global` with `--ttl` and `--lease`; `overlay create -f`, `overlay
   list`, `overlay delete`, `overlay renew`, `reset [--all]`; `run [scenario] [-f file] [--set k=v] [--wait] …`, `abort`, `wait run`, `wait
-  device`; `with`; `wg export`; `version`. Every command's `--help` has the details and examples.
+  device`; `with`; `explain`; `wg export`; `version`. Every command's `--help` has the details and examples.
 - **`run`.** The scenario is a stored one (by name or UUID) or a YAML/JSON file (`-f`, `-` for standard input), sent as
   `inline` with the `parameters` of `--set`; the server validates it (the CLI interprets nothing of it). Without `--wait` the
   command prints the run id and returns 0. With `--wait` it polls the run (every second), reports the steps, checks and
@@ -5169,25 +5169,42 @@ what they leave out.
   error; nothing is buffered in memory, a capture can be larger than the runner's memory), the name taken from the headers; the artifacts
   directory is made with mode 0700 and its files have 0600 (captures hold raw traffic, a key log is a secret), the JUnit file 0644 (P4-AUDIT-30).
   `--no-queue` is `?queue=false` (`409 target_busy`).
+- **`--to` of the fault flags** is `uplink`, an address (a bare one is a /32, an IPv6 one a /128) or prefix, a hostname (`mqtt.example.com`,
+  `*.example.com`; the gateway refuses it as `unsupported_feature` until M20), or the name of a network; `network:<name>` and
+  `hostname:<name>` say which is meant where the form is ambiguous (a network may be called `lab.net`) (P4-AUDIT-35).
 - **The lease is renewed automatically.** A run that is waited for gets a lease (30 s unless `--lease` says otherwise, `0`
   for none) and the CLI renews it at a third of its length until the run has ended, so a CI job that is killed leaves no
   fault behind: the gateway aborts the run when the renewals stop (plan §2.10). `--lease` without `--wait` is refused, as
   nobody would renew it.
-- **Interrupts and timeouts.** A SIGINT or SIGTERM during `run --wait`, and `--timeout`, abort the run (and wait for the
-  gateway to say that its overlays are gone) and return 2; if the run has ended in the meantime and the abort is refused, the
-  command reads the run once more and returns the code of its real result. `wait run` does not own the run: a signal or its `--timeout` only
-  stops waiting (2). Ten failed polls in a row (a gateway that does not answer; a 404/401/403 ends at once) end the wait
-  with 2.
+- **Interrupts and timeouts.** A SIGINT, SIGTERM or SIGHUP (a lost ssh session, a CI agent that gives up) during `run --wait`,
+  and `--timeout`, abort the run (and wait for the gateway to say that its overlays are gone) and return 2; if the run has
+  ended in the meantime and the abort is refused, the command reads the run once more and returns the code of its real result.
+  `wait run` does not own the run: a signal or its `--timeout` only stops waiting (2). The signals are subscribed to once,
+  before the first request of `run`, `wait` and `with`, so none of them kills `chaosctl` (143) between the start and the wait:
+  a signal while `POST /runs` is in flight lets the request finish (at most 5 s after the signal) and aborts the run it made;
+  one before the run exists is 2. Every request of a wait (a poll, a renewal) runs under a context that the signal, the
+  `--timeout` and the cancellation of the command end, and has 10 s of its own (a poll that hangs is a failed poll), so a
+  gateway that accepts the connection and does not answer neither stretches `--timeout` nor delays the abort; the create and
+  export calls keep the 2 minutes of `--request-timeout` (P4-AUDIT-33, -34). Ten failed polls in a row (a gateway that does not
+  answer; a 404/401/403 ends at once) end the wait with 2.
 - **`wait device <name> [--online] [--connected tcp/8883]`.** Polls `GET /devices/{name}` and, for `--connected`,
   `GET /flows?device=`: the device is online (the observed state of the API: a confirmed neighbor entry, a connection or a
   WireGuard handshake) and has a connection in the state `ESTABLISHED` to the port (`udp/…`: an answered flow), optionally to
   one address (`tcp/10.0.0.5:8883`). A device the gateway does not know yet is waited for. 0 when it holds, 1 at
-  `--timeout` (default 60 s) naming what is missing, 2 when the gateway cannot be asked.
+  `--timeout` (default 60 s) naming what is missing, 2 when the gateway cannot be asked: ten failed polls in a row, or the
+  time runs out while the latest poll failed (or hung for a poll interval) or none was answered ("timed out after 3s, and the
+  gateway could not be asked: …"), so a script that reads 2 as an infrastructure error does not take a dead gateway for a failing
+  device (P4-AUDIT-32).
+- **`explain (--device <name> | --src <ip>) --dst <ip|hostname> [--protocol tcp] [--port 8883]`** is a thin `GET /explain` (plan §2.4,
+  M8a): the verdict of the access rules, the winning fault of each family with the ones it overrides, and the route, in words;
+  `--json` prints the API's answer. P31-AUDIT-06 and P31-M35a-08 promised it for M18; it was built with the audit
+  (P4-AUDIT-47). It sends no packet and needs the scope `read`.
 - **`with [flags] -- command args`.** Creates the overlays (`--profile`, the fault flags, `--overlay <file>` any number of
   times), runs the command with the streams of chaosctl, and removes the overlays however the command ends. They get a lease
-  (30 s, `--lease 0` for none) that is renewed while the command runs, so the gateway removes them if chaosctl itself is
+  (30 s, `--lease 0` for none; the default applies to the requests that name no lease, so the `lease:` of an `--overlay` file stays
+  and an explicit `--lease` replaces it, each overlay renewed at a third of its own lease; P4-AUDIT-35) that is renewed while the command runs, so the gateway removes them if chaosctl itself is
   killed without a chance to clean up (SIGKILL, a lost machine), and the TTL of `--ttl`. The command's environment has
-  `CHAOSCTL_OVERLAYS`. A SIGTERM goes on to the command as it came; a SIGINT does not (it is the terminal's Ctrl-C, which reaches the
+  `CHAOSCTL_OVERLAYS`. A SIGTERM or SIGHUP goes on to the command as it came; a SIGINT does not (it is the terminal's Ctrl-C, which reaches the
   command in the same process group, and passing it on would interrupt the command twice); a second signal kills it.
   Either way chaosctl waits for the command to end and then cleans up. If the second overlay is
   refused the first is removed again and the command does not run.
@@ -5206,7 +5223,10 @@ what they leave out.
 `clients/examples` (see its README): `pytest/` (the generated Python client; fixtures for the client, the device, and a
 `degraded` helper that applies faults with a TTL and removes them in the teardown), `jest/` (the generated TypeScript client;
 `setup.ts` points its relative `fetch('/overlays')` calls at the gateway and adds the token), `scenarios/link-outage.yaml`.
-Both suites also drive `chaosctl run … --wait` and `chaosctl with …` as a CI job would. The tests of a suite share one device, so Jest runs its files one after the other (`maxWorkers: 1`): in parallel, a
+Both suites also drive `chaosctl run … --wait` and `chaosctl with …` as a CI job would. `chaosctl` is a Go program and ignores `NODE_EXTRA_CA_CERTS`, so
+against a self-signed gateway it needs its own setting (`CHAOSGW_CA_CERT`, `CHAOSGW_FINGERPRINT` or `CHAOSGW_INSECURE`, the variables pytest reads too); the Jest
+helper passes `NODE_EXTRA_CA_CERTS` on as `CHAOSGW_CA_CERT` (`helpers.test.ts`), and the README says so (P4-AUDIT-50). The examples test itself uses plain HTTP, so no TLS
+path of the suites runs in CI; the certificate checks of `chaosctl` are covered by `internal/ctl`. The tests of a suite share one device, so Jest runs its files one after the other (`maxWorkers: 1`): in parallel, a
 fault of `degraded.test.ts` on the device made the precondition of the scenario run (no foreign overlay on the target) fail. `make test-examples` generates the
 clients, installs the suites' dependencies (`.venv`, `npm ci` in `clients/examples/jest`) and runs
 `TestTheExampleSuitesPassAgainstTheGateway` (`internal/api/examples_test.go`, build tag `examples`): the test starts a gateway on
@@ -5271,15 +5291,15 @@ environment has not: vetted with `-tags testbed`; not run in the sandbox; run by
 | Plan M18 Tests | Test |
 |---|---|
 | CLI tests against the testbed incl. exit codes | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports` (0), `TestChaosctlRuns/Returns1ForAFailedCheck` (1), `TestChaosctlRuns/Returns2ForARunThatEndsAsError`, `TestChaosctlRuns/AbortsTheRunWhenTheTimeoutRunsOut`, `TestTimeoutRacingTheEndOfTheRunUsesTheFinalStatus`, `TestChaosctlRuns/AbortsItsRunOnASignalAndLeavesAnotherRunAlone` (2), `TestChaosctlRuns/ReportsAScenarioTheGatewayRefuses`, `TestChaosctlOverlays/ShowsWhatTheGatewayRefusesAndExitsWith2`, `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected` (0 and 1), `TestTheExitCodeOfARunIsItsStatus`; on the real kernel (the testbed proper) `TestChaosctlRunPassesForADeviceThatReconnectsOnTheRealKernel` (0), `TestChaosctlRunFailsForADeviceThatDoesNotReconnectOnTheRealKernel` (1), `TestChaosctlAbortsARunOnASignalAndTakesTheFaultOutOnTheRealKernel` (2), `TestChaosctlWaitsForADeviceAndItsConnectionOnTheRealKernel`; not runnable here |
-| cleanup of `chaosctl with` when the command fails | `TestChaosctlWith/WithRunsACommandUnderAFaultAndCleansUp` (exit 3, overlays gone), `TestChaosctlWith/WithCleansUpWhenTheCommandCannotRun` (not found 127, not executable 126, killed 137), `TestChaosctlWith/WithPassesASignalOnAndFailsWith125` (signal, refused setup, the first overlay removed when the second is refused), `TestWithRemovesTheFirstOverlayWhenTheSecondIsRefused`, `TestWithReportsAnOverlayItCannotRemove`, `TestASecondSignalKillsACommandThatIgnoresTheFirst`, `TestAnInterruptIsNotPassedOnToTheCommand`; on the real kernel `TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel` (the delay on the wire while the command runs, a clean path after it); not runnable here |
+| cleanup of `chaosctl with` when the command fails | `TestChaosctlWith/WithRunsACommandUnderAFaultAndCleansUp` (exit 3, overlays gone), `TestChaosctlWith/WithCleansUpWhenTheCommandCannotRun` (not found 127, not executable 126, killed 137), `TestChaosctlWith/WithPassesASignalOnAndFailsWith125` (signal, refused setup, the first overlay removed when the second is refused), `TestWithRemovesTheFirstOverlayWhenTheSecondIsRefused`, `TestWithReportsAnOverlayItCannotRemove`, `TestWithTreatsAnOverlayThatIsGoneAlreadyAsRemoved` (the removal that finds a 404 keeps the command's code), `TestChaosctlWith/WithAnOverlayWhoseTTLRanOutDuringTheCommand`, `TestASecondSignalKillsACommandThatIgnoresTheFirst`, `TestAnInterruptIsNotPassedOnToTheCommand`, `TestWithCleansUpOnAHangUp`, `TestARunIsAbortedWhenAHangUpArrivesWhileItIsBeingCreated`, `TestWithKeepsTheLeaseOfAnOverlayFileAndAnExplicitLeaseReplacesIt`; on the real kernel `TestChaosctlWithDelaysThePathAndCleansUpAfterAFailingCommandOnTheRealKernel` (the delay on the wire while the command runs, a clean path after it); not runnable here |
 | the example test suites run in CI | `TestTheExampleSuitesPassAgainstTheGateway` (`make test-examples`, the `level0` job) |
-| Scope: apply profile, set fault with TTL | `TestChaosctlOverlays/AppliesAProfileAndAFaultWithATTLAndRemovesThem`, `TestChaosctlOverlays/ResetAndTheReplacementOfAFault`, `TestChaosctlOverlays/CreatesAnOverlayFromARequestFile`, `TestTheFlagsOfAFaultBecomeItsBody` |
+| Scope: apply profile, set fault with TTL | `TestChaosctlOverlays/AppliesAProfileAndAFaultWithATTLAndRemovesThem`, `TestChaosctlOverlays/ResetAndTheReplacementOfAFault`, `TestChaosctlOverlays/ExplainsTheTrafficOfADevice`, `TestExplainAsksTheGatewayAboutOneTrafficTuple`, `TestChaosctlOverlays/CreatesAnOverlayFromARequestFile`, `TestTheFlagsOfAFaultBecomeItsBody` |
 | Scope: `run -f <file> --set …`, `--wait`, `--junit`, `--artifacts` | `TestChaosctlRuns/RunsAScenarioFromAFileAndSavesItsReports`, `TestChaosctlRuns/StartsAStoredScenarioAndWaitsForItLater`, `TestChaosctlRuns/QueuesBehindARunAndNoQueueRefuses`, `TestChaosctlSavesTheCapturesOfARunInTheArtifactsDirectory`, `TestAnArtifactIsStreamedToItsFileAndIsPrivate`, `TestSetArgumentsAreKeyValuePairs`, `TestDocumentsAreReadAsYAMLOrJSON` |
 | Scope: automatic lease renewal | `TestChaosctlRuns/RenewsTheLeaseOfTheRunItWaitsFor` (a 1 s lease outlives a 3 s run), `TestChaosctlOverlays/RenewsTheLeaseOfAnOverlayItDoesNotKeepAlive` (`overlay renew`), `TestChaosctlWith/WithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires`, `TestWithRenewsAtAThirdOfTheLease`; on the real kernel `TestAFaultWhoseLeaseIsNotRenewedLeavesTheRealKernelOnItsOwn`; not runnable here |
 | Scope: `wait device <name> --online [--connected tcp/8883] --timeout …` | `TestChaosctlOverlays/WaitsForADeviceToBeOnlineAndConnected`, `TestChaosctlOverlays/WaitsForADeviceThatComesOnline`, `TestAConnectionIsGivenAsProtocolAndPort`, `TestOnlyAnEstablishedConnectionMatches` |
 | Scope: `with --profile … --ttl … -- <command>` | as the second row |
 | Scope: generated TypeScript and Python clients; examples for pytest and Jest | `make check-clients` (they compile and import), `TestTheExampleSuitesPassAgainstTheGateway` (`clients/examples`) |
-| Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestTheTrustFlagsWinOverTheTrustVariablesAndInsecureNeverMixesWithAPin`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer` |
+| Connection, token, certificates | `TestTheAddressOfTheGatewayIsNormalized`, `TestAFingerprintIsReadInTheUsualForms`, `TestTheCertificateOfTheGatewayIsCheckedByFingerprintByCAOrNotAtAll`, `TestTheTrustFlagsWinOverTheTrustVariablesAndInsecureNeverMixesWithAPin`, `TestChaosctlOverlays/ReadsTheTokenFromAFile`, `TestWaitingForARunGivesUpOnAGatewayThatDoesNotAnswer`, `TestWaitDeviceThatRunsOutOfTimeWithoutAnAnswerFromTheGatewayExits2`, `TestAPollThatHangsIsCutOffAndTheWaitGoesOn`, `TestTheTimeoutAbortsARunWhileThePollIsHanging` |
 | `wg export` | `TestChaosctlExportsAWireGuardClient`, `TestWgExportWritesTheKeyWithMode0600OverAnExistingFileAndALink` |
 
 ## Scenario UI (M19)

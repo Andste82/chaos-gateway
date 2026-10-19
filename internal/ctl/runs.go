@@ -65,6 +65,8 @@ type awaitOptions struct {
 	// owns is set for the run this process started: a signal or the timeout aborts it. Waiting for someone
 	// else's run only stops waiting.
 	owns bool
+	// early is a signal that arrived while the run was being created: the wait starts with it
+	early os.Signal
 }
 
 func (a *app) runCmd() *cobra.Command {
@@ -84,7 +86,7 @@ the result as the exit code: 0 the run passed, 1 a check failed, 2 the run ended
 
 A run that is waited for has a lease (30s unless --lease says otherwise; --lease 0: none) that chaosctl renews
 while it waits, so a CI job that is killed leaves no fault behind: the gateway aborts the run when the renewals
-stop. An interrupt or a terminate signal, and --timeout, abort the run and remove its overlays.
+stop. An interrupt, a terminate or a hang-up signal, and --timeout, abort the run and remove its overlays.
 
 --junit and --artifacts save the JUnit report; --artifacts also the JSON report, the events and the captures
 the run made, into a directory.`,
@@ -92,6 +94,9 @@ the run made, into a directory.`,
   chaosctl run mqtt-outage --wait`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// from the start: a signal during the request that creates the run must not kill chaosctl
+			sigs, stop := a.signals()
+			defer stop()
 			if (file == "") == (len(args) == 0) {
 				return failf(ExitError, "name a stored scenario or give a scenario file with -f, not both and not neither")
 			}
@@ -143,7 +148,14 @@ the run made, into a directory.`,
 				q.Set("queue", "false")
 			}
 			var run model.Run
-			if _, err := cl.call(cmd.Context(), http.MethodPost, "/runs", q, req, &run); err != nil {
+			sig, err := a.guarded(cmd.Context(), sigs, startGrace, func(ctx context.Context) error {
+				_, err := cl.call(ctx, http.MethodPost, "/runs", q, req, &run)
+				return err
+			})
+			if err != nil {
+				if sig != nil {
+					return failf(ExitError, "%v received while the run was being created: %v (a lease takes the run down if it was created)", sig, err)
+				}
 				return apiFail(err)
 			}
 			fmt.Fprintf(a.env.Stderr, "run %s %s (%s)\n", run.Id, run.Status, run.Scenario.Name)
@@ -153,10 +165,14 @@ the run made, into a directory.`,
 				} else {
 					fmt.Fprintln(a.env.Stdout, run.Id)
 				}
+				if sig != nil {
+					return failf(ExitError, "%v received; the run %s goes on", sig, run.Id)
+				}
 				return nil
 			}
 			o.owns = true
-			return a.await(cmd.Context(), cl, &run, o)
+			o.early = sig
+			return a.await(cmd.Context(), cl, &run, o, sigs)
 		},
 	}
 	f := cmd.Flags()
@@ -207,21 +223,31 @@ func runExit(s model.RunStatus) int {
 const pollFailures = 10
 
 // await waits for a run to end, keeps its lease, reports the progress and the result, saves the reports and
-// returns the exit code as an error.
-func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOptions) error {
-	sigs, stop := a.signals()
-	defer stop()
+// returns the exit code as an error. Every request of the wait runs under a context that a signal, the timeout
+// and the cancellation of ctx end, so none of them waits for a gateway that does not answer.
+func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOptions, sigs <-chan os.Signal) error {
 	started := a.clk().Monotonic()
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(a.env.Stderr, "[%6.1fs] %s\n", a.since(started), fmt.Sprintf(format, args...))
 	}
-	wctx, cancel := context.WithCancel(ctx)
+	var deadline <-chan time.Time
+	if o.timeout > 0 {
+		t := a.clk().NewTimer(o.timeout)
+		defer t.Stop()
+		deadline = t.C()
+	}
+	wctx, endWatch := watch(ctx, sigs, deadline, fmt.Errorf("--timeout %v ran out", o.timeout))
+	defer endWatch(context.Canceled)
+	if o.early != nil {
+		endWatch(&signalError{o.early})
+	}
+	rctx, cancel := context.WithCancel(wctx)
 	defer cancel()
 	renewDone := make(chan struct{})
 	if o.lease > 0 {
 		go func() {
 			defer close(renewDone)
-			a.renewLoop(wctx, cl, run.Id.String(), o.lease, logf)
+			a.renewLoop(rctx, cl, run.Id.String(), o.lease, logf)
 		}()
 	} else {
 		close(renewDone)
@@ -229,13 +255,6 @@ func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOpti
 	stopRenewing := func() {
 		cancel()
 		<-renewDone
-	}
-
-	var deadline <-chan time.Time
-	if o.timeout > 0 {
-		t := a.clk().NewTimer(o.timeout)
-		defer t.Stop()
-		deadline = t.C()
 	}
 	tick := a.clk().NewTicker(a.env.Poll)
 	defer tick.Stop()
@@ -249,14 +268,9 @@ func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOpti
 	for !ended(cur.Status) {
 		select {
 		case <-tick.C():
-		case sig := <-sigs:
-			interrupted = fmt.Sprintf("%v received", sig)
-		case <-deadline:
-			interrupted = fmt.Sprintf("--timeout %v ran out", o.timeout)
-		case <-ctx.Done():
-			interrupted = "interrupted"
+		case <-wctx.Done():
 		}
-		if interrupted != "" {
+		if interrupted = interruption(wctx); interrupted != "" {
 			stopRenewing()
 			if !o.owns {
 				return failf(ExitError, "%s; the run %s goes on", interrupted, id)
@@ -268,10 +282,10 @@ func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOpti
 			acancel()
 			if err != nil {
 				// the run may have ended between the signal and the abort: read its result once more
-				rctx, rcancel := cleanupContext()
+				gctx, gcancel := cleanupContext()
 				var last model.Run
-				_, gerr := cl.call(rctx, http.MethodGet, "/runs/"+id, nil, nil, &last)
-				rcancel()
+				_, gerr := cl.call(gctx, http.MethodGet, "/runs/"+id, nil, nil, &last)
+				gcancel()
 				if gerr != nil || !ended(last.Status) {
 					return failf(ExitError, "%s, and the run could not be aborted: %v (the lease takes it down if it has one)", interrupted, err)
 				}
@@ -282,7 +296,13 @@ func (a *app) await(ctx context.Context, cl *client, run *model.Run, o awaitOpti
 			break
 		}
 		var next model.Run
-		if _, err := cl.call(ctx, http.MethodGet, "/runs/"+id, nil, nil, &next); err != nil {
+		pctx, pcancel := context.WithTimeout(wctx, a.pollTimeout())
+		_, err := cl.call(pctx, http.MethodGet, "/runs/"+id, nil, nil, &next)
+		pcancel()
+		if err != nil {
+			if wctx.Err() != nil {
+				continue // what ended the wait cut the request off: the top of the loop says what it was
+			}
 			if ae := asAPIError(err); ae != nil && (ae.Status == http.StatusNotFound || ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden) {
 				stopRenewing()
 				return apiFail(err)
@@ -332,7 +352,9 @@ func (a *app) renewLoop(ctx context.Context, cl *client, id string, lease time.D
 			return
 		case <-t.C():
 		}
-		_, err := cl.call(ctx, http.MethodPost, "/runs/"+id+"/renew", nil, nil, nil)
+		rctx, cancel := context.WithTimeout(ctx, a.pollTimeout())
+		_, err := cl.call(rctx, http.MethodPost, "/runs/"+id+"/renew", nil, nil, nil)
+		cancel()
 		switch {
 		case err == nil:
 			failing = false
@@ -597,16 +619,25 @@ func (a *app) waitCmd() *cobra.Command {
 interrupt or --timeout; it only stops waiting (exit 2).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sigs, stop := a.signals()
+			defer stop()
 			cl, err := a.client()
 			if err != nil {
 				return err
 			}
 			var run model.Run
-			if _, err := cl.call(cmd.Context(), http.MethodGet, "/runs/"+url.PathEscape(args[0]), nil, nil, &run); err != nil {
+			sig, err := a.guarded(cmd.Context(), sigs, 0, func(ctx context.Context) error {
+				_, err := cl.call(ctx, http.MethodGet, "/runs/"+url.PathEscape(args[0]), nil, nil, &run)
+				return err
+			})
+			if sig != nil {
+				return failf(ExitError, "%v received while waiting for run %s; the run goes on", sig, args[0])
+			}
+			if err != nil {
 				return apiFail(err)
 			}
 			o.owns = false
-			return a.await(cmd.Context(), cl, &run, o)
+			return a.await(cmd.Context(), cl, &run, o, sigs)
 		},
 	}
 	runWait.Flags().DurationVar(&o.timeout, "timeout", 0, "stop waiting after this time (exit 2); 0: wait for the end")

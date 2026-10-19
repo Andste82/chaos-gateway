@@ -734,6 +734,22 @@ func ctlWithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires(t *testing.T, g *gw, 
 	eventuallyTrue(t, "the lease to run out", func() bool { return g.do("GET", "/overlays/"+id, nil, nil, nil).Status == 404 })
 }
 
+// A command that outlives the TTL of its overlay: the gateway has removed the overlay by itself when `with` comes to
+// remove it, and that is neither an error nor a changed exit code.
+func ctlWithAnOverlayWhoseTTLRanOutDuringTheCommand(t *testing.T, g *gw, clk *clock.Fake) {
+	r := g.ctl("with", "--network", "IoT", "--blackout", "--ttl", "1s", "--lease", "0", "--", "sh", "-c", "sleep 2.5")
+	if r.code != 0 || strings.Contains(r.err, "could not remove") {
+		t.Errorf("a command that succeeds: %+v", r)
+	}
+	r = g.ctl("with", "--network", "IoT", "--blackout", "--ttl", "1s", "--lease", "0", "--", "sh", "-c", "sleep 2.5; exit 4")
+	if r.code != 4 || strings.Contains(r.err, "could not remove") {
+		t.Errorf("a command that fails: %+v", r)
+	}
+	if ids := overlayIDs(t, g); len(ids) != 0 {
+		t.Errorf("overlays are left: %v", ids)
+	}
+}
+
 // wg export: a client's configuration goes to a file with mode 0600, or to standard output; a token below scope full
 // is refused.
 func TestChaosctlExportsAWireGuardClient(t *testing.T) {
@@ -861,5 +877,6 @@ func TestChaosctlWith(t *testing.T) {
 	sub("WithCleansUpWhenTheCommandCannotRun", ctlWithCleansUpWhenTheCommandCannotRun)
 	sub("WithPassesASignalOnAndFailsWith125", ctlWithPassesASignalOnAndFailsWith125)
 	sub("WithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires", ctlWithRenewsTheLeaseAndALeaseThatIsNotRenewedExpires)
+	sub("WithAnOverlayWhoseTTLRanOutDuringTheCommand", ctlWithAnOverlayWhoseTTLRanOutDuringTheCommand)
 	g.t = t
 }

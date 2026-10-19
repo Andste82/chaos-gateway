@@ -37,11 +37,13 @@ type Env struct {
 	Getenv func(string) string
 	// Environ is the environment a command of `chaosctl with` gets; nil: the process's.
 	Environ []string
-	// Signals delivers the interrupt and terminate signals; nil: those of the process, subscribed to by the
-	// commands that wait.
+	// Signals delivers the interrupt, terminate and hang-up signals; nil: those of the process, subscribed to by
+	// the commands that wait, before their first request.
 	Signals <-chan os.Signal
 	// Poll is the interval at which a waiting command asks the gateway; 0: one second.
 	Poll time.Duration
+	// PollTimeout bounds one request of a wait (a poll, a renewal); 0: 10 seconds.
+	PollTimeout time.Duration
 	// Clock times the polls, timeouts and renewals; nil: the real one.
 	Clock clock.Clock
 }
@@ -226,13 +228,15 @@ func (a *app) client() (*client, error) {
 	return cl, nil
 }
 
-// signals returns the channel of the interrupt and terminate signals and the function that stops listening.
+// signals returns the channel of the interrupt, terminate and hang-up signals and the function that stops listening.
+// A command that waits or cleans up calls it once, before its first request: a signal that arrives earlier would
+// kill chaosctl without the cleanup (SIGHUP is what a lost ssh session or a CI agent that gives up sends).
 func (a *app) signals() (<-chan os.Signal, func()) {
 	if a.env.Signals != nil {
 		return a.env.Signals, func() {}
 	}
 	ch := make(chan os.Signal, 4)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	return ch, func() { signal.Stop(ch) }
 }
 

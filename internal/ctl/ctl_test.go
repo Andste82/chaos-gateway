@@ -177,11 +177,19 @@ func TestTheFlagsOfAFaultBecomeItsBody(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 	for in, want := range map[string]map[string]any{
-		"uplink":      {"uplink": true},
-		"203.0.113.9": {"cidr": "203.0.113.9/32"},
-		"10.0.0.0/8":  {"cidr": "10.0.0.0/8"},
-		"IoT":         {"network": "IoT"},
-		"lab network": {"network": "lab network"},
+		"uplink":           {"uplink": true},
+		"203.0.113.9":      {"cidr": "203.0.113.9/32"},
+		"10.0.0.0/8":       {"cidr": "10.0.0.0/8"},
+		"2001:db8::1":      {"cidr": "2001:db8::1/128"},
+		"2001:db8::/32":    {"cidr": "2001:db8::/32"},
+		"10.0.0.0/33":      {"cidr": "10.0.0.0/33"}, // the gateway says what is wrong with it
+		"10.0.0":           {"cidr": "10.0.0"},
+		"mqtt.example.com": {"hostname": "mqtt.example.com"},
+		"*.example.com":    {"hostname": "*.example.com"},
+		"hostname:broker":  {"hostname": "broker"},
+		"network:lab.net":  {"network": "lab.net"},
+		"IoT":              {"network": "IoT"},
+		"lab network":      {"network": "lab network"},
 	} {
 		if got := destinationOf(in); !reflect.DeepEqual(got, want) {
 			t.Errorf("destinationOf(%q) = %v, want %v", in, got, want)
@@ -316,6 +324,14 @@ type fakeGateway struct {
 	// abortStatus, when not 0, is the status of POST /runs/{id}/abort; the run is then passed for later GETs
 	abortStatus int
 	aborted     bool
+	// bodies are the bodies of the POST /overlays requests
+	bodies []map[string]any
+	// hangFrom makes GET /runs/{id} and GET /devices/{name} hang from the n-th such call on (1: from the first) until
+	// the client gives up (to hangTo, 0: on); passAt makes GET /runs/{id} answer "passed" from the n-th call on
+	hangFrom, hangTo, passAt int
+	// postStarted is closed when POST /runs arrives (if set), and the request is answered when postRelease is closed
+	postStarted chan struct{}
+	postRelease chan struct{}
 }
 
 func (f *fakeGateway) handler() http.Handler {
@@ -333,6 +349,9 @@ func (f *fakeGateway) handler() http.Handler {
 		switch {
 		case r.Method == http.MethodPost && path == "/overlays":
 			f.creates++
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.bodies = append(f.bodies, body)
 			if f.failCreate == f.creates {
 				problem(422, "validation_failed", "refused on purpose")
 				return
@@ -349,6 +368,15 @@ func (f *fakeGateway) handler() http.Handler {
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte("[Interface]\nPrivateKey = secret\n"))
 		case r.Method == http.MethodPost && path == "/runs":
+			if f.postStarted != nil {
+				close(f.postStarted)
+				f.mu.Unlock()
+				select {
+				case <-f.postRelease:
+				case <-r.Context().Done():
+				}
+				f.mu.Lock()
+			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(fakeRun("running")))
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/abort"):
@@ -361,8 +389,22 @@ func (f *fakeGateway) handler() http.Handler {
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/renew"):
 			f.renews++
 			_, _ = w.Write([]byte(`{}`))
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/runs/"):
+		case r.Method == http.MethodGet && (strings.HasPrefix(path, "/runs/") || strings.HasPrefix(path, "/devices/")):
 			f.gets++
+			if f.hangFrom > 0 && f.gets >= f.hangFrom && (f.hangTo == 0 || f.gets <= f.hangTo) {
+				f.mu.Unlock()
+				<-r.Context().Done()
+				f.mu.Lock()
+				return
+			}
+			if strings.HasPrefix(path, "/devices/") {
+				problem(404, "not_found", "no "+path)
+				return
+			}
+			if f.passAt > 0 && f.gets >= f.passAt {
+				_, _ = w.Write([]byte(fakeRun("passed")))
+				return
+			}
 			if f.runDown > 0 && f.gets >= f.runDown {
 				problem(503, "unavailable", "the executor is down")
 				return
@@ -390,11 +432,21 @@ func (f *fakeGateway) calls() []string {
 
 func (f *fakeGateway) run(t *testing.T, sigs <-chan os.Signal, args ...string) (int, string, string) {
 	t.Helper()
+	return f.runWith(t, nil, sigs, args...)
+}
+
+// runWith is run with a change to the environment of the command.
+func (f *fakeGateway) runWith(t *testing.T, tweak func(*Env), sigs <-chan os.Signal, args ...string) (int, string, string) {
+	t.Helper()
 	srv := httptest.NewServer(f.handler())
 	defer srv.Close()
 	var out, errb bytes.Buffer
-	code := Run(args, Env{Stdout: &out, Stderr: &errb, Signals: sigs, Poll: time.Millisecond,
-		Getenv: func(k string) string { return map[string]string{"CHAOSGW_URL": srv.URL, "CHAOSGW_TOKEN": "t"}[k] }})
+	env := Env{Stdout: &out, Stderr: &errb, Signals: sigs, Poll: time.Millisecond,
+		Getenv: func(k string) string { return map[string]string{"CHAOSGW_URL": srv.URL, "CHAOSGW_TOKEN": "t"}[k] }}
+	if tweak != nil {
+		tweak(&env)
+	}
+	code := Run(args, env)
 	return code, out.String(), errb.String()
 }
 

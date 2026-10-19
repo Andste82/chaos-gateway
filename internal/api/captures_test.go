@@ -407,6 +407,16 @@ func TestACaptureRequestThatDoesNotFitIsRefusedWithItsPointer(t *testing.T) {
 	if r := g.startCapture(map[string]any{"scope": map[string]any{"selector": map[string]any{"source": map[string]any{"global": true}, "destination": map[string]any{"hostname": "broker.example.com"}}}}); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
 		t.Errorf("a host name: %d %s", r.Status, r.Body)
 	}
+	// the admin tunnel (a WireGuard network of the role management) is recorded by no scope
+	for name, scope := range map[string]map[string]any{
+		"the network":                  {"network": "admin"},
+		"a selector with it as source": {"selector": map[string]any{"source": map[string]any{"network": "admin"}}},
+	} {
+		r := g.startCapture(map[string]any{"scope": scope})
+		if r.Status != 422 || r.code(t) != "validation_failed" || !strings.Contains(string(r.Body), "management_network") {
+			t.Errorf("%s: %d %s", name, r.Status, r.Body)
+		}
+	}
 	if g.cap.Running() != 0 || len(g.cap.Opened()) != 0 {
 		t.Errorf("a refused request reached the executor: %+v", g.cap.Opened())
 	}

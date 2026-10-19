@@ -14,6 +14,9 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
+// CodeManagementNetwork is the code of a scope that names a WireGuard network of the role management, or a device on one.
+const CodeManagementNetwork = "management_network"
+
 // Plan is what a scope of a capture stands for in the gateway as it is applied: the interfaces to read and the filter
 // of each (plan §2.11, spike S9).
 type Plan struct {
@@ -99,9 +102,15 @@ func (r resolver) interfacesOf(path, id string, wg bool) ([]string, []capture.Li
 	var links []capture.LinkType
 	if wg {
 		for _, w := range r.snap.WireGuardInterfaces {
-			if lower(w.NetworkID) == lower(id) {
-				names, links = append(names, w.Name), append(links, capture.LinkRaw)
+			if lower(w.NetworkID) != lower(id) {
+				continue
 			}
+			if w.Role == "management" {
+				// every scope but the uplink resolves its interfaces here, so this is the one place that keeps the
+				// capture of a network, a device, a group and a selector off the admin tunnel, as global() does
+				return nil, nil, invalid(path, CodeManagementNetwork, "the network %s is a WireGuard network of the role management: its packets are the admin's tunnel to the control plane and are not recorded (global skips it, too)", w.NetworkName)
+			}
+			names, links = append(names, w.Name), append(links, capture.LinkRaw)
 		}
 	} else {
 		for _, b := range r.snap.Bridges {
@@ -308,7 +317,9 @@ func (r resolver) selector(scope model.CaptureScope) (Plan, error) {
 	return p, nil
 }
 
-// global is every test network: all bridges and the WireGuard interfaces of the role test.
+// global is every test network: all bridges and the WireGuard interfaces of the role test. The WireGuard networks of
+// the role management are left out here and refused in interfacesOf where a scope names one: no capture records the
+// admin tunnel.
 func (r resolver) global() (Plan, error) {
 	var p Plan
 	for _, b := range r.snap.Bridges {

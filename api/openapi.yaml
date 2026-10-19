@@ -1767,7 +1767,10 @@ paths:
         device (its network's interface, filtered by its Ethernet addresses, or by its addresses on a WireGuard
         network), a selector (the packets of a source, device, group, network or global, to the `destination`,
         `protocol` and `ports`, in both directions, on the interfaces of the source) or the uplink (every packet
-        of the uplink interface after NAT, not attributable to devices). A `pcap` file holds one link type; a
+        of the uplink interface after NAT, not attributable to devices). The WireGuard networks of the role
+        `management` are the admin's tunnel and are never recorded: a scope that names one, a device on one, or a
+        group or selector source that reaches one is `422 validation_failed` with the code `management_network`
+        (`global` leaves them out). A `pcap` file holds one link type; a
         scope that spans Ethernet and raw IP interfaces needs `pcapng`. A hostname destination arrives with M20
         (`422 unsupported_feature`). Without `max_size`, `duration` or `ring_buffer` the capture stops at 1 GiB.
 

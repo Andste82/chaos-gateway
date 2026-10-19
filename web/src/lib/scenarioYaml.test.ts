@@ -3,9 +3,14 @@ import { reactive } from 'vue';
 import type { Scenario } from '../api/generated/model';
 import { mapRefs, parseScenarioYaml, scenarioToYaml, withIds, withNames, type RefIndex } from './scenarioYaml';
 import { mqttOutage } from './scenarioFixtures';
+import { readFileSync } from 'node:fs';
 
 // The YAML view of a scenario (M19): the file of plan §2.10 in and out, with the names of the objects it
 // refers to where the configuration has their UUIDs, and the problems it reports by line or by pointer.
+
+// The file that the Go side decodes in `TestTheYamlOfTheScenarioUiIsAcceptedByTheGateway` (internal/domain);
+// the tests run from web/.
+const exported = readFileSync('../internal/domain/testdata/scenario-ui-export.yaml', 'utf8');
 
 const ESP = 'a1b2c3d4-0000-4000-8000-000000000042';
 const SENSOR = 'a1b2c3d4-0000-4000-8000-000000000057';
@@ -115,6 +120,10 @@ describe('the scenario as YAML', () => {
     expect(text).toContain('  - reconnected:\n      protocol: tcp\n      ports:\n        - 8883\n    window:\n      from: restore\n      within: 30s\n');
     // a long line is not folded
     expect(scenarioToYaml({ ...mqttOutage, description: 'x'.repeat(200) }, index)).toContain(`description: ${'x'.repeat(200)}\n`);
+  });
+
+  it('is the file that the gateway decodes, byte for byte (the Go test of the same file keeps the two sides together)', () => {
+    expect(scenarioToYaml(mqttOutage, index)).toBe(exported);
   });
 
   it("takes the draft's scenario, which is a reactive proxy", () => {

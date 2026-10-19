@@ -104,6 +104,9 @@ type Gateway interface {
 	ResetOverlays(ctx context.Context, owner *model.Owner, actor model.Actor) (engine.OverlayResult, error)
 	Emit(typ string, data map[string]any)
 	Subscribe() (<-chan engine.Event, func())
+	// SubscribeFrom is Subscribe with the buffered events after the sequence number last first (the recorder of the
+	// events of the runs continues with it after the bus dropped it).
+	SubscribeFrom(last uint64) ([]engine.Event, <-chan engine.Event, func())
 }
 
 // DNSQuery is a query of a device that the gateway's DNS proxy logged.

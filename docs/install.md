@@ -193,6 +193,7 @@ export CHAOSGW_URL=$GW CHAOSGW_TOKEN_FILE=token
 chaosctl wait device esp32-42 --online --connected tcp/8883 --timeout 90s
 chaosctl run -f mqtt-outage.yaml --set target.device=esp32-42 --wait --junit report.xml --artifacts out/
 chaosctl with --device esp32-42 --profile bad-lte --ttl 10m -- pytest tests/
+chaosctl explain --device esp32-42 --dst mqtt.example.com --protocol tcp --port 8883   # why is it refused or slow?
 ```
 
 `chaosctl help` lists the commands. A run that is waited for has a lease of 30 s that the client renews, and the overlays of

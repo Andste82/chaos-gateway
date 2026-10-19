@@ -3,9 +3,14 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -428,44 +433,69 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 }
 
 // M2-02 test: every validation code the domain can report is documented in development.md's
-// "Validation codes" table (a table of the package's own Code* constants, mirroring how CC-01
-// checks the engine's Event* constants against the spec).
+// "Validation codes" table. The codes are the package's own Code* string constants, read from the source with
+// go/parser: a hand-kept list had left out CodeInvalidParameter and CodeCaptureLimit (P4-AUDIT-48). It mirrors
+// how CC-01 checks the engine's Event* constants against the spec.
 func TestEveryValidationCodeIsDocumented(t *testing.T) {
-	codes := []string{
-		CodeInvalidID, CodeDuplicateID, CodeDuplicateName, CodeNameIsUUID, CodeReservedName,
-		CodeUnknownReference, CodeWrongReference, CodeInvalidNetwork,
-		CodeHostBitsSet, CodeOverlappingSubnet, CodeReservedRange, CodeInvalidPrefixLength,
-		CodeInvalidAddress, CodeOutsideSubnet, CodeDuplicateAddress, CodeDuplicateInterface,
-		CodeDuplicatePort, CodeInvalidEndpoint, CodeWrongKind, CodePoolOrder, CodePoolOverlap,
-		CodeInvalidDuration, CodeNoIdentifier, CodeDuplicateIdentifier, CodeInvalidMAC,
-		CodeFixedIPRequires, CodeDuplicateMember, CodeProbeNetwork, CodeMatrixSelf,
-		CodeMatrixDuplicate, CodeManagementOverlap, CodeRuleOrder, CodePortsRequireProtocol,
-		CodeInvalidPortRange, CodeResetRequiresTCP, CodeCutRequiresTCP, CodeDuplicatePublicKey,
-		CodeKeySettings, CodeMissingField, CodeUnexpectedField, CodeProtocolSettings, CodeTimers,
-		CodeInvalidTable, CodeRemoteNetwork, CodeStepOrder, CodeTargetWidened, CodeTargetKind,
-		CodeTunnelOutsideTarget, CodeReservedID, CodeStepKind, CodeCheckWindow, CodeDuplicateStep,
-		CodeJitterExceedsLatency, CodeReorderNeedsLatency, CodeExclusive, CodeMixedDirections,
-		CodeMixedFamily, CodeEmptyFault, CodeInvalidMTU, CodeCutWithAllow, CodeTunnelParameter,
-		CodeInvalidDNSFault, CodeInvalidTLSCase, CodeInvalidDHCPAction, CodeInvalidOverlay,
-		CodeInvalidFlapping, CodeRejectTypeNeedsReject, CodeInvalidName, CodeDuplicateRoutingKind, CodeUnknownRoutingSettings,
-		CodeInvalidRate, CodeReservedOption,
-		CodeReservedPort, CodeOverlappingForward, CodePortRangeLength, CodeManagementIsUplink, // M35a
+	codes := codeConstants(t)
+	if len(codes) < 75 {
+		t.Fatalf("found only %d Code* constants in the package: the parser misses them", len(codes))
+	}
+	// one from each of the files that declare codes, so that a parser that stops at the first file is noticed
+	for name, want := range map[string]string{"CodeInvalidID": "invalid_id", "CodeHostBitsSet": "host_bits_set", "CodeCaptureLimit": "invalid_capture_limit", "CodeInvalidParameter": "invalid_parameter"} {
+		if codes[name] != want {
+			t.Errorf("%s = %q among the constants found, want %q", name, codes[name], want)
+		}
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "development.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	seen := map[string]bool{}
-	for _, c := range codes {
-		if seen[c] {
-			t.Errorf("%q listed twice in the test's own table", c)
-		}
-		seen[c] = true
+	for name, c := range codes {
 		if !strings.Contains(doc, "`"+c+"`") {
-			t.Errorf("code %q is not documented in development.md", c)
+			t.Errorf("%s (%q) is not documented in development.md", name, c)
 		}
 	}
+}
+
+// codeConstants returns the string constants of the package whose names begin with Code, by name.
+func codeConstants(t *testing.T) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, d := range f.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok || gd.Tok != token.CONST {
+					continue
+				}
+				for _, sp := range gd.Specs {
+					vs := sp.(*ast.ValueSpec)
+					for i, n := range vs.Names {
+						if !strings.HasPrefix(n.Name, "Code") || i >= len(vs.Values) {
+							continue
+						}
+						lit, ok := vs.Values[i].(*ast.BasicLit)
+						if !ok || lit.Kind != token.STRING {
+							continue
+						}
+						v, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						out[n.Name] = v
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // A published snapshot is shared between goroutines and never written to: asking whether a

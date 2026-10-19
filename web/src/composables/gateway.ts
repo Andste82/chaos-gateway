@@ -2,7 +2,7 @@
 // stays in the query cache, the event stream invalidates it). Lists follow the cursor to the end,
 // so a lab with many devices shows all of them. The keys start like the generated hooks' keys, so
 // the invalidation by event type (eventStream.ts) reaches them.
-import { useQuery } from '@tanstack/vue-query';
+import { useQueries, useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
 import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
@@ -14,6 +14,7 @@ import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '..
 import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
+import { isRunOf, mergeRuns } from '../lib/runs';
 import { useDraftStore } from '../stores/draft';
 
 interface PageOf<T> {
@@ -115,15 +116,72 @@ export function useCapabilities() {
 }
 
 /**
- * The runs, newest first, without their timelines. A queued or running run changes without an event of
- * the list's own (the events of a run invalidate it), so the list is also polled.
+ * One page of the runs, newest first, without their timelines: the newest `limit` of those the filters select,
+ * and the cursor of the next page when there are more (the gateway keeps the runs of 30 days, so the page is a
+ * window: callers that must not miss a run filter on the gateway's side). A queued or running run changes
+ * without an event of the list's own (the events of a run invalidate it), so the list is also polled.
  */
-export function useRuns(params: () => Omit<ListRunsParams, 'cursor' | 'limit'> = () => ({}), limit = 200) {
+export function useRuns(params: () => Omit<ListRunsParams, 'cursor' | 'limit'> = () => ({}), limit: number | (() => number) = 200, enabled: () => boolean = () => true) {
+  const size = () => Math.min(typeof limit === 'function' ? limit() : limit, 500);
   return useQuery({
-    queryKey: computed(() => ['runs', 'all', params(), limit]),
-    // the newest `limit` runs: one page, not the whole history (the gateway keeps the runs of 30 days)
-    queryFn: ({ signal }) => listRuns({ ...params(), limit: Math.min(limit, 500) }, { signal }).then((page) => page.items),
+    queryKey: computed(() => ['runs', 'all', params(), size()]),
+    queryFn: ({ signal }) => listRuns({ ...params(), limit: size() }, { signal }),
+    // asking for more of the same runs keeps the page that is shown; other filters start empty
+    placeholderData: (prev, prevQuery) => (prevQuery && JSON.stringify(prevQuery.queryKey[2]) === JSON.stringify(params()) ? prev : undefined),
+    enabled: computed(enabled),
     refetchInterval: 5_000,
+  });
+}
+
+/** The runs that are queued or running, whatever the number of runs that came after them. */
+export function useActiveRuns() {
+  const running = useRuns(() => ({ status: 'running' }), 500);
+  const queued = useRuns(() => ({ status: 'queued' }), 500);
+  return {
+    data: computed<Run[] | undefined>(() => (running.data.value && queued.data.value ? mergeRuns(running.data.value.items, queued.data.value.items) : undefined)),
+    isLoading: computed(() => running.isLoading.value || queued.isLoading.value),
+    error: computed(() => running.error.value ?? queued.error.value),
+    refetch: () => Promise.all([running.refetch(), queued.refetch()]),
+  };
+}
+
+/**
+ * The runs of one scenario, newest first, asked for by the scenario: those of its id and, for the runs of an inline
+ * scenario, those of its name. `limit` is the number asked for of each; `more` says the gateway has older ones.
+ */
+export function useScenarioRuns(scenario: () => { id: string; name: string } | undefined, limit: () => number, enabled: () => boolean = () => true) {
+  const on = () => enabled() && !!scenario();
+  const byId = useRuns(() => ({ scenario: scenario()?.id }), limit, on);
+  const byName = useRuns(() => ({ scenario: scenario()?.name }), limit, on);
+  return {
+    data: computed<Run[] | undefined>(() => {
+      const s = scenario();
+      if (!s || !byId.data.value || !byName.data.value) return undefined;
+      return mergeRuns(byId.data.value.items, byName.data.value.items).filter((r) => isRunOf(r, s));
+    }),
+    more: computed(() => !!byId.data.value?.next_cursor || !!byName.data.value?.next_cursor),
+    isLoading: computed(() => byId.isLoading.value || byName.isLoading.value),
+    error: computed(() => byId.error.value ?? byName.error.value),
+    refetch: () => Promise.all([byId.refetch(), byName.refetch()]),
+  };
+}
+
+/**
+ * The newest run of each of the scenarios, asked for one by one (for those the latest runs of the list do not
+ * reach); `null` where a scenario has none.
+ */
+export function useLastRuns(scenarios: () => { id: string; name: string }[]) {
+  return useQueries({
+    queries: computed(() =>
+      scenarios().map((s) => ({
+        queryKey: ['runs', 'last', s.id, s.name],
+        queryFn: async ({ signal }: { signal: AbortSignal }): Promise<Run | null> => {
+          const byId = await listRuns({ scenario: s.id, limit: 1 }, { signal });
+          if (byId.items[0]) return byId.items[0];
+          return (await listRuns({ scenario: s.name, limit: 1 }, { signal })).items[0] ?? null;
+        },
+      })),
+    ),
   });
 }
 

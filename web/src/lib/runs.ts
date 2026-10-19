@@ -126,6 +126,18 @@ export function sortedArtifacts(list: Artifact[] | undefined): Artifact[] {
   return [...(list ?? [])].sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
+/** Whether a run is of the scenario: by its id, or, for a run of an inline scenario (it has no id), by its name. */
+export function isRunOf(r: Pick<Run, 'scenario'>, s: { id: string; name: string }): boolean {
+  return r.scenario.id === s.id || (!!r.scenario.inline && r.scenario.name === s.name);
+}
+
+/** The runs of several lists as one, newest first, each run once. */
+export function mergeRuns(...lists: Run[][]): Run[] {
+  const byId = new Map<string, Run>();
+  for (const list of lists) for (const r of list) if (!byId.has(r.id)) byId.set(r.id, r);
+  return [...byId.values()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (a.id < b.id ? -1 : 1));
+}
+
 /** The newest run of each scenario, by the scenario's id or, for a run of an inline scenario, its name. */
 export function lastRunByScenario(runs: Run[]): Map<string, Run> {
   const out = new Map<string, Run>();

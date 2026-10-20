@@ -35,7 +35,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   all are closed, see [Issue #64 open items](#issue-64-open-items) further down.
 - **Phase 4** (M15–M19, branch `worktree-phase-4`): audited on 2026-10-19 at `89d1090` (CI run 39253445201 green). The result is in
   [Phase 4 audit result](#phase-4-audit-result), right before the Phase 4 open items: 13 items of major and 46 of minor severity,
-  P4-AUDIT-01 to P4-AUDIT-59, all closed on the branch `worktree-phase-4` (PR #71, not merged yet): 56 fixed, three fixed
+  P4-AUDIT-01 to P4-AUDIT-59, all closed on the branch `worktree-phase-4` (merged to `main` with PR #71 on 2026-10-20, `9ab7a24`; CI run 39384159501 green): 56 fixed, three fixed
   differently (P4-AUDIT-06, -29, -41), none rejected or left undone, see the verdict table and
   [the remaining points](#phase-4-audit-result-of-the-round-and-remaining-points). The maintainer decided P4-AUDIT-14 to -16 on
   2026-10-19 (option (a) each), see [Phase 4 audit items for the maintainer](#phase-4-audit-items-for-the-maintainer). What the implementation could not settle and
@@ -2111,7 +2111,7 @@ of runs held up under every lens. The major items are in the edges: the cleanup,
 -05), a crash of the privileged executor after a failed ring rotation (P4-AUDIT-01), two losses of captures (P4-AUDIT-08, -09), and
 the scenario list that reads a loading or failed query as "Never run" (P4-AUDIT-12). Three items need the maintainer (P4-AUDIT-14 to
 -16, with their options below). **Result of the round after the audit (2026-10-19):** all 59 items are closed on the branch
-`worktree-phase-4` (PR #71, not merged yet): 56 are fixed with a test that fails without the fix or with the corrected document,
+`worktree-phase-4` (merged to `main` with PR #71 on 2026-10-20, `9ab7a24`; CI run 39384159501 green): 56 are fixed with a test that fails without the fix or with the corrected document,
 three were fixed differently from the proposal (P4-AUDIT-06, -29 and -41, see the Fix column), none was rejected as wrong after
 all (one detail of the proposal for P4-AUDIT-43 was wrong and is corrected), and none is not done. The maintainer decided P4-AUDIT-14 to -16 on 2026-10-19 (option (a) each); the
 two choices taken by best practice are P4-AUDIT-47 (`chaosctl explain` was built) and P4-AUDIT-10 (`settings.retention.runs` is
@@ -2230,7 +2230,7 @@ apply changed nothing before Phase 4), with P4-AUDIT-25 (the count of `/reset`) 
 
 ### Phase 4 audit: result of the round and remaining points
 
-The round after the audit (2026-10-19, branch `worktree-phase-4`, PR #71, not merged) closed every item, see the Fix column of the
+The round after the audit (2026-10-19, branch `worktree-phase-4`, merged to `main` with PR #71 on 2026-10-20) closed every item, see the Fix column of the
 table. It was built and checked without KVM and without network namespaces: `go build ./...`, `go vet ./...` (also with
 `-tags testbed` and `-tags testbed,browser`), `gofmt`, `make check-spec`, `make check-generated` and `make check-clients` were green,
 and all runnable tests of the packages the items touched passed (`-race`; `internal/api` takes about 650 s under `-race`, so it needs
@@ -2401,7 +2401,7 @@ code, or the consequence did not follow); they are not recorded as items:
 
 ## Phase 4 open items
 
-Phase 4 (M15 to M19, automation) is implemented on the branch `worktree-phase-4`. Items below are what the implementation
+Phase 4 (M15 to M19, automation) was implemented on the branch `worktree-phase-4` and merged to `main` with PR #71 on 2026-10-20. Items below are what the implementation
 found that no later milestone of the plan completes and that need a decision of the maintainer.
 
 ### P4-M19-01 The Captures screen and the capture panel of the device detail have no milestone

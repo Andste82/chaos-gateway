@@ -4,6 +4,8 @@ package api_test
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,12 +27,21 @@ import (
 // logged with every step, and the schedule of the tests leaves more time between two steps than an apply takes, because
 // the timeline hands a step over only after the one before it has been answered, and a step that is due while the
 // apply of the one before is running is handed over late by design.
+//
+// The change of a step that replaces, removes or restores overlays is handed over after the timeline has read their
+// final counters (P4-AUDIT-17: `start_offset_ms` contains the read), and that read is a kernel read like the apply:
+// 0.6 s in the VM of the CI (run 39343558893, the step `end`), a few milliseconds on a native kernel. A step that is
+// handed over more than 100 ms behind its schedule must carry the run warning `step_late` (P4-AUDIT-14), and where the
+// warning names the counter read as the cause (`read for N ms first`) the read is taken off, because it is the
+// observation of the kernel and not the accuracy of the timeline: what remains is the lateness of the timeline itself,
+// which stays within 100 ms. A lateness the warning does not explain fails as before.
 func stepsOnTime(t *testing.T, run map[string]any) {
 	t.Helper()
 	hi := 100 * time.Millisecond
 	if !testbed.Accurate() {
 		hi = 30 * time.Second
 	}
+	readFor := counterReads(run)
 	for _, s := range run["steps"].([]any) {
 		st := s.(map[string]any)
 		if st["status"] != "applied" {
@@ -50,10 +61,54 @@ func stepsOnTime(t *testing.T, run map[string]any) {
 		answered := time.Duration(st["offset_ms"].(float64)) * time.Millisecond
 		t.Logf("step %v: scheduled %v, handed to the engine at %v, answered at %v (the apply took %v, of which %v ms in the queue)",
 			st["id"], sched, start, answered, answered-start, st["queue_wait_ms"])
-		if err := testbed.Measure(t, "step "+fmt.Sprint(st["id"])).Duration("", "handed over late", start-sched, 0, 0, hi); err != nil {
-			t.Errorf("a step was not on time: %v", err)
+		late := start - sched
+		read := readFor[fmt.Sprint(st["id"])]
+		if late > hi && testbed.Accurate() {
+			if _, warned := stepLateWarning(run, fmt.Sprint(st["id"])); !warned {
+				t.Errorf("step %v was handed over %v late and the run has no step_late warning for it: %v", st["id"], late, run["warnings"])
+			}
+		}
+		if read > 0 {
+			t.Logf("step %v: the counters of its overlays were read for %v before the hand-over (taken off its lateness of %v)", st["id"], read, late)
+			late -= read
+		}
+		if err := testbed.Measure(t, "step "+fmt.Sprint(st["id"])).Duration("", "handed over late", late, 0, 0, hi); err != nil {
+			t.Errorf("a step was not on time (the warnings of the run: %v): %v", run["warnings"], err)
 		}
 	}
+}
+
+var counterReadRE = regexp.MustCompile(`the counters of the overlays that go away were read for (\d+) ms first`)
+
+// stepLateWarning returns the message of the warning step_late of a step.
+func stepLateWarning(run map[string]any, step string) (string, bool) {
+	ws, _ := run["warnings"].([]any)
+	for _, w := range ws {
+		m, _ := w.(map[string]any)
+		if m["code"] == "step_late" && m["step"] == step {
+			msg, _ := m["message"].(string)
+			return msg, true
+		}
+	}
+	return "", false
+}
+
+// counterReads is, for each step whose step_late warning says that the counters were read ahead of the hand-over, how
+// long the read took.
+func counterReads(run map[string]any) map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, s := range run["steps"].([]any) {
+		id := fmt.Sprint(s.(map[string]any)["id"])
+		msg, ok := stepLateWarning(run, id)
+		if !ok {
+			continue
+		}
+		if m := counterReadRE.FindStringSubmatch(msg); m != nil {
+			ms, _ := strconv.Atoi(m[1])
+			out[id] = time.Duration(ms) * time.Millisecond
+		}
+	}
+	return out
 }
 
 func kernelHasFaultChain(top *testbed.Topology) bool {

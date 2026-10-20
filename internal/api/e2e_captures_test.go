@@ -255,6 +255,90 @@ func sameMultiset(t *testing.T, what string, got, want []string) {
 	}
 }
 
+// period is the time a capture ran, from the record of its start to the record of its stop (the gateway's clock, which is
+// the clock of the packets in the namespaces too: the tests run on one kernel).
+type period struct{ from, to time.Time }
+
+// periodOf reads the period of a capture from its JSON; the capture has stopped.
+func periodOf(t *testing.T, c map[string]any) period {
+	t.Helper()
+	read := func(key string) time.Time {
+		s, _ := c[key].(string)
+		ts, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("the capture has no %s (%q): %v\n%v", key, s, err, c)
+		}
+		return ts
+	}
+	return period{from: read("started_at"), to: read("stopped_at")}
+}
+
+func (p period) keep(ps []capture.Packet) []capture.Packet {
+	var out []capture.Packet
+	for _, pk := range ps {
+		if p.contains(pk.Time) {
+			out = append(out, pk)
+		}
+	}
+	return out
+}
+
+// sameAsTruth compares a capture with the capture on the device itself for the time the capture ran. The ground truth
+// is a program of its own that was started before the capture and is stopped by hand some time after it ended, so both
+// sides are cut to the period of the capture by the time stamps of the kernel: what the device saw while the capture
+// ran is what the capture must hold, nothing more and nothing less (CI run 39343558893: one frame more on the device
+// than in the capture, which the failure could not place in time). On a mismatch the failure says when each frame that
+// is missing (or too much) was on the wire, which tells a frame at the edge of the period from one in its middle.
+func sameAsTruth(t *testing.T, what string, got, truth []capture.Packet, p period) {
+	t.Helper()
+	gotIn, truthIn := p.keep(got), p.keep(truth)
+	g, w := multiset(gotIn, ipOrARP), multiset(truthIn, ipOrARP)
+	if slices.Equal(g, w) {
+		return
+	}
+	sameMultiset(t, what, g, w)
+	onlyGot, onlyWant := multisetDiff(g, w)
+	rel := func(ts time.Time) string { return fmt.Sprintf("%+d ms", ts.Sub(p.from).Milliseconds()) }
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: the capture ran from 0 to %d ms", what, p.to.Sub(p.from).Milliseconds())
+	if len(got) > 0 {
+		first, last := got[0].Time, got[0].Time
+		for _, pk := range got {
+			if pk.Time.Before(first) {
+				first = pk.Time
+			}
+			if pk.Time.After(last) {
+				last = pk.Time
+			}
+		}
+		fmt.Fprintf(&b, ", its first packet is at %s and its last at %s", rel(first), rel(last))
+	}
+	fmt.Fprintf(&b, "; %d packets of the device and %d of the capture are inside the period (%d and %d in all)\n", len(truthIn), len(gotIn), len(truth), len(got))
+	order := slices.Clone(truth)
+	sort.SliceStable(order, func(i, j int) bool { return order[i].Time.Before(order[j].Time) })
+	for _, frame := range onlyWant {
+		for i, pk := range order {
+			if string(pk.Data) != frame || !p.contains(pk.Time) {
+				continue
+			}
+			fmt.Fprintf(&b, "the frame the capture lacks was on the device at %s:\n", rel(pk.Time))
+			for j := max(0, i-3); j < min(len(order), i+4); j++ {
+				mark := "   "
+				if j == i {
+					mark = ">>>"
+				}
+				fmt.Fprintf(&b, "  %s %s  %s\n", mark, rel(order[j].Time), frameSummary(order[j].Data))
+			}
+		}
+	}
+	for _, frame := range onlyGot {
+		fmt.Fprintf(&b, "the capture holds a frame the device does not: %s\n", frameSummary([]byte(frame)))
+	}
+	t.Log(strings.TrimSuffix(b.String(), "\n"))
+}
+
+func (p period) contains(ts time.Time) bool { return !ts.Before(p.from) && !ts.After(p.to) }
+
 // multisetDiff returns the frames that one of two sorted multisets holds more often than the other.
 func multisetDiff(got, want []string) (onlyGot, onlyWant []string) {
 	count := map[string]int{}
@@ -355,14 +439,14 @@ func TestACaptureOfADeviceIsExactlyTheCaptureOnTheDeviceItselfOnTheRealKernel(t 
 		t.Fatalf("interfaces %v", ifs)
 	}
 	makeTraffic(t, top)
-	g.stopCapture(id)
-	want := multiset(truth.stop(), ipOrARP)
+	stopped := g.stopCapture(id)
+	groundTruth := truth.stop()
 
 	r, pkts := g.download(id, "")
 	if r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
-	sameMultiset(t, "device capture", multiset(pkts, ipOrARP), want)
+	sameAsTruth(t, "device capture", pkts, groundTruth, periodOf(t, stopped))
 	// before NAT: the addresses of the test network, never the gateway's address on the uplink
 	for _, p := range pkts {
 		if bytes.Contains(p.Data, []byte{203, 0, 113, 1}) {
@@ -391,10 +475,10 @@ func TestASelectorCaptureHoldsTheConnectionsItNamesOnTheRealKernel(t *testing.T)
 	c := g.mustStartCapture(map[string]any{"scope": map[string]any{"selector": map[string]any{
 		"source": map[string]any{"device": clientA}, "protocol": "tcp", "ports": []int{8883}, "destination": map[string]any{"cidr": testbed.ServerAddr + "/32"}}}})
 	makeTraffic(t, top)
-	g.stopCapture(c["id"].(string))
-	want := multiset(truth.stop(), ipOrARP)
+	stopped := g.stopCapture(c["id"].(string))
+	groundTruth := truth.stop()
 	dl, pkts := g.download(c["id"].(string), "")
-	sameMultiset(t, "selector capture", multiset(pkts, ipOrARP), want)
+	sameAsTruth(t, "selector capture", pkts, groundTruth, periodOf(t, stopped))
 	syn, fin := false, false
 	for _, p := range pkts {
 		if len(p.Data) >= 14+20+14 && p.Data[12] == 8 && p.Data[13] == 0 {
@@ -530,7 +614,7 @@ func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *test
 	g.waitStep(id, "normal", "applied")
 	makeTraffic(t, top)
 	run := g.waitRun(id, "passed", "failed", "error")
-	want := multiset(truth.stop(), ipOrARP)
+	groundTruth := truth.stop()
 	if run["status"] != "passed" {
 		t.Fatalf("%v %v", run["status"], run["reason"])
 	}
@@ -539,14 +623,15 @@ func TestARunWithCaptureTrueAttachesTheTrafficOfItsTargetOnTheRealKernel(t *test
 		t.Fatalf("artifacts %v", run["artifacts"])
 	}
 	capID := arts[0]["capture"].(string)
-	if cp := g.capture(capID); cp["run"] != id || cp["stop_reason"] != "run_end" || cp["status"] != "stopped" {
+	cp := g.capture(capID)
+	if cp["run"] != id || cp["stop_reason"] != "run_end" || cp["status"] != "stopped" {
 		t.Errorf("%v", cp)
 	}
 	dl := g.do("GET", arts[0]["url"].(string)[len("/api/v1"):], nil, nil, nil)
 	if dl.Status != 200 {
 		t.Fatalf("%d", dl.Status)
 	}
-	sameMultiset(t, "capture of the run", multiset(readPackets(t, dl.Body), ipOrARP), want)
+	sameAsTruth(t, "capture of the run", readPackets(t, dl.Body), groundTruth, periodOf(t, cp))
 	if len(captureWarnings(run)) != 0 {
 		t.Errorf("warnings %v", run["warnings"])
 	}

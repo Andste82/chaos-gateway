@@ -266,6 +266,31 @@ func TestDNSQuerySeenDecidesForADeviceOnTheRealKernel(t *testing.T) {
 		return map[string]any{"dns_query_seen": map[string]any{"name": "example.test"}, "window": map[string]any{"from": "go", "within": within}}
 	}
 
+	// The baseline of a run with a DNS check is `uses_gateway_dns`: the device must have asked the proxy (the testbed's
+	// device has no lease to tell otherwise), which the gateway knows from a logged query that it assigned to the device
+	// by the address of the client. The identity of the device is the one of the last observation, so the test makes
+	// the observation and the query itself and waits for the entry, instead of relying on what the bed's own queries
+	// left behind.
+	var logged []any
+	deadline := time.Now().Add(30 * time.Second)
+	for attributed := false; !attributed; {
+		g.observe()
+		if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
+			t.Fatalf("A does not resolve through the gateway: %q %v", out, err)
+		}
+		time.Sleep(1200 * time.Millisecond) // the proxy posts its log every 500 ms
+		logged = g.do("GET", "/dns/queries?name=example.test", nil, nil, nil).json(t)["items"].([]any)
+		for _, it := range logged {
+			if e := it.(map[string]any); e["client"] == testbed.ClientAAddr && e["device"] == espID {
+				attributed = true
+			}
+		}
+		if !attributed && time.Now().After(deadline) {
+			t.Fatalf("no query of A (%s) is logged for the device %s after 30 s, so the run would fail its baseline uses_gateway_dns; the log:\n%v",
+				testbed.ClientAAddr, espID, logged)
+		}
+	}
+
 	r := g.postRun(brokerRun("dns-asked", "10s", check("8s")), "")
 	if r.Status != 201 {
 		t.Fatalf("%d %s", r.Status, r.Body)

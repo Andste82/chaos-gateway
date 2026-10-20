@@ -28,9 +28,18 @@ func readyRuns(t *testing.T) (*gw, *clock.Fake) {
 
 func eventuallyTrue(t *testing.T, what string, ok func() bool) {
 	t.Helper()
+	eventuallyTrueDescribed(t, what, ok, nil)
+}
+
+// eventuallyTrueDescribed is eventuallyTrue whose timeout says what the thing waited for looked like at the end.
+func eventuallyTrueDescribed(t *testing.T, what string, ok func() bool, describe func() string) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for !ok() {
 		if time.Now().After(deadline) {
+			if describe != nil {
+				t.Fatalf("timeout: %s\n%s", what, describe())
+			}
 			t.Fatalf("timeout: %s", what)
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -54,7 +63,7 @@ func (g *gw) run(id string) map[string]any {
 func (g *gw) waitRun(id string, statuses ...string) map[string]any {
 	g.t.Helper()
 	var r map[string]any
-	eventuallyTrue(g.t, "run "+id+" "+statuses[0], func() bool {
+	eventuallyTrueDescribed(g.t, "run "+id+" "+statuses[0], func() bool {
 		r = g.run(id)
 		for _, s := range statuses {
 			if r["status"] == s {
@@ -62,6 +71,9 @@ func (g *gw) waitRun(id string, statuses ...string) map[string]any {
 			}
 		}
 		return false
+	}, func() string {
+		b, _ := json.MarshalIndent(map[string]any{"status": r["status"], "reason": r["reason"], "steps": r["steps"], "warnings": r["warnings"], "checks": r["checks"]}, "", "  ")
+		return "the run " + id + " at the end of the wait:\n" + string(b)
 	})
 	return r
 }
@@ -78,9 +90,15 @@ func stepOf(run map[string]any, id string) map[string]any {
 func (g *gw) waitStep(id, step, status string) map[string]any {
 	g.t.Helper()
 	var s map[string]any
-	eventuallyTrue(g.t, "step "+step+" "+status, func() bool {
-		s = stepOf(g.run(id), step)
+	var run map[string]any
+	eventuallyTrueDescribed(g.t, "step "+step+" "+status, func() bool {
+		run = g.run(id)
+		s = stepOf(run, step)
 		return s != nil && s["status"] == status
+	}, func() string {
+		// a run that ended before the step got its status (a failed precondition, a failed apply) says why
+		b, _ := json.MarshalIndent(map[string]any{"status": run["status"], "reason": run["reason"], "steps": run["steps"], "warnings": run["warnings"]}, "", "  ")
+		return "the run " + id + " at the end of the wait:\n" + string(b)
 	})
 	return s
 }

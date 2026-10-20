@@ -149,7 +149,11 @@ func TestADisconnectingClientDoesNotStopARun(t *testing.T) {
 // overlays are removed (plan §2.10). The lease runs on the monotonic clock.
 func TestAnExpiredLeaseAbortsTheRunAndARenewalKeepsItAlive(t *testing.T) {
 	h := newHarness(t)
-	r := h.start(long("long", esp), func(c *run.CreateRequest) { c.Lease = 30 * time.Second })
+	// The second step is far behind the last deadline of the lease (109 s): the final jump of the clock passes the lease
+	// and, with `long`, the step at 100 s as well, and a loaded machine let the run finish as passed before the lease
+	// timer cancelled it.
+	scenario := strings.Replace(long("long", esp), "at: 100s", "at: 1000s", 1)
+	r := h.start(scenario, func(c *run.CreateRequest) { c.Lease = 30 * time.Second })
 	if r.LeaseExpiresAt == nil || !r.LeaseExpiresAt.Equal(t0.Add(30*time.Second)) {
 		t.Fatalf("lease %v", r.LeaseExpiresAt)
 	}

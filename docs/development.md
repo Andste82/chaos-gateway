@@ -4567,7 +4567,13 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   due while the apply of the one before runs is handed over late; the level 1 test keeps its steps 10 s apart for
   that reason. The executor's commit time stamp itself (the end of its request, before the read-back) is not carried
   to the run: the change takes effect somewhere between the two moments, and what needs the exact moment (the
-  windows of checks) is placed so that it does not matter, see "Windows" in the M16 section.
+  windows of checks) is placed so that it does not matter, see "Windows" in the M16 section. The hand-over of a step
+  that replaces, removes or restores overlays contains the read of their final counters (P4-AUDIT-17), which is a kernel
+  read like the apply: 0.6 s in the VM of the CI (run 39343558893, the step `end` was handed over 604 ms late), a few
+  milliseconds on a native kernel. The product warns (`step_late`, naming "the counters ... were read for N ms first"),
+  and the level 1 test (`stepsOnTime`) requires that warning for every step more than 100 ms late and takes the
+  read the warning names off the lateness before it holds the rest to 100 ms, so the timeline's own accuracy stays
+  asserted and the cost of the observation is shown, not hidden.
 - **The end of a run, always the same way** (`Manager.finish`): read the final counters of the overlays that are
   still there (they are also read before a `remove` or `restore` takes overlays away, so the report holds the
   final counter of every overlay the run created, `RunReport.counters`), reset the run's owner through the

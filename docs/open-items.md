@@ -2250,6 +2250,14 @@ catch a late restore), and the nightly `-expect-pass` lists of P4-AUDIT-49 (a te
 the matrix fails the first night). `internal/run` `TestAnExpiredLeaseAbortsTheRunAndARenewalKeepsItAlive` failed twice in full
 package `-race` runs under heavy CPU load and passed on repeat; it looks load-sensitive and is not proven so.
 
+CI run 39343558893 (the first on the final commit of the round) failed four level 1 tests on a real kernel, answered in the
+follow-up commits: `stepsOnTime` (the counter read before a `restore` took 0.6 s in the VM and is now part of the hand-over by
+design; the test requires `step_late` and takes the named read off), the two capture tests of P4-AUDIT-52 (one frame more on the
+device than in the capture: the ground truth was stopped by hand after the capture and is now cut to the period of the capture,
+and a mismatch prints when the frame was on the wire), and `TestDNSQuerySeenDecidesForADeviceOnTheRealKernel` (the step never got
+its status; the test now waits for a logged query that is assigned to the device, and a timeout of `waitStep` and `waitRun`
+prints the run). The causes of the last two were not provable from the logs; see the commit messages.
+
 Remaining points of minor weight that the round left, none of them a new item:
 
 - P4-AUDIT-06: if the apply fails at the kernel after the runs were aborted, the runs stay aborted (documented).

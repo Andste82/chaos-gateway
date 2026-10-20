@@ -134,7 +134,10 @@ type options struct {
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
 	t.Helper()
-	o := options{confirm: 2 * time.Second}
+	// The window must outlast a loaded machine: finishSetup confirms the setup revision a moment after
+	// POST /setup, and with 2 s a loaded CI run let the window run out first (409 not_a_candidate). The tests of
+	// the expiry itself set their own, short window.
+	o := options{confirm: 30 * time.Second}
 	for _, f := range opts {
 		f(&o)
 	}

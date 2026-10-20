@@ -438,7 +438,9 @@ func (g *gw) finishSetupWith(body map[string]any) {
 // Plan §2.17 "Commit-confirm": the banner's "Roll back now" (P3-M12-01) ends the waiting at once with the
 // rollback the deadline would run; the event names the revision that is active again.
 func TestARevisionWaitingForConfirmationIsRolledBackOnRequest(t *testing.T) {
-	g := ready(t)
+	// the test waits for the window of a second revision to run out, so it needs a short one of its own
+	g := newGW(t, func(o *options) { o.confirm = 4 * time.Second })
+	g.finishSetup()
 	ch, cancel := g.e.Subscribe()
 	defer cancel()
 	id := g.mustPatch(map[string]any{"management": map[string]any{"allowed_sources": []any{"192.168.56.0/24", "172.16.0.0/12"}}})

@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -463,34 +462,44 @@ func TestEveryValidationCodeIsDocumented(t *testing.T) {
 func codeConstants(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// every .go file of the package that is not a test, whatever its build constraints say (parser.ParseDir did the same)
+	var files []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
 	out := map[string]string{}
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, d := range f.Decls {
-				gd, ok := d.(*ast.GenDecl)
-				if !ok || gd.Tok != token.CONST {
-					continue
-				}
-				for _, sp := range gd.Specs {
-					vs := sp.(*ast.ValueSpec)
-					for i, n := range vs.Names {
-						if !strings.HasPrefix(n.Name, "Code") || i >= len(vs.Values) {
-							continue
-						}
-						lit, ok := vs.Values[i].(*ast.BasicLit)
-						if !ok || lit.Kind != token.STRING {
-							continue
-						}
-						v, err := strconv.Unquote(lit.Value)
-						if err != nil {
-							t.Fatal(err)
-						}
-						out[n.Name] = v
+	for _, f := range files {
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs := sp.(*ast.ValueSpec)
+				for i, n := range vs.Names {
+					if !strings.HasPrefix(n.Name, "Code") || i >= len(vs.Values) {
+						continue
 					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					v, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					out[n.Name] = v
 				}
 			}
 		}

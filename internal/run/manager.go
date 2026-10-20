@@ -702,7 +702,7 @@ func (m *Manager) Renew(id uuid.UUID, by *model.Actor) (model.Run, error) {
 		// aborted, or its lease ran out: it stays `running` until its counters are read, its captures stopped and its
 		// overlays removed, but there is nothing to keep alive any more
 		m.mu.Unlock()
-		return model.Run{}, fmt.Errorf("%w: it is being aborted (%v)", ErrEnded, context.Cause(r.ctx))
+		return model.Run{}, fmt.Errorf("%w: it is being aborted (%w)", ErrEnded, context.Cause(r.ctx))
 	case r.lease <= 0 || r.leaseTimer == nil:
 		m.mu.Unlock()
 		return model.Run{}, ErrNoLease

@@ -36,7 +36,7 @@ func explainGateway(t *testing.T) (run func(args ...string) (int, string, string
 		mu.Unlock()
 		if r.URL.Query().Get("device") == "ghost" {
 			w.Header().Set("Content-Type", "application/problem+json")
-			w.WriteHeader(404)
+			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]any{"title": "not found", "status": 404, "code": "not_found", "detail": "no device ghost"})
 			return
 		}

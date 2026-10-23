@@ -637,6 +637,7 @@ export const useDraftStore = defineStore('draft', () => {
         if (out.length === count) out.push({ kind: 'profile', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }
+    const netName = (id: string) => names.network?.(id) ?? (baseConfig.value?.networks?.[id] as { name?: string } | undefined)?.name;
     for (const [id, dv] of Object.entries(devices.value)) {
       const before = baseConfig.value?.devices?.[id];
       const name = dv?.name ?? before?.name ?? id;
@@ -644,9 +645,18 @@ export const useDraftStore = defineStore('draft', () => {
       else if (!before) {
         const ids = [...(dv.identifiers?.macs ?? []), ...(dv.identifiers?.ipv4 ?? [])].join(', ');
         out.push({ kind: 'device', id, name, field: 'device', from: 'discovered', to: `configured${ids ? ` (${ids})` : ''}` });
-      } else if (before.name !== dv.name) out.push({ kind: 'device', id, name, field: 'name', from: before.name, to: dv.name });
+      } else {
+        const count = out.length;
+        const add = (field: string, a: string, b: string) => a !== b && out.push({ kind: 'device', id, name, field, from: a || '—', to: b || '—' });
+        const net = (n: string | undefined) => (n ? (netName(n) ?? n) : '');
+        add('name', before.name, dv.name);
+        add('network', net(before.network), net(dv.network));
+        add('fixed IP', before.fixed_ip ?? '', dv.fixed_ip ?? '');
+        add('MACs', (before.identifiers?.macs ?? []).join(', '), (dv.identifiers?.macs ?? []).join(', '));
+        // a change the words above do not show (setDevice keeps no edit that equals the base)
+        if (out.length === count) out.push({ kind: 'device', id, name, field: 'settings', from: 'as before', to: 'changed' });
+      }
     }
-    const netName = (id: string) => names.network?.(id) ?? (baseConfig.value?.networks?.[id] as { name?: string } | undefined)?.name;
     for (const [id, { network, client }] of Object.entries(clients.value)) {
       const before = clientsIn(baseConfig.value, network)[id];
       const name = client?.name ?? before?.name ?? id;

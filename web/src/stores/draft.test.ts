@@ -189,6 +189,30 @@ describe('the configuration draft', () => {
     expect(d.serverErrors).toEqual({ f1: { 'upload/latency': 'too long', fault: 'the fault sets no parameter' } });
   });
 
+  it('an edited device lists its name, network, fixed IP and MACs; clearing the fixed IP removes it in the patch (#73)', () => {
+    const d = useDraftStore();
+    const dev = { name: 'esp', identifiers: { macs: ['02:00:00:00:00:01', '02:00:00:00:00:02'] }, network: 'n1', fixed_ip: '10.10.0.50' };
+    d.track(revision(42, { devices: { d1: dev }, networks: { n1: { type: 'lan', name: 'IoT', interfaces: [{ name: 'eth1' }], address: '10.10.0.1/24' } } }));
+    d.setDevice('d1', { ...dev, name: 'esp-1', fixed_ip: '10.10.0.60', identifiers: { macs: ['02:00:00:00:00:02', '02:00:00:00:00:01'] } });
+    expect(d.changes().map((c) => [c.field, c.from, c.to])).toEqual([
+      ['name', 'esp', 'esp-1'],
+      ['fixed IP', '10.10.0.50', '10.10.0.60'],
+      ['MACs', '02:00:00:00:00:01, 02:00:00:00:00:02', '02:00:00:00:00:02, 02:00:00:00:00:01'],
+    ]);
+    const { fixed_ip: _f, network: _n, ...rest } = dev;
+    d.setDevice('d1', rest);
+    expect(d.changes().map((c) => [c.field, c.from, c.to])).toEqual([
+      ['network', 'IoT', '—'],
+      ['fixed IP', '10.10.0.50', '—'],
+    ]);
+    expect(d.patch().devices).toEqual({ d1: { network: null, fixed_ip: null } });
+    d.setServerErrors([{ path: '/devices/d1/fixed_ip', message: 'outside' }]);
+    expect(d.serverErrors).toEqual({ d1: { fixed_ip: 'outside' } });
+    d.setDevice('d1', { ...dev, labels: ['x'] });
+    expect(d.changes()).toMatchObject([{ field: 'settings', from: 'as before', to: 'changed' }]);
+    expect(d.serverErrors).toEqual({});
+  });
+
   it('a move of base rules is a change of their positions', () => {
     const d = useDraftStore();
     d.track(revision(42));

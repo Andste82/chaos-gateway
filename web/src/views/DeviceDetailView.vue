@@ -6,6 +6,8 @@
 // backend comes later (flows view, DNS, captures, DHCP and TLS test actions, diagnostics) arrive
 // with their milestones. The port forwards to the device (M35a) are listed with their status and
 // counter, each with a link to edit it on the networks page, which also adds one to the device.
+// A configured device is edited (name, network, fixed IP) in the device dialog (#73); the Network card
+// shows its fixed IP as the draft has it, with what the gateway refused of it.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
 import { ApiError } from '../api/fetcher';
@@ -13,6 +15,7 @@ import { useGetDevice } from '../api/generated/hooks/devices/devices';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import type { Overlay } from '../api/generated/model';
 import AdoptDialog from '../components/devices/AdoptDialog.vue';
+import DeviceDialog from '../components/devices/DeviceDialog.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -127,6 +130,17 @@ function undoAdoption() {
   if (d.value) draft.setDevice(d.value.id, null);
   focusAfterUpdate('[data-focus-key="adopt"]');
 }
+const editOpen = ref(false);
+/** The configured device as the draft has it (its edit or the configuration); undefined for any other kind or a deletion. */
+const configured = computed(() => {
+  const v = d.value;
+  if (!v || v.origin !== 'configured' || draft.devices[v.id] === null) return undefined;
+  return draft.devices[v.id] ?? draft.baseConfig?.devices?.[v.id] ?? v.config;
+});
+/** The fixed IP the draft gives the device, while it differs from the applied one. */
+const fixedIpPending = computed(() => !!d.value && d.value.id in draft.devices && (configured.value?.fixed_ip ?? '') !== (d.value.config?.fixed_ip ?? ''));
+/** What the gateway refused of the device in the last candidate, until it is edited. */
+const deviceRefused = computed(() => (d.value ? Object.values(draft.serverErrors[d.value.id] ?? {}) : []));
 const faultOpen = ref(false);
 const editing = ref<Overlay>();
 function addFault() {
@@ -182,6 +196,7 @@ useApiScreen('this device', () => [
       <template #actions>
         <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add fault</button>
         <RouterLink class="btn" :to="{ path: '/profiles', query: { scope: `device:${d.id}` } }">Apply profile</RouterLink>
+        <button v-if="configured" type="button" class="btn" :disabled="changeBlocked" data-focus-key="edit-device" @click="editOpen = true">Edit</button>
         <button v-if="adoptedAs" type="button" class="btn" :aria-label="`Undo the adoption of ${d.name}`" @click="undoAdoption">Undo adoption</button>
         <button
           v-else-if="!isAdopted(d)"
@@ -257,6 +272,27 @@ useApiScreen('this device', () => [
               </template>
               <template v-else>no DHCP lease</template>
             </dd>
+            <template v-if="configured">
+              <dt class="text-text-2">Fixed IP</dt>
+              <dd class="m-0" data-testid="device-fixed-ip">
+                <span class="mono" data-testid="device-fixed-ip-value">{{ configured.fixed_ip || 'none' }}</span>
+                <span
+                  v-if="fixedIpPending"
+                  class="ml-1.5 rounded border border-accent-strong px-1.5 text-xs text-accent-text"
+                  data-testid="device-fixed-ip-mark"
+                  >not applied yet</span
+                >
+                <button
+                  type="button"
+                  class="btn btn-sm ml-2"
+                  :disabled="changeBlocked"
+                  :aria-label="configured.fixed_ip ? `Edit the fixed IP of ${d.name}` : `Set a fixed IP for ${d.name}`"
+                  @click="editOpen = true"
+                >
+                  {{ configured.fixed_ip ? 'Edit' : 'Set' }}
+                </button>
+              </dd>
+            </template>
             <template v-if="netInfo?.gateway">
               <dt class="text-text-2">Gateway</dt>
               <dd class="mono m-0" data-testid="device-gateway">{{ netInfo.gateway }}</dd>
@@ -269,6 +305,10 @@ useApiScreen('this device', () => [
               </dd>
             </template>
           </dl>
+          <p v-if="deviceRefused.length" class="field-error mt-2 mb-0" role="alert" data-testid="device-refused">
+            The gateway refused the change: {{ deviceRefused.join(' ') }}
+            <button type="button" class="btn btn-sm ml-1" :aria-label="`Fix ${d.name}`" @click="editOpen = true">Fix</button>
+          </p>
         </SectionCard>
 
         <SectionCard title="Port forwards">
@@ -321,10 +361,6 @@ useApiScreen('this device', () => [
             <dd class="mono m-0">{{ d.observed.addresses?.join(', ') || '—' }}</dd>
             <dt class="text-text-2">Seen by</dt>
             <dd class="m-0">{{ sourcesLabel(d) || '—' }}</dd>
-            <template v-if="d.config?.fixed_ip">
-              <dt class="text-text-2">Fixed IP</dt>
-              <dd class="mono m-0">{{ d.config.fixed_ip }}</dd>
-            </template>
             <template v-if="groupNames.length">
               <dt class="text-text-2">Groups</dt>
               <dd class="m-0">{{ groupNames.join(', ') }}</dd>
@@ -343,6 +379,7 @@ useApiScreen('this device', () => [
     </div>
 
     <AdoptDialog v-model:open="adoptOpen" :device="d" :network-name="networkConfig?.name" />
+    <DeviceDialog v-if="configured" v-model:open="editOpen" :device="d" />
     <FaultDialog v-model:open="faultOpen" :fixed-target="`device:${d.id}`" :overlay="editing" />
   </template>
 </template>

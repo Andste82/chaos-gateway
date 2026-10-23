@@ -59,7 +59,7 @@ Chaos Gateway is a Linux machine that sits as the **gateway** between a test net
 | Access control | allow, drop, reject, TCP reset, per device/network/traffic |
 | Network faults | latency, jitter, loss, rate limit, reordering, duplication, corruption, blackout, flapping, MTU/PMTUD faults |
 | Application faults | DNS faults, TLS certificate faults, TLS interception, HTTP manipulation |
-| Infrastructure faults | DHCP behavior; later time (NTP) offset (M34) |
+| Infrastructure faults | DHCP behavior; later the gateway's own NTP server with time faults (M34, §2.18) |
 | Automation | profiles, scenarios, timed faults, REST API, CLI, event stream, test reports |
 | Evidence | per-rule counters, live connections, packet capture, run artifacts |
 | Diagnostics | connectivity checks, probe clients that experience the same faults as devices |
@@ -283,6 +283,7 @@ A fault belongs to exactly one family. Precedence is resolved **per family**, so
 | TLS | certificate case, handshake reset/stall | redirect to the TLS responder |
 | DHCP | short lease, forced new IP, option change, silence | Kea configuration |
 | Tunnel | latency, loss, blackout, flapping of a WireGuard client's or link's encrypted traffic | netem on the underlay (§2.2.1) |
+| Time (after V1, M34) | offset, absolute time, skew, leap, unsynchronized, kiss-of-death, silence, invalid answer | NTP server behavior (§2.18) |
 
 A **profile** is a bundle across families (e.g. "Bad LTE" = impairment only; a custom profile may add a DNS delay). When a profile is active on a scope, each of its parts competes in its own family like a fault on that scope. A fault and a profile part of the same family on the *same* scope **and in the same layer**: the fault wins; across layers the overlay wins (D24).
 
@@ -716,6 +717,38 @@ Real buttons, links and labelled inputs; visible focus ring (`accent`, 2 px); `a
 
 Per object, the compiled configuration next to the domain view: nftables rules, tc tree, routes, service configs and their live counters. Reached from "Show Linux view" / "Show Linux changes" links, never needed for normal use.
 
+## 2.18 Time (NTP) — after V1 (M34)
+
+Wrong time is a frequent IoT failure: a certificate that is "not yet valid" after a reset to 1970, a token that expires at once, a schedule that fires twice after a jump backwards, the 2038 overflow. Devices take their time from NTP (mostly SNTP with a hardcoded server), and NTP is unauthenticated, so the gateway can answer instead of the real server. Chaos Gateway therefore runs its **own NTP server** (part of the core, Go), which serves the correct time by default and the time faults of the time family on request. It never forwards queries: there is no upstream NTP traffic to manipulate, the answer is built locally.
+
+**Server (normal operation)**
+- `chaosgw ntp` answers NTPv3/v4 client requests (mode 3, RFC 5905; SNTP clients, RFC 4330) over UDP 123 with a server reply (mode 4). It serves the host's clock (`CLOCK_REALTIME`); the host keeps that clock synchronized (chrony or systemd-timesyncd, outside Chaos Gateway). Receive timestamp from the kernel's receive time stamp (`SO_TIMESTAMPNS`), transmit timestamp as late as possible; root delay and dispersion from the kernel's estimated and maximum error (`adjtimex`); stratum 2, reference id the gateway's address in the device's network.
+- **Honest when unsynchronized:** while the host clock is not synchronized (`adjtimex` reports `STA_UNSYNC`, or the maximum error exceeds 1 s), the server answers with leap indicator 3 and stratum 16, so correct clients ignore it, and the preflight and `/system` report it. It never claims a time it does not have.
+- **Wiring** (as the DNS proxy, §2.6): the server runs in the service namespace (§3.3); queries to a network's gateway address (UDP 123) are DNAT-ed to `169.254.100.2:123`, so it never conflicts with an NTP daemon of the host. Per local test network the time service is on by default (Q2); Kea hands out the gateway address as NTP server (option 42) unless `dhcp.options.ntp_servers` names others. WireGuard clients get no DHCP; they reach it through the redirect below or a configured server address.
+- **Hardcoded servers:** NTP to other servers (UDP 123) can be redirected to the server per network (`ntp.redirect_hardcoded`, like `dns.redirect_hardcoded`), selected with routing-mark bit 20 into the service namespace (§3.3). The reply leaves with the original server's address and port (conntrack reverses the redirect), so clients that check the source of the reply accept it. UDP has no `SO_ORIGINAL_DST`; the server reads the original destination from conntrack for its events and for destination selectors. Traffic of a scope with an active time fault is redirected whether or not the network redirects (Q3) (a time fault must not silently miss a device with a hardcoded server).
+- **Device identity:** the server sees the device's own address (no SNAT into the service namespace) and resolves the device, its groups and its network from the identity the API sends it, like the DNS proxy. It keeps no state of its own: when it starts it registers with the API and receives the current time faults and the identity (internal API, long poll on `/api/v1/internal/ntp/config`).
+- **Not an amplifier:** only traffic from test and WireGuard networks reaches it (bit 20 is set only there); control and private modes (6 and 7, the `monlist` amplification) get no answer; a reply is never larger than its request; per-device rate limit (default 16 queries/s, beyond it the server drops, it does not send a kiss-of-death on its own).
+- **Not covered:** NTS (RFC 8915, authenticated NTP) cannot be answered by a third party: a device that uses NTS gets no time through the server, which the server reports as an NTS-KE connection (TCP 4460) seen; blocking NTS-KE is a rule. Time from other sources (HTTP `Date` headers, cellular NITZ, GPS, the device's own RTC) is not affected (§6).
+
+**Time faults** (fault family *time*, §2.4; overlays, persistent with M39). Per device, group or network, optionally narrowed to the destination the device asked for (IP/CIDR or hostname: "only `time.google.com` is wrong"):
+
+| Fault | What the server answers | What it tests |
+|---|---|---|
+| **offset** (signed, s … years, e.g. `+400d`, `-90s`) | the correct time plus the offset, in the receive, transmit and reference timestamps | certificates "not yet valid" / "expired", token expiry, TOTP, schedules |
+| **absolute** (a date-time) | that instant at activation, running on from there | "reset to 1970", far future, a fixed date for a reproducible test |
+| **skew** (ppm, e.g. `+500`) | a time that drifts from the activation on, on top of offset or absolute | clock discipline, filtering of a drifting server |
+| **leap** (insert / delete) | leap indicator 1 or 2; with the preset the time a few minutes before midnight UTC at the end of a month | leap-second handling (23:59:60, smearing) |
+| **unsynchronized** | leap indicator 3, stratum 16 | a correct client ignores the server; a careless one takes its time |
+| **kiss-of-death** (`RATE`, `DENY`, `RSTR`) | stratum 0 with the kiss code as reference id | `RATE`: the client polls less often; `DENY`/`RSTR`: it stops using the server |
+| **silence** | nothing (the query is counted) | no time at boot, fallback servers, retry back-off; unlike a drop rule it counts the queries and acts only on NTP |
+| **invalid answer** (`origin_mismatch`, `zero_transmit`, `wrong_mode`) | a malformed reply | a correct client discards it (the origin check is its replay protection); a careless one is open to spoofing |
+
+- **Presets** (UI, API examples, built-in profiles): *+1 year*, *−1 day*, *1970*, *2038* (2038-01-19 03:14:07 UTC minus 5 min: the overflow of a signed 32-bit `time_t`), *NTP era 1* (2036-02-07 06:28:16 UTC minus 5 min: the rollover of NTP's 32-bit seconds), *leap second*, *unsynchronized*, *kiss-of-death*.
+- **Network effects stay in the impairment family:** a delayed or asymmetric NTP path is a latency fault with the selector `udp/123` (asymmetric delay shifts the client's offset by half the asymmetry, which is a test case of its own); the time family has no delay of its own.
+- **Activation and removal are jumps:** the served time jumps when a time fault starts and jumps back when it ends (the second jump is often the more interesting test). The device sees either only when it polls next; SNTP clients poll every few minutes to hours. Scenarios wait for the next query (the wait condition *NTP query seen*) or restart the device (HIL) instead of guessing.
+- **Events and counters:** per device the queries, the answers per fault and the last query (server asked, served time, fault); the event `ntp_answered` when a time fault shapes an answer (at most one per device and fault every 10 s), `ntp_query_seen` for wait conditions, `nts_seen` once per device. The device detail shows a *Time* panel (last query, server asked, served offset, active time fault).
+- **Scenarios and profiles:** step type *time*, wait condition *NTP query seen*, check *NTP queried* (the device asked for the time after a step; whether it took the answer is not visible on the network, its effect is: a TLS check or the device's own log); profiles get a `time` part.
+
 ---
 
 # 3. Technical Architecture
@@ -744,6 +777,7 @@ Further containers (same image, §3.8):
   chaosgw dns    DNS proxy (Go; part of the project)
   chaosgw tls    TLS responder for certificate test cases (Go; part of the project)
   tls-proxy      mitmproxy + Chaos Gateway addon (Python sidecar, interception only)
+  chaosgw ntp    NTP server with time faults (Go; part of the project; after V1, M34, §2.18)
   in the host network:
   DHCP server    Kea (decided in spike S6)
   capture        capture engine in the executor (AF_PACKET, plain Go; no container of their own)
@@ -1214,6 +1248,7 @@ Link events are simulated by setting one end of a veth pair down; the other end 
 | DNS proxy, DNS faults, hostname selectors | 1 |
 | DHCP (Kea) and DHCP test actions | 1 |
 | TLS responder, mitmproxy interception | 1 |
+| NTP server and time faults (M34) | 1 (clients only query, never set the clock: the system clock is not namespaced) |
 | Capture | 1 |
 | Probes and calibration | 1 |
 | VLANs, WireGuard, IPv6 | 1 (kernel modules `8021q`, `wireguard` required) |
@@ -1561,11 +1596,20 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 |---|---|
 | M31 VLANs | multiple networks on a trunk (VLAN ports on the network bridges), access matrix between them |
 | M32 IPv6 | RA/SLAAC, DHCPv6, IPv6 rules and faults (lifts the V1 IPv6 block); IPv6 inside WireGuard tunnels and as underlay; IPv6 in BIRD |
-| M34 NTP time faults | see §8 |
+| M34 NTP server and time faults | the gateway's own NTP server and the time fault family (§2.18); milestone below |
 | M35b Faults on forwarded connections | matching a device as responder, so faults apply to connections that reach it through a port forward (the DNAT itself is M35a, pulled forward, D34) |
 | M36 Further proposals | features from §8 by priority |
 | M38 Deferred from V1 | three-way merge of concurrent revisions; rule captures via NFLOG and live streaming to Wireshark; traceroute, path MTU and iperf3 diagnostics; continuous drift detection with reconcile; native .deb package |
-| M39 Persistent faults for all families | persistent (configuration) DNS faults, TLS cases and DHCP states, and persistent profile activations (`profile_activations`); "permanent" as the default in the add-fault dialog; a run precondition that warns about persistent faults on its target (D31) |
+| M39 Persistent faults for all families | persistent (configuration) DNS faults, TLS cases, DHCP states and time faults (M34), and persistent profile activations (`profile_activations`); "permanent" as the default in the add-fault dialog; a run precondition that warns about persistent faults on its target (D31) |
+
+**M34 — NTP server and time faults** (M)
+- Scope: the NTP server `chaosgw ntp` of §2.18 in the service namespace (NTPv3/v4 and SNTP clients, serves the host clock, leap indicator 3 and stratum 16 while the host clock is unsynchronized, no answer to modes 6 and 7, per-device rate limit), its container and registration with the API (internal API `/api/v1/internal/ntp/config`), the DNAT of UDP 123 to the gateway address, the time service per local test network with Kea option 42 defaulting to the gateway address, `ntp.redirect_hardcoded` per network and the automatic redirect for scopes with a time fault; the fault family *time* in the domain model, the compiler (§2.4 precedence) and the API (overlay body `TimeFault`: `offset`, `absolute`, `skew_ppm`, `leap`, `answer` = `normal` | `unsynchronized` | `kiss_of_death` | `silence` | `origin_mismatch` | `zero_transmit` | `wrong_mode`, `kiss_code`), destination selectors on the asked server, the presets; events `ntp_answered`, `ntp_query_seen`, `nts_seen`, per-device NTP counters; scenario step type *time*, wait condition *NTP query seen*, check *NTP queried*, a `time` part in profiles; UI: the kind *Time (NTP)* in the add-fault dialog with the presets, the time service and the redirect in the network form, the *Time* panel of the device detail; the preflight and `/system` report an unsynchronized host clock. NTP over IPv6 follows with M32; persistent time faults with M39.
+- Tests:
+  - level 0: encoding and parsing of NTP packets (fuzzed); timestamps across the era boundary of 2036-02-07 06:28:16 UTC and at the 2038 overflow; offset, absolute and skew arithmetic on the fake clock; precedence of time faults (device beats network, overlay beats configuration with M39); the compiler output of the DNAT and the redirect.
+  - level 1, clients only query and never set the clock (`chronyd -Q`, `sntp`/`ntpdig`, busybox `ntpd -q -n`): a client in a test network gets option 42 from Kea and an answer within 50 ms of the host clock with stratum 2 and leap indicator 0; a client asking a hardcoded server in the server namespace gets the gateway's answer from that server's address and port once redirected, the real server's answer otherwise; `offset +400d` on one device shifts only that device's answers, the device next to it gets the correct time, and removing the overlay ends it; `absolute` 2038 and NTP-era-1 presets are served within 1 s of the preset instant plus the elapsed time; `skew_ppm 1000` adds 10 ms over 10 s; `unsynchronized` makes chrony reject the server; `kiss_of_death DENY` makes chrony drop the server and `RATE` lengthens its poll interval (the counters show it); `silence` leaves the query unanswered and counted while DNS of the same device works; `origin_mismatch` is discarded by chrony and accepted by a deliberately careless test client (the check flags it); a destination selector on `time.google.com` affects only queries resolved for that name; a latency fault on `udp/123`, upload only, shifts chrony's measured offset by about half of it; the same for a WireGuard client; mode 6 and 7 queries and queries from the uplink and the management network get no answer, and no reply is larger than its query; with the service namespace gone, redirected NTP fails closed (no answer from the real server); the host clock reported unsynchronized makes the server answer with stratum 16; a scenario with a *time* step and a *NTP query seen* wait runs on the fake clock and in the testbed.
+  - level 3 (with H1 or a device lab): ESP-IDF SNTP and a Linux device with the presets, TLS to a server whose certificate the offset makes invalid.
+- Acceptance: the server answers 5,000 queries/s on x86 and adds less than 1 ms to an answer (§3.10); the attachment matrix of §4.2 covers local and WireGuard networks.
+- Depends on: M15, M16, M20 (the redirect and destination selectors of the service namespace, the identity in services), M23 (Kea options per network), M14 (network form); M32 for IPv6, M39 for persistent time faults.
 
 ## V1 Scope Summary
 
@@ -1615,6 +1659,7 @@ M23a (Captures UI) is part of V1 (decided 2026-10-19, P4-M19-01). M22 (intercept
 | 34 | NIC offloads | with GRO/GSO/TSO, netem acts on 64 KB aggregates, so loss and duplication are far off | offloads switched off on owned interfaces and the uplink (§3.4); cost measured in H1 |
 | 35 | Service namespace missing | redirected traffic could silently reach the real server (fail open), which would pass a TLS test that should fail | `prohibit` fallback in table 102 (S16 C4); executor re-attaches on holder restart; services exit when their namespace is stale |
 | 36 | One qdisc lock per interface | the HTB root qdisc of an interface is processed under one lock, so tc work on one interface does not scale across CPU cores; on a Raspberry Pi this may cap throughput with many active faults | measured in H1 with 50/250 faults; faults are spread over the interfaces they leave through anyway (upload on the uplink, download on the test interface); multi-queue alternatives only if H1 shows the need |
+| 37 | Time reaches a device only through NTP (after V1, M34) | devices with NTS, a GPS or cellular time source, a backed-up RTC, or that set their clock from HTTP `Date` headers are not affected by time faults; an SNTP client sees a fault only at its next poll | the server reports NTS-KE connections it sees; the *NTP query seen* wait and the *NTP queried* check make a missed fault visible; HTTP `Date` manipulation is a later extension of the interception (M22, §8) |
 
 ---
 
@@ -1664,8 +1709,11 @@ M23a (Captures UI) is part of V1 (decided 2026-10-19, P4-M19-01). M22 (intercept
 
 | # | Question | Recommendation |
 |---|---|---|
+| Q2 | M34: does every local test network get the gateway's NTP server by default (Kea option 42 = the gateway address when `dhcp.options.ntp_servers` is unset)? | yes, like DNS: a device that takes its server from DHCP is then covered by time faults without a redirect, and isolated test networks have a time source; a network that names other servers keeps them |
+| Q3 | M34: does a time fault redirect UDP 123 of its scope even where the network does not redirect hardcoded NTP? | yes: most firmware has its server hardcoded, and a fault that silently misses the device passes a test that should fail (the same reasoning as the fail-closed service table, risk 35); the network setting only decides about redirecting without a fault |
+| Q4 | M34: should HTTP `Date` headers follow the time fault of a device? | not in M34: it needs the interception (M22) and the test CA; a later §8 item "time faults in HTTP `Date`" |
 
-None currently. Q1 was decided as D33 (§7.1). New questions are added here with a recommendation.
+Q1 was decided as D33 (§7.1). New questions are added here with a recommendation.
 
 ---
 
@@ -1678,7 +1726,7 @@ None currently. Q1 was decided as D33 (§7.1). New questions are added here with
 | **Scenario checks and JUnit reports** | turns the gateway into a test tool, not just a fault tool | medium | V1 (included, M16) |
 | **CLI and client library** | integration into existing test suites | small | V1 (included, M18) |
 | **Device groups** | apply faults to a whole fleet at once | small | V1 (included, M2) |
-| **NTP server with time offset** | tests certificate validity handling, token expiry, time-based logic — a frequent IoT failure | small | M34 |
+| **NTP server with time faults** | tests certificate validity handling, token expiry, time-based logic — a frequent IoT failure | medium | M34 (§2.18) |
 | **Local mock services** | redirect a broker/API hostname to a local MQTT broker or HTTP mock (e.g. with a failing backend) via the DNS proxy | medium | after V1 |
 | **Captive portal simulation** | tests onboarding and connectivity checks of devices | small | after V1 |
 | **Protocol-aware MQTT faults** | drop specific topics, delay PUBACK, disconnect on subscribe | medium | after V1 |
@@ -1702,7 +1750,8 @@ None currently. Q1 was decided as D33 (§7.1). New questions are added here with
 | **pytest plugin, CI templates, Robot Framework library** | fixtures with guaranteed cleanup, pytest-embedded integration | small–medium | after V1 (review 2) |
 | **HTML run report and run comparison** | one file for a bug ticket; firmware A vs. B with measured values | medium | after V1 (review 2) |
 | **Seeds and repeated runs** | reproducible random faults (netem seed on newer kernels), pass rate over N runs | small | after V1 (review 2) |
-| **Time faults beyond the NTP offset** | redirect hardcoded NTP, kiss-of-death, stratum 16, NTP unreachable at boot, 2038 preset | small | with M34 |
+| **Time faults beyond the NTP offset** | redirect hardcoded NTP, kiss-of-death, stratum 16, NTP unreachable at boot, 2038 preset | small | M34 (§2.18) |
+| **Time faults in HTTP `Date`** | devices that set their clock from HTTP responses | small | after M34, with the interception (M22) |
 | **Small fault additions** | drop IP fragments, "first DNS address dead", server FIN instead of RST | small | after V1 (review 2) |
 | **Trace replay** | replay recorded latency/loss/rate time series (handover, tunnels) | medium | after V1 (review 2) |
 | **Faults for local and multicast traffic** | mDNS, Matter commissioning; needs one port per device or VLANs | large | after M31 |

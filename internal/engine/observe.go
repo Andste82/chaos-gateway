@@ -129,42 +129,41 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 	// (M6a-04), the ticker's own re-read is a fallback only, at most every conntrackFallback: the
 	// watch already triggers a fresh read whenever something actually changed.
 	if fromTick && e.conntrackWatching.Load() && e.conntrackFresh() {
-		obs.Active = e.lastActive()
+		obs.Active, obs.UnknownSources = e.lastActive()
 	} else if cout, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadConntrack}); err == nil && len(cout.Data) > 0 {
 		var flows []linux.Conntrack
 		if json.Unmarshal(cout.Data[0], &flows) == nil {
 			behind := routedPrefixes(snap)
 			seen := map[netip.Addr]bool{}
-			obs.Traffic = map[netip.Addr]AddrTraffic{}
+			obs.ConntrackRead = true
 			for _, f := range flows {
 				ip, err := netip.ParseAddr(f.Original.Src)
 				if err != nil {
 					continue
 				}
 				obs.Active[ip] = true
+				fc := FlowCounters{Key: flowID(f), Src: ip, Up: Traffic{f.Original.Packets, f.Original.Bytes}, Down: Traffic{f.Reply.Packets, f.Reply.Bytes}}
 				if target, ok := forwardTarget(f); ok {
 					obs.Active[target] = true
+					fc.Dst = target // a forward's traffic is the target device's, not the gateway address's
+				} else if dst, err := netip.ParseAddr(f.Original.Dst); err == nil {
+					fc.Dst = dst
 				}
+				obs.Flows = append(obs.Flows, fc)
 				if !seen[ip] && inAny(behind, ip) {
 					seen[ip] = true
 					obs.UnknownSources = append(obs.UnknownSources, ip)
 				}
-				up := Traffic{f.Original.Packets, f.Original.Bytes}
-				down := Traffic{f.Reply.Packets, f.Reply.Bytes}
-				addTraffic(obs.Traffic, ip, up, down)
-				if dst, err := netip.ParseAddr(f.Original.Dst); err == nil {
-					addTraffic(obs.Traffic, dst, down, up)
-				}
 			}
 			sort.Slice(obs.UnknownSources, func(i, j int) bool { return obs.UnknownSources[i].Less(obs.UnknownSources[j]) })
 		}
-		e.setActive(obs.Active)
+		e.setActive(obs.Active, obs.UnknownSources)
 		e.markConntrackRead()
 	} else if err != nil {
 		// a failed read is not "no connections": the addresses that were in use stay in use
 		e.logObserveError(err)
 		obs.ObserveError = err.Error()
-		obs.Active = e.lastActive()
+		obs.Active, obs.UnknownSources = e.lastActive()
 	}
 	if e.cfg.DHCP != nil {
 		if ls, err := e.cfg.DHCP.Leases(ctx); err == nil {
@@ -223,20 +222,23 @@ func forwardTarget(f linux.Conntrack) (netip.Addr, bool) {
 	return r, true
 }
 
-func (e *Engine) setActive(a map[netip.Addr]bool) {
+func (e *Engine) setActive(a map[netip.Addr]bool, unknown []netip.Addr) {
 	e.activeMu.Lock()
-	e.active = a
+	e.active, e.unknown = a, unknown
 	e.activeMu.Unlock()
 }
 
-func (e *Engine) lastActive() map[netip.Addr]bool {
+// lastActive returns what the last conntrack read found: the addresses in use and the hosts behind a
+// router, which an observation that does not read conntrack carries over (a host known only by its
+// connections would otherwise lose its address between two reads).
+func (e *Engine) lastActive() (map[netip.Addr]bool, []netip.Addr) {
 	e.activeMu.Lock()
 	defer e.activeMu.Unlock()
 	out := make(map[netip.Addr]bool, len(e.active))
 	for a := range e.active {
 		out[a] = true
 	}
-	return out
+	return out, append([]netip.Addr(nil), e.unknown...)
 }
 
 // conntrackFresh reports whether conntrack was read within conntrackFallback (M6a-04): while a
@@ -286,18 +288,6 @@ func routedPrefixes(s *Snapshot) []netip.Prefix {
 		}
 	}
 	return out
-}
-
-// addTraffic adds one flow's share of the traffic to the given address's running total: up is what
-// the address sent on this flow, down is what it received.
-func addTraffic(m map[netip.Addr]AddrTraffic, addr netip.Addr, up, down Traffic) {
-	t := m[addr]
-	t.Upload.Packets += up.Packets
-	t.Upload.Bytes += up.Bytes
-	t.Download.Packets += down.Packets
-	t.Download.Bytes += down.Bytes
-	t.Flows++
-	m[addr] = t
 }
 
 // wireGuardNetworkOf finds the WireGuard network an address belongs to: the interface's own subnet

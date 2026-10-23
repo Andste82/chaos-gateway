@@ -266,6 +266,9 @@ type barrier struct {
 
 func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 	o := &owner{e: e, host: init.host, problem: map[string]bool{}, tracker: newTracker()}
+	if e.cfg.OfflineAfter > 0 {
+		o.tracker.offlineAfter = e.cfg.OfflineAfter
+	}
 	o.initOverlays()
 	o.snap.Host = init.host
 	o.genPath = e.cfg.GenerationFile

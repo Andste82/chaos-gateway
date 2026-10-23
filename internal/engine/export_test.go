@@ -8,6 +8,9 @@ func (e *Engine) DHCPReopensScheduled() int {
 	return e.dhcp.scheduled
 }
 
+// OfflineAfter is how long a device stays online after its last evidence (issue #79).
+const OfflineAfter = offlineAfter
+
 // DryCompiles is how many compiles the state owner made only to check overlay writes: one per batch of writes (or
 // per write that is checked alone), never one per write of a burst.
 func (e *Engine) DryCompiles() int { return int(e.dryCompiles.Load()) }

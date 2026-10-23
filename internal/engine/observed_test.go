@@ -264,8 +264,13 @@ func TestDevicesAppearAndTheirAddressesFollowThem(t *testing.T) {
 		t.Errorf("the device set holds %q", got)
 	}
 
-	// the device leaves: offline
+	// the device leaves: offline once nothing has confirmed it for OfflineAfter (issue #79)
 	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.50", "02:00:00:00:00:aa")})
+	h.observe()
+	if d := h.device(devID); !d.Online {
+		t.Errorf("offline at the first reading without it: %+v", d)
+	}
+	h.clk.Advance(engine.OfflineAfter)
 	h.observe()
 	if d := h.device(devID); d.Online {
 		t.Errorf("%+v", d)

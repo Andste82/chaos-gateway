@@ -3454,18 +3454,26 @@ type DeviceIdentifiers struct {
 
 // DeviceObserved defines model for DeviceObserved.
 type DeviceObserved struct {
-	Addresses   *[]Ipv4       `json:"addresses,omitempty"`
-	DownloadBps *int64        `json:"download_bps,omitempty"`
-	FlowsActive *int          `json:"flows_active,omitempty"`
-	LastSeen    *time.Time    `json:"last_seen,omitempty"`
-	Lease       *DhcpLease    `json:"lease,omitempty"`
-	Macs        *[]MacAddress `json:"macs,omitempty"`
+	Addresses *[]Ipv4 `json:"addresses,omitempty"`
 
-	// Online Seen now - a confirmed neighbor entry, a connection, or a WireGuard handshake; a lease alone does not count.
-	Online    bool                     `json:"online"`
-	Sources   *[]DeviceObservedSources `json:"sources,omitempty"`
-	UploadBps *int64                   `json:"upload_bps,omitempty"`
-	Wireguard *WireGuardPeerStatus     `json:"wireguard,omitempty"`
+	// DownloadBps Bytes per second the device received; as upload_bps.
+	DownloadBps *int64 `json:"download_bps,omitempty"`
+
+	// FlowsActive Tracked connections the device is a party to, as of the last conntrack read; left out while unknown, as upload_bps.
+	FlowsActive *int `json:"flows_active,omitempty"`
+
+	// LastSeen When the device last gave a sign of life (see online).
+	LastSeen *time.Time    `json:"last_seen,omitempty"`
+	Lease    *DhcpLease    `json:"lease,omitempty"`
+	Macs     *[]MacAddress `json:"macs,omitempty"`
+
+	// Online The device gave a sign of life within the last 60 s (last_seen): a confirmed (REACHABLE) neighbor entry, traffic it sent on a tracked connection, a new or renewed DHCP lease, or a WireGuard handshake younger than 3 min. A connection that only exists, or an existing lease, does not count. It turns online at the first sign of life and offline 60 s after the last one; device_online and device_offline are sent on these transitions.
+	Online  bool                     `json:"online"`
+	Sources *[]DeviceObservedSources `json:"sources,omitempty"`
+
+	// UploadBps Bytes per second the device sent, averaged over the conntrack reads of the last 10 s (each connection counted by what it moved since the previous read; a port-forwarded connection counts for its target device). 0 when the device moved nothing; left out while unknown (before the second conntrack read, or when the last read failed).
+	UploadBps *int64               `json:"upload_bps,omitempty"`
+	Wireguard *WireGuardPeerStatus `json:"wireguard,omitempty"`
 }
 
 // DeviceObservedSources defines model for DeviceObserved.Sources.

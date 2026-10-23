@@ -1007,6 +1007,13 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   machine with unit tests) keeps the registry of discovered devices (the UUID is a hash of the MAC, so it
   is stable across restarts), resolves identity with `domain.ResolveIdentity`, sets online state and
   emits `device_discovered`, `device_online`, `device_offline` and `device_identity_changed`.
+  Online state and traffic rates follow plan §2.3 (issue #79): a device is online until `offlineAfter`
+  (60 s, `Config.OfflineAfter`) after its last sign of life; the tracker keeps each connection's
+  counters of the last conntrack read (keyed by `flowID`) and each device's per-read deltas of the last
+  `rateWindow` (10 s). An observation that did not read conntrack (`ConntrackRead` false) keeps the last
+  rates and carries the last read's `Active` and `UnknownSources` over. The API tests run the engine on
+  the real clock, so `checksGateway` sets `OfflineAfter` to a nanosecond: there a device is offline at the
+  first observation without a sign of life, as before.
 - **Conntrack events (M6a-04).** `Engine.FollowConntrack` asks the executor to watch conntrack
   (`conntrack -E`, the executor's `Watch`/`Event` frames over the same Unix socket as ordinary
   requests, one dedicated connection per watch) and debounces the events into `TriggerObserve`, the

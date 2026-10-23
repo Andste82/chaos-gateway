@@ -22,7 +22,8 @@ import (
 func checksGateway(t *testing.T) (g *gw, clk *clock.Fake, service string) {
 	t.Helper()
 	clk = clock.NewFake(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC))
-	g = newGW(t, func(o *options) { o.apiClock = clk })
+	// a device is offline at the first observation without a sign of life: the engine's clock is the real one
+	g = newGW(t, func(o *options) { o.apiClock, o.offlineAfter = clk, time.Nanosecond })
 	g.finishSetup()
 	id := g.mustPatch(map[string]any{
 		"networks": map[string]any{iotID: map[string]any{"dhcp": map[string]any{"lease_time": "10m"}}},

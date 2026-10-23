@@ -43,16 +43,21 @@ type DeviceState struct {
 	MACs    []string
 	// Addresses are the addresses that belong to the device now (the identity).
 	Addresses []netip.Addr
-	Online    bool
-	LastSeen  time.Time
+	// Online is whether the device has given evidence of being there within offlineAfter; LastSeen is
+	// when it last did (plan §2.3).
+	Online   bool
+	LastSeen time.Time
 	// Lease is the device's DHCP lease, when it has one.
 	Lease   *model.DhcpLease
 	Sources []string
+	// TrafficKnown is set once the traffic below is known: conntrack has been read twice, and the last
+	// read did not fail.
+	TrafficKnown bool
 	// FlowsActive is the number of tracked connections where the device is a party, as of the last
-	// observation.
+	// conntrack read.
 	FlowsActive int
-	// UploadBps and DownloadBps are byte rates since the previous observation, from the device's own
-	// point of view (plan §2.3).
+	// UploadBps and DownloadBps are byte rates over the last rateWindow, from the device's own point of
+	// view (plan §2.3).
 	UploadBps   int64
 	DownloadBps int64
 }
@@ -62,26 +67,30 @@ type observation struct {
 	At        time.Time
 	Leases    []model.DhcpLease
 	Neighbors []domain.Neighbor
-	// Active are the source addresses that have connections (conntrack).
+	// Active are the source addresses that have connections (conntrack). It is carried over when
+	// conntrack was not read; it decides identity, not online state.
 	Active map[netip.Addr]bool
 	// Peers are the WireGuard peers by client id.
 	Peers map[string]PeerStatus
 	// UnknownSources are source addresses of connections that no neighbor, lease or configuration explains
 	// (hosts behind a router, in a client network): they become discovered devices by address.
 	UnknownSources []netip.Addr
-	// Traffic sums the conntrack byte and packet counters touching each address, from that address's
-	// own point of view (what it sent is Upload, what it received is Download), plus how many tracked
-	// connections it is a party to.
-	Traffic map[netip.Addr]AddrTraffic
+	// ConntrackRead is set when this observation read conntrack; Flows are then its connections. A
+	// ticked observation that reused the last read, or whose read failed, has neither.
+	ConntrackRead bool
+	Flows         []FlowCounters
 	// ObserveError is set when reading the connections failed; the snapshot carries it so the API and
 	// the health check can tell a stale reading from a fresh one with nothing in it.
 	ObserveError string
 }
 
-// AddrTraffic is one address's share of the current connections.
-type AddrTraffic struct {
-	Upload, Download Traffic
-	Flows            int
+// FlowCounters is one tracked connection's cumulative counters: Up is what Src sent, Down what it
+// received. Dst is the other party inside the gateway's view: the original destination, or the device a
+// port forward translated the connection to.
+type FlowCounters struct {
+	Key      string
+	Src, Dst netip.Addr
+	Up, Down Traffic
 }
 
 // trackerEvent is what a step reports.
@@ -96,6 +105,15 @@ const forgetAfter = 24 * time.Hour
 // maxDiscovered bounds the registry.
 const maxDiscovered = 1024
 
+// offlineAfter is how long a device stays online after its last evidence unless Config.OfflineAfter
+// says otherwise (plan §2.3): one quiet observation, a neighbor entry going through DELAY and PROBE or
+// a connection that ends does not make it offline.
+const offlineAfter = 60 * time.Second
+
+// rateWindow is the span the byte rates are averaged over: about one conntrack read while the watch
+// streams (conntrackFallback), so the rate is that of the last read, not of the last 100 ms.
+const rateWindow = 10 * time.Second
+
 // tracker keeps the devices the gateway has seen and works out identity and online state (plan
 // §2.3). It is a pure state machine: observations in, state and events out. The state owner holds
 // one.
@@ -104,19 +122,36 @@ type tracker struct {
 	prev     *domain.Identity
 	devices  map[string]*DeviceState
 	started  bool
-	// traffic holds each device's cumulative byte totals as of the last observation, to turn the
-	// conntrack counters (cumulative for the life of a connection) into a rate.
-	traffic map[string]trafficSample
+	// offlineAfter is how long a device stays online after its last evidence.
+	offlineAfter time.Duration
+	// flows are the connections' counters as of the last conntrack read (lastRead), to turn counters
+	// that are cumulative for the life of a connection into what moved since.
+	flows    map[string]FlowCounters
+	lastRead time.Time
+	// traffic holds each device's byte deltas of the reads within rateWindow.
+	traffic map[string][]trafficSample
+	// leases is the expiry of each MAC's active lease as last seen: a new or renewed lease is evidence.
+	leases map[string]time.Time
 }
 
-// trafficSample is one device's cumulative traffic as of a given time.
+// trafficSample is what one device sent and received between two conntrack reads.
 type trafficSample struct {
-	at               time.Time
+	from, to         time.Time
 	upload, download int64
 }
 
+// addrDelta is one address's share of a conntrack read.
+type addrDelta struct {
+	upload, download int64
+	flows            int
+	// sent is set when the address sent something since the previous read, or, on the first read,
+	// started a connection that is still tracked.
+	sent bool
+}
+
 func newTracker() *tracker {
-	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}, traffic: map[string]trafficSample{}}
+	return &tracker{registry: map[string]*domain.DiscoveredDevice{}, devices: map[string]*DeviceState{}, offlineAfter: offlineAfter, flows: map[string]FlowCounters{},
+		traffic: map[string][]trafficSample{}, leases: map[string]time.Time{}}
 }
 
 // discovered returns every device the registry holds, whatever configuration covers it, by id: the
@@ -134,28 +169,108 @@ func (t *tracker) discovered() []domain.DiscoveredDevice {
 	return disc
 }
 
-// applyTraffic fills st.FlowsActive and the byte rates from obs.Traffic, using the previous sample
-// for this device (if any) to turn cumulative counters into a rate, and records the new sample.
-func (t *tracker) applyTraffic(st *DeviceState, obs observation) {
-	var up, down int64
+// readFlows turns a conntrack read into what moved per address since the previous read. Each
+// connection counts by itself: one that is new since the previous read brings all its counters, one
+// that ended brings nothing, so a long connection that ends does not hide the traffic of the others.
+// The first read only learns the counters.
+func (t *tracker) readFlows(obs observation) map[netip.Addr]*addrDelta {
+	out := map[netip.Addr]*addrDelta{}
+	get := func(a netip.Addr) *addrDelta {
+		d := out[a]
+		if d == nil {
+			d = &addrDelta{}
+			out[a] = d
+		}
+		return d
+	}
+	first := t.lastRead.IsZero()
+	next := make(map[string]FlowCounters, len(obs.Flows))
+	for _, f := range obs.Flows {
+		next[f.Key] = f
+		up, down := f.Up, f.Down
+		p, known := t.flows[f.Key]
+		switch {
+		case known && p.Up.Bytes <= up.Bytes && p.Down.Bytes <= down.Bytes && p.Up.Packets <= up.Packets && p.Down.Packets <= down.Packets:
+			up = Traffic{up.Packets - p.Up.Packets, up.Bytes - p.Up.Bytes}
+			down = Traffic{down.Packets - p.Down.Packets, down.Bytes - p.Down.Bytes}
+		case first:
+			up, down = Traffic{}, Traffic{}
+		}
+		// (smaller counters under a known key: a new connection with the same tuple, all of it is new)
+		s := get(f.Src)
+		s.upload += up.Bytes
+		s.download += down.Bytes
+		s.flows++
+		s.sent = s.sent || up.Packets > 0 || (first && !known)
+		if f.Dst.IsValid() {
+			d := get(f.Dst)
+			d.upload += down.Bytes
+			d.download += up.Bytes
+			d.flows++
+			d.sent = d.sent || down.Packets > 0
+		}
+	}
+	t.flows = next
+	return out
+}
+
+// applyTraffic fills st's flow count and byte rates. A read adds the device's deltas to its window;
+// an observation without a read keeps what the last one found, and a failed read makes it unknown.
+func (t *tracker) applyTraffic(st *DeviceState, obs observation, deltas map[netip.Addr]*addrDelta, prev *DeviceState) {
+	if !obs.ConntrackRead {
+		if obs.ObserveError == "" && prev != nil {
+			st.TrafficKnown, st.FlowsActive, st.UploadBps, st.DownloadBps = prev.TrafficKnown, prev.FlowsActive, prev.UploadBps, prev.DownloadBps
+		}
+		return
+	}
+	if t.lastRead.IsZero() {
+		return // the first read: nothing to rate against yet
+	}
+	sample := trafficSample{from: t.lastRead, to: obs.At}
 	for _, a := range st.Addresses {
-		if tr, ok := obs.Traffic[a]; ok {
-			up += tr.Upload.Bytes
-			down += tr.Download.Bytes
-			st.FlowsActive += tr.Flows
+		if d := deltas[a]; d != nil {
+			sample.upload += d.upload
+			sample.download += d.download
+			st.FlowsActive += d.flows
 		}
 	}
-	if prev, ok := t.traffic[st.ID]; ok {
-		if dt := obs.At.Sub(prev.at).Seconds(); dt > 0 {
-			if d := up - prev.upload; d > 0 {
-				st.UploadBps = int64(float64(d) / dt)
-			}
-			if d := down - prev.download; d > 0 {
-				st.DownloadBps = int64(float64(d) / dt)
-			}
+	window := append(t.traffic[st.ID], sample)
+	for len(window) > 1 && !window[0].to.After(obs.At.Add(-rateWindow)) {
+		window = window[1:]
+	}
+	t.traffic[st.ID] = window
+	var up, down int64
+	for _, s := range window {
+		up += s.upload
+		down += s.download
+	}
+	if dt := obs.At.Sub(window[0].from).Seconds(); dt > 0 {
+		st.UploadBps = int64(float64(up) / dt)
+		st.DownloadBps = int64(float64(down) / dt)
+	}
+	st.TrafficKnown = true
+}
+
+// leaseNews returns the MACs whose active lease is new or renewed since the last step: a device that
+// asks the DHCP server for an address is there. The leases of the first step are not news.
+func (t *tracker) leaseNews(obs observation, first bool) map[string]bool {
+	news := map[string]bool{}
+	for _, l := range obs.Leases {
+		if l.State != nil && *l.State != "active" {
+			continue
+		}
+		mac := strings.ToLower(l.Mac)
+		if was, ok := t.leases[mac]; !first && (!ok || !was.Equal(l.ExpiresAt)) {
+			news[mac] = true
+		}
+		t.leases[mac] = l.ExpiresAt
+	}
+	for mac, exp := range t.leases {
+		if obs.At.Sub(exp) > forgetAfter {
+			delete(t.leases, mac)
 		}
 	}
-	t.traffic[st.ID] = trafficSample{at: obs.At, upload: up, download: down}
+	return news
 }
 
 func (t *tracker) see(id string, mac string, ip netip.Addr, network, source string, at time.Time) {
@@ -279,7 +394,6 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 	}
 	for _, ip := range obs.UnknownSources {
 		t.see(ipDeviceID(ip), "", ip, "", "conntrack", obs.At)
-		seenNow[ipDeviceID(ip)] = true
 	}
 	// the devices behind WireGuard clients are the clients themselves (configured), not discovered
 	for id, d := range t.registry {
@@ -306,12 +420,24 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 			leaseOf[strings.ToLower(l.Mac)] = l
 		}
 	}
-	online := func(addrs []netip.Addr, macs []string, peer *PeerStatus) bool {
+	var deltas map[netip.Addr]*addrDelta
+	if obs.ConntrackRead {
+		deltas = t.readFlows(obs)
+	}
+	leaseNews := t.leaseNews(obs, !t.started)
+	// evidence that the device is there now (plan §2.3). Not the mere existence of a connection: an
+	// established TCP entry outlives an unplugged device by days.
+	evidence := func(addrs []netip.Addr, macs []string, peer *PeerStatus) bool {
 		if peer != nil && peer.Online {
 			return true
 		}
+		for _, m := range macs {
+			if leaseNews[m] {
+				return true
+			}
+		}
 		for _, a := range addrs {
-			if obs.Active[a] {
+			if d := deltas[a]; d != nil && d.sent {
 				return true
 			}
 			for _, n := range obs.Neighbors {
@@ -322,9 +448,9 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 				}
 			}
 		}
-		_ = macs
 		return false
 	}
+	seen := map[string]bool{}
 	for _, did := range sortedDeviceIDs(idx) {
 		d := idx.Devices[did]
 		st := &DeviceState{ID: did, Name: d.Name, Origin: model.DeviceOrigin(d.Origin), Network: d.Network, Addresses: id.Addresses[did]}
@@ -337,7 +463,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		if p, ok := obs.Peers[did]; ok {
 			peer = &p
 		}
-		st.Online = online(st.Addresses, st.MACs, peer)
+		seen[did] = evidence(st.Addresses, st.MACs, peer)
 		for _, m := range st.MACs {
 			if l, ok := leaseOf[m]; ok {
 				lc := l
@@ -353,7 +479,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		if len(d.MACs) == 0 && len(d.IPs) > 0 {
 			st.Name = "dev-" + strings.ReplaceAll(d.IPs[0].String(), ".", "-")
 		}
-		st.Online = online(st.Addresses, st.MACs, nil) || seenNow[d.ID]
+		seen[d.ID] = evidence(st.Addresses, st.MACs, nil) || seenNow[d.ID]
 		for _, m := range st.MACs {
 			if l, ok := leaseOf[m]; ok {
 				lc := l
@@ -387,13 +513,18 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		}
 	}
 	for did, st := range next {
-		if p := t.devices[did]; p != nil {
+		p := t.devices[did]
+		if p != nil {
 			st.LastSeen = p.LastSeen
 		}
-		if st.Online {
+		if seen[did] {
 			st.LastSeen = obs.At
 		}
-		t.applyTraffic(st, obs)
+		st.Online = !st.LastSeen.IsZero() && obs.At.Sub(st.LastSeen) < t.offlineAfter
+		t.applyTraffic(st, obs, deltas, p)
+	}
+	if obs.ConntrackRead {
+		t.lastRead = obs.At
 	}
 	for did := range t.traffic {
 		if _, ok := next[did]; !ok {

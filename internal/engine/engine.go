@@ -33,6 +33,9 @@ type Config struct {
 	Namespace string
 	Clock     clock.Clock
 	Log       *slog.Logger
+	// OfflineAfter is how long a device stays online after its last sign of life (plan §2.3); 0 is
+	// 60 s. A test whose clock is the real one sets a short one.
+	OfflineAfter time.Duration
 	// Supervisor starts the goroutines; the engine makes one when nil.
 	Supervisor *supervisor.Supervisor
 	// Secrets is the store of WireGuard keys. The engine reads it to derive the public keys the
@@ -244,6 +247,7 @@ type Engine struct {
 	dhcp            dhcpState
 	activeMu        sync.Mutex
 	active          map[netip.Addr]bool
+	unknown         []netip.Addr
 	// neighSeen is when each neighbor entry (interface, address, MAC) was first read: of two
 	// entries of a device, the one seen later is its more current address (domain.Neighbor.Seen).
 	neighMu   sync.Mutex

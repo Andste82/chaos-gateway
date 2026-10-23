@@ -125,6 +125,8 @@ type options struct {
 	maxRuns int
 	// noCaptures leaves out the capture volume (M17): a deployment that cannot record
 	noCaptures bool
+	// offlineAfter is the engine's (0: its default of a minute, on the real clock)
+	offlineAfter time.Duration
 	// captureQuota is the quota of the captures when the configuration names none (0: the default)
 	captureQuota int64
 	// captureMinFree is the free space of the capture volume below which the real executor of the testbed refuses and
@@ -203,7 +205,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if o.execWrap != nil {
 		eng = o.execWrap(eng)
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID, ClassLimit: o.classLimit,
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID, ClassLimit: o.classLimit, OfflineAfter: o.offlineAfter,
 		GenerationFile: filepath.Join(root, "api", "generation")})
 	if err != nil {
 		t.Fatal(err)

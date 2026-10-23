@@ -4919,8 +4919,15 @@ components:
       properties:
         online:
           type: boolean
-          description: Seen now - a confirmed neighbor entry, a connection, or a WireGuard handshake; a lease alone does not count.
-        last_seen: {type: string, format: date-time}
+          description: >-
+            The device gave a sign of life within the last 60 s (last_seen): a confirmed (REACHABLE) neighbor entry, traffic
+            it sent on a tracked connection, a new or renewed DHCP lease, or a WireGuard handshake younger than 3 min. A
+            connection that only exists, or an existing lease, does not count. It turns online at the first sign of life
+            and offline 60 s after the last one; device_online and device_offline are sent on these transitions.
+        last_seen:
+          type: string
+          format: date-time
+          description: When the device last gave a sign of life (see online).
         macs:
           type: array
           items: {$ref: '#/components/schemas/MacAddress'}
@@ -4934,9 +4941,21 @@ components:
             enum: [config, dhcp, neighbor, conntrack, wireguard, probe]
         lease: {$ref: '#/components/schemas/DhcpLease'}
         wireguard: {$ref: '#/components/schemas/WireGuardPeerStatus'}
-        upload_bps: {type: integer, format: int64}
-        download_bps: {type: integer, format: int64}
-        flows_active: {type: integer}
+        upload_bps:
+          type: integer
+          format: int64
+          description: >-
+            Bytes per second the device sent, averaged over the conntrack reads of the last 10 s (each connection counted
+            by what it moved since the previous read; a port-forwarded connection counts for its target device). 0 when
+            the device moved nothing; left out while unknown (before the second conntrack read, or when the last read
+            failed).
+        download_bps:
+          type: integer
+          format: int64
+          description: Bytes per second the device received; as upload_bps.
+        flows_active:
+          type: integer
+          description: Tracked connections the device is a party to, as of the last conntrack read; left out while unknown, as upload_bps.
     DhcpLease:
       type: object
       required: [ip, mac, network, expires_at]

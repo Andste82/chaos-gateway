@@ -37,13 +37,35 @@ test('a tall form keeps its action row in view at 1440 × 900', async ({ page })
   await open(page);
   await page.getByRole('button', { name: 'Add network' }).first().click();
   const dialog = page.getByRole('dialog', { name: 'Add network' });
-  // the form is taller than the dialog: Cancel and Preview & apply stay at its bottom edge, unscrolled
+  // with Advanced open the form is taller than the dialog: Cancel and Preview & apply stay at its bottom
+  // edge, unscrolled
+  await dialog.getByRole('button', { name: /^Advanced/ }).click();
+  await expect(dialog.getByRole('button', { name: /^Hide advanced/ })).toBeVisible();
   const content = await dialog.evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
   expect(content.scroll).toBeGreaterThan(content.client);
   await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeInViewport({ ratio: 1 });
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeInViewport({ ratio: 1 });
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toBeHidden();
+});
+
+test('a tall form scrolled to its end: the action row covers nothing of the last field and closes the dialog (#80)', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await page.getByRole('button', { name: 'Add network' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add network' });
+  await dialog.getByRole('button', { name: /^Advanced/ }).click();
+  await expect(dialog.getByRole('button', { name: /^Hide advanced/ })).toBeVisible();
+  const at = await dialog.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+    const row = el.querySelector('.dialog-actions')!;
+    const above = row.previousElementSibling!.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    return { scrolled: el.scrollTop > 0, aboveBottom: above.bottom, rowTop: row.getBoundingClientRect().top, rowBottom: row.getBoundingClientRect().bottom, innerBottom: box.bottom - el.clientTop };
+  });
+  expect(at.scrolled).toBe(true);
+  expect(at.aboveBottom).toBeLessThanOrEqual(at.rowTop);
+  expect(Math.abs(at.rowBottom - at.innerBottom)).toBeLessThanOrEqual(1);
 });
 
 test('network forms: add a test network with several ports through the drawer; after the apply it is listed with both ports (P3-M12-04)', async ({ page }) => {

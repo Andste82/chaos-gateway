@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Modal dialog (plan §2.17): Reka UI's dialog (focus trap, Escape, aria-modal, labelled by its
 // title), styled as a card. The footer slot holds the actions; a form's own action row uses the
-// `dialog-actions` class, so it stays in view while a tall form scrolls. On close the focus goes back
+// `dialog-actions` class, so it stays in view while a tall form scrolls; the row brings the dialog's
+// bottom padding, so the dialog drops its own while it has one (#80). On close the focus goes back
 // to the control that opened the dialog, or to the page's heading when that control is gone.
 import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui';
 import { useFocusReturn } from '../../lib/focus';
@@ -17,7 +18,7 @@ const focus = useFocusReturn();
     <DialogPortal>
       <DialogOverlay class="fixed inset-0 z-40 bg-black/60" />
       <DialogContent
-        class="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-48px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-auto rounded-[10px] border border-border-strong bg-surface p-6 text-text shadow-2xl"
+        class="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-48px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-auto rounded-[10px] border border-border-strong bg-surface p-6 text-text shadow-2xl has-[.dialog-actions]:pb-0"
         :style="{ width: width ?? '520px', maxWidth: 'calc(100vw - 32px)' }"
         @open-auto-focus="focus.onOpen"
         @close-auto-focus="focus.onClose"

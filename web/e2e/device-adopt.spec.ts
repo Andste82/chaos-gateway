@@ -93,6 +93,24 @@ test('adopting without the box adds no fixed IP and keeps the MACs in the order 
   });
 });
 
+test('a refresh of the device while the dialog is open does not fill a fixed IP the user has emptied', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto(`/devices/${DEV}`);
+  await page.getByRole('button', { name: 'Adopt', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Adopt device' });
+  await dialog.getByRole('checkbox', { name: 'Keep this address (DHCP reservation)' }).check();
+  const ip = dialog.getByLabel('Fixed IP (DHCP reservation)');
+  await expect(ip).toHaveValue('10.10.0.133');
+  await ip.fill('');
+  // the device detail polls the device; its counters change, its lease does not
+  gw.devices = gw.devices.map((d) => (d.id === DEV ? { ...d, observed: { ...d.observed, upload_bps: 4321 } } : d));
+  const polled = gw.requestsTo('GET', `/devices/${DEV}`).length;
+  await expect.poll(() => gw.requestsTo('GET', `/devices/${DEV}`).length, { timeout: 15_000 }).toBeGreaterThan(polled);
+  await expect(page.getByText('4.3 KB/s').first()).toBeAttached();
+  await expect(ip).toHaveValue('');
+});
+
 const notOffered: [string, () => MockGateway][] = [
   ['without a MAC', () => lab((d) => ({ ...d, observed: { ...d.observed, macs: [] } }))],
   ['without a network', () => lab((d) => ({ ...d, network: undefined }))],

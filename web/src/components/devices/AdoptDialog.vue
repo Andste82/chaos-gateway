@@ -63,16 +63,21 @@ const macs = computed(() => {
 
 watch(open, (o) => {
   if (!o || !props.device) return;
-  const hostname = props.device.observed.lease?.hostname;
+  // the host name of the lease to keep, else of the device's current lease
+  const hostname = (props.lease ?? props.device.observed.lease)?.hostname;
   name.value = hostname && nameRegExp.test(hostname) ? hostname : props.device.name;
   error.value = '';
   keep.value = !!props.lease;
   fixedIp.value = lease.value?.ip ?? '';
 });
-// the configuration can come after the dialog opened
-watch(lease, (l) => {
-  if (l && (!keep.value || !fixedIp.value)) fixedIp.value = l.ip;
-});
+// the configuration can come after the dialog opened; keyed on the address, so a refresh of the device
+// that keeps its lease does not fill a field the user has just emptied
+watch(
+  () => lease.value?.ip,
+  (ip) => {
+    if (ip && (!keep.value || !fixedIp.value)) fixedIp.value = ip;
+  },
+);
 
 const nameError = computed(() =>
   nameRegExp.test(name.value) ? '' : 'Letters, digits, dot, dash and underscore; starting with a letter or digit; at most 63.',

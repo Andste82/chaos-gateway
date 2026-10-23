@@ -1009,8 +1009,10 @@ export class MockGateway {
       this.config = applyMergePatch(this.config, patch);
       this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
       this.noteApplied(id, this.activeBy);
-      for (const [devId, cfg] of Object.entries(patch?.devices ?? {})) {
-        this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
+      for (const devId of Object.keys(patch?.devices ?? {})) {
+        // the device as the new configuration has it (the patch merged into what it had)
+        const cfg = this.config.devices?.[devId];
+        if (cfg) this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
       }
       this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
       const res: ApplyResult = { revision: id, status: 'active', generation: this.state.generation, duration_ms: 87 };
@@ -1167,8 +1169,10 @@ export class MockGateway {
       domain.push({ op, kind: 'scenario', id: key, name, path: `/scenarios/${key}`, summary: `scenario ${name} ${op}` });
     }
     for (const [key, v] of Object.entries((patch as { devices?: Record<string, { name?: string } | null> }).devices ?? {})) {
-      const name = String(v?.name ?? key);
-      domain.push({ op: v === null ? 'removed' : 'added', kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${v === null ? 'removed' : 'added'}` });
+      const before = this.config.devices?.[key];
+      const name = String(v?.name ?? before?.name ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'device', id: key, name, path: `/devices/${key}`, summary: `device ${name} ${op}` });
     }
     const nets = (patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> } | null> }).networks ?? {};
     for (const [netId, n] of Object.entries(nets)) {

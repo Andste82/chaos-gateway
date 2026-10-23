@@ -46,8 +46,9 @@ let refusedForm = '';
 let origin: EditOrigin | undefined;
 /** The device as the configuration has it when the dialog opened (the draft's edit of it included). */
 const before = ref<Device>({ name: '' });
-/** Its fixed IP in the draft's base: a reservation that is not new takes no renewal to take effect. */
+/** Its fixed IP and network in the draft's base: a reservation that is not new takes no renewal to take effect. */
 const baseFixedIp = ref<string>();
+const baseNetwork = ref<string>();
 
 /** The device as the draft has it: its edit, the draft's base, or the configuration the gateway sent with the view. */
 function current(): Device {
@@ -63,7 +64,9 @@ watch(
       return;
     }
     before.value = current();
-    baseFixedIp.value = (draft.baseConfig?.devices?.[props.device.id] ?? props.device.config)?.fixed_ip;
+    const base = draft.baseConfig?.devices?.[props.device.id] ?? props.device.config;
+    baseFixedIp.value = base?.fixed_ip;
+    baseNetwork.value = base?.network;
     form.value = formFromDevice(before.value);
     origin = draft.editOrigin();
     refused.value = draft.serverErrors[props.device.id] ?? {};
@@ -116,7 +119,7 @@ const formErrors = computed(() => deviceFormErrors(form.value, ctx.value));
 const hints = computed(() =>
   formErrors.value.fixedIp
     ? []
-    : fixedIpHints(form.value.fixedIp, { ...ctx.value, before: baseFixedIp.value, leases: leases.data.value, leaseMac: leaseMac.value }),
+    : fixedIpHints(form.value.fixedIp, { ...ctx.value, before: baseFixedIp.value, beforeNetwork: baseNetwork.value, leases: leases.data.value, leaseMac: leaseMac.value }),
 );
 const server = computed(() => {
   const byField: Partial<Record<DeviceField, string>> = {};

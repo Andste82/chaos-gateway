@@ -50,6 +50,8 @@ describe('the fixed IP of a device (#73)', () => {
   it('refuses what the gateway refuses, in its words', () => {
     expect(fixedIpError('10.10.0', ctx())).toBe('Not an IPv4 address, such as 10.10.0.50.');
     expect(fixedIpError('10.10.0.300', ctx())).toBe('Not an IPv4 address, such as 10.10.0.50.');
+    // the gateway refuses an octet with a leading zero
+    expect(fixedIpError('10.10.0.050', ctx())).toBe('Not an IPv4 address, such as 10.10.0.50.');
     expect(fixedIpError('10.10.0.50', ctx({ network: undefined }))).toBe('A fixed address is a DHCP reservation in a network: choose the network.');
     expect(fixedIpError('10.99.0.5', ctx({ network: hub }))).toBe('A DHCP reservation needs a local test network; lab-hub is a WireGuard network.');
     expect(fixedIpError('10.10.0.50', ctx({ macs: [] }))).toBe("The reservation is for the device's first MAC address: the device has none.");
@@ -99,6 +101,9 @@ describe('the fixed IP of a device (#73)', () => {
     );
     // unchanged: no renewal note
     expect(fixedIpHints('10.10.0.50', ctx({ before: '10.10.0.50' })).some((h) => h.kind === 'renewal')).toBe(false);
+    expect(fixedIpHints('10.10.0.50', ctx({ before: '10.10.0.50', beforeNetwork: IOT })).some((h) => h.kind === 'renewal')).toBe(false);
+    // the same address in another network is a new reservation
+    expect(fixedIpHints('10.10.0.50', ctx({ before: '10.10.0.50', beforeNetwork: 'other' })).some((h) => h.kind === 'renewal')).toBe(true);
     const short: Network = { ...iot, dhcp: { lease_time: '10m' } };
     expect(fixedIpHints('10.10.0.50', ctx({ network: short })).find((h) => h.kind === 'renewal')?.text).toContain('(5 min)');
     // cleared
@@ -115,6 +120,10 @@ describe('the fixed IP of a device (#73)', () => {
     );
     expect(fixedIpHints('10.10.0.50', ctx({ macs: [MAC, WIFI], leaseMac: WIFI })).find((h) => h.kind === 'first_mac')?.text).toBe(
       `The reservation is for the device's first MAC; ${WIFI}, the MAC of its current lease, is put first.`,
+    );
+    // an unchanged reservation stays on the first MAC, as deviceFromForm leaves the order alone
+    expect(fixedIpHints('10.10.0.50', ctx({ macs: [MAC, WIFI], leaseMac: WIFI, before: '10.10.0.50', beforeNetwork: IOT })).find((h) => h.kind === 'first_mac')?.text).toBe(
+      `The reservation is for the device's first MAC, ${MAC}, not for its other one.`,
     );
     expect(reservationMacs([MAC, WIFI], WIFI.toUpperCase())).toEqual([WIFI, MAC]);
     expect(reservationMacs([MAC, WIFI], MAC)).toEqual([MAC, WIFI]);
@@ -138,6 +147,8 @@ describe('the device dialog (#73)', () => {
     expect(deviceFromForm({ ...f, fixedIp: '10.10.0.50' }, esp, WIFI).identifiers).toEqual({ macs: [WIFI, MAC] });
     // an unchanged one leaves the order alone
     expect(deviceFromForm({ ...f, name: 'esp', fixedIp: '10.10.0.50' }, { ...esp, fixed_ip: '10.10.0.50' }, WIFI)).toEqual({ ...esp, name: 'esp', fixed_ip: '10.10.0.50' });
+    // the same address in another network is a new reservation too
+    expect(deviceFromForm({ ...f, network: 'other', fixedIp: '10.10.0.50' }, { ...esp, fixed_ip: '10.10.0.50' }, WIFI).identifiers).toEqual({ macs: [WIFI, MAC] });
     const cleared = deviceFromForm({ ...f, fixedIp: '' }, { ...esp, fixed_ip: '10.10.0.50' });
     expect(cleared).toEqual(esp);
     expect('fixed_ip' in cleared).toBe(false);

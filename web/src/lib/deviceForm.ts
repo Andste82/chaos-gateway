@@ -31,7 +31,8 @@ export interface ReservationContext {
 export function fixedIpError(ip: string, ctx: ReservationContext): string | undefined {
   const text = ip.trim();
   const n = parseIPv4(text);
-  if (n === undefined) return 'Not an IPv4 address, such as 10.10.0.50.';
+  // the gateway parses the address strictly: no octet with a leading zero ("10.10.0.050")
+  if (n === undefined || formatIPv4(n) !== text) return 'Not an IPv4 address, such as 10.10.0.50.';
   const net = ctx.network;
   if (!net) return 'A fixed address is a DHCP reservation in a network: choose the network.';
   if (net.type !== 'lan') return `A DHCP reservation needs a local test network; ${net.name} is a WireGuard network.`;
@@ -61,6 +62,8 @@ export interface ReservationHint {
 export interface ReservationHintContext extends ReservationContext {
   /** The fixed IP the device has in the configuration now (the active revision or the draft's base). */
   before?: string;
+  /** The network the device is in in the configuration now; a reservation moved to another network is a new one. */
+  beforeNetwork?: string;
   /** The current DHCP leases of the network. */
   leases?: DhcpLease[];
   /** The MAC of the device's current lease (the reservation is put on it, see `reservationMacs`). */
@@ -120,7 +123,9 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
       });
     }
   }
-  const macs = reservationMacs(ctx.macs, ctx.leaseMac);
+  // only a new or changed reservation puts the lease's MAC first (as `deviceFromForm` does)
+  const changed = parseIPv4(ctx.before) !== n || (ctx.beforeNetwork !== undefined && ctx.beforeNetwork !== ctx.networkId);
+  const macs = changed ? reservationMacs(ctx.macs, ctx.leaseMac) : ctx.macs;
   const mine = macs[0]?.toLowerCase();
   const held = (ctx.leases ?? []).find((l) => parseIPv4(l.ip) === n && l.state !== 'expired' && l.state !== 'declined' && l.mac.toLowerCase() !== mine);
   if (held) {
@@ -129,7 +134,7 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
       text: `${addr} is leased to ${held.mac}${held.hostname ? ` (${held.hostname})` : ''} now: the device gets it only once that lease is released or runs out, and an address from the pool until then.`,
     });
   }
-  if (net.dhcp?.enabled !== false && parseIPv4(ctx.before) !== n) {
+  if (net.dhcp?.enabled !== false && changed) {
     out.push({
       kind: 'renewal',
       text: `The device gets ${addr} when it renews its lease, which takes up to half the lease time (${renewalTime(net.dhcp?.lease_time)}).`,
@@ -202,7 +207,8 @@ export function deviceFromForm(f: DeviceForm, before: Device, leaseMac?: string)
   if (ip) {
     out.fixed_ip = ip;
     const macs = before.identifiers?.macs;
-    if (macs?.length && parseIPv4(ip) !== parseIPv4(before.fixed_ip)) {
+    const changed = parseIPv4(ip) !== parseIPv4(before.fixed_ip) || f.network !== (before.network ?? '');
+    if (macs?.length && changed) {
       const ordered = reservationMacs(macs, leaseMac);
       if (ordered !== macs) out.identifiers = { ...before.identifiers, macs: ordered };
     }

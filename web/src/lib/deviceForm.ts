@@ -6,7 +6,7 @@
 // leased to another client now, DHCP is off in the network, a new reservation takes effect when the
 // device renews its lease, and the reservation is for the device's first MAC (decision on #77). The
 // helpers for the fixed IP take a plain context, so the adopt dialog and the leases card can use them.
-import type { DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
+import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { durationMs, formatDuration } from './format';
 import { effectivePools, formatIPv4, parseIPv4, parseSubnet, subnetText } from './networks';
@@ -50,7 +50,7 @@ export function fixedIpError(ip: string, ctx: ReservationContext): string | unde
   return undefined;
 }
 
-export type ReservationHintKind = 'pool' | 'leased' | 'dhcp_off' | 'renewal' | 'removed' | 'first_mac';
+export type ReservationHintKind = 'pool' | 'leased' | 'dhcp_off' | 'renewal' | 'kept' | 'removed' | 'first_mac';
 
 /** A note on a reservation that does not stop it. */
 export interface ReservationHint {
@@ -68,6 +68,8 @@ export interface ReservationHintContext extends ReservationContext {
   leases?: DhcpLease[];
   /** The MAC of the device's current lease (the reservation is put on it, see `reservationMacs`). */
   leaseMac?: string;
+  /** The address of the device's current lease: a new reservation of it keeps the address, no renewal moves it. */
+  leaseIp?: string;
 }
 
 /** Half a lease time in words ("30 min" for the default of 1 h). */
@@ -134,7 +136,10 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
       text: `${addr} is leased to ${held.mac}${held.hostname ? ` (${held.hostname})` : ''} now: the device gets it only once that lease is released or runs out, and an address from the pool until then.`,
     });
   }
-  if (net.dhcp?.enabled !== false && changed) {
+  const kept = ctx.leaseIp !== undefined && parseIPv4(ctx.leaseIp) === n && (!ctx.leaseMac || ctx.leaseMac.toLowerCase() === mine);
+  if (net.dhcp?.enabled !== false && changed && kept) {
+    out.push({ kind: 'kept', text: `The device has ${addr} from its current lease and keeps it; from now on the address is reserved for it.` });
+  } else if (net.dhcp?.enabled !== false && changed) {
     out.push({
       kind: 'renewal',
       text: `The device gets ${addr} when it renews its lease, which takes up to half the lease time (${renewalTime(net.dhcp?.lease_time)}).`,
@@ -150,6 +155,29 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
           ? `The reservation is for the device's first MAC, ${macs[0]}, not for its other ${macs.length === 2 ? 'one' : `${macs.length - 1}`}.`
           : `The reservation is for the device's MAC ${macs[0]}.`,
     });
+  }
+  return out;
+}
+
+/**
+ * The address a discovered device can keep when it is adopted (#74): its current lease, when it has a MAC
+ * and the lease is in its network, a local test network with DHCP on; undefined when no reservation is
+ * offered. The MAC is the lease's, the one the reservation is put on (`reservationMacs`).
+ */
+export function adoptReservation(device: DeviceView, network: Network | undefined): { ip: string; mac: string } | undefined {
+  const lease = device.observed.lease;
+  if (!lease?.ip || !lease.mac || !device.observed.macs?.length || !device.network) return undefined;
+  if (lease.network && lease.network !== device.network) return undefined;
+  if (network?.type !== 'lan' || (network as LanNetwork).dhcp?.enabled === false) return undefined;
+  return { ip: lease.ip, mac: lease.mac };
+}
+
+/** The devices as the draft has them: the base's with the edits (`null` deletes one). */
+export function draftDevices(base: Record<string, Device> | undefined, edits: Record<string, Device | null>): Record<string, Device> {
+  const out: Record<string, Device> = { ...(base ?? {}) };
+  for (const [id, d] of Object.entries(edits)) {
+    if (d === null) delete out[id];
+    else out[id] = d;
   }
   return out;
 }

@@ -17,6 +17,7 @@ import {
   deviceFieldOf,
   deviceFormErrors,
   deviceFromForm,
+  draftDevices,
   fixedIpHints,
   formFromDevice,
   type DeviceField,
@@ -86,16 +87,14 @@ const network = computed(() => (form.value.network ? draft.effectiveNetworks[for
 const leases = useLeases(() => (network.value?.type === 'lan' ? form.value.network : undefined));
 const macs = computed(() => before.value.identifiers?.macs ?? []);
 const leaseMac = computed(() => props.device.observed.lease?.mac);
+/** The address of the current lease, when it is in the form's network (a reservation of it keeps the address). */
+const leaseIp = computed(() => {
+  const l = props.device.observed.lease;
+  return l && (!l.network || l.network === form.value.network) ? l.ip : undefined;
+});
 
 /** The devices as the draft has them (the other reservations, the names taken). */
-const devices = computed<Record<string, Device>>(() => {
-  const out: Record<string, Device> = { ...(draft.baseConfig?.devices ?? {}) };
-  for (const [id, d] of Object.entries(draft.devices)) {
-    if (d === null) delete out[id];
-    else out[id] = d;
-  }
-  return out;
-});
+const devices = computed<Record<string, Device>>(() => draftDevices(draft.baseConfig?.devices, draft.devices));
 const takenNames = computed(() => {
   const out = Object.entries(devices.value)
     .filter(([id]) => id !== props.device.id)
@@ -119,7 +118,7 @@ const formErrors = computed(() => deviceFormErrors(form.value, ctx.value));
 const hints = computed(() =>
   formErrors.value.fixedIp
     ? []
-    : fixedIpHints(form.value.fixedIp, { ...ctx.value, before: baseFixedIp.value, beforeNetwork: baseNetwork.value, leases: leases.data.value, leaseMac: leaseMac.value }),
+    : fixedIpHints(form.value.fixedIp, { ...ctx.value, before: baseFixedIp.value, beforeNetwork: baseNetwork.value, leases: leases.data.value, leaseMac: leaseMac.value, leaseIp: leaseIp.value }),
 );
 const server = computed(() => {
   const byField: Partial<Record<DeviceField, string>> = {};

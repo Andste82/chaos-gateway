@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { DhcpLease, Device, Network } from '../api/generated/model';
+import type { DeviceView, DhcpLease, Device, Network } from '../api/generated/model';
 import { CreateRevisionBody } from '../api/generated/zod/revisions/revisions';
 import {
+  adoptReservation,
   deviceFieldOf,
   deviceFormErrors,
   deviceFromForm,
   deviceNameError,
+  draftDevices,
   fixedIpError,
   fixedIpHints,
   formFromDevice,
@@ -172,5 +174,43 @@ describe('the device dialog (#73)', () => {
     expect(deviceFieldOf('name')).toBe('name');
     expect(deviceFieldOf('network')).toBe('network');
     expect(deviceFieldOf('identifiers')).toBeUndefined();
+  });
+});
+
+describe('the adopt dialog (#74)', () => {
+  const lease = { ip: '10.10.0.42', mac: WIFI, network: IOT, expires_at: '2026-10-23T12:00:00Z', state: 'active' as const };
+  const seen = (over: Partial<DeviceView['observed']> = {}): DeviceView => ({
+    id: ESP,
+    name: 'dev-02-00-00-00-00-2b',
+    origin: 'discovered',
+    network: IOT,
+    observed: { online: true, macs: [MAC, WIFI], addresses: ['10.10.0.42'], lease, ...over },
+  });
+
+  it('offers to keep the address of the current lease only where a reservation can work', () => {
+    expect(adoptReservation(seen(), iot)).toEqual({ ip: '10.10.0.42', mac: WIFI });
+    expect(adoptReservation(seen({ macs: [] }), iot)).toBeUndefined();
+    expect(adoptReservation({ ...seen(), network: undefined }, iot)).toBeUndefined();
+    expect(adoptReservation(seen(), undefined)).toBeUndefined();
+    expect(adoptReservation(seen(), hub)).toBeUndefined();
+    expect(adoptReservation(seen(), { ...iot, dhcp: { enabled: false } })).toBeUndefined();
+    expect(adoptReservation(seen({ lease: undefined }), iot)).toBeUndefined();
+    expect(adoptReservation(seen({ lease: { ...lease, network: 'other' } }), iot)).toBeUndefined();
+  });
+
+  it('notes that the device keeps the address of its lease, on the MAC of the lease', () => {
+    const hints = fixedIpHints('10.10.0.42', ctx({ macs: [MAC, WIFI], leaseMac: WIFI, leaseIp: '10.10.0.42', leases: [{ ...lease }] }));
+    expect(hints).toEqual([
+      { kind: 'kept', text: 'The device has 10.10.0.42 from its current lease and keeps it; from now on the address is reserved for it.' },
+      { kind: 'first_mac', text: `The reservation is for the device's first MAC; ${WIFI}, the MAC of its current lease, is put first.` },
+    ]);
+    // another address takes the renewal
+    expect(fixedIpHints('10.10.0.50', ctx({ leaseMac: MAC, leaseIp: '10.10.0.42' })).map((h) => h.kind)).toEqual(['renewal', 'first_mac']);
+  });
+
+  it('builds the devices of the draft from the base and the edits', () => {
+    const base = { [ESP]: { name: 'ESP32-42' }, [CAM]: { name: 'cam-1' } };
+    expect(draftDevices(base, { [CAM]: null, x: { name: 'x' } })).toEqual({ [ESP]: { name: 'ESP32-42' }, x: { name: 'x' } });
+    expect(draftDevices(undefined, {})).toEqual({});
   });
 });

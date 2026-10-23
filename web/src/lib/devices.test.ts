@@ -8,6 +8,7 @@ import {
   deviceReferences,
   deviceStatus,
   displayName,
+  idMac,
   matchesFilter,
   matchesSearch,
   nameDetail,
@@ -74,13 +75,26 @@ describe('devices', () => {
     expect(list.map(displayName)).toEqual(['aa-host', 'mm', 'zz-host']);
   });
 
+  it('find the MAC a configured device id was derived from (adopted from discovery)', () => {
+    // engine.DeviceID("02:00:00:00:00:3b")
+    const id = '63a1e1ce-ed5a-5b1f-bf4e-87a24a5435ca';
+    expect(idMac(id, ['02:00:00:00:00:3B'])).toBe('02:00:00:00:00:3B');
+    // not the first of its MACs (a reservation put the lease's MAC first)
+    expect(idMac(id, ['02:00:00:00:00:01', '02:00:00:00:00:3b'])).toBe('02:00:00:00:00:3b');
+    expect(idMac(id.toUpperCase(), ['02:00:00:00:00:3b'])).toBe('02:00:00:00:00:3b');
+    // configured with an id of its own, or without that MAC
+    expect(idMac('a1b2c3d4-0000-4000-8000-000000000059', ['02:00:00:00:00:3b'])).toBeUndefined();
+    expect(idMac(id, ['02:00:00:00:00:01'])).toBeUndefined();
+    expect(idMac(id, undefined)).toBeUndefined();
+  });
+
   it('list the configuration objects that name a device, by id or by name', () => {
     const id = 'a1b2c3d4-0000-4000-8000-000000000042';
     const rule = (name: string, device?: string): AccessRule => ({ name, source: device ? { device } : { global: true }, action: 'allow' }) as AccessRule;
     const refs = deviceReferences(
       { id, name: 'ESP32-42' },
       {
-        rules: { r1: rule('no-dot', id), r2: rule('other', 'b'), r3: rule('by-name', 'esp32-42') },
+        rules: { r1: rule('no-dot', id.toUpperCase()), r2: rule('other', 'b'), r3: rule('by-name', 'esp32-42') },
         faults: { f1: { name: 'slow', source: { device: id } } as ConfigFault, f2: { name: 'global' } as ConfigFault },
         groups: { g1: { name: 'lab', members: ['x', id] }, g2: { name: 'empty' } },
         forwards: { p1: { protocol: 'tcp', entry: 'uplink', external_port: 8080, target: { device: id } } as PortForward, p2: { name: 'addr', protocol: 'tcp', entry: 'uplink', external_port: 1, target: { address: '10.10.0.5' } } as PortForward },

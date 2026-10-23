@@ -3,16 +3,18 @@
 // lists the configuration objects that name the device as the draft has them (access rules, configured
 // faults, groups, port forwards, scenarios): the gateway refuses a configuration that names a device it
 // does not have (`unknown_reference`), so the removal waits until they no longer name it. Otherwise it
-// says what goes with the device (its fixed IP, the DHCP reservation) and that the device comes back as
-// a discovered one under the same id when the gateway sees it with the MAC that id was derived from.
+// says what goes with the device: its fixed IP (the DHCP reservation) and the overlays that target it,
+// which the gateway removes with it only when the apply is forced (the preview lists them and asks). A
+// device adopted from discovery comes back as a discovered one under the same id when the gateway sees
+// it with the MAC that id was derived from (idMac); one configured with an id of its own gets a new one.
 // "Preview & apply" puts the deletion into the configuration draft and opens the preview-and-apply
 // drawer; until it is applied, the device list marks it and Undo takes it back.
 import { computed, ref, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import type { Device, DeviceView } from '../../api/generated/model';
-import { useActiveConfig, useGatewayState } from '../../composables/gateway';
-import { deviceReferences, referenceKind } from '../../lib/devices';
+import { useActiveConfig, useGatewayState, useOverlays } from '../../composables/gateway';
+import { deviceReferences, idMac, referenceKind } from '../../lib/devices';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import LoadError from '../ui/LoadError.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -57,7 +59,11 @@ const references = computed(() =>
       )
     : [],
 );
-const firstMac = computed(() => config.value?.identifiers?.macs?.[0]);
+/** The MAC the device's id was derived from, when it was adopted from discovery. */
+const sameIdMac = computed(() => idMac(props.device.id, config.value?.identifiers?.macs ?? props.device.observed.macs));
+// the overlays that name the device: applying the removal orphans them (the gateway refuses it without force)
+const overlays = useOverlays();
+const overlayCount = computed(() => (overlays.data.value ?? []).filter((o) => o.target?.device?.toLowerCase() === props.device.id.toLowerCase()).length);
 const base = computed(() => draft.base ?? state.data.value?.active_revision);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
 
@@ -116,11 +122,20 @@ async function submit() {
         <template v-if="config?.fixed_ip">
           Its fixed IP <span class="mono">{{ config.fixed_ip }}</span> (the DHCP reservation) goes with it.
         </template>
-        No rule, fault, group, port forward or scenario names it.
+        No rule, fault, group, port forward or scenario of the configuration names it.
+        <span v-if="overlayCount" class="mt-2 block text-block-text" data-testid="remove-device-overlays">
+          {{ overlayCount === 1 ? 'An active overlay (a fault, profile or rule applied at runtime) targets' : `${overlayCount} active overlays (faults, profiles or rules applied at runtime) target` }}
+          it: the gateway removes {{ overlayCount === 1 ? 'it' : 'them' }} with the device. The preview lists {{ overlayCount === 1 ? 'it' : 'them' }} and asks before applying.
+        </span>
         <span class="mt-2 block text-text-2" data-testid="remove-device-comes-back">
-          When the gateway sees it again, it is listed as a discovered device<template v-if="firstMac">
-            under the same id, as long as it is seen with its first MAC <span class="mono">{{ firstMac }}</span></template
-          >; faults that target that id keep working.
+          <template v-if="sameIdMac">
+            When the gateway sees it again with the MAC <span class="mono">{{ sameIdMac }}</span> its id was derived from, it is listed as a
+            discovered device under the same id.
+          </template>
+          <template v-else>
+            Its id was not derived from one of its MACs (it was configured with an id of its own), so when the gateway sees it again it is
+            listed as a discovered device under a new id.
+          </template>
         </span>
       </div>
       <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text">Another revision waits for confirmation; remove the device after it is resolved.</p>

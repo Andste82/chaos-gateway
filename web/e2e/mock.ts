@@ -3,6 +3,7 @@
 // the browser's EventSource with one the test drives (`emit`), so live updates are deterministic.
 // The data use the generated types, so a change of the spec breaks the fixtures at compile time.
 import type { Page, Request, Route } from '@playwright/test';
+import { discoveredDeviceId } from '../src/lib/ids';
 import { applyMergePatch } from '../src/lib/mergePatch';
 import { reservationPool } from '../src/lib/networks';
 import type {
@@ -1013,13 +1014,16 @@ export class MockGateway {
         // the device as the new configuration has it (the patch merged into what it had)
         const cfg = this.config.devices?.[devId];
         if (cfg) this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
-        // a removed device is discovered again under the same id (derived from its first MAC), with the generated name
+        // a removed device is discovered again, with the generated name: under the same id when that id was
+        // derived from a MAC it is seen with (adopted from discovery), else under the id of its first MAC
         if (v === null) {
           this.devices = this.devices.map((d) => {
             if (d.id !== devId) return d;
-            const mac = d.observed.macs?.[0];
+            const macs = d.observed.macs ?? [];
+            const mac = macs.find((m) => discoveredDeviceId(m) === d.id) ?? macs[0];
             const { config: _config, ...rest } = d;
-            return { ...rest, origin: 'discovered', name: mac ? `dev-${mac.replace(/:/g, '-')}` : `dev-${d.observed.addresses?.[0]?.replace(/\./g, '-')}` };
+            const name = mac ? `dev-${mac.replace(/:/g, '-')}` : `dev-${d.observed.addresses?.[0]?.replace(/\./g, '-')}`;
+            return { ...rest, id: mac ? discoveredDeviceId(mac) : d.id, origin: 'discovered', name };
           });
         }
       }
@@ -1380,8 +1384,21 @@ export class MockGateway {
     return out;
   }
 
-  /** The active overlays a candidate would orphan: the activations of a custom profile it deletes. */
+  /**
+   * The active overlays a candidate would orphan: the activations of a custom profile it deletes, and the
+   * overlays that target a device it deletes (a device that comes back as discovered under the same id
+   * is not configured any more, so its overlays go too).
+   */
   referencesOf(patch: unknown): BlockingReference[] {
+    const devs = (patch as { devices?: Record<string, unknown> } | undefined)?.devices ?? {};
+    const onDevices = this.overlays
+      .filter((o) => o.target?.device && devs[o.target.device] === null && this.config.devices?.[o.target.device])
+      .map((o) => ({ kind: 'overlay' as const, id: o.id, owner: o.owner, object: `/devices/${o.target!.device}` }));
+    return [...this.profileReferencesOf(patch), ...onDevices];
+  }
+
+  /** The activations of a custom profile the candidate deletes. */
+  private profileReferencesOf(patch: unknown): BlockingReference[] {
     const deleted = Object.entries((patch as { profiles?: Record<string, unknown> } | undefined)?.profiles ?? {})
       .filter(([, v]) => v === null)
       .map(([key]) => key);

@@ -526,8 +526,9 @@ func TestAReservedAddressStaysWithItsDevice(t *testing.T) {
 
 // #78: removing an adopted device from the configuration brings it back as discovered under the same
 // UUID, as long as the MAC it is seen with is the one its id was derived from (adopting keeps the
-// discovered id, which is a function of the first MAC). Overlays that target it keep working. A device
-// seen only with another of its MACs comes back under that MAC's id.
+// discovered id, which is a function of that MAC). A device seen only with another of its MACs comes
+// back under that MAC's id. The overlays that target it do not survive the removal: the revision
+// orphans them (TestARevisionThatDeletesAReferencedObjectIsRefusedAndListsTheReferences).
 func TestARemovedAdoptionComesBackAsDiscoveredUnderTheSameID(t *testing.T) {
 	for name, tc := range map[string]struct {
 		seen   string

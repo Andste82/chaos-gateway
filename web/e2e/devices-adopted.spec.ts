@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { discoveredDeviceId } from '../src/lib/ids';
 import { FWD_SENSOR, FWD_WEB, IOT, MockGateway, device, toast, withForwards } from './mock';
 
 // #78: the device list shows a discovered device under the host name of its lease and marks the
@@ -10,6 +11,10 @@ const SENSOR9 = 'a1b2c3d4-0000-4000-8000-000000000059';
 const PHONE = 'a1b2c3d4-0000-4000-8000-000000000015';
 const THERMO = 'd15c0000-0000-4000-8000-0a0b0c0d0e0f';
 const GROUP = 'c0a80001-0000-4000-8000-000000000001';
+// adopted from discovery: its id is the one the gateway derived from its MAC
+const PLUG_MAC = '02:00:00:00:00:77';
+const PLUG = discoveredDeviceId(PLUG_MAC);
+const PLUG_FAULT = 'f0000000-0000-4000-8000-000000000077';
 
 function lab(): MockGateway {
   const gw = withForwards(MockGateway.sample());
@@ -25,7 +30,14 @@ function lab(): MockGateway {
       origin: 'discovered',
       observed: { online: true, macs: ['0a:0b:0c:0d:0e:0f'], addresses: ['10.10.0.140'], sources: ['dhcp'], lease: lease('10.10.0.140', '0a:0b:0c:0d:0e:0f', 'thermostat-hall') },
     }),
+    device({ id: PLUG, name: 'Plug-77', observed: { online: true, macs: [PLUG_MAC], addresses: ['10.10.0.77'], sources: ['dhcp'] } }),
   );
+  // an active fault on Plug-77 (an overlay; nothing in the configuration names it)
+  const now = new Date().toISOString();
+  gw.overlays = [
+    ...gw.overlays,
+    { id: PLUG_FAULT, kind: 'fault', owner: { type: 'user', id: 'admin' }, target: { device: PLUG }, fault: { latency: '100ms' }, created_at: now, updated_at: now, generation: 42, state: 'effective' },
+  ];
   // no port forward to Sensor-09: nothing names it
   const { [FWD_SENSOR]: _sensor, ...forwards } = gw.config.port_forwards ?? {};
   gw.config = {
@@ -36,6 +48,7 @@ function lab(): MockGateway {
       [SENSOR7]: { name: 'Sensor-07', identifiers: { macs: ['02:00:00:00:00:39'] }, network: IOT },
       [SENSOR9]: { name: 'Sensor-09', identifiers: { macs: ['02:00:00:00:00:3b'] }, network: IOT, fixed_ip: '10.10.0.59' },
       [PHONE]: { name: 'Test-Phone', identifiers: { macs: ['02:00:00:00:01:0f'] } },
+      [PLUG]: { name: 'Plug-77', identifiers: { macs: [PLUG_MAC] }, network: IOT },
     },
     groups: { [GROUP]: { name: 'lab', members: [SENSOR7] } },
   };
@@ -91,10 +104,10 @@ test('the filter chip Adopted lists the configured devices, with its count', asy
   await page.goto('/devices');
   const filter = page.getByRole('group', { name: 'Filter' });
   await expect(filter.getByRole('button', { name: 'Not adopted 2' })).toBeVisible();
-  await filter.getByRole('button', { name: 'Adopted 4', exact: true }).click();
-  await expect(filter.getByRole('button', { name: 'Adopted 4', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('device-row')).toHaveCount(4);
-  await expect(page.getByTestId('device-row').getByTestId('device-adopted-badge')).toHaveCount(4);
+  await filter.getByRole('button', { name: 'Adopted 5', exact: true }).click();
+  await expect(filter.getByRole('button', { name: 'Adopted 5', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('device-row')).toHaveCount(5);
+  await expect(page.getByTestId('device-row').getByTestId('device-adopted-badge')).toHaveCount(5);
   await expect(page.getByTestId('device-row').getByRole('button', { name: /^Adopt / })).toHaveCount(0);
 });
 
@@ -112,7 +125,7 @@ test('Edit in the list opens the device dialog of the device', async ({ page }) 
   await expect(page.getByRole('dialog', { name: 'Edit ESP32-42' }).getByLabel('Name')).toHaveValue('ESP32-42');
 });
 
-test('removing a device nothing names: preview and apply, it comes back as discovered under the same id', async ({ page }) => {
+test('removing a device configured with an id of its own: preview and apply, it comes back as discovered under a new id', async ({ page }) => {
   const gw = lab();
   await gw.install(page);
   await page.goto('/devices');
@@ -122,7 +135,8 @@ test('removing a device nothing names: preview and apply, it comes back as disco
   const preview = dialog.getByTestId('remove-device-preview');
   await expect(preview).toContainText('Device Sensor-09 is removed from the configuration in a new revision based on revision 42.');
   await expect(preview).toContainText('Its fixed IP 10.10.0.59 (the DHCP reservation) goes with it.');
-  await expect(preview.getByTestId('remove-device-comes-back')).toContainText('under the same id, as long as it is seen with its first MAC 02:00:00:00:00:3b');
+  await expect(preview.getByTestId('remove-device-comes-back')).toContainText('it is listed as a discovered device under a new id');
+  await expect(preview.getByTestId('remove-device-overlays')).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
 
   const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
@@ -134,8 +148,37 @@ test('removing a device nothing names: preview and apply, it comes back as disco
   const back = row(page, 'dev-02-00-00-00-00-3b');
   await expect(back.getByTestId('device-adopted-badge')).toHaveCount(0);
   await expect(back.getByRole('button', { name: 'Adopt dev-02-00-00-00-00-3b' })).toBeVisible();
-  await expect(back.getByRole('link', { name: 'dev-02-00-00-00-00-3b' })).toHaveAttribute('href', `/devices/${SENSOR9}`);
-  await expect(page.getByRole('group', { name: 'Filter' }).getByRole('button', { name: 'Adopted 3', exact: true })).toBeVisible();
+  await expect(back.getByRole('link', { name: 'dev-02-00-00-00-00-3b' })).toHaveAttribute('href', `/devices/${discoveredDeviceId('02:00:00:00:00:3b')}`);
+  await expect(page.getByRole('group', { name: 'Filter' }).getByRole('button', { name: 'Adopted 4', exact: true })).toBeVisible();
+});
+
+test('removing a device adopted from discovery: its active faults go with it, it comes back as discovered under the same id', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto('/devices');
+
+  await row(page, 'Plug-77').getByRole('button', { name: 'Remove Plug-77 from the configuration' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove Plug-77' });
+  const preview = dialog.getByTestId('remove-device-preview');
+  await expect(preview.getByTestId('remove-device-overlays')).toContainText('An active overlay (a fault, profile or rule applied at runtime) targets it: the gateway removes it with the device.');
+  await expect(preview.getByTestId('remove-device-comes-back')).toContainText(`When the gateway sees it again with the MAC ${PLUG_MAC} its id was derived from, it is listed as a discovered device under the same id.`);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+
+  // the gateway refuses to orphan the overlay unless asked to remove it
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  const refs = drawer.getByTestId('preview-references');
+  await expect(refs).toContainText(`overlay ${PLUG_FAULT} (Device Plug-77)`);
+  const apply = drawer.getByRole('button', { name: 'Apply revision 43' });
+  await expect(apply).toBeDisabled();
+  await refs.getByLabel('Remove them when applying').check();
+  await apply.click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions/43/apply')[0]!.query).toEqual({ force: 'true' });
+  expect(gw.overlays.some((o) => o.id === PLUG_FAULT)).toBe(false);
+
+  const back = row(page, 'dev-02-00-00-00-00-77');
+  await expect(back.getByTestId('device-adopted-badge')).toHaveCount(0);
+  await expect(back.getByRole('link', { name: 'dev-02-00-00-00-00-77' })).toHaveAttribute('href', `/devices/${PLUG}`);
 });
 
 test('removing a device that rules, faults, groups or forwards name lists them first and waits until they are gone', async ({ page }) => {

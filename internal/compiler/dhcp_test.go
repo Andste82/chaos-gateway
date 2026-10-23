@@ -143,6 +143,28 @@ func TestReservationsComeFromDevicesWithAFixedAddress(t *testing.T) {
 	if len(tg.Kea.Config.Subnets) != 1 || len(tg.Kea.Config.Subnets[0].Reservations) != 0 {
 		t.Errorf("%+v", tg.Kea.Config.Subnets)
 	}
+	// two networks with DHCP: each reservation lands in the subnet of its device's network, and the
+	// MAC is written in lower case
+	labIP, labMAC := "10.20.0.31", []string{"02:00:00:00:00:4A"}
+	tg = compileBasic(t, func(c *model.Configuration, _ *Host) {
+		withDHCP(c, iotNet, &model.DhcpScope{})
+		withDHCP(c, labNet, &model.DhcpScope{})
+		iot, lab := iotNet, labNet
+		addDevice(c, devA, model.Device{Name: "esp32-42", FixedIp: &ip, Network: &iot, Identifiers: &model.DeviceIdentifiers{Macs: &mac}})
+		addDevice(c, "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", model.Device{Name: "printer", FixedIp: &labIP, Network: &lab, Identifiers: &model.DeviceIdentifiers{Macs: &labMAC}})
+	})
+	if tg.HasErrors() || len(tg.Kea.Config.Subnets) != 2 {
+		t.Fatalf("%+v %+v", tg.Kea.Config.Subnets, tg.Problems)
+	}
+	got := map[string]string{}
+	for _, s := range tg.Kea.Config.Subnets {
+		for _, r := range s.Reservations {
+			got[s.Network] += r.MAC + "=" + r.IP.String()
+		}
+	}
+	if got[iotNet] != "02:00:00:00:00:31=10.10.0.31" || got[labNet] != "02:00:00:00:00:4a=10.20.0.31" {
+		t.Errorf("%v", got)
+	}
 }
 
 // identityPairs returns the compiled identity map's key→value pairs (plan §3.3).

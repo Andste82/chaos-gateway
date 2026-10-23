@@ -40,8 +40,13 @@ export function useFocusReturn() {
       e.preventDefault();
       const target = opener;
       opener = null;
-      // after the dialog is gone and the page under it updated (Reka focuses in a timeout, too)
-      setTimeout(() => returnFocus(target));
+      // after the dialog is gone and the page under it updated (Reka focuses in a timeout, too); when
+      // something took the focus meanwhile (the user clicked or tabbed on), it stays there
+      setTimeout(() => {
+        const a = document.activeElement;
+        if (a instanceof HTMLElement && a !== document.body && a.isConnected && !a.closest('[role="dialog"]')) return;
+        returnFocus(target);
+      });
     },
   };
 }

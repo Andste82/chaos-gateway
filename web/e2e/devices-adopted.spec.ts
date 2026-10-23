@@ -233,6 +233,9 @@ test('a removal in the changes is marked in the list and on the detail, Undo tak
 
   // the detail agrees, and takes it back too
   await sensor.getByTestId('device-name').click();
+  // the detail is a chunk of its own: under load the list stays a moment longer, and its row has an
+  // Undo with the same name
+  await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible();
   await expect(page.getByTestId('device-removed-mark')).toHaveText('REMOVED · not applied yet');
   await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo the removal of Sensor-09' }).click();
@@ -245,7 +248,13 @@ test('a removal in the changes is marked in the list and on the detail, Undo tak
   await row(page, 'Sensor-09').getByRole('button', { name: 'Remove Sensor-09 from the configuration' }).click();
   await page.getByRole('dialog', { name: 'Remove Sensor-09' }).getByRole('button', { name: 'Preview & apply' }).click();
   await page.getByRole('dialog', { name: 'Preview revision 44' }).getByRole('button', { name: 'Close' }).click();
-  await row(page, 'Sensor-09').getByRole('button', { name: 'Undo the removal of Sensor-09' }).focus();
+  // the dialog hands the focus back to its trigger only once its close animation ends: wait for that,
+  // or Enter goes to whatever has the focus then
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeHidden();
+  await expect(row(page, 'Sensor-09').getByTestId('device-removed-mark')).toHaveText('REMOVED · not applied yet');
+  const undo = row(page, 'Sensor-09').getByRole('button', { name: 'Undo the removal of Sensor-09' });
+  await undo.focus();
+  await expect(undo).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(row(page, 'Sensor-09').getByTestId('device-removed-mark')).toHaveCount(0);
   await expect(row(page, 'Sensor-09').getByRole('button', { name: 'Remove Sensor-09 from the configuration' })).toBeFocused();

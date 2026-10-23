@@ -16,6 +16,7 @@ import type {
 import type { DotTone } from '../components/ui/StatusDot.vue';
 import { faultChips, overlayChips } from './faults';
 import { forwardTitle } from './forwards';
+import { discoveredDeviceId } from './ids';
 import { profileTitle } from './profileNames';
 
 export type DeviceFilter = 'all' | 'online' | 'faulted' | 'unadopted' | 'adopted';
@@ -51,6 +52,16 @@ export function nameDetail(d: DeviceView): string | undefined {
   return host.toLowerCase() === d.name.toLowerCase() ? undefined : `host name ${host}`;
 }
 
+/**
+ * The MAC of a configured device whose discovered id is the device's id (#78): the device was adopted
+ * from discovery with that MAC, and once it is removed from the configuration the gateway lists it as a
+ * discovered device under the same id while it sees it with that MAC. Undefined for a device configured
+ * with an id of its own (YAML or the API) or one whose MACs no longer include that MAC.
+ */
+export function idMac(id: string, macs: readonly string[] | undefined): string | undefined {
+  return (macs ?? []).find((m) => discoveredDeviceId(m) === id.toLowerCase());
+}
+
 /** A configuration object that names a device; removing the device makes it an `unknown_reference`. */
 export interface DeviceReference {
   kind: 'rule' | 'fault' | 'group' | 'forward' | 'scenario';
@@ -77,7 +88,8 @@ export interface DeviceReferrers {
  */
 export function deviceReferences(device: { id: string; name: string }, cfg: DeviceReferrers): DeviceReference[] {
   const lower = device.name.toLowerCase();
-  const names = (ref: string | undefined) => !!ref && (ref === device.id || ref.toLowerCase() === lower);
+  const own = device.id.toLowerCase();
+  const names = (ref: string | undefined) => !!ref && (ref.toLowerCase() === own || ref.toLowerCase() === lower);
   const inScope = (s: Scope | undefined) => names(s?.device);
   const out: DeviceReference[] = [];
   for (const [id, r] of Object.entries(cfg.rules ?? {})) if (inScope(r.source)) out.push({ kind: 'rule', id, name: r.name ?? id, to: '/rules' });

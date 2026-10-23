@@ -3430,7 +3430,11 @@ type DestinationUplink bool
 type Device struct {
 	Description *Description `json:"description,omitempty"`
 
-	// FixedIp DHCP reservation for the device's first MAC in `network`.
+	// FixedIp DHCP reservation in `network` for the device's first MAC (`identifiers.macs[0]`); the device's
+	// other MACs get no reservation, so the MAC that asks for DHCP must come first (plan §2.7).
+	// A new or changed reservation reaches the DHCP server at once, but takes effect when the device
+	// renews its lease (up to half the lease time); if another client still holds the address,
+	// the device gets a pool address until that lease is released.
 	FixedIp     *Ipv4              `json:"fixed_ip,omitempty"`
 	Identifiers *DeviceIdentifiers `json:"identifiers,omitempty"`
 	Labels      *[]string          `json:"labels,omitempty"`

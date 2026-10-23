@@ -523,3 +523,43 @@ func TestAReservedAddressStaysWithItsDevice(t *testing.T) {
 		t.Errorf("a reservation maps the address to the device even before it is seen: %v", id.Owner)
 	}
 }
+
+// #78: removing an adopted device from the configuration brings it back as discovered under the same
+// UUID, as long as the MAC it is seen with is the one its id was derived from (adopting keeps the
+// discovered id, which is a function of the first MAC). Overlays that target it keep working. A device
+// seen only with another of its MACs comes back under that MAC's id.
+func TestARemovedAdoptionComesBackAsDiscoveredUnderTheSameID(t *testing.T) {
+	for name, tc := range map[string]struct {
+		seen   string
+		sameID bool
+	}{
+		"seen with the MAC it was discovered by": {seen: macA, sameID: true},
+		"seen only with another of its MACs":     {seen: macB, sameID: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := newTracker()
+			id := DeviceID(macA)
+			macs := []string{macA, macB}
+			adopted := &model.Configuration{Devices: &map[string]model.Device{id: {Name: "esp32-ab12", Identifiers: &model.DeviceIdentifiers{Macs: &macs}}}}
+			obs := func(at time.Duration) observation {
+				return observation{At: t0.Add(at), Neighbors: []domain.Neighbor{neigh("10.10.0.50", tc.seen)}}
+			}
+			tr.step(adopted, observation{At: t0})
+			_, states, _ := tr.step(adopted, obs(time.Second))
+			if len(states) != 1 || states[0].ID != id || states[0].Origin != model.DeviceOriginConfigured {
+				t.Fatalf("adopted: %+v", states)
+			}
+			// the adoption is removed: the next observation finds the device again as discovered
+			_, states, _ = tr.step(&model.Configuration{}, obs(2*time.Second))
+			if len(states) != 1 || states[0].Origin != model.DeviceOriginDiscovered {
+				t.Fatalf("removed: %+v", states)
+			}
+			if got := states[0].ID == id; got != tc.sameID {
+				t.Errorf("id %s, adopted as %s (same id expected: %v)", states[0].ID, id, tc.sameID)
+			}
+			if states[0].ID != DeviceID(tc.seen) {
+				t.Errorf("id %s, not the one of the MAC it is seen with", states[0].ID)
+			}
+		})
+	}
+}

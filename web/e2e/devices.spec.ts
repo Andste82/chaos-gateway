@@ -15,6 +15,7 @@ test('many devices: all pages are listed, search and filter chips narrow them', 
   await expect(filter.getByRole('button', { name: 'Online 413' })).toBeVisible();
   await expect(filter.getByRole('button', { name: 'With faults 89' })).toBeVisible();
   await expect(filter.getByRole('button', { name: 'Not adopted 62' })).toBeVisible();
+  await expect(filter.getByRole('button', { name: 'Adopted 558', exact: true })).toBeVisible();
   await expect(page.getByTestId('device-row')).toHaveCount(620);
   expect(gw.requestsTo('GET', '/devices').length).toBeGreaterThanOrEqual(2);
 

@@ -462,7 +462,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `invalid_endpoint` | A `host:port` value does not parse, or names something other than an IPv4 address or host name. |
 | `wrong_kind` | A field only makes sense for one kind of network (e.g. `clients` on a link, `peer` on a hub) and is set on the other. |
 | `pool_order` | A DHCP pool's `end` comes before its `start`. |
-| `pool_overlap` | Two DHCP pools of the same network overlap. |
+| `pool_overlap` | Two DHCP pools of the same network overlap. A device's fixed address inside a pool is no error but the warning `fixed_ip_in_pool` (see below). |
 | `invalid_duration` | A duration is outside the field's allowed range (a minimum, "not negative", ...). |
 | `no_identifier` | A device has neither a MAC nor an IP identifier. |
 | `duplicate_identifier` | A MAC or IP identifier already identifies another device. |
@@ -523,6 +523,19 @@ problem). The codes are stable; new ones are added, never renamed.
 
 `TestEveryValidationCodeIsDocumented` in `internal/domain` checks that every `Code*` constant's
 value appears somewhere on this page.
+
+### Validation warnings
+
+`domain.Warnings` checks a valid configuration for what is allowed but may surprise. A warning does
+not stop the apply: the preview (`POST /revisions/{id}/preview`) lists each in `warnings` with the
+JSON pointer of the field concerned, next to the compiler's warnings.
+
+| Code | Meaning |
+|---|---|
+| `fixed_ip_in_pool` | A device's `fixed_ip` (path `/devices/<id>/fixed_ip`) lies inside a DHCP pool of its network: a configured pool, or the default pool (the second half of the subnet) when the network names none. Kea allows in-pool reservations, but while another client holds the address from the pool the device gets a different pool address until that lease is released; the other client is refused only when it renews. Not reported when DHCP is off in the network (no reservation is made). Decided in #76 (a warning, not an error): a pool or a reservation that is changed never turns a valid configuration invalid. In the web UI `reservationPool` and `reservationPoolHint` (`web/src/lib/networks.ts`) are the same rule, for the hint that does not block in the device and adopt dialogs (#73, #74); the e2e mock warns with it too. |
+
+A new or changed reservation takes effect when the device renews its lease, which it does after half
+the lease time at the latest.
 
 ## Compiler, apply and engine
 

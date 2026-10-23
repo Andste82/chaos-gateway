@@ -4,6 +4,7 @@
 // The data use the generated types, so a change of the spec breaks the fixtures at compile time.
 import type { Page, Request, Route } from '@playwright/test';
 import { applyMergePatch } from '../src/lib/mergePatch';
+import { reservationPool } from '../src/lib/networks';
 import type {
   AccessRuleView,
   Actor,
@@ -1207,7 +1208,8 @@ export class MockGateway {
       const op = v === null ? 'removed' : before ? 'changed' : 'added';
       domain.push({ op, kind: 'port_forward', id: key, name, path: `/port_forwards/${key}`, summary: `port forward ${name} ${op}` });
     }
-    const { port_forwards, warnings } = this.previewForwards(patch);
+    const { port_forwards, warnings: forwardWarnings } = this.previewForwards(patch);
+    const warnings = [...this.previewReservations(patch), ...forwardWarnings];
     const references = this.referencesOf(patch);
     return {
       revision: id,
@@ -1243,6 +1245,28 @@ export class MockGateway {
       else status = { state: 'active', target_address: address };
       return { id, config, status, ...this.forwardViews[id] };
     });
+  }
+
+  /**
+   * The gateway's warning `fixed_ip_in_pool` (#76) for each device whose fixed address lies inside a DHCP pool
+   * of its network after the candidate: allowed, so it is a warning at the device's fixed_ip and not a refusal.
+   */
+  previewReservations(patch: unknown): { code: string; message: string; path: string }[] {
+    const cfg = applyMergePatch(this.config, patch);
+    const warnings: { code: string; message: string; path: string }[] = [];
+    for (const [id, d] of Object.entries(cfg.devices ?? {})) {
+      if (!d.fixed_ip || !d.network) continue;
+      const [, n] = Object.entries(cfg.networks ?? {}).find(([nid, x]) => nid === d.network || x.name === d.network) ?? [];
+      if (n?.type !== 'lan') continue;
+      const r = reservationPool(n, d.fixed_ip);
+      if (!r) continue;
+      warnings.push({
+        code: 'fixed_ip_in_pool',
+        path: `/devices/${id}/fixed_ip`,
+        message: `the fixed address ${d.fixed_ip} of device "${d.name}" lies in ${r.isDefault ? 'the default pool' : `pool ${n.dhcp!.pools!.indexOf(r.pool)}`} (${r.pool.start}-${r.pool.end}) of network "${n.name}": while another client holds that address the device gets a different one from the pool, until that lease is released`,
+      });
+    }
+    return warnings;
   }
 
   /**

@@ -993,7 +993,7 @@ export class MockGateway {
       }
       if (this.revisionBase(id) !== this.state.active_revision) return problem(409, 'revision_conflict', `the candidate's base is not the active revision`);
       if (this.state.pending_confirm) return problem(409, 'confirm_pending', `revision ${this.state.pending_confirm.revision} waits for confirmation`);
-      const patch = this.candidates.get(id) as { devices?: Record<string, { name: string }> } | undefined;
+      const patch = this.candidates.get(id) as { devices?: Record<string, { name: string } | null> } | undefined;
       // a deletion that orphans active overlays needs force=true, which removes them
       const references = this.referencesOf(patch);
       if (references.length && url.searchParams.get('force') !== 'true') {
@@ -1009,10 +1009,19 @@ export class MockGateway {
       this.config = applyMergePatch(this.config, patch);
       this.activeBy = { type: 'user', id: 'admin', name: 'admin' };
       this.noteApplied(id, this.activeBy);
-      for (const devId of Object.keys(patch?.devices ?? {})) {
+      for (const [devId, v] of Object.entries(patch?.devices ?? {})) {
         // the device as the new configuration has it (the patch merged into what it had)
         const cfg = this.config.devices?.[devId];
         if (cfg) this.devices = this.devices.map((d) => (d.id === devId ? { ...d, name: cfg.name, origin: 'configured', config: cfg } : d));
+        // a removed device is discovered again under the same id (derived from its first MAC), with the generated name
+        if (v === null) {
+          this.devices = this.devices.map((d) => {
+            if (d.id !== devId) return d;
+            const mac = d.observed.macs?.[0];
+            const { config: _config, ...rest } = d;
+            return { ...rest, origin: 'discovered', name: mac ? `dev-${mac.replace(/:/g, '-')}` : `dev-${d.observed.addresses?.[0]?.replace(/\./g, '-')}` };
+          });
+        }
       }
       this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
       const res: ApplyResult = { revision: id, status: 'active', generation: this.state.generation, duration_ms: 87 };
@@ -1325,9 +1334,9 @@ export class MockGateway {
   danglingReferences(patch: unknown): ValidationError[] {
     const nets = (patch as { networks?: Record<string, unknown> } | undefined)?.networks ?? {};
     const deleted = Object.keys(nets).filter((id) => nets[id] === null);
-    if (!deleted.length) return [];
+    const out: ValidationError[] = this.danglingDeviceReferences(patch);
+    if (!deleted.length) return out;
     const cfg = applyMergePatch(this.config, patch);
-    const out: ValidationError[] = [];
     const ref = (path: string, id: string | undefined) => {
       const hit = deleted.find((d) => d === id || this.config.networks?.[d]?.name === id);
       if (hit) out.push({ path, code: 'unknown_reference', message: `there is no network "${id}"` });
@@ -1346,6 +1355,28 @@ export class MockGateway {
       ref(`/routing/protocols/${id}/link`, p.link);
       (p.announce ?? []).forEach((a, i) => ref(`/routing/protocols/${id}/announce/${i}/network`, a.network));
     }
+    return out;
+  }
+
+  /**
+   * The references of the configuration to a device the candidate deletes, as the gateway reports them
+   * (`unknown_reference`): access rules and faults by their source, groups by their members, port
+   * forwards by their target, scenarios by their target.
+   */
+  danglingDeviceReferences(patch: unknown): ValidationError[] {
+    const devs = (patch as { devices?: Record<string, unknown> } | undefined)?.devices ?? {};
+    const deleted = Object.keys(devs).filter((id) => devs[id] === null);
+    if (!deleted.length) return [];
+    const cfg = applyMergePatch(this.config, patch);
+    const out: ValidationError[] = [];
+    const ref = (path: string, id: string | undefined) => {
+      if (id && deleted.some((d) => d === id || this.config.devices?.[d]?.name === id)) out.push({ path, code: 'unknown_reference', message: `there is no device "${id}"` });
+    };
+    for (const [id, r] of Object.entries(cfg.access_rules ?? {})) ref(`/access_rules/${id}/source/device`, r.source.device);
+    for (const [id, f] of Object.entries(cfg.faults ?? {})) ref(`/faults/${id}/source/device`, f.source?.device);
+    for (const [id, g] of Object.entries(cfg.groups ?? {})) (g.members ?? []).forEach((m, i) => ref(`/groups/${id}/members/${i}`, m));
+    for (const [id, p] of Object.entries(cfg.port_forwards ?? {})) ref(`/port_forwards/${id}/target/device`, p.target.device);
+    for (const [id, sc] of Object.entries(cfg.scenarios ?? {})) ref(`/scenarios/${id}/target/device`, sc.target.device);
     return out;
   }
 

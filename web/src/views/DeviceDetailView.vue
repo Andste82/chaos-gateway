@@ -7,7 +7,10 @@
 // with their milestones. The port forwards to the device (M35a) are listed with their status and
 // counter, each with a link to edit it on the networks page, which also adds one to the device.
 // A configured device is edited (name, network, fixed IP) in the device dialog (#73); the Network card
-// shows its fixed IP as the draft has it, with what the gateway refused of it.
+// shows its fixed IP as the draft has it, with what the gateway refused of it. The header shows the
+// name the list shows (a discovered device's host name, #78), the ADOPTED badge of a configured device,
+// and "Remove" takes a configured device out of the configuration (references listed first), with an
+// undo while that is not applied.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
 import { ApiError } from '../api/fetcher';
@@ -16,6 +19,7 @@ import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import type { Overlay } from '../api/generated/model';
 import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import DeviceDialog from '../components/devices/DeviceDialog.vue';
+import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -28,7 +32,7 @@ import StatusDot from '../components/ui/StatusDot.vue';
 import { fetchAll, firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, usePortForwards, type ActiveFault } from '../composables/gateway';
 import { counterHint, counterText, entryLabels, forwardDeviceProblem, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
 import { useNow } from '../composables/useNow';
-import { deviceNetworkInfo, deviceStatus, isAdopted, originLabel, sourcesLabel } from '../lib/devices';
+import { deviceNetworkInfo, deviceStatus, displayName, isAdopted, isConfigured, nameDetail, originLabel, sourcesLabel } from '../lib/devices';
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
 import { focusAfterUpdate } from '../lib/focus';
 import { profileTitle } from '../lib/profileNames';
@@ -131,6 +135,13 @@ function undoAdoption() {
   focusAfterUpdate('[data-focus-key="adopt"]');
 }
 const editOpen = ref(false);
+const removeOpen = ref(false);
+/** A configured device whose removal from the configuration is in the draft, not applied yet. */
+const removed = computed(() => !!d.value && isConfigured(d.value) && draft.devices[d.value.id] === null);
+function undoRemoval() {
+  if (d.value) draft.setDevice(d.value.id, draft.baseConfig?.devices?.[d.value.id] ?? null);
+  focusAfterUpdate('[data-focus-key="remove-device"]');
+}
 /** The configured device as the draft has it (its edit or the configuration); undefined for any other kind or a deletion. */
 const configured = computed(() => {
   const v = d.value;
@@ -189,14 +200,26 @@ useApiScreen('this device', () => [
     <LoadError :error="device.error.value" what="The device is not loaded" :retry="device.refetch" />
   </div>
   <template v-else-if="d">
-    <PageHeader :title="d.name">
+    <PageHeader :title="displayName(d)">
       <template #breadcrumb>
-        <nav aria-label="Breadcrumb" class="mb-1 text-[13px] text-text-2"><RouterLink to="/devices">Devices</RouterLink> / {{ d.name }}</nav>
+        <nav aria-label="Breadcrumb" class="mb-1 text-[13px] text-text-2"><RouterLink to="/devices">Devices</RouterLink> / {{ displayName(d) }}</nav>
       </template>
       <template #actions>
         <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add fault</button>
         <RouterLink class="btn" :to="{ path: '/profiles', query: { scope: `device:${d.id}` } }">Apply profile</RouterLink>
         <button v-if="configured" type="button" class="btn" :disabled="changeBlocked" data-focus-key="edit-device" @click="editOpen = true">Edit</button>
+        <button
+          v-if="configured"
+          type="button"
+          class="btn"
+          :disabled="changeBlocked"
+          :aria-label="`Remove ${d.name} from the configuration`"
+          data-focus-key="remove-device"
+          @click="removeOpen = true"
+        >
+          Remove
+        </button>
+        <button v-if="removed" type="button" class="btn" :aria-label="`Undo the removal of ${d.name}`" @click="undoRemoval">Undo removal</button>
         <button v-if="adoptedAs" type="button" class="btn" :aria-label="`Undo the adoption of ${d.name}`" @click="undoAdoption">Undo adoption</button>
         <button
           v-else-if="!isAdopted(d)"
@@ -212,9 +235,20 @@ useApiScreen('this device', () => [
     </PageHeader>
     <div class="-mt-2 flex flex-wrap items-center gap-3 text-sm" data-testid="device-identity">
       <StatusDot v-bind="deviceStatus(d)" />
+      <span
+        v-if="isConfigured(d)"
+        class="rounded border border-border-strong px-1.5 text-xs text-text-2"
+        title="In the configuration: adopted here, or configured via YAML or the API"
+        data-testid="device-adopted-badge"
+        >ADOPTED</span
+      >
+      <span v-if="nameDetail(d)" class="mono text-text-3" data-testid="device-name-detail">{{ nameDetail(d) }}</span>
       <span class="mono text-text-2">{{ identity }}</span>
       <span v-if="adoptedAs" class="rounded border border-accent-strong px-1.5 text-xs text-accent-text" data-testid="device-adopted-mark"
         >ADOPTED as {{ adoptedAs }} · not applied yet</span
+      >
+      <span v-if="removed" class="rounded border border-block-border px-1.5 text-xs text-block-text" data-testid="device-removed-mark"
+        >REMOVED · not applied yet</span
       >
     </div>
 
@@ -380,6 +414,7 @@ useApiScreen('this device', () => [
 
     <AdoptDialog v-model:open="adoptOpen" :device="d" :network-name="networkConfig?.name" />
     <DeviceDialog v-if="configured" v-model:open="editOpen" :device="d" />
+    <RemoveDeviceDialog v-if="isConfigured(d)" v-model:open="removeOpen" :device="d" />
     <FaultDialog v-model:open="faultOpen" :fixed-target="`device:${d.id}`" :overlay="editing" />
   </template>
 </template>

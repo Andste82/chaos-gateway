@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceView, Network, Overlay } from '../api/generated/model';
-import { compareDevices, deviceFaults, deviceNetworkInfo,deviceStatus, matchesFilter, matchesSearch, sourcesLabel } from './devices';
+import type { AccessRule, ConfigFault, PortForward, Scenario } from '../api/generated/model';
+import {
+  compareDevices,
+  deviceFaults,
+  deviceNetworkInfo,
+  deviceReferences,
+  deviceStatus,
+  displayName,
+  matchesFilter,
+  matchesSearch,
+  nameDetail,
+  sourcesLabel,
+} from './devices';
 
 const dev = (over: Partial<DeviceView>): DeviceView => ({
   id: 'd',
@@ -19,6 +31,71 @@ describe('devices', () => {
     expect(matchesFilter(discovered, 'unadopted')).toBe(true);
     expect(matchesFilter(discovered, 'online')).toBe(false);
     expect(matchesFilter(discovered, 'all')).toBe(true);
+  });
+
+  it('filter Adopted: the configured devices, not the discovered ones, WireGuard clients or probes', () => {
+    expect(matchesFilter(dev({}), 'adopted')).toBe(true);
+    expect(matchesFilter(dev({ origin: 'discovered' }), 'adopted')).toBe(false);
+    expect(matchesFilter(dev({ origin: 'wireguard_client' }), 'adopted')).toBe(false);
+    expect(matchesFilter(dev({ origin: 'probe' }), 'adopted')).toBe(false);
+    expect(matchesFilter(dev({ origin: 'discovered' }), 'unadopted')).toBe(true);
+    expect(matchesFilter(dev({}), 'unadopted')).toBe(false);
+  });
+
+  const lease = (hostname?: string) => ({ ip: '10.10.0.133', mac: '3a:f1:9c:22:07:b4', network: 'n', expires_at: '', hostname });
+  const withHost = (over: Partial<DeviceView>, hostname?: string) => dev({ ...over, observed: { online: true, macs: ['3a:f1:9c:22:07:b4'], lease: lease(hostname) } });
+
+  it('show a discovered device under the host name of its lease, the generated name below it', () => {
+    const d = withHost({ origin: 'discovered', name: 'dev-3a-f1-9c-22-07-b4' }, 'esp32-ab12');
+    expect(displayName(d)).toBe('esp32-ab12');
+    expect(nameDetail(d)).toBe('dev-3a-f1-9c-22-07-b4');
+    // without a host name (or only blanks), the generated name alone
+    for (const h of [undefined, '', '  ']) {
+      const plain = withHost({ origin: 'discovered', name: 'dev-3a-f1-9c-22-07-b4' }, h);
+      expect(displayName(plain)).toBe('dev-3a-f1-9c-22-07-b4');
+      expect(nameDetail(plain)).toBeUndefined();
+    }
+    expect(displayName(dev({ origin: 'discovered', name: 'dev-10-10-0-9', observed: { online: true } }))).toBe('dev-10-10-0-9');
+  });
+
+  it('show a configured device under its name, a differing host name below it', () => {
+    const d = withHost({ name: 'Thermostat-A' }, 'esp32-ab12');
+    expect(displayName(d)).toBe('Thermostat-A');
+    expect(nameDetail(d)).toBe('host name esp32-ab12');
+    // the same host name (in any case) is not repeated
+    expect(nameDetail(withHost({ name: 'ESP32-AB12' }, 'esp32-ab12'))).toBeUndefined();
+    expect(nameDetail(dev({}))).toBeUndefined();
+    // a WireGuard client or a probe keeps its name too
+    expect(displayName(withHost({ origin: 'wireguard_client', name: 'laptop' }, 'other'))).toBe('laptop');
+  });
+
+  it('sort by the displayed name', () => {
+    const list = [withHost({ origin: 'discovered', name: 'dev-aa' }, 'zz-host'), dev({ name: 'mm' }), withHost({ origin: 'discovered', name: 'dev-bb' }, 'aa-host')].sort(compareDevices);
+    expect(list.map(displayName)).toEqual(['aa-host', 'mm', 'zz-host']);
+  });
+
+  it('list the configuration objects that name a device, by id or by name', () => {
+    const id = 'a1b2c3d4-0000-4000-8000-000000000042';
+    const rule = (name: string, device?: string): AccessRule => ({ name, source: device ? { device } : { global: true }, action: 'allow' }) as AccessRule;
+    const refs = deviceReferences(
+      { id, name: 'ESP32-42' },
+      {
+        rules: { r1: rule('no-dot', id), r2: rule('other', 'b'), r3: rule('by-name', 'esp32-42') },
+        faults: { f1: { name: 'slow', source: { device: id } } as ConfigFault, f2: { name: 'global' } as ConfigFault },
+        groups: { g1: { name: 'lab', members: ['x', id] }, g2: { name: 'empty' } },
+        forwards: { p1: { protocol: 'tcp', entry: 'uplink', external_port: 8080, target: { device: id } } as PortForward, p2: { name: 'addr', protocol: 'tcp', entry: 'uplink', external_port: 1, target: { address: '10.10.0.5' } } as PortForward },
+        scenarios: {
+          s1: { name: 'reconnect', target: { network: 'n' }, steps: [{ id: 'a', at: '0s', target: { device: id } }] } as unknown as Scenario,
+          s2: { name: 'whole', target: { device: id }, steps: [] } as unknown as Scenario,
+          s3: { name: 'unrelated', target: { network: 'n' }, steps: [] } as unknown as Scenario,
+        },
+      },
+    );
+    expect(refs.map((r) => `${r.kind} ${r.name}`)).toEqual(['rule by-name', 'rule no-dot', 'fault slow', 'group lab', 'forward TCP 8080', 'scenario reconnect', 'scenario whole']);
+    expect(refs.find((r) => r.kind === 'group')!.to).toBeUndefined();
+    expect(refs.find((r) => r.kind === 'forward')!.to).toBe('/networks?forward=p1');
+    expect(refs.find((r) => r.kind === 'scenario')!.to).toBe('/scenarios/s1');
+    expect(deviceReferences({ id, name: 'ESP32-42' }, {})).toEqual([]);
   });
 
   it('do not count the normal profile as a fault', () => {

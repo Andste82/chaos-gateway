@@ -10,7 +10,9 @@
 // The routing view and the technical view are pages of their own. The uplink card and the management
 // card list the port forwards of their side (M35a) with their counter and status; a forward is added,
 // edited, disabled and deleted through the draft as well (`?forward=<id>` opens one for editing, the
-// link of the device detail; `?forward=new&device=<id>` adds one to a device).
+// link of the device detail; `?forward=new&device=<id>` adds one to a device). A test network lists its
+// DHCP reservations with their status and the draft's edits of them (#75); Reserve in its leases makes a
+// lease static.
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { errorMessage } from '../api/fetcher';
@@ -24,6 +26,7 @@ import ForwardList from '../components/networks/ForwardList.vue';
 import LeasesCard from '../components/networks/LeasesCard.vue';
 import NetworkDialog from '../components/networks/NetworkDialog.vue';
 import NetworkSettings from '../components/networks/NetworkSettings.vue';
+import ReservationsCard from '../components/networks/ReservationsCard.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
@@ -313,6 +316,7 @@ watch(unknownNetwork, async (unknown) => {
     <div v-else-if="applied.length" class="grid grid-cols-1 gap-5"><AccessMatrix :networks="applied" /></div>
 
     <LeasesCard v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending'" :network="selected" />
+    <ReservationsCard v-if="selected?.config.type === 'lan' && marks[selected.id] !== 'DELETED'" :network="selected" />
     <ClientsCard v-if="hub" :network="hub" />
   </template>
   <NetworkDialog v-model:open="formOpen" :network="editing" @saved="saved" />

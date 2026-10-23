@@ -8,6 +8,9 @@
 // revision the dialog was opened on, so a revision applied meanwhile meets the edit in the
 // concurrent-change dialog. A device the gateway refused opens again with its messages under their
 // fields, until the form is changed.
+//
+// The Reserve action of the DHCP leases card (#75) opens the dialog with `reserve`: the lease's address as
+// the fixed IP in the lease's network, and the lease's MAC as the one put first.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
@@ -29,7 +32,11 @@ import { useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 
-const props = defineProps<{ device: DeviceView }>();
+const props = defineProps<{
+  device: DeviceView;
+  /** A lease to make static (the leases card): its address is prefilled as the fixed IP, in its network. */
+  reserve?: { ip: string; mac: string; network: string };
+}>();
 const open = defineModel<boolean>('open', { required: true });
 
 const draft = useDraftStore();
@@ -69,6 +76,7 @@ watch(
     baseFixedIp.value = base?.fixed_ip;
     baseNetwork.value = base?.network;
     form.value = formFromDevice(before.value);
+    if (props.reserve) form.value = { ...form.value, network: props.reserve.network, fixedIp: props.reserve.ip };
     origin = draft.editOrigin();
     refused.value = draft.serverErrors[props.device.id] ?? {};
     refusedForm = JSON.stringify(form.value);
@@ -86,10 +94,10 @@ const networks = computed(() =>
 const network = computed(() => (form.value.network ? draft.effectiveNetworks[form.value.network] : undefined));
 const leases = useLeases(() => (network.value?.type === 'lan' ? form.value.network : undefined));
 const macs = computed(() => before.value.identifiers?.macs ?? []);
-const leaseMac = computed(() => props.device.observed.lease?.mac);
+const leaseMac = computed(() => (props.reserve ? props.reserve.mac : props.device.observed.lease?.mac));
 /** The address of the current lease, when it is in the form's network (a reservation of it keeps the address). */
 const leaseIp = computed(() => {
-  const l = props.device.observed.lease;
+  const l = props.reserve ?? props.device.observed.lease;
   return l && (!l.network || l.network === form.value.network) ? l.ip : undefined;
 });
 

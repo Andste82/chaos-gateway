@@ -11,18 +11,24 @@
 // box "Keep this address" adds a fixed IP, the DHCP reservation for the device's first MAC, prefilled
 // with the lease's address, and puts the lease's MAC first (decision on #77). The address is checked
 // as in the device dialog (lib/deviceForm.ts), with the same notes that do not stop it (an address in
-// the dynamic pool is allowed, decision on #76).
+// the dynamic pool is allowed, decision on #76). The Reserve action of the DHCP leases card (#75) opens
+// the dialog with that lease (`lease`) and the box checked.
 import { computed, ref, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
-import type { Device, DeviceView } from '../../api/generated/model';
+import type { Device, DeviceView, DhcpLease } from '../../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../../api/generated/zod/system/system';
 import { useActiveConfig, useGatewayState, useLeases } from '../../composables/gateway';
 import { adoptReservation, draftDevices, fixedIpError, fixedIpHints, reservationMacs, type ReservationContext } from '../../lib/deviceForm';
 import { useDraftStore } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 
-const props = defineProps<{ device: DeviceView | undefined; networkName?: string }>();
+const props = defineProps<{
+  device: DeviceView | undefined;
+  networkName?: string;
+  /** A lease of the device to keep (the leases card's Reserve): it stands for the device's current lease, and the box is checked. */
+  lease?: DhcpLease;
+}>();
 const open = defineModel<boolean>('open', { required: true });
 
 const state = useGatewayState();
@@ -43,7 +49,11 @@ const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
 const networkId = computed(() => props.device?.network);
 const network = computed(() => (networkId.value ? draft.effectiveNetworks[networkId.value] : undefined));
 /** The current lease the device can keep; undefined when no reservation is offered. */
-const lease = computed(() => (props.device ? adoptReservation(props.device, network.value) : undefined));
+const lease = computed(() => {
+  const d = props.device;
+  if (!d) return undefined;
+  return adoptReservation(props.lease ? { ...d, observed: { ...d.observed, lease: props.lease } } : d, network.value);
+});
 const reserving = computed(() => keep.value && !!lease.value);
 /** The MACs as they go into the configuration: with a reservation, the lease's MAC first (it is for the first MAC). */
 const macs = computed(() => {
@@ -56,12 +66,12 @@ watch(open, (o) => {
   const hostname = props.device.observed.lease?.hostname;
   name.value = hostname && nameRegExp.test(hostname) ? hostname : props.device.name;
   error.value = '';
-  keep.value = false;
+  keep.value = !!props.lease;
   fixedIp.value = lease.value?.ip ?? '';
 });
 // the configuration can come after the dialog opened
 watch(lease, (l) => {
-  if (l && !keep.value) fixedIp.value = l.ip;
+  if (l && (!keep.value || !fixedIp.value)) fixedIp.value = l.ip;
 });
 
 const nameError = computed(() =>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // The settings of the selected network (plan §2.17 "Networks": subnet, gateway, attachment, DHCP, DNS,
 // IPv6 blocked), in the user's words; a WireGuard network shows its tunnel, endpoint and peers instead.
+// The DHCP line counts the reservations of the network as the draft has them (#75).
 // "Show Linux view" opens what the kernel holds for the network: its bridge or WireGuard interface and
 // its subnet in nftables, tc, the routes and WireGuard (plan §2.17 "Technical view").
 // Edit opens the network form and Delete takes the network out of the configuration draft (P3-M14-01);
@@ -14,6 +15,7 @@ import { useGetUplink } from '../../api/generated/hooks/config/config';
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
 import { effectivePools, hostOf, subnetText } from '../../lib/networks';
+import { reservationRows } from '../../lib/reservations';
 import { useDraftStore } from '../../stores/draft';
 import DisclosureButton from '../ui/DisclosureButton.vue';
 import StatusDot from '../ui/StatusDot.vue';
@@ -59,6 +61,8 @@ const terms = computed(() => {
 
 const pools = computed(() => effectivePools(lan.value?.address, lan.value?.dhcp?.pools));
 const dhcpOn = computed(() => lan.value?.dhcp?.enabled !== false);
+/** The devices with a fixed IP in the network, as the draft has them. */
+const reserved = computed(() => (lan.value ? reservationRows(props.network.id, draft.baseConfig?.devices, draft.devices).filter((r) => r.mark !== 'DELETED').length : 0));
 const dns = computed(() => {
   const d = lan.value?.dns;
   const parts = ['Chaos Gateway proxy'];
@@ -137,6 +141,7 @@ const exportOpen = computed({
         <template v-if="dhcpOn">
           on · lease time {{ formatDuration(lan.dhcp?.lease_time ?? '1h') }}
           <span v-if="network.status.dhcp?.leases_active !== undefined"> · {{ network.status.dhcp.leases_active }} active</span>
+          <span v-if="reserved"> · {{ reserved }} reserved</span>
         </template>
         <template v-else>off: devices have static addresses, or another server answers</template>
       </dd>

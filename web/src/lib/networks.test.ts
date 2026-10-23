@@ -12,6 +12,8 @@ import {
   formFromClient,
   matrixChanges,
   nextFreeAddress,
+  reservationPool,
+  reservationPoolHint,
   parseSubnet,
   subnetText,
   toggleCell,
@@ -47,6 +49,34 @@ describe('IPv4 of the networks', () => {
     expect(effectivePools('10.10.0.254/24', undefined).pools[0]!.end).toBe('10.10.0.253');
     const own = [{ start: '10.10.0.100', end: '10.10.0.150' }];
     expect(effectivePools('10.10.0.1/24', own)).toEqual({ pools: own, isDefault: false });
+  });
+});
+
+describe('a fixed address inside a DHCP pool (#76: a hint, not an error)', () => {
+  const lan = { address: '10.10.0.1/24', dhcp: { pools: [{ start: '10.10.0.100', end: '10.10.0.149' }, { start: '10.10.0.200', end: '10.10.0.209' }] } };
+
+  it('names the pool the address lies in, edges included', () => {
+    expect(reservationPool(lan, '10.10.0.100')).toEqual({ pool: { start: '10.10.0.100', end: '10.10.0.149' }, isDefault: false });
+    expect(reservationPool(lan, '10.10.0.149')?.pool.start).toBe('10.10.0.100');
+    expect(reservationPool(lan, '10.10.0.205')?.pool.start).toBe('10.10.0.200');
+    expect(reservationPoolHint(lan, '10.10.0.120')).toBe(
+      '10.10.0.120 lies in the DHCP pool 10.10.0.100–10.10.0.149: while another device holds it, this one gets a different address from the pool until that lease is released.',
+    );
+  });
+
+  it('uses the default pool, the second half of the subnet, when the network names none', () => {
+    expect(reservationPool({ address: '10.10.0.1/24', dhcp: {} }, '10.10.0.200')).toEqual({ pool: { start: '10.10.0.128', end: '10.10.0.254' }, isDefault: true });
+    expect(reservationPoolHint({ address: '10.10.0.1/24', dhcp: { enabled: true } }, '10.10.0.200')).toContain('the default DHCP pool 10.10.0.128–10.10.0.254');
+    expect(reservationPool({ address: '10.10.0.1/24', dhcp: {} }, '10.10.0.42')).toBeUndefined();
+  });
+
+  it('has nothing to say outside the pools, without DHCP or for an address that is none', () => {
+    expect(reservationPool(lan, '10.10.0.42')).toBeUndefined();
+    expect(reservationPool(lan, '10.10.0.150')).toBeUndefined();
+    expect(reservationPool({ ...lan, dhcp: { ...lan.dhcp, enabled: false } }, '10.10.0.120')).toBeUndefined();
+    expect(reservationPool({ address: '10.10.0.1/24' }, '10.10.0.200')).toBeUndefined();
+    expect(reservationPool(lan, '10.10.0.300')).toBeUndefined();
+    expect(reservationPoolHint(lan, undefined)).toBeUndefined();
   });
 });
 

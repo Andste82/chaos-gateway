@@ -324,9 +324,11 @@ test('network forms: the checks stand under the fields, and Preview & apply wait
 
 test("network forms: a network the gateway refuses says why; Fix opens it again with the gateway's message under its field", async ({ page }) => {
   const gw = await open(page);
+  // the browser makes the gateway's checks of a pool itself, so the refusal is a stand-in for a check only the
+  // gateway knows (a reservation inside a pool is no refusal but a warning, #76: see the test below)
   gw.rejectRevision = (patch) => {
     const id = Object.keys((patch as { networks: Record<string, unknown> }).networks)[0]!;
-    return [{ path: `/networks/${id}/dhcp/pools/0`, code: 'pool_overlap', message: 'the pool overlaps the reservation of broker' }];
+    return [{ path: `/networks/${id}/dhcp/pools/0`, code: 'invalid', message: 'the pool has more than 64 addresses' }];
   };
   await page.getByRole('button', { name: 'Add network' }).first().click();
   const dialog = page.getByRole('dialog', { name: 'Add network' });
@@ -334,13 +336,13 @@ test("network forms: a network the gateway refuses says why; Fix opens it again 
   await dialog.getByTestId('network-ports').getByRole('checkbox', { name: /^eth3 / }).check();
   await dialog.getByLabel('Pools').fill('10.30.0.100-10.30.0.199');
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
-  await expect(page.getByTestId('preview-invalid')).toContainText('Network cams · dhcp pools 0: the pool overlaps the reservation of broker');
+  await expect(page.getByTestId('preview-invalid')).toContainText('Network cams · dhcp pools 0: the pool has more than 64 addresses');
   await page.getByRole('button', { name: 'Back to editing' }).click();
   await expect(card(page, 'cams').getByTestId('network-mark')).toHaveText('NEW');
-  await expect(page.getByTestId('network-refused')).toContainText('The gateway refused it: the pool overlaps the reservation of broker');
+  await expect(page.getByTestId('network-refused')).toContainText('The gateway refused it: the pool has more than 64 addresses');
   await settings(page).getByRole('button', { name: 'Fix cams' }).click();
   const fix = page.getByRole('dialog', { name: 'Edit cams' });
-  await expect(fix.getByText('the pool overlaps the reservation of broker')).toBeVisible();
+  await expect(fix.getByText('the pool has more than 64 addresses')).toBeVisible();
   await expect(fix.getByLabel('Pools')).toHaveAttribute('aria-invalid', 'true');
   // unchanged, it is not sent again; changed, it is
   await expect(fix.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
@@ -349,6 +351,24 @@ test("network forms: a network the gateway refuses says why; Fix opens it again 
   await page.getByRole('button', { name: 'Apply revision 43' }).click();
   await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
   await expect(card(page, 'cams')).toBeVisible();
+});
+
+test('network forms: a pool that grows over a fixed address is no refusal — the preview warns of the reservation, and the change applies (#76)', async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  gw.config.networks![IOT] = { ...(gw.config.networks![IOT] as LanNetwork), dhcp: { enabled: true, pools: [{ start: '10.10.0.100', end: '10.10.0.149' }] } };
+  gw.config = { ...gw.config, devices: { ...gw.config.devices, [CAM]: { name: 'Cam-1', identifiers: { macs: ['02:00:00:00:00:77'] }, network: IOT, fixed_ip: '10.10.0.160' } } };
+  await open(page, `/networks/${IOT}`, gw);
+  await settings(page).getByRole('button', { name: 'Edit IoT' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit IoT' });
+  await dialog.getByLabel('Pools').fill('10.10.0.100-10.10.0.199');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(drawer(page).getByTestId('preview-warnings')).toContainText(
+    'the fixed address 10.10.0.160 of device "Cam-1" lies in pool 0 (10.10.0.100-10.10.0.199) of network "IoT": while another client holds that address the device gets a different one from the pool, until that lease is released',
+  );
+  await expect(page.getByTestId('preview-invalid')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  expect((gw.config.networks![IOT] as LanNetwork).dhcp?.pools).toEqual([{ start: '10.10.0.100', end: '10.10.0.199' }]);
 });
 
 test('network forms: a WireGuard hub is added, and edited — its clients stay out of the patch', async ({ page }) => {

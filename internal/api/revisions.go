@@ -287,6 +287,10 @@ func (s *Server) PreviewRevision(c *gin.Context, revisionId model.RevisionId) {
 		body["faults"] = fs
 	}
 	if _, cand, err := s.cfg.Store.Get(revisionId); err == nil {
+		// what the validation allows but may surprise, at the field concerned (a fixed address in a DHCP pool, #76)
+		for _, w := range domain.Warnings(cand) {
+			warnings = append(warnings, gin.H{"code": w.Code, "message": w.Message, "path": w.Path})
+		}
 		var base *model.Configuration
 		if p.Base != 0 {
 			_, base, _ = s.cfg.Store.Get(p.Base)

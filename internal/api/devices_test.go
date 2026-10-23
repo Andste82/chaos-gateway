@@ -365,3 +365,42 @@ func TestADeviceCarriesTheFaultsThatWinForIt(t *testing.T) {
 		t.Errorf("overlays: %v", esp["overlays"])
 	}
 }
+
+// #76: a fixed address inside a DHCP pool of its network is allowed; the preview warns at the device's fixed_ip,
+// and the revision applies.
+func TestThePreviewWarnsOfAFixedAddressInsideADHCPPool(t *testing.T) {
+	g := dhcpGateway(t)
+	warnings := func(id int64) []map[string]any {
+		t.Helper()
+		pv := g.do("POST", "/revisions/"+itoa(id)+"/preview", nil, nil, nil)
+		if pv.Status != 200 {
+			t.Fatalf("%d %s", pv.Status, pv.Body)
+		}
+		var out []map[string]any
+		for _, x := range pv.json(t)["warnings"].([]any) {
+			if m := x.(map[string]any); m["code"] == "fixed_ip_in_pool" {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	pools := map[string]any{iotID: map[string]any{"dhcp": map[string]any{"pools": []any{map[string]any{"start": "10.10.0.100", "end": "10.10.0.199"}}}}}
+
+	outside := g.mustPatch(map[string]any{"networks": pools, "devices": map[string]any{espID: map[string]any{"fixed_ip": "10.10.0.42"}}})
+	if ws := warnings(outside); len(ws) != 0 {
+		t.Errorf("a reservation outside the pool: %v", ws)
+	}
+	if r := g.do("DELETE", "/revisions/"+itoa(outside), nil, nil, nil); r.Status != 204 {
+		t.Fatalf("discard: %d %s", r.Status, r.Body)
+	}
+
+	inside := g.mustPatch(map[string]any{"networks": pools, "devices": map[string]any{espID: map[string]any{"fixed_ip": "10.10.0.150"}}})
+	ws := warnings(inside)
+	if len(ws) != 1 || ws[0]["path"] != "/devices/"+espID+"/fixed_ip" ||
+		!strings.Contains(ws[0]["message"].(string), "10.10.0.150") || !strings.Contains(ws[0]["message"].(string), "pool 0 (10.10.0.100-10.10.0.199)") {
+		t.Fatalf("warnings %v", ws)
+	}
+	if r := g.apply(inside); r.Status != 200 {
+		t.Fatalf("a warning does not stop the apply: %d %s", r.Status, r.Body)
+	}
+}

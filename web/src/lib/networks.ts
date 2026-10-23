@@ -98,6 +98,36 @@ export function effectivePools(address: string | undefined, pools: DhcpPool[] | 
 }
 
 /**
+ * The pool of a local test network that a fixed address (a DHCP reservation, `Device.fixed_ip`) lies in, or
+ * undefined: the gateway's warning `fixed_ip_in_pool` (#76). A reservation inside a pool is allowed, but while
+ * another client holds the address the device gets a different one from the pool until that lease is released,
+ * so the device and adopt dialogs show it as a hint that does not block. A network with DHCP off makes no
+ * reservation: no pool then.
+ */
+export function reservationPool(
+  lan: { address?: string; dhcp?: { enabled?: boolean; pools?: DhcpPool[] } } | undefined,
+  ip: string | undefined,
+): { pool: DhcpPool; isDefault: boolean } | undefined {
+  const a = parseIPv4(ip);
+  if (!lan?.dhcp || lan.dhcp.enabled === false || a === undefined) return undefined;
+  const { pools, isDefault } = effectivePools(lan.address, lan.dhcp.pools);
+  const pool = pools.find((p) => {
+    const from = parseIPv4(p.start);
+    const to = parseIPv4(p.end);
+    return from !== undefined && to !== undefined && from <= a && a <= to;
+  });
+  return pool && { pool, isDefault };
+}
+
+/** The hint of `reservationPool` in words, or undefined when the address lies in no pool. */
+export function reservationPoolHint(lan: Parameters<typeof reservationPool>[0], ip: string | undefined): string | undefined {
+  const r = reservationPool(lan, ip);
+  if (!r) return undefined;
+  const pool = `${r.isDefault ? 'the default DHCP pool' : 'the DHCP pool'} ${r.pool.start}–${r.pool.end}`;
+  return `${ip!.trim()} lies in ${pool}: while another device holds it, this one gets a different address from the pool until that lease is released.`;
+}
+
+/**
  * The next free tunnel address of a hub (plan M14: "proposes the next free tunnel address of the hub,
  * computed client-side"): the lowest host address of the hub's subnet that is not the gateway's own,
  * not the network or broadcast address and not taken by another client. Undefined when the subnet is full.

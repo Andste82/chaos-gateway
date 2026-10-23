@@ -5437,7 +5437,13 @@ type Preview struct {
 	// Rules The access rules in the order they are evaluated after the change, overlay rules first (plan §2.4):
 	// the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
 	// `warnings` say so. Absent when there is no rule.
-	Rules    *[]PreviewRule `json:"rules,omitempty"`
+	Rules *[]PreviewRule `json:"rules,omitempty"`
+
+	// Warnings What the candidate allows but may not do as expected; a warning does not stop the apply. `path` is the
+	// JSON pointer of the field concerned when there is one: `fixed_ip_in_pool` at `/devices/{id}/fixed_ip` for a
+	// fixed address inside a DHCP pool of its network (while another client holds the address the device gets a
+	// pool address until that lease is released), `faults_not_on_forwards` at a port forward, a compiler warning
+	// at its network.
 	Warnings *[]struct {
 		Code    string  `json:"code"`
 		Message string  `json:"message"`

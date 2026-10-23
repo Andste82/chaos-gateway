@@ -29,17 +29,20 @@ type KeaTarget struct {
 const defaultLease = time.Hour
 
 // compileKea builds the DHCP configuration. Without a network that has DHCP switched on, there is
-// still a target (no subnets): Kea then answers nobody.
+// no target.
 func (t *Target) compileKea(cfg *model.Configuration, idx *domain.Index) {
 	var nets []string
+	on := map[string]bool{}
 	for id, n := range idx.Networks {
 		if n.Lan != nil && n.Lan.Dhcp != nil && (n.Lan.Dhcp.Enabled == nil || *n.Lan.Dhcp.Enabled) {
 			nets = append(nets, id)
+			on[id] = true
 		}
 	}
 	if len(nets) == 0 {
 		return
 	}
+	reserved := t.reservingDevices(idx, on)
 	sort.Slice(nets, func(i, j int) bool {
 		a, b := idx.Networks[nets[i]], idx.Networks[nets[j]]
 		if a.Name != b.Name {
@@ -71,37 +74,15 @@ func (t *Target) compileKea(cfg *model.Configuration, idx *domain.Index) {
 		}
 		c.Subnets = append(c.Subnets, sub)
 	}
-	// reservations: a device with a fixed address gets it on its network, for its first MAC
-	for did, d := range idx.Devices {
-		if d.Device == nil || d.Device.FixedIp == nil || *d.Device.FixedIp == "" {
-			continue
-		}
-		ip, err := netip.ParseAddr(*d.Device.FixedIp)
-		if err != nil {
-			t.errorf(CodeDHCP, "", "the fixed address %q of device %q is not valid", *d.Device.FixedIp, d.Name)
-			continue
-		}
-		var mac string
-		if d.Device.Identifiers != nil && d.Device.Identifiers.Macs != nil && len(*d.Device.Identifiers.Macs) > 0 {
-			mac = strings.ToLower((*d.Device.Identifiers.Macs)[0])
-		}
-		if mac == "" {
-			t.warn(CodeDHCP, "", "device %q has a fixed address but no MAC address: the reservation needs one", d.Name)
-			continue
-		}
-		placed := false
+	// reservations go to the subnet of the device's network; a network with DHCP whose subnet was
+	// not compiled has its error reported already
+	for _, r := range reserved {
 		for i := range c.Subnets {
-			sub := &c.Subnets[i]
-			if (d.Network == "" || d.Network == sub.Network) && sub.Subnet.Contains(ip) {
-				sub.Reservations = append(sub.Reservations, kea.Reservation{MAC: mac, IP: ip})
-				placed = true
+			if c.Subnets[i].Network == r.network {
+				c.Subnets[i].Reservations = append(c.Subnets[i].Reservations, r.res)
 				break
 			}
 		}
-		if !placed {
-			t.warn(CodeDHCP, "", "the fixed address %s of device %q is in none of the networks with DHCP: no reservation is made", ip, d.Name)
-		}
-		_ = did
 	}
 	text, err := c.Render()
 	if err != nil {
@@ -109,6 +90,45 @@ func (t *Target) compileKea(cfg *model.Configuration, idx *domain.Index) {
 		return
 	}
 	t.Kea = &KeaTarget{Config: c, Text: text, Networks: ids}
+}
+
+// reservation is one device's DHCP reservation in its network.
+type reservation struct {
+	network string
+	res     kea.Reservation
+}
+
+// reservingDevices returns the reservations of the devices with a fixed address, in device ID
+// order. A reservation is for the device's first MAC (plan §2.7): the UI puts the MAC of the
+// current lease first when it creates one. The validator has already refused a fixed address that
+// is not an address, one without a network or a MAC and one outside its network's subnet, so
+// those cases only skip the device. A device whose network has DHCP off gets a warning: the
+// address stays configured but nothing hands it out.
+func (t *Target) reservingDevices(idx *domain.Index, on map[string]bool) []reservation {
+	ids := make([]string, 0, len(idx.Devices))
+	for id := range idx.Devices {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []reservation
+	for _, id := range ids {
+		d := idx.Devices[id]
+		if d.Device == nil || d.Device.FixedIp == nil || d.Device.Identifiers == nil || d.Device.Identifiers.Macs == nil {
+			continue
+		}
+		ip, err := netip.ParseAddr(*d.Device.FixedIp)
+		macs := *d.Device.Identifiers.Macs
+		n, known := idx.Networks[d.Network]
+		if err != nil || len(macs) == 0 || !known {
+			continue // refused by the validator
+		}
+		if !on[d.Network] {
+			t.warn(CodeDHCP, n.Name, "device %q has the fixed address %s, but DHCP is off in its network %q: no reservation is made", d.Name, ip, n.Name)
+			continue
+		}
+		out = append(out, reservation{network: d.Network, res: kea.Reservation{MAC: strings.ToLower(macs[0]), IP: ip}})
+	}
+	return out
 }
 
 func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (kea.Subnet, bool) {

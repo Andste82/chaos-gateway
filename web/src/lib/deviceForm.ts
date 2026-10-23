@@ -4,8 +4,9 @@
 // device, and the device has a MAC to reserve it for. The hints say what the gateway accepts but the
 // admin should know: the address lies in the dynamic pool (decision on #76: allowed, a warning), it is
 // leased to another client now, DHCP is off in the network, a new reservation takes effect when the
-// device renews its lease, and the reservation is for the device's first MAC (decision on #77). The
-// helpers for the fixed IP take a plain context, so the adopt dialog and the leases card can use them.
+// device renews its lease (the address of its current lease it simply keeps), and the reservation is
+// for the device's first MAC (decision on #77). The helpers for the fixed IP take a plain context, so
+// the adopt dialog and the leases card can use them.
 import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { durationMs, formatDuration } from './format';

@@ -110,9 +110,12 @@ for (const [what, make] of notOffered) {
   test(`the box is not offered for a device ${what}`, async ({ page }) => {
     const gw = make();
     await gw.install(page);
+    // the configuration has come and is rendered (the networks the box depends on), so the box's
+    // absence is not just the dialog before the networks are known
+    const config = page.waitForResponse((r) => r.url().endsWith('/revisions/active'));
     const dialog = await openAdopt(page);
-    // the configuration has come (the networks the box depends on)
-    await expect.poll(() => gw.requestsTo('GET', '/revisions/active').length).toBeGreaterThan(0);
+    await config;
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     await expect(dialog.getByTestId('adopt-preview')).toContainText('Traffic is not changed.');
     await expect(dialog.getByTestId('adopt-reservation')).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Preview & apply' }).click();

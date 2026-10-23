@@ -70,6 +70,8 @@ test('Reserve on the lease of a configured device: the device dialog with the le
 
 test('Reserve on the lease of a discovered device: the adopt dialog with "Keep this address" checked, via preview and apply', async ({ page }) => {
   const gw = lab();
+  // the lease has a host name, the device's view has no lease: the name comes from the lease reserved
+  gw.leases[IOT] = gw.leases[IOT]!.map((l) => (l.mac === DEV_MAC ? { ...l, hostname: 'thermostat-a' } : l));
   await gw.install(page);
   await openIoT(page);
   // the gateway names no device for this lease: the discovered device with its MAC is the one
@@ -81,6 +83,7 @@ test('Reserve on the lease of a discovered device: the adopt dialog with "Keep t
   await expect(dialog.locator('[data-hint="pool"]')).toContainText('10.10.0.133 lies in the DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it');
   await expect(dialog.locator('[data-hint="kept"]')).toBeVisible();
   await expect(dialog.getByTestId('adopt-preview')).toContainText(`with MAC ${DEV_MAC} in network IoT and always gets 10.10.0.133 from DHCP`);
+  await expect(dialog.getByLabel('Name')).toHaveValue('thermostat-a');
   await dialog.getByLabel('Name').fill('Thermostat-A');
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
   await expect(dialog).toBeHidden();

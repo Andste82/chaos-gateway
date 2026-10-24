@@ -13,7 +13,8 @@
 // the fixed IP in the lease's network, and the lease's MAC as the one put first. A lease whose MAC is not
 // among the device's MACs (the gateway names the device by the lease's address, say) would be reserved
 // for a MAC that does not hold it: the dialog says so and offers to add the lease's MAC to the device as
-// its first MAC, checked (decision on #98), unless the MAC identifies another device already.
+// its first MAC, checked (decision on #98), unless the MAC identifies another device already; removing the
+// fixed IP withdraws the offer.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
@@ -113,8 +114,11 @@ const leaseIp = computed(() => {
 
 /** The devices as the draft has them (the other reservations, the names taken). */
 const devices = computed<Record<string, Device>>(() => draftDevices(draft.baseConfig?.devices, draft.devices));
-/** The reserved lease's MAC when it is not among the device's MACs; the dialog offers to add it (#98). */
-const foreignMac = computed(() => (props.reserve ? foreignLeaseMac(configuredMacs.value, props.reserve.mac) : undefined));
+/**
+ * The reserved lease's MAC when it is not among the device's MACs; the dialog offers to add it (#98) while
+ * the form keeps a fixed IP (with the fixed IP removed there is no reservation to add it for).
+ */
+const foreignMac = computed(() => (props.reserve && form.value.fixedIp.trim() ? foreignLeaseMac(configuredMacs.value, props.reserve.mac) : undefined));
 /** The other device the foreign MAC identifies already: it cannot be added to this one. */
 const foreignOwner = computed(() => (foreignMac.value ? macOwner(foreignMac.value, props.device.id, devices.value) : undefined));
 const addingMac = computed(() => !!foreignMac.value && !foreignOwner.value && addMac.value);

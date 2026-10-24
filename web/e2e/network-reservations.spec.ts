@@ -278,3 +278,33 @@ test('Reserve on a lease whose MAC identifies another device: no offer, the dial
     `${FOREIGN} already identifies device Sensor-07, so it cannot be added to this one: the reservation is for ${MAC}, which does not hold this lease.`,
   );
 });
+
+test('Reserve on a lease of a device without a MAC: the offer makes the MAC its only one, and removing the fixed IP withdraws it', async ({ page }) => {
+  const gw = lab({ [ESP]: { name: 'ESP32-42', macs: [] } });
+  foreignLease(gw);
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: `Reserve 10.10.0.60 for ${FOREIGN}` }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit ESP32-42' });
+  const offer = dialog.getByTestId('reserve-mac');
+  await expect(offer).toContainText(`The lease of 10.10.0.60 is held by MAC ${FOREIGN}, which is not among the device's MACs. A DHCP reservation is for the device's first MAC.`);
+  const box = offer.getByRole('checkbox', { name: `Add ${FOREIGN} to the device as its first MAC` });
+  await expect(box).toBeChecked();
+  await expect(offer.getByTestId('reserve-mac-effect')).toHaveText(`The reservation is for ${FOREIGN}, the MAC that holds the lease.`);
+  // declined, the device has no MAC to reserve for
+  await box.uncheck();
+  await expect(offer.getByTestId('reserve-mac-effect')).toHaveText('Without a MAC the device cannot have a reservation.');
+  await expect(dialog.getByTestId('fixed-ip-error')).toHaveText("The reservation is for the device's first MAC address: the device has none.");
+  await box.check();
+  await expect(dialog.getByTestId('fixed-ip-error')).toHaveCount(0);
+  // without the fixed IP there is nothing to add the MAC for
+  await dialog.getByRole('button', { name: 'Remove the fixed IP 10.10.0.60' }).click();
+  await expect(offer).toHaveCount(0);
+  await dialog.getByLabel('Fixed IP (DHCP reservation)').fill('10.10.0.60');
+  await expect(box).toBeChecked();
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(dialog).toBeHidden();
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
+    [ESP]: { identifiers: { macs: [FOREIGN] }, fixed_ip: '10.10.0.60' },
+  });
+});

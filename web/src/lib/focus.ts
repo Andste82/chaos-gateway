@@ -2,6 +2,10 @@
 // keyboard access to every action in dialogs and drawers; WCAG 2.4.3 focus order). Without this the
 // focus falls to <body> and a keyboard user starts again at the top of the page.
 
+// swaps (refocusAfterSwap) whose focus move has not run yet: a dialog that finishes closing in that
+// moment must not send the focus to the page start, from where the swap would not take it back
+let swapsPending = 0;
+
 function visible(el: HTMLElement): boolean {
   return el.isConnected && el.getClientRects().length > 0 && !(el as HTMLButtonElement).disabled;
 }
@@ -41,8 +45,10 @@ export function useFocusReturn() {
       const target = opener;
       opener = null;
       // after the dialog is gone and the page under it updated (Reka focuses in a timeout, too); when
-      // something took the focus meanwhile (the user clicked or tabbed on), it stays there
+      // something took the focus meanwhile (the user clicked or tabbed on), it stays there, and so
+      // when a swap the user just made (Undo) is about to place it
       setTimeout(() => {
+        if (swapsPending > 0) return;
         const a = document.activeElement;
         if (a instanceof HTMLElement && a !== document.body && a.isConnected && !a.closest('[role="dialog"]')) return;
         returnFocus(target);
@@ -71,8 +77,10 @@ export function focusAfterUpdate(selector: string): void {
 export function refocusAfterSwap(e: Event): void {
   const group = (e.currentTarget as HTMLElement | null)?.closest<HTMLElement>('[data-focus-group]');
   if (!group) return;
+  swapsPending++;
   // after the update the caller is about to cause (it may change the state after this call)
   setTimeout(() => {
+    swapsPending--;
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
     if (!group.isConnected) return focusPageStart();

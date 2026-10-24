@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useFocusReturn } from './focus';
+import { refocusAfterSwap, useFocusReturn } from './focus';
 
 function button(id: string): HTMLButtonElement {
   const b = document.createElement('button');
@@ -41,5 +41,38 @@ describe('useFocusReturn', () => {
     other.focus();
     vi.runAllTimers();
     expect(document.activeElement).toBe(other);
+  });
+
+  // the dialog's close ends just as the user presses Undo in a row: the swap places the focus, not the
+  // dialog's return to the page start (its opener is gone)
+  it('leaves the focus to an Undo swap that is still pending', () => {
+    vi.useFakeTimers();
+    const main = document.createElement('main');
+    main.innerHTML = '<h1>Devices</h1>';
+    document.body.appendChild(main);
+    const group = document.createElement('span');
+    group.setAttribute('data-focus-group', '');
+    document.body.appendChild(group);
+    const undo = button('undo');
+    undo.setAttribute('data-focus-swap', '');
+    group.appendChild(undo);
+
+    const opener = button('opener');
+    const f = useFocusReturn();
+    opener.focus();
+    f.onOpen();
+    opener.remove();
+    f.onClose(new Event('close'));
+
+    undo.focus();
+    undo.addEventListener('click', (e) => refocusAfterSwap(e));
+    undo.click();
+    undo.remove();
+    const remove = button('remove');
+    remove.setAttribute('data-focus-swap', '');
+    group.appendChild(remove);
+
+    vi.runAllTimers();
+    expect(document.activeElement).toBe(remove);
   });
 });

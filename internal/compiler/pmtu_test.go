@@ -406,23 +406,6 @@ func mtuOverlay(t *testing.T, cfg *model.Configuration, body string) model.Overl
 	return w.overlay(body, time.Duration(len(body))*time.Millisecond)
 }
 
-// A fault that selects a hostname cannot classify yet (M20); the compile says so and writes no chain.
-func TestAnMTUFaultThatNamesAHostnameIsReportedAndNotCompiled(t *testing.T) {
-	w := newFaultWorld(t)
-	w.overlay(`{target: {device: esp32-42}, fault: {family: mtu, mtu: {size: 1280}, destination: {hostname: example.com}}}`, 0)
-	tg := w.compile(nil)
-	if tg.HasErrors() || len(tg.PMTU) != 0 {
-		t.Fatalf("%+v %+v", tg.PMTU, tg.Problems)
-	}
-	found := false
-	for _, p := range tg.Problems {
-		found = found || (p.Code == CodeHostnameUnresolved && strings.Contains(p.Message, "MTU fault"))
-	}
-	if !found {
-		t.Errorf("%+v", tg.Problems)
-	}
-}
-
 // Golden: the MTU scenario, every mode next to an impairment, with the maps, chains and routes.
 func scenarioPMTU(t *testing.T) *Target {
 	t.Helper()

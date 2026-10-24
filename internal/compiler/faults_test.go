@@ -713,30 +713,6 @@ func TestOnlyImpairmentFaultsCompileHere(t *testing.T) {
 	}
 }
 
-func TestAHostnameSelectorIsLeftOutWithAWarning(t *testing.T) {
-	w := newFaultWorld(t)
-	o := w.overlay(`{target: {device: esp32-42}, fault: {destination: {hostname: broker.example.com}, latency: 50ms}}`, 0)
-	w.overlay(`{target: {network: IoT}, fault: {loss: 1%}}`, time.Second)
-	tg := w.compile(nil)
-	if tg.HasErrors() {
-		t.Fatalf("%+v", tg.Problems)
-	}
-	var warned bool
-	for _, p := range tg.Problems {
-		if p.Code == CodeHostnameUnresolved && strings.Contains(p.Message, o.Id.String()) && p.Severity == SevWarning {
-			warned = true
-		}
-	}
-	if !warned {
-		t.Errorf("no warning: %+v", tg.Problems)
-	}
-	for _, f := range tg.Faults {
-		if f.Source == o.Id.String() {
-			t.Error("the hostname fault got an id")
-		}
-	}
-}
-
 func TestAProfileActivationCompilesItsImpairmentPart(t *testing.T) {
 	w := newFaultWorld(t)
 	o := w.overlay(`{target: {device: esp32-42}, profile: bad-lte}`, 0)

@@ -30,6 +30,9 @@ type Client struct {
 	// connection (plan §3.11, M8a). They are dialed on demand, at most maxReaderConns at once, and
 	// kept idle for the next read.
 	rd readerConns
+	// dns holds the connections of the updates of DNS-derived sets (NftDNSElements): they must not
+	// wait for a plan on the main connection either, nor for a slow read (plan §3.11, M20).
+	dns readerConns
 }
 
 // readerConns is a bounded pool of extra connections for read-only requests.
@@ -44,6 +47,10 @@ type readerConns struct {
 // maxReaderConns is how many reads one client has in flight at once; the executor serves as many
 // reads beside its writer (readerSlots).
 const maxReaderConns = 4
+
+// maxDNSConns is how many requests of DNS-set updates one client has in flight at once: the executor
+// takes one at a time, the second connection only keeps the next request from waiting for a dial.
+const maxDNSConns = 2
 
 // DialOptions tune Dial.
 type DialOptions struct {
@@ -120,13 +127,15 @@ func remoteErr(e *RemoteError) error {
 
 // Close closes the connection and the reader connections.
 func (c *Client) Close() error {
-	c.rd.mu.Lock()
-	c.rd.closed = true
-	idle := c.rd.idle
-	c.rd.idle = nil
-	c.rd.mu.Unlock()
-	for _, rc := range idle {
-		_ = rc.conn.Close()
+	for _, pool := range []*readerConns{&c.rd, &c.dns} {
+		pool.mu.Lock()
+		pool.closed = true
+		idle := pool.idle
+		pool.idle = nil
+		pool.mu.Unlock()
+		for _, rc := range idle {
+			_ = rc.conn.Close()
+		}
 	}
 	return c.conn.Close()
 }
@@ -137,30 +146,36 @@ func (c *Client) Close() error {
 // A request of reads only goes over a reader connection of its own, so it does not wait for the
 // request that is on the main connection, and the executor answers it beside its writer (plan
 // §3.11). A client that was not made by Dial has no such connections and uses the one it has.
+//
+// The same holds for a request of updates of DNS-derived sets, over connections of their own: the
+// executor writes them beside its plan, and the answer of the DNS proxy waits for them.
 func (c *Client) Do(ctx context.Context, ops ...Operation) (Outcome, error) {
 	if c.path != "" && isReadOnly(ops) {
-		return c.doRead(ctx, ops)
+		return c.doPooled(ctx, ops, &c.rd, maxReaderConns)
+	}
+	if c.path != "" && isDNSElements(ops) {
+		return c.doPooled(ctx, ops, &c.dns, maxDNSConns)
 	}
 	return c.do(ctx, ops...)
 }
 
-// doRead runs a read-only request on a reader connection. A connection that failed in any way but
-// an error of the executor is closed, because it may be out of step with the executor; when no
-// extra connection can be made the read goes over the main one.
-func (c *Client) doRead(ctx context.Context, ops []Operation) (Outcome, error) {
-	c.rd.mu.Lock()
-	if c.rd.permits == nil {
-		c.rd.permits = make(chan struct{}, maxReaderConns)
+// doPooled runs a request on a connection of a pool of extra connections (the reads, the DNS-set updates).
+// A connection that failed in any way but an error of the executor is closed, because it may be out of
+// step with the executor; when no extra connection can be made the request goes over the main one.
+func (c *Client) doPooled(ctx context.Context, ops []Operation, pool *readerConns, max int) (Outcome, error) {
+	pool.mu.Lock()
+	if pool.permits == nil {
+		pool.permits = make(chan struct{}, max)
 	}
-	permits := c.rd.permits
-	c.rd.mu.Unlock()
+	permits := pool.permits
+	pool.mu.Unlock()
 	select {
 	case permits <- struct{}{}:
 	case <-ctx.Done():
 		return Outcome{}, ctx.Err()
 	}
 	defer func() { <-permits }()
-	rc, err := c.readerConn(ctx)
+	rc, err := c.poolConn(ctx, pool)
 	if err != nil {
 		return c.do(ctx, ops...)
 	}
@@ -170,27 +185,27 @@ func (c *Client) doRead(ctx context.Context, ops []Operation) (Outcome, error) {
 		_ = rc.conn.Close()
 		return out, err
 	}
-	c.rd.mu.Lock()
-	if c.rd.closed {
-		c.rd.mu.Unlock()
+	pool.mu.Lock()
+	if pool.closed {
+		pool.mu.Unlock()
 		_ = rc.conn.Close()
 		return out, err
 	}
-	c.rd.idle = append(c.rd.idle, rc)
-	c.rd.mu.Unlock()
+	pool.idle = append(pool.idle, rc)
+	pool.mu.Unlock()
 	return out, err
 }
 
-func (c *Client) readerConn(ctx context.Context) (*Client, error) {
-	c.rd.mu.Lock()
-	if n := len(c.rd.idle); n > 0 {
-		rc := c.rd.idle[n-1]
-		c.rd.idle = c.rd.idle[:n-1]
-		c.rd.mu.Unlock()
+func (c *Client) poolConn(ctx context.Context, pool *readerConns) (*Client, error) {
+	pool.mu.Lock()
+	if n := len(pool.idle); n > 0 {
+		rc := pool.idle[n-1]
+		pool.idle = pool.idle[:n-1]
+		pool.mu.Unlock()
 		return rc, nil
 	}
-	closed := c.rd.closed
-	c.rd.mu.Unlock()
+	closed := pool.closed
+	pool.mu.Unlock()
 	if closed {
 		return nil, net.ErrClosed
 	}

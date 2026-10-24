@@ -77,5 +77,8 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	// the port forwards (M35a): the DNAT map with its concatenated value, the DNAT through it next to the
 	// service redirect, the accept rules with `ct status dnat`, the responder forms of the access rules
 	out["forward"] = scenarioForward(t)
+	// hostnames (M20): the DNS-derived sets (a concatenated type with a timeout), the hostname faults in front of
+	// the lookup levels and next to the MTU lookup, a hostname rule and its responder form
+	out["hostnames"] = scenarioHostnames(t)
 	return out
 }

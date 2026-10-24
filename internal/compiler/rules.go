@@ -30,6 +30,7 @@ func anon(vals ...any) any      { return map[string]any{"set": vals} }
 func setRef(name string) string { return "@" + name }
 func counter(name string) any   { return map[string]any{"counter": name} }
 func verdict(v string) any      { return map[string]any{v: nil} }
+func gotoChain(name string) any { return map[string]any{"goto": map[string]any{"target": name}} }
 
 // lastStmt is the `last` statement (kernel 5.17+): the kernel notes when the rule last matched and
 // lists it as `last used <ms>` (plan §2.17, the rule editor's "last match", P3-M13-01). It is compiled
@@ -139,6 +140,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
 	t.Nft.Sets = append(t.Nft.Sets, t.accessSets...)
+	t.Nft.Sets = append(t.Nft.Sets, t.hostSetDefs...)
 	if t.identityMap.Name != "" {
 		t.Nft.Maps = append(t.Nft.Maps, t.identityMap)
 	}

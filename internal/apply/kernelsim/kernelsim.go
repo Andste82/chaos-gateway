@@ -54,7 +54,8 @@ type rule struct {
 }
 
 type nftSet struct {
-	typ   string
+	// typ is the set's type as `add set` gave it: a name, or the list of names of a concatenation
+	typ   json.RawMessage
 	flags []string
 	elems []json.RawMessage
 }

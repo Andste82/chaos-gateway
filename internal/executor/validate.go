@@ -213,6 +213,56 @@ func (o NftAddElements) validate() error {
 	return nil
 }
 
+// DNSSetName is the form of the name of a DNS-derived set: `dns_` and ten hexadecimal digits (the id of
+// the hostname selector), an underscore and six (the hash of the set's definition, compiler.DNSSetID and
+// the compiler's hashName). The operation for their elements takes no other set.
+var dnsSetName = regexp.MustCompile(`^dns_[0-9a-f]{10}_[0-9a-f]{6}$`)
+
+// IsDNSSetName reports whether a name is that of a DNS-derived set.
+func IsDNSSetName(name string) bool { return dnsSetName.MatchString(name) }
+
+// The limits of one NftDNSElements: a batch of the proxy's queries is far below them.
+const (
+	// MaxDNSElements is the most elements one operation writes in all of its sets.
+	MaxDNSElements = 8192
+	// MaxDNSSets is the most sets one operation names.
+	MaxDNSSets = 1024
+	// MaxDNSTimeout is the longest lifetime an element is written with.
+	MaxDNSTimeout = 30 * 24 * 3600
+)
+
+func (o NftDNSElements) validate() error {
+	if err := o.Target.validate(); err != nil {
+		return err
+	}
+	if len(o.Updates) == 0 || len(o.Updates) > MaxDNSSets {
+		return fmt.Errorf("%d sets, want 1..%d", len(o.Updates), MaxDNSSets)
+	}
+	total := 0
+	for i, u := range o.Updates {
+		if !dnsSetName.MatchString(u.Set) {
+			return fmt.Errorf("updates[%d]: %q is not the name of a DNS-derived set", i, u.Set)
+		}
+		if len(u.Elements) == 0 {
+			return fmt.Errorf("updates[%d]: no elements", i)
+		}
+		if total += len(u.Elements); total > MaxDNSElements {
+			return fmt.Errorf("more than %d elements", MaxDNSElements)
+		}
+		for j, e := range u.Elements {
+			for field, v := range map[string]string{"client": e.Client, "addr": e.Addr} {
+				if a, err := netip.ParseAddr(v); err != nil || !a.Is4() || a.IsUnspecified() || a.IsMulticast() {
+					return fmt.Errorf("updates[%d].elements[%d]: %s %q is not a unicast IPv4 address", i, j, field, v)
+				}
+			}
+			if e.TimeoutSeconds < 1 || e.TimeoutSeconds > MaxDNSTimeout {
+				return fmt.Errorf("updates[%d].elements[%d]: timeout %d s out of range", i, j, e.TimeoutSeconds)
+			}
+		}
+	}
+	return nil
+}
+
 func (o NftDelElements) validate() error {
 	return NftAddElements{Target: o.Target, Set: o.Set, Elements: o.Elements}.validate()
 }

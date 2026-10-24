@@ -136,6 +136,9 @@ type faultBuild struct {
 	maps     []MapDef
 	chains   []Chain
 	counters []string
+	// hostRules are the rules of the faults that name a hostname: they stand in front of the lookup
+	// levels of the classify chain (hostnames.go).
+	hostRules []Rule
 }
 
 // faultCounterName names the counter of a fault key and direction. It is derived from the key, not
@@ -328,7 +331,42 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	entryKey := make([][]string, len(sources))
 	keySet := map[string]bool{}
 	faults := map[string]*Fault{}
-	hostnames := map[string]bool{}
+	// register gives the winner of an entry (or of a hostname selector) its id key: the key of the
+	// fault, with the device when each device has a queue of its own, "" for a winner that impairs
+	// nothing. ok is false when the winner cannot be compiled.
+	register := func(c domain.Candidate, src domain.Source) (key string, ok bool) {
+		bk := baseKey(c)
+		r, seen := winners[bk]
+		if !seen {
+			if r, ok = t.resolveWinner(c); !ok {
+				return "", false
+			}
+			winners[bk] = r
+		}
+		if r.neutral() {
+			return "", true
+		}
+		key = bk
+		device := ""
+		if r.perDev {
+			device = src.Device
+			if device == "" {
+				device = "shared"
+			}
+			key += "@" + device
+			if device == "shared" {
+				device = ""
+			}
+		}
+		if !keySet[key] {
+			keySet[key] = true
+			c := r.cand
+			faults[key] = &Fault{Key: key, Layer: string(c.Layer), Source: c.ID, Profile: c.ProfileName, Device: device,
+				Scope: describeScope(idx, c.Scope), Upload: r.up, Download: r.down,
+				CounterUp: faultCounterName(key, Upload), CounterDown: faultCounterName(key, Download)}
+		}
+		return key, true
+	}
 	cells := 0
 	for i, src := range sources {
 		tab, err := w.Table(src, domain.FamilyImpairment)
@@ -347,50 +385,21 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		}
 		tables[i] = tab
 		t.addCoverage(tab)
-		for _, c := range tab.Unresolved {
-			if k := baseKey(c); !hostnames[k] {
-				hostnames[k] = true
-				t.warn(CodeHostnameUnresolved, "", "the fault %s selects a hostname: its addresses are known at run time only (DNS-derived sets), so it does not classify traffic yet", c.ID)
-			}
-		}
 		entryKey[i] = make([]string, len(tab.Entries))
 		for j, e := range tab.Entries {
 			if e.Winner == nil {
 				continue
 			}
-			bk := baseKey(*e.Winner)
-			r, seen := winners[bk]
-			if !seen {
-				var ok bool
-				if r, ok = t.resolveWinner(*e.Winner); !ok {
-					return
-				}
-				winners[bk] = r
-			}
-			if r.neutral() {
-				continue
-			}
-			key := bk
-			device := ""
-			if r.perDev {
-				device = src.Device
-				if device == "" {
-					device = "shared"
-				}
-				key += "@" + device
-				if device == "shared" {
-					device = ""
-				}
+			key, ok := register(*e.Winner, src)
+			if !ok {
+				return
 			}
 			entryKey[i][j] = key
-			if !keySet[key] {
-				keySet[key] = true
-				c := r.cand
-				faults[key] = &Fault{Key: key, Layer: string(c.Layer), Source: c.ID, Profile: c.ProfileName, Device: device,
-					Scope: describeScope(idx, c.Scope), Upload: r.up, Download: r.down,
-					CounterUp: faultCounterName(key, Upload), CounterDown: faultCounterName(key, Download)}
-			}
 		}
+	}
+	hostRules, ok := t.hostFaultRules(tables, sources, register)
+	if !ok {
+		return
 	}
 
 	// ---- tunnel faults: their own family, resolved per tunnel ----
@@ -442,7 +451,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	}
 
 	// ---- the classification maps ------------------------------------------------------------
-	t.compileClassification(sources, tables, entryKey)
+	t.compileClassification(sources, tables, entryKey, hostRules)
 }
 
 // compileTC builds the classes of the active (id, direction)s and checks the class limit of an
@@ -774,7 +783,7 @@ func (r clsRow) rest() string {
 	return b.String()
 }
 
-func (t *Target) compileClassification(sources []domain.Source, tables []domain.Table, entryKey [][]string) {
+func (t *Target) compileClassification(sources []domain.Source, tables []domain.Table, entryKey [][]string, hostRules []hostRule) {
 	byLevel, needZero, ok := t.classElements(sources, tables, func(i, j int) (int, bool) {
 		if tables[i].Entries[j].Winner == nil {
 			return 0, false
@@ -789,6 +798,17 @@ func (t *Target) compileClassification(sources []domain.Source, tables []domain.
 		return
 	}
 	t.faultBuild.maps = classMapDefs(byLevel)
+
+	// the rules of the hostname faults, in front of the lookup levels (hostnames.go)
+	for _, hr := range hostRules {
+		target := MarkChainName(0)
+		if hr.key == "" {
+			needZero = true
+		} else {
+			target = MarkChainName(t.FaultIDs[hr.key])
+		}
+		t.faultBuild.hostRules = append(t.faultBuild.hostRules, newRule(append(append([]any(nil), hr.expr...), gotoChain(target))...))
+	}
 
 	// the per-id chains and their counters
 	if needZero {

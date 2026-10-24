@@ -22,6 +22,9 @@ type recordingExec struct {
 	inner   apply.Exec
 	mu      sync.Mutex
 	updates []executor.DNSSetUpdate
+	// block, when set, holds every DNS-set request until it is closed; entered is told that one arrived
+	block   chan struct{}
+	entered chan struct{}
 }
 
 func (r *recordingExec) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
@@ -35,6 +38,10 @@ func (r *recordingExec) Do(ctx context.Context, ops ...executor.Operation) (exec
 		}
 	}
 	if dns {
+		if r.block != nil {
+			r.entered <- struct{}{}
+			<-r.block
+		}
 		return executor.Outcome{}, nil
 	}
 	return r.inner.Do(ctx, ops...)
@@ -182,6 +189,69 @@ func TestTheElementsTheKernelHoldsAreAdoptedAfterARestart(t *testing.T) {
 		t.Errorf("an element the kernel holds was written again: %v", got)
 	}
 	if got := e.HostNames(netip.MustParseAddr("10.10.0.5"), netip.MustParseAddr("203.0.113.7")); len(got) != 1 || got[0] != "broker.example.com" {
+		t.Errorf("%v", got)
+	}
+}
+
+// A request that was on its way while a plan replaced the set went into the set that is gone: the mirror must not
+// claim the new set holds the element, or the device's address would stay out of it for half a lifetime.
+func TestARequestThatWasOnItsWayWhileAPlanReplacedTheSetIsNotRememberedAsWritten(t *testing.T) {
+	e, ex, _ := hostEngine(t)
+	e.hosts.applied(targetWithSet("dns_0123456789_aaaaaa"), nil)
+	ex.block, ex.entered = make(chan struct{}), make(chan struct{}, 4)
+	done := make(chan error, 1)
+	go func() { done <- report(e, "203.0.113.8") }()
+	<-ex.entered
+	next := targetWithSet("dns_0123456789_bbbbbb")
+	end := e.hosts.begin(next)
+	end(next, nil) // the plan is through while the request has not returned
+	close(ex.block)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	ex.block = nil
+	if err := report(e, "203.0.113.8"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ex.sets(); len(got) != 2 || got[0] != "dns_0123456789_aaaaaa" || got[1] != "dns_0123456789_bbbbbb" {
+		t.Errorf("the address is not in the new set: %v", got)
+	}
+}
+
+// One operation takes at most MaxDNSElements elements and MaxDNSSets sets: a larger batch goes in several requests
+// that together hold every element once.
+func TestALargeBatchOfElementsIsSplitIntoRequestsTheExecutorTakes(t *testing.T) {
+	mk := func(n int) []executor.DNSElement {
+		els := make([]executor.DNSElement, n)
+		for i := range els {
+			els[i] = executor.DNSElement{Client: "10.10.0.5", Addr: netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}).String(), TimeoutSeconds: 600}
+		}
+		return els
+	}
+	var u executor.NftDNSElements
+	u.Updates = []executor.DNSSetUpdate{
+		{Set: "dns_0000000001_aaaaaa", Elements: mk(executor.MaxDNSElements - 3)},
+		{Set: "dns_0000000002_aaaaaa", Elements: mk(10)},
+	}
+	parts := splitDNSUpdates(u)
+	if len(parts) != 2 {
+		t.Fatalf("%d requests", len(parts))
+	}
+	count := map[string]int{}
+	for _, p := range parts {
+		total := 0
+		for _, up := range p.Updates {
+			total += len(up.Elements)
+			count[up.Set] += len(up.Elements)
+		}
+		if total > executor.MaxDNSElements || len(p.Updates) > executor.MaxDNSSets {
+			t.Errorf("a request with %d elements in %d sets", total, len(p.Updates))
+		}
+	}
+	if count["dns_0000000001_aaaaaa"] != executor.MaxDNSElements-3 || count["dns_0000000002_aaaaaa"] != 10 {
+		t.Errorf("%v", count)
+	}
+	if got := splitDNSUpdates(executor.NftDNSElements{}); len(got) != 0 {
 		t.Errorf("%v", got)
 	}
 }

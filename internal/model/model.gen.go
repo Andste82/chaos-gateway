@@ -3748,7 +3748,9 @@ type DnsQueryLogEntry struct {
 	Name     string                    `json:"name"`
 	Protocol *DnsQueryLogEntryProtocol `json:"protocol,omitempty"`
 
-	// Rcode Example: NOERROR
+	// Rcode The response code of the answer; `TIMEOUT` for a query that a `timeout` fault left without an answer (M20).
+	//
+	// Example: NOERROR
 	Rcode        string    `json:"rcode"`
 	StrippedAaaa *bool     `json:"stripped_aaaa,omitempty"`
 	Time         time.Time `json:"time"`

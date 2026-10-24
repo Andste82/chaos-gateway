@@ -2449,3 +2449,16 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`.
 - Acceptance: the plan states which of the three holds, and the tests of §2.4 (E1 to E12) have a case with a hostname selector if (b) or (c) is chosen.
 - Needs maintainer: yes
 - Effort: L
+
+### P5-M20-02 DNS faults cannot be made in the web UI or with `chaosctl`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. M20 delivers the DNS family in the API (an overlay of the kind `dns`, the `dns` part of profiles, the step type `dns`) and the UI labels and lists them (the chips of a DNS fault, the "DNS broken" profile card, a `dns` step in a scenario). The plan names no UI work for it: §2.17 lists the kinds of the "Add fault" dialog as impairment, MTU/PMTUD and tunnel, the step dialog of M19 edits the step types of M15 to M17, and `chaosctl` (M18) has flags for impairment faults and profiles only. No later milestone of the plan adds a DNS form (M21 to M23a are TLS, DHCP and the Captures screen). A DNS fault is made today with the API or the generated clients, in the YAML of a scenario (the step list keeps a `dns` step it does not edit), or by activating a profile with a `dns` part.
+- Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `dns`), `web/src/lib/faultForm.ts` (the fault kinds), `internal/ctl/overlays.go` (the flags of `chaosctl fault`); `docs/development.md` "DNS faults and hostname selectors (M20)".
+- Task: decide whether V1 needs a DNS kind in the "Add fault" dialog (action, names, delay, answers, TTL; target and TTL as for the other kinds), a `dns` step in the step dialog and a `chaosctl` flag, and in which milestone.
+- Options: (a) leave it: the API, the clients and scenario files are the way to make DNS faults, the UI shows them; (b) a DNS kind in the "Add fault" dialog and the step dialog, with Playwright tests, and `chaosctl dns` flags (one form for DNS, TLS and DHCP kinds would share the work of M21 and M23, which have the same gap).
+- Recommendation: (b) together with the TLS form of M21, so the dialog gets its application-layer kinds once.
+- Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
+- Needs maintainer: yes
+- Effort: M

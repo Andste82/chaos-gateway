@@ -286,6 +286,7 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 	h.mu.Lock()
 	var update executor.NftDNSElements
 	update.NS = h.e.cfg.Namespace
+	used := map[string]string{} // the set each id was written to
 	var ids []string
 	for id := range merged {
 		ids = append(ids, id)
@@ -297,6 +298,7 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 			continue // the set went with an apply since the report
 		}
 		u := executor.DNSSetUpdate{Set: info.name}
+		used[id] = info.name
 		keys := make([]string, 0, len(merged[id]))
 		for k := range merged[id] {
 			keys = append(keys, k)
@@ -311,17 +313,23 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 	if len(update.Updates) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(h.e.ctx, hostWriteTimeout)
-	defer cancel()
-	if _, err := h.e.cfg.Exec.Do(ctx, &update); err != nil {
-		h.e.cfg.Log.Warn("writing DNS-derived set elements failed", "error", err)
-		return fmt.Errorf("the DNS-derived sets could not be updated: %w", err)
+	// one operation takes at most MaxDNSElements: a larger batch (a refresh of many flows) goes in several requests
+	for _, part := range splitDNSUpdates(update) {
+		ctx, cancel := context.WithTimeout(h.e.ctx, hostWriteTimeout)
+		_, err := h.e.cfg.Exec.Do(ctx, &part)
+		cancel()
+		if err != nil {
+			h.e.cfg.Log.Warn("writing DNS-derived set elements failed", "error", err)
+			return fmt.Errorf("the DNS-derived sets could not be updated: %w", err)
+		}
 	}
 	now := h.e.cfg.Clock.Now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, m := range merged {
-		if _, ok := h.sets[id]; !ok {
+		// a set that an apply replaced while the request was on its way holds nothing of it (the old one went
+		// with the plan): the mirror must not say it does
+		if info, ok := h.sets[id]; !ok || info.name != used[id] {
 			continue
 		}
 		if h.elems[id] == nil {
@@ -551,5 +559,34 @@ func (h *hostSets) addrs(pattern string) []netip.Addr {
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
+	return out
+}
+
+// splitDNSUpdates cuts a request into requests of at most executor.MaxDNSElements elements and executor.MaxDNSSets sets.
+func splitDNSUpdates(u executor.NftDNSElements) []executor.NftDNSElements {
+	var out []executor.NftDNSElements
+	cur := executor.NftDNSElements{Target: u.Target}
+	n := 0
+	flush := func() {
+		if len(cur.Updates) > 0 {
+			out = append(out, cur)
+			cur = executor.NftDNSElements{Target: u.Target}
+			n = 0
+		}
+	}
+	for _, up := range u.Updates {
+		for len(up.Elements) > 0 {
+			room := executor.MaxDNSElements - n
+			if room == 0 || len(cur.Updates) >= executor.MaxDNSSets {
+				flush()
+				continue
+			}
+			take := min(room, len(up.Elements))
+			cur.Updates = append(cur.Updates, executor.DNSSetUpdate{Set: up.Set, Elements: up.Elements[:take]})
+			up.Elements = up.Elements[take:]
+			n += take
+		}
+	}
+	flush()
 	return out
 }

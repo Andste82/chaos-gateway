@@ -76,8 +76,7 @@ func (s *Server) ruleViews(ctx context.Context, v view) (views []model.AccessRul
 			if cr, ok := oc.snap.Access.Rule("config:" + id.String()); ok {
 				rv.Counters = oc.ruleCounter(*cr)
 			} else {
-				// enabled, but not in the packet path: a rule that names a hostname before M20, or a
-				// revision the kernel does not run yet
+				// enabled, but not in the packet path: a revision the kernel does not run yet
 				st = model.EffectStateDisabled
 			}
 		}

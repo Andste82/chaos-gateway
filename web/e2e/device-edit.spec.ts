@@ -53,7 +53,7 @@ test('a fixed IP is set, changed and removed from the device detail, via preview
   // in the pool and leased to another client: allowed, with notes
   await ip.fill('10.10.0.133');
   await expect(dialog.getByTestId('fixed-ip-error')).toHaveCount(0);
-  await expect(dialog.locator('[data-hint="pool"]')).toContainText('10.10.0.133 lies in the DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it');
+  await expect(dialog.locator('[data-hint="pool"]')).toContainText('10.10.0.133 lies in the default DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it');
   await expect(dialog.locator('[data-hint="leased"]')).toContainText('10.10.0.133 is leased to 3a:f1:9c:22:07:b4 now');
   await ip.fill('10.10.0.50');
   await expect(dialog.locator('[data-hint="pool"]')).toHaveCount(0);

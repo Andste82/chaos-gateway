@@ -2,15 +2,16 @@
 // name, network and fixed IP. The checks mirror the gateway's (`validate_device.go`): a fixed IP is a
 // host address of a local test network's subnet, not the gateway's own and not reserved for another
 // device, and the device has a MAC to reserve it for. The hints say what the gateway accepts but the
-// admin should know: the address lies in the dynamic pool (decision on #76: allowed, a warning), it is
-// leased to another client now, DHCP is off in the network, a new reservation takes effect when the
+// admin should know: the address lies in the dynamic pool (decision on #76: allowed, a warning; the check
+// and its wording are `reservationPoolHint`'s, #101), it is leased to another client now, or the device
+// holds it with a MAC other than the one the reservation is for (#96), DHCP is off in the network, a new reservation takes effect when the
 // device renews its lease (the address of its current lease it simply keeps), and the reservation is
 // for the device's first MAC (decision on #77). The helpers for the fixed IP take a plain context, so
 // the adopt dialog and the leases card can use them.
 import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { durationMs, formatDuration } from './format';
-import { effectivePools, formatIPv4, parseIPv4, parseSubnet, subnetText } from './networks';
+import { formatIPv4, parseIPv4, parseSubnet, reservationPoolHint, subnetText } from './networks';
 
 // ---- the fixed IP ------------------------------------------------------------------------------
 
@@ -51,12 +52,17 @@ export function fixedIpError(ip: string, ctx: ReservationContext): string | unde
   return undefined;
 }
 
-export type ReservationHintKind = 'pool' | 'leased' | 'dhcp_off' | 'renewal' | 'kept' | 'removed' | 'first_mac';
+export type ReservationHintKind = 'pool' | 'leased' | 'other_mac' | 'dhcp_off' | 'renewal' | 'kept' | 'removed' | 'first_mac';
 
 /** A note on a reservation that does not stop it. */
 export interface ReservationHint {
   kind: ReservationHintKind;
   text: string;
+}
+
+/** A hint that warns (the dialogs show it in the fault color): the address may not reach the device. */
+export function warningHint(kind: ReservationHintKind): boolean {
+  return kind === 'pool' || kind === 'leased' || kind === 'other_mac' || kind === 'dhcp_off';
 }
 
 /** What the hints of a fixed IP need beyond the checks. */
@@ -113,28 +119,28 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
   if (net.dhcp?.enabled === false) {
     out.push({ kind: 'dhcp_off', text: `DHCP is off in ${net.name}: the reservation has no effect until it is turned on.` });
   } else {
-    const { pools } = effectivePools(net.address, net.dhcp?.pools);
-    const pool = pools.find((p) => {
-      const a = parseIPv4(p.start);
-      const b = parseIPv4(p.end);
-      return a !== undefined && b !== undefined && n >= a && n <= b;
-    });
-    if (pool) {
-      out.push({
-        kind: 'pool',
-        text: `${addr} lies in the DHCP pool ${pool.start}–${pool.end} of ${net.name}. The gateway allows it, but the pool may hand it to another client first; an address outside the pool is safer.`,
-      });
-    }
+    // the one pool check of the web app, in the gateway's terms (`fixed_ip_in_pool`, #101)
+    const pool = reservationPoolHint(net, addr);
+    if (pool) out.push({ kind: 'pool', text: pool });
   }
   // only a new or changed reservation puts the lease's MAC first (as `deviceFromForm` does)
   const changed = parseIPv4(ctx.before) !== n || (ctx.beforeNetwork !== undefined && ctx.beforeNetwork !== ctx.networkId);
   const macs = changed ? reservationMacs(ctx.macs, ctx.leaseMac) : ctx.macs;
   const mine = macs[0]?.toLowerCase();
-  const held = (ctx.leases ?? []).find((l) => parseIPv4(l.ip) === n && l.state !== 'expired' && l.state !== 'declined' && l.mac.toLowerCase() !== mine);
-  if (held) {
+  const own = new Set(macs.map((m) => m.toLowerCase()));
+  // a lease of the address by one of the device's MACs is its own (#96); by its first MAC it is the reserved one
+  const held = (ctx.leases ?? []).filter((l) => parseIPv4(l.ip) === n && l.state !== 'expired' && l.state !== 'declined' && l.mac.toLowerCase() !== mine);
+  const other = held.find((l) => !own.has(l.mac.toLowerCase()));
+  const ownOther = held.find((l) => own.has(l.mac.toLowerCase()));
+  if (other) {
     out.push({
       kind: 'leased',
-      text: `${addr} is leased to ${held.mac}${held.hostname ? ` (${held.hostname})` : ''} now: the device gets it only once that lease is released or runs out, and an address from the pool until then.`,
+      text: `${addr} is leased to ${other.mac}${other.hostname ? ` (${other.hostname})` : ''} now: the device gets it only once that lease is released or runs out, and an address from the pool until then.`,
+    });
+  } else if (ownOther) {
+    out.push({
+      kind: 'other_mac',
+      text: `The device holds ${addr} with its MAC ${ownOther.mac} now, but the reservation is for its first MAC, ${macs[0]}: it keeps the address only while it asks with that one. Put ${ownOther.mac} first among the device's MACs to reserve the address for the MAC that holds the lease.`,
     });
   }
   const kept = ctx.leaseIp !== undefined && parseIPv4(ctx.leaseIp) === n && (!ctx.leaseMac || ctx.leaseMac.toLowerCase() === mine);

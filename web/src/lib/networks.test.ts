@@ -60,8 +60,10 @@ describe('a fixed address inside a DHCP pool (#76: a hint, not an error)', () =>
     expect(reservationPool(lan, '10.10.0.149')?.pool.start).toBe('10.10.0.100');
     expect(reservationPool(lan, '10.10.0.205')?.pool.start).toBe('10.10.0.200');
     expect(reservationPoolHint(lan, '10.10.0.120')).toBe(
-      '10.10.0.120 lies in the DHCP pool 10.10.0.100–10.10.0.149: while another device holds it, this one gets a different address from the pool until that lease is released.',
+      '10.10.0.120 lies in the DHCP pool 10.10.0.100–10.10.0.149. The gateway allows it, but while another client holds the address the device gets a different one from the pool, until that lease is released; an address outside the pool is safer.',
     );
+    // the network's name, when it has one, says whose pool it is
+    expect(reservationPoolHint({ ...lan, name: 'IoT' }, ' 10.10.0.120 ')).toMatch(/^10\.10\.0\.120 lies in the DHCP pool 10\.10\.0\.100–10\.10\.0\.149 of IoT\. /);
   });
 
   it('uses the default pool, the second half of the subnet, when the network names none', () => {

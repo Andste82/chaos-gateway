@@ -51,7 +51,7 @@ test('adopting with "Keep this address": the fixed IP of the lease, its MAC firs
   await expect(dialog.getByTestId('fixed-ip-error')).toHaveCount(0);
   // in the pool: allowed, a note (decision on #76); the device keeps its address; the lease's MAC first
   await expect(dialog.locator('[data-hint]')).toHaveText([
-    '10.10.0.133 lies in the DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it, but the pool may hand it to another client first; an address outside the pool is safer.',
+    '10.10.0.133 lies in the default DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it, but while another client holds the address the device gets a different one from the pool, until that lease is released; an address outside the pool is safer.',
     'The device has 10.10.0.133 from its current lease and keeps it; from now on the address is reserved for it.',
     `The reservation is for the device's first MAC; ${MAC}, the MAC of its current lease, is put first.`,
   ]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DeviceView, DhcpLease, Device, Network } from '../api/generated/model';
+import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { CreateRevisionBody } from '../api/generated/zod/revisions/revisions';
 import {
   adoptReservation,
@@ -13,8 +13,10 @@ import {
   formFromDevice,
   renewalTime,
   reservationMacs,
+  warningHint,
   type ReservationHintContext,
 } from './deviceForm';
+import { reservationPoolHint } from './networks';
 
 const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
 const HUB = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';
@@ -71,13 +73,17 @@ describe('the fixed IP of a device (#73)', () => {
     const hints = fixedIpHints('10.10.0.200', ctx());
     expect(fixedIpError('10.10.0.200', ctx())).toBeUndefined();
     expect(hints.find((h) => h.kind === 'pool')?.text).toBe(
-      '10.10.0.200 lies in the DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it, but the pool may hand it to another client first; an address outside the pool is safer.',
+      '10.10.0.200 lies in the default DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it, but while another client holds the address the device gets a different one from the pool, until that lease is released; an address outside the pool is safer.',
     );
     expect(fixedIpHints('10.10.0.50', ctx()).some((h) => h.kind === 'pool')).toBe(false);
     // configured pools
     const pools: Network = { ...iot, dhcp: { pools: [{ start: '10.10.0.10', end: '10.10.0.60' }] } };
-    expect(fixedIpHints('10.10.0.50', ctx({ network: pools })).some((h) => h.kind === 'pool')).toBe(true);
+    expect(fixedIpHints('10.10.0.50', ctx({ network: pools })).find((h) => h.kind === 'pool')?.text).toBe(reservationPoolHint(pools as LanNetwork, '10.10.0.50'));
+    expect(fixedIpHints('10.10.0.50', ctx({ network: pools })).find((h) => h.kind === 'pool')?.text).toContain('lies in the DHCP pool 10.10.0.10–10.10.0.60 of IoT.');
     expect(fixedIpHints('10.10.0.200', ctx({ network: pools })).some((h) => h.kind === 'pool')).toBe(false);
+    // a network without a DHCP scope makes no reservation, as the gateway's fixed_ip_in_pool has it
+    const { dhcp: _dhcp, ...bare } = iot as LanNetwork;
+    expect(fixedIpHints('10.10.0.200', ctx({ network: bare })).some((h) => h.kind === 'pool')).toBe(false);
   });
 
   it('notes an address leased to another client now', () => {
@@ -92,6 +98,25 @@ describe('the fixed IP of a device (#73)', () => {
     // its own lease and an expired one are no obstacle
     expect(fixedIpHints('10.10.0.42', ctx({ leases })).some((h) => h.kind === 'leased')).toBe(false);
     expect(fixedIpHints('10.10.0.60', ctx({ leases })).some((h) => h.kind === 'leased')).toBe(false);
+  });
+
+  it("takes a lease of any of the device's MACs for its own, and says when it is not the reserved MAC's (#96)", () => {
+    const wifi: DhcpLease[] = [{ ip: '10.10.0.42', mac: WIFI.toUpperCase(), network: IOT, expires_at: '2026-10-23T12:00:00Z', state: 'active' }];
+    // an unchanged reservation stays on the first MAC, while the device holds the address with its second
+    const unchanged = fixedIpHints('10.10.0.42', ctx({ macs: [MAC, WIFI], leases: wifi, before: '10.10.0.42', beforeNetwork: IOT }));
+    expect(unchanged.some((h) => h.kind === 'leased')).toBe(false);
+    expect(unchanged.find((h) => h.kind === 'other_mac')?.text).toBe(
+      `The device holds 10.10.0.42 with its MAC ${WIFI.toUpperCase()} now, but the reservation is for its first MAC, ${MAC}: it keeps the address only while it asks with that one. Put ${WIFI.toUpperCase()} first among the device's MACs to reserve the address for the MAC that holds the lease.`,
+    );
+    // a new reservation on the MAC of the lease puts it first: then the lease is the reserved MAC's
+    const moved = fixedIpHints('10.10.0.42', ctx({ macs: [MAC, WIFI], leases: wifi, leaseMac: WIFI, leaseIp: '10.10.0.42' }));
+    expect(moved.map((h) => h.kind)).toEqual(['kept', 'first_mac']);
+    expect(warningHint('other_mac')).toBe(true);
+    expect(warningHint('first_mac')).toBe(false);
+    // a lease of the first MAC needs no note; another client's lease still is one, and wins over the device's own
+    expect(fixedIpHints('10.10.0.42', ctx({ macs: [WIFI, MAC], leases: wifi })).some((h) => h.kind === 'leased' || h.kind === 'other_mac')).toBe(false);
+    const both: DhcpLease[] = [...wifi, { ip: '10.10.0.42', mac: '3a:f1:9c:22:07:b4', network: IOT, expires_at: '2026-10-23T12:00:00Z', state: 'active' }];
+    expect(fixedIpHints('10.10.0.42', ctx({ macs: [MAC, WIFI], leases: both, before: '10.10.0.42' })).map((h) => h.kind)).toEqual(['leased', 'first_mac']);
   });
 
   it('notes that DHCP is off, and when a new reservation takes effect', () => {

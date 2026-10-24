@@ -119,12 +119,19 @@ export function reservationPool(
   return pool && { pool, isDefault };
 }
 
-/** The hint of `reservationPool` in words, or undefined when the address lies in no pool. */
-export function reservationPoolHint(lan: Parameters<typeof reservationPool>[0], ip: string | undefined): string | undefined {
+/**
+ * The hint of `reservationPool` in words, or undefined when the address lies in no pool: the one wording of
+ * the pool hint in the web app (the device and adopt dialogs use it through `fixedIpHints`, #101). The
+ * network's name, when given, says whose pool it is.
+ */
+export function reservationPoolHint(
+  lan: (Parameters<typeof reservationPool>[0] & { name?: string }) | undefined,
+  ip: string | undefined,
+): string | undefined {
   const r = reservationPool(lan, ip);
   if (!r) return undefined;
-  const pool = `${r.isDefault ? 'the default DHCP pool' : 'the DHCP pool'} ${r.pool.start}–${r.pool.end}`;
-  return `${ip!.trim()} lies in ${pool}: while another device holds it, this one gets a different address from the pool until that lease is released.`;
+  const pool = `${r.isDefault ? 'the default DHCP pool' : 'the DHCP pool'} ${r.pool.start}–${r.pool.end}${lan?.name ? ` of ${lan.name}` : ''}`;
+  return `${ip!.trim()} lies in ${pool}. The gateway allows it, but while another client holds the address the device gets a different one from the pool, until that lease is released; an address outside the pool is safer.`;
 }
 
 /**

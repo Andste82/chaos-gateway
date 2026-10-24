@@ -42,7 +42,7 @@ func (t *Target) compileKea(cfg *model.Configuration, idx *domain.Index) {
 	if len(nets) == 0 {
 		return
 	}
-	reserved := t.reservingDevices(idx, on)
+	reserved := reservingDevices(idx, on)
 	sort.Slice(nets, func(i, j int) bool {
 		a, b := idx.Networks[nets[i]], idx.Networks[nets[j]]
 		if a.Name != b.Name {
@@ -102,9 +102,10 @@ type reservation struct {
 // order. A reservation is for the device's first MAC (plan §2.7): the UI puts the MAC of the
 // current lease first when it creates one. The validator has already refused a fixed address that
 // is not an address, one without a network or a MAC and one outside its network's subnet, so
-// those cases only skip the device. A device whose network has DHCP off gets a warning: the
-// address stays configured but nothing hands it out.
-func (t *Target) reservingDevices(idx *domain.Index, on map[string]bool) []reservation {
+// those cases only skip the device. A device whose network has DHCP off gets no reservation: the
+// address stays configured but nothing hands it out, which domain.Warnings reports at the device's
+// fixed_ip (fixed_ip_dhcp_off), also while no network serves DHCP and there is no Kea target (#94).
+func reservingDevices(idx *domain.Index, on map[string]bool) []reservation {
 	ids := make([]string, 0, len(idx.Devices))
 	for id := range idx.Devices {
 		ids = append(ids, id)
@@ -118,13 +119,12 @@ func (t *Target) reservingDevices(idx *domain.Index, on map[string]bool) []reser
 		}
 		ip, err := netip.ParseAddr(*d.Device.FixedIp)
 		macs := *d.Device.Identifiers.Macs
-		n, known := idx.Networks[d.Network]
+		_, known := idx.Networks[d.Network]
 		if err != nil || len(macs) == 0 || !known {
 			continue // refused by the validator
 		}
 		if !on[d.Network] {
-			t.warn(CodeDHCP, n.Name, "device %q has the fixed address %s, but DHCP is off in its network %q: no reservation is made", d.Name, ip, n.Name)
-			continue
+			continue // DHCP off: a warning of the validation (fixed_ip_dhcp_off)
 		}
 		out = append(out, reservation{network: d.Network, res: kea.Reservation{MAC: strings.ToLower(macs[0]), IP: ip}})
 	}

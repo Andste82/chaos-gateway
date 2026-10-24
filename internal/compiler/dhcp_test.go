@@ -128,8 +128,8 @@ func TestReservationsComeFromDevicesWithAFixedAddress(t *testing.T) {
 	if tg.HasErrors() || len(r) != 1 || r[0].MAC != "02:00:00:00:00:31" || r[0].IP.String() != "10.10.0.31" {
 		t.Fatalf("%+v %+v", r, tg.Problems)
 	}
-	// DHCP off in the device's network while another network serves DHCP: no reservation, and a
-	// warning that says why
+	// DHCP off in the device's network while another network serves DHCP: no reservation and no
+	// problem of the compile (the validation warns, fixed_ip_dhcp_off, #94)
 	off := false
 	tg = compileBasic(t, func(c *model.Configuration, _ *Host) {
 		withDHCP(c, iotNet, &model.DhcpScope{Enabled: &off})
@@ -137,7 +137,7 @@ func TestReservationsComeFromDevicesWithAFixedAddress(t *testing.T) {
 		net := iotNet
 		addDevice(c, devA, model.Device{Name: "esp32-42", FixedIp: &ip, Network: &net, Identifiers: &model.DeviceIdentifiers{Macs: &mac}})
 	})
-	if tg.HasErrors() || len(tg.Problems) != 1 || tg.Problems[0].Code != CodeDHCP || !strings.Contains(tg.Problems[0].Message, "DHCP is off in its network") {
+	if len(tg.Problems) != 0 {
 		t.Errorf("%+v", tg.Problems)
 	}
 	if len(tg.Kea.Config.Subnets) != 1 || len(tg.Kea.Config.Subnets[0].Reservations) != 0 {

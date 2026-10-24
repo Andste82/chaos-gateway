@@ -404,3 +404,27 @@ func TestThePreviewWarnsOfAFixedAddressInsideADHCPPool(t *testing.T) {
 		t.Fatalf("a warning does not stop the apply: %d %s", r.Status, r.Body)
 	}
 }
+
+// #94: a fixed address in a network with DHCP off makes no reservation; the preview warns at the device's
+// fixed_ip also when no network serves DHCP at all (there is no Kea target then), and the revision applies.
+func TestThePreviewWarnsOfAFixedAddressWhileNoNetworkServesDHCP(t *testing.T) {
+	g := ready(t)
+	id := g.mustPatch(map[string]any{"devices": map[string]any{espID: map[string]any{
+		"name": "esp32-42", "network": iotID, "fixed_ip": "10.10.0.42", "identifiers": map[string]any{"macs": []any{"02:00:00:00:00:31"}},
+	}}})
+	pv := g.do("POST", "/revisions/"+itoa(id)+"/preview", nil, nil, nil)
+	if pv.Status != 200 {
+		t.Fatalf("%d %s", pv.Status, pv.Body)
+	}
+	var ws []map[string]any
+	for _, x := range pv.json(t)["warnings"].([]any) {
+		ws = append(ws, x.(map[string]any))
+	}
+	if len(ws) != 1 || ws[0]["code"] != "fixed_ip_dhcp_off" || ws[0]["path"] != "/devices/"+espID+"/fixed_ip" ||
+		!strings.Contains(ws[0]["message"].(string), "10.10.0.42") || !strings.Contains(ws[0]["message"].(string), "DHCP is off") {
+		t.Fatalf("warnings %v", ws)
+	}
+	if r := g.apply(id); r.Status != 200 {
+		t.Fatalf("a warning does not stop the apply: %d %s", r.Status, r.Body)
+	}
+}

@@ -135,6 +135,49 @@ func TestDefaultPoolIsTheSecondHalf(t *testing.T) {
 	}
 }
 
+// defaultPoolCase is a row of testdata/default_pool.json: a network address (the gateway's own address with
+// the prefix length), where the gateway lies in the subnet, and the default pool (null: none). The web app's
+// effectivePools (web/src/lib/networks.test.ts) runs the same table, so the browser names the pool the
+// gateway hands out (#95).
+type defaultPoolCase struct {
+	Address   string `json:"address"`
+	GatewayAt string `json:"gateway_at"`
+	Pool      *struct {
+		Start string `json:"start"`
+		End   string `json:"end"`
+	} `json:"pool"`
+}
+
+func TestDefaultPoolForEverySubnetSizeAndGatewayPosition(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "default_pool.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []defaultPoolCase
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	sizes := map[int]bool{}
+	for _, c := range cases {
+		p := netip.MustParsePrefix(c.Address)
+		sizes[p.Bits()] = true
+		got, ok := DefaultPool(p, p.Addr())
+		switch {
+		case c.Pool == nil && ok:
+			t.Errorf("%s (gateway at the %s): pool %s - %s, want none", c.Address, c.GatewayAt, got.Start, got.End)
+		case c.Pool != nil && !ok:
+			t.Errorf("%s (gateway at the %s): no pool, want %s - %s", c.Address, c.GatewayAt, c.Pool.Start, c.Pool.End)
+		case c.Pool != nil && (got.Start.String() != c.Pool.Start || got.End.String() != c.Pool.End):
+			t.Errorf("%s (gateway at the %s): pool %s - %s, want %s - %s", c.Address, c.GatewayAt, got.Start, got.End, c.Pool.Start, c.Pool.End)
+		}
+	}
+	for bits := 16; bits <= 30; bits++ {
+		if !sizes[bits] {
+			t.Errorf("the table has no /%d", bits)
+		}
+	}
+}
+
 func TestTheHookEnvironmentBecomesAnEvent(t *testing.T) {
 	env := map[string]string{"KEA_LEASE4_ADDRESS": "10.10.0.150", "KEA_LEASE4_HWADDR": "02:00:00:00:00:AA", "KEA_LEASE4_HOSTNAME": "esp32", "KEA_SUBNET_ID": "7", "KEA_LEASE4_VALID_LIFETIME": "600", "KEA_LEASE4_CLIENT_ID": "01:02"}
 	ev, err := EventFromHook("lease4_renew", func(k string) string { return env[k] })

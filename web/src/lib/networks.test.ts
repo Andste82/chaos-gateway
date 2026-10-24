@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { NetworkView, WireGuardClient } from '../api/generated/model';
 import { CompleteSetupBody } from '../api/generated/zod/system/system';
@@ -46,9 +47,26 @@ describe('IPv4 of the networks', () => {
   it('the default DHCP pool is the second half of the subnet, without the broadcast and the gateway address', () => {
     expect(effectivePools('10.10.0.1/24', undefined)).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
     expect(effectivePools('10.10.0.200/24', [])).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
-    expect(effectivePools('10.10.0.254/24', undefined).pools[0]!.end).toBe('10.10.0.253');
     const own = [{ start: '10.10.0.100', end: '10.10.0.150' }];
     expect(effectivePools('10.10.0.1/24', own)).toEqual({ pools: own, isDefault: false });
+  });
+
+  // The table that `TestDefaultPoolForEverySubnetSizeAndGatewayPosition` (internal/kea) runs against
+  // kea.DefaultPool: every subnet size from /16 to /32 with the gateway at the start, the middle and the end of
+  // the subnet. The browser names the pool the gateway hands out (#95); the tests run from web/.
+  const defaultPools = JSON.parse(readFileSync('../internal/kea/testdata/default_pool.json', 'utf8')) as {
+    address: string;
+    gateway_at: string;
+    pool: { start: string; end: string } | null;
+  }[];
+
+  it('the table covers every subnet size from /16 to /30', () => {
+    const sizes = new Set(defaultPools.map((c) => Number(c.address.split('/')[1])));
+    for (let bits = 16; bits <= 30; bits++) expect(sizes.has(bits), `/${bits}`).toBe(true);
+  });
+
+  it.each(defaultPools)('the default pool of $address (the gateway at the $gateway_at) is the one of kea.DefaultPool', (c) => {
+    expect(effectivePools(c.address, undefined)).toEqual({ pools: c.pool ? [c.pool] : [], isDefault: true });
   });
 });
 

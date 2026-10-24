@@ -83,17 +83,19 @@ export function hostOf(cidr: string | undefined): string {
 
 /**
  * The DHCP pools of a network: the configured ones, or the default of the spec, the second half of the
- * subnet (`DhcpScope.pools`). The default leaves out the broadcast address and the gateway's own.
+ * subnet (`DhcpScope.pools`). The default is the gateway's `kea.DefaultPool`, ported exactly (#95): from the
+ * middle of the subnet, or the address after it when that is the gateway's own, to the last address before
+ * the broadcast; a subnet smaller than a /29 has none. Both run the table internal/kea/testdata/default_pool.json.
  */
 export function effectivePools(address: string | undefined, pools: DhcpPool[] | undefined): { pools: DhcpPool[]; isDefault: boolean } {
   if (pools?.length) return { pools, isDefault: false };
   const s = parseSubnet(address);
-  if (!s || s.len > 30) return { pools: [], isDefault: true };
+  if (!s || s.len > 29) return { pools: [], isDefault: true };
   const size = s.broadcast - s.network + 1;
   let start = s.network + size / 2;
-  let end = s.broadcast - 1;
+  const end = s.network + size - 2;
   if (start === s.address) start++;
-  if (end === s.address) end--;
+  if (start > end) return { pools: [], isDefault: true };
   return { pools: [{ start: formatIPv4(start), end: formatIPv4(end) }], isDefault: true };
 }
 

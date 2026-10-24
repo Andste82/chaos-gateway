@@ -2,11 +2,11 @@
 // name, network and fixed IP. The checks mirror the gateway's (`validate_device.go`): a fixed IP is a
 // host address of a local test network's subnet, not the gateway's own and not reserved for another
 // device, and the device has a MAC to reserve it for. The hints say what the gateway accepts but the
-// admin should know: the address lies in the dynamic pool (decision on #76: allowed, a warning; the check
-// and its wording are `reservationPoolHint`'s, #101), it is leased to another client now, or the device
-// holds it with a MAC other than the one the reservation is for (#96), DHCP is off in the network, a new reservation takes effect when the
-// device renews its lease (the address of its current lease it simply keeps), and the reservation is
-// for the device's first MAC (decision on #77). The helpers for the fixed IP take a plain context, so
+// admin should know: the address lies in the dynamic pool (decision on #76: allowed, a warning; the
+// check and its wording are `reservationPoolHint`'s, #101), it is leased to another client now, or the
+// device holds it with a MAC other than the one the reservation is for (#96), DHCP is off in the
+// network, a new reservation takes effect when the device renews its lease (the address of its current
+// lease it simply keeps), and the reservation is for the device's first MAC (decision on #77). The helpers for the fixed IP take a plain context, so
 // the adopt dialog and the leases card can use them.
 import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
@@ -102,7 +102,8 @@ export function reservationMacs(macs: string[], leaseMac: string | undefined): s
 
 /**
  * The notes on a fixed IP that the gateway accepts (call it for an address without `fixedIpError`):
- * in the dynamic pool, leased to another client now, DHCP off, when it takes effect, the MAC it is for.
+ * in the dynamic pool, leased to another client now or held by the device with another of its MACs,
+ * DHCP off, when it takes effect, the MAC it is for.
  * An empty address after one that was set says what the removal does.
  */
 export function fixedIpHints(ip: string, ctx: ReservationHintContext): ReservationHint[] {

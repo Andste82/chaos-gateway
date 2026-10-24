@@ -383,8 +383,7 @@ Captures (M17) are not operations of this queue: a capture lives as long as a co
 and changes nothing in the network configuration (see "Packet captures (M17)").
 
 All operations the compiler needs are implemented (`links`, `sysctl`, `wireguard`, `bird` and
-`service_ns` followed in M4-M6b). Still deferred: the persistent netlink connection for
-DNS-derived set updates (`nft_add_elements` starts one `nft` per call until M20). The reader pool
+`service_ns` followed in M4-M6b, the persistent netlink connection for DNS-derived set updates in M20 as the operation `nft_dns_elements`, "DNS faults and hostname selectors (M20)"). The reader pool
 and the operation time stamps came with M8a (see "Coalescing and the reader pool (M8a)"). Which interfaces count as assigned is decided by whoever
 may call `assign_interfaces`: loopback and Docker's devices are
 refused, the rest is trusted to the (root or allowed-uid) caller. An assigned interface can also be
@@ -1212,8 +1211,8 @@ proxy; the TLS responder (M21) joins it later.
   the first apply). `Follow` warns once, with a hint, and again only when the error changes; the
   attempts in between are logged at debug level, and the recovery once (issue #57 F6,
   `TestTheProxyWarnsOnceWhileTheAPICannotBeReached`).
-- **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20),
-  `/internal/dns/resolutions` (M20), per-device query statistics.
+- **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20, done: "DNS faults and hostname selectors (M20)"),
+  `/internal/dns/resolutions` (M20, done), per-device query statistics.
 
 ## Classification (M7)
 
@@ -1465,7 +1464,7 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   device with its addresses, each range that identifies a device, the stretches of the networks'
   addresses that no device owns) the impairment family's `Table` gives the winner per piece of the
   destination and port space. MTU, DNS, TLS, DHCP and tunnel faults are not compiled here, and the access rules have a compile step of their own (`access.go`, "Access rules (M9)"); a
-  fault that names a hostname is left out with a `hostname_unresolved` warning (M20).
+  fault that names a hostname is not in the tables either: since M20 its rules stand in front of the lookup levels (`hostnames.go`, "DNS faults and hostname selectors (M20)").
 - **Fault ids.** One id (12 bits, 1 to 4095; 0 is "no fault") per winning fault, per matched device
   when the fault has a rate, an explicit queue limit or keep order in either direction (D18); the
   addresses no device owns share one id per winning fault (the devices in between cut those addresses into
@@ -2358,9 +2357,9 @@ removed rule (plan §3.2). An overlay that is written again keeps its id and so 
   network, so they count as the uplink, and "drop to uplink" also drops traffic to a learned remote site and to the
   namespace of the DNS proxy. A rule that must leave them out names its destination with a `cidr`. Decided by the
   maintainer on 2026-10-11 (P2-M9-11), documented in the spec (`Destination`); `TestRulesMatchTheOriginalTupleAndNeverThePacketsOwnAddresses`
-  pins the set. A hostname needs the DNS-derived sets of M20: such a rule stays out of the
-  chain with a `hostname_unresolved` warning (P2-M9-02). Transferred to the plan on 2026-10-11: M20's acceptance
-  criteria include a drop rule with a hostname destination that blocks the addresses the device resolved.
+  pins the set. A hostname needs the DNS-derived sets of M20: until then such a rule stayed out of the
+  chain with a `hostname_unresolved` warning (P2-M9-02). Transferred to the plan on 2026-10-11 and delivered by M20: the rule looks up
+  the set of the name, and a drop rule blocks the addresses the device resolved.
 - **Ports** are merged into disjoint ranges (an anonymous interval set refuses overlapping elements).
 - **Verdicts**: `allow` is `accept` in both hooks; `drop`; `reject` is `reject with icmpx type <t>`, one statement for
   IPv4 and IPv6, where `<t>` is chosen per rule (below); `reset` is `reject with tcp reset` (validation requires protocol `tcp`).
@@ -2546,8 +2545,8 @@ and LAST_ACK.
   `rules`.
 - **Preview.** `POST /revisions/{id}/preview` has `rules`: the effective list after the change, overlay
   rules first, each with its key, layer, place, action, selector in words and `new` when the kernel does
-  not run it in this form yet. A hostname rule is not in the list and the warning
-  `hostname_unresolved` says why; a reject carries its `reject_with`; more rules than the limit is `capacity_exceeded` at preview and apply
+  not run it in this form yet. A hostname rule is in the list since M20 (before, it was left out with the warning
+  `hostname_unresolved`); a reject carries its `reject_with`; more rules than the limit is `capacity_exceeded` at preview and apply
   (`TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply`).
 - **Tests.** Simulator and fake clock: `internal/engine/access_test.go`, `cut_internal_test.go`,
   `internal/api/rules_test.go`, `internal/executor/conntrack_delete_test.go`. Real kernel (testbed, run in
@@ -5541,6 +5540,138 @@ code changed). There is no test that needs a VM: nothing of M19 runs in the test
 | §2.17 run states, Abort removes the run's overlays | `run a scenario and follow it …` (Running, Failed), `a queued run waits …` (Queued), `abort a run …` (Aborted); the removal of the overlays is the engine's (`TestAbortRemovesTheOverlaysOfTheRun`, M15) |
 | §2.17 concurrent change, unapplied changes | `stores/draft.scenarios.test.ts` |
 
+## DNS faults and hostname selectors (M20)
+
+Plan §2.4, §2.6, §3.3, §3.11 and M20, with the acceptance carried over from Phase 2 (P2-M9-02: rules with a hostname destination,
+P2-M11-01: profiles with a `dns` part). The DNS proxy of M6b answers faults now, the kernel matches the addresses the proxy
+answered for the names that rules and faults select, the executor writes them on a netlink connection of its own, and the
+checks, waits and captures that name a host use the same addresses.
+
+### How it works
+
+- **DNS-derived sets** (`compiler/hostnames.go`). One nftables set per hostname selector in use (exact name or `*.suffix`, in its
+  canonical form `domain.HostnamePattern`: lower case, no trailing dot), of the type `ipv4_addr . ipv4_addr` with the flag
+  `timeout`: the requesting device's address and the address in the answer. Rules and faults look the pair up on the conntrack
+  original tuple, `ct original ip saddr . ct original ip daddr @dns_<id>_<hash>`, so both directions of a connection, a redirected one
+  and one behind NAT find their element. The id is `dns_` and ten hex digits of the hash of the pattern and is what the proxy and
+  the API call the set (`DNSSetID`, the `set` of the spec); the name in the kernel adds a hash of the definition (type and flags,
+  plan §3.2), so a changed definition makes a new set. The sets are `SetDef.Dynamic`: an apply creates a missing one and never flushes,
+  fills or compares the elements of one that stays (S11; verify compares type and flags, not elements); one that no rule or fault
+  needs any more is deleted with its elements. `Target.DNSSets` lists them with the clients whose resolutions are recorded (the
+  sources of the rules and faults that use the selector).
+- **Access rules** (`compiler/access.go`). A rule with a hostname destination is a rule of its place in the list whose destination match
+  is the lookup (`DestKind` `hostname`); the responder form of a forwarded connection (D34) looks up the device that answers and the peer
+  that opened it. `AccessPlan.Matches` takes the names a source resolved for an address (`Tuple.Names`), which the engine knows
+  (`Engine.HostNames`): `explain`, the cut of existing connections and the checks use it. The warning `hostname_unresolved` and the rule's
+  state `disabled` for it are gone.
+- **Faults with a hostname** (impairment and MTU). The addresses are not known at compile time, so such a candidate is not part of a
+  `domain.Table` (`Table.Unresolved`, now in the order of its rank). The compiler writes one rule per fault (and per device for a fault with a queue of
+  its own, D18) in front of the four lookup levels, strongest first: the source set (`hsrc_<hash>`, static, refilled at every apply), the
+  protocol and ports, the lookup, `goto mark_<id>`; a winner that impairs nothing goes to `mark_0`. The MTU lookup chain has the same rules in front of its
+  levels. Decision 2 says what that costs.
+- **The proxy** (`dnsproxy`). `hostname_sets` of its configuration tell which names to report: after the answer is known and before it
+  is sent, the question and the CNAME targets of the answer are matched against the selectors (and the client against the set's
+  sources), and (client, name, A addresses, smallest TTL) is posted to `POST /internal/dns/resolutions`; the answer waits for the call.
+  Reports of concurrent queries gather for at most `BatchWindow` (2 ms) and make one call; a report for the same client, set and addresses made
+  in the last minute is not made again (a new configuration forgets them). The report is of the answer that was sent: a wrong answer
+  reports the addresses it gave, a short TTL its TTL. A call that fails does not stop the answer (decision 7).
+- **The engine** (`engine/hostsets.go`). `RecordResolutions` keeps a mirror of the sets (client, address, the time each element runs
+  out, the names it has), writes only what is new or has less than half of its lifetime left, and gives the writes of all callers that
+  arrive meanwhile to the executor as one request (group commit). The lifetime is max(TTL, 10 minutes). The mirror takes the
+  flows of every read of the connections (`refresh`): an element with a flow of its client to its address and less than half of its
+  lifetime left is written again with the full lifetime, so a long-lived connection keeps its fault past a short TTL and past ten
+  minutes. After a restart the elements the kernel still holds are adopted from the listing the first apply reads back, with the time they have left.
+- **The executor** (`executor/dnssets.go`, `netlinkset.go`). `nft_dns_elements` takes the elements of the sets of this one kind
+  (`dns_<10 hex>_<6 hex>`, valid unicast IPv4 addresses, 1 s to 30 days) and runs beside the writer: it never enters the queue (as a read
+  does not), one request at a time on a persistent netlink connection per namespace (`google/nftables`, lasting, opened at the first update;
+  `executor.New` uses it when the runner is the real one and the nft tool through the runner otherwise, which is what the tests against
+  the simulated kernel run). The client sends such requests over connections of its own, so they do not wait for a plan on the main one either. The kernel
+  does not change the lifetime of an element it has, so a refresh deletes and adds in one transaction, and a delete that finds nothing
+  (the element ran out) is answered with the adds alone.
+- **A plan that replaces a set.** Updates for a set whose name the plan about to run changes wait for it (`hostSets.begin`/`end` around the apply of the
+  apply loop) and then go into the new set; the report names the selector (the id), not the set. The new set starts empty, the mirror drops what it
+  held, and the event `dns_set_epoch` says so. A failed plan changes nothing. Updates for other sets, and all of them while no plan replaces
+  anything, are written while the plan runs.
+- **DNS faults** (`compiler/dns.go`, `dnsproxy/faults.go`). They are overlays (`dns`, or the `dns` part of an activated profile; "DNS broken" and a custom profile
+  with a `dns` part activate, `domain.unavailableFamilies` has only `tls` left). The compiler gives each source the DNS faults that apply to
+  it in the order of §2.4 (`domain.RankOrder`: overlay before configuration, level, a fault before a profile part on its scope, the newer first), sources with the
+  same list share their entries (`Target.DNSFaults`), and the API's `GET /internal/dns/config` hands them to the proxy
+  (`faults`, with the overlay and the sources). The proxy answers a query with the first entry whose sources hold the client and whose names match (or that has none):
+  `nxdomain` and `servfail` answer without the upstream; `timeout` sends nothing (UDP and TCP; the log says `TIMEOUT`); `delay` waits `delay` after the answer
+  is known; `wrong_answer` replaces the addresses of an A query (AAAA gets no data, other types are answered as usual); `truncate` sends over UDP an
+  empty answer with the TC bit, over TCP the real one; `short_ttl` rewrites every TTL (`0s` is allowed), after the proxy's cache, which keeps the real one. The log
+  entry names the overlay when the fault changed the answer, and the engine publishes `dns_fault_triggered` (at most once per overlay and device in 10 s).
+  A DNS fault competes only with DNS faults (E5). The state of a DNS overlay is `effective` while it is in a list; `GET /overlays` names what overrides it.
+- **Hardcoded resolvers** (`compiler/service.go`). A network with `dns.redirect_hardcoded` gets the DNAT of the gateway's address for every other destination of UDP and TCP port 53 too, except what lies in
+  its own segments (the network and the networks behind its routers: switched or routed back out of the bridge, never ours, §2.2); an access rule judges a redirected query by
+  the resolver the device meant. `dns.block_dot` drops TCP 853 of the network in the chain `dot_block`, jumped to after the access rules (an `allow` rule is an exception) and before the
+  access matrix, counted in `dot_<network>`. Both settings are of local networks (the model has them there only). Without a service namespace nothing can be
+  redirected and the compile warns.
+- **Hosts in checks, waits and captures.** A destination that names a host matches the flows whose addresses the gateway's DNS answered the device for names the
+  selector matches. The names come from two places (`api.Server.hostNames`): the proxy's query log (the question and the CNAME targets of every answer, indexed by client and
+  address for an hour) and the sets' mirror, so a name no rule or fault selects works too. `ScenarioUsesDNS` counts the `except` list, so the precondition
+  `uses_gateway_dns` applies. A capture whose selector names a host captures the traffic to the addresses answered so far, as they are when it starts (`capturemgr.ResolveWith`);
+  a host with no answer yet is `422 validation_failed` with the code `unresolved_hostname`, as a filter without an address would capture nothing and say so to nobody.
+- **The rest.** `explain` takes the names a device got for an address as the names of the destination and, for a host name as `dst`, asks the DNS family too; the flows API's `dst_hostname`
+  is the first name; `dns.faults` and `dns.hostname_selectors` are in the capabilities, `dns` in the step types of runs, `dns_fault_triggered` and `dns_set_epoch` on the event
+  stream; the UI labels host names "DNS-derived" and shows what a DNS fault does ("DNS delay 2s · broker.example.com").
+
+### Decisions
+
+Taken by best practice where the plan leaves room (the one that needs the maintainer is `P5-M20-01` in `open-items.md`):
+
+1. **One set per selector, keyed on the device and the address, not one set per rule or per device.** Rules and faults of several scopes that name the same host share the set, the key
+   keeps the devices apart, and the compiler keeps the clients of each use (`DNSSet.Sources`) so the proxy reports what something looks up and nothing else.
+2. **Hostname faults stand in front of the lookup levels, strongest first.** The plan says "ordered rules against the per-device DNS-derived sets, placed at their level"; the levels of the maps are shapes
+   of keys, not ranks, so the exact place of a rule would have to be between the elements of the maps. M20 puts them first, orders them among themselves by §2.4 (`RankOrder`), and removes from a source the hostname
+   faults a stronger fault of the whole source covers (`rankHostnames`). A stronger fault with a destination or ports loses to the hostname rule on the traffic both select; the three ways to be exact
+   are in the open item.
+3. **Overlays only for DNS faults.** §2.6: "DNS faults are overlays; the proxy keeps no state". A configured fault does not have the DNS family (`faultFamily` only knows impairment and MTU for the configuration).
+4. **Lifetime max(TTL, 10 minutes), refreshed from the connection table at half of it.** The refresh needs no timer of its own: it runs after every read of the connections, which the watch triggers on changes
+   and the poll repeats. An element a flow keeps alive is written about every five minutes.
+5. **Group commit instead of a batching timer in the API.** Plan §3.11 puts the ≤ 2 ms batch window in the proxy; the engine's side gathers whatever arrives while a request is on its way, which costs no latency when
+   there is no queue.
+6. **The gate is the engine's, not the executor's.** Which set a plan replaces is known to the apply loop (the names of the old and the new target), not to the executor, which would have to read
+   the nft JSON of every plan; the executor's own operation is the concurrent path, the engine orders the exception.
+7. **A report that fails does not stop the answer.** A gateway that cannot write the sets (the executor does not answer) would otherwise take the device's DNS down with it; the answer goes out, the proxy
+   logs a warning and the next answer reports again (the failed report is not remembered). The faults of the name may miss the first packets.
+8. **`delay` is not cut by the upstream's timeout.** The wait after the answer is known is as long as the fault says; a client with a longer timeout gets its late answer.
+9. **A refresh is a delete and an add in one transaction,** because the kernel keeps the lifetime of an element that exists; a delete of an element that ran out fails the transaction, and the adds alone are the answer.
+10. **The redirect leaves the network's own segments alone and the DoT block drops.** A resolver of the lab on the same bridge is not the gateway's to take; a blocked port 853 that answers with a reset would make
+    clients that fall back to plain DNS do so at once, which is what a test of the fallback may want, so the choice is the silent drop (as a firewall that blocks DoT does); the access matrix and `reject` rules stay available.
+11. **Hosts in checks and captures come from the proxy's log as well as from the sets.** A check names hosts no rule selects, and the sets only know those.
+12. **`dst_hostname` is what the gateway knows** (a name of an answer of the last hour, or one a selector matches), not what the device asked at some other resolver.
+13. **The netlink connection is the default of the real executor,** the nft tool the default of every other runner: the level 0 tests run the same operation against the simulated kernel, the level 1 tests against the real one.
+
+### Tests
+
+Level 0, all run here: `compiler/hostnames_test.go` (sets, rules, order, per-device rules, MTU, the nft parser accepts the transaction: `scenarioHostnames` is in `transactionScenarios`), `dns_test.go` (the entries of the proxy's list, E5, order),
+`dnsredirect_test.go`, `domain` (the unavailable families), `executor/dnssets_test.go` (decode and scope of the operation, the transaction's JSON, refresh and its fallback, an update beside a plan on the executor and over the socket, one request at a time),
+`apply/dnssets_test.go` (the elements survive every apply on the simulated kernel, verify does not compare them, a set that goes), `engine/hostsets_test.go` and `hostsets_internal_test.go` (the set holds the report when the call returns, no second write,
+refresh at half, the group commit, a flow keeps an element alive, an update beside a held plan, an update for a replaced set waits and lands in the new one, adoption after a restart, the names),
+`dnsproxy/faults_test.go` (every action over UDP and TCP, sources, names, order, the report before the answer, CNAMEs, batching, dedup, a failing report), `api/dnsfaults_test.go` (the configuration, state, resolutions endpoint, events, capabilities), `run/hostnames_test.go`
+(checks and a wait for a host), the capture of a host in `api/captures_test.go`. Web: `lib/faults.test.ts` (DNS chips), `lib/rules.test.ts`; the Playwright specs of profiles, rules, the Linux view and the scenarios pass.
+
+Level 1 (written, vetted with `-tags testbed`, run by CI with `$M20_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_dnsfaults_test.go` and `executor/dnssets_integration_test.go`, listed in `.github/level1-tests.env`.
+
+### Acceptance map (plan M20 "Tests" and the acceptance of Phase 2)
+
+| Plan M20 | Test |
+|---|---|
+| `dig` from clients shows each fault | `TestDigFromAClientShowsEachDNSFaultOnTheRealKernel` (level 1), `dnsproxy/faults_test.go` (level 0) |
+| A hostname-selector fault affects only traffic to the resolved IPs | `TestAHostnameFaultAffectsOnlyTrafficToTheResolvedAddressesOnTheRealKernel`, `hostnames_test.go` (compiler) |
+| A long-lived connection keeps its hostname fault past a 1 s TTL | `TestALongLivedConnectionKeepsItsHostnameFaultPastAOneSecondTTLOnTheRealKernel`, `TestAFlowKeepsAnElementAliveAndWithoutOneItRunsOut` |
+| The set survives 10 overlay changes | `TestTheDNSDerivedSetSurvivesTenOverlayChangesOnTheRealKernel`, `TestDNSDerivedElementsSurviveEveryApplyAndVerifyDoesNotCompareThem` |
+| Hardcoded DNS is redirected | `TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel`, `dnsredirect_test.go` |
+| Download and upload latency apply to the queries of a device (S16) | `TestUploadAndDownloadLatencyApplyToTheQueriesOfADeviceOnTheRealKernel` |
+| A set update during a long plan is applied without waiting for it | `TestASetUpdateDuringALongPlanIsAppliedWithoutWaitingForIt`, `TestADNSSetUpdateIsWrittenWhileALongPlanRuns`, `TestADNSElementIsWrittenWhileTheExecutorAppliesALargeTransactionOnTheRealKernel`, `TestSetUpdatesAreWrittenBesideAppliesOnTheRealKernel` |
+| … and one for a set the plan replaces lands in the new set | `TestAnUpdateForASetThePlanReplacesWaitsAndLandsInTheNewSet` |
+| The added answer latency for hostname-set names meets §3.10 | `TestTheAddedAnswerLatencyForHostnameSetNamesMeetsThePlanOnTheRealKernel` (3 times the target on a VM; the measurement is logged) |
+| Acceptance: an access rule with a hostname destination compiles to the DNS-derived set; a drop rule blocks the resolved addresses (P2-M9-02) | `TestADNSDerivedSetIsDynamicKeyedOnTheDeviceAndTheAddressAndHasATimeout`, `TestADropRuleWithAHostnameBlocksTheResolvedAddressesOnTheRealKernel` |
+| Acceptance: a profile with a `dns` part, "DNS broken" included, activates and competes in the DNS family (E5); the family is lifted (P2-M11-01) | `TestADeviceLatencyAndADNSBrokenProfileOnTheNetworkCombine`, `TestTheDNSBrokenProfileActivatesAndCombinesWithALatencyFaultOnTheRealKernel` |
+| Scope: DoT blocking | `TestDNSOverTLSIsDroppedForTheNetworksThatBlockItAfterTheAccessRules`, `TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel` |
+| Scope: DNS scenario step type | `dns` in `run.SupportedStepTypes`, `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` (capabilities) |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -5576,9 +5707,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job.

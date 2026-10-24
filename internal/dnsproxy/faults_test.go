@@ -208,19 +208,13 @@ func TestAWrongAnswerFaultReplacesTheAddressesOfAnAQuery(t *testing.T) {
 	if up.count() != 1 {
 		t.Errorf("only the TXT query goes upstream: %v", up.calls)
 	}
-	var withFault int
-	for _, e := range sink.all() {
-		if e.Fault != nil {
-			withFault++
-		}
-	}
-	time.Sleep(700 * time.Millisecond)
+	lastEntry(t, sink, "broker.example.test")
+	time.Sleep(700 * time.Millisecond) // the log is posted in batches
 	for _, e := range sink.all() {
 		if e.Type == "TXT" && e.Fault != nil {
 			t.Errorf("a query the fault left alone is logged with it: %+v", e)
 		}
 	}
-	_ = withFault
 	// the name of the fault does not reach other names
 	if r := ask(t, addr, "udp", "example.test", dns.TypeA); r.Answer[0].(*dns.A).A.String() != "203.0.113.10" {
 		t.Errorf("%v", r)

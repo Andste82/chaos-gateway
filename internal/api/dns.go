@@ -134,6 +134,9 @@ func (s *Server) dnsConfig() *model.DnsServiceConfig {
 	}
 	sets := make([]any, 0, len(snap.DNSSets))
 	for _, ds := range snap.DNSSets {
+		if len(ds.Sources) == 0 {
+			continue // no client is recorded for this selector yet: an empty list would mean every client to the proxy
+		}
 		srcs := make([]string, len(ds.Sources))
 		for i, p := range ds.Sources {
 			srcs[i] = p.String()

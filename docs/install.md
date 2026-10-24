@@ -101,13 +101,13 @@ reads only the host's `/etc`), so run the check before the wizard.
 
 ## 3. Start the containers
 
-The deployment is five compose files in `deploy/`. Name them once in the environment, so every later
+The deployment is six compose files in `deploy/`. Name them once in the environment, so every later
 `docker compose` command (logs, exec, down) finds them without repeating `-f`:
 
 ```sh
 cd deploy
 export COMPOSE_PROJECT_NAME=chaos-gateway
-export COMPOSE_FILE=compose.executor.yaml:compose.api.yaml:compose.kea.yaml:compose.dns.yaml:compose.bird.yaml
+export COMPOSE_FILE=compose.executor.yaml:compose.api.yaml:compose.kea.yaml:compose.dns.yaml:compose.tls.yaml:compose.bird.yaml
 docker compose up -d
 docker compose ps
 ```
@@ -115,6 +115,12 @@ docker compose ps
 The executor starts first (the others wait for its health check). Put the two `export` lines into the shell
 profile of the user that operates the gateway, or into `deploy/.env` (compose reads `COMPOSE_FILE` and
 `COMPOSE_PROJECT_NAME` from there too).
+
+`compose.tls.yaml` is the TLS responder of the certificate test cases (it joins the service namespace of
+`compose.dns.yaml`). A gateway that was started before it existed adds the file to `COMPOSE_FILE` and runs
+`docker compose up -d` again; without it the health check lists the component `tls` as degraded and a TLS case
+(plan §2.8) has nothing to answer the device. The API makes the two CAs of the cases in the volume `chaosgw-tlsca`
+at its start; the certificate to install on a development firmware is `GET /api/v1/tls/ca`.
 
 ## 4. Finish the setup
 
@@ -265,7 +271,7 @@ change volumes that already exist. With no configuration applied yet, remove the
 (`docker compose down -v`, then step 3). To keep them instead, give them to the API's user:
 
 ```sh
-for v in state secrets api service captures; do
+for v in state secrets api service captures tlsca; do
   docker run --rm -v "${COMPOSE_PROJECT_NAME}_chaosgw-$v:/v" --entrypoint chown chaos-gateway:latest -R 65532:65532 /v
 done
 docker run --rm -v "${COMPOSE_PROJECT_NAME}_chaosgw-secrets:/v" --entrypoint chmod chaos-gateway:latest 0700 /v

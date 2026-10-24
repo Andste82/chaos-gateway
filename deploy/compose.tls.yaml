@@ -1,0 +1,58 @@
+# The TLS responder (plan §2.8, §3.3, §3.8): the certificate test cases.
+#
+# It joins the service namespace that `svcns` holds (compose.dns.yaml) and listens there on the port the namespace
+# redirects the selected connections to: the gateway routes a connection that a TLS case selects unchanged into the
+# namespace, nftables there redirects it to port 9443, and the responder reads the original destination with
+# SO_ORIGINAL_DST. It asks the API (169.254.100.1) for the decision of every connection and reports the outcome of
+# every handshake. It keeps no state: restarting it costs nothing; Compose restarts it with the holder
+# (`depends_on ... restart: true`), which re-joins the new namespace.
+#
+# The two CAs (the test CA a development firmware may install, and the unknown CA nobody gets) are made by the API at its
+# start in the volume `chaosgw-tlsca` and read here, keys included, which is why the volume is the CAs' alone: nothing of
+# the API's secrets volume is mounted. The responder needs only the capability that a port above 1024 does not need; it
+# drops them all.
+services:
+  tls:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    command: ["tls", "--listen", ":9443", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem", "--ca-dir", "/var/lib/chaosgw/tlsca"]
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the token the responder authenticates with and the API's certificate: nothing else of the service volume
+      - type: volume
+        source: chaosgw-service
+        target: /var/lib/chaosgw/service
+        read_only: true
+      # the two CAs the API made
+      - type: volume
+        source: chaosgw-tlsca
+        target: /var/lib/chaosgw/tlsca
+        read_only: true
+    depends_on:
+      svcns:
+        condition: service_started
+        # a recreated holder has a new namespace: the responder has to join it again
+        restart: true
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "chaosgw", "tls", "--health", "--listen", ":9443"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  chaosgw-service:
+  chaosgw-tlsca:

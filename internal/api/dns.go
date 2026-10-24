@@ -53,6 +53,10 @@ type dnsState struct {
 	// and the CNAME targets). It is how a check, a wait or a capture that names a host finds the addresses of the
 	// name, whether or not a rule or a fault selects it (the DNS-derived sets know only those names).
 	answered map[addrPair]*answeredNames
+	// faultHits counts the queries each DNS fault changed (by overlay id): the counter of a DNS overlay and of the dns part of
+	// a profile. It lives in memory, like the log; epoch changes with every start of the API.
+	faultHits map[string]int64
+	epoch     int64
 }
 
 // addrPair is a client and an address it got in an answer.
@@ -247,6 +251,7 @@ func (s *Server) PostDnsQueries(c *gin.Context) {
 		s.dns.entries = append(s.dns.entries, loggedQuery{seq: s.dns.seq, e: e})
 		s.indexAnswer(e)
 		if e.Fault != nil {
+			s.countFault(e.Fault.String())
 			if ev, ok := s.faultTriggered(e); ok {
 				events = append(events, ev)
 			}
@@ -491,4 +496,27 @@ func (s *Server) hostAddrs(pattern string) []netip.Addr {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
 	return out
+}
+
+// countFault counts a query that a DNS fault changed. Called with logMu held.
+func (s *Server) countFault(overlay string) {
+	if s.dns.faultHits == nil {
+		s.dns.faultHits = map[string]int64{}
+		s.dns.epoch = s.clk.Now().UnixMilli()
+	}
+	s.dns.faultHits[strings.ToLower(overlay)]++
+}
+
+// dnsHitsSnapshot copies the counters of the DNS faults and their epoch.
+func (s *Server) dnsHitsSnapshot() (map[string]int64, int64) {
+	s.dns.logMu.Lock()
+	defer s.dns.logMu.Unlock()
+	if s.dns.epoch == 0 {
+		s.dns.epoch = s.clk.Now().UnixMilli()
+	}
+	out := make(map[string]int64, len(s.dns.faultHits))
+	for k, v := range s.dns.faultHits {
+		out[k] = v
+	}
+	return out, s.dns.epoch
 }

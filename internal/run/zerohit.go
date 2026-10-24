@@ -18,8 +18,11 @@ import (
 // `slow` is not excused by the packets `slow` matched.
 
 // hitKind reports whether the overlay of a step kind has a counter of packets that matched: faults, rules and
-// profiles (whose parts are faults). A WireGuard action changes the tunnel and matches no packets.
-func hitKind(kind string) bool { return kind == "fault" || kind == "rule" || kind == "profile" }
+// profiles (whose parts are faults), and DNS faults (the queries they changed). A WireGuard action changes the
+// tunnel and matches no packets.
+func hitKind(kind string) bool {
+	return kind == "fault" || kind == "rule" || kind == "profile" || kind == "dns"
+}
 
 // impairsNothing reports whether a step is meant to match nothing: a profile with no parameter in any part, like the
 // built-in `normal`, which wins its family so that the faults beneath it stop, and impairs nothing. Such a step has no
@@ -76,8 +79,12 @@ func (m *Manager) zeroHits(r *runState, status model.RunStatus, reason string) (
 	var names []string
 	for _, z := range zeros {
 		step, overlay := z.step, z.overlay
+		what := fmt.Sprintf("the %s of step %s matched no packet", z.kind, z.step)
+		if z.kind == "dns" {
+			what = fmt.Sprintf("the DNS fault of step %s changed no answer", z.step)
+		}
 		m.addWarning(r, model.RunWarning{Code: model.ZeroHit, Step: &step, Overlay: &overlay,
-			Message: fmt.Sprintf("the %s of step %s matched no packet, so the run proves nothing about it", z.kind, z.step)})
+			Message: what + ", so the run proves nothing about it"})
 		names = append(names, z.step)
 	}
 	if asError && len(names) > 0 && status == model.RunStatusPassed {

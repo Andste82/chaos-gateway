@@ -60,7 +60,7 @@ func startProxy(t *testing.T, ns, token, base string) *proxyIn {
 		t.Fatal(err)
 	}
 	c := &dnsproxy.APIClient{Base: base, TokenFile: token, Dial: testbed.DialerIn(ns), Wait: 3 * time.Second}
-	srv := dnsproxy.New(dnsproxy.Options{Upstream: nsExchanger{ns: ns}, Sink: c})
+	srv := dnsproxy.New(dnsproxy.Options{Upstream: nsExchanger{ns: ns}, Sink: c, Resolutions: c})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{}, 3)
 	go func() { srv.Follow(ctx, c, testLog(t)); done <- struct{}{} }()

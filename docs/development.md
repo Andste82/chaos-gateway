@@ -5645,6 +5645,7 @@ Taken by best practice where the plan leaves room (the one that needs the mainta
 11. **Hosts in checks and captures come from the proxy's log as well as from the sets.** A check names hosts no rule selects, and the sets only know those.
 12. **`dst_hostname` is what the gateway knows** (a name of an answer of the last hour, or one a selector matches), not what the device asked at some other resolver.
 13. **The netlink connection is the default of the real executor,** the nft tool the default of every other runner: the level 0 tests run the same operation against the simulated kernel, the level 1 tests against the real one.
+14. **Known limit of the refresh retry.** When one element of a refresh batch ran out in the kernel, the whole transaction fails and the retry writes the adds without the deletes; the other elements of that batch then keep their old, shorter lifetime while the mirror believes they were extended. The window is milliseconds around the expiry of an element, and the next refresh a flow causes or the next resolution of the name repairs it. Not changed: it can only be verified on the real kernel (level 1), which the first implementation could not run.
 
 ### Tests
 

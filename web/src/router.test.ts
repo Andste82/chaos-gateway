@@ -2,6 +2,26 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter } from './router';
 
+// The router loads a page's component (a lazy chunk) before a navigation ends. The real ones pull
+// in the whole app (the overview alone brings uPlot), which took about 8 s to transform on an idle
+// machine and ran past the timeout while Playwright ran at the same time. These tests are about
+// where the guards lead, so every page is a stub here; the e2e tests load the real pages.
+vi.mock('./views/SetupWizard.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/LoginView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./components/layout/AppShell.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/OverviewView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/DevicesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/DeviceDetailView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/RulesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/FaultsView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/ProfilesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/ScenariosView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/RunView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/NetworksView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/RoutingView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/LinuxStateView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/NotFoundView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+
 function respond(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -22,8 +42,6 @@ function gateway(setupDone: boolean, session: boolean) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  // uPlot (the overview's chart) asks for it when it loads; jsdom has none
-  window.matchMedia ??= ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
   window.history.replaceState({}, '', '/');
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -46,7 +64,7 @@ describe('the router', () => {
     expect(r.currentRoute.value.name).toBe('login');
   });
 
-  it('with a session, the login and the setup lead to the overview', { timeout: 20_000 }, async () => {
+  it('with a session, the login and the setup lead to the overview', async () => {
     gateway(true, true);
     const r = createAppRouter();
     await r.push('/login');
@@ -75,6 +93,16 @@ describe('the router', () => {
     expect(r.currentRoute.value.params.id).toBe('0a1b2c3d');
     await r.push('/captures');
     expect(r.currentRoute.value.name).toBe('not-found');
+  });
+
+  it('stubs every page (a new page needs its vi.mock above, or these tests load it for real)', async () => {
+    const r = createAppRouter();
+    for (const route of r.getRoutes()) {
+      for (const load of Object.values(route.components ?? {})) {
+        const page = await (load as () => Promise<{ default: { name?: string } }>)();
+        expect(page.default.name, route.path).toBe('PageStub');
+      }
+    }
   });
 
   it('lets the app show the unreachable gateway', async () => {

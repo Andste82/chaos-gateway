@@ -5778,6 +5778,8 @@ TLS server, a decision that cannot be had, the reset on removal and the generati
 Level 1 (written, vetted with `-tags testbed`, run by CI with `$M21_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_tls_test.go`, listed in `.github/level1-tests.env`. The kernel side is verified by CI only until its run is green: the chain and the marks, the redirect inside the
 namespace and `SO_ORIGINAL_DST`, the cut by a reset from an unknown connection, the masquerade of a passed-through connection and the faults on the path through `svc0` are written as assumptions of S16 and S4, not observed.
 
+Two things seen while building M21 on a machine with a nearly full disk, neither caused by it: `internal/executor` `TestACaptureIsRefusedOutsideTheScopeAndForBadRequests` fails there with "the disk is almost full" (the same on a clean `main`; the executor refuses to start a capture with less than 10 % free), and the M20 test `run: TestADNSStepMakesADNSOverlayOwnedByTheRunAndRemoveTakesItAway` failed once while Playwright ran in parallel (the overlay list was empty; it passed five times alone and in the full package run), which looks like a race between the last step and the run's removal of its overlays. It is not M21 code and was not changed; a CI failure of it should be looked at as an M20 matter.
+
 ### Acceptance map (plan M21 "Tests" and the acceptance of Phase 2)
 
 | Plan M21 | Test |

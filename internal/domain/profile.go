@@ -38,9 +38,9 @@ type UnavailablePart struct {
 }
 
 // unavailableFamilies are the families of a profile that arrive with later milestones (plan §2.9:
-// "DNS broken" and "TLS broken" come with M20 and M21). The impairment and MTU families are
-// implemented.
-var unavailableFamilies = map[string]string{FamilyDNS: "M20", FamilyTLS: "M21"}
+// "TLS broken" comes with M21; the dns family was lifted by M20, P2-M11-01). The impairment, MTU and
+// DNS families are implemented.
+var unavailableFamilies = map[string]string{FamilyTLS: "M21"}
 
 // UnavailableParts lists the parts of a profile that cannot be activated in this build, in the
 // order of ProfileFamilies. A profile with such a part is stored and shown, but its activation is

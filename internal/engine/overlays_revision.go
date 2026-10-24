@@ -42,7 +42,7 @@ func (e *ErrOverlaysOrphaned) Error() string {
 }
 
 // UnsupportedProfileRevisionError is returned by Apply, and reported by Preview, for a revision that
-// gives a profile a part of a later milestone (a dns part before M20, a tls part before M21) while an
+// gives a profile a part of a later milestone (a tls part before M21) while an
 // overlay activates the profile. checkProfileAvailable refuses the same activation at the write, so no
 // activation runs half a profile (P2-M11-05, decided on 2026-10-11); nothing has changed. The revision
 // is accepted again once the activation is gone, and the profile is then stored but cannot be activated.

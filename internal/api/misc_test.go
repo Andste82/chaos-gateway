@@ -232,8 +232,8 @@ func TestSystemEndpoints(t *testing.T) {
 		}
 	}
 	// M8a: faults of the impairment family, M11: profile activations, M10: the mtu and tunnel families and the WireGuard actions, M9: access
-	// rules; the other kinds follow with their milestones
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu tunnel]" || caps["version"] != "test" {
+	// rules, M20: DNS faults; the other kinds follow with their milestones
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tunnel]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
 	}
 	// the limits of plan §3.3 (P2-AUDIT-15): 4095 fault ids, and the class limit of the architecture

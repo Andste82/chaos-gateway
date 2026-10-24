@@ -12,7 +12,7 @@ type BuiltinProfile struct {
 	ID      string
 	Profile model.Profile
 	// Milestone is the milestone from which the profile is usable; empty when it always is.
-	// "dns-broken" and "tls-broken" arrive with the DNS and TLS milestones (plan §2.9).
+	// "tls-broken" arrives with the TLS milestone (plan §2.9); "dns-broken" came with M20.
 	Milestone string
 }
 
@@ -97,7 +97,6 @@ var builtinProfiles = []BuiltinProfile{
 			Description: ptr("DNS answers SERVFAIL"),
 			Parts:       model.ProfileParts{Dns: &model.DnsFault{Action: "servfail"}},
 		},
-		Milestone: "M20",
 	},
 	{
 		ID: "16ee6339-08ca-5c47-a34b-f89f32070b14",

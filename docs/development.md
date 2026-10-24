@@ -8,7 +8,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is a skeleton until M21; `cmd/chaosctl` is a `main` over `internal/ctl`) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21); `cmd/chaosctl` is a `main` over `internal/ctl`) |
 | `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with` |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
@@ -35,6 +35,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/audit` | the append-only audit log (JSON lines) |
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
+| `internal/tlsresponder` | the TLS responder (M21): the two CAs (the test CA and the unknown CA), the certificates of the cases per name, the ClientHello reader, the connection handling (a case, a passed-through connection, reset on removal), the reports of the handshakes, the client of the internal API |
+| `internal/svcapi` | the client of the internal API that the service containers share (service token, the API's certificate from a file) |
 | `internal/kea` | the Kea DHCPv4 server: configuration renderer (one subnet per network on its bridge, reservations), control socket client (`config-test`, `config-set`, leases), the `run_script` hook's environment as a lease event |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
@@ -1114,7 +1116,7 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
 
 The gateway services run in a **service namespace** of their own (plan §3.3, D29), so that the faults of
 a device apply to its connections to them like to any other traffic. M6b adds the namespace and the DNS
-proxy; the TLS responder (M21) joins it later.
+proxy; the TLS responder (M21) joined it, see "TLS responder: certificate cases (M21)".
 
 - **The pair.** The executor operation `service_ns` (closed, link-local only: `169.254.100.0/30`) creates
   the named namespace when it is missing, or attaches the namespace of the holder process with
@@ -1211,7 +1213,7 @@ proxy; the TLS responder (M21) joins it later.
   the first apply). `Follow` warns once, with a hint, and again only when the error changes; the
   attempts in between are logged at debug level, and the recovery once (issue #57 F6,
   `TestTheProxyWarnsOnceWhileTheAPICannotBeReached`).
-- **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20, done: "DNS faults and hostname selectors (M20)"),
+- **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20, done: "DNS faults and hostname selectors (M20)"), the TLS responder (M21, "TLS responder: certificate cases (M21)"),
   `/internal/dns/resolutions` (M20, done), per-device query statistics.
 
 ## Classification (M7)
@@ -1224,7 +1226,7 @@ also changes two things said here: the maps are interval maps, and an element `g
 
 - **Mark bits.** Bits 4-15 hold the fault id (12 bits, up to the 4095 of plan §3.3's capacity limit),
   bit 16 the direction (0 = original/upload, 1 = reply/download, read from `ct direction`). Bits
-  17-19 (PMTU), 20 (service selection, already compiled by M6b but not yet written by real traffic: the
+  17-19 (PMTU), 20 (service selection, already compiled by M6b and written by the TLS cases since M21, `tls_redirect`: the
   maintainer confirmed on 2026-10-11 that writing it stays with M20/M21, because setting it changes which
   policy-routing rule wins for real DNS/TLS traffic, `ServiceRulePriority` 900 before the policy table's 1000, a
   behavior change that needs the real redirect-interaction test, P2-M7-01) and 21-23 (reserved) are untouched by this chain; so are bits 0-3
@@ -1562,8 +1564,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: TLS M21,
-  DHCP M23; the kind `dns` has been supported since M20) are refused with `unsupported_feature` before they reach the owner. The
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DHCP M23,
+  and the TLS case `intercept`, M22; the kind `dns` has been supported since M20, the kind `tls` since M21) are refused with `unsupported_feature` before they reach the owner. The
   kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
   mtu and tunnel families since M10 (see "Extended faults (M10)"), the kind `profile` since M11 (see
   "Profiles (M11)").
@@ -3287,7 +3289,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 
 - **The catalogue** (`domain/builtin.go`). `normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`,
   `intermittent` have fixed UUIDs (version 5 of the name) and reserved names; `dns-broken` and `tls-broken` exist in the
-  catalogue; `dns-broken` has been available since M20, `tls-broken` stays unavailable until M21. They are not part of any configuration: a key equal to a built-in
+  catalogue; `dns-broken` has been available since M20 and `tls-broken` since M21. They are not part of any configuration: a key equal to a built-in
   UUID and a name equal to a built-in name (any case) are `reserved_name`, so a configured profile can never shadow one.
   Custom profiles are the `profiles` of the configuration, keyed by UUID. They are created, changed and deleted with a
   candidate revision like every configured object (P2-M11-02; decided by the maintainer on 2026-10-11: no endpoints of
@@ -3300,7 +3302,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   (`engine.checkProfileAvailable`, after `ValidateOverlay` resolved the reference, P2-M11-01), so a half-working profile never
   runs; the compiler ignores the parts of families it does not resolve yet. Transferred to the plan on 2026-10-11: M20 and M21
   lift the check family by family (`domain.unavailableFamilies`), and their acceptance criteria include that a profile with a
-  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family.
+  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family. Both are done: only a `tls` part with the case `intercept` is still unavailable (M22).
 - **Activation** is an overlay of kind `profile` with the key *(owner, kind, target)*: one profile per owner and target, so
   writing the activation again with another profile **switches** it (`200`, the same overlay id, the same TTL rules as any
   overlay: `ttl`, `lease`, `renew`, reset, restart). The fault ids follow the existing rules (M8b): a switch between
@@ -3328,7 +3330,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   Deleting an unreferenced profile needs nothing. A profile that a scenario step refers to is a missing reference in the
   scenario (M15). The activation follows an edit of the impairment and MTU parts, but not into a profile that has a
   part this build cannot resolve: a revision that gives a custom profile a `dns` or `tls` part while an overlay activates it
-  is **refused** with `unsupported_feature`, naming the profile and the milestone (M20 for `dns`, M21 for `tls`), by the
+  is **refused** with `unsupported_feature`, naming the profile and the milestone (M22 for a `tls` part with the case `intercept`; M20 and M21 lifted `dns` and `tls`), by the
   same rule as the write of the activation (`checkProfileAvailable`), so no revision leaves an activation with a half profile
   (`engine.unavailableProfileRevision`, `UnsupportedProfileRevisionError`, called where the apply settles the overlays
   of a revision and by the preview, which reports it as a problem; the API answers 422 before it applies). `force` does
@@ -4550,11 +4552,11 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   and resolves every reference to its UUID. That resolved scenario is the run's `snapshot`, with the revision
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
-  naming the milestone: a `tls`
-  (M21) or `dhcp` (M23) step, a profile with a TLS part (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20), and, on a gateway
+  naming the milestone: a `tls` step
+  with the case `intercept` (M22), a `dhcp` step (M23), a profile with such a TLS part (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20, a `tls` step and a profile with a certificate or handshake case since M21), and, on a gateway
   without a capture volume, `capture: true` or a `capture` step (see Packet captures (M17)); `GET
-  /capabilities` lists `step_types` (profile, fault, rule, dns since M20, wireguard, capture, wait, remove, restore) and, since M16, the
-  `check_types` (a check of `tls_rejected` or `tls_accepted` is M21; one for a host name works since M20). Nothing is stored
+  /capabilities` lists `step_types` (profile, fault, rule, dns since M20, tls since M21, wireguard, capture, wait, remove, restore) and, since M16, the
+  `check_types` (the checks `tls_rejected` and `tls_accepted` since M21; one for a host name works since M20). Nothing is stored
   for a refused scenario.
 - **One run per target, the queue.** Two targets overlap when they share a device or a network
   (`scopeTokens`: the ids of a scope's devices from the snapshot, a group's members whether the snapshot knows
@@ -4766,7 +4768,7 @@ Plan §2.10 and M16. A scenario's `checks` evaluate what the gateway observes of
 that is tied to a step, and a fault, rule or profile of a run that matched no packet is reported, because a `passed` run
 whose fault never hit proves nothing. M15 refused a scenario with checks (`unsupported_feature`, M16); this build runs
 them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `traffic_seen`, `traffic_not_seen` and
-`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` arrive with M21 (`422 unsupported_feature` until then); a check for a host name
+`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` came with M21 (`422 unsupported_feature` before); a check for a host name
 (a `destination` or an `except` with `hostname`) came with M20.
 
 ### How it works
@@ -5676,6 +5678,125 @@ Level 1 (written, vetted with `-tags testbed`, run by CI with `$M20_LEVEL1`, not
 | Scope: DoT blocking | `TestDNSOverTLSIsDroppedForTheNetworksThatBlockItAfterTheAccessRules`, `TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel` |
 | Scope: DNS scenario step type | `dns` in `run.SupportedStepTypes`, `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` (capabilities) |
 
+## TLS responder: certificate cases (M21)
+
+Plan §2.4 (E11), §2.8, §3.3 and M21, with the acceptance carried over from Phase 2 (P2-M11-01: profiles with a `tls` part). The TLS family
+of the precedence rules has a mechanism now: selected new connections of a device are routed unchanged into the service namespace and end at
+the TLS responder, which shows a deliberately broken certificate (or breaks the handshake) and reports what the device did with it. The check types
+`tls_rejected` and `tls_accepted` and the step type `tls` of M16 work, "TLS broken" activates, and the `tls` family is lifted from
+`domain.unavailableFamilies` (it is empty now; what is still missing is the case `intercept`, which M22 brings and which is refused with
+`unsupported_feature`, also as the part of a profile).
+
+### How it works
+
+- **The two CAs** (`tlsresponder/ca.go`). The API makes them once at its start in `--tls-ca-dir` (`/var/lib/chaosgw/tlsca`, the volume
+  `chaosgw-tlsca`, which the responder's container mounts read-only): `test-ca.pem` (the *test CA*, which a development firmware may install; it signs the
+  cases `expired`, `not_yet_valid` and `hostname_mismatch`) and `unknown-ca.pem` (the *unknown CA*, never distributed; it signs `untrusted_ca`), each with its key
+  (`*.key`, 0600, the user of the responder is the one of the API). Both are ECDSA P-256 and last ten years; they start five years back, so the certificate of `expired`
+  (ran out a day ago, began three months before) lies inside the CA's validity. A CA that exists is never replaced (the devices that installed it would trust nothing
+  any more); `POST /tls/ca/regenerate` is M22's. `GET /tls/ca` serves `test-ca.pem` as a download (`Content-Disposition: attachment`) for every scope that reads, never a key
+  and never the unknown CA.
+- **The certificates** (`tlsresponder/certs.go`). One per case and name, the name being the server name of the ClientHello (without one: the name the DNS proxy
+  answered last for the destination address, else the address itself in an IP SAN). `untrusted_ca`: valid, signed by the unknown CA. `self_signed`: its own issuer.
+  `expired` (valid until a day ago) and `not_yet_valid` (valid from in two days): signed by the test CA, right name. `hostname_mismatch`: signed by the test CA, valid, for
+  `chaosgw-mismatch.invalid`. Each is made twice, with an ECDSA and with an RSA key, so a TLS stack that knows only one of them still judges a certificate instead of failing the
+  handshake (crypto/tls takes the first the client can use); they are cached for an hour. The responder serves TLS 1.2 and 1.3.
+- **The redirect** (`compiler/tls.go`). Every TLS case (an overlay of the kind `tls`, or the `tls` part of an activated profile) is a candidate of the TLS family: `World.TLSCandidates` gives
+  each source its cases in the order of §2.4 (`RankOrder`), sources with the same list share their entries (`Target.TLSCases`; `groupCandidates` is the helper of the DNS family too). The kernel
+  selects, per case, what it can see: source, destination (an address, a prefix, a network, the uplink, or a host name through the DNS-derived set of M20), TCP and the ports (without ports 443 and
+  8883, `domain.TLSPorts`). The chain `tls_redirect` (prerouting, priority -145, after the classification) first leaves the packets that come from `svc0` and the replies alone, then holds two rules
+  per case: the first selects a *new* connection (`ct state new`) and sets bit 23 of the conntrack mark (`TLSConnMarkBit`) and the service mark of the packet (bit 20, which table 102 routes into
+  `svc0`); the second gives the packets of a connection with that conntrack mark the service mark, as long as the case still selects the connection. So a connection that was established before the
+  case came stays with the real server ("new connections"), and the connection the responder holds follows the redirect for its whole life. With `cut_existing` the first rule has no `ct state new`: a
+  connection that is there already is selected at its next packet, which arrives at the responder's namespace as a packet of a connection nobody knows there and is answered with a reset; that is the cut,
+  and it needs no window (the cut of an access rule is a window of `reject with tcp reset` because the rule drops, here the responder answers). The forward chain accepts what goes to `svc0` with the service mark
+  after the access rules, the DoT block and the port forwards, before the matrix (decision 3). Inside the namespace the executor writes a fixed chain when it makes the namespace (`executor.serviceRedirectRuleset`,
+  the last step of `service_ns ensure`): TCP that arrives on `svc1` for another address than the namespace's own is redirected to port 9443, where the responder listens and reads `SO_ORIGINAL_DST`
+  (`tlsresponder.OriginalDst`). `apply` reads that chain back with the state of the namespace (`ServiceState.Redirect`); a namespace of an earlier version without it is made anew by the next apply, and verify finds
+  a missing one.
+- **The decision of a connection.** Which case decides a connection depends on what only the connection knows: the server name of its ClientHello. The responder reads the first handshake message (`readClientHello`, also over several
+  records), asks `POST /internal/tls/resolve` (client, original destination, server name) and gets the decision of `domain.World.Resolve` — the one `explain` shows, with the DNS names the client was answered for the
+  address (`Engine.ResolveTLS`, `api.Server.hostNames`) — with the overlay, the case, the device and its `trusts_test_ca`, and the generation of the configuration the decision belongs to. No case means: the
+  gateway's selection was wider than the case (a server name that no case names, a CDN address, a case that went in between). Then the responder passes the connection through to the destination, unchanged
+  (the bytes of the ClientHello, then both directions; the namespace's own connection leaves through `svc0` and is masqueraded at the uplink), but only if `passthrough` says the gateway would have forwarded the connection (the access rules, the
+  protection and the matrix on the destination the device meant, `AccessDecision`); otherwise it resets it (decision 4). A decision that cannot be had (the API is away) resets the connection and never passes it: the gateway fails closed.
+- **What the responder does** (`tlsresponder/cases.go`). The certificate cases are a `crypto/tls` handshake over the connection with the ClientHello put back in front of it: it *completes* (the device took the certificate, outcome `accepted`),
+  or ends with an alert of the device (`rejected`, with the alert's RFC name: `bad_certificate`, `unknown_ca`, ...), or with a close or reset without an alert (`rejected`), or times out after ten seconds (`timeout`); something that is none of these
+  (no shared cipher, a version the responder does not speak, bytes that are no TLS) is `client_closed` with a token that says which, because it says nothing of the certificate. `handshake_reset` answers the ClientHello with a reset
+  (`reset_sent`), `handshake_close` with a FIN and nothing more (`close_sent`), `handshake_stall` with silence for `StallFor` (30 s) or until the client gives up (`stalled`). The version of a report is the negotiated one when the handshake completed,
+  else the highest the client offered. **Reset on removal:** the responder follows `GET /internal/tls/config` by long poll (`Follow`); a connection that a case holds is reset when a configuration of a *later generation than its decision's* does not hold the case
+  any more (`SetConfig`), so a stalled device sees the end of the stall at once and goes on to the real server; the generation of the decision keeps a connection decided after the configuration was computed from being reset by an older one.
+- **The reports** (`POST /internal/tls/handshakes`). The responder batches them and posts the first at once. The API makes each an event `tls_handshake` (subject: the device; data: client, device, original destination, server name, overlay, case, outcome, alert,
+  version, `expected` (`reject` for the certificate cases, `any` for the handshake cases, `domain.TLSExpected`), `violation` (the device completed the handshake of a case it must reject) and `tested` (a rejection that tests what the case is for:
+  always for `untrusted_ca` and `self_signed`; for `expired`, `not_yet_valid` and `hostname_mismatch` only when the device's `trusts_test_ca` is set, because a device without the test CA fails them all at the first check as an unknown
+  issuer, `domain.TLSTested`)), counts it for its overlay (the counter of a TLS overlay, and of the `tls` part of a profile, is the number of connections the responder held, in packets, kept in memory like the DNS log) and keeps it in a
+  log of 20000 entries that the checks read. The state of a TLS overlay is `effective` while some source has it in its list; `GET /overlays` names what overrides it. `explain` says `service: tls_responder` when a case decides the traffic
+  and nothing in front of the redirect (an access rule, the protection, the management guard) stops it; the flows API marks a connection with the conntrack mark as `tls_responder`; the health check lists the component `tls` (degraded without
+  a poll in 60 s, `disabled` without a service namespace); `tls.responder` and `tls.cases` are in the capabilities.
+- **The checks and the step.** `tls_rejected` and `tls_accepted` (`run/checks.go`, `lookTLS`) read the handshakes of the devices of the target inside the window, matched by the selector against the original destination (the same matching as the traffic checks,
+  host names included) and by the outcome: `tls_rejected` passes at the first `rejected` handshake, `tls_accepted` at the first `accepted` one. A handshake case does not satisfy either: the device does not abort anything there, the responder does (a scenario checks the
+  device's reaction with a traffic check). A check that fails says what the responder saw ("the responder saw 1 accepted ... a device took a certificate it must reject", or "saw no handshake of it (is a TLS case selecting this connection?)"); the report
+  comes after the handshake, so the final look waits one second after the window (`tlsSettle`). A `tls` step writes the overlay like the other kinds, and a TLS step or the "TLS broken" profile step that held no connection is a `zero_hit` ("the TLS case of step X held no connection").
+- **Containers.** `deploy/compose.tls.yaml`: `tls` (`network_mode: service:svcns`, every capability dropped, the service token and the CAs read-only, health check `chaosgw tls --health`), started with the others (`docs/install.md`);
+  `compose.api.yaml` mounts the volume `chaosgw-tlsca` and passes `--tls-ca-dir`; `deploy/Dockerfile` creates the directory for the API's user; `--namespace-check` as for `dns`.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (nothing needs the maintainer except `P5-M21-01` in `open-items.md`):
+
+1. **The responder asks the API for the decision of each connection.** The plan's configuration shape (`cases` with `sources` and `expected`, "the service looks up a connection by client address and original destination")
+   cannot express what a case selects: networks, the uplink and host names are known to the compiler and the engine only, and the server name only to the connection. One local HTTPS call per connection (a kept-alive connection to the
+   private link) reuses `World.Resolve` and is the same answer `explain` gives; the configuration is still served and followed, for the reset on removal and for the health check.
+2. **Selection by the kernel is the union of the cases, the decision is the connection's.** A case with an `sni` selects at the kernel by everything but the name (the name is in the ClientHello only); a connection whose name no case names falls back to the next case of the
+   precedence rules, or, with none, is passed through. A case that must not touch other names on the same address names the destination too.
+3. **The redirect is accepted past the access matrix, not past the access rules.** E11: the access rules (and the anti-lockout rule, the management guard) judge the redirected packets by the original tuple in the forward chain before the accept; the matrix (`allow`/`deny` between networks, the
+   uplink and the implicit rules) names interfaces, and the packets leave through `svc0`, so it cannot judge them: a case that selects a network the matrix keeps from the server still shows the device the responder's certificate, the answer coming from the gateway.
+4. **A passed-through connection must still be allowed by the matrix.** The namespace's own connection to the destination leaves through the gateway's service path (accepted towards the uplink for the services), which the matrix does not see. Passing a connection that the redirect took through it
+   would be a way round the matrix, so the API judges the original connection (`AccessDecision`, which also covers the rules) and the responder resets what the gateway would not have forwarded. The destination is reached through the uplink only (the namespace is masqueraded there, as for the DNS proxy's upstream): a server in another
+   test network or behind a tunnel is not reached by a passed-through connection (the forward chain accepts the namespace towards the uplink only) and the device sees a reset.
+5. **New connections only, by a conntrack mark.** Per-packet marks (the rest of the classification) would redirect a connection that was established before the case at its next packet; the plan asks for new connections, so the selection is kept in bit 23 of the conntrack mark and given to the packets
+   while the case still selects the connection (the second rule), not for good: a case that goes (the chain is not compiled without a case) stops redirecting at once and the responder resets what it holds.
+6. **`cut_existing` is the redirect without the "new" condition.** The established connection meets a namespace that knows nothing of it and is answered with a reset by the kernel's TCP (nothing listens for it, the listener's port answers a segment that is no SYN with RST); no window of
+   `reject with tcp reset` is needed and nothing has to be closed again afterwards. The reset reaches the device with the original server address as its source (the namespace's NAT undoes the redirect).
+7. **Reset on removal is the responder's, not the gateway's.** The responder knows which connections it holds per case; the gateway's conntrack does not (a delete would not cut a connection behind NAT either, S3). The decision's generation keeps a late configuration from resetting a connection that a newer decision made.
+8. **The expected result is the same for every certificate case, whatever the device trusts; `tested` says what the rejection proves.** `trusts_test_ca` decides whether a rejection of `expired`, `not_yet_valid` and `hostname_mismatch` says anything about the device's date and name checks (S4: it fails them all at the first check as an unknown issuer
+   otherwise). The plan's "expected results from `trusts_test_ca`" is this: `expected` stays `reject`, `tested` follows the trust.
+9. **Handshake cases act after the ClientHello.** S4's modes: the responder reads the ClientHello first (the case needs the connection to have started), so a client that never says anything is `client_closed` or `timeout` with no case applied.
+10. **A connection to the responder's port that did not come through the redirect is dropped.** The health check (`--health`) connects to the port directly and gets a connection that is closed at once: there is no original destination, so there is nothing it could mean.
+11. **`rp_filter`.** The replies of the responder come in on `svc0` with the server's address as their source. A host with strict reverse-path filtering (`rp_filter=1`) on `svc0` drops them; the default of Ubuntu is loose (`2`). A per-interface value cannot lower the maximum of `all` and the interface, so the executor does not set it. The preflight does not check it.
+12. **Both CAs are in one directory.** The responder has to sign with the keys of both CAs, and the API (which makes them and serves the certificate) runs as the same user, so the two containers share one volume with nothing else in it, and the API's secrets volume is not mounted into the responder.
+
+### Tests
+
+Level 0, all run here: `tlsresponder` (the CAs and their file modes, that a CA is never replaced, the download holds the certificate only; the certificate of each case fails exactly the check it is meant for under Go's verifier, for both keys; the ClientHello reader on real hellos of TLS 1.2 and 1.3, split over records, malformed;
+real TLS clients against the responder on the loopback: every certificate case with TLS 1.2 and 1.3 is rejected and reported with its alert, an insecure client completes the handshake and is reported, the name of the certificate, the handshake cases, a connection that never says ClientHello, passthrough to a real
+TLS server, a decision that cannot be had, the reset on removal and the generation that spares a newer decision, no connection is held after it ends; the API client), `compiler/tls_test.go` (the responder's list, the rules of the chain for a new connection and for `cut_existing`, every kind of destination, hostname set, shared uplink set, order and grouping, no service namespace, **the golden test of E11**
+(`testdata/e11.golden.txt`), the transaction is accepted by nft's parser: `scenarioTLS` is in `transactionScenarios`), `executor/plan_test.go` (the fixed ruleset of the namespace), `apply/service_test.go` (the namespace holds the redirect, a namespace without it is found by verify and made anew), `domain` (the profile's parts, the intercept case is unavailable until M22),
+`engine/tls_test.go` (the snapshot and the kernel's chain, "TLS broken" competing with a device's case, the decision by port, server name, destination and client, the matrix and passthrough, `explain`), `api/tlsservice_test.go` (the configuration by long poll, the decision, host names and the name without SNI, malformed requests, events and counters, the test CA download, health, `explain` and E11), the flows of the API, `run/checks_tls_test.go` (both checks, windows, the report that comes late, selectors, zero hits),
+`cmd/chaosgw` (the daemon makes the CAs, `tls --health`), the hardening test of `compose.tls.yaml`, `tools/ciconfig` (the new volume in the fresh-volume check and the upgrade note). Web: `lib/faults.test.ts` (TLS chips), the Playwright specs of profiles ("TLS broken" activates) and scenarios (a TLS check is added and sent).
+
+Level 1 (written, vetted with `-tags testbed`, run by CI with `$M21_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_tls_test.go`, listed in `.github/level1-tests.env`. The kernel side is verified by CI only until its run is green: the chain and the marks, the redirect inside the
+namespace and `SO_ORIGINAL_DST`, the cut by a reset from an unknown connection, the masquerade of a passed-through connection and the faults on the path through `svc0` are written as assumptions of S16 and S4, not observed.
+
+### Acceptance map (plan M21 "Tests" and the acceptance of Phase 2)
+
+| Plan M21 | Test |
+|---|---|
+| `openssl s_client`/`curl` with TLS 1.2 and 1.3: untrusted, expired, wrong-host, self-signed are rejected by a correct client | `TestACorrectClientRejectsEveryCertificateCaseWithTLS12And13OnTheRealKernel`, `TestOpenSSLAndCurlRejectTheCertificatesOfTheCasesOnTheRealKernel` (level 1), `TestACorrectClientRejectsTheCertificateOfEveryCase`, `TestTheCertificateOfEachCaseFailsTheCheckItIsMeantFor` (level 0) |
+| A deliberately insecure client is flagged by the check | `TestADeviceThatTakesTheBrokenCertificateIsFlaggedByTheCheckOnTheRealKernel`, `TestADeviceThatCompletesTheHandshakeFailsTheTLSRejectedCheck`, `TestADeviceThatDoesNotVerifyCompletesTheHandshakeAndIsReported` |
+| Golden test E11 | `TestE11AnAccessRuleDecidesBeforeTheRedirectIsAccepted` (`e11.golden.txt`), `TestE11AnAccessRuleDecidesBeforeTheRedirectOnTheRealKernel`, `TestE11AnAccessRuleDecidesBeforeAnyRedirect` (domain) |
+| A client trusting the test CA passes the "untrusted CA" case | the first case of `TestACorrectClientRejectsEveryCertificateCaseWithTLS12And13OnTheRealKernel` (the client trusts the test CA and rejects it), `untrusted_ca` in `TestTheCertificateOfEachCaseFailsTheCheckItIsMeantFor` |
+| Upload and download latency apply to connections to the responder (S16) | `TestUploadAndDownloadLatencyApplyToConnectionsToTheResponderOnTheRealKernel` |
+| The responder reads the original destination | `TestACorrectClientRejectsEveryCertificateCaseWithTLS12And13OnTheRealKernel` (the event's `original_dst`), `TestTheServiceNamespaceHoldsTheRedirectToTheResponderOnTheRealKernel` |
+| The same cases work for a WireGuard client | `TestTheSameCasesWorkForAWireGuardClientOnTheRealKernel` |
+| Scope: transparent redirect, new connections, "cut existing" on activation, reset on removal | `TestOnlyNewConnectionsAreRedirectedAndCutExistingAndRemovalResetOnTheRealKernel`, `TestTheKernelSelectsNewConnectionsOfTheDeviceForTheResponder`, `TestACaseThatCutsExistingConnectionsSelectsEveryPacket`, `TestTheConnectionsOfARemovedCaseAreReset` |
+| Scope: no-SNI fallback | `TestTheCertificateIsForTheNameOfTheClientHelloOrTheFallbacks`, `TestAHostnameDestinationAndTheNameForAConnectionWithoutServerNameComeFromTheGatewaysDNS` |
+| Scope: test CA with download, the unknown CA never distributed | `TestTheTestCADownloadIsTheCertificateOnly`, `TestTheDownloadIsTheTestCAsCertificateAndNothingElse` |
+| Scope: expected results from `trusts_test_ca`, events per handshake | `TestEveryHandshakeIsAnEventAndCountedForItsOverlay`, `TestTheStreamTellsAHandshakeInWords` |
+| Scope: check type "TLS rejected/accepted" | `run/checks_tls_test.go` (all of it), `TestADeviceThatTakesTheBrokenCertificateIsFlaggedByTheCheckOnTheRealKernel` |
+| Scope: "TLS broken" profile, TLS scenario step type | `TestTheTLSBrokenProfileActivatesAndCompetesInTheTLSFamily`, `TestTheTLSBrokenProfileResetsTheHandshakeOnTheDefaultPortsOnTheRealKernel`, `TestATLSCaseThatHeldNoConnectionIsAZeroHitWarning` |
+| Acceptance: a profile with a `tls` part, custom or "TLS broken", activates and competes in the TLS family; the family is lifted (P2-M11-01) | `TestADeviceLatencyAndATLSBrokenProfileOnTheNetworkCombine`, `TestACustomProfileWithAnInterceptPartIsStoredButCannotBeActivatedAndOneWithADNSOrTLSPartCan`, `TestOnlyProfilesWithAPartOfALaterFamilyAreUnavailable` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -5711,14 +5832,14 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 
-The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
+The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it), tlsca (the CAs of the TLS responder, M21) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,

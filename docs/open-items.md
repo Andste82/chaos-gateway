@@ -405,14 +405,14 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M0: `image.yml` has never run (ghcr push, release tags) | M28 |
 | M0: persistent faults for DNS, TLS, DHCP and profile activations (D31) | M39 |
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
-| Stubs: `chaosgw tls` (~~`chaosctl` beyond `version`~~ — done in M18, `chaosctl explain` with P4-AUDIT-47) | M21 |
+| Stubs: ~~`chaosgw tls`~~ — done in M21; ~~`chaosctl` beyond `version`~~ — done in M18 (`chaosctl explain` with P4-AUDIT-47) | M21 |
 | Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
 | ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | Overlay removal on stop | M27 |
 | ~~M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions`~~ — done in M20 | M20 |
-| M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (confirmed 2026-10-11, P2-M7-01) |
-| M6b: TLS responder joins the service namespace | M21 |
+| ~~M6b: classification sets the service mark (bit 20) that table 102 routes on~~ — done in M21 (`compiler/tls.go`: the chain `tls_redirect` writes it right after the classification, with the real redirect-interaction test) | M21 (confirmed 2026-10-11, P2-M7-01) |
+| ~~M6b: TLS responder joins the service namespace~~ — done in M21 (`deploy/compose.tls.yaml`) | M21 |
 
 ## Phase 2 audit result
 
@@ -567,7 +567,7 @@ with P2-AUDIT-17, a low item the work on P2-AUDIT-15 found (fourth table, 16 row
 
 | Item | Question | Decision |
 |---|---|---|
-| P2-M7-01 | Should M7 write the service-selection mark (bit 20)? | Confirmed: no, it stays deferred to M20/M21, where the real redirect-interaction test is |
+| P2-M7-01 | Should M7 write the service-selection mark (bit 20)? | Confirmed: no, it stays deferred to M20/M21, where the real redirect-interaction test is. **Delivered by M21:** the chain `tls_redirect` writes the mark for the TLS cases (E11 and the redirect on the real kernel are tested) |
 | P2-M7-02 | Classification maps keyed by address, not by the identity map's device number | Confirmed: keyed by address (a device that gets a new address changes 6 elements in all maps, `TestAnAddressChangeChangesAHandfulOfElements`); recorded in `docs/development.md` (M8a) |
 | P2-M7-03 | Convergence bound of the identity map on a shared CI runner | Confirmed: 3 s on CI, the plan's 1 s is the target on dedicated hardware (H1) |
 | P2-M8a-01 | Group and network scopes folded into per-source tables | Confirmed: folded |
@@ -598,7 +598,7 @@ with P2-AUDIT-17, a low item the work on P2-AUDIT-15 found (fourth table, 16 row
 | P2-M10-06 | The WireGuard actions | Confirmed |
 | P2-M10-07 | One IFB with a fixed name; the host's ingress qdisc is shared | Confirmed |
 | P2-M10-08 | The per-packet delay check of the update test on a loaded runner | **Changed:** the measured stream is at least 200 packets (sent 5 ms apart); the bounds and the rule that none is more than 10 ms outside stay |
-| P2-M11-01 | A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21 | **Transferred to the plan:** M20 (`dns`) and M21 (`tls`) lift `domain.unavailableFamilies` family by family, and their acceptance criteria include that such a profile activates and its part competes in its family; until then the activation is refused with `unsupported_feature`. **The `dns` family is lifted (M20):** `dns-broken` and a custom profile with a `dns` part activate and compete in the DNS family (E5); `tls` follows with M21 |
+| P2-M11-01 | A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21 | **Transferred to the plan:** M20 (`dns`) and M21 (`tls`) lift `domain.unavailableFamilies` family by family, and their acceptance criteria include that such a profile activates and its part competes in its family; until then the activation is refused with `unsupported_feature`. **The `dns` family is lifted (M20):** `dns-broken` and a custom profile with a `dns` part activate and compete in the DNS family (E5); **The `tls` family is lifted (M21):** "TLS broken" and a custom profile with a `tls` part activate and compete in the TLS family; only the case `intercept` of a `tls` part stays unavailable until M22 |
 | P2-M11-02 | Custom profiles only through candidate revisions, no endpoints of their own | Confirmed: no `POST /profiles`; the configuration's `profiles` are created, changed and deleted with a revision |
 | P2-M11-03 | The rate of the built-in Bad LTE end to end | **Changed:** a UDP measurement above the rate was added (`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd`) |
 | P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
@@ -2459,6 +2459,19 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`.
 - Task: decide whether V1 needs a DNS kind in the "Add fault" dialog (action, names, delay, answers, TTL; target and TTL as for the other kinds), a `dns` step in the step dialog and a `chaosctl` flag, and in which milestone.
 - Options: (a) leave it: the API, the clients and scenario files are the way to make DNS faults, the UI shows them; (b) a DNS kind in the "Add fault" dialog and the step dialog, with Playwright tests, and `chaosctl dns` flags (one form for DNS, TLS and DHCP kinds would share the work of M21 and M23, which have the same gap).
 - Recommendation: (b) together with the TLS form of M21, so the dialog gets its application-layer kinds once.
+- Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
+- Needs maintainer: yes
+- Effort: M
+
+### P5-M21-01 TLS cases cannot be made in the web UI or with `chaosctl`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. M21 delivers the TLS family in the API (an overlay of the kind `tls`, the `tls` part of profiles, the step type `tls`, the check types `tls_rejected` and `tls_accepted`) and the UI labels and lists them (the chips of a TLS case, the "TLS broken" profile card that activates, a TLS check in the check editor, a `tls` step in a scenario). The plan names no UI work for it: §2.17 lists the kinds of the "Add fault" dialog as impairment, MTU/PMTUD and tunnel, the step dialog of M19 edits the step types of M15 to M17, and `chaosctl` (M18) has flags for impairment faults and profiles only (`chaosctl overlay create` takes a request document of any kind, a TLS case included). No later milestone of the plan adds a TLS form (M22 is interception, M23 DHCP, M23a the Captures screen). A TLS case is made today with the API or the generated clients, with `chaosctl overlay create` and a document, in the YAML of a scenario (the step list keeps a `tls` step it does not edit), or by activating a profile with a `tls` part. It is the same gap as P5-M20-02 for the DNS family.
+- Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `tls`), `web/src/lib/faultForm.ts` (the fault kinds), `internal/ctl/overlays.go` (the flags of `chaosctl fault`); `docs/development.md` "TLS responder: certificate cases (M21)".
+- Task: decide with P5-M20-02 whether V1 needs a TLS kind in the "Add fault" dialog (case, ports, server names, destination, cut existing; target and TTL as for the other kinds), a `tls` step in the step dialog, a flag of `chaosctl`, and the download of the test CA in the UI (`GET /tls/ca` has no button yet), and in which milestone.
+- Options: (a) leave it: the API, the clients and scenario files are the way to make TLS cases, the UI shows them; (b) a TLS kind in the "Add fault" dialog and the step dialog, a "Download the test CA" button, with Playwright tests, and `chaosctl tls` flags (one form for the DNS, TLS and DHCP kinds, as P5-M20-02 recommends, so the dialog gets its application-layer kinds once).
+- Recommendation: (b), together with the DNS form of P5-M20-02.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
 - Needs maintainer: yes
 - Effort: M

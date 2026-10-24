@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/dnsproxy"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -47,7 +49,25 @@ type dnsState struct {
 	// per faultEventEvery for each pair, so a proxy that answers hundreds of queries a second does not flood the
 	// stream.
 	faultEvent map[string]time.Time
+	// answered is what the proxy answered the devices, by client and address: the names of the answers (the name asked
+	// and the CNAME targets). It is how a check, a wait or a capture that names a host finds the addresses of the
+	// name, whether or not a rule or a fault selects it (the DNS-derived sets know only those names).
+	answered map[addrPair]*answeredNames
 }
+
+// addrPair is a client and an address it got in an answer.
+type addrPair struct{ client, addr netip.Addr }
+
+type answeredNames struct {
+	names []string
+	last  time.Time
+}
+
+// maxAnswered bounds the index of answers; answeredFor is how long an answer stays in it.
+const (
+	maxAnswered = 50000
+	answeredFor = time.Hour
+)
 
 // faultEventEvery is how often dns_fault_triggered is sent for one overlay and device.
 const faultEventEvery = 10 * time.Second
@@ -222,6 +242,7 @@ func (s *Server) PostDnsQueries(c *gin.Context) {
 		}
 		s.dns.seq++
 		s.dns.entries = append(s.dns.entries, loggedQuery{seq: s.dns.seq, e: e})
+		s.indexAnswer(e)
 		if e.Fault != nil {
 			if ev, ok := s.faultTriggered(e); ok {
 				events = append(events, ev)
@@ -368,4 +389,103 @@ func nameMatches(pattern, name string) bool {
 		return name == rest || strings.HasSuffix(name, "."+rest)
 	}
 	return name == pattern
+}
+
+// indexAnswer notes the names of an answer for the addresses it holds. Called with logMu held.
+func (s *Server) indexAnswer(e model.DnsQueryLogEntry) {
+	if e.Rcode != "NOERROR" || e.Answers == nil {
+		return
+	}
+	client, err := netip.ParseAddr(e.Client)
+	if err != nil {
+		return
+	}
+	names := []string{strings.ToLower(strings.TrimSuffix(e.Name, "."))}
+	var addrs []netip.Addr
+	for _, a := range *e.Answers {
+		if ip, err := netip.ParseAddr(a); err == nil {
+			addrs = append(addrs, ip.Unmap())
+		} else if a != "" && !strings.ContainsAny(a, " \t") {
+			names = append(names, strings.ToLower(strings.TrimSuffix(a, ".")))
+		}
+	}
+	if len(addrs) == 0 {
+		return
+	}
+	if s.dns.answered == nil {
+		s.dns.answered = map[addrPair]*answeredNames{}
+	}
+	if len(s.dns.answered) >= maxAnswered {
+		// drop what is old; if everything is fresh, half of it
+		cut := e.Time.Add(-answeredFor)
+		for k, v := range s.dns.answered {
+			if v.last.Before(cut) {
+				delete(s.dns.answered, k)
+			}
+		}
+		for k := range s.dns.answered {
+			if len(s.dns.answered) < maxAnswered/2 {
+				break
+			}
+			delete(s.dns.answered, k)
+		}
+	}
+	for _, a := range addrs {
+		k := addrPair{client, a}
+		v := s.dns.answered[k]
+		if v == nil {
+			v = &answeredNames{}
+			s.dns.answered[k] = v
+		}
+		for _, n := range names {
+			if !slices.Contains(v.names, n) && len(v.names) < 16 {
+				v.names = append(v.names, n)
+			}
+		}
+		if e.Time.After(v.last) {
+			v.last = e.Time
+		}
+	}
+}
+
+// hostNames returns the names a client was answered for an address: those of the proxy's answers (the whole
+// log of the proxy) and those the DNS-derived sets hold.
+func (s *Server) hostNames(client, addr netip.Addr) []string {
+	var out []string
+	s.dns.logMu.Lock()
+	if v := s.dns.answered[addrPair{client, addr}]; v != nil {
+		out = append(out, v.names...)
+	}
+	s.dns.logMu.Unlock()
+	for _, n := range s.cfg.Engine.HostNames(client, addr) {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// hostAddrs returns the addresses the proxy answered any client for names that the selector matches, sorted: where a
+// capture of "traffic to this host" looks.
+func (s *Server) hostAddrs(pattern string) []netip.Addr {
+	seen := map[netip.Addr]bool{}
+	s.dns.logMu.Lock()
+	for k, v := range s.dns.answered {
+		for _, n := range v.names {
+			if domain.HostnameMatches(pattern, n) {
+				seen[k.addr] = true
+				break
+			}
+		}
+	}
+	s.dns.logMu.Unlock()
+	for _, a := range s.cfg.Engine.HostAddrs(pattern) {
+		seen[a] = true
+	}
+	out := make([]netip.Addr, 0, len(seen))
+	for a := range seen {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
+	return out
 }

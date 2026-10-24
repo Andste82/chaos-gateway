@@ -35,7 +35,7 @@ func (s *Server) initCaptures() error {
 	}
 	m, err := capturemgr.New(capturemgr.Config{
 		Clock: s.clk, Dir: s.cfg.CapturesDir, Opener: opener, Gateway: s.cfg.Engine, Namespace: s.cfg.Namespace, Log: s.log,
-		Quota: s.captureQuota, MinFreePercent: s.cfg.CaptureMinFree, DiskFree: s.cfg.CaptureDiskFree,
+		HostAddrs: s.hostAddrs, Quota: s.captureQuota, MinFreePercent: s.cfg.CaptureMinFree, DiskFree: s.cfg.CaptureDiskFree,
 	})
 	if err != nil {
 		return err

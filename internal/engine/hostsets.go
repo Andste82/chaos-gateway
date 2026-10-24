@@ -519,6 +519,39 @@ func (h *hostSets) names(client, addr netip.Addr) []string {
 // the address is in the set of. Empty for an address no hostname selector covers.
 func (e *Engine) HostNames(client, addr netip.Addr) []string { return e.hosts.names(client, addr) }
 
+// HostAddrs returns the addresses the sets hold for names the selector matches, for any client, sorted.
+func (e *Engine) HostAddrs(pattern string) []netip.Addr { return e.hosts.addrs(pattern) }
+
+func (h *hostSets) addrs(pattern string) []netip.Addr {
+	now := h.e.cfg.Clock.Now()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen := map[netip.Addr]bool{}
+	for id, m := range h.elems {
+		for k, el := range m {
+			if !el.expires.After(now) {
+				continue
+			}
+			names := el.names
+			if p := h.sets[id].pattern; len(names) == 0 && p != "" {
+				names = []string{p}
+			}
+			for _, n := range names {
+				if domain.HostnameMatches(pattern, n) {
+					seen[k.addr] = true
+					break
+				}
+			}
+		}
+	}
+	out := make([]netip.Addr, 0, len(seen))
+	for a := range seen {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
+	return out
+}
+
 // HostnameMatches reports whether a selector (an exact name or `*.suffix`) matches one of the names.
 func hostnameMatchesAny(pattern string, names []string) bool {
 	for _, n := range names {

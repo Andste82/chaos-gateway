@@ -765,7 +765,7 @@ func (m *Manager) condition(r *runState, w *model.WaitCondition, target model.Sc
 		}
 		set := idSet(devs)
 		match := model.TrafficMatch{Destination: w.Destination, PortRanges: w.PortRanges, Ports: w.Ports, Protocol: w.Protocol}
-		nets := newFlowNets(snap)
+		nets := newFlowNets(snap).withNames(m.cfg.Observer.HostNames)
 		if nets.err != nil && destNeedsNets(match.Destination) {
 			return false, "the networks of the gateway cannot be resolved: " + nets.err.Error()
 		}

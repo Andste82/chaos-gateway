@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -147,6 +148,8 @@ func (o runObserver) DNSQueries(devices []string, name string, since time.Time) 
 	slices.Reverse(out)
 	return out
 }
+
+func (o runObserver) HostNames(client, addr netip.Addr) []string { return o.s.hostNames(client, addr) }
 
 func (o runObserver) DNSClientSeen(device string) bool {
 	o.s.dns.logMu.Lock()

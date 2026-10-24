@@ -641,18 +641,6 @@ target: {device: esp32-42}
 steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
 checks: [{tls_rejected: {protocol: tcp, ports: [8883]}, window: {from: a, within: 30s}}]
 `, "M21"},
-		"check for a host name": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-checks: [{reconnected: {destination: {hostname: broker.example.com}}, window: {from: a, within: 30s}}]
-`, "M20"},
-		"check that excepts a host name": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-checks: [{traffic_not_seen: {except: [{hostname: broker.example.com}]}, window: {from: a, within: 30s}}]
-`, "M20"},
 		"capture flag": {`
 name: c
 target: {device: esp32-42}
@@ -674,11 +662,6 @@ name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, dhcp: {action: silence}}]
 `, "M23"},
-		"wait for a host name": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, wait: {for: connected, destination: {hostname: broker.example.com}, timeout: 5s}}]
-`, "M20"},
 	} {
 		sc, err := domain.DecodeScenario([]byte(tc.yaml), domain.FormatYAML)
 		if err != nil {

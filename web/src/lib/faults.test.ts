@@ -34,6 +34,19 @@ describe('fault chips', () => {
     expect(overlayChips({ ...base, kind: 'profile', profile: 'my-own' } as Overlay)).toEqual(['profile my-own']);
     expect(overlayChips({ ...base, kind: 'dhcp', dhcp: { action: 'silence' } } as Overlay)).toEqual(['DHCP silence']);
   });
+
+  it('say what a DNS fault does and for which names', () => {
+    const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'dns' } as const;
+    expect(overlayChips({ ...base, dns: { action: 'nxdomain' } } as Overlay)).toEqual(['DNS nxdomain']);
+    expect(overlayChips({ ...base, dns: { action: 'delay', delay: '2s', names: ['broker.example.com', '*.cdn.example.net'] } } as Overlay)).toEqual([
+      'DNS delay 2s · broker.example.com, *.cdn.example.net',
+    ]);
+    expect(overlayChips({ ...base, dns: { action: 'wrong_answer', answers: ['10.9.0.1'], names: ['broker.example.com'] } } as Overlay)).toEqual([
+      'DNS answer 10.9.0.1 · broker.example.com',
+    ]);
+    expect(overlayChips({ ...base, dns: { action: 'short_ttl', ttl: '1s' } } as Overlay)).toEqual(['DNS TTL 1s']);
+    expect(overlayChips({ ...base, dns: { action: 'truncate' } } as Overlay)).toEqual(['DNS truncate']);
+  });
 });
 
 describe('selectors in words', () => {

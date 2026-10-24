@@ -7,7 +7,7 @@ import { LINK, MockGateway, toast, withNetworks } from './mock';
 
 const LTE = 'b0000000-0000-5000-8000-0000000000e1';
 const BAD_LTE = 'b0000000-0000-5000-8000-0000000000e2';
-const DNS_BROKEN = 'b0000000-0000-5000-8000-0000000000e3';
+const TLS_BROKEN = 'b0000000-0000-5000-8000-0000000000e4';
 const ESP = 'a1b2c3d4-0000-4000-8000-000000000042';
 
 function lab(): MockGateway {
@@ -16,11 +16,11 @@ function lab(): MockGateway {
     { id: LTE, builtin: true, available: true, config: { name: 'lte', description: '50 ms ± 10 ms, 0.1 % loss', parts: { impairment: { latency: '50ms', jitter: '10ms', loss: '0.1%' } } } },
     { id: BAD_LTE, builtin: true, available: true, config: { name: 'bad-lte', parts: { impairment: { latency: '150ms', jitter: '50ms', loss: '3%', rate: '2Mbit' } } } },
     {
-      id: DNS_BROKEN,
+      id: TLS_BROKEN,
       builtin: true,
       available: false,
-      unavailable_reason: 'the dns part arrives with milestone M20',
-      config: { name: 'dns-broken', parts: { dns: { action: 'servfail' } } },
+      unavailable_reason: 'the tls part arrives with milestone M21',
+      config: { name: 'tls-broken', parts: { tls: { case: 'handshake_reset' } } },
     },
     { id: 'c0000000-0000-4000-8000-0000000000c1', builtin: false, available: true, config: { name: 'slow-lab', parts: { impairment: { latency: '20ms' }, mtu: { size: 1280 } } } },
   ];
@@ -46,8 +46,8 @@ test('cards with their parameters and where each profile is active, with the rem
   await expect(card(page, 'slow-lab')).toContainText('custom');
   await expect(card(page, 'slow-lab')).toContainText('MTU 1280');
   // a profile whose family comes later says so and cannot be activated
-  await expect(card(page, 'DNS broken')).toContainText('the dns part arrives with milestone M20');
-  await expect(card(page, 'DNS broken').getByRole('button', { name: /^Activate/ })).toBeDisabled();
+  await expect(card(page, 'TLS broken')).toContainText('the tls part arrives with milestone M21');
+  await expect(card(page, 'TLS broken').getByRole('button', { name: /^Activate/ })).toBeDisabled();
 });
 
 test('activate on the chosen scope for a duration, then deactivate', async ({ page }) => {

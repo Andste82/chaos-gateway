@@ -164,7 +164,7 @@ const cutPossible = computed(() => !props.rule.protocol || props.rule.protocol =
           <option value="uplink">Uplink (Internet)</option>
           <option value="network">A network</option>
           <option value="cidr">An address or prefix</option>
-          <option value="hostname">A host name</option>
+          <option value="hostname">A host name (DNS-derived)</option>
         </select>
       </div>
       <div v-if="destKind === 'network' || destKind === 'cidr' || destKind === 'hostname'" class="col-span-2">

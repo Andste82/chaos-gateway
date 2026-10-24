@@ -1,6 +1,6 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
+import type { DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
 import { durationMs, formatDuration } from './format';
 import { profileTitle } from './profileNames';
 
@@ -99,6 +99,16 @@ export function faultChips(f: FaultBody | undefined): string[] {
   return out.length > 0 ? out : ['no impairment'];
 }
 
+/** The chips of a DNS fault: "DNS nxdomain", "DNS delay 2s · broker.example.com, *.cdn.example.net", "DNS answer 10.9.0.1". */
+export function dnsChips(d: DnsFault): string[] {
+  let what = `DNS ${d.action.replace('_', ' ')}`;
+  if (d.action === 'delay' && d.delay) what += ` ${d.delay}`;
+  if (d.action === 'short_ttl' && d.ttl !== undefined) what = `DNS TTL ${d.ttl}`;
+  if (d.action === 'wrong_answer') what = `DNS answer ${(d.answers ?? []).join(', ')}`.trim();
+  const names = d.names ?? [];
+  return [names.length ? `${what} · ${names.join(', ')}` : what];
+}
+
 /** The chips of an overlay, whatever its kind. */
 export function overlayChips(o: Overlay, profileName?: (ref: string) => string | undefined): string[] {
   switch (o.kind) {
@@ -109,7 +119,7 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
     case 'rule':
       return [`access: ${o.rule?.action ?? 'rule'}`];
     case 'dns':
-      return ['DNS fault'];
+      return o.dns ? dnsChips(o.dns) : ['DNS fault'];
     case 'tls':
       return ['TLS case'];
     case 'dhcp':

@@ -171,7 +171,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
             <option value="uplink">Uplink (Internet)</option>
             <option value="network">A network</option>
             <option value="cidr">An address or prefix</option>
-            <option value="hostname">A host name</option>
+            <option value="hostname">A host name (DNS-derived)</option>
           </select>
           <template v-if="r.destKind === 'uplink'"><span class="self-center text-[13px] text-text-2">everything behind the uplink</span></template>
           <select v-else-if="r.destKind === 'network'" v-model="r.destination" class="input" :aria-label="`Network of allowed destination ${i + 1}`">

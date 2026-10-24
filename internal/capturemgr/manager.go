@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,6 +96,9 @@ type Config struct {
 	Dir     string
 	Opener  Opener
 	Gateway Gateway
+	// HostAddrs returns the addresses the gateway's DNS answered for the names a host selector matches (a capture whose
+	// selector names a host captures the traffic to them); nil resolves no host.
+	HostAddrs func(pattern string) []netip.Addr
 	// Namespace is the network namespace of the interfaces (the testbed's gateway namespace); empty in production, where
 	// the executor captures in its own.
 	Namespace string
@@ -311,7 +315,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (model.Capture, e
 	if snap == nil || snap.Config == nil {
 		return model.Capture{}, engine.ErrNoConfiguration
 	}
-	plan, err := Resolve(snap, req.Scope)
+	plan, err := ResolveWith(snap, req.Scope, m.cfg.HostAddrs)
 	if err != nil {
 		return model.Capture{}, err
 	}

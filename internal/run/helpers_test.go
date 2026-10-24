@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,8 +337,10 @@ type fakeObserver struct {
 	// gw and stepCounters give the counter of the overlay that a step wrote, whatever its id
 	gw           *fakeGateway
 	stepCounters map[string]*model.Counter
-	flowErr      error
-	flowPolls    int
+	// answered are the names the gateway's DNS answered a client for an address ("client|addr" -> names)
+	answered  map[string][]string
+	flowErr   error
+	flowPolls int
 	// block, when set, holds every read of the connections until it is closed or the read is cancelled
 	block chan struct{}
 	// readDelay holds every read of the counters for that long on the fake clock (a slow executor)
@@ -402,6 +405,22 @@ func (o *fakeObserver) DNSQueries(devices []string, name string, since time.Time
 		}
 	}
 	return out
+}
+
+// answer records that the gateway's DNS answered the client the address for the names.
+func (o *fakeObserver) answer(client, addr string, names ...string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.answered == nil {
+		o.answered = map[string][]string{}
+	}
+	o.answered[client+"|"+addr] = append(o.answered[client+"|"+addr], names...)
+}
+
+func (o *fakeObserver) HostNames(client, addr netip.Addr) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.answered[client.String()+"|"+addr.String()]...)
 }
 
 func (o *fakeObserver) DNSClientSeen(device string) bool {

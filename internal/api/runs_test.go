@@ -357,12 +357,6 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	if r := g.postRun(tls, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
 		t.Errorf("a TLS check: %d %s", r.Status, r.Body)
 	}
-	named := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
-	named["inline"].(map[string]any)["checks"] = []any{map[string]any{
-		"reconnected": map[string]any{"destination": map[string]any{"hostname": "broker.example.com"}}, "window": map[string]any{"from": "a", "within": "30s"}}}
-	if r := g.postRun(named, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
-		t.Errorf("a check for a host name: %d %s", r.Status, r.Body)
-	}
 	tlsStep := inlineRun("t", iotTarget, step("a", "0s", "tls", map[string]any{"case": "expired"}))
 	if r := g.postRun(tlsStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
 		t.Errorf("tls: %d %s", r.Status, r.Body)

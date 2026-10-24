@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Device, DeviceView, DhcpLease } from '../api/generated/model';
-import { leaseDevice, leaseReserved, leaseTarget, reservationRows } from './reservations';
+import { leaseDevice, leaseReserved, leaseTarget, reservationRows, undoReservation } from './reservations';
 
 const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
 const TEST = '2c9b8e7f-6a54-4e2f-9d1c-8b3a4f6ea1d7';
@@ -63,6 +63,45 @@ describe('reservationRows', () => {
 
   it('a reservation not applied yet whose address another MAC holds is a conflict', () => {
     expect(reservationRows(IOT, {}, { [ESP]: esp }, [lease('10.10.0.42', OTHER)])[0]).toMatchObject({ mark: 'NEW', status: 'conflict' });
+  });
+});
+
+describe('undoReservation', () => {
+  const rows = (base: Record<string, Device>, id: string, now: Device | null) => {
+    const undone = undoReservation(IOT, base[id], now);
+    return reservationRows(IOT, base, undone === null ? {} : { [id]: undone }).filter((r) => r.id === id);
+  };
+
+  it('restores the fixed IP and the MAC order of the base and keeps the other edits', () => {
+    const base = { ...esp, identifiers: { macs: [MAC, CAM_MAC] } };
+    const now: Device = { ...base, name: 'renamed', labels: ['lab'], fixed_ip: '10.10.0.43', identifiers: { macs: [OTHER, CAM_MAC, MAC] } };
+    // the MAC the draft added stays, the base's first MAC is first again
+    expect(undoReservation(IOT, base, now)).toEqual({ ...now, fixed_ip: '10.10.0.42', identifiers: { macs: [MAC, OTHER, CAM_MAC] } });
+    expect(rows({ [ESP]: base }, ESP, now).map((r) => [r.ip, r.mark])).toEqual([['10.10.0.42', undefined]]);
+    // a fixed IP the draft removed comes back; so does the base's first MAC when the draft took it away
+    const { fixed_ip: _f, ...without } = esp;
+    expect(undoReservation(IOT, esp, { ...without, name: 'renamed', identifiers: { macs: [OTHER] } })).toEqual({ ...esp, name: 'renamed', identifiers: { macs: [MAC, OTHER] } });
+  });
+
+  it('a device the draft moved away from the network comes back to it with its fixed IP', () => {
+    expect(undoReservation(IOT, esp, { ...esp, name: 'moved', network: TEST, fixed_ip: '10.20.0.5' })).toEqual({ ...esp, name: 'moved' });
+  });
+
+  it('a reservation the base does not have in the network loses only its fixed IP', () => {
+    // adopted in the draft: stays adopted
+    const adopted: Device = { name: 'Thermostat-A', identifiers: { macs: [OTHER] }, network: IOT, fixed_ip: '10.10.0.133' };
+    expect(undoReservation(IOT, undefined, adopted)).toEqual({ name: 'Thermostat-A', identifiers: { macs: [OTHER] }, network: IOT });
+    expect(rows({}, ESP, adopted)).toEqual([]);
+    // no fixed IP in the base: the MAC order of the base comes back with it (the reservation put a MAC first)
+    const now: Device = { ...cam, name: 'renamed', identifiers: { macs: [OTHER, CAM_MAC] }, fixed_ip: '10.10.0.7' };
+    expect(undoReservation(IOT, cam, now)).toEqual({ ...cam, name: 'renamed', identifiers: { macs: [CAM_MAC, OTHER] } });
+    // moved here from a network where it had one: stays moved, without a fixed IP
+    expect(undoReservation(IOT, { ...esp, network: TEST, fixed_ip: '10.20.0.5' }, { ...esp, name: 'moved' })).toEqual({ name: 'moved', identifiers: { macs: [MAC] }, network: IOT });
+  });
+
+  it('a device the draft deletes comes back as the base has it', () => {
+    expect(undoReservation(IOT, esp, null)).toEqual(esp);
+    expect(undoReservation(IOT, undefined, null)).toBeNull();
   });
 });
 

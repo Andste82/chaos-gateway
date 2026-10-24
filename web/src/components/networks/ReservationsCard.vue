@@ -3,13 +3,14 @@
 // the devices with a fixed IP in it as the draft has them, with MAC, address, device and status (active:
 // the device holds a lease on the address; pending: not applied yet, or the device has not renewed its
 // lease yet; conflict: the address is leased to another MAC). A reservation the draft adds, changes or
-// takes away is marked NEW, CHANGED or DELETED until it is applied, and Undo takes the device's edit back.
+// takes away is marked NEW, CHANGED or DELETED until it is applied, and Undo takes back only the reservation
+// (the fixed IP and the MAC order) and keeps the device's other edits, an adoption or a new name (#97).
 // Edit opens the device dialog.
 import { computed, nextTick, ref } from 'vue';
 import type { DeviceView, NetworkView } from '../../api/generated/model';
 import { useDevices, useLeases } from '../../composables/gateway';
 import { refocusAfterSwap } from '../../lib/focus';
-import { reservationRows, type ReservationRow, type ReservationStatus } from '../../lib/reservations';
+import { reservationRows, undoReservation, type ReservationRow, type ReservationStatus } from '../../lib/reservations';
 import { useDraftStore } from '../../stores/draft';
 import DeviceDialog from '../devices/DeviceDialog.vue';
 import EmptyState from '../ui/EmptyState.vue';
@@ -29,7 +30,7 @@ function view(r: ReservationRow): DeviceView | undefined {
   return devices.data.value?.find((d) => d.id === r.id);
 }
 function undo(r: ReservationRow) {
-  draft.setDevice(r.id, draft.baseConfig?.devices?.[r.id] ?? null);
+  draft.setDevice(r.id, undoReservation(props.network.id, draft.baseConfig?.devices?.[r.id], draft.devices[r.id]));
 }
 
 const editOpen = ref(false);
@@ -89,7 +90,7 @@ async function edit(d: DeviceView) {
                 v-if="r.mark"
                 type="button"
                 class="btn btn-sm"
-                :aria-label="`Undo the changes of ${r.device.name}`"
+                :aria-label="`Undo the reservation change of ${r.device.name}`"
                 @click="
                   refocusAfterSwap($event);
                   undo(r);

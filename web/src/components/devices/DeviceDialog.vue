@@ -23,6 +23,7 @@ import {
   draftDevices,
   fixedIpHints,
   formFromDevice,
+  warningHint,
   type DeviceField,
   type DeviceForm,
   type DeviceFormContext,
@@ -246,7 +247,7 @@ const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
           <li
             v-for="h in hints"
             :key="h.kind"
-            :class="h.kind === 'pool' || h.kind === 'leased' || h.kind === 'dhcp_off' ? 'text-fault-text' : ''"
+            :class="warningHint(h.kind) ? 'text-fault-text' : ''"
             data-testid="fixed-ip-hint"
             :data-hint="h.kind"
           >

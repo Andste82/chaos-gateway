@@ -80,7 +80,7 @@ test('Reserve on the lease of a discovered device: the adopt dialog with "Keep t
   await expect(dialog.getByRole('checkbox', { name: 'Keep this address (DHCP reservation)' })).toBeChecked();
   await expect(dialog.getByLabel('Fixed IP (DHCP reservation)')).toHaveValue('10.10.0.133');
   // in the pool: allowed, a note (decision on #76)
-  await expect(dialog.locator('[data-hint="pool"]')).toContainText('10.10.0.133 lies in the DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it');
+  await expect(dialog.locator('[data-hint="pool"]')).toContainText('10.10.0.133 lies in the default DHCP pool 10.10.0.128–10.10.0.254 of IoT. The gateway allows it');
   await expect(dialog.locator('[data-hint="kept"]')).toBeVisible();
   await expect(dialog.getByTestId('adopt-preview')).toContainText(`with MAC ${DEV_MAC} in network IoT and always gets 10.10.0.133 from DHCP`);
   await expect(dialog.getByLabel('Name')).toHaveValue('thermostat-a');

@@ -19,7 +19,7 @@ import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions
 import type { Device, DeviceView, DhcpLease } from '../../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../../api/generated/zod/system/system';
 import { useActiveConfig, useGatewayState, useLeases } from '../../composables/gateway';
-import { adoptReservation, draftDevices, fixedIpError, fixedIpHints, reservationMacs, type ReservationContext } from '../../lib/deviceForm';
+import { adoptReservation, draftDevices, fixedIpError, fixedIpHints, reservationMacs, warningHint, type ReservationContext } from '../../lib/deviceForm';
 import { useDraftStore } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
 
@@ -150,7 +150,7 @@ async function adopt() {
             <li
               v-for="h in hints"
               :key="h.kind"
-              :class="h.kind === 'pool' || h.kind === 'leased' || h.kind === 'dhcp_off' ? 'text-fault-text' : ''"
+              :class="warningHint(h.kind) ? 'text-fault-text' : ''"
               data-testid="fixed-ip-hint"
               :data-hint="h.kind"
             >

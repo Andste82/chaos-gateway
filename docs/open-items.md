@@ -399,7 +399,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M0: DNS proxy at least 1000 queries/s on Pi | H1 |
 | M0: scenario step timing on real hardware | H1, M15 |
 | M0: S7 coexistence with netplan, NetworkManager, systemd-networkd | M28 (no explicit test named: add one to the M28 tests) |
-| M0: S4 TLS 1.2 vs 1.3, connection reuse, control from the core | M21, M22 |
+| M0: S4 TLS 1.2 vs 1.3, connection reuse, control from the core — **done in M21 for the certificate and handshake cases** (both versions in the tests of the responder and of the real kernel; only new connections are selected, an established one stays with its server unless `cut_existing`; the responder is controlled by the API's configuration and decisions); what is left is interception (M22) | M22 |
 | M0: IPv6 never spiked | M32 |
 | ~~M0: persistent nft session for DNS-derived sets (DNS over TCP is done in M6b)~~ — done in M20 | M20 |
 | M0: `image.yml` has never run (ghcr push, release tags) | M28 |
@@ -2473,5 +2473,18 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`.
 - Options: (a) leave it: the API, the clients and scenario files are the way to make TLS cases, the UI shows them; (b) a TLS kind in the "Add fault" dialog and the step dialog, a "Download the test CA" button, with Playwright tests, and `chaosctl tls` flags (one form for the DNS, TLS and DHCP kinds, as P5-M20-02 recommends, so the dialog gets its application-layer kinds once).
 - Recommendation: (b), together with the DNS form of P5-M20-02.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
+- Needs maintainer: yes
+- Effort: M
+
+### P5-M21-02 A connection that no TLS case decides reaches only servers behind the uplink
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Plan §2.8: a connection that the kernel selected and no case decides (a server name no case names, a shared CDN address) is passed on to its destination unchanged, and only if the gateway would have forwarded it. The responder terminates the connection, so the pass-through is a second connection that starts in the service namespace and leaves it through `svc0`; the forward chain accepts that path towards the uplink only (`serviceForward`, `internal/compiler/service.go`) and the namespace is masqueraded there, as for the DNS proxy's upstream queries. A server in another test network or behind a WireGuard link is not reached: the device sees a reset, where the gateway would have forwarded the connection. It matters when a case selects traffic that is wider than its server names (no destination, so every server on port 443 or 8883) and a device talks to a server of that kind inside the test setup. Reaching those servers means accepting the namespace's connections towards the test networks and tunnels in the forward chain (after the access rules and the matrix, which judge the original connection as for the uplink, `AccessDecision`) and a decision on the source address the server sees (the namespace's, which the server answers through the gateway because the gateway routes `169.254.100.0/30`, or the device's, which needs a TPROXY-like path); the plan weighed neither. M21 resets what it cannot pass on instead of choosing one.
+- Evidence: `docs/development.md` "TLS responder: certificate cases (M21)", decision 4; `compiler.Target.serviceForward`; `engine.TLSDecision.Passthrough`; `TestAConnectionNoCaseDecidesAndTheGatewayWouldNotForwardIsResetNotPassedThrough`.
+- Task: decide whether a pass-through has to reach every destination the gateway forwards to, or only the uplink (a case that must not touch other servers names its destination, which the kernel then selects exactly).
+- Options: (a) leave it: pass-through reaches the uplink only, a case with a destination or with the server's network in it does not touch other servers; (b) accept the namespace towards the test networks and the tunnels, the server sees the namespace's address; (c) (b) with the device's address as the source, which needs a transparent path from the namespace and a level 1 test of it.
+- Recommendation: (a) for V1, (b) when a user needs a case with a wide selection next to servers inside the test setup.
+- Acceptance: the plan states which destinations a pass-through reaches, and a level 1 test pins it.
 - Needs maintainer: yes
 - Effort: M

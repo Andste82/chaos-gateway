@@ -101,6 +101,30 @@ export function reservationMacs(macs: string[], leaseMac: string | undefined): s
 }
 
 /**
+ * A lease's MAC that is not among the device's MACs (#98: the gateway names the device of a lease by its
+ * address, say): undefined when the device has it. Reserving the lease for the device's first MAC would
+ * reserve it for a MAC that does not hold it, so the device dialog offers to add this one first.
+ */
+export function foreignLeaseMac(macs: string[], leaseMac: string | undefined): string | undefined {
+  if (!leaseMac) return undefined;
+  const lower = leaseMac.toLowerCase();
+  return macs.some((m) => m.toLowerCase() === lower) ? undefined : leaseMac;
+}
+
+/** The device with a MAC added as its first (decision on #98: the reservation is for the first MAC). */
+export function withFirstMac(d: Device, mac: string): Device {
+  const lower = mac.toLowerCase();
+  const rest = (d.identifiers?.macs ?? []).filter((m) => m.toLowerCase() !== lower);
+  return { ...d, identifiers: { ...d.identifiers, macs: [mac, ...rest] } };
+}
+
+/** The other device that a MAC identifies already, as the draft has the devices (a MAC identifies one device). */
+export function macOwner(mac: string, self: string | undefined, devices: Record<string, Device>): Device | undefined {
+  const lower = mac.toLowerCase();
+  return Object.entries(devices).find(([id, d]) => id !== self && d.identifiers?.macs?.some((m) => m.toLowerCase() === lower))?.[1];
+}
+
+/**
  * The notes on a fixed IP that the gateway accepts (call it for an address without `fixedIpError`):
  * in the dynamic pool, leased to another client now or held by the device with another of its MACs,
  * DHCP off, when it takes effect, the MAC it is for.

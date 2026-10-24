@@ -205,3 +205,76 @@ test('Undo on the reservation of a device renamed in the draft keeps its new nam
   await expect(page.getByRole('dialog', { name: /^Preview revision/ }).getByTestId('preview-changes')).toContainText('device ESP32-kitchen changed');
   expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({ [ESP]: { name: 'ESP32-kitchen' } });
 });
+
+// #98: a lease the gateway assigns to a configured device whose MACs do not include the lease's (here by
+// the device's address) is reserved for the device's first MAC; the device dialog says so and offers to
+// add the lease's MAC to the device first, checked (decision on #98).
+const FOREIGN = '02:00:00:00:00:99';
+function foreignLease(gw: MockGateway) {
+  gw.leases[IOT]!.push({ ip: '10.10.0.60', mac: FOREIGN, network: IOT, device: ESP, expires_at: new Date(Date.now() + 40 * 60_000).toISOString(), state: 'active' });
+}
+
+test('Reserve on a lease whose MAC the device does not have: the dialog adds the MAC first, and the reservation holds for it', async ({ page }) => {
+  const gw = lab();
+  foreignLease(gw);
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: `Reserve 10.10.0.60 for ${FOREIGN}` }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit ESP32-42' });
+  await expect(dialog.getByLabel('Fixed IP (DHCP reservation)')).toHaveValue('10.10.0.60');
+  const offer = dialog.getByTestId('reserve-mac');
+  await expect(offer).toContainText(`The lease of 10.10.0.60 is held by MAC ${FOREIGN}, which is not among the device's MACs (${MAC}). A DHCP reservation is for the device's first MAC.`);
+  await expect(offer.getByRole('checkbox', { name: `Add ${FOREIGN} to the device as its first MAC` })).toBeChecked();
+  await expect(offer.getByTestId('reserve-mac-effect')).toHaveText(`The reservation is for ${FOREIGN}, the MAC that holds the lease; the device keeps ${MAC} as its other MAC.`);
+  await expect(dialog.locator('[data-hint="kept"]')).toHaveText('The device has 10.10.0.60 from its current lease and keeps it; from now on the address is reserved for it.');
+  await expect(dialog.locator('[data-hint="leased"]')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(dialog).toBeHidden();
+
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  await expect(drawer.getByTestId('preview-changes')).toContainText('device ESP32-42 changed');
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
+    [ESP]: { identifiers: { macs: [FOREIGN, MAC] }, fixed_ip: '10.10.0.60' },
+  });
+  await drawer.getByRole('button', { name: /^Apply revision/ }).click();
+  await expect(leaseRow(page, '10.10.0.60').getByTestId('lease-reserved')).toHaveText('reserved');
+  expect(gw.config.devices?.[ESP]).toMatchObject({ identifiers: { macs: [FOREIGN, MAC] }, fixed_ip: '10.10.0.60' });
+  await expect(reservationRow(page, '10.10.0.60')).toContainText(FOREIGN);
+  await expect(reservationRow(page, '10.10.0.60').getByTestId('reservation-status')).toHaveText('active');
+});
+
+test('Reserve on a lease whose MAC the device does not have, the offer declined: the reservation stays on the first MAC, and the dialog says it may not apply', async ({ page }) => {
+  const gw = lab();
+  foreignLease(gw);
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: `Reserve 10.10.0.60 for ${FOREIGN}` }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit ESP32-42' });
+  const offer = dialog.getByTestId('reserve-mac');
+  await offer.getByRole('checkbox', { name: `Add ${FOREIGN} to the device as its first MAC` }).uncheck();
+  await expect(offer.getByTestId('reserve-mac-effect')).toHaveText(
+    `The reservation is for ${MAC}, which does not hold this lease: it takes effect only when the device asks for an address with that MAC.`,
+  );
+  await expect(dialog.locator('[data-hint="first_mac"]')).toHaveText(`The reservation is for the device's MAC ${MAC}.`);
+  await expect(dialog.locator('[data-hint="leased"]')).toContainText(`10.10.0.60 is leased to ${FOREIGN} now`);
+  await expect(dialog.locator('[data-hint="kept"]')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(dialog).toBeHidden();
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({ [ESP]: { fixed_ip: '10.10.0.60' } });
+  await page.getByRole('dialog', { name: 'Preview revision 43' }).getByRole('button', { name: 'Close' }).click();
+  await expect(reservationRow(page, '10.10.0.60')).toContainText(MAC);
+  await expect(reservationRow(page, '10.10.0.60').getByTestId('reservation-mark')).toHaveText('NEW');
+});
+
+test('Reserve on a lease whose MAC identifies another device: no offer, the dialog says why', async ({ page }) => {
+  const gw = lab({ [ESP]: { name: 'ESP32-42', macs: [MAC] }, [SENSOR7]: { name: 'Sensor-07', macs: [FOREIGN] } });
+  foreignLease(gw);
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: `Reserve 10.10.0.60 for ${FOREIGN}` }).click();
+  const offer = page.getByRole('dialog', { name: 'Edit ESP32-42' }).getByTestId('reserve-mac');
+  await expect(offer.getByRole('checkbox')).toHaveCount(0);
+  await expect(offer.getByTestId('reserve-mac-effect')).toHaveText(
+    `${FOREIGN} already identifies device Sensor-07, so it cannot be added to this one: the reservation is for ${MAC}, which does not hold this lease.`,
+  );
+});

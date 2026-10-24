@@ -6,7 +6,8 @@
 // this address" checked (#74), for a configured device the device dialog with the lease's address as its
 // fixed IP (#73); a lease whose MAC the gateway names no device for goes to the discovered device with
 // that MAC. Both put the lease's MAC first, since the reservation is for the device's first MAC (decision
-// on #77). A lease whose address is the fixed IP of its device is marked "reserved".
+// on #77); for a lease whose MAC is not among its device's MACs the device dialog offers to add it first
+// (decision on #98). A lease whose address is the fixed IP of its device is marked "reserved".
 import { computed, nextTick, ref } from 'vue';
 import type { DeviceView, DhcpLease, NetworkView } from '../../api/generated/model';
 import { firstError, useDevices, useLeases } from '../../composables/gateway';

@@ -32,8 +32,8 @@ const waitPoll = 250 * time.Millisecond
 // The step types and check types this build runs (GET /capabilities). The others arrive with the
 // milestones of Unsupported.
 var (
-	SupportedStepTypes  = []string{"profile", "fault", "rule", "dns", "wireguard", "capture", "wait", "remove", "restore"}
-	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen"}
+	SupportedStepTypes  = []string{"profile", "fault", "rule", "dns", "tls", "wireguard", "capture", "wait", "remove", "restore"}
+	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted"}
 )
 
 var (
@@ -117,6 +117,20 @@ type DNSQuery struct {
 	Time               time.Time
 }
 
+// TLSHandshake is a handshake of a device that the gateway's TLS responder reported (plan §2.8).
+type TLSHandshake struct {
+	// Device is the device's UUID; Client its address and Dst the destination it meant (the original destination).
+	Device string
+	Client netip.Addr
+	Dst    netip.AddrPort
+	// SNI is the server name of the ClientHello ("" without one), Case the case that decided the connection.
+	SNI, Case string
+	// Outcome is the report's: rejected, accepted, client_closed, timeout, reset_sent, close_sent or stalled; Alert the
+	// alert the device sent, if it did.
+	Outcome, Alert string
+	Time           time.Time
+}
+
 // Observer is what the runs read of what the gateway sees besides the snapshot: the connections for
 // `wait` steps and checks, the DNS log for the baseline, for `dns_query` waits and for `dns_query_seen`
 // checks, and the counters of overlays for the report and the zero-hit warnings.
@@ -131,6 +145,9 @@ type Observer interface {
 	DNSQueries(devices []string, name string, since time.Time) []DNSQuery
 	// DNSClientSeen reports whether the device has asked the gateway's DNS proxy for anything.
 	DNSClientSeen(device string) bool
+	// TLSHandshakes returns the handshakes of the devices (UUIDs) with the gateway's TLS responder at or after the time,
+	// oldest first.
+	TLSHandshakes(devices []string, since time.Time) []TLSHandshake
 	// HostNames returns the names the client was answered for the address by the gateway's DNS proxy (the name
 	// asked and the CNAME targets of the answer): what a destination that names a host matches.
 	HostNames(client, addr netip.Addr) []string

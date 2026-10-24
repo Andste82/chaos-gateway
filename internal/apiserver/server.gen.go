@@ -117,6 +117,9 @@ type ServerInterface interface {
 	// PostTlsHandshakes Handshake outcomes seen by the TLS responder or proxy
 	// (POST /internal/tls/handshakes)
 	PostTlsHandshakes(c *gin.Context)
+	// ResolveTlsConnection The case that decides a connection the TLS responder holds, and the name to certify
+	// (POST /internal/tls/resolve)
+	ResolveTlsConnection(c *gin.Context)
 	// GetMetrics Prometheus metrics
 	// (GET /metrics)
 	GetMetrics(c *gin.Context)
@@ -1301,6 +1304,19 @@ func (siw *ServerInterfaceWrapper) PostTlsHandshakes(c *gin.Context) {
 	}
 
 	siw.Handler.PostTlsHandshakes(c)
+}
+
+// ResolveTlsConnection operation middleware
+func (siw *ServerInterfaceWrapper) ResolveTlsConnection(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ResolveTlsConnection(c)
 }
 
 // GetMetrics operation middleware
@@ -3475,6 +3491,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/internal/dns/resolutions", wrapper.PostDnsResolutions)
 	router.POST(options.BaseURL+"/internal/dns/queries", wrapper.PostDnsQueries)
 	router.GET(options.BaseURL+"/internal/tls/config", wrapper.GetTlsServiceConfig)
+	router.POST(options.BaseURL+"/internal/tls/resolve", wrapper.ResolveTlsConnection)
 	router.POST(options.BaseURL+"/internal/tls/handshakes", wrapper.PostTlsHandshakes)
 	router.GET(options.BaseURL+"/events", wrapper.StreamEvents)
 	router.GET(options.BaseURL+"/metrics", wrapper.GetMetrics)
@@ -4794,6 +4811,45 @@ type PostTlsHandshakesdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response PostTlsHandshakesdefaultApplicationProblemPlusJSONResponse) VisitPostTlsHandshakesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveTlsConnectionRequestObject struct {
+	Body *ResolveTlsConnectionJSONRequestBody
+}
+
+type ResolveTlsConnectionResponseObject interface {
+	VisitResolveTlsConnectionResponse(w http.ResponseWriter) error
+}
+
+type ResolveTlsConnection200JSONResponse TlsResolveResponse
+
+func (response ResolveTlsConnection200JSONResponse) VisitResolveTlsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveTlsConnectiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ResolveTlsConnectiondefaultApplicationProblemPlusJSONResponse) VisitResolveTlsConnectionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7498,8 +7554,13 @@ type GetTestCaResponseObject interface {
 	VisitGetTestCaResponse(w http.ResponseWriter) error
 }
 
+type GetTestCa200ResponseHeaders struct {
+	ContentDisposition *string
+}
+
 type GetTestCa200ApplicationxPemFileResponse struct {
 	Body          io.Reader
+	Headers       GetTestCa200ResponseHeaders
 	ContentLength int64
 }
 
@@ -7508,6 +7569,9 @@ func (response GetTestCa200ApplicationxPemFileResponse) VisitGetTestCaResponse(w
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	if response.ContentLength != 0 {
 		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.ContentDisposition != nil {
+		w.Header().Set("Content-Disposition", fmt.Sprint(*response.Headers.ContentDisposition))
 	}
 	w.WriteHeader(200)
 
@@ -7765,6 +7829,9 @@ type StrictServerInterface interface {
 	// PostTlsHandshakes Handshake outcomes seen by the TLS responder or proxy
 	// (POST /internal/tls/handshakes)
 	PostTlsHandshakes(ctx context.Context, request PostTlsHandshakesRequestObject) (PostTlsHandshakesResponseObject, error)
+	// ResolveTlsConnection The case that decides a connection the TLS responder holds, and the name to certify
+	// (POST /internal/tls/resolve)
+	ResolveTlsConnection(ctx context.Context, request ResolveTlsConnectionRequestObject) (ResolveTlsConnectionResponseObject, error)
 	// GetMetrics Prometheus metrics
 	// (GET /metrics)
 	GetMetrics(ctx context.Context, request GetMetricsRequestObject) (GetMetricsResponseObject, error)
@@ -8889,6 +8956,37 @@ func (sh *strictHandler) PostTlsHandshakes(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(PostTlsHandshakesResponseObject); ok {
 		if err := validResponse.VisitPostTlsHandshakesResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveTlsConnection operation middleware
+func (sh *strictHandler) ResolveTlsConnection(ctx *gin.Context) {
+	var request ResolveTlsConnectionRequestObject
+
+	var body ResolveTlsConnectionJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(ctx, err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveTlsConnection(ctx, request.(ResolveTlsConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveTlsConnection")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ResolveTlsConnectionResponseObject); ok {
+		if err := validResponse.VisitResolveTlsConnectionResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

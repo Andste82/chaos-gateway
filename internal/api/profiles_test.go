@@ -30,7 +30,7 @@ func profileItems(t *testing.T, g *gw) map[string]map[string]any {
 	return out
 }
 
-func TestTheProfileCatalogueListsTheBuiltInProfilesAndMarksTheUnavailableOnes(t *testing.T) {
+func TestTheProfileCatalogueListsTheBuiltInProfilesAndAllOfThemAreAvailable(t *testing.T) {
 	g := ready(t)
 	items := profileItems(t, g)
 	for _, name := range []string{"normal", "lte", "bad-lte", "satellite", "congested-wifi", "offline", "intermittent", "dns-broken", "tls-broken"} {
@@ -38,11 +38,11 @@ func TestTheProfileCatalogueListsTheBuiltInProfilesAndMarksTheUnavailableOnes(t 
 		if !ok {
 			t.Fatalf("%s is not listed: %v", name, items)
 		}
-		later := name == "tls-broken"
-		if it["builtin"] != true || it["available"] == later {
+		// "DNS broken" is usable since M20 and "TLS broken" since M21: none is unavailable any more
+		if it["builtin"] != true || it["available"] != true {
 			t.Errorf("%s: %v", name, it)
 		}
-		if reason, _ := it["unavailable_reason"].(string); later != (reason != "") || (later && !strings.Contains(reason, "M21")) {
+		if reason, _ := it["unavailable_reason"].(string); reason != "" {
 			t.Errorf("%s: unavailable_reason %q", name, reason)
 		}
 	}
@@ -153,9 +153,10 @@ func TestACustomProfileIsCreatedChangedAndDeletedWithRevisions(t *testing.T) {
 }
 
 // A profile with a part of a later milestone can be defined and is listed as unavailable; activating it is
-// refused with the milestone. A dns part is available since M20 (P2-M11-01): the profile is listed as
-// available and activates.
-func TestACustomProfileWithATLSPartIsStoredButCannotBeActivatedAndOneWithADNSPartCan(t *testing.T) {
+// refused with the milestone. A dns part is available since M20 and a tls part with a certificate or handshake case since
+// M21 (P2-M11-01): such a profile is listed as available and activates; a tls part with the case intercept
+// waits for M22.
+func TestACustomProfileWithAnInterceptPartIsStoredButCannotBeActivatedAndOneWithADNSOrTLSPartCan(t *testing.T) {
 	g := ready(t)
 	rev := g.mustPatch(map[string]any{"profiles": map[string]any{
 		pSlowNS: map[string]any{"name": "slow-dns-lte", "parts": map[string]any{
@@ -163,29 +164,37 @@ func TestACustomProfileWithATLSPartIsStoredButCannotBeActivatedAndOneWithADNSPar
 			"dns":        map[string]any{"action": "delay", "delay": "2s"},
 		}},
 		pGlitch: map[string]any{"name": "glitch", "parts": map[string]any{
-			"tls": map[string]any{"case": "expired"},
+			"tls": map[string]any{"case": "intercept"},
+		}},
+		pFlaky: map[string]any{"name": "expiring", "parts": map[string]any{
+			"impairment": map[string]any{"latency": "50ms"},
+			"tls":        map[string]any{"case": "expired", "ports": []int{8883}},
 		}},
 	}})
 	if r := g.apply(rev); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	items := profileItems(t, g)
-	if it := items["slow-dns-lte"]; it["available"] != true {
-		t.Errorf("%v", it)
+	for _, name := range []string{"slow-dns-lte", "expiring"} {
+		if it := items[name]; it["available"] != true {
+			t.Errorf("%s: %v", name, it)
+		}
 	}
 	it := items["glitch"]
-	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M21") {
+	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M22") {
 		t.Errorf("%v", it)
 	}
 	r := g.createOverlay(`{"target":{"network":"IoT"},"profile":"glitch"}`)
-	if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(r.json(t)["detail"].(string), "M21") {
+	if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(r.json(t)["detail"].(string), "M22") {
 		t.Errorf("%d %s", r.Status, r.Body)
 	}
 	if n := len(g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)); n != 0 {
 		t.Errorf("%d overlays", n)
 	}
-	if r := g.createOverlay(`{"target":{"network":"IoT"},"profile":"slow-dns-lte"}`); r.Status != 201 {
-		t.Errorf("%d %s", r.Status, r.Body)
+	for _, name := range []string{"slow-dns-lte", "expiring", "tls-broken"} {
+		if r := g.createOverlay(`{"target":{"network":"IoT"},"profile":"` + name + `"}`); r.Status != 201 && r.Status != 200 { // the same target: 200 replaces
+			t.Errorf("%s: %d %s", name, r.Status, r.Body)
+		}
 	}
 }
 
@@ -361,10 +370,10 @@ func TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences(t *testing.T)
 	}
 }
 
-// A revision that gives an activated profile a tls part is refused when it is applied, with
+// A revision that gives an activated profile a tls part with the case intercept is refused when it is applied, with
 // unsupported_feature, the profile and the milestone, and nothing changes. The preview says the same. Without the
-// activation the revision is accepted (P2-M11-05). A dns part is not refused (M20).
-func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefusedOverTheAPI(t *testing.T) {
+// activation the revision is accepted (P2-M11-05). A dns part is not refused (M20), nor is a certificate case (M21).
+func TestARevisionThatAddsAnInterceptPartToAnActivatedProfileIsRefusedOverTheAPI(t *testing.T) {
 	g := ready(t)
 	flaky := func(parts map[string]any) map[string]any {
 		return map[string]any{"profiles": map[string]any{pFlaky: map[string]any{"name": "flaky", "parts": parts}}}
@@ -381,14 +390,18 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefusedOverTheAPI(t *tes
 	if r := g.apply(g.mustPatch(withDNS)); r.Status != 200 {
 		t.Fatalf("a dns part is available since M20: %d %s", r.Status, r.Body)
 	}
-	withTLS := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": map[string]any{"case": "expired"}})
+	withCert := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": map[string]any{"case": "expired"}})
+	if r := g.apply(g.mustPatch(withCert)); r.Status != 200 {
+		t.Fatalf("a certificate case is available since M21: %d %s", r.Status, r.Body)
+	}
+	withTLS := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": map[string]any{"case": "intercept"}})
 	rev := g.mustPatch(withTLS)
 	for _, path := range []string{"/revisions/" + itoa(rev) + "/preview", "/revisions/" + itoa(rev) + "/apply", "/revisions/" + itoa(rev) + "/apply?force=true"} {
 		r := g.do("POST", path, nil, nil, nil)
 		if r.Status != 422 || r.code(t) != "unsupported_feature" {
 			t.Fatalf("%s: %d %s", path, r.Status, r.Body)
 		}
-		if d := r.json(t)["detail"].(string); !strings.Contains(d, "flaky") || !strings.Contains(d, "M21") {
+		if d := r.json(t)["detail"].(string); !strings.Contains(d, "flaky") || !strings.Contains(d, "M22") {
 			t.Errorf("%s: the detail does not name the profile and the milestone: %s", path, d)
 		}
 	}
@@ -409,7 +422,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefusedOverTheAPI(t *tes
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	it = profileItems(t, g)["flaky"]
-	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M21") {
+	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M22") {
 		t.Errorf("%v", it)
 	}
 }

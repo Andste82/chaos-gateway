@@ -121,7 +121,7 @@ func specOps(t *testing.T) (m5, later []struct {
 				Method, Path, Milestone string
 				Internal                bool
 			}{m, path, o.Milestone, o.Internal}
-			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" || o.Milestone == "M9" || o.Milestone == "M11" || o.Milestone == "M14" || o.Milestone == "M35a" || o.Milestone == "M12" || o.Milestone == "M15" || o.Milestone == "M17" || o.Milestone == "M20" { // implemented in this build
+			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" || o.Milestone == "M9" || o.Milestone == "M11" || o.Milestone == "M14" || o.Milestone == "M35a" || o.Milestone == "M12" || o.Milestone == "M15" || o.Milestone == "M17" || o.Milestone == "M20" || o.Milestone == "M21" { // implemented in this build
 				m5 = append(m5, e)
 			} else {
 				later = append(later, e)
@@ -134,7 +134,7 @@ func specOps(t *testing.T) (m5, later []struct {
 func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 	g := ready(t)
 	_, later := specOps(t)
-	if len(later) < 10 { // 11 today (17 until M17 took six, 29 until M15 took twelve): one operation may move into a milestone, a bigger drop is a mistake
+	if len(later) < 7 { // 8 today (11 until M21 took the download of the test CA and the three operations of the TLS responder, 17 until M17 took six, 29 until M15 took twelve): one operation may move into a milestone, a bigger drop is a mistake
 		t.Fatalf("only %d operations of later milestones", len(later))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body
@@ -166,7 +166,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 87 { // 87 since M20 took the resolutions of the proxy, 86 since M17 added the six operations of the captures, 80 since M15 added the twelve operations of the scenarios and runs, 68 before; 62 until M14 added the rollback and the Linux state, 64 until P3-M14-03 added the Linux view of one object, 65 until M35a added the port forwards, 67 until issue #63 added the uplink traffic
+	if len(m5) != 91 { // 91 since M21 took the download of the test CA and the three operations of the TLS responder, 87 since M20 took the resolutions of the proxy, 86 since M17 added the six operations of the captures, 80 since M15 added the twelve operations of the scenarios and runs, 68 before; 62 until M14 added the rollback and the Linux state, 64 until P3-M14-03 added the Linux view of one object, 65 until M35a added the port forwards, 67 until issue #63 added the uplink traffic
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body
@@ -226,14 +226,14 @@ func TestSystemEndpoints(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	feats := fmt.Sprint(caps["features"])
-	for _, f := range []string{"networks.wireguard", "routing.bird", "networks.lan"} {
+	for _, f := range []string{"networks.wireguard", "routing.bird", "networks.lan", "tls.responder", "tls.cases"} {
 		if !strings.Contains(feats, f) {
 			t.Errorf("capability %s is missing: %v", f, feats)
 		}
 	}
 	// M8a: faults of the impairment family, M11: profile activations, M10: the mtu and tunnel families and the WireGuard actions, M9: access
-	// rules, M20: DNS faults; the other kinds follow with their milestones
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tunnel]" || caps["version"] != "test" {
+	// rules, M20: DNS faults, M21: TLS cases; the other kinds follow with their milestones
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls tunnel]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
 	}
 	// the limits of plan §3.3 (P2-AUDIT-15): 4095 fault ids, and the class limit of the architecture

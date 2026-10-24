@@ -272,8 +272,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs) and M20 (DNS faults and hostname selectors) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors) and M21 (the TLS responder: certificate cases) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {
@@ -406,6 +406,16 @@ func (s *Server) GetHealth(c *gin.Context) {
 		worse("degraded")
 	}
 	comps = append(comps, dns)
+	if snap.Service == nil {
+		comps = append(comps, healthComponent{Name: "tls", Status: "disabled"})
+	} else {
+		tlsc := healthComponent{Name: "tls", Status: "healthy"}
+		if last := s.tlsLastPoll(); last.IsZero() || s.clk.Now().Sub(last) > 60*time.Second {
+			tlsc.Status, tlsc.Detail = "degraded", "the TLS responder has not polled for its configuration in the last 60s"
+			worse("degraded")
+		}
+		comps = append(comps, tlsc)
+	}
 	if err := s.cfg.Audit.Err(); err != nil {
 		comps[0].Status, comps[0].Detail = "unhealthy", "the audit log cannot be written: "+firstLine(err.Error())
 		worse("unhealthy")

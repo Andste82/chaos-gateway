@@ -78,6 +78,10 @@ type Config struct {
 	CaptureQuota    int64
 	CaptureMinFree  float64
 	CaptureDiskFree func() (free, total uint64, err error)
+	// TLSCADir holds the two CAs of the TLS responder (M21): the API makes them at its start (tlsresponder.EnsureCAs)
+	// and serves the test CA's certificate from it (GET /tls/ca); the responder's container reads the directory,
+	// keys included. Empty for a deployment without one (the download answers `unavailable`).
+	TLSCADir string
 }
 
 // Server implements apiserver.ServerInterface.
@@ -91,6 +95,7 @@ type Server struct {
 	setupMu sync.Mutex
 	streams atomic.Int64
 	dns     dnsState
+	tls     tlsState
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
 	// endpoint must not give every caller its own round trip to the executor.
 	health healthProbeCache

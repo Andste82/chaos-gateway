@@ -40,3 +40,10 @@ func OSConfigCacheReadsOfALateCaller() int {
 	c.load(context.Background(), now, read)
 	return reads
 }
+
+// SetTLSPoll shortens the TLS configuration's long poll for tests and returns a function that restores it.
+func SetTLSPoll(wait, tick time.Duration) (restore func()) {
+	old := tlsPoll
+	tlsPoll.wait, tlsPoll.tick = wait, tick
+	return func() { tlsPoll = old }
+}

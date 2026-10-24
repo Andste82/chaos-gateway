@@ -635,12 +635,6 @@ func TestAStoredScenarioThatCapturesNeedsACaptureVolume(t *testing.T) {
 func TestStepTypesAndChecksOfLaterMilestonesAreRefused(t *testing.T) {
 	h := newHarness(t)
 	for name, tc := range map[string]struct{ yaml, milestone string }{
-		"tls check": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-checks: [{tls_rejected: {protocol: tcp, ports: [8883]}, window: {from: a, within: 30s}}]
-`, "M21"},
 		"capture flag": {`
 name: c
 target: {device: esp32-42}
@@ -652,11 +646,12 @@ name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
 `, ""},
-		"tls step": {`
+		"tls interception step": {`
 name: c
 target: {device: esp32-42}
-steps: [{id: a, at: 0s, tls: {case: untrusted_ca}}]
-`, "M21"},
+steps: [{id: a, at: 0s, tls: {case: intercept}}]
+`, "M22"},
+
 		"dhcp step": {`
 name: c
 target: {device: esp32-42}

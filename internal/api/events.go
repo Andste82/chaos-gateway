@@ -69,7 +69,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
 		model.EventTypeCaptureStarted, model.EventTypeCaptureStopped, model.EventTypeDiskLow,
-		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch,
+		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch, model.EventTypeTlsHandshake,
 	} {
 		m[string(t)] = true
 	}
@@ -199,6 +199,19 @@ func describe(ev engine.Event) string {
 		return "the volume of the captures has " + str("free_percent") + " % free space"
 	case "dns_fault_triggered":
 		return "DNS fault " + str("overlay") + " changed the answer to " + str("name") + " (" + str("rcode") + ")"
+	case "tls_handshake":
+		who := str("device_name")
+		if who == "" {
+			who = str("client")
+		}
+		msg := "TLS handshake of " + who + " to " + str("original_dst") + " (" + str("case") + "): " + str("outcome")
+		if a := str("alert"); a != "" {
+			msg += ", alert " + a
+		}
+		if v, ok := ev.Data["violation"].(bool); ok && v {
+			msg += ": the device took a certificate it must reject"
+		}
+		return msg
 	case "dns_set_epoch":
 		return "the DNS-derived set of " + str("pattern") + " was replaced: it starts empty"
 	case "network_degraded":

@@ -51,7 +51,7 @@ func TestTheAPIServerRunsFromSetupToPasswordReset(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- serveAPI(ctx, slog.New(slog.NewTextHandler(logs, nil)), logs, apiOptions{socket: sock, execUID: uint32(os.Getuid()), stateDir: filepath.Join(root, "state"),
-			secretsDir: secretsDir, dataDir: filepath.Join(root, "data"), port: port, listen: fmt.Sprintf("127.0.0.1:%d", port), poll: time.Second, confirm: 20 * time.Second})
+			secretsDir: secretsDir, dataDir: filepath.Join(root, "data"), tlsCADir: filepath.Join(root, "tlsca"), port: port, listen: fmt.Sprintf("127.0.0.1:%d", port), poll: time.Second, confirm: 20 * time.Second})
 	}()
 	defer func() {
 		cancel()
@@ -149,6 +149,23 @@ func TestTheAPIServerRunsFromSetupToPasswordReset(t *testing.T) {
 	// the TLS key stays private
 	if fi, err := os.Stat(filepath.Join(secretsDir, "tls", "key.pem")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("%v %v", fi, err)
+	}
+
+	// the CAs of the TLS responder were made at the start: the keys are private, and the test CA's certificate is the download
+	for name, mode := range map[string]os.FileMode{"test-ca.pem": 0o644, "test-ca.key": 0o600, "unknown-ca.pem": 0o644, "unknown-ca.key": 0o600} {
+		if fi, err := os.Stat(filepath.Join(root, "tlsca", name)); err != nil || fi.Mode().Perm() != mode {
+			t.Errorf("%s: %v %v", name, fi, err)
+		}
+	}
+	if res, err := client.Get(base + "/tls/ca"); err != nil {
+		t.Errorf("%v", err)
+	} else {
+		raw, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+		want, _ := os.ReadFile(filepath.Join(root, "tlsca", "test-ca.pem"))
+		if res.StatusCode != http.StatusOK || !bytes.Equal(raw, want) || bytes.Contains(raw, []byte("PRIVATE KEY")) {
+			t.Errorf("the download of the test CA: %d %s", res.StatusCode, raw)
+		}
 	}
 
 	// `chaosgw admin reset-password` from another process ends the session

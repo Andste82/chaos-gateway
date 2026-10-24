@@ -351,15 +351,10 @@ func TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName(t *testing.T) {
 
 func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.T) {
 	g, _ := readyRuns(t)
-	tls := inlineRun("c", iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
-	tls["inline"].(map[string]any)["checks"] = []any{map[string]any{
-		"tls_rejected": map[string]any{"protocol": "tcp", "ports": []int{8883}}, "window": map[string]any{"from": "a", "within": "30s"}}}
-	if r := g.postRun(tls, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
-		t.Errorf("a TLS check: %d %s", r.Status, r.Body)
-	}
-	tlsStep := inlineRun("t", iotTarget, step("a", "0s", "tls", map[string]any{"case": "expired"}))
-	if r := g.postRun(tlsStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
-		t.Errorf("tls: %d %s", r.Status, r.Body)
+	// the TLS checks and the TLS step are in this build (M21); the case intercept is not (M22)
+	tlsStep := inlineRun("t", iotTarget, step("a", "0s", "tls", map[string]any{"case": "intercept"}))
+	if r := g.postRun(tlsStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M22") {
+		t.Errorf("tls interception: %d %s", r.Status, r.Body)
 	}
 	bad := inlineRun("b", map[string]any{"device": "nobody"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
 	r := g.postRun(bad, "")
@@ -388,8 +383,8 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
-	if steps != "profile,fault,rule,dns,wireguard,capture,wait,remove,restore" ||
-		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen" {
+	if steps != "profile,fault,rule,dns,tls,wireguard,capture,wait,remove,restore" ||
+		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen,tls_rejected,tls_accepted" {
 		t.Errorf("capabilities %v", caps)
 	}
 	if feats := strings.Join(toStrings(caps["features"].([]any)), ","); !strings.Contains(feats, "runs") || !strings.Contains(feats, "checks") || !strings.Contains(feats, "captures") {

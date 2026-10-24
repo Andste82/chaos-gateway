@@ -33,6 +33,11 @@ const checkPoll = waitPoll
 // moment of the poll, decides whether it was asked inside the window.
 const dnsSettle = time.Second
 
+// tlsSettle is how long the final look of a `tls_rejected` or `tls_accepted` check waits after its window has closed: the
+// responder reports a handshake after it ended, in batches, so one that ended at the very end of the window is not in the
+// API's log yet when the window closes; its time stamp, not the moment of the poll, decides whether it was inside.
+const tlsSettle = time.Second
+
 // maxEvidence bounds the observations that a check keeps as its evidence.
 const maxEvidence = 10
 
@@ -44,9 +49,13 @@ type liveCheck struct {
 	match  model.TrafficMatch
 	except []model.Destination
 	dns    string
-	from   string
-	within time.Duration
-	until  string // "" for a window of `within`
+	// tls says what a handshake with the TLS responder has to end with for the check: "rejected" or "accepted"; tlsSeen
+	// is what the last look found in the window (the outcome and how often), for the message of a check that fails.
+	tls     string
+	tlsSeen map[string]int
+	from    string
+	within  time.Duration
+	until   string // "" for a window of `within`
 
 	opened bool // the step the window starts at has been reached
 	armed  bool // the baseline poll of the window is behind: the polls from now on belong to the window
@@ -76,6 +85,10 @@ func newLiveCheck(cfg *model.Configuration, idx int, c *model.Check) *liveCheck 
 		lc.except = deref(n.Except)
 	case "dns_query_seen":
 		lc.dns = c.DnsQuerySeen.Name
+	case "tls_rejected":
+		lc.match, lc.tls = *c.TlsRejected, "rejected"
+	case "tls_accepted":
+		lc.match, lc.tls = *c.TlsAccepted, "accepted"
 	}
 	if lc.kind == "dns_query_seen" {
 		lc.what = "a query for " + lc.dns
@@ -89,7 +102,7 @@ func newLiveCheck(cfg *model.Configuration, idx int, c *model.Check) *liveCheck 
 // fails without; the others fail on one.
 func (c *liveCheck) positive() bool {
 	switch c.kind {
-	case "reconnected", "traffic_seen", "dns_query_seen":
+	case "reconnected", "traffic_seen", "dns_query_seen", "tls_rejected", "tls_accepted":
 		return true
 	}
 	return false
@@ -137,14 +150,18 @@ func (c *liveCheck) needsNets() bool {
 // decideAt is the offset from which a check whose window has closed is decided without the observation that
 // would have decided it earlier: the end of the window, for a `dns_query_seen` check a settle time later.
 func (c *liveCheck) decideAt() time.Duration {
-	if c.kind == "dns_query_seen" {
+	switch {
+	case c.kind == "dns_query_seen":
 		return c.wend + dnsSettle
+	case c.tls != "":
+		return c.wend + tlsSettle
 	}
 	return c.wend
 }
 
-// usesFlows reports whether the check looks at the connections (the others at the DNS log).
-func (c *liveCheck) usesFlows() bool { return c.kind != "dns_query_seen" }
+// usesFlows reports whether the check looks at the connections (the others at the DNS log or the handshakes of the
+// TLS responder).
+func (c *liveCheck) usesFlows() bool { return c.kind != "dns_query_seen" && c.tls == "" }
 
 // ---- names
 
@@ -405,6 +422,8 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 				// window is news, one that the poll merely found is not. The events that the poll before it
 				// consumed for other checks belong to this one as far as they began inside the window.
 				m.feed(r, c, nets, devSet, startedSince(append(slices.Clone(prevEvents), events...), c.wstartWall), nowWall)
+			case c.armed && c.tls != "":
+				m.lookTLS(r, c, devs, nets)
 			case c.armed:
 				m.lookDNS(r, c, devs)
 			}
@@ -412,7 +431,7 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 				continue
 			}
 			if c.ended && now >= c.decideAt() {
-				m.endWindow(r, c, flowErr, devs)
+				m.endWindow(r, c, flowErr, devs, nets)
 			}
 		}
 		for _, c := range checks {
@@ -561,7 +580,7 @@ func (m *Manager) lookDNS(r *runState, c *liveCheck, devs []engine.DeviceState) 
 // endWindow decides a check whose window has closed without the observation that would have decided it
 // earlier: a positive check has failed, a negative one has passed. A connection check that could not read the
 // connections at its last poll cannot say either way: it is an error.
-func (m *Manager) endWindow(r *runState, c *liveCheck, flowErr error, devs []engine.DeviceState) {
+func (m *Manager) endWindow(r *runState, c *liveCheck, flowErr error, devs []engine.DeviceState, nets *flowNets) {
 	window := fmt.Sprintf("the window of %s", (c.wend - c.wstart).Round(time.Millisecond))
 	switch {
 	case c.usesFlows() && flowErr != nil:
@@ -570,6 +589,11 @@ func (m *Manager) endWindow(r *runState, c *liveCheck, flowErr error, devs []eng
 		m.lookDNS(r, c, devs)
 		if !c.decided {
 			m.decide(r, c, model.CheckResultStatusFailed, fmt.Sprintf("no device of the target asked for %s in %s", c.dns, window))
+		}
+	case c.tls != "":
+		m.lookTLS(r, c, devs, nets)
+		if !c.decided {
+			m.decide(r, c, model.CheckResultStatusFailed, c.tlsFailure(window))
 		}
 	case c.kind == "reconnected":
 		m.decide(r, c, model.CheckResultStatusFailed, fmt.Sprintf("no connection matching %s was established in %s", c.what, window))
@@ -699,4 +723,68 @@ func verdictReason(what string, cs []model.CheckResult) string {
 		out += fmt.Sprintf(" (and %d more)", len(cs)-1)
 	}
 	return out
+}
+
+// lookTLS looks into the handshakes of the TLS responder for a `tls_rejected` or `tls_accepted` check whose window is
+// open: a handshake of a device of the target with the connection the selector names (its original destination), inside the
+// window. The check passes on the first one that ended the way it asks for. What else was seen is kept for the message of a
+// check that fails.
+func (m *Manager) lookTLS(r *runState, c *liveCheck, devs []engine.DeviceState, nets *flowNets) {
+	c.tlsSeen = map[string]int{}
+	if len(devs) == 0 {
+		return
+	}
+	for _, h := range m.cfg.Observer.TLSHandshakes(ids(devs), c.wstartWall) {
+		if c.ended && h.Time.After(c.wendWall) {
+			continue
+		}
+		f := engine.Flow{Device: h.Device, Protocol: "tcp", Src: h.Client, Dst: h.Dst.Addr(), DPort: int(h.Dst.Port())}
+		if !matchFlow(nets, c.match, f) {
+			continue
+		}
+		c.tlsSeen[h.Outcome]++
+		if h.Outcome != c.tls {
+			continue
+		}
+		ev := map[string]any{"kind": "tls_handshake", "device": h.Device, "client": h.Client.String(), "dst": h.Dst.String(), "case": h.Case, "outcome": h.Outcome, "time": h.Time.UTC().Format(time.RFC3339Nano)}
+		if h.SNI != "" {
+			ev["sni"] = h.SNI
+		}
+		if h.Alert != "" {
+			ev["alert"] = h.Alert
+		}
+		c.evidence = append(c.evidence, ev)
+		after := h.Time.Sub(c.wstartWall).Round(time.Millisecond)
+		switch c.tls {
+		case "rejected":
+			by := "aborted the handshake"
+			if h.Alert != "" {
+				by += " with the alert " + h.Alert
+			}
+			m.decide(r, c, model.CheckResultStatusPassed, fmt.Sprintf("the device %s with the responder for %s (case %s) %s into the window", by, h.Dst, h.Case, after))
+		default:
+			m.decide(r, c, model.CheckResultStatusPassed, fmt.Sprintf("the device completed the handshake with the responder for %s (case %s) %s into the window: it took the certificate", h.Dst, h.Case, after))
+		}
+		return
+	}
+}
+
+// tlsFailure is the message of a TLS check whose window closed without the handshake it asks for: what the responder saw
+// of the target instead, in words.
+func (c *liveCheck) tlsFailure(window string) string {
+	want := map[string]string{"rejected": "rejected the certificate", "accepted": "completed a handshake"}[c.tls]
+	if len(c.tlsSeen) == 0 {
+		return fmt.Sprintf("no device of the target %s with the TLS responder for %s in %s: the responder saw no handshake of it (is a TLS case selecting this connection?)", want, c.what, window)
+	}
+	var seen []string
+	for _, o := range []string{"accepted", "rejected", "client_closed", "timeout", "reset_sent", "close_sent", "stalled"} {
+		if n := c.tlsSeen[o]; n > 0 {
+			seen = append(seen, fmt.Sprintf("%d %s", n, strings.ReplaceAll(o, "_", " ")))
+		}
+	}
+	msg := fmt.Sprintf("no device of the target %s with the TLS responder for %s in %s; the responder saw %s", want, c.what, window, strings.Join(seen, ", "))
+	if c.tls == "rejected" && c.tlsSeen["accepted"] > 0 {
+		msg += ": a device took a certificate it must reject"
+	}
+	return msg
 }

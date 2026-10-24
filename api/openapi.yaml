@@ -1916,12 +1916,19 @@ paths:
       tags: [config]
       operationId: getTestCa
       summary: The test CA certificate (PEM) for installation on development firmware
-      description: Never returns the unknown CA, which is not distributed (plan §2.8).
+      description: |
+        The certificate that signs the expired, not-yet-valid and hostname-mismatch certificates of the TLS responder
+        (plan §2.8): a development firmware that trusts it can tell these cases apart. It is a download
+        (`Content-Disposition: attachment`). Never returns the unknown CA, which signs the `untrusted_ca` case and is
+        never distributed, and never a key.
       x-milestone: M21
       x-required-scope: read
       responses:
         '200':
           description: PEM certificate
+          headers:
+            Content-Disposition:
+              schema: {type: string, example: 'attachment; filename="chaos-gateway-test-ca.pem"'}
           content:
             application/x-pem-file:
               schema: {type: string}
@@ -2104,6 +2111,36 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/TlsServiceConfig'}
         '204': {description: Unchanged}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/tls/resolve:
+    post:
+      tags: [internal]
+      operationId: resolveTlsConnection
+      summary: The case that decides a connection the TLS responder holds, and the name to certify
+      description: |
+        The kernel sends every connection that some case selects by its source, destination and ports to the responder
+        (plan §2.8); which case decides depends on what only the connection knows, the server name (SNI) of its
+        ClientHello, so the responder reads it and asks. The answer is the decision of the precedence rules of §2.4,
+        the same one `explain` shows. `case` is absent when no case decides the connection (the kernel's selection was
+        wider than the case, the case went since, or its `sni` does not match): the responder then passes the
+        connection through to the destination it was meant for, unchanged, when `passthrough` says the gateway would have
+        forwarded it, and resets it otherwise. `name` is what to put into the
+        certificate when the ClientHello has no SNI: a name the gateway's DNS answered the client for the address
+        (the one it answered last), else absent (a certificate for the address).
+      x-internal: true
+      x-milestone: M21
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TlsResolveRequest'}
+      responses:
+        '200':
+          description: The decision
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TlsResolveResponse'}
         default: {$ref: '#/components/responses/Problem'}
   /internal/tls/handshakes:
     post:
@@ -3880,10 +3917,21 @@ components:
         dns_query_seen: {$ref: '#/components/schemas/DnsQueryCheck'}
         tls_rejected:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
-          description: The device aborted the TLS handshake with the responder (M21).
+          description: |
+            A device of the target aborts a TLS handshake with the gateway's TLS responder inside the window (M21): it
+            was shown the certificate of a case and did not take it (an alert, or a close or reset of the connection). The
+            handshake cases show no certificate and never satisfy this check (the device's reaction to a reset or a stall is
+            for a traffic check). The selector is the connection the device meant, its original destination (`destination`,
+            `ports`; `protocol` is `tcp`).
+            It needs a TLS case that selects the connection, which the run's own steps provide; a connection that no
+            case selects never reaches the responder, so the check fails.
         tls_accepted:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
-          description: The device completed the handshake (a failed security check if the case must be rejected).
+          description: |
+            A device of the target completes a TLS handshake with the responder inside the window: it took the
+            certificate the responder showed. For a case that must be rejected (every certificate case, plan §2.8) that
+            is the finding of the security check, so a scenario that expects it uses the check to assert the broken
+            device; a scenario that expects a correct device uses `tls_rejected`.
     DnsQueryCheck:
       type: object
       description: |
@@ -4502,7 +4550,7 @@ components:
         version: {type: string}
         features:
           type: array
-          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
+          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
           items: {type: string}
         overlay_kinds:
           type: array
@@ -5124,8 +5172,9 @@ components:
         available:
           type: boolean
           description: |
-            False while a part's family is not in this build (e.g. `tls-broken` before M21, a custom
-            profile with a `tls` part; the `dns` family is available since M20). Such a profile can be defined and shown, but activating it
+            False while a part of the profile is not in this build: a `tls` part with the case `intercept`
+            (M22); the `dns` family has been available since M20 and the certificate and handshake cases of the
+            `tls` family, `tls-broken` among them, since M21. Such a profile can be defined and shown, but activating it
             is refused with `unsupported_feature`. So is applying a revision that gives a profile
             such a part while an overlay activates it (the profile and the milestone are named; remove
             the activation first, `force` does not lift it), so that no activation runs half a profile.
@@ -5133,7 +5182,7 @@ components:
         unavailable_reason:
           type: string
           description: Set when `available` is false - the part and the milestone that brings it.
-          example: 'the tls part arrives with milestone M21'
+          example: 'the tls part with the case intercept arrives with milestone M22'
         config: {$ref: '#/components/schemas/Profile'}
         activations:
           type: array
@@ -6189,6 +6238,55 @@ components:
                     type: string
                     enum: [reject, accept, any]
                     description: Expected device behavior, from the case and `trusts_test_ca` (plan §2.8).
+    TlsResolveRequest:
+      type: object
+      required: [client, original_dst]
+      properties:
+        client: {$ref: '#/components/schemas/Ipv4'}
+        original_dst:
+          type: string
+          description: '`ip:port` from `SO_ORIGINAL_DST`.'
+          example: '203.0.113.10:8883'
+        sni:
+          type: string
+          description: The server name of the ClientHello, absent without one.
+    TlsResolveResponse:
+      type: object
+      required: [generation]
+      properties:
+        generation:
+          type: integer
+          format: int64
+          description: |
+            The generation of the configuration (`/internal/tls/config`) the decision belongs to. The responder resets the
+            connections of an overlay that a configuration of a later generation no longer holds (plan §2.8: "reset on
+            removal"), and leaves alone one whose decision is of the same or a later generation.
+        overlay:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The overlay that decides the connection (the activation, for the `tls` part of a profile); absent when no case does.
+        case:
+          allOf: [{$ref: '#/components/schemas/TlsCase'}]
+          description: The deciding case as it was written; absent when no case decides the connection.
+        expected:
+          type: string
+          enum: [reject, accept, any]
+          description: What a correct device does with the case (plan §2.8); absent without a case.
+        device:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The device the client is, absent for an address no device owns.
+        trusts_test_ca:
+          type: boolean
+          description: Whether the device's firmware trusts the test CA (`trusts_test_ca` of the device), false for an unknown device.
+        name:
+          type: string
+          description: The name for the certificate when the ClientHello has no SNI (see the operation).
+        passthrough:
+          type: boolean
+          description: |
+            Only without a `case`: whether the gateway would have forwarded the connection if it had not been selected, judged
+            by the access rules and the access matrix on the original destination. The responder passes the connection through
+            only when this is true and resets it otherwise: the answer of the gateway must not let a device reach a server that the
+            matrix keeps it from.
     TlsHandshakeReport:
       type: object
       required: [time, client, original_dst, outcome]
@@ -6203,8 +6301,14 @@ components:
         case: {type: string}
         outcome:
           type: string
-          enum: [rejected, accepted, client_closed, timeout, reset_sent, stalled]
-          description: '`rejected` - the client aborted (alert or close) after receiving the certificate; `accepted` - handshake completed.'
+          enum: [rejected, accepted, client_closed, timeout, reset_sent, close_sent, stalled]
+          description: |
+            `rejected` - the client aborted (an alert, or closing the connection) after it was shown the certificate;
+            `accepted` - the handshake completed, the client took the certificate (a security failure for a case that
+            must be rejected); `client_closed` - the client went away before it was shown a certificate;
+            `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
+            responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
+            (`handshake_stall`).
         alert:
           type: string
           example: bad_certificate

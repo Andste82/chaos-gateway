@@ -2242,6 +2242,7 @@ func (e TlsCaseCase) Valid() bool {
 const (
 	TlsHandshakeReportOutcomeAccepted     TlsHandshakeReportOutcome = "accepted"
 	TlsHandshakeReportOutcomeClientClosed TlsHandshakeReportOutcome = "client_closed"
+	TlsHandshakeReportOutcomeCloseSent    TlsHandshakeReportOutcome = "close_sent"
 	TlsHandshakeReportOutcomeRejected     TlsHandshakeReportOutcome = "rejected"
 	TlsHandshakeReportOutcomeResetSent    TlsHandshakeReportOutcome = "reset_sent"
 	TlsHandshakeReportOutcomeStalled      TlsHandshakeReportOutcome = "stalled"
@@ -2255,6 +2256,8 @@ func (e TlsHandshakeReportOutcome) Valid() bool {
 		return true
 	case TlsHandshakeReportOutcomeClientClosed:
 		return true
+	case TlsHandshakeReportOutcomeCloseSent:
+		return true
 	case TlsHandshakeReportOutcomeRejected:
 		return true
 	case TlsHandshakeReportOutcomeResetSent:
@@ -2262,6 +2265,27 @@ func (e TlsHandshakeReportOutcome) Valid() bool {
 	case TlsHandshakeReportOutcomeStalled:
 		return true
 	case TlsHandshakeReportOutcomeTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TlsResolveResponseExpected.
+const (
+	TlsResolveResponseExpectedAccept TlsResolveResponseExpected = "accept"
+	TlsResolveResponseExpectedAny    TlsResolveResponseExpected = "any"
+	TlsResolveResponseExpectedReject TlsResolveResponseExpected = "reject"
+)
+
+// Valid indicates whether the value is a known member of the TlsResolveResponseExpected enum.
+func (e TlsResolveResponseExpected) Valid() bool {
+	switch e {
+	case TlsResolveResponseExpectedAccept:
+		return true
+	case TlsResolveResponseExpectedAny:
+		return true
+	case TlsResolveResponseExpectedReject:
 		return true
 	default:
 		return false
@@ -2964,7 +2988,7 @@ type Capabilities struct {
 	DiagnosticTypes *[]string     `json:"diagnostic_types,omitempty"`
 	FaultFamilies   []FaultFamily `json:"fault_families"`
 
-	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
+	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
 	Features []string `json:"features"`
 
 	// Limits The capacity limits of this gateway (plan §3.3); a change above one is `capacity_exceeded`.
@@ -3168,10 +3192,19 @@ type Check struct {
 	// flow nobody answered) does not count until it is answered.
 	Reconnected *TrafficMatch `json:"reconnected,omitempty"`
 
-	// TlsAccepted The device completed the handshake (a failed security check if the case must be rejected).
+	// TlsAccepted A device of the target completes a TLS handshake with the responder inside the window: it took the
+	// certificate the responder showed. For a case that must be rejected (every certificate case, plan §2.8) that
+	// is the finding of the security check, so a scenario that expects it uses the check to assert the broken
+	// device; a scenario that expects a correct device uses `tls_rejected`.
 	TlsAccepted *TrafficMatch `json:"tls_accepted,omitempty"`
 
-	// TlsRejected The device aborted the TLS handshake with the responder (M21).
+	// TlsRejected A device of the target aborts a TLS handshake with the gateway's TLS responder inside the window (M21): it
+	// was shown the certificate of a case and did not take it (an alert, or a close or reset of the connection). The
+	// handshake cases show no certificate and never satisfy this check (the device's reaction to a reset or a stall is
+	// for a traffic check). The selector is the connection the device meant, its original destination (`destination`,
+	// `ports`; `protocol` is `tcp`).
+	// It needs a TLS case that selects the connection, which the run's own steps provide; a connection that no
+	// case selects never reaches the responder, so the check fails.
 	TlsRejected *TrafficMatch `json:"tls_rejected,omitempty"`
 
 	// TrafficNotSeen No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
@@ -5702,8 +5735,9 @@ type ProfileView struct {
 	// activation produces.
 	Activations *[]ProfileActivation `json:"activations,omitempty"`
 
-	// Available False while a part's family is not in this build (e.g. `tls-broken` before M21, a custom
-	// profile with a `tls` part; the `dns` family is available since M20). Such a profile can be defined and shown, but activating it
+	// Available False while a part of the profile is not in this build: a `tls` part with the case `intercept`
+	// (M22); the `dns` family has been available since M20 and the certificate and handshake cases of the
+	// `tls` family, `tls-broken` among them, since M21. Such a profile can be defined and shown, but activating it
 	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
 	// such a part while an overlay activates it (the profile and the milestone are named; remove
 	// the activation first, `force` does not lift it), so that no activation runs half a profile.
@@ -5719,7 +5753,7 @@ type ProfileView struct {
 
 	// UnavailableReason Set when `available` is false - the part and the milestone that brings it.
 	//
-	// Example: the tls part arrives with milestone M21
+	// Example: the tls part with the case intercept arrives with milestone M22
 	UnavailableReason *string `json:"unavailable_reason,omitempty"`
 }
 
@@ -6520,7 +6554,12 @@ type TlsHandshakeReport struct {
 	// OriginalDst `ip:port` from `SO_ORIGINAL_DST`.
 	OriginalDst string `json:"original_dst"`
 
-	// Outcome `rejected` - the client aborted (alert or close) after receiving the certificate; `accepted` - handshake completed.
+	// Outcome `rejected` - the client aborted (an alert, or closing the connection) after it was shown the certificate;
+	// `accepted` - the handshake completed, the client took the certificate (a security failure for a case that
+	// must be rejected); `client_closed` - the client went away before it was shown a certificate;
+	// `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
+	// responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
+	// (`handshake_stall`).
 	Outcome    TlsHandshakeReportOutcome `json:"outcome"`
 	Overlay    *Uuid                     `json:"overlay,omitempty"`
 	Sni        *string                   `json:"sni,omitempty"`
@@ -6528,8 +6567,61 @@ type TlsHandshakeReport struct {
 	TlsVersion *string                   `json:"tls_version,omitempty"`
 }
 
-// TlsHandshakeReportOutcome `rejected` - the client aborted (alert or close) after receiving the certificate; `accepted` - handshake completed.
+// TlsHandshakeReportOutcome `rejected` - the client aborted (an alert, or closing the connection) after it was shown the certificate;
+// `accepted` - the handshake completed, the client took the certificate (a security failure for a case that
+// must be rejected); `client_closed` - the client went away before it was shown a certificate;
+// `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
+// responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
+// (`handshake_stall`).
 type TlsHandshakeReportOutcome string
+
+// TlsResolveRequest defines model for TlsResolveRequest.
+type TlsResolveRequest struct {
+	Client Ipv4 `json:"client"`
+
+	// OriginalDst `ip:port` from `SO_ORIGINAL_DST`.
+	//
+	// Example: 203.0.113.10:8883
+	OriginalDst string `json:"original_dst"`
+
+	// Sni The server name of the ClientHello, absent without one.
+	Sni *string `json:"sni,omitempty"`
+}
+
+// TlsResolveResponse defines model for TlsResolveResponse.
+type TlsResolveResponse struct {
+	// Case The deciding case as it was written; absent when no case decides the connection.
+	Case *TlsCase `json:"case,omitempty"`
+
+	// Device The device the client is, absent for an address no device owns.
+	Device *Uuid `json:"device,omitempty"`
+
+	// Expected What a correct device does with the case (plan §2.8); absent without a case.
+	Expected *TlsResolveResponseExpected `json:"expected,omitempty"`
+
+	// Generation The generation of the configuration (`/internal/tls/config`) the decision belongs to. The responder resets the
+	// connections of an overlay that a configuration of a later generation no longer holds (plan §2.8: "reset on
+	// removal"), and leaves alone one whose decision is of the same or a later generation.
+	Generation int64 `json:"generation"`
+
+	// Name The name for the certificate when the ClientHello has no SNI (see the operation).
+	Name *string `json:"name,omitempty"`
+
+	// Overlay The overlay that decides the connection (the activation, for the `tls` part of a profile); absent when no case does.
+	Overlay *Uuid `json:"overlay,omitempty"`
+
+	// Passthrough Only without a `case`: whether the gateway would have forwarded the connection if it had not been selected, judged
+	// by the access rules and the access matrix on the original destination. The responder passes the connection through
+	// only when this is true and resets it otherwise: the answer of the gateway must not let a device reach a server that the
+	// matrix keeps it from.
+	Passthrough *bool `json:"passthrough,omitempty"`
+
+	// TrustsTestCa Whether the device's firmware trusts the test CA (`trusts_test_ca` of the device), false for an unknown device.
+	TrustsTestCa *bool `json:"trusts_test_ca,omitempty"`
+}
+
+// TlsResolveResponseExpected What a correct device does with the case (plan §2.8); absent without a case.
+type TlsResolveResponseExpected string
 
 // TlsServiceConfig defines model for TlsServiceConfig.
 type TlsServiceConfig struct {
@@ -7319,6 +7411,9 @@ type PostDnsResolutionsJSONRequestBody = PostDnsResolutionsJSONBody
 
 // PostTlsHandshakesJSONRequestBody defines body for PostTlsHandshakes for application/json ContentType.
 type PostTlsHandshakesJSONRequestBody = PostTlsHandshakesJSONBody
+
+// ResolveTlsConnectionJSONRequestBody defines body for ResolveTlsConnection for application/json ContentType.
+type ResolveTlsConnectionJSONRequestBody = TlsResolveRequest
 
 // CreateOverlayJSONRequestBody defines body for CreateOverlay for application/json ContentType.
 type CreateOverlayJSONRequestBody = OverlayRequest

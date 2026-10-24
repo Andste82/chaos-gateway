@@ -44,6 +44,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
+	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
 )
 
 func TestMain(m *testing.M) {
@@ -52,6 +53,7 @@ func TestMain(m *testing.M) {
 	openapi3filter.RegisterBodyDecoder("application/jsonl", openapi3filter.FileBodyDecoder)
 	openapi3filter.RegisterBodyDecoder("application/x-pcapng", openapi3filter.FileBodyDecoder)
 	openapi3filter.RegisterBodyDecoder("application/vnd.tcpdump.pcap", openapi3filter.FileBodyDecoder)
+	openapi3filter.RegisterBodyDecoder("application/x-pem-file", openapi3filter.FileBodyDecoder)
 	auth.RefreshInterval = time.Millisecond // M5-09: don't sleep real time for a cross-process test
 	goleak.VerifyTestMain(m)
 }
@@ -235,6 +237,11 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 			return []netip.Addr{netip.MustParseAddr("192.0.2.53")}
 		}}
 	capCfg(&apiCfg)
+	// the CAs of the TLS responder (M21): the API makes them when it starts, like the daemon
+	apiCfg.TLSCADir = filepath.Join(root, "tlsca")
+	if err := tlsresponder.EnsureCAs(apiCfg.TLSCADir, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	srv, err := api.New(apiCfg)
 	if err != nil {
 		t.Fatal(err)

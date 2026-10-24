@@ -35,6 +35,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
+	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
 	"github.com/Andste82/chaos-gateway/internal/version"
 	"github.com/Andste82/chaos-gateway/web"
 )
@@ -65,6 +66,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	holderPID := fs.String("service-holder-pid-file", "", "file with the PID (as the executor sees it) of the process whose network namespace becomes the service namespace")
 	serviceToken := fs.String("service-token-file", "/var/lib/chaosgw/service/token", "where the token of the service containers (Kea's hook) is written; empty creates none")
 	serviceCert := fs.String("service-cert-file", "/var/lib/chaosgw/service/api.pem", "where the API's certificate is published for the service containers to verify; empty publishes none")
+	tlsCADir := fs.String("tls-ca-dir", "/var/lib/chaosgw/tlsca", "directory of the CAs of the TLS responder (the test CA, downloadable with GET /tls/ca, and the unknown CA, never distributed): made at the start, read by the responder's container; empty runs without")
 	keaEventsSocket := fs.String("kea-events-socket", "/run/chaosgw-kea-events/events.sock", "Unix datagram socket chaosgw kea-hook posts lease events to instead of HTTP; empty serves none")
 	runRetention := fs.Duration("run-retention", 30*24*time.Hour, "how long the record and the report of an ended run are kept when the active configuration does not set settings.retention.runs (which wins)")
 	capturesDir := fs.String("captures-dir", "", "volume of the packet captures, shared with the executor (one directory per capture); empty runs without captures")
@@ -92,7 +94,7 @@ func runAPI(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	if err := serveAPI(ctx, log, stderr, apiOptions{socket: *socket, execUID: uint32(*execUID), namespace: *namespace, stateDir: *stateDir,
 		secretsDir: *secretsDir, dataDir: *dataDir, port: *port, listen: *listen, poll: *poll, confirm: *confirm, webDir: *webDir, keaSocket: *keaSocket, keaEventsSocket: *keaEventsSocket,
-		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, runRetention: *runRetention, capturesDir: *capturesDir, captureQuota: quota, captureMinFree: *captureMinFree, serviceToken: *serviceToken, serviceCert: *serviceCert, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
+		trafficInterval: *trafficInterval, trafficPeriod: *trafficPeriod, runRetention: *runRetention, capturesDir: *capturesDir, captureQuota: quota, captureMinFree: *captureMinFree, serviceToken: *serviceToken, serviceCert: *serviceCert, tlsCADir: *tlsCADir, serviceNS: *serviceNS, holderPIDFile: *holderPID}); err != nil {
 		fmt.Fprintf(stderr, "chaosgw api: %v\n", err)
 		return 1
 	}
@@ -122,6 +124,7 @@ type apiOptions struct {
 	keaEventsSocket string
 	serviceToken    string
 	serviceCert     string
+	tlsCADir        string
 	// serviceNS and holderPIDFile configure the service namespace (plan §3.3)
 	serviceNS     string
 	holderPIDFile string
@@ -196,6 +199,13 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		}
 	}
 
+	// the two CAs of the TLS responder (plan §2.8): made once, never replaced; its container reads the directory
+	if o.tlsCADir != "" {
+		if err := tlsresponder.EnsureCAs(o.tlsCADir, time.Now()); err != nil {
+			return fmt.Errorf("the CAs of the TLS responder: %w", err)
+		}
+	}
+
 	ui, err := webUI(o.webDir)
 	if err != nil {
 		return err
@@ -209,7 +219,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
 		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention,
-		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree})
+		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree, TLSCADir: o.tlsCADir})
 	if err != nil {
 		return err
 	}

@@ -338,9 +338,11 @@ type fakeObserver struct {
 	gw           *fakeGateway
 	stepCounters map[string]*model.Counter
 	// answered are the names the gateway's DNS answered a client for an address ("client|addr" -> names)
-	answered  map[string][]string
-	flowErr   error
-	flowPolls int
+	answered map[string][]string
+	// handshakes are the handshakes the gateway's TLS responder reported
+	handshakes []run.TLSHandshake
+	flowErr    error
+	flowPolls  int
 	// block, when set, holds every read of the connections until it is closed or the read is cancelled
 	block chan struct{}
 	// readDelay holds every read of the counters for that long on the fake clock (a slow executor)
@@ -391,6 +393,20 @@ func (o *fakeObserver) DNSQuerySeen(devices []string, name string, since time.Ti
 		}
 	}
 	return false
+}
+
+func (o *fakeObserver) TLSHandshakes(devices []string, since time.Time) []run.TLSHandshake {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []run.TLSHandshake
+	for _, h := range o.handshakes {
+		for _, d := range devices {
+			if h.Device == d && !h.Time.Before(since) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
 }
 
 func (o *fakeObserver) DNSQueries(devices []string, name string, since time.Time) []run.DNSQuery {

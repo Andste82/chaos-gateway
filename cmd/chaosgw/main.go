@@ -1,6 +1,6 @@
 // Command chaosgw is the Chaos Gateway core binary (plan §3.1). Its subcommands run in separate
 // containers with only the privileges they need (§3.8): the API server, the privileged executor,
-// the DNS proxy and the TLS responder. They arrive with the milestones named below.
+// the DNS proxy and the TLS responder. They arrived with the milestones named below.
 package main
 
 import (
@@ -25,7 +25,7 @@ var subcommands = []struct {
 	{"exec", "M3", "privileged executor for nftables, tc, routes and sysctls", runExec},
 	{"dns", "M6b", "DNS proxy in the service namespace", runDNS},
 	{"svcns", "M6b", "holder of the service namespace", runSvcNS},
-	{"tls", "M21", "TLS responder in the service namespace", nil},
+	{"tls", "M21", "TLS responder in the service namespace", runTLS},
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

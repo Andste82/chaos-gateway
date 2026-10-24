@@ -1,10 +1,7 @@
 package dnsproxy
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/svcapi"
 )
 
 // APIClient is the proxy's side of the internal API (scope `service`): it fetches the configuration
@@ -35,89 +31,24 @@ type APIClient struct {
 	// Dial replaces the dialer; the tests of the service namespace connect from inside it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// mu guards client and cert: the configuration poll and the query log share the client
-	mu     sync.Mutex
-	client *http.Client
-	cert   []byte
+	// svc is the shared client, made from the fields above at the first request
+	once sync.Once
+	svc  svcapi.Client
 }
 
-// http returns the client for the certificate in CertFile now: a certificate the API has issued again
-// (issue #64: one without the service address) is trusted without a restart of the proxy.
-func (c *APIClient) http() (*http.Client, error) {
-	var cert []byte
-	if c.CertFile != "" {
-		b, err := os.ReadFile(c.CertFile)
-		if err != nil {
-			return nil, err
-		}
-		cert = b
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client != nil && bytes.Equal(cert, c.cert) {
-		return c.client, nil
-	}
-	tc := &tls.Config{MinVersion: tls.VersionTLS12}
-	if c.CertFile != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(cert) {
-			return nil, fmt.Errorf("%s holds no certificate", c.CertFile)
-		}
-		tc.RootCAs = pool
-	} else {
-		tc.InsecureSkipVerify = true //nolint:gosec // the private link to the gateway; see CertFile
-	}
-	if c.client != nil {
-		c.client.CloseIdleConnections()
-	}
-	c.client = &http.Client{Transport: &http.Transport{TLSClientConfig: tc, MaxIdleConns: 2, IdleConnTimeout: 60 * time.Second, DialContext: c.Dial}}
-	c.cert = cert
-	return c.client, nil
+func (c *APIClient) shared() *svcapi.Client {
+	c.once.Do(func() {
+		c.svc = svcapi.Client{Base: c.Base, TokenFile: c.TokenFile, CertFile: c.CertFile, Dial: c.Dial}
+	})
+	return &c.svc
 }
 
 func (c *APIClient) do(ctx context.Context, method, path string, body []byte, timeout time.Duration) (*http.Response, error) {
-	cl, err := c.http()
-	if err != nil {
-		return nil, err
-	}
-	tok, err := os.ReadFile(c.TokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("the service token: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+"/api/v1"+path, bytes.NewReader(body))
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := cl.Do(req)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	res.Body = &cancelBody{ReadCloser: res.Body, cancel: cancel}
-	return res, nil
+	return c.shared().Do(ctx, method, path, body, timeout)
 }
-
-type cancelBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (b *cancelBody) Close() error { err := b.ReadCloser.Close(); b.cancel(); return err }
 
 // CloseIdleConnections closes the connections the client keeps open.
-func (c *APIClient) CloseIdleConnections() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client != nil {
-		c.client.CloseIdleConnections()
-	}
-}
+func (c *APIClient) CloseIdleConnections() { c.shared().CloseIdleConnections() }
 
 // Config asks for a configuration newer than generation `after` (0 asks for any). It returns nil
 // when nothing changed within the poll.
@@ -141,8 +72,7 @@ func (c *APIClient) Config(ctx context.Context, after int64) (*model.DnsServiceC
 		}
 		return &cfg, nil
 	}
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-	return nil, fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+	return nil, svcapi.Failure(res)
 }
 
 // Post implements Sink.
@@ -157,8 +87,7 @@ func (c *APIClient) Post(ctx context.Context, entries []model.DnsQueryLogEntry) 
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusNoContent {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-		return fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+		return svcapi.Failure(res)
 	}
 	return nil
 }
@@ -176,8 +105,7 @@ func (c *APIClient) PostResolutions(ctx context.Context, rs []model.DnsResolutio
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusNoContent {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-		return fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+		return svcapi.Failure(res)
 	}
 	return nil
 }

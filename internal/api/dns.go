@@ -65,6 +65,9 @@ type addrPair struct{ client, addr netip.Addr }
 type answeredNames struct {
 	names []string
 	last  time.Time
+	// latest is the name that was asked in the newest answer for the address: what a TLS case without a server name
+	// certifies (plan §2.8, "the name the DNS proxy last returned for the destination address")
+	latest string
 }
 
 // maxAnswered bounds the index of answers; answeredFor is how long an answer stays in it.
@@ -450,10 +453,22 @@ func (s *Server) indexAnswer(e model.DnsQueryLogEntry) {
 				v.names = append(v.names, n)
 			}
 		}
-		if e.Time.After(v.last) {
-			v.last = e.Time
+		if !e.Time.Before(v.last) {
+			v.last, v.latest = e.Time, names[0]
 		}
 	}
+}
+
+// latestName is the name the gateway's DNS answered the client last for the address, "" for an address it never
+// answered the client with. Names that only a DNS-derived set knows (the answers of an earlier start) are not kept: the
+// certificate is then for the address.
+func (s *Server) latestName(client, addr netip.Addr) string {
+	s.dns.logMu.Lock()
+	defer s.dns.logMu.Unlock()
+	if v := s.dns.answered[addrPair{client, addr}]; v != nil {
+		return v.latest
+	}
+	return ""
 }
 
 // hostNames returns the names a client was answered for an address: those of the proxy's answers (the whole

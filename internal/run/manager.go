@@ -388,13 +388,6 @@ func (m *Manager) supported(cfg *model.Configuration, sc *model.Scenario) error 
 			}
 		}
 	}
-	for i := range deref(sc.Checks) {
-		c := &(*sc.Checks)[i]
-		kind := domain.CheckKind(c)
-		if kind == "tls_rejected" || kind == "tls_accepted" {
-			return &UnsupportedError{What: fmt.Sprintf("a %s check (check %d)", kind, i), Milestone: "M21"}
-		}
-	}
 	for i := range sc.Steps {
 		st := &sc.Steps[i]
 		if !domain.StepCreatesOverlay(st) {

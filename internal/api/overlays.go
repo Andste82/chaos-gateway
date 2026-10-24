@@ -66,6 +66,9 @@ type overlayContext struct {
 	// dnsHits are the queries each DNS fault changed, by overlay id, and dnsEpoch the epoch of those counters
 	dnsHits  map[string]int64
 	dnsEpoch int64
+	// tlsHits are the handshakes of each TLS overlay (by overlay id) and tlsEpoch the epoch of those counters
+	tlsHits  map[string]int64
+	tlsEpoch int64
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -81,6 +84,9 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	}
 	if len(oc.snap.DNSFaults) > 0 {
 		oc.dnsHits, oc.dnsEpoch = s.dnsHitsSnapshot()
+	}
+	if len(oc.snap.TLSCases) > 0 {
+		oc.tlsHits, oc.tlsEpoch = s.tlsHitsSnapshot()
 	}
 	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0 || len(oc.snap.Forwards) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
@@ -178,6 +184,29 @@ func (oc overlayContext) withDNS(c *model.Counter, id string) *model.Counter {
 	}
 	out.Packets += oc.dnsHits[strings.ToLower(id)]
 	out.Epoch = max(out.Epoch, oc.dnsEpoch)
+	return &out
+}
+
+// withTLS adds the handshakes of the overlay to its counter (a TLS overlay's, or the tls part of an activated
+// profile's): the counter of a TLS case is the number of connections it held, in packets (no bytes). An overlay that is in
+// no TLS list has none, whatever else is counted for it.
+func (oc overlayContext) withTLS(c *model.Counter, id string) *model.Counter {
+	in := false
+	for _, f := range oc.snap.TLSCases {
+		if strings.EqualFold(f.Overlay, id) {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return c
+	}
+	out := model.Counter{}
+	if c != nil {
+		out = *c
+	}
+	out.Packets += oc.tlsHits[strings.ToLower(id)]
+	out.Epoch = max(out.Epoch, oc.tlsEpoch)
 	return &out
 }
 
@@ -284,7 +313,7 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		// the parts of the profile are faults of the overlay's id: their counters and queues add up
 		st := oc.profileEffect(ov)
 		ov.State = &st
-		ov.Counters = oc.withDNS(oc.counterOf("overlay", ov.Id.String()), ov.Id.String())
+		ov.Counters = oc.withTLS(oc.withDNS(oc.counterOf("overlay", ov.Id.String()), ov.Id.String()), ov.Id.String())
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
 		}
@@ -302,6 +331,22 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		ov.Counters = oc.withDNS(nil, ov.Id.String())
 		if overridden(st) && ov.Dns != nil {
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, map[string]bool{domain.FamilyDNS: true}, sampleName(deref(ov.Dns.Names))))
+		}
+	}
+	if ov.Kind == model.OverlayKindTls {
+		// a TLS case competes with the other cases (and the tls parts of profiles) for the connections it selects; it is
+		// `effective` while some source has it in its list (compiler.compileTLS)
+		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyTLS)
+		ov.State = &st
+		ov.Counters = oc.withTLS(nil, ov.Id.String())
+		if overridden(st) && ov.Tls != nil {
+			// the connection to look at is one the case selects: TCP, a port of it (the default ones without) and a server name of it
+			tcp := model.Protocol("tcp")
+			ports, ranges := domain.TLSPorts(*ov.Tls)
+			if len(ports) == 0 && len(ranges) > 0 {
+				ports = []int{ranges[0].From}
+			}
+			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, ov.Tls.Destination, &tcp, &ports, map[string]bool{domain.FamilyTLS: true}, "", sampleName(deref(ov.Tls.Sni))))
 		}
 	}
 	if ov.Kind == model.OverlayKindRule {
@@ -620,13 +665,17 @@ func refsOrNil(r []model.FaultRef) *[]model.FaultRef {
 // overriddenBy names the faults that beat a fault (a configured one, a fault overlay or the parts of a
 // profile activation): for the traffic of every device in its scope, the winner of each of its
 // families at a destination and port the fault selects.
-func (oc overlayContext) overriddenBy(layer domain.Layer, id string, scope *model.Scope, dest *model.Destination, proto *model.Protocol, ports *[]int, families map[string]bool, dnsName ...string) []model.FaultRef {
+func (oc overlayContext) overriddenBy(layer domain.Layer, id string, scope *model.Scope, dest *model.Destination, proto *model.Protocol, ports *[]int, families map[string]bool, names ...string) []model.FaultRef {
 	if scope == nil || oc.world == nil {
 		return nil
 	}
 	q := domain.Query{}
-	if len(dnsName) > 0 {
-		q.DNSName = dnsName[0]
+	// the sample names: the name a DNS fault names, then the server name a TLS case names
+	if len(names) > 0 {
+		q.DNSName = names[0]
+	}
+	if len(names) > 1 {
+		q.SNI = names[1]
 	}
 	if dest != nil && dest.Cidr != nil {
 		if pfx, err := netip.ParsePrefix(*dest.Cidr); err == nil {

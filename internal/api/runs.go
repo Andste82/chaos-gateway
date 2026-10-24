@@ -151,6 +151,24 @@ func (o runObserver) DNSQueries(devices []string, name string, since time.Time) 
 
 func (o runObserver) HostNames(client, addr netip.Addr) []string { return o.s.hostNames(client, addr) }
 
+func (o runObserver) TLSHandshakes(devices []string, since time.Time) []run.TLSHandshake {
+	var out []run.TLSHandshake
+	for _, h := range o.s.tlsHandshakes(devices, since) {
+		hs := run.TLSHandshake{Device: h.device, Client: h.client, Dst: h.dst, Outcome: string(h.report.Outcome), Time: h.report.Time}
+		if h.report.Sni != nil {
+			hs.SNI = *h.report.Sni
+		}
+		if h.report.Case != nil {
+			hs.Case = *h.report.Case
+		}
+		if h.report.Alert != nil {
+			hs.Alert = *h.report.Alert
+		}
+		out = append(out, hs)
+	}
+	return out
+}
+
 func (o runObserver) DNSClientSeen(device string) bool {
 	o.s.dns.logMu.Lock()
 	defer o.s.dns.logMu.Unlock()
@@ -177,7 +195,7 @@ func (o runObserver) Counters(ctx context.Context, ids []uuid.UUID) map[uuid.UUI
 			continue
 		}
 		c := oc.overlayView(ov).Counters
-		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile || ov.Kind == model.OverlayKindDns) {
+		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile || ov.Kind == model.OverlayKindDns || ov.Kind == model.OverlayKindTls) {
 			// the counters were read and the overlay has none: it is not in the packet path (a rule that
 			// is disabled, a fault another one overrides), so it matched nothing
 			c = &model.Counter{}

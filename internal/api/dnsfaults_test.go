@@ -205,6 +205,22 @@ loop:
 	if len(q) != 3 || q[0].(map[string]any)["fault"] != ov["id"] {
 		t.Errorf("%v", q)
 	}
+	// the counter of the overlay is the number of answers the fault changed (no bytes), for the overlay and for the dns part of a profile
+	view := g.do("GET", "/overlays/"+ov["id"].(string), nil, nil, nil).json(t)
+	if c, ok := view["counters"].(map[string]any); !ok || c["packets"] != float64(3) || c["bytes"] != float64(0) || c["epoch"] == nil {
+		t.Errorf("counters %v", view["counters"])
+	}
+	prof := g.mustCreateOverlay(`{"target":{"network":"IoT"},"profile":"dns-broken"}`)
+	g.token = svc
+	e := entry(7)
+	e["fault"] = prof["id"]
+	if r := g.do("POST", "/internal/dns/queries", []any{e}, nil, nil); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.token = admin
+	if c, ok := g.do("GET", "/overlays/"+prof["id"].(string), nil, nil, nil).json(t)["counters"].(map[string]any); !ok || c["packets"] != float64(1) {
+		t.Errorf("the dns part of a profile: %v", c)
+	}
 }
 
 func TestACapabilityListsDNSFaults(t *testing.T) {

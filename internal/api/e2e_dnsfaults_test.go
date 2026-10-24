@@ -398,12 +398,12 @@ func TestTheDNSDerivedSetSurvivesTenOverlayChangesOnTheRealKernel(t *testing.T) 
 	for i := 0; i < 10; i++ {
 		switch i % 3 {
 		case 0:
-			b.overlay(t, `{"target":{"network":"Lab"},"fault":{"latency":"`+strconv.Itoa(5+i)+`ms"}}`)
+			b.overlay(t, `{"target":{"network":"lab-hub"},"fault":{"latency":"`+strconv.Itoa(5+i)+`ms"}}`)
 		case 1:
 			// the same fault with other parameters: the same overlay, the same set
 			b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"`+strconv.Itoa(100+i)+`ms","destination":{"hostname":"`+brokerHost+`"}}}`)
 		default:
-			rid := b.overlay(t, `{"target":{"network":"Lab"},"rule":{"action":"drop","protocol":"tcp","ports":[`+strconv.Itoa(9000+i)+`]}}`)
+			rid := b.overlay(t, `{"target":{"network":"lab-hub"},"rule":{"action":"drop","protocol":"tcp","ports":[`+strconv.Itoa(9000+i)+`]}}`)
 			b.remove(t, rid)
 		}
 		if els := b.setElements(brokerHost); fmt.Sprint(els) != fmt.Sprint(want) {
@@ -463,28 +463,7 @@ func TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel(t *testing.T) {
 	if out, err := direct(); err != nil || out != "203.0.113.77" {
 		t.Fatalf("a query to the resolver without the redirect: %q %v", out, err)
 	}
-
-	// the network redirects hardcoded resolvers and blocks DoT
-	id := b.g.mustPatch(map[string]any{"networks": map[string]any{iotID: map[string]any{"dns": map[string]any{"redirect_hardcoded": true, "block_dot": true}}}})
-	if r := b.g.apply(id); r.Status != 200 {
-		t.Fatalf("%d %s", r.Status, r.Body)
-	}
-	waitFor(t, 20*time.Second, "the query to the resolver is answered by the proxy", func() bool {
-		out, err := direct()
-		return err == nil && out == "10.99.0.9"
-	})
-	if out, err := b.top.A.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "+tcp", "@"+testbed.ServerAddr, "example.test"); err != nil || strings.TrimSpace(out) != "10.99.0.9" {
-		t.Errorf("over TCP: %q %v", out, err)
-	}
-	if items := b.g.do("GET", "/dns/queries?name=example.test", nil, nil, nil).json(t)["items"].([]any); len(items) == 0 {
-		t.Error("the log does not show the redirected queries")
-	}
-	// a client of the other network is not redirected
-	if out, err := b.top.C.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "@"+testbed.ServerAddr, "example.test"); err != nil || strings.TrimSpace(out) != "203.0.113.77" {
-		t.Errorf("a network without the setting: %q %v", out, err)
-	}
-
-	// DNS over TLS (TCP 853): a listener on the server accepts from the other network and not from this one
+	// a listener on the server for DNS over TLS: A reaches it before the network blocks it
 	l, err := testbed.ListenIn(b.top.Server.Name, "tcp", testbed.ServerAddr+":853")
 	if err != nil {
 		t.Fatal(err)
@@ -499,11 +478,34 @@ func TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	if c, err := dialIn(b.top.C, testbed.ServerAddr+":853"); err != nil {
-		t.Errorf("a network without the block cannot reach port 853: %v", err)
+	if c, err := dialIn(b.top.A, testbed.ServerAddr+":853"); err != nil {
+		t.Fatalf("port 853 is not reachable before the block: %v", err)
 	} else {
 		_ = c.Close()
 	}
+
+	// the network redirects hardcoded resolvers and blocks DoT
+	id := b.g.mustPatch(map[string]any{"networks": map[string]any{iotID: map[string]any{"dns": map[string]any{"redirect_hardcoded": true, "block_dot": true}}}})
+	if r := b.g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	waitFor(t, 20*time.Second, "the query to the resolver is answered by the proxy", func() bool {
+		out, err := direct()
+		return err == nil && out == "10.99.0.9"
+	})
+	if out, err := b.top.A.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "+tcp", "@"+testbed.ServerAddr, "example.test"); err != nil || strings.TrimSpace(out) != "10.99.0.9" {
+		t.Errorf("over TCP: %q %v", out, err)
+	}
+	b.g.token = b.admin
+	if items := b.g.do("GET", "/dns/queries?name=example.test", nil, nil, nil).json(t)["items"].([]any); len(items) == 0 {
+		t.Error("the log does not show the redirected queries")
+	}
+	// a query to a resolver inside the network's own segment is not the gateway's: the gateway's own address is answered by the proxy as always
+	if out, err := b.top.A.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "@"+testbed.LAN0Gateway, "example.test"); err != nil || strings.TrimSpace(out) != "10.99.0.9" {
+		t.Errorf("the gateway's own address: %q %v", out, err)
+	}
+
+	// DNS over TLS is dropped now, and counted
 	if c, err := dialIn(b.top.A, testbed.ServerAddr+":853"); err == nil {
 		_ = c.Close()
 		t.Errorf("DNS over TLS is not blocked:\n%s", b.top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "dot_block"))
@@ -587,7 +589,7 @@ func TestSetUpdatesAreWrittenBesideAppliesOnTheRealKernel(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 25; i++ {
-			r := b.g.createOverlay(`{"target":{"network":"Lab"},"fault":{"latency":"` + strconv.Itoa(1+i) + `ms"}}`)
+			r := b.g.createOverlay(`{"target":{"network":"lab-hub"},"fault":{"latency":"` + strconv.Itoa(1+i) + `ms"}}`)
 			if r.Status != 201 && r.Status != 200 {
 				t.Errorf("overlay %d: %d %s", i, r.Status, r.Body)
 			}

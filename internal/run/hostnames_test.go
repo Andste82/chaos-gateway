@@ -3,6 +3,7 @@ package run_test
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,4 +162,31 @@ steps:
 		t.Errorf("%+v", left)
 	}
 	h.m.AbortOwned(context.Background(), nil, "test over")
+}
+
+// A DNS fault step that changed no answer is a zero hit, like a fault that matched no packet; one that changed some, and the
+// "DNS broken" profile that did, is not.
+func TestADNSFaultThatChangedNoAnswerIsAZeroHitWarning(t *testing.T) {
+	h := newHarness(t)
+	h.obs.dns[idESP] = true
+	h.obs.stepCounters["hit"] = &model.Counter{Packets: 4, Epoch: 1}
+	h.obs.stepCounters["miss"] = &model.Counter{Epoch: 1}
+	h.obs.stepCounters["profile"] = &model.Counter{Packets: 2, Epoch: 1}
+	r := h.start(`
+name: dnszero
+target: {device: esp32-42}
+steps:
+  - {id: hit,     at: 0s, dns: {action: nxdomain, names: [a.example.com]}}
+  - {id: miss,    at: 1s, dns: {action: servfail, names: [b.example.com]}}
+  - {id: profile, at: 2s, profile: dns-broken}
+`)
+	h.waitStep(r.Id, "hit", model.RunStepStatusApplied)
+	h.advance(time.Second)
+	h.waitStep(r.Id, "miss", model.RunStepStatusApplied)
+	h.advance(time.Second)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	ws := deref(done.Warnings)
+	if len(ws) != 1 || ws[0].Code != model.ZeroHit || *ws[0].Step != "miss" || !strings.Contains(ws[0].Message, "the DNS fault of step miss changed no answer") {
+		t.Fatalf("warnings %+v", ws)
+	}
 }

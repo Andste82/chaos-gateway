@@ -63,6 +63,9 @@ type overlayContext struct {
 	// countersFailed is set when the counters were needed and could not be read (a run does not take a missing
 	// counter for zero packets)
 	countersFailed bool
+	// dnsHits are the queries each DNS fault changed, by overlay id, and dnsEpoch the epoch of those counters
+	dnsHits  map[string]int64
+	dnsEpoch int64
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -75,6 +78,9 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	}
 	if oc.snap.Config != nil {
 		oc.world, _ = domain.NewWorld(oc.snap.Config, oc.snap.Overlays)
+	}
+	if len(oc.snap.DNSFaults) > 0 {
+		oc.dnsHits, oc.dnsEpoch = s.dnsHitsSnapshot()
 	}
 	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0 || len(oc.snap.Forwards) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
@@ -150,6 +156,29 @@ func (oc overlayContext) counterOf(layer, source string) *model.Counter {
 		}
 	}
 	return &c
+}
+
+// withDNS adds the queries a DNS fault of the overlay changed to its counter (a DNS overlay's, or the dns part of an
+// activated profile's): the fault's counter is the number of answers it changed, in packets (no bytes). An overlay
+// that is in no DNS list has none, whatever the kernel's counter says.
+func (oc overlayContext) withDNS(c *model.Counter, id string) *model.Counter {
+	in := false
+	for _, f := range oc.snap.DNSFaults {
+		if strings.EqualFold(f.Overlay, id) {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return c
+	}
+	out := model.Counter{}
+	if c != nil {
+		out = *c
+	}
+	out.Packets += oc.dnsHits[strings.ToLower(id)]
+	out.Epoch = max(out.Epoch, oc.dnsEpoch)
+	return &out
 }
 
 // queuesOf lists the netem queues the faults of one source feed: one per interface of the tree and
@@ -255,7 +284,7 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		// the parts of the profile are faults of the overlay's id: their counters and queues add up
 		st := oc.profileEffect(ov)
 		ov.State = &st
-		ov.Counters = oc.counterOf("overlay", ov.Id.String())
+		ov.Counters = oc.withDNS(oc.counterOf("overlay", ov.Id.String()), ov.Id.String())
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
 		}
@@ -270,6 +299,7 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		// names; it is `effective` while some source has it in its list (compiler.compileDNS)
 		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyDNS)
 		ov.State = &st
+		ov.Counters = oc.withDNS(nil, ov.Id.String())
 		if overridden(st) && ov.Dns != nil {
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, map[string]bool{domain.FamilyDNS: true}, sampleName(deref(ov.Dns.Names))))
 		}

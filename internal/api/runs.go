@@ -177,7 +177,7 @@ func (o runObserver) Counters(ctx context.Context, ids []uuid.UUID) map[uuid.UUI
 			continue
 		}
 		c := oc.overlayView(ov).Counters
-		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile) {
+		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile || ov.Kind == model.OverlayKindDns) {
 			// the counters were read and the overlay has none: it is not in the packet path (a rule that
 			// is disabled, a fault another one overrides), so it matched nothing
 			c = &model.Counter{}

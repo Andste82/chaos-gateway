@@ -5602,6 +5602,8 @@ checks, waits and captures that name a host use the same addresses.
   empty answer with the TC bit, over TCP the real one; `short_ttl` rewrites every TTL (`0s` is allowed), after the proxy's cache, which keeps the real one. The log
   entry names the overlay when the fault changed the answer, and the engine publishes `dns_fault_triggered` (at most once per overlay and device in 10 s).
   A DNS fault competes only with DNS faults (E5). The state of a DNS overlay is `effective` while it is in a list; `GET /overlays` names what overrides it.
+  The counter of a DNS overlay, and of the `dns` part of an activated profile, is the number of answers the fault changed (packets, no bytes), kept in memory like the log (its epoch is the start of the API);
+  a DNS step, or a "DNS broken" step, that changed no answer is a `zero_hit` of the run ("the DNS fault of step X changed no answer").
 - **Hardcoded resolvers** (`compiler/service.go`). A network with `dns.redirect_hardcoded` gets the DNAT of the gateway's address for every other destination of UDP and TCP port 53 too, except what lies in
   its own segments (the network and the networks behind its routers: switched or routed back out of the bridge, never ours, §2.2); an access rule judges a redirected query by
   the resolver the device meant. `dns.block_dot` drops TCP 853 of the network in the chain `dot_block`, jumped to after the access rules (an `allow` rule is an exception) and before the

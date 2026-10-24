@@ -84,6 +84,9 @@ type Executor struct {
 	wake  chan struct{} // an enqueued job
 	slots chan struct{} // bounds the queue: a request waits for a slot
 	clock clock.Clock   // time stamps of the operations
+	// sets writes the elements of DNS-derived sets (dnssets.go); dnsSlot lets one request at a time use it.
+	sets    SetWriter
+	dnsSlot chan struct{}
 	// readers bounds the reads that run beside the writer; rmu, rwg and closed let Close wait for
 	// the ones that are running and refuse new ones.
 	readers chan struct{}
@@ -155,8 +158,16 @@ func WithNetnsInode(f func(path string) (uint64, bool)) Option {
 func New(run Runner, opts ...Option) (*Executor, error) {
 	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), readers: make(chan struct{}, readerSlots), clock: clock.NewReal(), done: make(chan struct{}), stopped: make(chan struct{})}
 	e.capSlots = make(chan struct{}, MaxCaptures)
+	e.dnsSlot = make(chan struct{}, 1)
 	for _, o := range opts {
 		o(e)
+	}
+	if e.sets == nil {
+		if _, real := run.(*ExecRunner); real {
+			e.sets = newNetlinkSets(e.log)
+		} else {
+			e.sets = cliSets{run: run}
+		}
 	}
 	if e.capClock == nil {
 		e.capClock = e.clock
@@ -180,6 +191,7 @@ func (e *Executor) Close() {
 	})
 	<-e.stopped
 	e.rwg.Wait()
+	_ = e.sets.Close()
 }
 
 // Scope returns the executor's scope.
@@ -204,6 +216,9 @@ func (e *Executor) Do(ctx context.Context, op Operation) (Outcome, error) {
 // before the first one runs; the first failure stops the request. An empty batch returns the
 // current generation.
 //
+// A request that consists of updates of DNS-derived sets only does not enter the queue either (doDNS): it runs
+// at once on the executor's own netlink connection, beside a plan that is running (plan §3.11).
+//
 // A request that consists of reads only does not enter the writer's queue: it runs at once on one
 // of the reader slots, beside whatever the writer is doing (plan §3.11 "Reads ... run in a small
 // pool of reader goroutines in parallel to the writer"). Such a read sees whatever the kernel holds
@@ -214,6 +229,9 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 	case <-e.done:
 		return Outcome{}, ErrClosed
 	default:
+	}
+	if isDNSElements(ops) {
+		return e.doDNS(ctx, ops)
 	}
 	if isReadOnly(ops) {
 		return e.doRead(ctx, ops)

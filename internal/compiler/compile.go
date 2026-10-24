@@ -255,6 +255,11 @@ type Target struct {
 	// is no rule.
 	Access     *AccessPlan `json:"access,omitempty"`
 	accessSets []SetDef
+	// DNSSets are the DNS-derived address sets of the hostname selectors in use (plan §2.6, M20), sorted
+	// by id: what the DNS proxy reports resolutions for and the engine writes them into (hostnames.go).
+	DNSSets     []DNSSet `json:"dns_sets,omitempty"`
+	host        *hostBuild
+	hostSetDefs []SetDef
 	// Forwards are the port forwards in the packet path (plan §2.2 layer 4, M35a), sorted by name and id;
 	// ForwardMap is the name of their DNAT map, whose elements send each forwarded port to the target's
 	// current address (forward.go). Both are empty without a forward.
@@ -391,6 +396,7 @@ func Compile(in Input) *Target {
 	t.compileIdentity(idx, in.Identity, in.DeviceNums, in.DeviceNumHigh)
 	t.compileFaults(in, idx)
 	t.compileAccess(in, idx)
+	t.finishHostnames()
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)
 	t.compileTunnelNft(in)
 	t.finish()

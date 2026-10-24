@@ -162,8 +162,7 @@ func nftLines(rs *linux.Ruleset) []line {
 	sort.Strings(names)
 	for _, n := range names {
 		s := byName[n]
-		typ := strings.Trim(string(s.Type), `"`)
-		add(fmt.Sprintf("set %s type %s%s", n, typ, flagText(s.Flags)))
+		add(fmt.Sprintf("set %s type %s%s", n, setTypeOf(s.Type), flagText(s.Flags)))
 		if dynamicName(n) {
 			continue
 		}

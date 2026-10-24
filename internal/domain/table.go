@@ -39,8 +39,9 @@ import (
 // so a piece with no winner has none below it either. Traffic that no entry names has no fault.
 //
 // Not part of a table: hostname destinations. They are resolved through DNS-derived address sets
-// that exist at run time only (M20); the candidates are listed in Table.Unresolved so the
-// compiler can say what it left out.
+// that exist at run time only (M20); the candidates are listed in Table.Unresolved, in the order
+// of their rank, and the compiler turns them into rules that stand in front of the lookup levels
+// (docs/development.md, "DNS faults and hostname selectors (M20)").
 
 // IPRange is an inclusive range of IPv4 addresses.
 type IPRange struct{ First, Last netip.Addr }
@@ -142,7 +143,10 @@ type Table struct {
 	// Entries are sorted by level, then by key.
 	Entries []Entry
 	// Unresolved are the candidates that name a hostname: their addresses are known at run time
-	// only, so they are not in Entries.
+	// only, so they are not in Entries. They are the DNS-derived selectors of the source in the
+	// order the precedence rules of §2.4 try them (RankOrder), without those a candidate that
+	// names no destination and no port of a stronger rank covers entirely (the source's own
+	// winner for all of its traffic, which a hostname selector of a lower rank cannot take over).
 	Unresolved []Candidate
 	// Cells is the work the build took (see MaxTableCells); 0 for a table that was shared with an
 	// earlier source.
@@ -589,7 +593,7 @@ func (w *World) Table(src Source, family string) (Table, error) {
 	w.tabMu.Unlock()
 	if !ok {
 		r.t, r.err = buildTable(t, relevant, destCover, sels)
-		r.t.Unresolved = unresolved
+		r.t.Unresolved = rankHostnames(unresolved, relevant)
 		w.tabMu.Lock()
 		if w.tabCache == nil {
 			w.tabCache = map[string]tableResult{}
@@ -601,6 +605,32 @@ func (w *World) Table(src Source, family string) (Table, error) {
 	}
 	r.t.Source = src
 	return r.t, r.err
+}
+
+// rankHostnames orders the hostname candidates of a source by rank and drops those that a candidate
+// without any destination and port (a fault of the whole source: device, group, network or
+// global, level 4, 6, 8 or 10) of a stronger rank covers for all of its traffic: the rules of the
+// compiler put a hostname selector in front of the lookup levels, so without this a hostname
+// fault of a group would take over from a fault of the device itself.
+func rankHostnames(hosts []Candidate, relevant []tableCand) []Candidate {
+	if len(hosts) == 0 {
+		return nil
+	}
+	var out []Candidate
+	for _, h := range hosts {
+		covered := false
+		for _, x := range relevant {
+			if !x.hasD && !x.hasP && Outranks(x.c, h) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, h)
+		}
+	}
+	RankOrder(out)
+	return out
 }
 
 // buildTable is the work of Table, for the candidates that apply to the source.

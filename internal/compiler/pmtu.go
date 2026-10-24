@@ -134,6 +134,9 @@ type pmtuBuild struct {
 	maps     []MapDef
 	chains   []Chain
 	counters []string
+	// hostRules are the rules of the MTU faults that name a hostname (hostnames.go), in front of the
+	// lookup levels of the MTU lookup chain.
+	hostRules []Rule
 }
 
 // compilePMTU resolves the winning MTU faults of every source, gives the icmp sizes their mirror
@@ -142,7 +145,27 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 	tables := make([]domain.Table, len(sources))
 	var keys []string
 	faults := map[string]*PMTUFault{}
-	hostnames := map[string]bool{}
+	// register makes the PMTU fault of a winner, once per key
+	register := func(c domain.Candidate) string {
+		k := baseKey(c)
+		if faults[k] != nil {
+			return k
+		}
+		mode := PMTUModeICMP
+		if c.MTU.Mode != nil {
+			mode = string(*c.MTU.Mode)
+		}
+		h := pmtuName(k)
+		f := &PMTUFault{Key: k, Layer: string(c.Layer), Source: c.ID, Profile: c.ProfileName, Scope: describeScope(idx, c.Scope),
+			Size: c.MTU.Size, Mode: mode, Chain: pmtuChainPrefix + h,
+			CounterUp: "pmtu_" + h + "_up", CounterDown: "pmtu_" + h + "_down"}
+		if mode == PMTUModeBlackhole {
+			f.CounterDrop = "pmtu_" + h + "_drop"
+		}
+		faults[k] = f
+		keys = append(keys, k)
+		return k
+	}
 	cells := 0
 	for i, src := range sources {
 		tab, err := w.Table(src, domain.FamilyMTU)
@@ -161,35 +184,16 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 		}
 		tables[i] = tab
 		t.addCoverage(tab)
-		for _, c := range tab.Unresolved {
-			if k := baseKey(c); !hostnames[k] {
-				hostnames[k] = true
-				t.warn(CodeHostnameUnresolved, "", "the MTU fault %s selects a hostname: its addresses are known at run time only (DNS-derived sets), so it does not classify traffic yet", c.ID)
-			}
-		}
 		for _, e := range tab.Entries {
 			if e.Winner == nil || e.Winner.MTU == nil {
 				continue
 			}
-			k := baseKey(*e.Winner)
-			if faults[k] != nil {
-				continue
-			}
-			c := *e.Winner
-			mode := PMTUModeICMP
-			if c.MTU.Mode != nil {
-				mode = string(*c.MTU.Mode)
-			}
-			h := pmtuName(k)
-			f := &PMTUFault{Key: k, Layer: string(c.Layer), Source: c.ID, Profile: c.ProfileName, Scope: describeScope(idx, c.Scope),
-				Size: c.MTU.Size, Mode: mode, Chain: pmtuChainPrefix + h,
-				CounterUp: "pmtu_" + h + "_up", CounterDown: "pmtu_" + h + "_down"}
-			if mode == PMTUModeBlackhole {
-				f.CounterDrop = "pmtu_" + h + "_drop"
-			}
-			faults[k] = f
-			keys = append(keys, k)
+			register(*e.Winner)
 		}
+	}
+	hostRules, ok := t.hostFaultRules(tables, sources, func(c domain.Candidate, _ domain.Source) (string, bool) { return register(c), true })
+	if !ok {
+		return
 	}
 	if len(keys) == 0 {
 		return
@@ -253,6 +257,9 @@ func (t *Target) compilePMTU(in Input, w *domain.World, sources []domain.Source,
 		return
 	}
 	t.pmtuBuild = &pmtuBuild{maps: classMapDefs(byLevel)}
+	for _, hr := range hostRules {
+		t.pmtuBuild.hostRules = append(t.pmtuBuild.hostRules, newRule(append(append([]any(nil), hr.expr...), gotoChain(faults[hr.key].Chain))...))
+	}
 	for _, f := range t.PMTU {
 		t.pmtuBuild.chains = append(t.pmtuBuild.chains, f.chain())
 		t.pmtuBuild.counters = append(t.pmtuBuild.counters, f.CounterUp, f.CounterDown)
@@ -351,6 +358,7 @@ func (t *Target) pmtuClassify() (Rule, bool) {
 		t.Nft.Maps = append(t.Nft.Maps, md)
 		t.PMTUMaps[lv.field] = md.Name
 	}
+	look.Rules = append(look.Rules, t.pmtuBuild.hostRules...)
 	look.Rules = append(look.Rules,
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.PMTUMaps["devdestport"])),
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr")), t.PMTUMaps["devdest"])),

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
 func (k *Kernel) nftCmd(c executor.Command) (executor.Result, error) {
@@ -60,7 +61,9 @@ func (k *Kernel) nftList() any {
 	sort.Strings(setNames)
 	for _, n := range setNames {
 		s := t.sets[n]
-		m := map[string]any{"family": "inet", "table": "chaosgw", "name": n, "handle": next(), "type": s.typ}
+		var typ any
+		_ = json.Unmarshal(s.typ, &typ)
+		m := map[string]any{"family": "inet", "table": "chaosgw", "name": n, "handle": next(), "type": typ}
 		if len(s.flags) > 0 {
 			m["flags"] = s.flags
 		}
@@ -243,9 +246,9 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 		case "add":
 			var flags []string
 			_ = json.Unmarshal(f["flags"], &flags)
-			typ := str(f, "type")
+			typ := f["type"]
 			if old, ok := t.sets[name]; ok {
-				if old.typ != typ || !reflect.DeepEqual(old.flags, flags) {
+				if string(old.typ) != string(typ) || !reflect.DeepEqual(old.flags, flags) {
 					return t, nftErr("File exists")
 				}
 				return t, nil
@@ -310,7 +313,7 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 				for _, e := range elems {
 					found := false
 					for i, x := range s.elems {
-						if string(x) == string(e) {
+						if setElemKey(x) == setElemKey(e) {
 							s.elems = append(s.elems[:i:i], s.elems[i+1:]...)
 							found = true
 							break
@@ -325,7 +328,9 @@ func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (
 			for _, e := range elems {
 				dup := false
 				for _, x := range s.elems {
-					dup = dup || string(x) == string(e)
+					// the same key is the same element, whatever timeout the add carries: the kernel
+					// does not change an element that exists
+					dup = dup || setElemKey(x) == setElemKey(e)
 				}
 				if !dup {
 					s.elems = append(s.elems, e)
@@ -538,6 +543,13 @@ func mapElemKey(raw json.RawMessage) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// setElemKey is the key of a set element: what the element is, without the timeout or the other
+// attributes it was added with.
+func setElemKey(raw json.RawMessage) string {
+	set := linux.NftSet{Elem: []json.RawMessage{raw}}
+	return set.Elements()[0]
 }
 
 // printedElems renders the elements as nft prints them: a single-address interval element (a /32

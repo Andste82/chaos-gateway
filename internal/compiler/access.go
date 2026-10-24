@@ -118,12 +118,17 @@ type AccessRule struct {
 	// Sources are the addresses of the source scope right now (empty for AnySource).
 	Sources   []netip.Prefix `json:"sources,omitempty"`
 	SourceSet string         `json:"source_set"`
-	// DestKind is "" (any destination), "prefixes" (Dest) or "uplink" (everything outside the
-	// networks and the management network).
+	// DestKind is "" (any destination), "prefixes" (Dest), "uplink" (everything outside the
+	// networks and the management network) or "hostname" (the addresses the source resolved for
+	// Hostname, held in the DNS-derived set HostSet, plan §2.6).
 	DestKind string         `json:"dest_kind,omitempty"`
 	Dest     []netip.Prefix `json:"dest,omitempty"`
-	Ports    []PortRange    `json:"ports,omitempty"`
-	Counter  string         `json:"counter"`
+	// Hostname is the canonical selector of a destination of kind "hostname", HostSet the nftables set
+	// that holds the addresses.
+	Hostname string      `json:"hostname,omitempty"`
+	HostSet  string      `json:"host_set,omitempty"`
+	Ports    []PortRange `json:"ports,omitempty"`
+	Counter  string      `json:"counter"`
 }
 
 // Cuts reports whether the rule can cut existing connections.
@@ -235,6 +240,10 @@ type Tuple struct {
 	// match as responder; RespPort is its port (the target port).
 	Responder netip.Addr
 	RespPort  int
+	// Names are the names the source resolved for Dst through the gateway's DNS (the engine's record of
+	// the DNS-derived sets), PeerNames those the responder resolved for Src: what a rule with a
+	// hostname destination matches. Empty for a tuple whose names are not known.
+	Names, PeerNames []string
 }
 
 // ForwardedTuple is the tuple of a forwarded connection: from the peer to the entry address and the
@@ -257,10 +266,10 @@ func inPrefixes(ps []netip.Prefix, a netip.Addr) bool {
 // selector with the reply source as the source, the original source as the destination and the reply's
 // source port as the port.
 func (p *AccessPlan) Matches(r *AccessRule, t Tuple) bool {
-	if p.matches(r, t.Src, t.Dst, t.Proto, t.Port, p.NonUplink) {
+	if p.matches(r, t.Src, t.Dst, t.Proto, t.Port, p.NonUplink, t.Names) {
 		return true
 	}
-	return p.Responder && t.Responder.IsValid() && respondsTo(r) && p.matches(r, t.Responder, t.Src, t.Proto, t.RespPort, p.peerNonUplink())
+	return p.Responder && t.Responder.IsValid() && respondsTo(r) && p.matches(r, t.Responder, t.Src, t.Proto, t.RespPort, p.peerNonUplink(), t.PeerNames)
 }
 
 // peerNonUplink is what the destination "uplink" excludes in the responder form (PeerNonUplink).
@@ -279,7 +288,7 @@ func (p *AccessPlan) peerNonUplinkSet() string {
 	return nonUplinkSetName()
 }
 
-func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, port int, nonUplink []netip.Prefix) bool {
+func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, port int, nonUplink []netip.Prefix, names []string) bool {
 	if r.AnySource {
 		if !inPrefixes(p.GlobalSources, src) {
 			return false
@@ -294,6 +303,14 @@ func (p *AccessPlan) matches(r *AccessRule, src, dst netip.Addr, proto string, p
 		}
 	case "uplink":
 		if inPrefixes(nonUplink, dst) {
+			return false
+		}
+	case "hostname":
+		matched := false
+		for _, n := range names {
+			matched = matched || domain.HostnameMatches(r.Hostname, n)
+		}
+		if !matched {
 			return false
 		}
 	}
@@ -532,13 +549,6 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 	elements := 0
 	for _, c := range cands {
 		b := c.body
-		if b.Destination != nil && b.Destination.Hostname != nil {
-			// the addresses of a name are known at run time only (DNS-derived sets, M20): the rule
-			// would match nothing, which for a drop or reject rule means traffic gets through the
-			// operator thinks is blocked. It stays out of the chain and the preview says so.
-			t.warn(CodeHostnameUnresolved, "", "the access rule %s selects the hostname %s: its addresses are known at run time only (DNS-derived sets), so the rule does not apply yet", c.id, *b.Destination.Hostname)
-			continue
-		}
 		key := string(c.layer) + ":" + c.id
 		r := AccessRule{Key: key, Layer: string(c.layer), ID: c.id, Name: c.name, Position: len(plan.Rules),
 			Action: string(b.Action), CutExisting: b.CutExisting != nil && *b.CutExisting,
@@ -575,6 +585,15 @@ func (t *Target) compileAccess(in Input, idx *domain.Index) {
 		}
 		if d := b.Destination; d != nil {
 			switch {
+			case d.Hostname != nil:
+				// the addresses of a name are known at run time only: the rule looks them up in the
+				// DNS-derived set of the selector, which the proxy fills with what the source resolved
+				clients := r.Sources
+				if r.AnySource {
+					clients = plan.GlobalSources
+				}
+				set := t.hostSet(*d.Hostname, clients)
+				r.DestKind, r.Hostname, r.HostSet = "hostname", set.Pattern, set.Name
 			case d.Uplink != nil:
 				r.DestKind = "uplink"
 			case d.Network != nil:
@@ -704,6 +723,8 @@ func (p *AccessPlan) matchExpr(r AccessRule) []any {
 		e = append(e, eq(ctOriginalIP("daddr"), prefixes(r.Dest)))
 	case "uplink":
 		e = append(e, match(ctOriginalIP("daddr"), "!=", setRef(nonUplinkSetName())))
+	case "hostname":
+		e = append(e, hostLookup(r.HostSet))
 	}
 	if r.Protocol != "any" {
 		e = append(e, eq(meta("l4proto"), r.Protocol))
@@ -728,6 +749,8 @@ func (p *AccessPlan) responderExpr(r AccessRule) []any {
 		e = append(e, eq(ctOriginalIP("saddr"), prefixes(r.Dest)))
 	case "uplink":
 		e = append(e, match(ctOriginalIP("saddr"), "!=", setRef(p.peerNonUplinkSet())))
+	case "hostname":
+		e = append(e, hostLookupResponder(r.HostSet))
 	}
 	if r.Protocol != "any" {
 		e = append(e, eq(meta("l4proto"), r.Protocol))

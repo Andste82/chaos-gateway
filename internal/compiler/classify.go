@@ -156,6 +156,9 @@ func (t *Target) compileClassify() {
 	if r, ok := t.pmtuClassify(); ok {
 		c.Rules = append(c.Rules, r)
 	}
+	// the faults that name a hostname: DNS-derived sets are looked up in front of the levels, strongest
+	// first (hostnames.go); a packet that matches goes to the chain of its id and never reaches them
+	c.Rules = append(c.Rules, fb.hostRules...)
 	c.Rules = append(c.Rules,
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr"), meta("l4proto"), ctOriginal("proto-dst")), t.ClassifyMaps["devdestport"])),
 		newRule(vmap(concat(ctOriginalIP("saddr"), ctOriginalIP("daddr")), t.ClassifyMaps["devdest"])),

@@ -16,6 +16,7 @@ const (
 	TypeNftDelElements    = "nft_del_elements"
 	TypeNftAddMapElements = "nft_add_map_elements"
 	TypeNftDelMapElements = "nft_del_map_elements"
+	TypeNftDNSElements    = "nft_dns_elements"
 	TypeRouting           = "routing"
 	TypeTC                = "tc"
 	TypeOffloads          = "offloads"
@@ -106,6 +107,36 @@ type NftDelMapElements struct {
 	Target
 	Map  string   `json:"map"`
 	Keys []string `json:"keys"`
+}
+
+// DNSElement is one address a client resolved for a name: an element of a DNS-derived set (plan §2.6),
+// whose key is the client's address and the address in the answer.
+type DNSElement struct {
+	Client string `json:"client"`
+	Addr   string `json:"addr"`
+	// TimeoutSeconds is the lifetime the element is written with (plan §2.6: max(DNS TTL, 10 min)).
+	TimeoutSeconds int `json:"timeout_seconds"`
+	// Replace refreshes an element that exists: the kernel does not change the lifetime of an element that
+	// is there already, so it is deleted and added again in the same transaction. An element that is not
+	// there (it ran out meanwhile) is added.
+	Replace bool `json:"replace,omitempty"`
+}
+
+// DNSSetUpdate are the elements to write into one DNS-derived set.
+type DNSSetUpdate struct {
+	Set      string       `json:"set"`
+	Elements []DNSElement `json:"elements"`
+}
+
+// NftDNSElements writes the elements of DNS-derived address sets (plan §2.6, §3.4, §3.11): what the DNS
+// proxy answered a client, entered before the answer goes out. It is the one operation that does not wait for
+// a plan: it runs on a netlink connection of its own that the executor keeps open (a process per answer
+// limited the proxy of spike S5 to ~280 queries/s), beside whatever the writer is doing, one request at
+// a time. The kernel serializes the transactions, and an apply never flushes these sets (S11). It takes
+// the sets of this one kind only (DNSSetName), so it cannot change any other set.
+type NftDNSElements struct {
+	Target
+	Updates []DNSSetUpdate `json:"updates"`
 }
 
 // Route is a route in one of Chaos Gateway's tables. The executor tags it with its own protocol.
@@ -421,6 +452,7 @@ func (NftAddElements) OpType() string    { return TypeNftAddElements }
 func (NftDelElements) OpType() string    { return TypeNftDelElements }
 func (NftAddMapElements) OpType() string { return TypeNftAddMapElements }
 func (NftDelMapElements) OpType() string { return TypeNftDelMapElements }
+func (NftDNSElements) OpType() string    { return TypeNftDNSElements }
 func (Routing) OpType() string           { return TypeRouting }
 func (TC) OpType() string                { return TypeTC }
 func (Offloads) OpType() string          { return TypeOffloads }
@@ -439,6 +471,7 @@ func (NftAddElements) Mutates() bool    { return true }
 func (NftDelElements) Mutates() bool    { return true }
 func (NftAddMapElements) Mutates() bool { return true }
 func (NftDelMapElements) Mutates() bool { return true }
+func (NftDNSElements) Mutates() bool    { return true }
 func (Routing) Mutates() bool           { return true }
 func (TC) Mutates() bool                { return true }
 func (Offloads) Mutates() bool          { return true }
@@ -489,6 +522,8 @@ func Decode(data []byte) (Operation, error) {
 		op = &NftAddMapElements{}
 	case TypeNftDelMapElements:
 		op = &NftDelMapElements{}
+	case TypeNftDNSElements:
+		op = &NftDNSElements{}
 	case TypeRouting:
 		op = &Routing{}
 	case TypeTC:

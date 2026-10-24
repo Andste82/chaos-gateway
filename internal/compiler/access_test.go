@@ -293,25 +293,6 @@ func TestPortsAndRangesAreMergedIntoDisjointIntervals(t *testing.T) {
 	}
 }
 
-func TestAHostnameRuleIsLeftOutWithAWarning(t *testing.T) {
-	w := accessWorld(t)
-	w.addConfigRule(ruleA, `{name: by-name, source: {global: true}, destination: {hostname: broker.example.com}, action: drop}`)
-	w.addConfigRule(ruleB, `{name: plain, source: {global: true}, protocol: tcp, ports: [2], action: drop}`)
-	tg := w.compile(nil)
-	if len(tg.Access.Rules) != 1 || tg.Access.Rules[0].Name != "plain" {
-		t.Fatalf("rules = %+v", tg.Access.Rules)
-	}
-	found := false
-	for _, p := range tg.Problems {
-		if p.Code == CodeHostnameUnresolved && p.Severity == SevWarning && strings.Contains(p.Message, "broker.example.com") {
-			found = true
-		}
-	}
-	if !found || tg.HasErrors() {
-		t.Fatalf("problems = %+v", tg.Problems)
-	}
-}
-
 // ---- scopes ----------------------------------------------------------------------------------------
 
 func sourcesOf(tg *Target, key string) []string {

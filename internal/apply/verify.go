@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -271,11 +272,11 @@ func verifyNft(t *compiler.Target, rs *linux.Ruleset) []Mismatch {
 			bad("set %s is missing", name)
 			continue
 		}
-		if want.Dynamic {
-			continue
-		}
-		if typ := strings.Trim(string(got.Type), `"`); typ != want.Type || strings.Join(got.Flags, ",") != strings.Join(want.Flags, ",") {
+		if typ := setTypeOf(got.Type); typ != want.Type || strings.Join(got.Flags, ",") != strings.Join(want.Flags, ",") {
 			bad("set %s is %s %v, want %s %v", name, typ, got.Flags, want.Type, want.Flags)
+		}
+		if want.Dynamic {
+			continue // the elements are the runtime's (the DNS-derived sets), not the compiler's
 		}
 		have := got.Elements()
 		wantEl := make([]string, 0, len(want.Elements))
@@ -389,4 +390,14 @@ func comments(r []linux.NftRule) []string {
 		out = append(out, x.Comment)
 	}
 	return out
+}
+
+// setTypeOf is the type of a set as the compiler writes it: the name of a type, or the names of a
+// concatenation joined with " . " (nft lists the latter as an array).
+func setTypeOf(raw json.RawMessage) string {
+	var parts []string
+	if json.Unmarshal(raw, &parts) == nil {
+		return strings.Join(parts, " . ")
+	}
+	return strings.Trim(string(raw), `"`)
 }

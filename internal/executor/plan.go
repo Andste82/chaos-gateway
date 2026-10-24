@@ -71,6 +71,8 @@ func Plan(op Operation) ([]Step, error) {
 		return planElements("add", o.Target, o.Set, o.Elements, o.TimeoutSeconds)
 	case *NftDelElements:
 		return planElements("delete", o.Target, o.Set, o.Elements, 0)
+	case *NftDNSElements:
+		return planDNSElements(o), nil
 	case *NftAddMapElements:
 		return planMapElements("add", o.Target, o.Map, o.Elements)
 	case *NftDelMapElements:

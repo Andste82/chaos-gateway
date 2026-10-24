@@ -144,7 +144,7 @@ func (n Nft) transaction(current *linux.Ruleset, diff bool) ([]byte, error) {
 		cmds = append(cmds, cmd("add", "counter", map[string]any{"name": c}))
 	}
 	for _, s := range n.Sets {
-		f := map[string]any{"name": s.Name, "type": s.Type}
+		f := map[string]any{"name": s.Name, "type": mapValueType(s.Type)}
 		if len(s.Flags) > 0 {
 			f["flags"] = s.Flags
 		}

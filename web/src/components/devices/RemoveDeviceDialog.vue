@@ -18,7 +18,7 @@ import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
 import type { Device, DeviceView } from '../../api/generated/model';
 import { useActiveConfig, useGatewayState, useOverlays } from '../../composables/gateway';
-import { deviceReferences, groupWithout, idMac, referenceEffectText, referenceKind, type DeviceReference } from '../../lib/devices';
+import { deviceReferences, idMac, referenceEffectText, referenceKind } from '../../lib/devices';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import LoadError from '../ui/LoadError.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -51,7 +51,7 @@ const config = computed<Device | undefined>(() => {
 const name = computed(() => config.value?.name ?? props.device.name);
 
 /** The objects of the draft that name the device. */
-function currentReferences(): DeviceReference[] {
+const references = computed(() => {
   if (!draft.baseConfig) return [];
   return deviceReferences(
     { id: props.device.id, name: name.value },
@@ -63,8 +63,7 @@ function currentReferences(): DeviceReference[] {
       scenarios: draft.effectiveScenarios,
     },
   );
-}
-const references = computed(currentReferences);
+});
 /** The references the removal cannot take along (a scenario): they block it. */
 const blockers = computed(() => references.value.filter((r) => r.effect === 'blocks'));
 const deleted = computed(() => references.value.filter((r) => r.effect === 'delete').length);
@@ -88,21 +87,9 @@ async function submit() {
       error.value = `${name.value} is not in the configuration of revision ${draft.base}.`;
       return;
     }
-    const device = { id: props.device.id, name: name.value };
-    draft.editFrom(origin, () => {
-      // the references as the draft has them on the revision the dialog was opened on; a scenario stays
-      // (the gateway names it in the preview, should one have come up meanwhile)
-      for (const r of currentReferences()) {
-        if (r.kind === 'rule') draft.setRule(r.id, null);
-        else if (r.kind === 'fault') draft.setFault(r.id, null);
-        else if (r.kind === 'forward') draft.setForward(r.id, null);
-        else if (r.kind === 'group') {
-          const g = draft.effectiveGroups[r.id];
-          if (g) draft.setGroup(r.id, groupWithout(g, device));
-        }
-      }
-      draft.setDevice(props.device.id, null);
-    });
+    // the references as the draft has them on the revision the dialog was opened on; a scenario stays
+    // (the gateway names it in the preview, should one have come up meanwhile)
+    draft.editFrom(origin, () => draft.removeDevice({ id: props.device.id, name: name.value }));
     open.value = false;
     if (draft.dirty) draft.drawerOpen = true;
   } catch (e) {

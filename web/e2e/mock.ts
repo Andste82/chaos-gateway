@@ -1194,7 +1194,7 @@ export class MockGateway {
       const fields = v?.members && before ? [{ path: 'members', old: before.members ?? [], new: v.members }] : undefined;
       domain.push({ op, kind: 'group', id: key, name, path: `/groups/${key}`, summary: `group ${name} ${op}`, ...(fields ? { fields } : {}) });
     }
-    const nets =(patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> } | null> }).networks ?? {};
+    const nets = (patch as { networks?: Record<string, { clients?: Record<string, { name?: string; address?: string } | null> } | null> }).networks ?? {};
     for (const [netId, n] of Object.entries(nets)) {
       for (const [key, c] of Object.entries(n?.clients ?? {})) {
         const before = (this.config.networks?.[netId] as WireGuardNetwork | undefined)?.clients?.[key];

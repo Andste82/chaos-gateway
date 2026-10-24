@@ -20,7 +20,7 @@ import type {
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
-import { deviceReferences, groupWithMember } from '../lib/devices';
+import { deviceReferences, groupWithMember, groupWithout } from '../lib/devices';
 import { forwardChanges, forwardTitle } from '../lib/forwards';
 import { faultChips, describeScope, describeTunnel, impairmentCombines, impairmentKeys, impairmentOf, withImpairment, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
@@ -130,6 +130,20 @@ export interface DraftChange extends FieldChange {
 }
 
 /**
+ * What the draft had before a device was removed together with the objects that name it (#99): the
+ * device, the rules, faults and port forwards deleted along and the groups it was taken out of (as the
+ * draft had them), and the order of the rules.
+ */
+interface Removal {
+  device: Device | undefined;
+  rules: Record<string, AccessRule>;
+  faults: Record<string, ConfigFault>;
+  forwards: Record<string, PortForward>;
+  groups: Record<string, Group>;
+  order: string[];
+}
+
+/**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
  * access rules, their order, configured faults, custom profiles, adopted devices, groups (#99), networks (P3-M14-01), WireGuard clients, the access
  * matrix, the routing (P3-M14-01), the port forwards (M35a) and the scenarios (M19), edited
@@ -158,6 +172,8 @@ export const useDraftStore = defineStore('draft', () => {
    * members (#99).
    */
   const groups = ref<Record<string, Group | null>>({});
+  /** What the draft had before each removal of a device together with the objects that name it, by device id: for its Undo (#99). */
+  const removals = ref<Record<string, Removal>>({});
   /** WireGuard clients added, changed or deleted (`client: null`), by client id with their hub. */
   const clients = ref<Record<string, { network: string; client: WireGuardClient | null }>>({});
   /** The entries of the access matrix, when they were edited. */
@@ -420,14 +436,84 @@ export const useDraftStore = defineStore('draft', () => {
   }
 
   /**
-   * Undoes the removal of a configured device of the base (the device list's and the detail's Undo):
-   * the device comes back, and so do the objects of the base that named it and that the draft deleted
-   * or took it out of (a removal together with them, #99): rules, faults and port forwards come back
-   * as the base has them, a group gets the device back as a member.
+   * Removes a configured device together with the objects of the draft that name it (#99): access
+   * rules, configured faults and port forwards are deleted, a group loses the device as a member and
+   * keeps the others. A scenario is not changed (the removal dialog waits while one names the device).
+   * What the draft had before is kept for the Undo (`restoreDevice`).
+   */
+  function removeDevice(device: { id: string; name: string }) {
+    const record: Removal = {
+      device: devices.value[device.id] ?? baseConfig.value?.devices?.[device.id],
+      rules: {},
+      faults: {},
+      forwards: {},
+      groups: {},
+      order: [...effectiveOrder.value],
+    };
+    const refs = deviceReferences(device, { rules: effectiveRules.value, faults: effectiveFaults.value, groups: effectiveGroups.value, forwards: effectiveForwards.value });
+    for (const r of refs) {
+      if (r.kind === 'rule') {
+        record.rules[r.id] = cloneJSON(effectiveRules.value[r.id]!);
+        setRule(r.id, null);
+      } else if (r.kind === 'fault') {
+        record.faults[r.id] = cloneJSON(effectiveFaults.value[r.id]!);
+        setFault(r.id, null);
+      } else if (r.kind === 'forward') {
+        record.forwards[r.id] = cloneJSON(effectiveForwards.value[r.id]!);
+        setForward(r.id, null);
+      } else if (r.kind === 'group') {
+        const g = effectiveGroups.value[r.id]!;
+        record.groups[r.id] = cloneJSON(g);
+        setGroup(r.id, groupWithout(g, device));
+      }
+    }
+    setDevice(device.id, null);
+    removals.value = { ...removals.value, [device.id]: record };
+  }
+
+  /**
+   * Undoes the removal of a configured device (the device list's and the detail's Undo): the device
+   * comes back as the draft had it, and so do the objects removed along with it (`removeDevice`):
+   * rules, faults and port forwards as the draft had them (a rule at its place in the order), and the
+   * device is put back into its groups at its old place, while the groups keep what changed since.
+   * An object brought back meanwhile stays as it is. Without that record (the draft was reapplied on
+   * another revision since), the device and the objects of the base that named it come back as the
+   * base has them.
    */
   function restoreDevice(id: string) {
+    if (devices.value[id] !== null) return;
+    const record = removals.value[id];
+    const { [id]: _drop, ...rest } = removals.value;
+    removals.value = rest;
+    if (!record) {
+      restoreDeviceFromBase(id);
+      return;
+    }
+    setDevice(id, record.device ?? null);
+    const device = { id, name: record.device?.name ?? id };
+    const back = Object.keys(record.rules).filter((r) => !(r in effectiveRules.value));
+    for (const r of back) setRule(r, record.rules[r]!);
+    if (back.length) {
+      // each rule after the nearest one that stood before it and is still there
+      const ids = effectiveOrder.value.filter((x) => !back.includes(x));
+      for (const r of record.order.filter((x) => back.includes(x))) {
+        const prev = record.order.slice(0, record.order.indexOf(r)).reverse().find((x) => ids.includes(x));
+        ids.splice(prev === undefined ? 0 : ids.indexOf(prev) + 1, 0, r);
+      }
+      setOrder(ids);
+    }
+    for (const [f, fault] of Object.entries(record.faults)) if (!(f in effectiveFaults.value)) setFault(f, fault);
+    for (const [f, forward] of Object.entries(record.forwards)) if (!(f in effectiveForwards.value)) setForward(f, forward);
+    for (const [g, group] of Object.entries(record.groups)) {
+      const now = effectiveGroups.value[g];
+      if (now) setGroup(g, groupWithMember(group, now, device));
+    }
+  }
+
+  /** The Undo of a removal without its record: the device and the objects of the base that named it come back as the base has them. */
+  function restoreDeviceFromBase(id: string) {
     const before = baseConfig.value?.devices?.[id];
-    if (!before || devices.value[id] !== null) return;
+    if (!before) return;
     setDevice(id, before);
     const device = { id, name: before.name };
     const refs = deviceReferences(device, { rules: baseRules.value, faults: baseFaults.value, groups: baseGroups.value, forwards: baseForwards.value });
@@ -436,9 +522,8 @@ export const useDraftStore = defineStore('draft', () => {
       else if (r.kind === 'fault') restoreFault(r.id);
       else if (r.kind === 'forward' && forwards.value[r.id] === null) restoreForward(r.id);
       else if (r.kind === 'group') {
-        const now = groups.value[r.id];
-        if (now === null) setGroup(r.id, baseGroups.value[r.id]!);
-        else if (now) setGroup(r.id, groupWithMember(baseGroups.value[r.id]!, now, device));
+        const now = effectiveGroups.value[r.id];
+        if (now) setGroup(r.id, groupWithMember(baseGroups.value[r.id]!, now, device));
       }
     }
   }
@@ -1067,6 +1152,8 @@ export const useDraftStore = defineStore('draft', () => {
     profiles.value = reapply('profile', profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
     devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
     groups.value = reapply('group', groups.value, old?.groups ?? {}, rev.configuration.groups ?? {});
+    // what the draft had before a removal was based on the old revision: its Undo goes back to the base
+    removals.value = {};
     networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
     forwards.value = reapply('forward', forwards.value, old?.port_forwards ?? {}, rev.configuration.port_forwards ?? {});
     scenarios.value = reapply('scenario', scenarios.value, old?.scenarios ?? {}, rev.configuration.scenarios ?? {});
@@ -1119,6 +1206,7 @@ export const useDraftStore = defineStore('draft', () => {
     profiles.value = {};
     devices.value = {};
     groups.value = {};
+    removals.value = {};
     clients.value = {};
     networks.value = {};
     routing.value = undefined;
@@ -1250,6 +1338,7 @@ export const useDraftStore = defineStore('draft', () => {
     restoreFault,
     restoreProfile,
     setDevice,
+    removeDevice,
     restoreDevice,
     effectiveGroups,
     setGroup,

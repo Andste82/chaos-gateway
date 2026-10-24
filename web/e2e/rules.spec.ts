@@ -15,7 +15,13 @@ const rows = (page: Page) => page.getByTestId('rule-row');
 const bar = (page: Page) => page.getByTestId('unapplied-bar');
 
 test('the ordered list: the system rule locked at the top, overlay rules before the configured rules, hits and switches', async ({ page }) => {
-  await open(page);
+  // the "ago" texts compare the counters' time stamps with the browser's clock: pin it to the time
+  // the mock's stamps are taken from, so a slow run cannot turn "just now" into "5 s ago"
+  const now = Date.now();
+  const gw = withRules(MockGateway.sample(), now);
+  gw.systemRuleCounters.last_match = new Date(now).toISOString();
+  await page.clock.setFixedTime(now);
+  await open(page, gw);
   await expect(rows(page)).toHaveCount(5);
   await expect(rows(page).nth(0)).toContainText('Control plane access');
   await expect(rows(page).nth(0)).toContainText('SYSTEM');

@@ -80,8 +80,8 @@ func fixedIPDHCPOff(idx *Index, d *DeviceInfo) (Warning, bool) {
 }
 
 // fixedIPInPool reports a device's fixed address that lies inside a DHCP pool of its network: a
-// configured pool, or the default pool (the second half of the subnet) when the network names none, as
-// the compiler hands it to Kea. A network with DHCP off makes no reservation, so there is nothing to warn.
+// configured pool, or the default pool (the second half of the subnet, split around the gateway's address
+// when it lies inside, #110) when the network names none, as the compiler hands it to Kea. A network with DHCP off makes no reservation, so there is nothing to warn.
 func fixedIPInPool(idx *Index, d *DeviceInfo) (Warning, bool) {
 	if d.Origin != OriginConfigured || d.Device == nil || d.Device.FixedIp == nil || d.Network == "" {
 		return Warning{}, false

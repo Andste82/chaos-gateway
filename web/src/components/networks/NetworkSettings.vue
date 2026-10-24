@@ -60,10 +60,10 @@ const terms = computed(() => {
 });
 
 const pools = computed(() => effectivePools(lan.value?.address, lan.value?.dhcp?.pools));
-/** The gateway's own address lies in the second half of the subnet: the default pools leave it out (#110). */
+/** The gateway's own address lies in the default range, the second half of the subnet: the default pools leave it out (#110); a subnet smaller than a /29 has no default pool. */
 const gatewayInDefault = computed(() => {
   const s = parseSubnet(lan.value?.address);
-  return !!s && s.address >= s.network + (s.broadcast - s.network + 1) / 2 && s.address < s.broadcast;
+  return !!s && s.len <= 29 && s.address >= s.network + (s.broadcast - s.network + 1) / 2 && s.address < s.broadcast;
 });
 const dhcpOn = computed(() => lan.value?.dhcp?.enabled !== false);
 /** The devices with a fixed IP in the network, as the draft has them. */

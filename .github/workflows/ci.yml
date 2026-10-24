@@ -90,7 +90,7 @@ jobs:
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           # The engine package alone needs more than the default 20 minutes since M8b (about 50 minutes under KVM since M10): its measurement
           # tests of the fault engine send thousands of probes through delays of 100 to 600 ms each.
-          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1"
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -134,7 +134,7 @@ jobs:
         run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       # The engine package alone needs more than the default 20 minutes since M10 (about 25 native):
       # its measurement tests send thousands of probes through delays of 100 to 600 ms each.
-      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1"
+      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record

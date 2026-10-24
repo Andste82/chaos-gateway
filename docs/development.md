@@ -1037,6 +1037,18 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   rates and carries the last read's `Active` and `UnknownSources` over. The API tests run the engine on
   the real clock, so `checksGateway` sets `OfflineAfter` to a nanosecond: there a device is offline at the
   first observation without a sign of life, as before.
+  The acceptance of #79 runs on the real kernel too (issue #92, `integration_observe_test.go`, `$I79_LEVEL1`),
+  with the observation wired as `cmd/chaosgw/api.go` wires it: `TestASteadyTransferShowsASteadyRateInEverySampleOnTheRealKernel`
+  (a TCP transfer shaped to 1 MB/s by tbf on the server, sampled every 5 s for a minute: every sample known
+  and within ±20 %, under emulation only known, non-zero and below twice the link rate),
+  `TestADeviceThatTalksEveryThirtySecondsStaysOnlineWithoutFlapsOnTheRealKernel` (a UDP datagram every 30 s
+  that is never answered, the product's 60 s, watched for 150 s: five intervals, each going through the same
+  states, instead of the 10 minutes of #79) and `TestAnUnpluggedDeviceWithAnOpenConnectionGoesOfflineAfterOfflineAfterOnTheRealKernel`
+  (`OfflineAfter` 20 s; the device stays online for `OfflineAfter` after its last sighting, goes offline within a
+  poll after `OfflineAfter` has passed since its last sign of life, and its TCP connection is still established).
+  A last sign of life can come after the unplug: what the device sent just before it is counted by the next
+  conntrack read (up to `conntrackFallback`, 10 s, later), and a neighbor entry that was REACHABLE at the unplug
+  stays a sign of life until the kernel turns it STALE (up to one and a half times `base_reachable_time`, 45 s).
   The identity does not flap either (issue #93, option (a), decided 2026-10-24): `ResolveIdentity` keeps
   the stale (STALE, DELAY, PROBE) neighbor entry of a configured device as a lingering claim of its
   address (`claim.yielding`, the device's least current address) that gives way to any claim of another
@@ -5564,10 +5576,11 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of Kea's packet socket after a link flap
-(issue #64) and the tests against the real Kea (I64-05) must each pass, so one that is renamed, skips or is no
+(issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
+issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job.
 
 The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.

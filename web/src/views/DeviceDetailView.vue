@@ -139,7 +139,7 @@ const removeOpen = ref(false);
 /** A configured device whose removal from the configuration is in the draft, not applied yet. */
 const removed = computed(() => !!d.value && isConfigured(d.value) && draft.devices[d.value.id] === null);
 function undoRemoval() {
-  if (d.value) draft.setDevice(d.value.id, draft.baseConfig?.devices?.[d.value.id] ?? null);
+  if (d.value) draft.restoreDevice(d.value.id);
   focusAfterUpdate('[data-focus-key="remove-device"]');
 }
 /** The configured device as the draft has it (its edit or the configuration); undefined for any other kind or a deletion. */

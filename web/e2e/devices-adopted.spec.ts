@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { discoveredDeviceId } from '../src/lib/ids';
-import { FWD_SENSOR, FWD_WEB, IOT, MockGateway, device, toast, withForwards } from './mock';
+import { FWD_SENSOR, FWD_WEB, IOT, MockGateway, device, toast, withForwards, withScenarios } from './mock';
 
 // #78: the device list shows a discovered device under the host name of its lease and marks the
 // configured ones (ADOPTED, a differing host name), filters them, edits them in the device dialog
-// (#73) and removes them from the configuration (references listed first, undo while not applied).
+// (#73) and removes them from the configuration (with the objects that name them, a scenario blocks: #99;
+// undo while not applied).
 const ESP = 'a1b2c3d4-0000-4000-8000-000000000042';
 const SENSOR7 = 'a1b2c3d4-0000-4000-8000-000000000057';
 const SENSOR9 = 'a1b2c3d4-0000-4000-8000-000000000059';
@@ -181,28 +182,105 @@ test('removing a device adopted from discovery: its active faults go with it, it
   await expect(back.getByRole('link', { name: 'dev-02-00-00-00-00-77' })).toHaveAttribute('href', `/devices/${PLUG}`);
 });
 
-test('removing a device that rules, faults, groups or forwards name lists them first and waits until they are gone', async ({ page }) => {
+const SENSOR7_FAULT = 'c0f00000-0000-4000-8000-000000000007';
+const SENSOR7_RULE = 'a1000000-0000-4000-8000-000000000057';
+const SENSOR7_FWD = 'e1000000-0000-4000-8000-000000000057';
+
+/** The lab with Sensor-07 named by a rule, its fault, the group lab (with Sensor-09 too) and a port forward. */
+function sensor7Named(): MockGateway {
   const gw = lab();
+  gw.config = {
+    ...gw.config,
+    access_rules: { [SENSOR7_RULE]: { name: 'sensor7-out', source: { device: SENSOR7 }, destination: { uplink: true }, action: 'drop' } },
+    access_rule_order: [SENSOR7_RULE],
+    groups: { [GROUP]: { name: 'lab', members: [SENSOR7, SENSOR9] } },
+    port_forwards: {
+      ...gw.config.port_forwards,
+      [SENSOR7_FWD]: { name: 'sensor7-ssh', protocol: 'tcp', entry: 'uplink', external_port: 2207, target: { device: SENSOR7 }, target_port: 22 },
+    },
+  };
+  return gw;
+}
+
+test('removing a device together with the rule, fault, group and forward that name it: one draft, one apply (#99)', async ({ page }) => {
+  const gw = sensor7Named();
   await gw.install(page);
   await page.goto('/devices');
 
-  // Sensor-07: the configured fault sensor7-slow and the group lab
   await row(page, 'Sensor-07').getByRole('button', { name: 'Remove Sensor-07 from the configuration' }).click();
-  let dialog = page.getByRole('dialog', { name: 'Remove Sensor-07' });
-  await expect(dialog.getByTestId('remove-device-references')).toContainText('Sensor-07 is used by these 2 objects of the configuration');
-  await expect(dialog.getByTestId('remove-device-reference')).toHaveText(['fault sensor7-slow', 'group lab']);
-  await expect(dialog.getByTestId('remove-device-reference').first().getByRole('link', { name: 'sensor7-slow' })).toHaveAttribute('href', '/faults');
-  await expect(dialog.getByTestId('remove-device-references')).toContainText("A group's members are changed in the configuration");
-  await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
-  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove Sensor-07' });
+  const refs = dialog.getByTestId('remove-device-references');
+  await expect(refs).toContainText('Sensor-07 is used by these 4 objects of the configuration');
+  await expect(dialog.getByTestId('remove-device-reference')).toHaveText([
+    'rule sensor7-out · deleted',
+    'fault sensor7-slow · deleted',
+    'group lab · loses Sensor-07 as a member',
+    'port forward sensor7-ssh · deleted',
+  ]);
+  await expect(dialog.getByTestId('remove-device-reference').nth(1).getByRole('link', { name: 'sensor7-slow' })).toHaveAttribute('href', '/faults');
+  await expect(refs.getByTestId('remove-device-along')).toHaveText(
+    'They go with the device in the same revision: the 3 objects that name only Sensor-07 are deleted, a group loses it as a member and keeps the others. The preview lists what is deleted and what is changed before anything is applied.',
+  );
+  await expect(dialog.getByTestId('remove-device-preview')).toContainText('Device Sensor-07 is removed from the configuration');
+  await dialog.getByRole('button', { name: 'Remove the device and these references' }).click();
 
-  // ESP32-42 from its detail: the port forwards esp-web and esp-admin
+  // the preview lists what is deleted and what is changed; nothing is applied yet
+  let drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  const changes = drawer.getByTestId('preview-changes');
+  await expect(changes).toContainText('access rule sensor7-out removed');
+  await expect(changes).toContainText('fault sensor7-slow removed');
+  await expect(changes).toContainText('device Sensor-07 removed');
+  await expect(changes).toContainText('group lab changed');
+  await expect(changes).toContainText(`members: ${JSON.stringify([SENSOR7, SENSOR9])} → ${JSON.stringify([SENSOR9])}`);
+  await expect(changes).toContainText('port forward sensor7-ssh removed');
+
+  // Undo of the removal takes the objects removed along back too
+  await drawer.getByRole('button', { name: 'Close' }).click();
+  await expect(drawer).toBeHidden();
+  await expect(page.getByTestId('unapplied-bar')).toContainText('5 changes in 1 rule, 1 fault, 1 device, 1 group and 1 port forward');
+  await row(page, 'Sensor-07').getByRole('button', { name: 'Undo the removal of Sensor-07' }).click();
+  await expect(page.getByTestId('unapplied-bar')).toBeHidden();
+
+  await row(page, 'Sensor-07').getByRole('button', { name: 'Remove Sensor-07 from the configuration' }).click();
+  await page.getByRole('dialog', { name: 'Remove Sensor-07' }).getByRole('button', { name: 'Remove the device and these references' }).click();
+  drawer = page.getByRole('dialog', { name: 'Preview revision 44' });
+  await drawer.getByRole('button', { name: 'Apply revision 44' }).click();
+  await expect(toast(page, 'Revision 44 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions').at(-1)!.body).toEqual({
+    access_rules: { [SENSOR7_RULE]: null },
+    access_rule_order: [],
+    faults: { [SENSOR7_FAULT]: null },
+    devices: { [SENSOR7]: null },
+    groups: { [GROUP]: { members: [SENSOR9] } },
+    port_forwards: { [SENSOR7_FWD]: null },
+  });
+  // the group keeps Sensor-09; the forwards to other devices stay
+  expect(gw.config.groups).toEqual({ [GROUP]: { name: 'lab', members: [SENSOR9] } });
+  expect(gw.config.access_rules).toEqual({});
+  expect(Object.keys(gw.config.port_forwards ?? {})).not.toContain(SENSOR7_FWD);
+  expect(Object.keys(gw.config.port_forwards ?? {})).toContain(FWD_WEB);
+  await expect(row(page, 'dev-02-00-00-00-00-39').getByRole('button', { name: 'Adopt sensor-a7' })).toBeVisible();
+});
+
+test('a scenario that targets the device still blocks its removal, with the reason (#99)', async ({ page }) => {
+  const gw = withScenarios(lab());
+  await gw.install(page);
+
+  // ESP32-42 from its detail: the port forwards esp-web and esp-admin could go along, the scenario mqtt-outage cannot
   await page.goto(`/devices/${ESP}`);
   await page.getByRole('button', { name: 'Remove ESP32-42 from the configuration' }).click();
-  dialog = page.getByRole('dialog', { name: 'Remove ESP32-42' });
-  await expect(dialog.getByTestId('remove-device-reference')).toHaveText(['port forward esp-admin', 'port forward esp-web']);
+  const dialog = page.getByRole('dialog', { name: 'Remove ESP32-42' });
+  const refs = dialog.getByTestId('remove-device-references');
+  await expect(refs).toHaveAttribute('role', 'alert');
+  await expect(dialog.getByTestId('remove-device-reference')).toHaveText([
+    'port forward esp-admin · deleted',
+    'port forward esp-web · deleted',
+    'scenario mqtt-outage · blocks the removal: a scenario is a file of its own, change its target first',
+  ]);
   await expect(dialog.getByRole('link', { name: 'esp-web' })).toHaveAttribute('href', `/networks?forward=${FWD_WEB}`);
-  await expect(dialog.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await expect(refs.getByTestId('remove-device-blocked')).toContainText('The removal waits for the scenario: a scenario is a file of its own and is not changed with the device');
+  await expect(dialog.getByTestId('remove-device-preview')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Remove the device and these references' })).toBeDisabled();
   expect(gw.requestsTo('POST', '/revisions')).toHaveLength(0);
 });
 

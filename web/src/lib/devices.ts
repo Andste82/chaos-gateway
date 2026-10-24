@@ -70,6 +70,24 @@ export interface DeviceReference {
   name: string;
   /** Where it can be changed in the UI; none for a group (configured via YAML or the API). */
   to?: string;
+  /** What removing the device together with the objects that name it does to this one (#99). */
+  effect: ReferenceEffect;
+}
+
+/**
+ * What removing a device together with the objects that name it does to one of them (#99): an object
+ * that names only this device is deleted (an access rule, a configured fault and a port forward name one
+ * device at most: a scope and a forward's target are one choice); a group loses the device as a member
+ * and keeps the others (it stays, also without members: rules and faults may name the group itself); a
+ * scenario is a file of its own and is not changed, so it keeps blocking the removal.
+ */
+export type ReferenceEffect = 'delete' | 'member' | 'blocks';
+
+/** Whether a reference names the device: by its UUID or its name, as the gateway resolves references (plan conventions). */
+function namer(device: { id: string; name: string }): (ref: string | undefined) => boolean {
+  const lower = device.name.toLowerCase();
+  const own = device.id.toLowerCase();
+  return (ref) => !!ref && (ref.toLowerCase() === own || ref.toLowerCase() === lower);
 }
 
 /** The configuration objects that can name a device (the draft's view of them). */
@@ -87,22 +105,40 @@ export interface DeviceReferrers {
  * forwards by their target, scenarios by their target or a step's. Sorted by kind, then by name.
  */
 export function deviceReferences(device: { id: string; name: string }, cfg: DeviceReferrers): DeviceReference[] {
-  const lower = device.name.toLowerCase();
-  const own = device.id.toLowerCase();
-  const names = (ref: string | undefined) => !!ref && (ref.toLowerCase() === own || ref.toLowerCase() === lower);
+  const names = namer(device);
   const inScope = (s: Scope | undefined) => names(s?.device);
   const out: DeviceReference[] = [];
-  for (const [id, r] of Object.entries(cfg.rules ?? {})) if (inScope(r.source)) out.push({ kind: 'rule', id, name: r.name ?? id, to: '/rules' });
-  for (const [id, f] of Object.entries(cfg.faults ?? {})) if (inScope(f.source)) out.push({ kind: 'fault', id, name: f.name ?? id, to: '/faults' });
-  for (const [id, g] of Object.entries(cfg.groups ?? {})) if ((g.members ?? []).some(names)) out.push({ kind: 'group', id, name: g.name });
+  for (const [id, r] of Object.entries(cfg.rules ?? {})) if (inScope(r.source)) out.push({ kind: 'rule', id, name: r.name ?? id, to: '/rules', effect: 'delete' });
+  for (const [id, f] of Object.entries(cfg.faults ?? {})) if (inScope(f.source)) out.push({ kind: 'fault', id, name: f.name ?? id, to: '/faults', effect: 'delete' });
+  for (const [id, g] of Object.entries(cfg.groups ?? {})) if ((g.members ?? []).some(names)) out.push({ kind: 'group', id, name: g.name, effect: 'member' });
   for (const [id, p] of Object.entries(cfg.forwards ?? {})) {
-    if (names(p.target.device)) out.push({ kind: 'forward', id, name: forwardTitle(p), to: `/networks?forward=${id}` });
+    if (names(p.target.device)) out.push({ kind: 'forward', id, name: forwardTitle(p), to: `/networks?forward=${id}`, effect: 'delete' });
   }
   for (const [id, sc] of Object.entries(cfg.scenarios ?? {})) {
-    if (inScope(sc.target) || sc.steps.some((st) => inScope(st.target))) out.push({ kind: 'scenario', id, name: sc.name, to: `/scenarios/${id}` });
+    if (inScope(sc.target) || sc.steps.some((st) => inScope(st.target))) {
+      out.push({ kind: 'scenario', id, name: sc.name, to: `/scenarios/${id}`, effect: 'blocks' });
+    }
   }
   const order = ['rule', 'fault', 'group', 'forward', 'scenario'];
   return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+/** A group without the device among its members (by its UUID or its name); the others keep their order. */
+export function groupWithout(group: Group, device: { id: string; name: string }): Group {
+  const names = namer(device);
+  return { ...group, members: (group.members ?? []).filter((m) => !names(m)) };
+}
+
+/**
+ * A group with the members of `base` that named the device put back (the Undo of a removal together
+ * with the objects that name the device, #99): the members `now` has stay, the base's members that
+ * named the device come back at their place, and members only `now` has stay at the end.
+ */
+export function groupWithMember(base: Group, now: Group, device: { id: string; name: string }): Group {
+  const names = namer(device);
+  const current = now.members ?? [];
+  const was = base.members ?? [];
+  return { ...now, members: [...was.filter((m) => current.includes(m) || names(m)), ...current.filter((m) => !was.includes(m))] };
 }
 
 const referenceKinds: Record<DeviceReference['kind'], string> = { rule: 'rule', fault: 'fault', group: 'group', forward: 'port forward', scenario: 'scenario' };
@@ -110,6 +146,18 @@ const referenceKinds: Record<DeviceReference['kind'], string> = { rule: 'rule', 
 /** The kind of a reference in words ("port forward"). */
 export function referenceKind(r: DeviceReference): string {
   return referenceKinds[r.kind];
+}
+
+/** What removing the device together with the objects that name it does to one of them, in words (#99). */
+export function referenceEffectText(r: DeviceReference, device: string): string {
+  switch (r.effect) {
+    case 'delete':
+      return 'deleted';
+    case 'member':
+      return `loses ${device} as a member`;
+    default:
+      return 'blocks the removal: a scenario is a file of its own, change its target first';
+  }
 }
 
 /** Where the chips of a winning fault come from: the overlay or the configured fault it names. */

@@ -8,10 +8,13 @@ import {
   deviceReferences,
   deviceStatus,
   displayName,
+  groupWithMember,
+  groupWithout,
   idMac,
   matchesFilter,
   matchesSearch,
   nameDetail,
+  referenceEffectText,
   sourcesLabel,
 } from './devices';
 
@@ -110,6 +113,31 @@ describe('devices', () => {
     expect(refs.find((r) => r.kind === 'forward')!.to).toBe('/networks?forward=p1');
     expect(refs.find((r) => r.kind === 'scenario')!.to).toBe('/scenarios/s1');
     expect(deviceReferences({ id, name: 'ESP32-42' }, {})).toEqual([]);
+    // #99: what removing the device together with them does to each
+    expect(refs.map((r) => r.effect)).toEqual(['delete', 'delete', 'delete', 'member', 'delete', 'blocks', 'blocks']);
+  });
+
+  it('say what removing the device together with the objects that name it does to each (#99)', () => {
+    const ref = (kind: 'rule' | 'group' | 'scenario', effect: 'delete' | 'member' | 'blocks') => ({ kind, id: 'x', name: 'x', effect });
+    expect(referenceEffectText(ref('rule', 'delete'), 'ESP32-42')).toBe('deleted');
+    expect(referenceEffectText(ref('group', 'member'), 'ESP32-42')).toBe('loses ESP32-42 as a member');
+    expect(referenceEffectText(ref('scenario', 'blocks'), 'ESP32-42')).toBe('blocks the removal: a scenario is a file of its own, change its target first');
+  });
+
+  it('take a device out of a group and put it back (#99)', () => {
+    const id = 'a1b2c3d4-0000-4000-8000-000000000042';
+    const device = { id, name: 'ESP32-42' };
+    // by its UUID in any case, or by its name; the other members keep their order
+    expect(groupWithout({ name: 'lab', description: 'd', members: ['x', id.toUpperCase(), 'y', 'esp32-42'] }, device)).toEqual({ name: 'lab', description: 'd', members: ['x', 'y'] });
+    // the only member: the group stays, without members
+    expect(groupWithout({ name: 'lab', members: [id] }, device)).toEqual({ name: 'lab', members: [] });
+    expect(groupWithout({ name: 'empty' }, device)).toEqual({ name: 'empty', members: [] });
+
+    const base = { name: 'lab', members: ['x', id, 'y'] };
+    // back at its place among the members the draft still has
+    expect(groupWithMember(base, { name: 'lab', members: ['x', 'y'] }, device)).toEqual(base);
+    // a member the draft took out otherwise stays out, one it added stays at the end
+    expect(groupWithMember(base, { name: 'lab', members: ['y', 'z'] }, device)).toEqual({ name: 'lab', members: [id, 'y', 'z'] });
   });
 
   it('do not count the normal profile as a fault', () => {

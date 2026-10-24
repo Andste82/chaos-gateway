@@ -403,6 +403,89 @@ describe('the configuration draft', () => {
   });
 });
 
+describe('a device removed together with the objects that name it (#99)', () => {
+  const DEV = 'd0000000-0000-4000-8000-000000000001';
+  const OTHER = 'd0000000-0000-4000-8000-000000000002';
+  const G = 'c0000000-0000-4000-8000-000000000001';
+  const F = 'e0000000-0000-4000-8000-000000000001';
+  function lab(): RevisionWithConfiguration {
+    return revision(42, {
+      devices: { [DEV]: { name: 'esp' }, [OTHER]: { name: 'phone' } },
+      access_rules: { ...revision(42).configuration.access_rules, [C]: { name: 'esp-out', source: { device: DEV }, action: 'drop' } },
+      access_rule_order: [A, B, C],
+      groups: { [G]: { name: 'lab', members: [DEV, OTHER] } },
+      port_forwards: { [F]: { name: 'esp-web', protocol: 'tcp', entry: 'uplink', external_port: 8080, target: { device: DEV }, target_port: 80 } },
+    });
+  }
+  function removeAll(d: ReturnType<typeof useDraftStore>) {
+    d.setRule(C, null);
+    d.setForward(F, null);
+    d.setGroup(G, { name: 'lab', members: [OTHER] });
+    d.setDevice(DEV, null);
+  }
+
+  it('puts everything into one patch and names it in the changes', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    removeAll(d);
+    expect(d.patch()).toEqual({
+      access_rules: { [C]: null },
+      access_rule_order: [A, B],
+      port_forwards: { [F]: null },
+      groups: { [G]: { members: [OTHER] } },
+      devices: { [DEV]: null },
+    });
+    const names = { device: (id: string) => ({ [DEV]: 'esp', [OTHER]: 'phone' })[id] };
+    expect(d.changes(names).filter((c) => c.kind === 'group')).toEqual([{ kind: 'group', id: G, name: 'lab', field: 'members', from: 'esp, phone', to: 'phone' }]);
+    expect(d.summary(names)).toBe('4 changes in 1 rule, 1 device, 1 group and 1 port forward');
+    expect(d.effectiveGroups[G]!.members).toEqual([OTHER]);
+  });
+
+  it('a group back at its base is no change', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    d.setGroup(G, { name: 'lab', members: [OTHER] });
+    expect(d.dirty).toBe(true);
+    d.setGroup(G, { name: 'lab', members: [DEV, OTHER] });
+    expect(d.dirty).toBe(false);
+  });
+
+  it('Undo of the removal brings the device back with the objects removed along', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    removeAll(d);
+    d.restoreDevice(DEV);
+    expect(d.dirty).toBe(false);
+    expect(d.patch()).toEqual({});
+  });
+
+  it('Undo keeps the other edits of a group the device was taken out of', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    removeAll(d);
+    d.setGroup(G, { name: 'lab', members: [OTHER, 'x'] });
+    d.restoreDevice(DEV);
+    expect(d.groups[G]).toEqual({ name: 'lab', members: [DEV, OTHER, 'x'] });
+  });
+
+  it('reapplies the group change on theirs; a group both changed is named in the overlaps', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    removeAll(d);
+    const theirs = lab();
+    theirs.id = 43;
+    theirs.configuration.groups = { [G]: { name: 'lab', description: 'theirs', members: [DEV, OTHER, 'z'] } };
+    const names = { device: (id: string) => ({ [DEV]: 'esp', [OTHER]: 'phone' })[id] };
+    expect(d.overlaps(theirs.configuration, names).filter((c) => c.kind === 'group')).toEqual([
+      { kind: 'group', id: G, name: 'lab', field: 'members', from: 'esp, phone, z', to: 'phone' },
+    ]);
+    d.rebase(theirs);
+    expect(d.groups[G]).toEqual({ name: 'lab', description: 'theirs', members: [OTHER] });
+    d.discard();
+    expect(d.groups).toEqual({});
+  });
+});
+
 describe('WireGuard clients and the access matrix in the draft (M14)', () => {
   const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
   const HUB = '4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54';

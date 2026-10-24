@@ -207,7 +207,8 @@ func TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive(
 }
 
 // A profile with a part of a later milestone is stored but cannot be activated: the whole activation is
-// refused with the milestone, and nothing changes. The built-in dns-broken and tls-broken are the same.
+// refused with the milestone, and nothing changes. The built-in tls-broken is the same (the dns part
+// has been available since M20).
 func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -222,10 +223,8 @@ func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing
 	}))
 	gen := h.e.Snapshot().Generation
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\nprofile: slow-dns-lte": "M20",
-		"target: {network: IoT}\nprofile: glitch":       "M21",
-		"target: {network: IoT}\nprofile: dns-broken":   "M20",
-		"target: {network: IoT}\nprofile: tls-broken":   "M21",
+		"target: {network: IoT}\nprofile: glitch":     "M21",
+		"target: {network: IoT}\nprofile: tls-broken": "M21",
 	} {
 		_, err := h.put(alice, body)
 		var ue *engine.UnsupportedOverlayError
@@ -287,12 +286,13 @@ func TestAnActiveProfileFollowsItsNewDefinition(t *testing.T) {
 	}
 }
 
-// A revision that gives a custom profile a dns or a tls part while an overlay activates it is refused with
-// the profile and the milestone, as the write of the activation would be: no activation runs half a profile
-// (P2-M11-05, decided on 2026-10-11). Nothing changes, the preview names the same problem, and without
-// the activation the same revision is accepted: the profile is stored and cannot be activated. A change of the
-// impairment part alone is not touched by the rule.
-func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.T) {
+// A revision that gives a custom profile a tls part (a dns part is available since M20, P2-M11-01) while an
+// overlay activates it is refused with the profile and the milestone, as the write of the activation would
+// be: no activation runs half a profile (P2-M11-05, decided on 2026-10-11). Nothing changes, the preview
+// names the same problem, and without the activation the same revision is accepted: the profile is stored
+// and cannot be activated. A change of the impairment part alone is not touched by the rule, and neither
+// is the addition of a dns part: the activation then competes in the DNS family, too.
+func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 	h := overlaysHarness(t)
 	flaky := func(mod func(*model.Profile)) func(*model.Configuration) {
 		p := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
@@ -311,7 +311,7 @@ func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.
 	for _, c := range []struct {
 		name, family, milestone string
 		mod                     func(*model.Profile)
-	}{{"a dns part", "dns", "M20", withDNS}, {"a tls part", "tls", "M21", withTLS}} {
+	}{{"a tls part", "tls", "M21", withTLS}} {
 		rev := h.revision(flaky(c.mod))
 		_, err := h.apply(rev)
 		var ue *engine.UnsupportedProfileRevisionError
@@ -358,16 +358,22 @@ func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.
 		t.Errorf("%+v", fs)
 	}
 
-	// without the activation the revision is accepted: the profile is stored, and cannot be activated
+	// a dns part is accepted while the activation exists: the activation then has a DNS part, too
+	h.mustApply(h.revision(flaky(withDNS)))
+	if s := h.barrier(); len(s.Overlays) != 1 || s.Overlays[0].Id != res.Overlay.Id {
+		t.Errorf("%+v", s.Overlays)
+	}
+
+	// without the activation a tls part is accepted: the profile is stored, and cannot be activated
 	if _, err := h.e.DeleteOverlay(context.Background(), res.Overlay.Id, nil, model.Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	h.mustApply(h.revision(flaky(withDNS)))
+	h.mustApply(h.revision(flaky(withTLS)))
 	if _, err := h.put(alice, "target: {network: IoT}\nprofile: flaky"); err == nil {
-		t.Error("the profile with a dns part was activated")
+		t.Error("the profile with a tls part was activated")
 	} else {
 		var ue *engine.UnsupportedOverlayError
-		if !errors.As(err, &ue) || ue.Milestone != "M20" {
+		if !errors.As(err, &ue) || ue.Milestone != "M21" {
 			t.Errorf("got %v", err)
 		}
 	}
@@ -377,13 +383,13 @@ func TestARevisionThatAddsADNSOrTLSPartToAnActivatedProfileIsRefused(t *testing.
 }
 
 // P2-AUDIT-05: a commit-confirm rollback cannot be refused, so an activation written in the confirmation window of
-// a revision that took the dns part out of a profile is removed when the rollback brings the part back
+// a revision that took the tls part out of a profile is removed when the rollback brings the part back
 // (overlay_orphaned, reason rollback): no activation runs half a profile.
-func TestARollbackThatGivesAnActivatedProfileBackItsDNSPartRemovesTheActivation(t *testing.T) {
+func TestARollbackThatGivesAnActivatedProfileBackItsTLSPartRemovesTheActivation(t *testing.T) {
 	h := overlaysHarness(t)
 	flaky := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
 	withDNS := flaky
-	withDNS.Parts.Dns = &model.DnsFault{Action: "delay", Delay: ptr("2s")}
+	withDNS.Parts.Tls = &model.TlsCase{Case: "expired"}
 	h.mustApply(h.revision(withProfiles(map[string]model.Profile{profFlaky: withDNS})))
 	keep := h.mustPut(bob, "target: {network: Lab}\nprofile: lte")
 	rev := h.revision(func(c *model.Configuration) {

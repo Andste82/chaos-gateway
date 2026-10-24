@@ -664,11 +664,6 @@ name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
 `, ""},
-		"dns step": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, dns: {names: [broker.example.com], action: servfail}}]
-`, "M20"},
 		"tls step": {`
 name: c
 target: {device: esp32-42}

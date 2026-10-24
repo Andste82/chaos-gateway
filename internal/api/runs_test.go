@@ -363,9 +363,9 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	if r := g.postRun(named, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
 		t.Errorf("a check for a host name: %d %s", r.Status, r.Body)
 	}
-	dns := inlineRun("d", iotTarget, step("a", "0s", "dns", map[string]any{"action": "servfail", "names": []string{"x.example.com"}}))
-	if r := g.postRun(dns, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
-		t.Errorf("dns: %d %s", r.Status, r.Body)
+	tlsStep := inlineRun("t", iotTarget, step("a", "0s", "tls", map[string]any{"case": "expired"}))
+	if r := g.postRun(tlsStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M21") {
+		t.Errorf("tls: %d %s", r.Status, r.Body)
 	}
 	bad := inlineRun("b", map[string]any{"device": "nobody"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
 	r := g.postRun(bad, "")
@@ -394,7 +394,7 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
-	if steps != "profile,fault,rule,wireguard,capture,wait,remove,restore" ||
+	if steps != "profile,fault,rule,dns,wireguard,capture,wait,remove,restore" ||
 		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen" {
 		t.Errorf("capabilities %v", caps)
 	}

@@ -96,10 +96,7 @@ func TestSourcesWithTheSameFaultsShareTheirEntriesAndTheOrderIsTheRank(t *testin
 		}
 	}
 	// the stretches of the network that no device owns: the network's fault alone, in one entry for all of them
-	var rest []string
-	for _, g := range got[len(want):] {
-		rest = append(rest, g)
-	}
+	rest := append([]string(nil), got[len(want):]...)
 	if len(rest) != 1 || !strings.HasPrefix(rest[0], "servfail * -> 10.10.0.0/24") {
 		t.Errorf("%v", rest)
 	}

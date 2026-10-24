@@ -494,9 +494,9 @@ func TestAForwardSendsToTheDevicesMostCurrentAddressNotToOneThatLingersOn(t *tes
 // P31-AUDIT-14 (decided 2026-10-18, option (a)): a device with a static address, known only from the neighbor
 // table (no lease, no reservation, no ipv4 identifier), keeps its address as long as an enabled forward sends to
 // it, also once its entry is stale and nothing has a connection on the address: an idle listener stays the
-// forward's target, and the kernel probes the entry when a connection comes. A device no enabled forward sends to
-// loses a stale entry without connections as before, and the forward's stale claim gives way to any claim of
-// another device on the address (the new holder wins).
+// forward's target, and the kernel probes the entry when a connection comes. Since issue #93 every configured
+// device keeps a stale entry this way, a forward or not (TestAStaleNeighborOfAConfiguredDeviceKeepsItsAddress);
+// the stale claim gives way to any claim of another device on the address (the new holder wins).
 func TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale(t *testing.T) {
 	const otherID, otherMAC = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", "02:00:00:00:00:99"
 	staticOnly := func(c *model.Configuration) {
@@ -518,7 +518,8 @@ func TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale(t *testing.T)
 		t.Fatalf("status with a stale entry and no connection = %+v", st)
 	}
 
-	// without an enabled forward to the device the stale entry says nothing, as before
+	// without an enabled forward to the device the configured device keeps its stale entry all the same
+	// (issue #93, TestAStaleNeighborOfAConfiguredDeviceKeepsItsAddress)
 	w2, _ := forwardWorld(t, func(c *model.Configuration) {
 		staticOnly(c)
 		fw := (*c.PortForwards)[idForward]
@@ -526,8 +527,8 @@ func TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale(t *testing.T)
 		fw.Enabled = &off
 		(*c.PortForwards)[idForward] = fw
 	})
-	if id := ResolveIdentity(w2.Config, stale, nil); len(id.Addresses[idESP]) != 0 {
-		t.Errorf("a disabled forward keeps the stale address: %v", id.Addresses[idESP])
+	if id := ResolveIdentity(w2.Config, stale, nil); len(id.Addresses[idESP]) != 1 {
+		t.Errorf("a configured device without a forward lost its stale address: %v", id.Addresses[idESP])
 	}
 
 	// another device that claims the address wins: a confirmed neighbor entry, a lease

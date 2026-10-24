@@ -223,43 +223,94 @@ func staleNeigh(ip, mac string) domain.Neighbor {
 
 // issue #79: a neighbor entry that goes STALE, DELAY and PROBE between two confirmations, as it does
 // for a device that talks only through the gateway, does not flap the device; it goes offline once
-// nothing confirms it for offlineAfter, and each transition is one event.
+// nothing confirms it for offlineAfter, and each transition is one event. Issue #93: neither does it
+// flap the device's identity, with a lease or without one (a static address set on the device itself):
+// the stale entry of a configured device keeps its address, so no device_identity_changed is sent
+// between two confirmations, and the address stays after the device went offline until another device
+// claims it.
 func TestANeighborEntryBetweenConfirmationsDoesNotFlap(t *testing.T) {
+	active := model.DhcpLeaseState("active")
+	for name, leases := range map[string][]model.DhcpLease{
+		"with a lease":    {{Ip: "10.10.0.31", Mac: macCf, ExpiresAt: t0.Add(time.Hour), State: &active}},
+		"without a lease": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := newTracker()
+			cfg := trackerConfig(t)
+			ip := addr("10.10.0.31")
+			tr.step(cfg, observation{At: t0, Leases: leases})
+			// the device's first address is one identity change when it has no lease; then nothing changes
+			want := EventDeviceOnline
+			if leases == nil {
+				want = EventDeviceIdentityChanged + "," + EventDeviceOnline
+			}
+			var all []string
+			for s := 1; s <= 120; s++ {
+				n := staleNeigh("10.10.0.31", macCf)
+				if s%40 == 1 { // confirmed every 40 s, STALE/DELAY/PROBE in between
+					n = neigh("10.10.0.31", macCf)
+				}
+				id, states, ev := tr.step(cfg, observation{At: t0.Add(time.Duration(s) * time.Second), Neighbors: []domain.Neighbor{n}, Leases: leases})
+				if types(ev) != "" {
+					all = append(all, types(ev))
+				}
+				if !stateOf(states, tDev).Online {
+					t.Fatalf("offline at %d s", s)
+				}
+				if id.Owner[ip] != tDev {
+					t.Fatalf("the device lost its address at %d s: %v", s, id.Owner)
+				}
+			}
+			if strings.Join(all, ";") != want {
+				t.Errorf("events %v, want %s", all, want)
+			}
+			// the device is unplugged: the stale entry stays, nothing confirms it
+			last := t0.Add(81 * time.Second)
+			var offAt time.Duration
+			for s := 121; s <= 200 && offAt == 0; s++ {
+				at := t0.Add(time.Duration(s) * time.Second)
+				id, _, ev := tr.step(cfg, observation{At: at, Neighbors: []domain.Neighbor{staleNeigh("10.10.0.31", macCf)}, Leases: leases})
+				if strings.Contains(types(ev), EventDeviceOffline) {
+					offAt = at.Sub(last)
+				}
+				if strings.Contains(types(ev), EventDeviceIdentityChanged) || id.Owner[ip] != tDev {
+					t.Fatalf("the identity changed at %d s: %v %v", s, types(ev), id.Owner)
+				}
+			}
+			if offAt != offlineAfter {
+				t.Errorf("offline %v after the last confirmation, want %v", offAt, offlineAfter)
+			}
+		})
+	}
+}
+
+// Issue #93: the stale entry of a configured device without a lease gives way to another device that
+// claims the address, which is one identity change of each; when the entry is confirmed again the
+// device has its address back.
+func TestAStaleEntryGivesItsAddressToTheNewHolder(t *testing.T) {
+	const otherDev, otherMAC = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", "02:00:00:00:00:99"
 	tr := newTracker()
 	cfg := trackerConfig(t)
-	// the lease keeps the address with the device while its entry is stale
-	active := model.DhcpLeaseState("active")
-	leases := []model.DhcpLease{{Ip: "10.10.0.31", Mac: macCf, ExpiresAt: t0.Add(time.Hour), State: &active}}
-	tr.step(cfg, observation{At: t0, Leases: leases})
-	var all []string
-	for s := 1; s <= 120; s++ {
-		n := staleNeigh("10.10.0.31", macCf)
-		if s%40 == 1 { // confirmed every 40 s, STALE/DELAY/PROBE in between
-			n = neigh("10.10.0.31", macCf)
-		}
-		_, states, ev := tr.step(cfg, observation{At: t0.Add(time.Duration(s) * time.Second), Neighbors: []domain.Neighbor{n}, Leases: leases})
-		if types(ev) != "" {
-			all = append(all, types(ev))
-		}
-		if !stateOf(states, tDev).Online {
-			t.Fatalf("offline at %d s", s)
-		}
+	macs := []string{otherMAC}
+	(*cfg.Devices)[otherDev] = model.Device{Name: "other", Identifiers: &model.DeviceIdentifiers{Macs: &macs}}
+	ip := addr("10.10.0.31")
+	tr.step(cfg, observation{At: t0, Neighbors: []domain.Neighbor{neigh("10.10.0.31", macCf)}})
+	id, _, ev := tr.step(cfg, observation{At: t0.Add(time.Second), Neighbors: []domain.Neighbor{staleNeigh("10.10.0.31", macCf)}})
+	if id.Owner[ip] != tDev || types(ev) != "" {
+		t.Fatalf("stale: owner %v, events %v", id.Owner, types(ev))
 	}
-	if strings.Join(all, ";") != EventDeviceOnline {
-		t.Errorf("events %v, want one device_online", all)
+	// another device answers on the address (the kernel replaced the entry; both shown for the order)
+	id, _, ev = tr.step(cfg, observation{At: t0.Add(2 * time.Second), Neighbors: []domain.Neighbor{staleNeigh("10.10.0.31", macCf), neigh("10.10.0.31", otherMAC)}})
+	if id.Owner[ip] != otherDev || len(id.Addresses[tDev]) != 0 {
+		t.Fatalf("taken over: owner %v", id.Owner)
 	}
-	// the device is unplugged: the stale entry stays, nothing confirms it
-	last := t0.Add(81 * time.Second)
-	var offAt time.Duration
-	for s := 121; s <= 200 && offAt == 0; s++ {
-		at := t0.Add(time.Duration(s) * time.Second)
-		_, _, ev := tr.step(cfg, observation{At: at, Neighbors: []domain.Neighbor{staleNeigh("10.10.0.31", macCf)}, Leases: leases})
-		if strings.Contains(types(ev), EventDeviceOffline) {
-			offAt = at.Sub(last)
-		}
+	if n := strings.Count(types(ev), EventDeviceIdentityChanged); n != 2 {
+		t.Errorf("events %v, want two device_identity_changed", types(ev))
 	}
-	if offAt != offlineAfter {
-		t.Errorf("offline %v after the last confirmation, want %v", offAt, offlineAfter)
+	// the other device is gone and the device's entry is confirmed again
+	id, _, ev = tr.step(cfg, observation{At: t0.Add(3 * time.Second), Neighbors: []domain.Neighbor{neigh("10.10.0.31", macCf)}})
+	if id.Owner[ip] != tDev || strings.Count(types(ev), EventDeviceIdentityChanged) != 2 {
+		t.Errorf("back: owner %v, events %v", id.Owner, types(ev))
 	}
 }
 

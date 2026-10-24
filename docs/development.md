@@ -1027,6 +1027,15 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   rates and carries the last read's `Active` and `UnknownSources` over. The API tests run the engine on
   the real clock, so `checksGateway` sets `OfflineAfter` to a nanosecond: there a device is offline at the
   first observation without a sign of life, as before.
+  The identity does not flap either (issue #93, option (a), decided 2026-10-24): `ResolveIdentity` keeps
+  the stale (STALE, DELAY, PROBE) neighbor entry of a configured device as a lingering claim of its
+  address (`claim.yielding`, the device's least current address) that gives way to any claim of another
+  device on the address (`yieldToOthers`), so a device with a static address set on itself (no lease, no
+  fixed IP) keeps its address between two confirmations and no `device_identity_changed` is sent. A
+  probe's stale entry still counts only while the address carries connections. Tests:
+  `TestAStaleNeighborOfAConfiguredDeviceKeepsItsAddress`, `TestAStaleNeighborClaimGivesWayToAnotherDevice`,
+  `TestANeighborEntryBetweenConfirmationsDoesNotFlap` (with a lease and without one),
+  `TestAStaleEntryGivesItsAddressToTheNewHolder`.
 - **Conntrack events (M6a-04).** `Engine.FollowConntrack` asks the executor to watch conntrack
   (`conntrack -E`, the executor's `Watch`/`Event` frames over the same Unix socket as ordinary
   requests, one dedicated connection per watch) and debounces the events into `TriggerObserve`, the
@@ -4328,7 +4337,8 @@ target with a stale neighbor entry).
     forwarded connection counts for the device it was sent to (the reply's source of a translated connection,
     `forwardTarget` in `internal/engine/observe.go`), and a device that an enabled forward sends to keeps a stale
     entry also without any connection, as a lingering claim (the least current address) that gives way to any
-    claim of another device on the address (`ResolveIdentity`, `claim.forwardOnly`). So an idle listener known
+    claim of another device on the address (`ResolveIdentity`, `claim.yielding`; since issue #93 every
+    configured device keeps a stale entry this way). So an idle listener known
     only from the neighbor table (a static address, no lease, no reservation) stays the forward's target; the
     kernel probes the entry when a forwarded connection comes, and an entry that fails leaves the table and the
     forward goes inactive. Tests: `TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale`,

@@ -2605,7 +2605,7 @@ components:
           default: true
         pools:
           type: array
-          description: Default - the second half of the subnet.
+          description: Default - the second half of the subnet up to the last usable address, without the gateway's address (a gateway inside it splits it into the range before and the range after it).
           items: {$ref: '#/components/schemas/DhcpPool'}
         lease_time:
           allOf: [{$ref: '#/components/schemas/Duration'}]

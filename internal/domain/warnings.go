@@ -113,8 +113,8 @@ func fixedIPInPool(idx *Index, d *DeviceInfo) (Warning, bool) {
 			}
 			pools = append(pools, kea.Pool{Start: from, End: to})
 		}
-	} else if p, ok := kea.DefaultPool(gw, gw.Addr()); ok {
-		pools = []kea.Pool{p}
+	} else if ps := kea.DefaultPool(gw, gw.Addr()); len(ps) > 0 {
+		pools = ps
 		what = func(int) string { return "the default pool" }
 	}
 	for i, p := range pools {

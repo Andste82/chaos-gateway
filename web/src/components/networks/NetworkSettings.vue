@@ -14,7 +14,7 @@ import type { LanNetwork, NetworkView, WireGuardNetwork } from '../../api/genera
 import { useGetUplink } from '../../api/generated/hooks/config/config';
 import { useNow } from '../../composables/useNow';
 import { formatAgo, formatBytes, formatDuration } from '../../lib/format';
-import { effectivePools, hostOf, subnetText } from '../../lib/networks';
+import { effectivePools, hostOf, parseSubnet, subnetText } from '../../lib/networks';
 import { reservationRows } from '../../lib/reservations';
 import { useDraftStore } from '../../stores/draft';
 import DisclosureButton from '../ui/DisclosureButton.vue';
@@ -60,6 +60,11 @@ const terms = computed(() => {
 });
 
 const pools = computed(() => effectivePools(lan.value?.address, lan.value?.dhcp?.pools));
+/** The gateway's own address lies in the second half of the subnet: the default pools leave it out (#110). */
+const gatewayInDefault = computed(() => {
+  const s = parseSubnet(lan.value?.address);
+  return !!s && s.address >= s.network + (s.broadcast - s.network + 1) / 2 && s.address < s.broadcast;
+});
 const dhcpOn = computed(() => lan.value?.dhcp?.enabled !== false);
 /** The devices with a fixed IP in the network, as the draft has them. */
 const reserved = computed(() => (lan.value ? reservationRows(props.network.id, draft.baseConfig?.devices, draft.devices).filter((r) => r.mark !== 'DELETED').length : 0));
@@ -149,7 +154,7 @@ const exportOpen = computed({
         <dt class="text-text-2">DHCP pool</dt>
         <dd class="mono m-0 text-[13px]" data-testid="dhcp-pool">
           <span v-for="(p, i) in pools.pools" :key="i" class="block">{{ p.start }} – {{ p.end }}</span>
-          <span v-if="pools.isDefault" class="font-sans text-xs text-text-3">the default: the second half of the subnet</span>
+          <span v-if="pools.isDefault" class="font-sans text-xs text-text-3">the default: the second half of the subnet<template v-if="gatewayInDefault">, without the gateway's address</template></span>
           <span v-if="network.status.dhcp?.pool_free !== undefined" class="block font-sans text-xs text-text-3">{{ network.status.dhcp.pool_free }} addresses free</span>
         </dd>
         <dt class="text-text-2">Router · DNS</dt>

@@ -73,6 +73,32 @@ func TestADhcpScopeBecomesAKeaSubnetOnTheBridge(t *testing.T) {
 	}
 }
 
+// A gateway inside the default range splits it: Kea never hands out the gateway's own address (#110).
+func TestTheDefaultPoolLeavesOutTheGatewayInsideIt(t *testing.T) {
+	tg := compileBasic(t, func(c *model.Configuration, _ *Host) {
+		n := (*c.Networks)[iotNet]
+		lan, _ := n.AsLanNetwork()
+		lan.Address = "10.10.0.200/24"
+		_ = n.FromLanNetwork(lan)
+		(*c.Networks)[iotNet] = n
+		withDHCP(c, iotNet, &model.DhcpScope{})
+	})
+	if tg.HasErrors() || tg.Kea == nil || len(tg.Kea.Config.Subnets) != 1 {
+		t.Fatalf("%+v %+v", tg.Problems, tg.Kea)
+	}
+	s := tg.Kea.Config.Subnets[0]
+	var got []string
+	for _, p := range s.Pools {
+		got = append(got, p.Start.String()+"-"+p.End.String())
+	}
+	if strings.Join(got, " ") != "10.10.0.128-10.10.0.199 10.10.0.201-10.10.0.254" || s.Router.String() != "10.10.0.200" {
+		t.Errorf("pools %v, router %s", got, s.Router)
+	}
+	if !strings.Contains(tg.Kea.Text, `"pool": "10.10.0.128 - 10.10.0.199"`) || !strings.Contains(tg.Kea.Text, `"pool": "10.10.0.201 - 10.10.0.254"`) {
+		t.Errorf("%s", tg.Kea.Text)
+	}
+}
+
 func TestDhcpOffMeansNoSubnet(t *testing.T) {
 	off := false
 	for name, scope := range map[string]*model.DhcpScope{"absent": nil, "disabled": {Enabled: &off}} {

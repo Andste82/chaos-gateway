@@ -117,35 +117,50 @@ func TestSubnetIDsAreStableAndDoNotCollide(t *testing.T) {
 	}
 }
 
+// poolsText is "a - b, c - d" for a list of pools ("" for none).
+func poolsText(ps []Pool) string {
+	s := make([]string, len(ps))
+	for i, p := range ps {
+		s[i] = p.Start.String() + " - " + p.End.String()
+	}
+	return strings.Join(s, ", ")
+}
+
 func TestDefaultPoolIsTheSecondHalf(t *testing.T) {
-	p, ok := DefaultPool(netip.MustParsePrefix("10.10.0.1/24"), netip.MustParseAddr("10.10.0.1"))
-	if !ok || p.Start.String() != "10.10.0.128" || p.End.String() != "10.10.0.254" {
-		t.Errorf("%v %v", p, ok)
+	gw := func(a string) (netip.Prefix, netip.Addr) {
+		p := netip.MustParsePrefix(a)
+		return p, p.Addr()
 	}
-	// the gateway in the second half is skipped
-	p, _ = DefaultPool(netip.MustParsePrefix("10.10.0.200/24"), netip.MustParseAddr("10.10.0.128"))
-	if p.Start.String() != "10.10.0.129" {
-		t.Errorf("%v", p)
-	}
-	if _, ok := DefaultPool(netip.MustParsePrefix("10.10.0.0/30"), netip.MustParseAddr("10.10.0.1")); ok {
-		t.Error("a /30 has no useful pool")
-	}
-	if p, ok := DefaultPool(netip.MustParsePrefix("192.168.1.1/29"), netip.MustParseAddr("192.168.1.1")); !ok || p.Start.String() != "192.168.1.4" || p.End.String() != "192.168.1.6" {
-		t.Errorf("%v %v", p, ok)
+	for _, c := range []struct{ address, want string }{
+		{"10.10.0.1/24", "10.10.0.128 - 10.10.0.254"},
+		// the gateway at the start of the second half is skipped
+		{"10.10.0.128/24", "10.10.0.129 - 10.10.0.254"},
+		// a gateway inside the second half splits it around its address (#110)
+		{"10.10.0.200/24", "10.10.0.128 - 10.10.0.199, 10.10.0.201 - 10.10.0.254"},
+		// a gateway on the last usable address ends the pool before it
+		{"10.10.0.254/24", "10.10.0.128 - 10.10.0.253"},
+		{"192.168.1.1/29", "192.168.1.4 - 192.168.1.6"},
+		{"192.168.1.5/29", "192.168.1.4 - 192.168.1.4, 192.168.1.6 - 192.168.1.6"},
+		// a /30 has no useful pool
+		{"10.10.0.1/30", ""},
+	} {
+		if got := poolsText(DefaultPool(gw(c.address))); got != c.want {
+			t.Errorf("%s: %q, want %q", c.address, got, c.want)
+		}
 	}
 }
 
 // defaultPoolCase is a row of testdata/default_pool.json: a network address (the gateway's own address with
-// the prefix length), where the gateway lies in the subnet, and the default pool (null: none). The web app's
-// effectivePools (web/src/lib/networks.test.ts) runs the same table, so the browser names the pool the
-// gateway hands out (#95).
+// the prefix length), where the gateway lies in the subnet, and the default pools (empty: none). The web
+// app's effectivePools (web/src/lib/networks.test.ts) runs the same table, so the browser names the pools
+// the gateway hands out (#95, #110).
 type defaultPoolCase struct {
 	Address   string `json:"address"`
 	GatewayAt string `json:"gateway_at"`
-	Pool      *struct {
+	Pools     []struct {
 		Start string `json:"start"`
 		End   string `json:"end"`
-	} `json:"pool"`
+	} `json:"pools"`
 }
 
 func TestDefaultPoolForEverySubnetSizeAndGatewayPosition(t *testing.T) {
@@ -161,14 +176,18 @@ func TestDefaultPoolForEverySubnetSizeAndGatewayPosition(t *testing.T) {
 	for _, c := range cases {
 		p := netip.MustParsePrefix(c.Address)
 		sizes[p.Bits()] = true
-		got, ok := DefaultPool(p, p.Addr())
-		switch {
-		case c.Pool == nil && ok:
-			t.Errorf("%s (gateway at the %s): pool %s - %s, want none", c.Address, c.GatewayAt, got.Start, got.End)
-		case c.Pool != nil && !ok:
-			t.Errorf("%s (gateway at the %s): no pool, want %s - %s", c.Address, c.GatewayAt, c.Pool.Start, c.Pool.End)
-		case c.Pool != nil && (got.Start.String() != c.Pool.Start || got.End.String() != c.Pool.End):
-			t.Errorf("%s (gateway at the %s): pool %s - %s, want %s - %s", c.Address, c.GatewayAt, got.Start, got.End, c.Pool.Start, c.Pool.End)
+		got := DefaultPool(p, p.Addr())
+		want := make([]string, len(c.Pools))
+		for i, w := range c.Pools {
+			want[i] = w.Start + " - " + w.End
+		}
+		if poolsText(got) != strings.Join(want, ", ") {
+			t.Errorf("%s (gateway at the %s): pools %q, want %q", c.Address, c.GatewayAt, poolsText(got), strings.Join(want, ", "))
+		}
+		for _, q := range got {
+			if q.Start.Compare(p.Addr()) <= 0 && p.Addr().Compare(q.End) <= 0 {
+				t.Errorf("%s (gateway at the %s): the pool %s - %s holds the gateway's address", c.Address, c.GatewayAt, q.Start, q.End)
+			}
 		}
 	}
 	for bits := 16; bits <= 30; bits++ {

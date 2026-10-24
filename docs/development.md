@@ -540,7 +540,7 @@ JSON pointer of the field concerned, next to the compiler's warnings.
 
 | Code | Meaning |
 |---|---|
-| `fixed_ip_in_pool` | A device's `fixed_ip` (path `/devices/<id>/fixed_ip`) lies inside a DHCP pool of its network: a configured pool, or the default pool (the second half of the subnet) when the network names none. Kea allows in-pool reservations, but while another client holds the address from the pool the device gets a different pool address until that lease is released; the other client is refused only when it renews. Not reported when DHCP is off in the network (no reservation is made). Decided in #76 (a warning, not an error): a pool or a reservation that is changed never turns a valid configuration invalid. In the web UI `reservationPool` and `reservationPoolHint` (`web/src/lib/networks.ts`) are the same rule, for the hint that does not block in the device and adopt dialogs (#73, #74); the e2e mock warns with it too. |
+| `fixed_ip_in_pool` | A device's `fixed_ip` (path `/devices/<id>/fixed_ip`) lies inside a DHCP pool of its network: a configured pool, or the default pool (the second half of the subnet, split around the gateway's address when it lies inside, #110) when the network names none. Kea allows in-pool reservations, but while another client holds the address from the pool the device gets a different pool address until that lease is released; the other client is refused only when it renews. Not reported when DHCP is off in the network (no reservation is made). Decided in #76 (a warning, not an error): a pool or a reservation that is changed never turns a valid configuration invalid. In the web UI `reservationPool` and `reservationPoolHint` (`web/src/lib/networks.ts`) are the same rule, for the hint that does not block in the device and adopt dialogs (#73, #74); the e2e mock warns with it too. |
 | `fixed_ip_dhcp_off` | A device's `fixed_ip` (path `/devices/<id>/fixed_ip`) is in a local test network with DHCP off (no `dhcp` scope, or `enabled: false`): the address stays in the configuration, but the compiler makes no reservation and nothing hands it out until DHCP is turned on there. Reported whether or not another network serves DHCP: it was a compiler warning that only appeared while a Kea target existed, and moved here in #94 so that it does not depend on one and sits at the field. In the web UI the device and adopt dialogs show the same as the hint `dhcp_off` (`fixedIpHints`, `web/src/lib/deviceForm.ts`); the e2e mock warns with it too. |
 
 A new or changed reservation takes effect when the device renews its lease, which it does after half
@@ -968,7 +968,8 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
 -V` against it and fails on a mismatch. Bump the two `ARG`s together when the package updates.
 
 - **Compiler.** `Target.Kea` has one subnet per network with `dhcp` switched on, bound to the network's
-  bridge: pools (default: the second half of the subnet), lease time (default 1 h), router and DNS
+  bridge: pools (default, `kea.DefaultPool`: the second half of the subnet, split around the gateway's address
+  when it lies inside, #110), lease time (default 1 h), router and DNS
   (default: the gateway), NTP, domain, custom options, and reservations from devices with `fixed_ip` and a
   MAC. A subnet id is derived from the network's UUID, so it does not change when other networks come
   and go (Kea keys its leases by it). Every device, configured or discovered, also has a nftables set
@@ -3989,8 +3990,8 @@ settings and the protocols on the links; part 3) go through the draft too.
   and the uplink (both owned by the OS, not selectable); a card is a link, so the selected network has its own URL (the
   overview's topology links there too). The selected network's settings (`NetworkSettings.vue`) in the user's words: for a
   local network the subnet, the gateway address, the attachment (its ports with presence and link), DHCP (on or off, lease
-  time, active leases, the pool — the configured one, or the spec's default, the second half of the subnet, computed by
-  `effectivePools` — with the free addresses the gateway reports, router and DNS options), DNS (the proxy, redirected
+  time, active leases, the pool — the configured one, or the spec's default, the second half of the subnet without the
+  gateway's address (two ranges when the gateway lies inside it, #110), computed by `effectivePools` — with the free addresses the gateway reports, router and DNS options), DNS (the proxy, redirected
   resolvers, DoT blocked, static entries), masquerade, downstream routes and "IPv6 blocked"; for a WireGuard network its
   kind and role, tunnel subnet and gateway address, endpoint (by default the uplink's address from `GET /uplink` with the listen port, "192.168.1.57:51820 (the uplink address)"), MTU, public key and the clients
   online; for a link the remote side's address and endpoint, its online state with the last handshake and bytes, and the

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import jsQR from 'jsqr';
 import { PNG } from 'pngjs';
-import type { WireGuardNetwork } from '../src/api/generated/model';
+import type { LanNetwork, WireGuardNetwork } from '../src/api/generated/model';
 import { ADMIN_HUB, CLIENT_RA, HUB, IOT, LINK, MockGateway, TEST, toast, withNetworks } from './mock';
 
 // M14: the network cards and the detail, DHCP pool and leases, WireGuard networks with their clients and
@@ -82,6 +82,17 @@ test('network cards and the detail of a test network: subnet, gateway, attachmen
   await expect(settings.getByRole('heading', { name: 'Test network' })).toBeVisible();
   await expect(page.getByTestId('leases')).toHaveCount(0);
   await expect(page.getByText('No device has a lease yet.')).toBeVisible();
+});
+
+test("the default DHCP pool of a network whose gateway lies in the second half of the subnet is split around the gateway's address (#110)", async ({ page }) => {
+  const gw = withNetworks(MockGateway.sample());
+  gw.config.networks![IOT] = { ...(gw.config.networks![IOT] as LanNetwork), address: '10.10.0.200/24' };
+  await open(page, `/networks/${IOT}`, gw);
+  const pool = page.getByTestId('dhcp-pool');
+  await expect(pool).toContainText('10.10.0.128 – 10.10.0.199');
+  await expect(pool).toContainText('10.10.0.201 – 10.10.0.254');
+  await expect(pool).not.toContainText('10.10.0.128 – 10.10.0.254');
+  await expect(pool).toContainText("the default: the second half of the subnet, without the gateway's address");
 });
 
 test('a WireGuard hub lists its clients with their status; a link shows its peer and its routes', async ({ page }) => {

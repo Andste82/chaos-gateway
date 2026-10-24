@@ -3589,7 +3589,7 @@ type DhcpScope struct {
 	LeaseTime *Duration    `json:"lease_time,omitempty"`
 	Options   *DhcpOptions `json:"options,omitempty"`
 
-	// Pools Default - the second half of the subnet.
+	// Pools Default - the second half of the subnet up to the last usable address, without the gateway's address (a gateway inside it splits it into the range before and the range after it).
 	Pools *[]DhcpPool `json:"pools,omitempty"`
 }
 

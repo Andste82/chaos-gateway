@@ -160,6 +160,9 @@ const ctx = computed<DeviceFormContext>(() => ({
   takenNames: takenNames.value,
 }));
 const formErrors = computed(() => deviceFormErrors(form.value, ctx.value));
+const result = computed(() => deviceFromForm(form.value, edited.value, ordered.value ? undefined : leaseMac.value));
+/** The device's MACs in the order the change gives them (the first is the one a reservation is for). */
+const resultMacs = computed(() => result.value.identifiers?.macs ?? []);
 const hints = computed(() =>
   formErrors.value.fixedIp
     ? []
@@ -170,7 +173,9 @@ const hints = computed(() =>
         leases: leases.data.value,
         leaseMac: leaseMac.value,
         leaseIp: leaseIp.value,
-        ordered: ordered.value,
+        // the notes speak of the order the request carries: the lease's MAC is put first only when
+        // `deviceFromForm` puts it there (a draft's chosen order, the reservation already in it, stays)
+        ordered: ordered.value || resultMacs.value[0] === macs.value[0],
       }),
 );
 const server = computed(() => {
@@ -194,9 +199,6 @@ function shown(f: DeviceField): string | undefined {
 }
 
 const title = computed(() => `Edit ${before.value.name || props.device.name}`);
-const result = computed(() => deviceFromForm(form.value, edited.value, ordered.value ? undefined : leaseMac.value));
-/** The device's MACs in the order the change gives them (the first is the one a reservation is for). */
-const resultMacs = computed(() => result.value.identifiers?.macs ?? []);
 /** The first MAC changes with this edit (by the admin's choice or a new reservation on the lease's MAC). */
 const firstChanged = computed(() => !!resultMacs.value.length && !!configuredMacs.value.length && resultMacs.value[0] !== configuredMacs.value[0]);
 

@@ -220,7 +220,18 @@ test("any of the device's MACs is made its first, from the list or from the othe
   await expect(macs.first()).toContainText(WIFI);
   await expect(dialog.locator('[data-hint="first_mac"]')).toHaveText(`The reservation is for the device's first MAC, ${WIFI}, not for its other one.`);
   await dialog.getByRole('button', { name: 'Preview & apply' }).click();
-  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  const preview = page.getByRole('dialog', { name: 'Preview revision 44' });
+  await expect(preview).toBeVisible();
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
+    [ESP]: { fixed_ip: '10.10.0.50', identifiers: { macs: [WIFI, MAC] } },
+  });
+  // backed out, the draft keeps the order; opened again, the notes speak of the MAC the draft has first
+  await preview.getByRole('button', { name: 'Close' }).click();
+  dialog = await openEdit(page);
+  await expect(macs.locator('.mono')).toHaveText([WIFI, MAC]);
+  await expect(dialog.locator('[data-hint="first_mac"]')).toHaveText(`The reservation is for the device's first MAC, ${WIFI}, not for its other one.`);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 45' })).toBeVisible();
   expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
     [ESP]: { fixed_ip: '10.10.0.50', identifiers: { macs: [WIFI, MAC] } },
   });

@@ -82,8 +82,9 @@ export interface ReservationHintContext extends ReservationContext {
   /** The address of the device's current lease: a new reservation of it keeps the address, no renewal moves it. */
   leaseIp?: string;
   /**
-   * The admin chose the order of the MACs (#111): `macs` is final, a new reservation does not put the
-   * lease's MAC first (the dialog passes no lease MAC to `deviceFromForm` then).
+   * The order of `macs` is final: a new reservation does not put the lease's MAC first. So when the admin
+   * chose the first MAC (#111; the dialog passes no lease MAC to `deviceFromForm` then), and when the
+   * change keeps the order of the draft (a reservation in the draft already, `deviceFromForm` compares with it).
    */
   ordered?: boolean;
 }

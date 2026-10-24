@@ -314,14 +314,17 @@ func TestTheManagementNetworkIsNotReachedViaTheUplink(t *testing.T) {
 
 // ---- identity ----------------------------------------------------------------------------
 
-// A device no port forward sends to; for a forward's target a stale entry counts as well
-// (P31-AUDIT-14, TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale).
-func TestAStaleNeighborOnlyCountsWhileTheAddressCarriesConnections(t *testing.T) {
+// Issue #93 (decided 2026-10-24, option (a)): a stale entry (STALE, DELAY, PROBE) of a configured device
+// stays a lingering claim of its address without connections too, as long as no other device claims the
+// address, like a forward's target (P31-AUDIT-14, TestAForwardKeepsItsTargetWhileTheDevicesNeighborEntryIsStale).
+// A probe's stale entry still counts only while the address carries connections.
+func TestAStaleNeighborOfAConfiguredDeviceKeepsItsAddress(t *testing.T) {
 	cfg := stored(t)
 	cfg.PortForwards = nil
 	n := Neighbor{IP: ip("10.10.0.80"), MAC: espMAC, Stale: true}
-	if _, owned := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{n}}, nil).Owner[n.IP]; owned {
-		t.Fatal("a stale entry without connections says nothing")
+	id := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{n}}, nil)
+	if id.Owner[n.IP] != idESP || len(id.Conflicts) != 0 {
+		t.Fatalf("a configured device lost its stale address: %v %v", id.Owner, id.Conflicts)
 	}
 	obs := Observed{Neighbors: []Neighbor{n}, ActiveSources: map[netip.Addr]bool{n.IP: true}}
 	if ResolveIdentity(cfg, obs, nil).Owner[n.IP] != idESP {
@@ -330,6 +333,64 @@ func TestAStaleNeighborOnlyCountsWhileTheAddressCarriesConnections(t *testing.T)
 	fresh := Neighbor{IP: ip("10.10.0.81"), MAC: espMAC}
 	if ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{fresh}}, nil).Owner[fresh.IP] != idESP {
 		t.Fatal("a confirmed entry counts")
+	}
+	// the stale address is the least current one: the confirmed entry of the device comes first
+	id = ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{n, fresh}}, nil)
+	if cur := id.Current[idESP]; len(cur) < 2 || cur[0] != fresh.IP {
+		t.Errorf("current = %v", cur)
+	}
+
+	// a probe's stale entry without connections says nothing
+	const probeMAC = "02:00:00:aa:bb:cc"
+	probe := Observed{
+		Probes:    map[string]ProbeObservation{idProbe: {MAC: probeMAC}},
+		Neighbors: []Neighbor{{IP: ip("10.10.0.82"), MAC: probeMAC, Stale: true}},
+	}
+	if _, owned := ResolveIdentity(cfg, probe, nil).Owner[ip("10.10.0.82")]; owned {
+		t.Error("a probe's stale entry without connections says nothing")
+	}
+}
+
+// Issue #93: the stale claim of a configured device gives way to any claim of another device on the
+// address, without a conflict (the new holder wins): a confirmed entry, a lease, a reservation. Of two stale
+// entries of two devices without connections neither says who has the address now.
+func TestAStaleNeighborClaimGivesWayToAnotherDevice(t *testing.T) {
+	const otherID, otherMAC = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", "02:00:00:00:00:99"
+	cfg := stored(t)
+	cfg.PortForwards = nil
+	devs := *cfg.Devices
+	d := devs[idESP]
+	d.FixedIp = nil
+	devs[idESP] = d
+	macs := []string{otherMAC}
+	iot := idIoT
+	devs[otherID] = model.Device{Name: "other", Network: &iot, Identifiers: &model.DeviceIdentifiers{Macs: &macs}}
+	addr := ip("10.10.0.80")
+	stale := Neighbor{IP: addr, MAC: espMAC, Stale: true}
+
+	for name, obs := range map[string]Observed{
+		"a confirmed entry": {Neighbors: []Neighbor{stale, {IP: addr, MAC: otherMAC}}},
+		"a lease":           {Neighbors: []Neighbor{stale}, Leases: []model.DhcpLease{lease(addr.String(), otherMAC, time.Hour)}},
+	} {
+		id := ResolveIdentity(cfg, obs, nil)
+		if id.Owner[addr] != otherID || len(id.Conflicts) != 0 || len(id.Addresses[idESP]) != 0 {
+			t.Errorf("%s: owner %v, conflicts %v", name, id.Owner, id.Conflicts)
+		}
+	}
+	reserved := addr.String()
+	o := devs[otherID]
+	o.FixedIp = &reserved
+	devs[otherID] = o
+	if id := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{stale}}, nil); id.Owner[addr] != otherID || len(id.Conflicts) != 0 {
+		t.Errorf("a reservation: owner %v, conflicts %v", id.Owner, id.Conflicts)
+	}
+	o.FixedIp = nil
+	devs[otherID] = o
+
+	// two stale entries of two devices: another device claims the address for each, so neither keeps it
+	id := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{stale, {IP: addr, MAC: otherMAC, Stale: true}}}, nil)
+	if owner, owned := id.Owner[addr]; owned || len(id.Conflicts) != 0 {
+		t.Errorf("two stale entries: owner %v, conflicts %v", owner, id.Conflicts)
 	}
 }
 

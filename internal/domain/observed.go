@@ -20,8 +20,9 @@ type Neighbor struct {
 	Interface string
 	Network   string // UUID of the network the interface belongs to
 	// Stale marks an entry the kernel has not confirmed lately (state STALE, DELAY, PROBE). It
-	// only counts while the address still carries connections, or while an enabled port forward
-	// sends to the device and no other device claims the address (P31-AUDIT-14).
+	// counts while the address still carries connections; without connections it stays a lingering
+	// claim of a configured device (issue #93) or of a port forward's target (P31-AUDIT-14) as long
+	// as no other device claims the address.
 	Stale bool
 	// Seen is when the engine first saw the address with this MAC: of two confirmed entries of a
 	// device, the one seen later is its more current address (a device that moved keeps its old
@@ -132,17 +133,18 @@ type claim struct {
 	lingering bool
 	// seen is when the neighbor entry behind a neighbor claim was first seen (Neighbor.Seen).
 	seen time.Time
-	// forwardOnly marks a stale neighbor entry without connections that stands only because a port forward
-	// sends to the device: any claim of another device on the address takes it away (yieldToOthers).
-	forwardOnly bool
+	// yielding marks a stale neighbor entry without connections: it keeps the address of a configured
+	// device or a port forward's target between two confirmations, but any claim of another device on the
+	// address takes it away (yieldToOthers).
+	yielding bool
 }
 
-// yieldToOthers drops the forwardOnly claims of an address that another device claims too: the new
-// holder of an address wins over a forward target's stale entry.
+// yieldToOthers drops the yielding claims of an address that another device claims too: the new
+// holder of an address wins over a device's stale entry.
 func yieldToOthers(cs []claim) []claim {
 	out := cs[:0:0]
 	for _, c := range cs {
-		if c.forwardOnly && claimedByOther(cs, c.device) {
+		if c.yielding && claimedByOther(cs, c.device) {
 			continue
 		}
 		out = append(out, c)
@@ -271,13 +273,16 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 		}
 		c := claim{device: dev, strength: claimNeighbor, lingering: n.Stale, seen: n.Seen}
 		if n.Stale && !obs.ActiveSources[n.IP] {
-			if !targets[dev] {
-				continue // an old entry says nothing about who has the address now
+			if d := idx.Devices[dev]; (d == nil || d.Device == nil) && !targets[dev] {
+				continue // an old entry of a probe says nothing about who has the address now
 			}
-			// a forward's target keeps its stale entry as a lingering claim, so the forward keeps sending
-			// there (the kernel probes the entry when a connection comes, and an entry that fails goes); it
-			// gives way to any claim of another device (P31-AUDIT-14, decided 2026-10-18)
-			c.forwardOnly = true
+			// a configured device keeps its stale entry as a lingering claim, so an entry that goes STALE,
+			// DELAY or PROBE between two confirmations does not take the address from the device and back
+			// (issue #93, decided 2026-10-24: faults and rules keep matching, no device_identity_changed);
+			// a forward's target keeps it too, so the forward keeps sending there (the kernel probes the
+			// entry when a connection comes, and an entry that fails goes; P31-AUDIT-14, decided
+			// 2026-10-18). It gives way to any claim of another device: the new holder wins.
+			c.yielding = true
 		}
 		add(n.IP, c)
 	}

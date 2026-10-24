@@ -2,8 +2,8 @@
 // Edit a configured device (plan §2.3, §2.7, §2.17 "Devices"; #73): its name, its network (a local test
 // network) and its fixed IP, the DHCP reservation for its first MAC. The checks of the gateway stand
 // under their fields; the notes under the fixed IP do not stop the change (an address in the dynamic
-// pool, leased to another client now, DHCP off in the network, when the reservation takes effect, which
-// MAC it is for). A new or changed reservation puts the MAC of the current lease first. "Preview & apply"
+// pool, leased to another client now, held by the device with a MAC other than the reserved one (#96),
+// DHCP off in the network, when the reservation takes effect, which MAC it is for). A new or changed reservation puts the MAC of the current lease first. "Preview & apply"
 // puts the device into the configuration draft and opens the preview-and-apply drawer, against the
 // revision the dialog was opened on, so a revision applied meanwhile meets the edit in the
 // concurrent-change dialog. A device the gateway refused opens again with its messages under their

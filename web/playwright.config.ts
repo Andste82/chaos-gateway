@@ -13,7 +13,8 @@ import { defineConfig } from '@playwright/test';
 // E2E_PORT sets the port of the preview server (default 4173), so runs in several worktrees can
 // overlap, each against its own build. A server already running on the port is reused only with
 // E2E_REUSE=1 (never in CI); otherwise the run fails on a busy port instead of silently testing
-// another worktree's build.
+// another worktree's build. The build (vue-tsc and vite) takes about a minute alone and much
+// longer while other runs build at the same time, so the server gets 5 minutes to come up.
 const port = Number(process.env.E2E_PORT || 4173);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`E2E_PORT must be a TCP port, got ${JSON.stringify(process.env.E2E_PORT)}`);
@@ -28,7 +29,7 @@ export default defineConfig({
     command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer: !process.env.CI && process.env.E2E_REUSE === '1',
-    timeout: 120_000,
+    timeout: 300_000,
   },
   use: {
     baseURL,

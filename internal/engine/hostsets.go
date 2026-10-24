@@ -232,6 +232,8 @@ func (h *hostSets) write(ctx context.Context, w *hostWrite) error {
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-h.e.ctx.Done():
+		return ErrClosed
 	}
 }
 

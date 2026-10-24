@@ -336,15 +336,17 @@ func (e *Engine) FollowConntrack(ctx context.Context, debounce time.Duration) er
 
 // debounceConntrack reads from a conntrack watch until it closes or ctx ends, triggering an
 // observation once per burst of events (the same debouncing internal/observer does for netlink).
+// The final counters of every destroyed connection are kept for that read (noteConntrackEvent).
 func (e *Engine) debounceConntrack(ctx context.Context, events <-chan json.RawMessage, debounce time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case _, ok := <-events:
+		case raw, ok := <-events:
 			if !ok {
 				return
 			}
+			e.noteConntrackEvent(raw)
 		}
 		t := e.cfg.Clock.NewTimer(debounce)
 	burst:
@@ -352,12 +354,13 @@ func (e *Engine) debounceConntrack(ctx context.Context, events <-chan json.RawMe
 			select {
 			case <-t.C():
 				break burst
-			case _, ok := <-events:
+			case raw, ok := <-events:
 				if !ok {
 					t.Stop()
 					e.TriggerObserve()
 					return
 				}
+				e.noteConntrackEvent(raw)
 				t.Stop()
 				t = e.cfg.Clock.NewTimer(debounce)
 			case <-ctx.Done():

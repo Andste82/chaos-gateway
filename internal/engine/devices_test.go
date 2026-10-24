@@ -369,6 +369,72 @@ func TestDeviceTrafficRatesAndActiveFlowCount(t *testing.T) {
 	}
 }
 
+// issue #91 test: a connection that ends between two reads is gone from the second one; the final
+// counters of its destroy event bring what it moved after the first read, and one that starts and
+// ends between the reads brings all of its bytes.
+func TestConnectionsThatEndBetweenTwoReadsCountFromTheirDestroyEvent(t *testing.T) {
+	tr := newTracker()
+	cfg := trackerConfig(t)
+	ip, srv := addr("10.10.0.31"), addr("203.0.113.10")
+	nb := []domain.Neighbor{neigh("10.10.0.31", macCf)}
+
+	tr.step(cfg, observation{At: t0.Add(time.Second), Neighbors: nb, ConntrackRead: true, Flows: []FlowCounters{
+		{Key: "a", Src: ip, Dst: srv, Up: Traffic{10, 800}, Down: Traffic{5, 400}},
+		{Key: "b", Src: ip, Dst: srv, Up: Traffic{1, 200}, Down: Traffic{1, 100}}}})
+
+	// two seconds later "b" has ended after moving 1000 more bytes up and 400 down, and "dns" started
+	// and ended in between
+	_, states, _ := tr.step(cfg, observation{At: t0.Add(3 * time.Second), Neighbors: nb, ConntrackRead: true,
+		Flows: []FlowCounters{{Key: "a", Src: ip, Dst: srv, Up: Traffic{30, 4800}, Down: Traffic{15, 2400}}},
+		Ended: []FlowCounters{
+			{Key: "b", Src: ip, Dst: srv, Up: Traffic{4, 1200}, Down: Traffic{3, 500}},
+			{Key: "dns", Src: ip, Dst: addr("10.10.0.1"), Up: Traffic{1, 600}, Down: Traffic{1, 300}}}})
+	st := stateOf(states, tDev)
+	// upload (4000 + 1000 + 600) / 2 = 2800 B/s, download (2000 + 400 + 300) / 2 = 1350 B/s; the ended
+	// connections are not active any more
+	if st == nil || !st.TrafficKnown || st.FlowsActive != 1 || st.UploadBps != 2800 || st.DownloadBps != 1350 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+// issue #91 test: the destroy event of a connection can come after the read that already missed it;
+// it then brings only what the connection moved after the last read that saw it. A connection with the
+// tuple of an ended one is a new connection and brings all of its own.
+func TestALateDestroyEventDoesNotCountTwice(t *testing.T) {
+	tr := newTracker()
+	ip, srv := addr("10.10.0.31"), addr("203.0.113.10")
+	read := func(s int, ended []FlowCounters, flows ...FlowCounters) *addrDelta {
+		t.Helper()
+		at := t0.Add(time.Duration(s) * time.Second)
+		d := tr.readFlows(observation{At: at, ConntrackRead: true, Flows: flows, Ended: ended})
+		tr.lastRead = at
+		if d[ip] == nil {
+			return &addrDelta{}
+		}
+		return d[ip]
+	}
+	a := func(up, down int64) FlowCounters {
+		return FlowCounters{Key: "a", Src: ip, Dst: srv, Up: Traffic{up, up}, Down: Traffic{down, down}}
+	}
+	read(0, nil, a(100, 50))
+	if d := read(1, nil, a(300, 80)); d.upload != 200 || d.download != 30 || d.flows != 1 {
+		t.Fatalf("%+v", d)
+	}
+	// "a" has ended, but its destroy event comes only after this read
+	if d := read(2, nil); d.upload != 0 || d.download != 0 || d.flows != 0 {
+		t.Fatalf("%+v", d)
+	}
+	if d := read(3, []FlowCounters{a(350, 90)}); d.upload != 50 || d.download != 10 || d.flows != 0 || !d.sent {
+		t.Fatalf("the late destroy: %+v", d)
+	}
+
+	// "a" ends again, and a new connection with the same tuple is already in the read
+	read(4, nil, a(10, 10))
+	if d := read(5, []FlowCounters{a(40, 20)}, a(7, 7)); d.upload != 30+7 || d.download != 10+7 || d.flows != 1 {
+		t.Fatalf("a new connection with the tuple of an ended one: %+v", d)
+	}
+}
+
 // issue #79: observations that do not read conntrack (the watch streams, or the read failed) neither
 // reset the baseline nor spike the next read; a device that moves nothing has a known rate of 0.
 func TestTrafficRatesSurviveObservationsWithoutAConntrackRead(t *testing.T) {

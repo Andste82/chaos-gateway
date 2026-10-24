@@ -3,8 +3,33 @@ package compiler
 import (
 	"net/netip"
 
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 )
+
+// DoTChain is the chain of the networks that block DNS over TLS (plan §2.6, `dns.block_dot`): TCP port 853 of
+// their devices is dropped, after the access rules (an allow rule is an exception) and before the access matrix.
+const DoTChain = "dot_block"
+
+// dotCounterName names the counter of the DoT block of a network.
+func dotCounterName(networkID string) string { return "dot_" + shortID(networkID) }
+
+// dotBlock builds the chain that drops DNS over TLS of the networks that ask for it; nil when none does.
+func (t *Target) dotBlock() *Chain {
+	var c Chain
+	for _, b := range t.Bridges {
+		if !b.BlockDoT {
+			continue
+		}
+		t.Nft.Counters = append(t.Nft.Counters, dotCounterName(b.NetworkID))
+		c.Rules = append(c.Rules, newRule(iifname(b.Name), eq(meta("l4proto"), "tcp"), eq(payload("tcp", "dport"), 853), counter(dotCounterName(b.NetworkID)), verdict("drop")))
+	}
+	if len(c.Rules) == 0 {
+		return nil
+	}
+	c.Name = DoTChain
+	return &c
+}
 
 // The service namespace (plan §3.3, D29): the gateway services (DNS proxy, later the TLS responder)
 // run in a namespace of their own, connected to the gateway by a veth pair. Traffic that a service
@@ -147,6 +172,28 @@ func (t *Target) serviceRedirect(tp *topo) []Rule {
 	}
 	for _, w := range t.WireGuard {
 		add(w.Name, w.Address.Addr())
+	}
+	// DNS to other resolvers (plan §2.6, `dns.redirect_hardcoded`): the same redirect for any destination, after the
+	// rules for the gateway's own address. What stays inside the segments of the network (the network and the
+	// networks behind its routers: a resolver of the lab on the same bridge) is switched or routed back out of the
+	// bridge and is never ours to redirect (plan §2.2). The access rules judge a redirected query by the resolver the
+	// device meant (the conntrack original tuple), so a rule that drops it still does.
+	for _, b := range t.Bridges {
+		if !b.RedirectDNS {
+			continue
+		}
+		local := []netip.Prefix{b.Address.Masked()}
+		for _, r := range b.Routes {
+			if p, err := netip.ParsePrefix(r); err == nil {
+				local = append(local, p.Masked())
+			} else if a, err := netip.ParseAddr(r); err == nil {
+				local = append(local, netip.PrefixFrom(a, a.BitLen()))
+			}
+		}
+		local = domain.CollapsePrefixes(local)
+		for _, proto := range []string{"udp", "tcp"} {
+			rules = append(rules, newRule(iifname(b.Name), match(payload("ip", "daddr"), "!=", prefixes(local)), eq(payload(proto, "dport"), 53), dnat))
+		}
 	}
 	_ = tp
 	return rules

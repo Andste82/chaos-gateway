@@ -222,8 +222,19 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		dstIP = a
 		query.DestIP = a
 		out.Destination = &ExplainDestination{IP: a.String()}
+		// the names the device got for the address from the gateway's DNS, which a hostname selector of a rule or a
+		// fault matches (the DNS-derived sets hold them, plan §2.6)
+		if sub.IP.IsValid() {
+			if names := e.HostNames(sub.IP, a); len(names) > 0 {
+				query.DestNames = names
+				out.Destination.Hostname = names[0]
+			}
+		}
 	} else if q.Dst != "" {
-		query.DestNames = []string{strings.ToLower(q.Dst)}
+		name := strings.ToLower(strings.TrimSuffix(q.Dst, "."))
+		query.DestNames = []string{name}
+		// resolving the name is asked of the DNS proxy, so the DNS faults for it apply
+		query.DNSName = name
 		out.Destination = &ExplainDestination{Hostname: q.Dst}
 	}
 
@@ -319,12 +330,16 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		}
 	}
 
-	// the service namespace: DNS queries to the gateway's own address
+	// the service namespace: DNS queries to the gateway's own address, and to any other resolver of a network
+	// that redirects them (plan §2.6, `dns.redirect_hardcoded`)
 	if snap.Service != nil && q.Port == 53 && (query.Protocol == "" || query.Protocol == "udp" || query.Protocol == "tcp") && dstIP.IsValid() {
 		for _, g := range gatewayAddrs(snap) {
 			if g == dstIP {
 				out.Service = "dns_proxy"
 			}
+		}
+		if out.Service == "" && redirectsDNS(snap, sub.Network, dstIP) {
+			out.Service = "dns_proxy"
 		}
 	}
 	if out.Service == "" {
@@ -471,4 +486,25 @@ func (e *Engine) explainForwarded(snap *Snapshot, world *domain.World, q Explain
 	a := world.ForwardedDecision(domain.ForwardedQuery{Forward: f, Target: st.Target, Network: st.Network, Device: owner,
 		Peer: sub.IP, Protocol: proto, Port: q.Port}, e.accessFacts(snap))
 	return explainedForward{out, ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Rule: a.Rule, Reason: a.Reason}}, true
+}
+
+// redirectsDNS reports whether the network of the source redirects DNS to the proxy for a resolver at this address:
+// the network asks for it and the address lies outside its own segments (the network and the networks behind its
+// routers), which are switched or routed back out of the bridge and never redirected.
+func redirectsDNS(snap *Snapshot, network string, dst netip.Addr) bool {
+	for _, b := range snap.Bridges {
+		if !strings.EqualFold(b.NetworkID, network) || !b.RedirectDNS {
+			continue
+		}
+		if b.Address.Masked().Contains(dst) {
+			return false
+		}
+		for _, r := range b.Routes {
+			if p, err := netip.ParsePrefix(r); err == nil && p.Contains(dst) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

@@ -59,7 +59,7 @@ func runDNS(args []string, stdout, stderr io.Writer) int {
 	}
 
 	c := &dnsproxy.APIClient{Base: *api, TokenFile: *tokenFile, CertFile: *certFile}
-	srv := dnsproxy.New(dnsproxy.Options{Log: log, Sink: c})
+	srv := dnsproxy.New(dnsproxy.Options{Log: log, Sink: c, Resolutions: c})
 	go srv.Follow(runCtx, c, log)
 	logDone := make(chan struct{})
 	go func() { srv.RunLog(runCtx); close(logDone) }()

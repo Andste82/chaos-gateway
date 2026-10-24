@@ -35,9 +35,6 @@ const (
 	// CodeFaultInvalid: the parameters of a winning fault cannot be turned into a netem
 	// configuration. Validation refuses such a fault before it is stored, so this is a defect.
 	CodeFaultInvalid = "fault_invalid"
-	// CodeHostnameUnresolved: a fault names a hostname; its addresses are known at run time only
-	// (DNS-derived sets, M20), so the fault does not reach the packet path yet.
-	CodeHostnameUnresolved = "hostname_unresolved"
 )
 
 // EffectiveFault is a fault or a part of an activated profile that wins for some traffic, in the
@@ -324,6 +321,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	if t.HasErrors() {
 		return
 	}
+	t.compileDNS(w, sources, idx)
 
 	// ---- pass 1: the winner of every entry of every source's table, and the keys they need ----
 	tables := make([]domain.Table, len(sources))

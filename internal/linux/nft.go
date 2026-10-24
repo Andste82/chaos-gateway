@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // NftObject is one object of an `nft -j` ruleset: exactly one of the pointer fields is set for the
@@ -124,6 +125,36 @@ func (s *NftSet) Elements() []string {
 		out = append(out, NormalizeElement(normalizeElem(raw)))
 	}
 	sort.Strings(out)
+	return out
+}
+
+// TimedElement is an element of a set with timeouts: its key in the form of Elements and the lifetime it was
+// written with and the time it has left, 0 for an element that has no timeout (or no `expires` in the
+// listing).
+type TimedElement struct {
+	Key              string
+	Timeout, Expires time.Duration
+}
+
+// TimedElements returns the elements of a set that has timeouts (a DNS-derived set) with their lifetimes, sorted by
+// key. nft prints both in seconds: {"elem": {"val": ..., "timeout": 600, "expires": 590}}.
+func (s *NftSet) TimedElements() []TimedElement {
+	out := make([]TimedElement, 0, len(s.Elem))
+	for _, raw := range s.Elem {
+		te := TimedElement{Key: NormalizeElement(normalizeElem(raw))}
+		var v struct {
+			Elem struct {
+				Timeout float64 `json:"timeout"`
+				Expires float64 `json:"expires"`
+			} `json:"elem"`
+		}
+		if json.Unmarshal(raw, &v) == nil {
+			te.Timeout = time.Duration(v.Elem.Timeout * float64(time.Second))
+			te.Expires = time.Duration(v.Elem.Expires * float64(time.Second))
+		}
+		out = append(out, te)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 

@@ -265,6 +265,15 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, fams))
 		}
 	}
+	if ov.Kind == model.OverlayKindDns {
+		// a DNS fault competes with the other faults of its family (and the dns parts of profiles) for the names it
+		// names; it is `effective` while some source has it in its list (compiler.compileDNS)
+		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyDNS)
+		ov.State = &st
+		if overridden(st) && ov.Dns != nil {
+			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, map[string]bool{domain.FamilyDNS: true}, sampleName(deref(ov.Dns.Names))))
+		}
+	}
 	if ov.Kind == model.OverlayKindRule {
 		return oc.overlayRule(ov)
 	}
@@ -300,8 +309,7 @@ func (oc overlayContext) overlayRule(ov model.Overlay) model.Overlay {
 		ov.State = &st
 		ov.Counters = oc.ruleCounter(*r)
 	} else {
-		// the overlay is in the store but not in the packet path (a rule that names a hostname before M20,
-		// or a change the apply loop has not verified yet)
+		// the overlay is in the store but not in the packet path (a change the apply loop has not verified yet)
 		st := model.EffectStateDisabled
 		ov.State = &st
 	}
@@ -582,11 +590,14 @@ func refsOrNil(r []model.FaultRef) *[]model.FaultRef {
 // overriddenBy names the faults that beat a fault (a configured one, a fault overlay or the parts of a
 // profile activation): for the traffic of every device in its scope, the winner of each of its
 // families at a destination and port the fault selects.
-func (oc overlayContext) overriddenBy(layer domain.Layer, id string, scope *model.Scope, dest *model.Destination, proto *model.Protocol, ports *[]int, families map[string]bool) []model.FaultRef {
+func (oc overlayContext) overriddenBy(layer domain.Layer, id string, scope *model.Scope, dest *model.Destination, proto *model.Protocol, ports *[]int, families map[string]bool, dnsName ...string) []model.FaultRef {
 	if scope == nil || oc.world == nil {
 		return nil
 	}
 	q := domain.Query{}
+	if len(dnsName) > 0 {
+		q.DNSName = dnsName[0]
+	}
 	if dest != nil && dest.Cidr != nil {
 		if pfx, err := netip.ParsePrefix(*dest.Cidr); err == nil {
 			q.DestIP = pfx.Addr()
@@ -718,4 +729,16 @@ func readBody(c *gin.Context) ([]byte, *problem) {
 		return nil, bodyReadProblem(err)
 	}
 	return raw, nil
+}
+
+// sampleName is a name a DNS fault with these names applies to: the first exact one, a subdomain of the first
+// suffix, "" for a fault without names (it applies to every name).
+func sampleName(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	if rest, ok := strings.CutPrefix(names[0], "*."); ok {
+		return "a." + rest
+	}
+	return names[0]
 }

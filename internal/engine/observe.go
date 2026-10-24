@@ -161,6 +161,8 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 				}
 			}
 			sort.Slice(obs.UnknownSources, func(i, j int) bool { return obs.UnknownSources[i].Less(obs.UnknownSources[j]) })
+			// a flow to an address a DNS-derived set holds keeps its element alive (plan §2.6)
+			e.hosts.refresh(ctx, obs.Flows)
 		}
 		e.setActive(obs.Active, obs.UnknownSources)
 		e.markConntrackRead()

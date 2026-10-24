@@ -14,6 +14,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
 func (e *Engine) signal() {
@@ -161,12 +162,25 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			var after *apply.State
 			if !incremental {
 				var res *apply.Result
+				// the updates of a DNS-derived set that this plan replaces wait for it (hostsets.go)
+				endHosts := e.hosts.begin(target)
 				res, err = apply.ApplyWith(ctx, e.cfg.Exec, e.cfg.Namespace, target, retirer)
 				if res != nil {
 					plan, after = res.Plan, res.After
 					execWait = res.Outcome.QueueWait()
 				}
+				if err == nil {
+					var kernel *linux.Ruleset
+					if after != nil {
+						kernel = after.Nft
+					}
+					endHosts(target, kernel)
+				} else {
+					endHosts(nil, nil)
+				}
 				arm()
+			} else {
+				e.hosts.applied(target, nil)
 			}
 			took := e.cfg.Clock.Monotonic() - start
 			prev.deviceHigh = max(prev.deviceHigh, target.DeviceNumHigh)

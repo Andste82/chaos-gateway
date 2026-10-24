@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Andste82/chaos-gateway/internal/dnsproxy"
+	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -21,7 +23,7 @@ import (
 const dnsLogSize = 20000
 
 // dnsPoll are the long poll's wait and the interval at which it looks for a new configuration.
-var dnsPoll = struct{ wait, tick time.Duration }{30 * time.Second, 250 * time.Millisecond}
+var dnsPoll = struct{ wait, tick time.Duration }{30 * time.Second, 100 * time.Millisecond}
 
 type dnsState struct {
 	mu sync.Mutex
@@ -41,7 +43,14 @@ type dnsState struct {
 	logMu   sync.Mutex
 	seq     int64
 	entries []loggedQuery // oldest first, bounded
+	// faultEvent is when a DNS fault last announced itself for a device (dns_fault_triggered): at most once
+	// per faultEventEvery for each pair, so a proxy that answers hundreds of queries a second does not flood the
+	// stream.
+	faultEvent map[string]time.Time
 }
+
+// faultEventEvery is how often dns_fault_triggered is sent for one overlay and device.
+const faultEventEvery = 10 * time.Second
 
 type loggedQuery struct {
 	seq int64
@@ -91,7 +100,27 @@ func (s *Server) dnsConfig() *model.DnsServiceConfig {
 	if len(upstream) == 0 {
 		upstream = append(upstream, s.hostResolvers()...)
 	}
-	doc := map[string]any{"upstream": upstream, "strip_aaaa": true, "networks": nets, "faults": []any{}, "hostname_sets": []any{}}
+	faults := make([]any, 0, len(snap.DNSFaults))
+	for _, f := range snap.DNSFaults {
+		raw, _ := json.Marshal(f.Fault)
+		var entry map[string]any
+		_ = json.Unmarshal(raw, &entry)
+		srcs := make([]string, len(f.Sources))
+		for i, p := range f.Sources {
+			srcs[i] = p.String()
+		}
+		entry["overlay"], entry["sources"] = f.Overlay, srcs
+		faults = append(faults, entry)
+	}
+	sets := make([]any, 0, len(snap.DNSSets))
+	for _, ds := range snap.DNSSets {
+		srcs := make([]string, len(ds.Sources))
+		for i, p := range ds.Sources {
+			srcs[i] = p.String()
+		}
+		sets = append(sets, map[string]any{"set": ds.ID, "names": []string{ds.Pattern}, "sources": srcs})
+	}
+	doc := map[string]any{"upstream": upstream, "strip_aaaa": true, "networks": nets, "faults": faults, "hostname_sets": sets}
 	raw, _ := json.Marshal(doc)
 	sum := string(raw)
 
@@ -181,6 +210,7 @@ func (s *Server) PostDnsQueries(c *gin.Context) {
 		}
 	}
 	id := s.cfg.Engine.Snapshot().Identity
+	var events []map[string]any
 	s.dns.logMu.Lock()
 	for _, e := range batch {
 		if a, err := netip.ParseAddr(e.Client); err == nil {
@@ -192,11 +222,99 @@ func (s *Server) PostDnsQueries(c *gin.Context) {
 		}
 		s.dns.seq++
 		s.dns.entries = append(s.dns.entries, loggedQuery{seq: s.dns.seq, e: e})
+		if e.Fault != nil {
+			if ev, ok := s.faultTriggered(e); ok {
+				events = append(events, ev)
+			}
+		}
 	}
 	if over := len(s.dns.entries) - dnsLogSize; over > 0 {
 		s.dns.entries = append([]loggedQuery(nil), s.dns.entries[over:]...)
 	}
 	s.dns.logMu.Unlock()
+	for _, ev := range events {
+		s.cfg.Engine.Emit(engine.EventDNSFaultTriggered, ev)
+	}
+	c.Status(204)
+}
+
+// faultTriggered makes the event of a logged query that a DNS fault changed, unless the same overlay announced
+// itself for the same device a moment ago. Called with logMu held.
+func (s *Server) faultTriggered(e model.DnsQueryLogEntry) (map[string]any, bool) {
+	dev := e.Client
+	if e.Device != nil {
+		dev = e.Device.String()
+	}
+	key := e.Fault.String() + "|" + dev
+	now := s.clk.Now()
+	if t, ok := s.dns.faultEvent[key]; ok && now.Sub(t) < faultEventEvery {
+		return nil, false
+	}
+	if s.dns.faultEvent == nil {
+		s.dns.faultEvent = map[string]time.Time{}
+	}
+	if len(s.dns.faultEvent) > 4096 {
+		for k, t := range s.dns.faultEvent {
+			if now.Sub(t) >= faultEventEvery {
+				delete(s.dns.faultEvent, k)
+			}
+		}
+	}
+	s.dns.faultEvent[key] = now
+	ev := map[string]any{"overlay": e.Fault.String(), "name": e.Name, "type": e.Type, "rcode": e.Rcode, "client": e.Client}
+	if e.Device != nil {
+		ev["device"] = e.Device.String()
+	}
+	return ev, true
+}
+
+// PostDnsResolutions implements POST /internal/dns/resolutions (plan §2.6): the addresses the proxy is about
+// to answer a client with, for the names that hostname selectors match. It returns when the kernel's
+// DNS-derived sets hold them, so the device's first packet already matches; the engine deduplicates, batches the
+// concurrent calls into one executor request and writes beside a running plan (engine.RecordResolutions).
+func (s *Server) PostDnsResolutions(c *gin.Context) {
+	var batch []model.DnsResolution
+	if p := decodeJSON(c, &batch); p != nil {
+		s.write(c, p)
+		return
+	}
+	if len(batch) > 1000 {
+		s.write(c, newProblem(model.ErrorCodeBadRequest, "at most 1000 resolutions per request"))
+		return
+	}
+	rs := make([]engine.HostResolution, 0, len(batch))
+	for i, r := range batch {
+		client, err := netip.ParseAddr(r.Client)
+		if err != nil || !client.Is4() {
+			s.write(c, newProblem(model.ErrorCodeValidationFailed, "resolution %d: client %q is not an IPv4 address", i, r.Client))
+			return
+		}
+		if r.Set == "" || len(r.Addresses) == 0 || len(r.Addresses) > 256 || r.Ttl < 0 {
+			s.write(c, newProblem(model.ErrorCodeValidationFailed, "resolution %d: it needs a set, between 1 and 256 addresses and a TTL that is not negative", i))
+			return
+		}
+		hr := engine.HostResolution{Set: r.Set, Client: client.Unmap(), Name: strings.ToLower(r.Name), TTL: time.Duration(r.Ttl) * time.Second}
+		for _, a := range r.Addresses {
+			addr, err := netip.ParseAddr(a)
+			if err != nil || !addr.Is4() {
+				s.write(c, newProblem(model.ErrorCodeValidationFailed, "resolution %d: %q is not an IPv4 address", i, a))
+				return
+			}
+			hr.Addrs = append(hr.Addrs, addr)
+		}
+		rs = append(rs, hr)
+	}
+	if _, err := s.cfg.Engine.RecordResolutions(contextOf(c), rs); err != nil {
+		switch {
+		case errors.Is(err, engine.ErrClosed):
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "the gateway is stopping"))
+		case contextOf(c).Err() != nil:
+			return
+		default:
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "%s", firstLine(err.Error())))
+		}
+		return
+	}
 	c.Status(204)
 }
 

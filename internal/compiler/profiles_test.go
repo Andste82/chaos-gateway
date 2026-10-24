@@ -368,15 +368,20 @@ func TestAnActivationFollowsTheNewDefinitionOfItsProfile(t *testing.T) {
 	}
 }
 
-// DNS and TLS profiles arrive with M20 and M21: their parts are not compiled and break nothing (the
-// engine refuses the activation; a target built from an older overlay still compiles).
+// TLS profiles arrive with M21: their parts are not compiled and break nothing (the engine refuses the
+// activation; a target built from an older overlay still compiles). The dns part of a profile is a DNS fault
+// of the proxy since M20 and takes nothing from the kernel's side.
 func TestAProfileWithOnlyALaterFamilyCompilesToNothing(t *testing.T) {
 	w := newFaultWorld(t)
-	w.overlay(`{target: {network: IoT}, profile: dns-broken}`, 0)
 	w.overlay(`{target: {network: Lab}, profile: tls-broken}`, time.Second)
 	tg := w.compile(nil)
-	if tg.HasErrors() || len(tg.Faults) != 0 || len(tg.PMTU) != 0 || len(tg.Effective) != 0 {
+	if tg.HasErrors() || len(tg.Faults) != 0 || len(tg.PMTU) != 0 || len(tg.Effective) != 0 || len(tg.DNSFaults) != 0 {
 		t.Errorf("%+v %+v", tg.Problems, tg.Faults)
+	}
+	w.overlay(`{target: {network: IoT}, profile: dns-broken}`, 0)
+	tg = w.compile(nil)
+	if tg.HasErrors() || len(tg.Faults) != 0 || len(tg.PMTU) != 0 || len(tg.DNSFaults) == 0 || len(tg.Effective) != 1 || tg.Effective[0].Family != "dns" || tg.Effective[0].Profile != "dns-broken" {
+		t.Errorf("%+v %+v %+v", tg.Problems, tg.Faults, tg.Effective)
 	}
 	// a profile with an impairment and a DNS part compiles the impairment part
 	w.addProfile(profFlaky, `{name: slow-dns-lte, parts: {impairment: {latency: 50ms}, dns: {action: delay, delay: 2s}}}`)

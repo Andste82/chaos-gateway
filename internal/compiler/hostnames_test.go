@@ -140,7 +140,7 @@ func TestAHostnameFaultStandsInFrontOfTheLookupLevelsAndGoesToTheChainOfItsId(t 
 		t.Fatalf("%+v", tg.Problems)
 	}
 	for _, p := range tg.Problems {
-		if p.Code == CodeHostnameUnresolved {
+		if p.Code == "hostname_unresolved" {
 			t.Errorf("a hostname fault is compiled now: %+v", p)
 		}
 	}
@@ -276,7 +276,7 @@ func TestAnMTUFaultThatNamesAHostnameHasARuleInTheMTULookup(t *testing.T) {
 		t.Fatalf("%+v %+v", tg.PMTU, tg.Problems)
 	}
 	for _, p := range tg.Problems {
-		if p.Code == CodeHostnameUnresolved {
+		if p.Code == "hostname_unresolved" {
 			t.Errorf("%+v", p)
 		}
 	}

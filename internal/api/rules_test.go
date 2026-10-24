@@ -190,9 +190,9 @@ func TestARevisionWithMoreRulesThanTheLimitIsRefusedAtPreviewAndApply(t *testing
 	}
 }
 
-// A rule that names a hostname is not compiled before M20: the preview says so, the list shows the rule as
-// not in the packet path (P2-M9-02).
-func TestARuleThatNamesAHostnameIsReportedByThePreviewAndNotInThePacketPath(t *testing.T) {
+// A rule that names a hostname is compiled since M20: it looks up the DNS-derived set of the name, the preview
+// has no warning, and the list shows the rule in the packet path (P2-M9-02).
+func TestARuleThatNamesAHostnameIsCompiledToTheDNSDerivedSet(t *testing.T) {
 	g := ready(t)
 	id := g.mustPatch(map[string]any{
 		"access_rules": map[string]any{ruleA: map[string]any{"name": "block-cdn", "source": map[string]any{"network": "IoT"},
@@ -203,19 +203,15 @@ func TestARuleThatNamesAHostnameIsReportedByThePreviewAndNotInThePacketPath(t *t
 	if pv.Status != 200 {
 		t.Fatalf("%d %s", pv.Status, pv.Body)
 	}
-	var found bool
 	for _, w := range pv.json(t)["warnings"].([]any) {
 		if w.(map[string]any)["code"] == "hostname_unresolved" {
-			found = true
+			t.Errorf("a hostname rule is compiled now: %s", pv.Body)
 		}
-	}
-	if !found {
-		t.Errorf("no hostname_unresolved warning: %s", pv.Body)
 	}
 	if r := g.apply(id); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
-	if st := g.do("GET", "/rules/"+ruleA, nil, nil, nil).json(t)["state"]; st != "disabled" {
+	if st := g.do("GET", "/rules/"+ruleA, nil, nil, nil).json(t)["state"]; st != "effective" {
 		t.Errorf("state %v", st)
 	}
 }

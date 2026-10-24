@@ -20,6 +20,11 @@ const (
 	EventNetworkRecovered = "network_restored"
 	EventUplinkChanged    = "uplink_changed"
 	EventObservedChanged  = "observed_changed"
+	// EventDNSSetEpoch says that a DNS-derived address set was replaced by an apply (its definition
+	// changed, plan §3.2): it starts empty, and what the DNS proxy reported for it before is gone.
+	EventDNSSetEpoch = "dns_set_epoch"
+	// EventDNSFaultTriggered says that a DNS fault changed an answer (the proxy's query log carries it).
+	EventDNSFaultTriggered = "dns_fault_triggered"
 	// The events of runs (internal/run, M15).
 	EventRunQueued   = "run_queued"
 	EventRunStarted  = "run_started"

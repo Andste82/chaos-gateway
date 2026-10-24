@@ -111,7 +111,7 @@ func (e *Engine) cutExisting(ctx context.Context, old, next *compiler.Target) *c
 			return &cutOutcome{Err: fmt.Errorf("read the tracked connections: %w", err)}
 		}
 	}
-	flows := cutFlows(old, next, raw)
+	flows := cutFlowsNamed(old, next, raw, e.hosts.names)
 	if len(flows) == 0 {
 		return nil
 	}
@@ -232,6 +232,12 @@ func (e *Engine) closeStuckWindow(ctx context.Context, t *compiler.Target) error
 // rule's sources and ports), connections the gateway opened and traffic switched inside one bridge
 // are never among them, whatever a rule says.
 func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
+	return cutFlowsNamed(old, next, raw, nil)
+}
+
+// cutFlowsNamed is cutFlows for rules that may name a host: names gives the names a client got for an address
+// from the gateway's DNS (Engine.HostNames), which a rule with a hostname destination matches; nil knows none.
+func cutFlowsNamed(old, next *compiler.Target, raw []linux.Conntrack, names func(client, addr netip.Addr) []string) []cutFlow {
 	var out []cutFlow
 	for _, c := range raw {
 		src, err1 := netip.ParseAddr(c.Original.Src)
@@ -241,6 +247,9 @@ func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 		}
 		var flow executor.ConntrackFlow
 		t := compiler.Tuple{Src: src, Dst: dst, Proto: c.Proto}
+		if names != nil {
+			t.Names = names(src, dst)
+		}
 		switch c.Proto {
 		case "tcp", "udp":
 			t.Port = c.Original.DPort
@@ -252,6 +261,9 @@ func cutFlows(old, next *compiler.Target, raw []linux.Conntrack) []cutFlow {
 				// the destination was translated (a port forward, M35a): the rules match the connection
 				// with the reply's source, the forward's target, as responder
 				t.Responder, t.RespPort = rs, c.Reply.SPort
+				if names != nil {
+					t.PeerNames = names(rs, src)
+				}
 			}
 		case "icmp":
 			if c.Original.ICMPType == nil || c.Original.ICMPCode == nil || c.Original.ICMPID == nil {

@@ -1,6 +1,6 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TrafficMatch, TunnelRef } from '../api/generated/model';
+import type { DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
 import { durationMs, formatDuration } from './format';
 import { profileTitle } from './profileNames';
 
@@ -109,6 +109,21 @@ export function dnsChips(d: DnsFault): string[] {
   return [names.length ? `${what} · ${names.join(', ')}` : what];
 }
 
+/** The chips of a TLS case: "TLS expired · 8883", "TLS self signed · broker.example.com", "TLS untrusted ca · 203.0.113.0/24 · cuts existing". */
+export function tlsChips(t: TlsCase): string[] {
+  const what = `TLS ${t.case.replace(/_/g, ' ')}`;
+  const parts: string[] = [];
+  const ports = [...(t.ports ?? []).map(String), ...(t.port_ranges ?? []).map((r) => `${r.from}-${r.to}`)];
+  if (ports.length) parts.push(ports.join(', '));
+  if (t.destination?.cidr) parts.push(t.destination.cidr);
+  if (t.destination?.hostname) parts.push(t.destination.hostname);
+  if (t.destination?.network) parts.push(`network ${t.destination.network}`);
+  if (t.destination?.uplink) parts.push('uplink');
+  if (t.sni?.length) parts.push(`SNI ${t.sni.join(', ')}`);
+  if (t.cut_existing) parts.push('cuts existing');
+  return [parts.length ? `${what} · ${parts.join(' · ')}` : what];
+}
+
 /** The chips of an overlay, whatever its kind. */
 export function overlayChips(o: Overlay, profileName?: (ref: string) => string | undefined): string[] {
   switch (o.kind) {
@@ -121,7 +136,7 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
     case 'dns':
       return o.dns ? dnsChips(o.dns) : ['DNS fault'];
     case 'tls':
-      return ['TLS case'];
+      return o.tls ? tlsChips(o.tls) : ['TLS case'];
     case 'dhcp':
       return [`DHCP ${o.dhcp?.action ?? ''}`.trim()];
     case 'wireguard':

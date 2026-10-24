@@ -2,7 +2,7 @@
 // configuration (`profiles`), made and changed through the draft and the preview like a configured
 // fault. The form has the name, the description and the parts the editor makes — an impairment part
 // (the fault dialog's impairment fields, `netemForm`) and an MTU part (size and mode); a DNS or TLS
-// part a profile already has (defined over the API; the dns part is available since M20, the tls part comes with M21) is kept as it is.
+// part a profile already has (defined over the API; the dns part is available since M20, the tls part since M21) is kept as it is.
 import type { Profile, ProfileParts } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneProfilesNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { mtuOf, type MtuMode } from './faultForm';

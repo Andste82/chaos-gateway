@@ -19,8 +19,8 @@ function lab(): MockGateway {
       id: TLS_BROKEN,
       builtin: true,
       available: false,
-      unavailable_reason: 'the tls part arrives with milestone M21',
-      config: { name: 'tls-broken', parts: { tls: { case: 'handshake_reset' } } },
+      unavailable_reason: 'the tls part with the case intercept arrives with milestone M22',
+      config: { name: 'tls-intercept', parts: { tls: { case: 'intercept' } } },
     },
     { id: 'c0000000-0000-4000-8000-0000000000c1', builtin: false, available: true, config: { name: 'slow-lab', parts: { impairment: { latency: '20ms' }, mtu: { size: 1280 } } } },
   ];
@@ -46,8 +46,26 @@ test('cards with their parameters and where each profile is active, with the rem
   await expect(card(page, 'slow-lab')).toContainText('custom');
   await expect(card(page, 'slow-lab')).toContainText('MTU 1280');
   // a profile whose family comes later says so and cannot be activated
-  await expect(card(page, 'TLS broken')).toContainText('the tls part arrives with milestone M21');
-  await expect(card(page, 'TLS broken').getByRole('button', { name: /^Activate/ })).toBeDisabled();
+  await expect(card(page, 'tls-intercept')).toContainText('the tls part with the case intercept arrives with milestone M22');
+  await expect(card(page, 'tls-intercept').getByRole('button', { name: /^Activate/ })).toBeDisabled();
+});
+
+// M21: "TLS broken" is a profile like the others now: its tls part (a certificate or handshake case) is in this build.
+test('the built-in TLS broken profile is available and activates like any other', async ({ page }) => {
+  const gw = lab();
+  gw.profiles = [
+    ...gw.profiles,
+    { id: 'b0000000-0000-5000-8000-0000000000e5', builtin: true, available: true, config: { name: 'tls-broken', parts: { tls: { case: 'handshake_reset', ports: [443, 8883] } } } },
+  ];
+  await gw.install(page);
+  await page.goto('/profiles');
+  await page.getByLabel('Activate on').selectOption({ label: 'Network · IoT' });
+  const tls = card(page, 'TLS broken');
+  await expect(tls).toContainText('TLS handshake reset');
+  await expect(tls).not.toContainText('arrives with milestone');
+  await tls.getByRole('button', { name: 'Activate TLS broken on Network IoT' }).click();
+  await expect(toast(page, 'TLS broken active on Network IoT')).toBeVisible();
+  expect(gw.requestsTo('POST', '/overlays')[0]!.body).toMatchObject({ profile: 'b0000000-0000-5000-8000-0000000000e5' });
 });
 
 test('activate on the chosen scope for a duration, then deactivate', async ({ page }) => {

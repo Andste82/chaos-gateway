@@ -13,6 +13,7 @@ import {
   foreignLeaseMac,
   formFromDevice,
   macOwner,
+  ownMac,
   renewalTime,
   reservationMacs,
   warningHint,
@@ -207,6 +208,40 @@ describe('the device dialog (#73)', () => {
     const devices: Record<string, Device> = { [ESP]: esp, [CAM]: { name: 'cam-1', identifiers: { macs: [LEASE.toUpperCase()] } } };
     expect(macOwner(LEASE, ESP, devices)?.name).toBe('cam-1');
     expect(macOwner(MAC, ESP, devices)).toBeUndefined();
+  });
+
+  it("makes any of the device's MACs the first one, through the form (#111)", () => {
+    const THIRD = '02:00:00:00:00:2c';
+    const three: Device = { ...esp, identifiers: { macs: [MAC, WIFI, THIRD], ipv4: ['10.10.0.42'] } };
+    // moved to the front, nothing added or removed, the other identifiers kept
+    expect(withFirstMac(three, THIRD).identifiers).toEqual({ macs: [THIRD, MAC, WIFI], ipv4: ['10.10.0.42'] });
+    expect(withFirstMac(three, MAC).identifiers?.macs).toEqual([MAC, WIFI, THIRD]);
+    expect(ownMac([MAC, WIFI], WIFI.toUpperCase())).toBe(WIFI);
+    expect(ownMac([MAC, WIFI], '02:00:00:00:00:99')).toBeUndefined();
+    expect(ownMac([MAC, WIFI], undefined)).toBeUndefined();
+    // the order goes into the request, with or without a fixed IP
+    const f = formFromDevice(three);
+    expect(deviceFromForm(f, withFirstMac(three, WIFI)).identifiers).toEqual({ macs: [WIFI, MAC, THIRD], ipv4: ['10.10.0.42'] });
+    const reserved = deviceFromForm({ ...f, fixedIp: '10.10.0.50' }, withFirstMac(three, THIRD));
+    expect(reserved.identifiers?.macs).toEqual([THIRD, MAC, WIFI]);
+    expect(valid(reserved)).toBe(true);
+    // a chosen order stays: the dialog passes no lease MAC then, the hints are told by `ordered`
+    const kinds = fixedIpHints('10.10.0.50', ctx({ macs: [THIRD, MAC, WIFI], leaseMac: WIFI, ordered: true }));
+    expect(kinds.find((h) => h.kind === 'first_mac')?.text).toBe(`The reservation is for the device's first MAC, ${THIRD}, not for its other 2.`);
+  });
+
+  it("names the MAC that holds the lease in the other-MAC hint, to put it first (#111)", () => {
+    const wifi: DhcpLease[] = [{ ip: '10.10.0.42', mac: WIFI.toUpperCase(), network: IOT, expires_at: '2026-10-23T12:00:00Z', state: 'active' }];
+    const unchanged = ctx({ macs: [MAC, WIFI], leases: wifi, before: '10.10.0.42', beforeNetwork: IOT });
+    const hint = fixedIpHints('10.10.0.42', unchanged).find((h) => h.kind === 'other_mac');
+    expect(hint?.mac).toBe(WIFI.toUpperCase());
+    // put first (as the configuration spells it), the lease is the reserved MAC's: no hint any more
+    const first = ownMac([MAC, WIFI], hint!.mac)!;
+    const moved = withFirstMac(esp, first).identifiers!.macs!;
+    expect(moved).toEqual([WIFI, MAC]);
+    const after = fixedIpHints('10.10.0.42', { ...unchanged, macs: moved, ordered: true });
+    expect(after.map((h) => h.kind)).toEqual(['first_mac']);
+    expect(after[0]!.text).toBe(`The reservation is for the device's first MAC, ${WIFI}, not for its other one.`);
   });
 
   it('checks the name and the fixed IP', () => {

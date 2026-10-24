@@ -6,8 +6,10 @@
 // check and its wording are `reservationPoolHint`'s, #101), it is leased to another client now, or the
 // device holds it with a MAC other than the one the reservation is for (#96), DHCP is off in the
 // network, a new reservation takes effect when the device renews its lease (the address of its current
-// lease it simply keeps), and the reservation is for the device's first MAC (decision on #77). The helpers for the fixed IP take a plain context, so
-// the adopt dialog and the leases card can use them.
+// lease it simply keeps), and the reservation is for the device's first MAC (decision on #77). The admin
+// can make any of the device's MACs the first one (#111, reordering only: `withFirstMac`); the hint of a
+// lease held with another of its MACs names that MAC, so the dialog can offer it. The helpers for the
+// fixed IP take a plain context, so the adopt dialog and the leases card can use them.
 import type { DeviceView, DhcpLease, Device, LanNetwork, Network } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { durationMs, formatDuration } from './format';
@@ -58,6 +60,8 @@ export type ReservationHintKind = 'pool' | 'leased' | 'other_mac' | 'dhcp_off' |
 export interface ReservationHint {
   kind: ReservationHintKind;
   text: string;
+  /** `other_mac`: the device's MAC that holds the lease, the one to put first (#111). */
+  mac?: string;
 }
 
 /** A hint that warns (the dialogs show it in the fault color): the address may not reach the device. */
@@ -77,6 +81,11 @@ export interface ReservationHintContext extends ReservationContext {
   leaseMac?: string;
   /** The address of the device's current lease: a new reservation of it keeps the address, no renewal moves it. */
   leaseIp?: string;
+  /**
+   * The admin chose the order of the MACs (#111): `macs` is final, a new reservation does not put the
+   * lease's MAC first (the dialog passes no lease MAC to `deviceFromForm` then).
+   */
+  ordered?: boolean;
 }
 
 /** Half a lease time in words ("30 min" for the default of 1 h). */
@@ -111,11 +120,20 @@ export function foreignLeaseMac(macs: string[], leaseMac: string | undefined): s
   return macs.some((m) => m.toLowerCase() === lower) ? undefined : leaseMac;
 }
 
-/** The device with a MAC added as its first (decision on #98: the reservation is for the first MAC). */
+/**
+ * The device with a MAC as its first: added (decision on #98), or one of its MACs moved to the front
+ * (#111); the reservation is for the first MAC.
+ */
 export function withFirstMac(d: Device, mac: string): Device {
   const lower = mac.toLowerCase();
   const rest = (d.identifiers?.macs ?? []).filter((m) => m.toLowerCase() !== lower);
   return { ...d, identifiers: { ...d.identifiers, macs: [mac, ...rest] } };
+}
+
+/** A device's MAC as its configuration spells it (a lease may give it in capitals); undefined when it has none such. */
+export function ownMac(macs: string[], mac: string | undefined): string | undefined {
+  const lower = mac?.toLowerCase();
+  return lower ? macs.find((m) => m.toLowerCase() === lower) : undefined;
 }
 
 /** The other device that a MAC identifies already, as the draft has the devices (a MAC identifies one device). */
@@ -152,7 +170,7 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
   }
   // only a new or changed reservation puts the lease's MAC first (as `deviceFromForm` does)
   const changed = parseIPv4(ctx.before) !== n || (ctx.beforeNetwork !== undefined && ctx.beforeNetwork !== ctx.networkId);
-  const macs = changed ? reservationMacs(ctx.macs, ctx.leaseMac) : ctx.macs;
+  const macs = changed && !ctx.ordered ? reservationMacs(ctx.macs, ctx.leaseMac) : ctx.macs;
   const mine = macs[0]?.toLowerCase();
   const own = new Set(macs.map((m) => m.toLowerCase()));
   // a lease of the address by one of the device's MACs is its own (#96); by its first MAC it is the reserved one
@@ -167,6 +185,7 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
   } else if (ownOther) {
     out.push({
       kind: 'other_mac',
+      mac: ownOther.mac,
       text: `The device holds ${addr} with its MAC ${ownOther.mac} now, but the reservation is for its first MAC, ${macs[0]}: it keeps the address only while it asks with that one. Put ${ownOther.mac} first among the device's MACs to reserve the address for the MAC that holds the lease.`,
     });
   }
@@ -258,8 +277,9 @@ export function deviceFormErrors(f: DeviceForm, ctx: DeviceFormContext): Partial
 }
 
 /**
- * The device with the form's name, network and fixed IP; the rest of `before` is kept. A new or changed
- * reservation puts the MAC of the current lease first (decision on #77: the reservation is for the first MAC).
+ * The device with the form's name, network and fixed IP; the rest of `before` is kept, the order of its
+ * MACs too. A new or changed reservation puts the MAC of the current lease first (decision on #77: the
+ * reservation is for the first MAC); without `leaseMac` (the admin chose the first MAC, #111) it does not.
  */
 export function deviceFromForm(f: DeviceForm, before: Device, leaseMac?: string): Device {
   const { network: _n, fixed_ip: _f, ...rest } = before;

@@ -1267,6 +1267,7 @@ export class MockGateway {
   /**
    * The gateway's warning `fixed_ip_in_pool` (#76) for each device whose fixed address lies inside a DHCP pool
    * of its network after the candidate: allowed, so it is a warning at the device's fixed_ip and not a refusal.
+   * A fixed address in a network with DHCP off (no scope, or one switched off) gets `fixed_ip_dhcp_off` (#94).
    */
   previewReservations(patch: unknown): { code: string; message: string; path: string }[] {
     const cfg = applyMergePatch(this.config, patch);
@@ -1275,6 +1276,14 @@ export class MockGateway {
       if (!d.fixed_ip || !d.network) continue;
       const [, n] = Object.entries(cfg.networks ?? {}).find(([nid, x]) => nid === d.network || x.name === d.network) ?? [];
       if (n?.type !== 'lan') continue;
+      if (!n.dhcp || n.dhcp.enabled === false) {
+        warnings.push({
+          code: 'fixed_ip_dhcp_off',
+          path: `/devices/${id}/fixed_ip`,
+          message: `device "${d.name}" has the fixed address ${d.fixed_ip}, but DHCP is off in its network "${n.name}": no reservation is made until DHCP is turned on there`,
+        });
+        continue;
+      }
       const r = reservationPool(n, d.fixed_ip);
       if (!r) continue;
       warnings.push({

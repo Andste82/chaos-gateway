@@ -91,6 +91,60 @@ func TestFixedIPInPool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := baseDoc(t)
 			tt.change(t, d)
+			for _, w := range d.warnings(t) {
+				if w.Code == CodeFixedIPInPool {
+					t.Fatalf("want no %s, got %+v", CodeFixedIPInPool, w)
+				}
+			}
+		})
+	}
+}
+
+// A fixed address in a network with DHCP off gets a warning at the field, whether or not another network
+// serves DHCP: the compiler makes no reservation for it (#94).
+func TestFixedIPDHCPOff(t *testing.T) {
+	off := []struct {
+		name   string
+		change func(t *testing.T, d doc)
+	}{
+		{"DHCP switched off", func(t *testing.T, d doc) { d.set(t, false, "networks", idIoT, "dhcp", "enabled") }},
+		{"no DHCP scope at all", func(t *testing.T, d doc) { d.del(t, "networks", idIoT, "dhcp") }},
+		{"the network named by its UUID", func(t *testing.T, d doc) {
+			d.del(t, "networks", idIoT, "dhcp")
+			d.set(t, idIoT, "devices", idESP, "network")
+		}},
+	}
+	for _, tt := range off {
+		t.Run(tt.name, func(t *testing.T) {
+			d := baseDoc(t)
+			tt.change(t, d)
+			ws := d.warnings(t)
+			if len(ws) != 1 || ws[0].Path != esp+"/fixed_ip" || ws[0].Code != CodeFixedIPDHCPOff {
+				t.Fatalf("want one %s at %s/fixed_ip, got %+v", CodeFixedIPDHCPOff, esp, ws)
+			}
+			for _, part := range []string{`device "esp32-42"`, "10.10.0.42", `DHCP is off in its network "IoT"`, "no reservation is made"} {
+				if !strings.Contains(ws[0].Message, part) {
+					t.Errorf("the message %q does not say %q", ws[0].Message, part)
+				}
+			}
+		})
+	}
+
+	on := []struct {
+		name   string
+		change func(t *testing.T, d doc)
+	}{
+		{"the example: DHCP on", func(*testing.T, doc) {}},
+		{"DHCP switched on explicitly", func(t *testing.T, d doc) { d.set(t, true, "networks", idIoT, "dhcp", "enabled") }},
+		{"no fixed address", func(t *testing.T, d doc) {
+			d.del(t, "networks", idIoT, "dhcp")
+			d.del(t, "devices", idESP, "fixed_ip")
+		}},
+	}
+	for _, tt := range on {
+		t.Run(tt.name, func(t *testing.T) {
+			d := baseDoc(t)
+			tt.change(t, d)
 			if ws := d.warnings(t); len(ws) != 0 {
 				t.Fatalf("want no warning, got %+v", ws)
 			}

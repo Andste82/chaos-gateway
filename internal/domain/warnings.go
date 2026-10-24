@@ -17,6 +17,10 @@ const (
 	// client holds the address from the pool, the device gets a different pool address until that lease
 	// is released: the other client is refused only when it renews (#76, plan §2.7).
 	CodeFixedIPInPool = "fixed_ip_in_pool"
+	// CodeFixedIPDHCPOff is the warning for a device's fixed address in a network whose DHCP is off (no
+	// scope, or a scope switched off): the address stays in the configuration, but no reservation is made
+	// and nothing hands it out until DHCP is turned on in the network (#94, plan §2.7).
+	CodeFixedIPDHCPOff = "fixed_ip_dhcp_off"
 )
 
 // Warning is something about a valid configuration that may surprise: it does not stop the apply.
@@ -36,6 +40,9 @@ func Warnings(cfg *model.Configuration) []Warning {
 		if w, ok := fixedIPInPool(idx, idx.Devices[id]); ok {
 			out = append(out, w)
 		}
+		if w, ok := fixedIPDHCPOff(idx, idx.Devices[id]); ok {
+			out = append(out, w)
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Path != out[j].Path {
@@ -44,6 +51,32 @@ func Warnings(cfg *model.Configuration) []Warning {
 		return out[i].Code < out[j].Code
 	})
 	return out
+}
+
+// fixedIPDHCPOff reports a device's fixed address in a local test network with DHCP off: the compiler
+// makes no reservation for it, whether or not another network serves DHCP (#94).
+func fixedIPDHCPOff(idx *Index, d *DeviceInfo) (Warning, bool) {
+	if d.Origin != OriginConfigured || d.Device == nil || d.Device.FixedIp == nil || d.Network == "" {
+		return Warning{}, false
+	}
+	ip, ok := parseAddr(*d.Device.FixedIp)
+	if !ok {
+		return Warning{}, false
+	}
+	nid, ok := idx.Resolve(KindNetwork, d.Network)
+	if !ok {
+		return Warning{}, false
+	}
+	n := idx.Networks[nid]
+	if !n.IsLan() || (n.Lan.Dhcp != nil && (n.Lan.Dhcp.Enabled == nil || *n.Lan.Dhcp.Enabled)) {
+		return Warning{}, false
+	}
+	return Warning{
+		Path: d.Path + "/fixed_ip",
+		Code: CodeFixedIPDHCPOff,
+		Message: fmt.Sprintf("device %s has the fixed address %s, but DHCP is off in its network %s: no reservation is made "+
+			"until DHCP is turned on there", quote(d.Name), ip, quote(n.Name)),
+	}, true
 }
 
 // fixedIPInPool reports a device's fixed address that lies inside a DHCP pool of its network: a

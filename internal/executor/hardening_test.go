@@ -226,14 +226,14 @@ func TestApiContainerHardeningProfile(t *testing.T) {
 	if len(s.Command) < 1 || s.Command[0] != "api" {
 		t.Fatalf("command %v", s.Command)
 	}
-	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--kea-events-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true, "--captures-dir": true}
+	known := map[string]bool{"--socket": true, "--state-dir": true, "--secrets-dir": true, "--data-dir": true, "--port": true, "--executor-uid": true, "--kea-socket": true, "--kea-events-socket": true, "--service-token-file": true, "--service-ns": true, "--service-holder-pid-file": true, "--captures-dir": true, "--tls-ca-dir": true}
 	for _, a := range s.Command[1:] {
 		if strings.HasPrefix(a, "--") && !known[a] {
 			t.Errorf("flag %s is not a flag of `chaosgw api`", a)
 		}
 	}
-	if len(s.Volumes) != 10 {
-		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, the captures, Kea's socket, the Kea events socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
+	if len(s.Volumes) != 11 {
+		t.Errorf("volumes %d: the socket, the revisions, the secrets, the audit log, the captures, the CAs of the TLS responder, Kea's socket, the Kea events socket, the service token, the host's resolvers and the holder's PID", len(s.Volumes))
 	}
 	// issue #57 F3: the API creates the Kea events socket in a directory of its own, and the Kea hook sends to it there
 	if !containsPair(s.Command, "--kea-events-socket", keaEventsSocket) {
@@ -401,6 +401,70 @@ func TestDNSContainersHardeningProfile(t *testing.T) {
 	}
 }
 
+// The TLS responder joins the namespace of the holder like the DNS proxy, drops every capability (its port is above
+// 1024) and mounts the service token and the CAs read-only; the CAs are a volume of their own, so nothing of the API's secrets
+// is within its reach.
+func TestTLSContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.tls.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Services) != 1 {
+		t.Fatalf("services %v", doc.Services)
+	}
+	tls := doc.Services["tls"]
+	if tls.Privileged || !tls.ReadOnly || !contains(tls.CapDrop, "ALL") || len(tls.CapAdd) != 0 || !contains(tls.SecurityOpt, "no-new-privileges:true") || tls.User != "65532:65532" {
+		t.Errorf("%+v", tls)
+	}
+	if tls.NetworkMode != "service:svcns" {
+		t.Errorf("the responder joins the namespace of the holder: %+v", tls)
+	}
+	if len(tls.Command) < 1 || tls.Command[0] != "tls" {
+		t.Fatalf("command %v", tls.Command)
+	}
+	known := map[string]bool{"--listen": true, "--api": true, "--service-token-file": true, "--api-cert-file": true, "--ca-dir": true}
+	for _, a := range tls.Command[1:] {
+		if strings.HasPrefix(a, "--") && !known[a] {
+			t.Errorf("flag %s is not a flag of `chaosgw tls`", a)
+		}
+	}
+	mounted := map[string]bool{}
+	for _, v := range tls.Volumes {
+		var m struct {
+			Source   string `yaml:"source"`
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+		}
+		if v.Kind != yaml.MappingNode {
+			t.Fatalf("a short volume: %v", v.Value)
+		}
+		if err := v.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		if !m.ReadOnly {
+			t.Errorf("the responder only reads %s", m.Target)
+		}
+		mounted[m.Source+":"+m.Target] = true
+	}
+	if len(tls.Volumes) != 2 || !mounted["chaosgw-service:/var/lib/chaosgw/service"] || !mounted["chaosgw-tlsca:/var/lib/chaosgw/tlsca"] {
+		t.Errorf("volumes: %v", mounted)
+	}
+	// the responder reads the directory the API writes: the same volume, at the path both flags name
+	api, err := os.ReadFile("../../deploy/compose.api.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(api), "chaosgw-tlsca:/var/lib/chaosgw/tlsca") || !strings.Contains(string(api), `"--tls-ca-dir", "/var/lib/chaosgw/tlsca"`) {
+		t.Error("the API does not make the CAs where the responder reads them")
+	}
+}
+
 // Issue #57: the API container runs as 65532, and a named volume that is still empty takes its owner and
 // mode from the image's directory. Every named volume the API mounts writable must therefore exist in the
 // image with that owner, or the API cannot write to it on a fresh host and does not start. The two
@@ -446,8 +510,8 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 			writable = append(writable, target)
 		}
 	}
-	if len(writable) != 6 {
-		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the captures, the service token and the Kea events socket", writable)
+	if len(writable) != 7 {
+		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the captures, the CAs of the TLS responder, the service token and the Kea events socket", writable)
 	}
 
 	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")

@@ -1,6 +1,7 @@
 package run_test
 
 import (
+	"context"
 	"net/netip"
 	"testing"
 	"time"
@@ -127,4 +128,37 @@ steps:
 	h.waitStep(r.Id, "conn", model.RunStepStatusApplied)
 	h.advance(1500 * time.Millisecond)
 	h.waitStatus(r.Id, model.RunStatusPassed)
+}
+
+// The step type `dns` (plan §2.10, M20) makes an overlay of the kind dns for the run, and a profile step with "DNS broken" makes a profile
+// activation: both are the run's, and `remove` takes the first away again.
+func TestADNSStepMakesADNSOverlayOwnedByTheRunAndRemoveTakesItAway(t *testing.T) {
+	h := newHarness(t)
+	h.obs.dns[idESP] = true
+	r := h.start(`
+name: dnsstep
+target: {device: esp32-42}
+steps:
+  - {id: broken, at: 0s, dns: {action: servfail, names: [broker.example.com]}}
+  - {id: slow,   at: 1s, dns: {action: delay, delay: 2s}}
+  - {id: gone,   at: 2s, remove: broken}
+`)
+	h.waitStep(r.Id, "broken", model.RunStepStatusApplied)
+	ovs := h.gw.overlays()
+	if len(ovs) != 1 || ovs[0].Kind != model.OverlayKindDns || ovs[0].Dns == nil || ovs[0].Dns.Action != model.DnsFaultActionServfail ||
+		ovs[0].Owner.Type != model.ActorTypeRun || ovs[0].Owner.Id != r.Id.String() || ovs[0].Run == nil || ovs[0].Run.Step != "broken" {
+		t.Fatalf("%+v", ovs)
+	}
+	h.advance(time.Second)
+	h.waitStep(r.Id, "slow", model.RunStepStatusApplied)
+	if n := len(h.gw.overlays()); n != 2 {
+		t.Fatalf("%d overlays", n)
+	}
+	h.advance(time.Second)
+	h.waitStep(r.Id, "gone", model.RunStepStatusApplied)
+	left := h.gw.overlays()
+	if len(left) != 1 || left[0].Dns == nil || left[0].Dns.Action != model.DnsFaultActionDelay {
+		t.Errorf("%+v", left)
+	}
+	h.m.AbortOwned(context.Background(), nil, "test over")
 }

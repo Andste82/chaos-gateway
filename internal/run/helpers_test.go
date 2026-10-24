@@ -184,7 +184,7 @@ func (g *fakeGateway) PutOverlay(ctx context.Context, w engine.OverlayWrite) (en
 	}
 	kind, _ := domain.OverlayKindOf(&w.Request)
 	ov := model.Overlay{Id: id, Kind: model.OverlayKind(kind), Owner: w.Owner, Target: w.Request.Target, Profile: w.Request.Profile,
-		Fault: w.Request.Fault, Rule: w.Request.Rule, Wireguard: w.Request.Wireguard, Run: w.Run, Generation: int64(g.gen)}
+		Fault: w.Request.Fault, Rule: w.Request.Rule, Dns: w.Request.Dns, Wireguard: w.Request.Wireguard, Run: w.Run, Generation: int64(g.gen)}
 	g.byID[id], g.key[key] = ov, id
 	verb := "put"
 	if replaced {

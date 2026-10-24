@@ -146,6 +146,9 @@ test-privileged: ## the namespace testbed directly (level 1; needs privileges)
 test-arm64: ## the unit tests as arm64 binaries under qemu-user
 	GOARCH=arm64 CGO_ENABLED=0 $(GO) test -count=1 -exec qemu-aarch64 ./...
 
+# The preview server listens on E2E_PORT (default 4173); give each worktree its own port to run
+# them side by side (`make test-e2e E2E_PORT=4174`). E2E_REUSE=1 reuses a server already running
+# on the port instead of failing.
 test-e2e: $(WEBDEPS) ## Playwright end-to-end tests (needs `npx playwright install chromium` once)
 	cd web && npm run test:e2e
 

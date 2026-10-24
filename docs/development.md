@@ -70,9 +70,17 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | 1b | `make test-vm` | the testbed tests in a QEMU VM with a stock Ubuntu kernel | `vng`, QEMU, the kernels in `/boot` (all in the devcontainer) |
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |
-| – | `make test-e2e` | Playwright tests of the web app | `npx playwright install chromium` once |
+| – | `make test-e2e` | Playwright tests of the web app against a mocked API (port and server reuse: see below) | `npx playwright install chromium` once |
 | – | `make test-examples` | the example suites of `clients/examples` (pytest with the generated Python client, Jest with the generated TypeScript client, both also driving `chaosctl`) against a gateway on the simulated kernel (M18; test tag `examples`) | network access for `pip` and `npm ci`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
+
+**Playwright port.** The e2e tests (`web/playwright.config.ts`) build the app and start `vite preview` on
+the port in `E2E_PORT`, 4173 when it is unset; the tests use the same port as their base URL. Runs in
+several worktrees can overlap when each has its own port, and each tests its own build:
+`E2E_PORT=4174 make test-e2e`, or `cd web && E2E_PORT=4174 npx playwright test e2e/devices.spec.ts`.
+A server that already listens on the port is reused only with `E2E_REUSE=1` (for example a
+`npm run preview` you keep running while you write a test); without it a busy port fails the run
+instead of silently testing another worktree's build. CI sets neither and never reuses a server (#112).
 
 **Which level where.** The devcontainer is unprivileged on purpose: network tests must not be able
 to touch the host's interfaces or other containers. There the testbed runs only as level 1b. In

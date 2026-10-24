@@ -5051,14 +5051,16 @@ operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`
   gone, out of scope, executor unavailable) deletes nothing, and a client that retries a failing request cannot erase the
   evidence of its runs (decision 8). A `max_size` or ring buffer larger than the whole quota is `validation_failed`
   (`invalid_capture_limit`; the files of a ring buffer are compared with `quota / files` before they are multiplied, so a
-  huge file size cannot overflow the check). While captures run, every `stats` event checks the sum, under the same
-  lock that takes its counters (so of two captures whose counters arrive at once only the one that makes the sum pass
-  the quota is stopped: the first to be taken decides on the counters the other had reported before): the oldest stopped captures go first
-  as far as that gets the sum within the quota, and if it does not, nothing is deleted and the capture whose counters
-  just arrived is stopped with the reason `size` and the message "the captures take … more than their quota" (the
-  running captures may together pass the quota by a second of their traffic). A capture the quota stopped is never
-  deleted by a `stats` event (decision 8): it stays, and the next `Start` makes room by deleting it if it must. The
-  final record of a capture is written before its end can be seen, so a capture that reads as stopped has it on disk.
+  huge file size cannot overflow the check). While captures run, every `stats` event checks the sum, under the same lock
+  that takes its counters (so of two captures whose counters arrive at once only the one that makes the sum pass the
+  quota is stopped: the first to be taken decides on the counters the other had reported before): the oldest stopped
+  captures go first as far as that gets the sum within the quota, and if it does not, nothing is deleted and the capture
+  whose counters just arrived is stopped with the reason `size` and the message "the captures take … more than their
+  quota" (the running captures may together pass the quota by a second of their traffic). A capture the quota stopped
+  (and that ended with the reason `size`) is never deleted by a `stats` event (decision 8): it stays, and the next
+  `Start` makes room by deleting it if it must; this lives in memory, so after a restart it is a stopped capture like
+  any other. The final record of a capture is written before its end can be seen, so a capture that reads as stopped has
+  it on disk.
   A run's captures are deleted with its record (30 days, plan §3.6) and, if the quota needs the room, before.
 - **Disk low** (plan §3.6: below 10 % free). The API refuses a new capture when the volume is below the limit
   (`422 capacity_exceeded`); the executor checks again when it opens the files (`ErrDiskLow`, also `capacity_exceeded`: the

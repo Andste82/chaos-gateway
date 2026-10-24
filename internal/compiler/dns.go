@@ -36,17 +36,19 @@ type DNSFault struct {
 	Sources []netip.Prefix `json:"sources"`
 }
 
-// compileDNS builds the proxy's list: the faults that apply to each source in order of rank, the sources
-// with the same list sharing their entries.
-func (t *Target) compileDNS(w *domain.World, sources []domain.Source, idx *domain.Index) {
-	type group struct {
-		cands    []domain.Candidate
-		prefixes []netip.Prefix
-	}
-	groups := map[string]*group{}
-	var order []string
+// candGroup is a set of sources that have the same candidates in the same order, with the addresses they cover.
+type candGroup struct {
+	cands    []domain.Candidate
+	prefixes []netip.Prefix
+}
+
+// groupCandidates puts the sources that have exactly the same candidates in the same order into one group, in the
+// order the groups first appear; a source without a candidate is in none.
+func groupCandidates(sources []domain.Source, candidates func(domain.Source) []domain.Candidate) []*candGroup {
+	groups := map[string]*candGroup{}
+	var order []*candGroup
 	for _, src := range sources {
-		cands := w.DNSCandidates(src)
+		cands := candidates(src)
 		if len(cands) == 0 {
 			continue
 		}
@@ -57,15 +59,20 @@ func (t *Target) compileDNS(w *domain.World, sources []domain.Source, idx *domai
 		k := strings.Join(keys, ",")
 		g := groups[k]
 		if g == nil {
-			g = &group{cands: cands}
+			g = &candGroup{cands: cands}
 			groups[k] = g
-			order = append(order, k)
+			order = append(order, g)
 		}
 		g.prefixes = append(g.prefixes, src.Prefixes()...)
 	}
+	return order
+}
+
+// compileDNS builds the proxy's list: the faults that apply to each source in order of rank, the sources
+// with the same list sharing their entries.
+func (t *Target) compileDNS(w *domain.World, sources []domain.Source, idx *domain.Index) {
 	seen := map[string]bool{}
-	for _, k := range order {
-		g := groups[k]
+	for _, g := range groupCandidates(sources, w.DNSCandidates) {
 		clients := domain.CollapsePrefixes(g.prefixes)
 		for _, c := range g.cands {
 			if c.DNS == nil {

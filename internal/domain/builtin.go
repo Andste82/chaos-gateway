@@ -12,7 +12,7 @@ type BuiltinProfile struct {
 	ID      string
 	Profile model.Profile
 	// Milestone is the milestone from which the profile is usable; empty when it always is.
-	// "tls-broken" arrives with the TLS milestone (plan §2.9); "dns-broken" came with M20.
+	// "dns-broken" came with M20 and "tls-broken" with M21 (plan §2.9): none waits for a milestone now.
 	Milestone string
 }
 
@@ -109,7 +109,6 @@ var builtinProfiles = []BuiltinProfile{
 				Ports:    &[]int{443, 8883},
 			}},
 		},
-		Milestone: "M21",
 	},
 }
 

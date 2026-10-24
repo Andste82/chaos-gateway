@@ -25,7 +25,7 @@ import (
 //   - the tc tree (tc.go): one class per active (id, direction) with its netem leaf.
 //
 // Faults of the MTU, DNS, TLS and DHCP families and the tunnel family take no part here: they
-// resolve into other mechanisms, which later milestones compile.
+// resolve into other mechanisms (pmtu.go, dns.go, tls.go, tunnel.go; the DHCP actions follow with M23).
 
 // Problem codes of the fault compiler.
 const (
@@ -322,6 +322,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		return
 	}
 	t.compileDNS(w, sources, idx)
+	t.compileTLS(w, sources, identity, idx)
 
 	// ---- pass 1: the winner of every entry of every source's table, and the keys they need ----
 	tables := make([]domain.Table, len(sources))

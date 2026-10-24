@@ -480,6 +480,11 @@ func (e *Engine) Flows(ctx context.Context) ([]Flow, error) {
 		if r, err := netip.ParseAddr(c.Reply.Src); err == nil && r == compiler.ServicePeerCIDR.Addr() {
 			f.Service = "dns_proxy"
 		}
+		// a connection that a TLS case selected for the responder carries the conntrack mark of the selection (compiler/tls.go):
+		// its addresses are unchanged, so the mark is what tells
+		if c.Mark&compiler.TLSConnMarkBit != 0 && f.Service == "" && c.Proto == "tcp" {
+			f.Service = "tls_responder"
+		}
 		if f.Device == "" && f.Network == "" {
 			continue // not a flow of a test network
 		}

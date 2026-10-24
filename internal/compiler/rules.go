@@ -140,6 +140,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	t.Nft.Sets = append(t.Nft.Sets, dynamic...)
 	t.Nft.Sets = append(t.Nft.Sets, t.accessSets...)
+	t.Nft.Sets = append(t.Nft.Sets, t.tlsExtraSets(t.accessSets)...)
 	t.Nft.Sets = append(t.Nft.Sets, t.hostSetDefs...)
 	if t.identityMap.Name != "" {
 		t.Nft.Maps = append(t.Nft.Maps, t.identityMap)
@@ -290,6 +291,8 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	// the port forwards (forward.go): a forwarded connection that no access rule decided is accepted
 	// here, in front of the access matrix, so the forward itself is the allowance (plan §2.2 layer 4)
 	forward.Rules = append(forward.Rules, t.forwardAccepts(ifsLan.Name)...)
+	// what the TLS cases select for the responder (tls.go): after the access rules, which have judged the original tuple
+	forward.Rules = append(forward.Rules, t.tlsForward(ifsCG.Name)...)
 	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
 	forward.Rules = append(forward.Rules, implicit...)
@@ -322,6 +325,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	t.Nft.Chains = []Chain{forward, input, post, guard}
 	if dot != nil {
 		t.Nft.Chains = append(t.Nft.Chains, *dot)
+	}
+	if tls := t.tlsChain(); tls != nil {
+		t.Nft.Chains = append(t.Nft.Chains, *tls)
 	}
 	if t.Access != nil {
 		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain), t.Access.chain(AccessInputChain))

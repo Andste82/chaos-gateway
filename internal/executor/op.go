@@ -184,6 +184,16 @@ const (
 	ServicePeerIf = "svc1"
 )
 
+// The redirect inside the service namespace (plan §3.3, "Redirect inside"): what arrives on the namespace's end of
+// the pair for another address than its own is redirected to the TLS responder, which listens on
+// ServiceTLSPort and reads the original destination with SO_ORIGINAL_DST. The chain is part of the namespace: the
+// executor writes it when it makes the namespace (ServiceNS ensure), and the apply reads it back to find a
+// namespace that lacks it.
+const (
+	ServiceTLSPort       = 9443
+	ServiceRedirectChain = "svc_redirect"
+)
+
 // ServiceNS sets up the service namespace (plan §3.3, D29): the named namespace the gateway
 // services (DNS proxy, TLS responder) run in, and the veth pair that connects it to the gateway.
 // `ensure` creates the namespace when it is missing (or attaches the namespace of the holder

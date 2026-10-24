@@ -1,0 +1,14 @@
+# responder's cases
+overlay:00000000-0000-4000-8000-000000000002:tls  expired  scope "device esp32-42"  sources 10.10.0.42/32
+# tls_redirect
+meta iifname svc0 return
+ct direction reply return
+ct original ip saddr 10.10.0.42/32 meta l4proto tcp ct original proto-dst 8883 ct state new ct mark set ct mark | 0x800000 meta mark set meta mark | 0x100000
+ct original ip saddr 10.10.0.42/32 meta l4proto tcp ct original proto-dst 8883 ct mark & 0x800000 0x800000 meta mark set meta mark | 0x100000
+# forward (the access rules and the redirected packets)
+jump access_forward
+meta iifname @ifs_cg_bf4feb meta oifname svc0 meta mark & 0x100000 0x100000 accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 53 accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 53 accept
+# access_forward
+ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" last drop

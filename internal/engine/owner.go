@@ -637,6 +637,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Service = r.target.Service
 		o.snap.DNSSets = r.target.DNSSets
 		o.snap.DNSFaults = r.target.DNSFaults
+		o.snap.TLSCases = r.target.TLSCases
 		o.snap.ServiceError = ""
 		o.snap.CutWindowError = ""
 		if r.cutStuck != nil {

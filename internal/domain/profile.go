@@ -37,10 +37,14 @@ type UnavailablePart struct {
 	Milestone string
 }
 
-// unavailableFamilies are the families of a profile that arrive with later milestones (plan §2.9:
-// "TLS broken" comes with M21; the dns family was lifted by M20, P2-M11-01). The impairment, MTU and
-// DNS families are implemented.
-var unavailableFamilies = map[string]string{FamilyTLS: "M21"}
+// unavailableFamilies are the families of a profile that arrive with later milestones. Every family a profile
+// has a part for is implemented: the dns family was lifted by M20 and the tls family by M21 (P2-M11-01). What is
+// still missing in the tls family is its case `intercept` (M22), which UnavailableParts reports.
+var unavailableFamilies = map[string]string{}
+
+// interceptMilestone is the milestone that brings the TLS case `intercept`: the responder of M21 serves the
+// certificate and handshake cases only.
+const interceptMilestone = "M22"
 
 // UnavailableParts lists the parts of a profile that cannot be activated in this build, in the
 // order of ProfileFamilies. A profile with such a part is stored and shown, but its activation is
@@ -50,6 +54,8 @@ func UnavailableParts(p model.Profile) []UnavailablePart {
 	for _, f := range ProfileFamilies(p) {
 		if m, ok := unavailableFamilies[f]; ok {
 			out = append(out, UnavailablePart{Family: f, Milestone: m})
+		} else if f == FamilyTLS && p.Parts.Tls.Case == model.TlsCaseCaseIntercept {
+			out = append(out, UnavailablePart{Family: f, Milestone: interceptMilestone})
 		}
 	}
 	return out

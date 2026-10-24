@@ -110,7 +110,9 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
   const n = parseIPv4(text);
   if (n === undefined || !net) return out;
   const addr = formatIPv4(n);
-  if (net.dhcp?.enabled === false) {
+  // no scope is DHCP off too, as for the gateway's warning fixed_ip_dhcp_off (#94)
+  const dhcpOff = !net.dhcp || net.dhcp.enabled === false;
+  if (dhcpOff) {
     out.push({ kind: 'dhcp_off', text: `DHCP is off in ${net.name}: the reservation has no effect until it is turned on.` });
   } else {
     const { pools } = effectivePools(net.address, net.dhcp?.pools);
@@ -138,9 +140,9 @@ export function fixedIpHints(ip: string, ctx: ReservationHintContext): Reservati
     });
   }
   const kept = ctx.leaseIp !== undefined && parseIPv4(ctx.leaseIp) === n && (!ctx.leaseMac || ctx.leaseMac.toLowerCase() === mine);
-  if (net.dhcp?.enabled !== false && changed && kept) {
+  if (!dhcpOff && changed && kept) {
     out.push({ kind: 'kept', text: `The device has ${addr} from its current lease and keeps it; from now on the address is reserved for it.` });
-  } else if (net.dhcp?.enabled !== false && changed) {
+  } else if (!dhcpOff && changed) {
     out.push({
       kind: 'renewal',
       text: `The device gets ${addr} when it renews its lease, which takes up to half the lease time (${renewalTime(net.dhcp?.lease_time)}).`,

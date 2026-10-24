@@ -237,3 +237,32 @@ func TestACapabilityListsDNSFaults(t *testing.T) {
 		t.Errorf("%s", steps)
 	}
 }
+
+// The flows API names the host of an address from the proxy's log too, whether or not a rule or a fault selects the name: the name asked and
+// the CNAME targets of the answer.
+func TestAFlowIsNamedAfterTheAnswersOfTheProxyEvenWhenNothingSelectsTheName(t *testing.T) {
+	g, admin := serviceGateway(t)
+	svc := g.token
+	g.token = admin
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31")})
+	g.observe()
+	g.token = svc
+	now := time.Now().UTC().Truncate(time.Second)
+	e := map[string]any{"time": now.Format(time.RFC3339), "client": "10.10.0.31", "name": "www.example.org", "type": "A", "rcode": "NOERROR", "protocol": "udp",
+		"answers": []any{"edge.cdn.example.net", "203.0.113.7"}}
+	if r := g.do("POST", "/internal/dns/queries", []any{e}, nil, nil); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.token = admin
+	g.k.SetConntrack("tcp 6 86400 ESTABLISHED src=10.10.0.31 dst=203.0.113.7 sport=40000 dport=443 packets=3 bytes=300 src=203.0.113.7 dst=10.10.0.31 sport=443 dport=40000 packets=3 bytes=300 [ASSURED] mark=0 use=1\n" +
+		"tcp 6 86400 ESTABLISHED src=10.10.0.31 dst=198.51.100.9 sport=40001 dport=443 packets=3 bytes=300 src=198.51.100.9 dst=10.10.0.31 sport=443 dport=40001 packets=3 bytes=300 [ASSURED] mark=0 use=1\n")
+	flows := g.do("GET", "/flows", nil, nil, nil).json(t)["items"].([]any)
+	got := map[string]any{}
+	for _, f := range flows {
+		m := f.(map[string]any)
+		got[m["dst"].(string)] = m["dst_hostname"]
+	}
+	if got["203.0.113.7"] != "www.example.org" || got["198.51.100.9"] != nil {
+		t.Errorf("%v", got)
+	}
+}

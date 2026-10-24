@@ -80,5 +80,7 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	// hostnames (M20): the DNS-derived sets (a concatenated type with a timeout), the hostname faults in front of
 	// the lookup levels and next to the MTU lookup, a hostname rule and its responder form
 	out["hostnames"] = scenarioHostnames(t)
+	// the hardcoded resolvers of a network (M20): the DNAT of every other destination of port 53 and the DoT chain
+	out["dns-network"] = compileDNSNet(t, true, true, true)
 	return out
 }

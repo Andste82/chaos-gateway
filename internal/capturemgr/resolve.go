@@ -52,13 +52,23 @@ func invalid(path, code, format string, args ...any) error {
 // resolver turns the scope of a request into a plan with the snapshot of the moment.
 type resolver struct {
 	snap *engine.Snapshot
+	// hosts returns the addresses the gateway's DNS answered for the names a host selector matches; nil knows none.
+	hosts func(pattern string) []netip.Addr
 }
 
 // Resolve turns a scope into the interfaces and filters to read. A scope that names nothing the gateway knows, or
 // whose interface is not applied yet, is a validation error with the pointer into the request; one that needs a
 // later milestone is an *UnsupportedError.
 func Resolve(snap *engine.Snapshot, scope model.CaptureScope) (Plan, error) {
-	r := resolver{snap}
+	return ResolveWith(snap, scope, nil)
+}
+
+// ResolveWith is Resolve for a gateway that can say which addresses its DNS answered for a name (plan §2.6, M20): a
+// selector whose destination is a host captures the traffic to those addresses, as they are when the capture
+// starts. A host whose address the DNS has not answered yet is refused (`unresolved_hostname`): a filter
+// without an address would capture nothing, and say nothing about it.
+func ResolveWith(snap *engine.Snapshot, scope model.CaptureScope, hosts func(pattern string) []netip.Addr) (Plan, error) {
+	r := resolver{snap: snap, hosts: hosts}
 	switch {
 	case scope.Network != nil:
 		return r.network("/scope/network", *scope.Network)
@@ -340,13 +350,23 @@ func (r resolver) global() (Plan, error) {
 }
 
 // destination returns the peer side of a selector: the prefixes it names, or for the destination `uplink` the
-// prefixes it is not in. A host name arrives with M20.
+// prefixes it is not in. A host name is the addresses the gateway's DNS has answered for it so far.
 func (r resolver) destination(path string, d *model.Destination) (peers, notPeers []netip.Prefix, err error) {
 	switch {
 	case d == nil:
 		return nil, nil, nil
 	case d.Hostname != nil:
-		return nil, nil, &UnsupportedError{What: "a host name as the destination of a capture", Milestone: "M20"}
+		var addrs []netip.Addr
+		if r.hosts != nil {
+			addrs = r.hosts(*d.Hostname)
+		}
+		if len(addrs) == 0 {
+			return nil, nil, invalid(path+"/hostname", "unresolved_hostname", "the gateway's DNS has not answered an address for %s yet: a device must ask for it first", *d.Hostname)
+		}
+		for _, a := range addrs {
+			peers = append(peers, netip.PrefixFrom(a, a.BitLen()))
+		}
+		return peers, nil, nil
 	case d.Cidr != nil:
 		p, perr := netip.ParsePrefix(*d.Cidr)
 		if perr != nil {

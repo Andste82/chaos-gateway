@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -130,6 +131,9 @@ type Observer interface {
 	DNSQueries(devices []string, name string, since time.Time) []DNSQuery
 	// DNSClientSeen reports whether the device has asked the gateway's DNS proxy for anything.
 	DNSClientSeen(device string) bool
+	// HostNames returns the names the client was answered for the address by the gateway's DNS proxy (the name
+	// asked and the CNAME targets of the answer): what a destination that names a host matches.
+	HostNames(client, addr netip.Addr) []string
 	// Counters returns the counters of the overlays (their kernel counters). An overlay that is in the
 	// kernel's view but has nothing in it (a rule that is not in the packet path, a fault that another one
 	// overrides) counts zero packets; one whose counters could not be read is left out.

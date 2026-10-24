@@ -364,27 +364,6 @@ func scenarioOf(cfg *model.Configuration, req CreateRequest) (*model.Scenario, *
 	return nil, nil, fmt.Errorf("%w %q in the active revision", ErrNoScenario, req.Scenario)
 }
 
-// checkHostname returns a host name that a check names as a destination or an exception, "" when it names none: the
-// resolver that tells which addresses belong to a name arrives with M20.
-func checkHostname(c *model.Check) string {
-	for _, m := range []*model.TrafficMatch{c.Reconnected, c.NoConnection, c.TrafficSeen} {
-		if m != nil && m.Destination != nil && m.Destination.Hostname != nil {
-			return *m.Destination.Hostname
-		}
-	}
-	if n := c.TrafficNotSeen; n != nil {
-		if n.Destination != nil && n.Destination.Hostname != nil {
-			return *n.Destination.Hostname
-		}
-		for _, d := range deref(n.Except) {
-			if d.Hostname != nil {
-				return *d.Hostname
-			}
-		}
-	}
-	return ""
-}
-
 func discoveredIDs(snap *engine.Snapshot) []string {
 	var out []string
 	for _, d := range snap.Devices {
@@ -415,18 +394,9 @@ func (m *Manager) supported(cfg *model.Configuration, sc *model.Scenario) error 
 		if kind == "tls_rejected" || kind == "tls_accepted" {
 			return &UnsupportedError{What: fmt.Sprintf("a %s check (check %d)", kind, i), Milestone: "M21"}
 		}
-		if host := checkHostname(c); host != "" {
-			return &UnsupportedError{What: fmt.Sprintf("a check (check %d) for the host name %s", i, host), Milestone: "M20"}
-		}
 	}
 	for i := range sc.Steps {
 		st := &sc.Steps[i]
-		switch domain.StepKind(st) {
-		case "wait":
-			if d := st.Wait.Destination; d != nil && d.Hostname != nil {
-				return &UnsupportedError{What: fmt.Sprintf("a wait step (%s) for a host name", st.Id), Milestone: "M20"}
-			}
-		}
 		if !domain.StepCreatesOverlay(st) {
 			continue
 		}

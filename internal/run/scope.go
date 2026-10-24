@@ -222,8 +222,8 @@ func established(f engine.Flow) bool {
 }
 
 // matchFlow reports whether a connection is one the match selects: the protocol, a destination port, and
-// the destination address (an address or prefix, a network, the uplink). A host name needs the resolver
-// (M20) and is refused when the scenario is checked, so it never reaches here.
+// the destination address (an address or prefix, a network, the uplink, or a host name: the addresses the gateway's
+// DNS answered the device for names the selector matches, nets.names).
 func matchFlow(nets *flowNets, m model.TrafficMatch, f engine.Flow) bool {
 	if p := deref(m.Protocol); p != "" && p != model.ProtocolAny && string(p) != f.Protocol {
 		return false
@@ -261,6 +261,15 @@ func matchFlow(nets *flowNets, m model.TrafficMatch, f engine.Flow) bool {
 		return false
 	case d.Uplink != nil:
 		return nets != nil && nets.world != nil && nets.viaUplink(f.Dst)
+	case d.Hostname != nil:
+		if nets == nil || nets.names == nil {
+			return false
+		}
+		for _, n := range nets.names(f.Src, f.Dst) {
+			if domain.HostnameMatches(*d.Hostname, n) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -273,6 +282,14 @@ type flowNets struct {
 	world     *domain.World
 	nonUplink []netip.Prefix
 	err       error
+	// names gives the names a client was answered for an address (Observer.HostNames); nil knows none
+	names func(client, addr netip.Addr) []string
+}
+
+// withNames lets the destinations that name a host find the addresses of the name.
+func (n *flowNets) withNames(f func(client, addr netip.Addr) []string) *flowNets {
+	n.names = f
+	return n
 }
 
 func newFlowNets(snap *engine.Snapshot) *flowNets {
@@ -307,6 +324,9 @@ func (n *flowNets) viaUplink(a netip.Addr) bool {
 func destNeedsNets(d *model.Destination) bool {
 	return d != nil && (d.Network != nil || d.Uplink != nil)
 }
+
+// destNeedsHost reports whether a destination names a host: its addresses are those the gateway's DNS answered.
+func destNeedsHost(d *model.Destination) bool { return d != nil && d.Hostname != nil }
 
 // flowInScope reports whether the connection's initiator is in the scope's set of devices (or in a
 // network scope's network).

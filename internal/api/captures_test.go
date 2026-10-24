@@ -404,7 +404,9 @@ func TestACaptureRequestThatDoesNotFitIsRefusedWithItsPointer(t *testing.T) {
 			t.Errorf("%s: %d %s", name, r.Status, r.Body)
 		}
 	}
-	if r := g.startCapture(map[string]any{"scope": map[string]any{"selector": map[string]any{"source": map[string]any{"global": true}, "destination": map[string]any{"hostname": "broker.example.com"}}}}); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M20") {
+	// a host the gateway's DNS has not answered an address for: nothing to capture
+	if r := g.startCapture(map[string]any{"scope": map[string]any{"selector": map[string]any{"source": map[string]any{"global": true}, "destination": map[string]any{"hostname": "broker.example.com"}}}}); r.Status != 422 || r.code(t) != "validation_failed" ||
+		!strings.Contains(string(r.Body), "unresolved_hostname") || !strings.Contains(string(r.Body), "/scope/selector/destination/hostname") {
 		t.Errorf("a host name: %d %s", r.Status, r.Body)
 	}
 	// the admin tunnel (a WireGuard network of the role management) is recorded by no scope
@@ -845,5 +847,49 @@ func TestADeploymentWithoutACaptureVolumeCannotCapture(t *testing.T) {
 		if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "capture volume") {
 			t.Errorf("%d %s", r.Status, r.Body)
 		}
+	}
+}
+
+// A selector that names a host captures the traffic to the addresses the gateway's DNS answered for it (plan §2.6, M20):
+// those of the name asked, and of the names of its CNAME chain.
+func TestTheHostOfASelectorIsTheAddressesTheGatewaysDNSAnsweredForIt(t *testing.T) {
+	g, _ := capGateway(t)
+	admin := g.token
+	file := filepath.Join(t.TempDir(), "service-token")
+	if err := g.au.EnsureServiceToken(file); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(file)
+	now := time.Now().UTC().Truncate(time.Second)
+	entry := func(name string, answers ...any) map[string]any {
+		return map[string]any{"time": now.Format(time.RFC3339), "client": "10.10.0.31", "name": name, "type": "A", "rcode": "NOERROR", "protocol": "udp", "answers": answers}
+	}
+	g.token = strings.TrimSpace(string(raw))
+	if r := g.do("POST", "/internal/dns/queries", []any{
+		entry("broker.example.com", "203.0.113.10", "203.0.113.11"),
+		entry("www.example.net", "edge.cdn.example.org", "198.51.100.20"),
+		entry("other.example.com", "198.51.100.99"),
+	}, nil, nil); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.token = admin
+	body := func(host string) map[string]any {
+		return map[string]any{"scope": map[string]any{"selector": map[string]any{"source": map[string]any{"global": true}, "destination": map[string]any{"hostname": host}}}}
+	}
+	g.mustStartCapture(body("broker.example.com"))
+	var got []string
+	for _, p := range g.cap.Last().Interfaces[0].Filter.Peers {
+		got = append(got, p.String())
+	}
+	if strings.Join(got, ",") != "203.0.113.10/32,203.0.113.11/32" {
+		t.Errorf("the peers of the exact name: %v", got)
+	}
+	g.mustStartCapture(body("*.cdn.example.org")) // a name of a CNAME chain
+	got = nil
+	for _, p := range g.cap.Last().Interfaces[0].Filter.Peers {
+		got = append(got, p.String())
+	}
+	if strings.Join(got, ",") != "198.51.100.20/32" {
+		t.Errorf("the peers of the suffix of a CNAME target: %v", got)
 	}
 }

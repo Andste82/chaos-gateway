@@ -2743,7 +2743,7 @@ type AccessRuleView struct {
 	// Position 0-based position in `access_rule_order`.
 	Position int `json:"position"`
 
-	// State `effective` for a rule that is in the packet path, `disabled` for one with `enabled: false` and for one the kernel does not run (a rule that names a hostname before M20 is not compiled, see the preview warning `hostname_unresolved`).
+	// State `effective` for a rule that is in the packet path, `disabled` for one with `enabled: false` and for one the kernel does not run (a change the apply loop has not verified yet).
 	State *EffectState `json:"state,omitempty"`
 }
 
@@ -3395,7 +3395,14 @@ type Description = string
 type Destination struct {
 	Cidr *Ipv4OrCidr `json:"cidr,omitempty"`
 
-	// Hostname DNS-derived (best effort, plan §2.6). Requires M20.
+	// Hostname DNS-derived (best effort, plan §2.6, M20): the addresses the gateway's DNS proxy answered the source for a
+	// name that matches (an exact name, or `*.suffix` for its subdomains), kept in an address set per selector
+	// and per requesting device for at least 10 minutes and as long as the connection table shows flows to
+	// the address. The kernel matches addresses: on a CDN another name on the same address is selected too,
+	// and a device that does not use the gateway's DNS has no addresses. For a fault the selectors of the same
+	// family are tried strongest first and in front of the destinations that name addresses; a fault that
+	// names no destination and no port at a higher precedence covers all of its traffic (docs/development.md,
+	// "DNS faults and hostname selectors (M20)").
 	Hostname *Hostname `json:"hostname,omitempty"`
 
 	// Network UUID or name of an object. Stored configurations contain UUIDs only.
@@ -3693,7 +3700,12 @@ type DiagnosticResult struct {
 // DiagnosticResultPathStep defines model for DiagnosticResult.Path.Step.
 type DiagnosticResultPathStep string
 
-// DnsFault DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+// DnsFault DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
+// activated profile. The proxy answers a query with the first fault whose scope contains the client and whose
+// `names` match the name asked (or that names none); the faults of one client are ordered by the precedence of
+// §2.4 (a more specific scope or level first, the newer first at the same level, a fault before a part of a
+// profile on the same scope). A DNS fault competes only with other DNS faults: a latency fault of the device
+// does not cancel a "DNS broken" profile of its network (E5).
 type DnsFault struct {
 	Action DnsFaultAction `json:"action"`
 
@@ -4259,7 +4271,9 @@ type Flow struct {
 	Dport *int `json:"dport,omitempty"`
 	Dst   Ipv4 `json:"dst"`
 
-	// DstHostname Name the DNS proxy last returned for `dst` to this device.
+	// DstHostname A name the DNS proxy returned for `dst` to this device: one that a hostname selector of a rule or a fault
+	// selects (the DNS-derived address sets hold them) or that appears in the proxy's query log (the name asked
+	// and the CNAME targets of the answer; the last 20000 queries are kept).
 	DstHostname *string      `json:"dst_hostname,omitempty"`
 	Id          string       `json:"id"`
 	NatSrc      *Ipv4        `json:"nat_src,omitempty"`
@@ -4773,10 +4787,15 @@ type Network struct {
 
 // NetworkDns defines model for NetworkDns.
 type NetworkDns struct {
-	// BlockDot Block DNS over TLS (TCP 853).
+	// BlockDot Block DNS over TLS (TCP 853) of the network's devices (M20): dropped after the access rules (an `allow` rule is
+	// an exception) and before the access matrix. DNS over HTTPS cannot be told from other HTTPS traffic and is not
+	// blocked (plan §6).
 	BlockDot *bool `json:"block_dot,omitempty"`
 
-	// RedirectHardcoded Redirect DNS (UDP/TCP 53) to other resolvers to the DNS proxy.
+	// RedirectHardcoded Redirect DNS (UDP/TCP 53) to other resolvers than the gateway to the DNS proxy (M20): the queries of the
+	// network's devices are answered by the proxy, its faults apply to them, and an access rule judges them by the
+	// resolver the device meant. What stays inside the network and the networks behind its routers is not
+	// redirected. A network without the DNS proxy (no service namespace) cannot redirect: the preview warns.
 	RedirectHardcoded *bool             `json:"redirect_hardcoded,omitempty"`
 	StaticEntries     *[]DnsStaticEntry `json:"static_entries,omitempty"`
 }
@@ -4855,7 +4874,12 @@ type Overlay struct {
 	// Requires M23.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
-	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
+	// activated profile. The proxy answers a query with the first fault whose scope contains the client and whose
+	// `names` match the name asked (or that names none); the faults of one client are ordered by the precedence of
+	// §2.4 (a more specific scope or level first, the newer first at the same level, a fault before a part of a
+	// profile on the same scope). A DNS fault competes only with other DNS faults: a latency fault of the device
+	// does not cancel a "DNS broken" profile of its network (E5).
 	Dns       *DnsFault  `json:"dns,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
@@ -5040,7 +5064,12 @@ type OverlayRequest struct {
 	// Requires M23.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
-	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
+	// activated profile. The proxy answers a query with the first fault whose scope contains the client and whose
+	// `names` match the name asked (or that names none); the faults of one client are ordered by the precedence of
+	// §2.4 (a more specific scope or level first, the newer first at the same level, a fault before a part of a
+	// profile on the same scope). A DNS fault competes only with other DNS faults: a latency fault of the device
+	// does not cancel a "DNS broken" profile of its network (E5).
 	Dns *DnsFault `json:"dns,omitempty"`
 
 	// ExpiresIn Only with `ttl`, at most `ttl`: this write removes the overlay after this time instead of
@@ -5447,8 +5476,8 @@ type Preview struct {
 	Revision        int64 `json:"revision"`
 
 	// Rules The access rules in the order they are evaluated after the change, overlay rules first (plan §2.4):
-	// the effective list. A rule that cannot be compiled yet (a hostname before M20) is not in it; the
-	// `warnings` say so. Absent when there is no rule.
+	// the effective list. A rule with a hostname destination is in it (it looks up the DNS-derived address set of
+	// the name). Absent when there is no rule.
 	Rules *[]PreviewRule `json:"rules,omitempty"`
 
 	// Warnings What the candidate allows but may not do as expected; a warning does not stop the apply. `path` is the
@@ -5640,7 +5669,12 @@ type ProfileActivation struct {
 
 // ProfileParts defines model for ProfileParts.
 type ProfileParts struct {
-	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
+	// activated profile. The proxy answers a query with the first fault whose scope contains the client and whose
+	// `names` match the name asked (or that names none); the faults of one client are ordered by the precedence of
+	// §2.4 (a more specific scope or level first, the newer first at the same level, a fault before a part of a
+	// profile on the same scope). A DNS fault competes only with other DNS faults: a latency fault of the device
+	// does not cancel a "DNS broken" profile of its network (E5).
 	Dns *DnsFault `json:"dns,omitempty"`
 
 	// Impairment Flat `NetemParams` apply to both directions. Alternatively `upload` and/or `download`
@@ -5666,8 +5700,8 @@ type ProfileView struct {
 	// activation produces.
 	Activations *[]ProfileActivation `json:"activations,omitempty"`
 
-	// Available False while a part's family is not in this build (e.g. `dns-broken` before M20, a custom
-	// profile with a `dns` part). Such a profile can be defined and shown, but activating it
+	// Available False while a part's family is not in this build (e.g. `tls-broken` before M21, a custom
+	// profile with a `tls` part; the `dns` family is available since M20). Such a profile can be defined and shown, but activating it
 	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
 	// such a part while an overlay activates it (the profile and the milestone are named; remove
 	// the activation first, `force` does not lift it), so that no activation runs half a profile.
@@ -5683,7 +5717,7 @@ type ProfileView struct {
 
 	// UnavailableReason Set when `available` is false - the part and the milestone that brings it.
 	//
-	// Example: the dns part arrives with milestone M20
+	// Example: the tls part arrives with milestone M21
 	UnavailableReason *string `json:"unavailable_reason,omitempty"`
 }
 
@@ -6292,7 +6326,12 @@ type Step struct {
 	// Requires M23.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
-	// Dns DNS family (plan §2.6), implemented by the DNS proxy. Requires M20.
+	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
+	// activated profile. The proxy answers a query with the first fault whose scope contains the client and whose
+	// `names` match the name asked (or that names none); the faults of one client are ordered by the precedence of
+	// §2.4 (a more specific scope or level first, the newer first at the same level, a fault before a part of a
+	// profile on the same scope). A DNS fault competes only with other DNS faults: a latency fault of the device
+	// does not cancel a "DNS broken" profile of its network (E5).
 	Dns *DnsFault `json:"dns,omitempty"`
 
 	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`

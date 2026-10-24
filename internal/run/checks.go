@@ -120,13 +120,14 @@ func (c *liveCheck) closesAt(mm stepMoments) (stepTime, bool) {
 }
 
 // needsNets reports whether the selector of the check looks at where an address lies (a destination `network` or
-// `uplink`), which cannot be answered when the networks of the gateway cannot be resolved.
+// `uplink`), which cannot be answered when the networks of the gateway cannot be resolved, or names a host
+// (flowNets also holds how its addresses are found).
 func (c *liveCheck) needsNets() bool {
-	if destNeedsNets(c.match.Destination) {
+	if destNeedsNets(c.match.Destination) || destNeedsHost(c.match.Destination) {
 		return true
 	}
 	for i := range c.except {
-		if destNeedsNets(&c.except[i]) {
+		if destNeedsNets(&c.except[i]) || destNeedsHost(&c.except[i]) {
 			return true
 		}
 	}
@@ -371,7 +372,7 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 
 		snap := m.cfg.Gateway.Snapshot()
 		if snap != netsOf && anyNeedsNets(checks) {
-			nets, netsOf = newFlowNets(snap), snap
+			nets, netsOf = newFlowNets(snap).withNames(m.cfg.Observer.HostNames), snap
 		}
 		devs := scopeDevices(snap, r.sc.Target)
 		devSet := idSet(devs)

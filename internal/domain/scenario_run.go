@@ -104,8 +104,15 @@ func ScenarioUsesDNS(sc *model.Scenario) bool {
 				return true
 			}
 		}
-		if c.TrafficNotSeen != nil && named(c.TrafficNotSeen.Destination) {
-			return true
+		if c.TrafficNotSeen != nil {
+			if named(c.TrafficNotSeen.Destination) {
+				return true
+			}
+			for i := range deref(c.TrafficNotSeen.Except) {
+				if named(&(*c.TrafficNotSeen.Except)[i]) {
+					return true
+				}
+			}
 		}
 	}
 	return false

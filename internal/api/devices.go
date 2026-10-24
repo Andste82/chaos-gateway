@@ -362,7 +362,7 @@ func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 		if f.NatSrc.IsValid() {
 			fv.NatSrc = f.NatSrc.String()
 		}
-		if names := s.cfg.Engine.HostNames(f.Src, f.Dst); len(names) > 0 {
+		if names := s.hostNames(f.Src, f.Dst); len(names) > 0 {
 			fv.DstHostname = names[0]
 		}
 		if !f.StartedAt.IsZero() {

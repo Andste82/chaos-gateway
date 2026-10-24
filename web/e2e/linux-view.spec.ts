@@ -79,7 +79,7 @@ test('"Show Linux view" on a fault shows its mark chain, classes and netem queue
   const row = page.getByTestId('fault-family-impairment').getByTestId('fault-row').nth(0);
   await expect(row).toContainText('ESP32-42');
   const dnsRow = page.getByTestId('fault-family-dns').getByTestId('fault-row');
-  await expect(dnsRow).toContainText('DNS fault');
+  await expect(dnsRow).toContainText('DNS nxdomain');
   await expect(dnsRow.getByRole('button', { name: /Linux view/ })).toHaveCount(0);
   const show = row.getByRole('button', { name: /^Show the Linux view of .* on ESP32-42/ });
   await expect(show).toHaveAttribute('aria-expanded', 'false');

@@ -112,15 +112,16 @@ export function ruleFieldChanges(before: AccessRule, after: AccessRule, names: N
 
 /**
  * What the rule does with the traffic it selects, in words (the editor's matches box). `state` is
- * the gateway's: an enabled rule it does not run (a host name before M20) says so.
+ * the gateway's: an enabled rule it does not run (a change the gateway has not applied yet) says so.
  */
 export function ruleEffectInWords(r: AccessRule, opts: { state?: string; overlayRules?: number; applied?: boolean } = {}): string {
   if (r.enabled === false) return 'Disabled: matching traffic falls through to the next rule.';
   const parts: string[] = [];
-  if (r.destination?.hostname) {
-    parts.push('Not in the packet path yet: rules on host names are matched from milestone M20 on.');
-  } else if (opts.state === 'disabled' && opts.applied) {
+  if (opts.state === 'disabled' && opts.applied) {
     parts.push('Not in the packet path: the gateway does not run this rule.');
+  }
+  if (r.destination?.hostname) {
+    parts.push("DNS-derived: it matches the addresses the gateway's DNS answered the device for the name, as long as it has them");
   }
   switch (r.action) {
     case 'allow':

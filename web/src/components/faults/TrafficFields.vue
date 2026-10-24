@@ -55,7 +55,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
           <option value="uplink">Uplink (Internet)</option>
           <option value="network">A network</option>
           <option value="cidr">An address or prefix</option>
-          <option value="hostname">A host name</option>
+          <option value="hostname">A host name (DNS-derived)</option>
         </select>
       </div>
       <div v-if="form.destKind === 'network' || form.destKind === 'cidr' || form.destKind === 'hostname'">

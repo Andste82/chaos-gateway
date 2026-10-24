@@ -39,7 +39,7 @@ describe('access rules in words', () => {
     );
     expect(ruleEffectInWords({ ...rule, enabled: false })).toMatch(/^Disabled: matching traffic falls through/);
     expect(ruleEffectInWords({ ...rule, action: 'allow' })).toMatch(/^Allowed: new connections that match are accepted/);
-    expect(ruleEffectInWords({ ...rule, destination: { hostname: 'x.example.com' } })).toMatch(/from milestone M20 on/);
+    expect(ruleEffectInWords({ ...rule, destination: { hostname: 'x.example.com' } })).toMatch(/DNS-derived: it matches the addresses the gateway's DNS answered/);
   });
 
   it('checks a rule before it can be applied', () => {

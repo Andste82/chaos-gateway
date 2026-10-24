@@ -15,8 +15,9 @@ import { defineConfig } from '@playwright/test';
 // E2E_REUSE=1 (never in CI); otherwise the run fails on a busy port instead of silently testing
 // another worktree's build. The build (vue-tsc and vite) takes about a minute alone and much
 // longer while other runs build at the same time, so the server gets 5 minutes to come up.
-const port = Number(process.env.E2E_PORT || 4173);
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
+const rawPort = process.env.E2E_PORT || '4173';
+const port = Number(rawPort);
+if (!/^\d+$/.test(rawPort) || port < 1 || port > 65535) {
   throw new Error(`E2E_PORT must be a TCP port, got ${JSON.stringify(process.env.E2E_PORT)}`);
 }
 const baseURL = `http://127.0.0.1:${port}`;

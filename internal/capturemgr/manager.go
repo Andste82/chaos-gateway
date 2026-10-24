@@ -376,7 +376,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (model.Capture, e
 	}
 	// What the quota allows is decided before anything is deleted or started: the oldest stopped captures that
 	// would have to go are only picked here, and go once the executor has accepted the capture.
-	victims, used := m.roomLocked(quota, need)
+	victims, used := m.roomLocked(quota, need, false)
 	m.mu.Unlock()
 	avail := quota - used
 	if req.RingBuffer != nil {
@@ -521,8 +521,7 @@ func (m *Manager) follow(c *capState) {
 	for ev := range c.stream.Events() {
 		switch ev.Kind {
 		case executor.CaptureStats:
-			m.update(c, ev)
-			m.enforceQuota(c)
+			m.stats(c, ev)
 		case executor.CaptureStopped:
 			m.finish(c, &ev)
 			ended = true
@@ -534,12 +533,33 @@ func (m *Manager) follow(c *capState) {
 	c.stream.Close()
 }
 
-// update takes the counters of a stats event into the record.
-func (m *Manager) update(c *capState, ev executor.CaptureEvent) {
+// stats takes the counters of a stats event into the record and keeps the total of all captures within the quota
+// while the capture runs: the oldest stopped captures go first, as far as that gets the total within the quota;
+// if it does not, nothing is deleted and the capture is stopped with the reason `size`. A capture that the quota
+// stopped is not deleted here (decision 8: that would destroy what it was stopped to keep, to make room for
+// nothing); the next Start deletes it if it must. The counters and the decision are taken under one lock, so of
+// two captures whose counters arrive at once only the one that makes the total pass the quota is stopped: the
+// other decides on the counters the first had reported before.
+func (m *Manager) stats(c *capState, ev executor.CaptureEvent) {
+	quota := m.quota()
 	m.mu.Lock()
 	c.rec.Packets, c.rec.SizeBytes, c.rec.Dropped = ptr(ev.Packets), ptr(ev.Size), ptr(ev.Dropped)
 	c.files = ev.Files
+	victims, used := m.roomLocked(quota, 0, true)
+	var gone []*capState
+	stop := false
+	if used <= quota {
+		gone = m.forgetLocked(victims)
+	} else if c.pending == nil && c.rec.Status == model.CaptureStatusRunning {
+		used = m.usageLocked()
+		c.pending = &pendingStop{model.CaptureStopReasonSize, fmt.Sprintf("the captures take %s, more than their quota of %s", domain.FormatByteSize(used), domain.FormatByteSize(quota))}
+		stop = true
+	}
 	m.mu.Unlock()
+	m.removeFiles(gone, quota)
+	if stop {
+		c.stream.Stop("user")
+	}
 }
 
 // finish records the end of a capture and announces it.
@@ -550,9 +570,10 @@ func (m *Manager) finish(c *capState, ev *executor.CaptureEvent) {
 		m.mu.Unlock()
 		return
 	}
-	c.rec.Packets, c.rec.SizeBytes, c.rec.Dropped = ptr(ev.Packets), ptr(ev.Size), ptr(ev.Dropped)
+	v, files := c.rec, c.files
+	v.Packets, v.SizeBytes, v.Dropped = ptr(ev.Packets), ptr(ev.Size), ptr(ev.Dropped)
 	if len(ev.Files) > 0 {
-		c.files = ev.Files
+		files = ev.Files
 	}
 	reason, status, msg := model.CaptureStopReason(ev.Reason), model.CaptureStatusStopped, ""
 	switch {
@@ -580,13 +601,17 @@ func (m *Manager) finish(c *capState, ev *executor.CaptureEvent) {
 			msg = "the capture failed"
 		}
 	}
-	c.rec.Status, c.rec.StopReason, c.rec.StoppedAt = status, &reason, &now
+	v.Status, v.StopReason, v.StoppedAt = status, &reason, &now
 	if msg != "" {
-		c.rec.Message = ptr(msg)
+		v.Message = ptr(msg)
 	}
-	v := c.rec
 	m.mu.Unlock()
-	m.save(c)
+	// the record is on disk before the end can be seen: a capture that reads as stopped has its final record written,
+	// so a restart right after does not find it running, and a delete right after does not race with the write
+	m.writeRecord(c, recordFile{Version: fileVersion, Capture: v, Files: files})
+	m.mu.Lock()
+	c.rec, c.files = v, files
+	m.mu.Unlock()
 	data := map[string]any{"capture": c.id.String(), "reason": string(reason), "packets": deref(v.Packets), "size_bytes": deref(v.SizeBytes),
 		"subject": engine.Subject{Kind: "capture", ID: c.id.String(), Name: deref(v.Name)}}
 	if v.Run != nil {
@@ -623,15 +648,16 @@ func (m *Manager) usageLocked() int64 {
 }
 
 // roomLocked picks the oldest stopped captures that have to go for the captures to take at most quota-need bytes, oldest
-// first (running captures never go), and returns them with what the captures take without them. It deletes nothing.
-func (m *Manager) roomLocked(quota, need int64) ([]*capState, int64) {
+// first (running captures never go, nor, with spareQuotaStopped, the captures the quota stopped), and returns them with
+// what the captures take without them. It deletes nothing.
+func (m *Manager) roomLocked(quota, need int64, spareQuotaStopped bool) ([]*capState, int64) {
 	used := m.usageLocked()
 	if used+need <= quota {
 		return nil, used
 	}
 	var stopped []*capState
 	for _, c := range m.caps {
-		if c.rec.Status != model.CaptureStatusRunning {
+		if c.rec.Status != model.CaptureStatusRunning && (!spareQuotaStopped || !c.stoppedByQuota()) {
 			stopped = append(stopped, c)
 		}
 	}
@@ -649,14 +675,27 @@ func (m *Manager) roomLocked(quota, need int64) ([]*capState, int64) {
 
 // deleteCaptures deletes the captures roomLocked picked, as far as they are still there.
 func (m *Manager) deleteCaptures(victims []*capState, quota int64) {
+	m.mu.Lock()
+	gone := m.forgetLocked(victims)
+	m.mu.Unlock()
+	m.removeFiles(gone, quota)
+}
+
+// forgetLocked takes the captures out of the manager, as far as they are still there, and returns those it took.
+func (m *Manager) forgetLocked(victims []*capState) []*capState {
+	var gone []*capState
 	for _, c := range victims {
-		m.mu.Lock()
-		_, ok := m.caps[c.id]
-		delete(m.caps, c.id)
-		m.mu.Unlock()
-		if !ok {
-			continue
+		if _, ok := m.caps[c.id]; ok {
+			delete(m.caps, c.id)
+			gone = append(gone, c)
 		}
+	}
+	return gone
+}
+
+// removeFiles deletes the files of captures that forgetLocked took out for the quota.
+func (m *Manager) removeFiles(gone []*capState, quota int64) {
+	for _, c := range gone {
 		m.log.Info("a capture is deleted: the captures take more than their quota", "capture", c.id, "quota", quota)
 		if err := os.RemoveAll(c.dir); err != nil {
 			m.log.Warn("cannot delete a capture", "capture", c.id, "error", err)
@@ -664,14 +703,9 @@ func (m *Manager) deleteCaptures(victims []*capState, quota int64) {
 	}
 }
 
-// makeRoom deletes the oldest stopped captures until the captures take at most quota-need bytes, and returns
-// what they take then (running captures are never deleted).
-func (m *Manager) makeRoom(quota, need int64) int64 {
-	m.mu.Lock()
-	victims, used := m.roomLocked(quota, need)
-	m.mu.Unlock()
-	m.deleteCaptures(victims, quota)
-	return used
+// stoppedByQuota reports whether the quota stopped the capture while it ran (Manager.mu held).
+func (c *capState) stoppedByQuota() bool {
+	return c.pending != nil && c.pending.reason == model.CaptureStopReasonSize
 }
 
 func stoppedAt(c *capState) time.Time {
@@ -681,24 +715,6 @@ func stoppedAt(c *capState) time.Time {
 	return c.rec.StartedAt
 }
 
-// enforceQuota keeps the total of all captures within the quota while one runs: the oldest stopped captures go
-// first; a running capture that still does not fit is stopped with the reason `size`.
-func (m *Manager) enforceQuota(c *capState) {
-	quota := m.quota()
-	used := m.makeRoom(quota, 0)
-	if used <= quota {
-		return
-	}
-	m.mu.Lock()
-	if c.pending != nil || c.rec.Status != model.CaptureStatusRunning {
-		m.mu.Unlock()
-		return
-	}
-	c.pending = &pendingStop{model.CaptureStopReasonSize, fmt.Sprintf("the captures take %s, more than their quota of %s", domain.FormatByteSize(used), domain.FormatByteSize(quota))}
-	m.mu.Unlock()
-	c.stream.Stop("user")
-}
-
 // ---- records
 
 // save writes the record of a capture.
@@ -706,6 +722,11 @@ func (m *Manager) save(c *capState) {
 	m.mu.Lock()
 	f := recordFile{Version: fileVersion, Capture: c.rec, Files: append([]string(nil), c.files...)}
 	m.mu.Unlock()
+	m.writeRecord(c, f)
+}
+
+// writeRecord writes a record of a capture to its file.
+func (m *Manager) writeRecord(c *capState, f recordFile) {
 	raw, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		m.log.Error("cannot encode a capture", "capture", c.id, "error", err)

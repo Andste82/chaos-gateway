@@ -334,7 +334,7 @@ func newManagerWithQuota(t *testing.T, dir string, quota int64) (*capturemgr.Man
 	t.Helper()
 	gw := &gateway{snap: snapshot(t)}
 	op := &opener{}
-	m, err := capturemgr.New(capturemgr.Config{Clock: clock.NewFake(t0), Dir: dir, Opener: op, Gateway: gw, Quota: func() int64 { return quota }})
+	m, err := capturemgr.New(capturemgr.Config{Clock: clock.NewFake(t0), Dir: dir, Opener: op, Gateway: gw, Quota: func() int64 { return quota }, DiskFree: func() (uint64, uint64, error) { return 60, 100, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,6 +551,110 @@ func ringRequest(t *testing.T, files int, size string) capturemgr.StartRequest {
 		t.Fatal(err)
 	}
 	return req
+}
+
+// While captures run, a stats event deletes the oldest stopped captures only when that gets the total within the
+// quota, and never one the quota stopped (decision 8): otherwise the capture whose counters passed the quota stops.
+func TestTheQuotaWhileCapturesRunDeletesNothingForNothingAndKeepsWhatItStopped(t *testing.T) {
+	dir := t.TempDir()
+	m, op, _ := newManagerWithQuota(t, dir, 10*mib)
+	ctx := context.Background()
+	old, err := m.Start(ctx, uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.last().end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 1, Size: mib})
+	if _, err := m.Wait(ctx, old.Id); err != nil {
+		t.Fatal(err)
+	}
+	op.mu.Lock()
+	op.hang = true // the test ends the captures it stops, with the counters it wants
+	op.mu.Unlock()
+	a, err := m.Start(ctx, uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := op.last()
+	b, err := m.Start(ctx, uplinkRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := op.last()
+	stops := func(s *stream) []string { s.mu.Lock(); defer s.mu.Unlock(); return append([]string(nil), s.stops...) }
+	kept := func(what string, ids ...uuid.UUID) {
+		t.Helper()
+		for _, id := range ids {
+			if _, err := m.Get(id); err != nil {
+				t.Errorf("%s: capture %s is gone (%v)", what, id, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, id.String())); err != nil {
+				t.Errorf("%s: the directory of %s is gone: %v", what, id, err)
+			}
+		}
+	}
+
+	sa.events <- executor.CaptureEvent{Kind: executor.CaptureStats, Packets: 6, Size: 6 * mib}
+	eventually(t, "the counters of a", func() bool { got, _ := m.Get(a.Id); return *got.SizeBytes == 6*mib })
+	// 1 + 6 + 5 MiB: deleting the stopped capture would leave 11 MiB, still more than the quota
+	sb.events <- executor.CaptureEvent{Kind: executor.CaptureStats, Packets: 5, Size: 5 * mib}
+	eventually(t, "b is stopped", func() bool { return len(stops(sb)) == 1 })
+	kept("a stop that deleting does not spare", old.Id)
+	sb.end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 5, Size: 5 * mib})
+	got, err := m.Wait(ctx, b.Id)
+	if err != nil || got.Status != model.CaptureStatusStopped || *got.StopReason != model.CaptureStopReasonSize || got.Message == nil || !strings.Contains(*got.Message, "quota") {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// deleting both stopped captures would make room for a, but b is what the quota stopped: a stops as well
+	sa.events <- executor.CaptureEvent{Kind: executor.CaptureStats, Packets: 6, Size: 6 * mib}
+	eventually(t, "a is stopped", func() bool { return len(stops(sa)) == 1 })
+	kept("a capture the quota stopped", old.Id, b.Id)
+	sa.end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 6, Size: 6 * mib})
+	if got, err := m.Wait(ctx, a.Id); err != nil || *got.StopReason != model.CaptureStopReasonSize {
+		t.Errorf("%+v %v", got, err)
+	}
+	m.Close(ctx)
+}
+
+// Two captures whose counters arrive at once and together pass the quota: the counters and the decision are taken
+// under one lock, so only the one taken second is stopped, and the other neither stops nor deletes it.
+func TestOfTwoCapturesWhoseCountersArriveAtOnceOnlyTheOneThatPassesTheQuotaStops(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		dir := t.TempDir()
+		m, op, _ := newManagerWithQuota(t, dir, 10*mib)
+		op.hang = true // the test ends the capture that is stopped, with its counters
+		ctx := context.Background()
+		var ids []uuid.UUID
+		var ss []*stream
+		for j := 0; j < 2; j++ {
+			c, err := m.Start(ctx, uplinkRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids, ss = append(ids, c.Id), append(ss, op.last())
+		}
+		stops := func(s *stream) int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.stops) }
+		for _, s := range ss {
+			s.events <- executor.CaptureEvent{Kind: executor.CaptureStats, Packets: 6, Size: 6 * mib}
+		}
+		eventually(t, "a capture is stopped", func() bool { return stops(ss[0])+stops(ss[1]) > 0 })
+		stopped, other := 0, 1
+		if stops(ss[1]) > 0 {
+			stopped, other = 1, 0
+		}
+		ss[stopped].end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 6, Size: 6 * mib})
+		if got, err := m.Wait(ctx, ids[stopped]); err != nil || *got.StopReason != model.CaptureStopReasonSize {
+			t.Fatalf("the capture the quota stopped: %+v %v", got, err)
+		}
+		eventually(t, "the counters of the other", func() bool { got, _ := m.Get(ids[other]); return *got.SizeBytes == 6*mib })
+		if got, err := m.Get(ids[other]); err != nil || got.Status != model.CaptureStatusRunning || stops(ss[other]) != 0 {
+			t.Fatalf("the other capture: %+v %v, %d stops", got, err, stops(ss[other]))
+		}
+		if _, err := m.Get(ids[stopped]); err != nil {
+			t.Fatalf("the stopped capture is gone: %v", err)
+		}
+		ss[other].end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user"})
+		m.Close(ctx)
+	}
 }
 
 // A ring buffer of huge files wrapped the int64 of the product of the files and the size, so that the quota check passed.

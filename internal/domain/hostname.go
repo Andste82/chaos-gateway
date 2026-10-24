@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"net/netip"
 	"sort"
 	"strings"
 )
@@ -58,4 +59,32 @@ func Outranks(a, b Candidate) bool {
 // Outranks says, which is the order winnerOf gives wherever no such triple exists.
 func RankOrder(cs []Candidate) {
 	sort.SliceStable(cs, func(i, j int) bool { return Outranks(cs[i], cs[j]) })
+}
+
+// DNSCandidates returns the DNS faults (overlays, and the dns parts of activated profiles) that apply to a source
+// of traffic, in the order the precedence rules of §2.4 try them (RankOrder): the proxy answers a query with the
+// first of them whose names match the name asked for, so a fault of a more specific scope or level that names
+// other names does not hide the less specific one for the rest.
+func (w *World) DNSCandidates(src Source) []Candidate {
+	var out []Candidate
+	for _, c := range w.candidates() {
+		if c.Family == FamilyDNS && w.scopeMatches(c.Scope, src.Subject) {
+			out = append(out, c)
+		}
+	}
+	RankOrder(out)
+	return out
+}
+
+// Prefixes are the addresses of a source as prefixes: the device's addresses (one prefix each) and the
+// ranges of a stretch of addresses.
+func (s Source) Prefixes() []netip.Prefix {
+	var out []netip.Prefix
+	for _, a := range s.Addrs {
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	for _, r := range s.Ranges {
+		out = append(out, r.Prefixes()...)
+	}
+	return out
 }

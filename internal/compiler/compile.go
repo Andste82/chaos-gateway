@@ -152,6 +152,11 @@ type Bridge struct {
 	Ports       []string     `json:"ports"`
 	// NAT reports whether the network is masqueraded towards the uplink.
 	NAT bool `json:"nat"`
+	// RedirectDNS reports that DNS (UDP and TCP port 53) to other resolvers than the gateway is redirected to the
+	// DNS proxy, BlockDoT that DNS over TLS (TCP 853) is dropped (plan §2.6: `dns.redirect_hardcoded` and
+	// `dns.block_dot` of the network).
+	RedirectDNS bool `json:"redirect_dns,omitempty"`
+	BlockDoT    bool `json:"block_dot,omitempty"`
 	// Routes are the network's downstream routes (plan §2.3): prefixes reached through a router in
 	// the network, the LAN counterpart of a WireGuard peer's Routes.
 	Routes []string `json:"routes,omitempty"`
@@ -257,7 +262,9 @@ type Target struct {
 	accessSets []SetDef
 	// DNSSets are the DNS-derived address sets of the hostname selectors in use (plan §2.6, M20), sorted
 	// by id: what the DNS proxy reports resolutions for and the engine writes them into (hostnames.go).
-	DNSSets     []DNSSet `json:"dns_sets,omitempty"`
+	DNSSets []DNSSet `json:"dns_sets,omitempty"`
+	// DNSFaults are the DNS faults the proxy answers with, in the order of their rank for each source (dns.go).
+	DNSFaults   []DNSFault `json:"dns_faults,omitempty"`
 	host        *hostBuild
 	hostSetDefs []SetDef
 	// Forwards are the port forwards in the packet path (plan §2.2 layer 4, M35a), sorted by name and id;
@@ -369,6 +376,13 @@ func Compile(in Input) *Target {
 			continue
 		}
 		b := Bridge{Name: bridgeName(id, n.Name, used), NetworkID: id, NetworkName: n.Name, Address: addr, NAT: n.Lan.Nat == nil || *n.Lan.Nat}
+		if d := n.Lan.Dns; d != nil {
+			b.RedirectDNS = d.RedirectHardcoded != nil && *d.RedirectHardcoded
+			b.BlockDoT = d.BlockDot != nil && *d.BlockDot
+			if b.RedirectDNS && in.ServiceNS == "" {
+				t.warn(CodeUnsupported, n.Name, "network %q redirects DNS to other resolvers, which needs the gateway's DNS proxy: there is no service namespace, so nothing is redirected", n.Name)
+			}
+		}
 		for _, ref := range n.Lan.Interfaces {
 			l, ok := in.Host.Resolve(ref)
 			if !ok {

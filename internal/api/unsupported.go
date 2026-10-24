@@ -17,7 +17,6 @@ func (s *Server) GetTlsServiceConfig(c *gin.Context, _ model.GetTlsServiceConfig
 	s.unsupported(c)
 }
 func (s *Server) ListProbes(c *gin.Context, _ model.ListProbesParams) { s.unsupported(c) }
-func (s *Server) PostDnsResolutions(c *gin.Context)                   { s.unsupported(c) }
 func (s *Server) PostTlsHandshakes(c *gin.Context)                    { s.unsupported(c) }
 func (s *Server) RegenerateTestCa(c *gin.Context)                     { s.unsupported(c) }
 func (s *Server) ReplaceCertificate(c *gin.Context)                   { s.unsupported(c) }

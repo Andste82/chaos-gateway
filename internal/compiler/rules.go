@@ -282,6 +282,11 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	if t.Access != nil {
 		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": AccessForwardChain}}))
 	}
+	// DNS over TLS of the networks that block it (plan §2.6): after the rules, so an allow rule is an exception
+	dot := t.dotBlock()
+	if dot != nil {
+		forward.Rules = append(forward.Rules, newRule(map[string]any{"jump": map[string]any{"target": DoTChain}}))
+	}
 	// the port forwards (forward.go): a forwarded connection that no access rule decided is accepted
 	// here, in front of the access matrix, so the forward itself is the allowance (plan §2.2 layer 4)
 	forward.Rules = append(forward.Rules, t.forwardAccepts(ifsLan.Name)...)
@@ -315,6 +320,9 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	}
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post, guard}
+	if dot != nil {
+		t.Nft.Chains = append(t.Nft.Chains, *dot)
+	}
 	if t.Access != nil {
 		t.Nft.Chains = append(t.Nft.Chains, t.Access.chain(AccessForwardChain), t.Access.chain(AccessInputChain))
 		if t.Access.HasCuts() {

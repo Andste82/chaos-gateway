@@ -69,6 +69,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
 		model.EventTypeCaptureStarted, model.EventTypeCaptureStopped, model.EventTypeDiskLow,
+		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch,
 	} {
 		m[string(t)] = true
 	}
@@ -196,6 +197,10 @@ func describe(ev engine.Event) string {
 		return "capture " + str("capture") + " stopped (" + str("reason") + ")"
 	case "disk_low":
 		return "the volume of the captures has " + str("free_percent") + " % free space"
+	case "dns_fault_triggered":
+		return "DNS fault " + str("overlay") + " changed the answer to " + str("name") + " (" + str("rcode") + ")"
+	case "dns_set_epoch":
+		return "the DNS-derived set of " + str("pattern") + " was replaced: it starts empty"
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

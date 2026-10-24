@@ -163,6 +163,25 @@ func (c *APIClient) Post(ctx context.Context, entries []model.DnsQueryLogEntry) 
 	return nil
 }
 
+// PostResolutions implements ResolutionSink: the addresses the proxy is about to answer with for the names that
+// hostname selectors match. The API returns after the gateway's DNS-derived sets hold them.
+func (c *APIClient) PostResolutions(ctx context.Context, rs []model.DnsResolution) error {
+	body, err := json.Marshal(rs)
+	if err != nil {
+		return err
+	}
+	res, err := c.do(ctx, http.MethodPost, "/internal/dns/resolutions", body, callTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		return fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // Follow registers with the API and follows its configuration until ctx ends: the first request
 // asks for any configuration, every later one for a newer generation. A failure is retried with a
 // growing pause; the configuration in use stays. A failure is logged as a warning once, with a hint,

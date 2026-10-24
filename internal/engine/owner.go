@@ -635,6 +635,8 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.Management = r.target.Management
 		o.snap.DeviceNums, o.snap.DeviceNumHigh = r.target.DeviceNums, r.target.DeviceNumHigh
 		o.snap.Service = r.target.Service
+		o.snap.DNSSets = r.target.DNSSets
+		o.snap.DNSFaults = r.target.DNSFaults
 		o.snap.ServiceError = ""
 		o.snap.CutWindowError = ""
 		if r.cutStuck != nil {

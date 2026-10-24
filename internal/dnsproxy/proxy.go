@@ -35,14 +35,21 @@ type Options struct {
 	CacheEntries int
 	// UpstreamPort is the port of the upstream resolvers; default 53.
 	UpstreamPort string
+	// Resolutions receives what the proxy answered for the names that hostname selectors match (plan §2.6); the
+	// answer waits for the call. Nil reports nothing.
+	Resolutions ResolutionSink
+	// BatchWindow is how long the first resolution of a batch waits for others to join it (plan §3.11); default 2 ms.
+	BatchWindow time.Duration
 }
 
 // Server is the DNS proxy.
 type Server struct {
-	opt   Options
-	cfg   atomic.Pointer[model.DnsServiceConfig]
-	cache *cache
-	log   *queryLog
+	opt    Options
+	cfg    atomic.Pointer[model.DnsServiceConfig]
+	parsed atomic.Pointer[parsedConfig]
+	cache  *cache
+	log    *queryLog
+	rep    *reporter
 	// Counters for tests and diagnostics.
 	queries, upstreamQueries atomic.Int64
 	ready                    chan struct{}
@@ -69,15 +76,27 @@ func New(o Options) *Server {
 	if o.Upstream == nil {
 		o.Upstream = &client{}
 	}
-	return &Server{opt: o, cache: newCache(o.CacheEntries, o.Clock), log: newQueryLog(o.Sink, o.Clock, o.Log), ready: make(chan struct{})}
+	if o.BatchWindow <= 0 {
+		o.BatchWindow = 2 * time.Millisecond
+	}
+	s := &Server{opt: o, cache: newCache(o.CacheEntries, o.Clock), log: newQueryLog(o.Sink, o.Clock, o.Log), ready: make(chan struct{})}
+	if o.Resolutions != nil {
+		s.rep = newReporter(o.Resolutions, o.Clock, o.BatchWindow, o.Log)
+	}
+	return s
 }
 
 // SetConfig replaces the configuration. A new generation drops the cache: a changed upstream or
 // static entry must not be hidden by an old answer.
 func (s *Server) SetConfig(c *model.DnsServiceConfig) {
+	s.parsed.Store(parseConfig(c))
 	old := s.cfg.Swap(c)
 	if old == nil || old.Generation != c.Generation {
 		s.cache.flush()
+		// what was reported for the sets of the old configuration is not known to hold in the new one
+		if s.rep != nil {
+			s.rep.forget()
+		}
 	}
 }
 
@@ -153,12 +172,17 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	client := clientAddr(w.RemoteAddr())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opt.Timeout)
 	defer cancel()
-	resp, e := s.answer(ctx, r, client)
-	fitEDNS(resp, r)
-	if !isTCP {
-		resp.Truncate(udpSize(r))
+	resp, e, drop := s.answerFaulted(ctx, r, client, isTCP)
+	if !drop {
+		fitEDNS(resp, r)
+		if !isTCP {
+			resp.Truncate(udpSize(r))
+		}
+		// the addresses of the answer go into the DNS-derived sets before the answer is sent, so the first
+		// packet of the device already matches (plan §2.6)
+		s.report(ctx, client, r, resp)
+		_ = w.WriteMsg(resp)
 	}
-	_ = w.WriteMsg(resp)
 	e.Time = start
 	e.Client = client.String()
 	proto := model.DnsQueryLogEntryProtocol("udp")
@@ -243,6 +267,55 @@ const (
 	staticTTL   = 60
 	negativeTTL = 30
 )
+
+// answerFaulted answers a query as the DNS faults of the configuration say (faults.go): the first entry for
+// the client whose names match decides, and the log entry names the overlay when it changed the answer. drop is
+// true for the fault `timeout`: there is no answer to send.
+func (s *Server) answerFaulted(ctx context.Context, r *dns.Msg, client netip.Addr, tcp bool) (resp *dns.Msg, e model.DnsQueryLogEntry, drop bool) {
+	pc := s.parsed.Load()
+	if pc == nil || len(pc.faults) == 0 || len(r.Question) != 1 || r.Opcode != dns.OpcodeQuery || r.Question[0].Qclass != dns.ClassINET {
+		resp, e = s.answer(ctx, r, client)
+		return resp, e, false
+	}
+	q := r.Question[0]
+	name := strings.TrimSuffix(lowerName(q.Name), ".")
+	f := pc.faultFor(client, name)
+	if f == nil {
+		resp, e = s.answer(ctx, r, client)
+		return resp, e, false
+	}
+	e.Name, e.Type = name, dns.TypeToString[q.Qtype]
+	if q.Qtype == 0 {
+		e.Type = "TYPE0"
+	}
+	if f.action == model.DnsFaultActionTimeout {
+		e.Rcode, e.Fault = "TIMEOUT", f.uuid
+		return nil, e, true
+	}
+	if m, ok := f.synthetic(r, q); ok {
+		e.Rcode, e.Answers, e.Fault = dns.RcodeToString[m.Rcode], answers(m), f.uuid
+		return m, e, false
+	}
+	resp, e = s.answer(ctx, r, client)
+	if !f.changes(q, tcp) {
+		return resp, e, false
+	}
+	switch f.action {
+	case model.DnsFaultActionDelay:
+		select {
+		case <-s.opt.Clock.After(f.delay):
+		case <-ctx.Done():
+		}
+	case model.DnsFaultActionTruncate:
+		resp.Answer, resp.Ns, resp.Extra = nil, nil, nil
+		resp.Truncated = true
+		e.Answers = nil
+	case model.DnsFaultActionShortTtl:
+		shorten(resp, f.ttl)
+	}
+	e.Fault = f.uuid
+	return resp, e, false
+}
 
 // answer builds the reply to one query and the log entry that describes it.
 func (s *Server) answer(ctx context.Context, r *dns.Msg, client netip.Addr) (*dns.Msg, model.DnsQueryLogEntry) {

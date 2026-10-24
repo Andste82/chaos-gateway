@@ -450,6 +450,21 @@ func (k *Kernel) AddElement(set, elem string) {
 	s.elems = append(s.elems, b)
 }
 
+// NftSetNames returns the names of the sets of the table, sorted.
+func (k *Kernel) NftSetNames() []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.nft == nil {
+		return nil
+	}
+	out := make([]string, 0, len(k.nft.sets))
+	for n := range k.nft.sets {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // SetElements returns the raw elements of a set as strings.
 func (k *Kernel) SetElements(set string) []string {
 	k.mu.Lock()

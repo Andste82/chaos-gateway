@@ -112,6 +112,12 @@ type Snapshot struct {
 	KeaNetworks map[int]string
 	// Service is the service namespace of the last applied target; nil when there is none.
 	Service *compiler.ServiceNS
+	// DNSSets are the DNS-derived address sets of the last applied target, one per hostname selector in use
+	// (plan §2.6): what the DNS proxy reports resolutions for.
+	DNSSets []compiler.DNSSet
+	// DNSFaults are the DNS faults of the last applied target in the order the DNS proxy tries them, for each source
+	// (plan §2.6): the proxy's configuration.
+	DNSFaults []compiler.DNSFault
 	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
 	DHCPError string
 	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first
@@ -229,7 +235,10 @@ type Engine struct {
 	// have left (plan §3.2); the apply loop is its only writer.
 	retirer *apply.Retirer
 	// flap is the schedule of the flapping faults (flap.go); the apply loop is its only writer.
-	flap   *flapper
+	flap *flapper
+	// hosts is the mirror of the DNS-derived address sets and their writer (hostsets.go); the apply loop tells it what the
+	// kernel holds, the API's DNS endpoints feed it.
+	hosts  *hostSets
 	events *bus
 	sup    *supervisor.Supervisor
 
@@ -339,6 +348,7 @@ func New(cfg Config) (*Engine, error) {
 	}
 	e.retirer = apply.NewRetirer(cfg.Clock)
 	e.flap = newFlapper()
+	e.hosts = newHostSets(e)
 	e.snap.Store(&Snapshot{})
 	return e, nil
 }

@@ -293,20 +293,23 @@ func (s *Server) ListLeases(c *gin.Context, networkId model.NetworkId, params mo
 }
 
 type flowView struct {
-	Device    string     `json:"device,omitempty"`
-	Download  *traffic   `json:"download,omitempty"`
-	DPort     int        `json:"dport,omitempty"`
-	Dst       string     `json:"dst"`
-	ID        string     `json:"id"`
-	NatSrc    string     `json:"nat_src,omitempty"`
-	Network   string     `json:"network,omitempty"`
-	Protocol  string     `json:"protocol"`
-	Service   string     `json:"service,omitempty"`
-	SPort     int        `json:"sport,omitempty"`
-	Src       string     `json:"src"`
-	StartedAt *time.Time `json:"started_at,omitempty"`
-	State     string     `json:"state,omitempty"`
-	Upload    *traffic   `json:"upload,omitempty"`
+	Device   string   `json:"device,omitempty"`
+	Download *traffic `json:"download,omitempty"`
+	DPort    int      `json:"dport,omitempty"`
+	Dst      string   `json:"dst"`
+	// DstHostname is a name the DNS proxy returned for Dst to the device that opened the flow, as far as a
+	// hostname selector of a rule or a fault selects it (the DNS-derived sets hold those, plan §2.6).
+	DstHostname string     `json:"dst_hostname,omitempty"`
+	ID          string     `json:"id"`
+	NatSrc      string     `json:"nat_src,omitempty"`
+	Network     string     `json:"network,omitempty"`
+	Protocol    string     `json:"protocol"`
+	Service     string     `json:"service,omitempty"`
+	SPort       int        `json:"sport,omitempty"`
+	Src         string     `json:"src"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	State       string     `json:"state,omitempty"`
+	Upload      *traffic   `json:"upload,omitempty"`
 }
 
 type traffic struct {
@@ -358,6 +361,9 @@ func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 			Src: f.Src.String(), State: f.State, Upload: trafficOf(f.Upload), Download: trafficOf(f.Download)}
 		if f.NatSrc.IsValid() {
 			fv.NatSrc = f.NatSrc.String()
+		}
+		if names := s.cfg.Engine.HostNames(f.Src, f.Dst); len(names) > 0 {
+			fv.DstHostname = names[0]
 		}
 		if !f.StartedAt.IsZero() {
 			fv.StartedAt = &f.StartedAt

@@ -5,6 +5,7 @@
 //   - active: the device holds a lease on its reserved address
 //   - pending: not applied yet, or the device has not renewed its lease yet (it still holds another address)
 //   - conflict: the address is leased to another MAC
+// Undo on a row (`undoReservation`, #97) takes back only the reservation, not the device's other edits.
 // The leases card asks `leaseTarget` what its Reserve action opens for a lease and `leaseReserved` whether
 // a lease's address is the fixed IP of its device.
 import type { Device, DeviceView, DhcpLease } from '../api/generated/model';
@@ -71,6 +72,39 @@ export function reservationRows(network: string, base: Record<string, Device> | 
     out.push({ id, ...row, ip: row.device.fixed_ip!, mac: row.device.identifiers?.macs?.[0], ...status(id, row.device, row.mark, leases) });
   }
   return out.sort((a, b) => (parseIPv4(a.ip) ?? 0) - (parseIPv4(b.ip) ?? 0));
+}
+
+/** The identifiers with `mac` first (added when they do not have it); the others keep their order. */
+function withFirstMac(ids: Device['identifiers'], mac: string): NonNullable<Device['identifiers']> {
+  const macs = ids?.macs ?? [];
+  return { ...ids, macs: [mac, ...macs.filter((m) => lower(m) !== lower(mac))] };
+}
+
+/**
+ * The device as the draft has it with its reservation in the network taken back to the base, and its other
+ * edits kept (Undo on a row of the reservations, #97): the fixed IP (and the network, for a device the draft
+ * moved away from it) as the base has them, and the base's first MAC first again, which the reservation is
+ * for. A reservation the base does not have in the network (the device was adopted in the draft, had no
+ * fixed IP or was in another network) loses only its fixed IP. A device the draft deletes comes back as the
+ * base has it; null when the draft deletes it and the base does not have it.
+ */
+export function undoReservation(network: string, base: Device | undefined, now: Device | null | undefined): Device | null {
+  if (!now) return base ?? null;
+  const out: Device = { ...now };
+  const first = base?.identifiers?.macs?.[0];
+  if (reservedIn(base, network)) {
+    out.network = base.network;
+    out.fixed_ip = base.fixed_ip;
+    // the MAC the reservation is for; re-added when the draft took it away
+    if (first) out.identifiers = withFirstMac(now.identifiers, first);
+    return out;
+  }
+  if (reservedIn(now, network)) {
+    delete out.fixed_ip;
+    // a MAC order the reservation brought along, as long as the base's first MAC is still there
+    if (first && now.identifiers?.macs?.some((m) => lower(m) === lower(first))) out.identifiers = withFirstMac(now.identifiers, first);
+  }
+  return out;
 }
 
 /** The device a lease belongs to: the one the gateway names, else the one that has its MAC. */

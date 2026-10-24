@@ -138,7 +138,7 @@ test('the reservations of a network: status active, pending and conflict, and th
   await page.getByRole('dialog', { name: /^Preview revision/ }).getByRole('button', { name: 'Close' }).click();
   await expect(reservationRow(page, '10.10.0.58').getByTestId('reservation-mark')).toHaveText('CHANGED');
   await expect(reservationRow(page, '10.10.0.58').getByTestId('reservation-status')).toHaveText('pending: not applied yet');
-  await page.getByRole('button', { name: 'Undo the changes of Sensor-07' }).click();
+  await page.getByRole('button', { name: 'Undo the reservation change of Sensor-07' }).click();
   await expect(reservationRow(page, '10.10.0.57').getByTestId('reservation-mark')).toHaveCount(0);
   await expect(page.getByTestId('unapplied-bar')).toHaveCount(0);
 
@@ -155,4 +155,53 @@ test('the reservations of a network: status active, pending and conflict, and th
   await expect(toast(page, 'Revision 45 applied and verified in 87 ms')).toBeVisible();
   await expect(rows).toHaveCount(2);
   expect(gw.config.devices?.[SENSOR9]?.fixed_ip).toBeUndefined();
+});
+
+// #97: Undo on a reservation row takes back only the reservation and keeps the device's other draft edits.
+test('Undo on the reservation of a device adopted in the draft keeps the adoption and drops the reservation', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: `Reserve 10.10.0.133 for ${DEV_MAC}` }).click();
+  const dialog = page.getByRole('dialog', { name: 'Adopt device' });
+  await dialog.getByLabel('Name').fill('Thermostat-A');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('dialog', { name: /^Preview revision/ }).getByRole('button', { name: 'Close' }).click();
+  await expect(reservationRow(page, '10.10.0.133').getByTestId('reservation-mark')).toHaveText('NEW');
+
+  await page.getByRole('button', { name: 'Undo the reservation change of Thermostat-A' }).click();
+  await expect(page.getByTestId('reservations')).toHaveCount(0);
+  await expect(page.getByTestId('unapplied-bar')).toBeVisible();
+  // the device is still adopted, so Reserve opens its device dialog now
+  await expect(page.getByRole('button', { name: `Reserve 10.10.0.133 for ${DEV_MAC}` })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const drawer = page.getByRole('dialog', { name: /^Preview revision/ });
+  await expect(drawer.getByTestId('preview-changes')).toContainText('device Thermostat-A added');
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
+    [DEV]: { name: 'Thermostat-A', identifiers: { macs: [DEV_MAC] }, network: IOT },
+  });
+});
+
+test('Undo on the reservation of a device renamed in the draft keeps its new name', async ({ page }) => {
+  const gw = lab({ [ESP]: { name: 'ESP32-42', macs: [MAC], fixed_ip: '10.10.0.42' } });
+  await gw.install(page);
+  await openIoT(page);
+  await page.getByRole('button', { name: 'Edit the reservation of ESP32-42' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit ESP32-42' });
+  await dialog.getByLabel('Name').fill('ESP32-kitchen');
+  await dialog.getByLabel('Fixed IP (DHCP reservation)').fill('10.10.0.43');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await page.getByRole('dialog', { name: /^Preview revision/ }).getByRole('button', { name: 'Close' }).click();
+  await expect(reservationRow(page, '10.10.0.43').getByTestId('reservation-mark')).toHaveText('CHANGED');
+
+  await page.getByRole('button', { name: 'Undo the reservation change of ESP32-kitchen' }).click();
+  await expect(reservationRow(page, '10.10.0.42').getByTestId('reservation-mark')).toHaveCount(0);
+  await expect(reservationRow(page, '10.10.0.42').getByRole('link', { name: 'ESP32-kitchen' })).toBeVisible();
+  await expect(reservationRow(page, '10.10.0.43')).toHaveCount(0);
+  await expect(page.getByTestId('unapplied-bar')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: /^Preview revision/ }).getByTestId('preview-changes')).toContainText('device ESP32-kitchen changed');
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({ [ESP]: { name: 'ESP32-kitchen' } });
 });

@@ -172,3 +172,56 @@ test('a device without a MAC cannot have a fixed IP; DHCP off in its network is 
   await expect(page.getByRole('button', { name: 'Adopt' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
 });
+
+// #111: the dialog lists the device's MACs and makes any of them the first one, the MAC a reservation is
+// for; the hint of a lease held with another of its MACs (#96) offers it for that MAC.
+test("any of the device's MACs is made its first, from the list or from the other-MAC hint, via preview and apply", async ({ page }) => {
+  const gw = lab();
+  // the reservation is for WIFI, the device holds the address with MAC
+  gw.config.devices![ESP] = { ...gw.config.devices![ESP]!, fixed_ip: '10.10.0.42' };
+  gw.devices = gw.devices.map((d) => (d.id === ESP ? { ...d, config: gw.config.devices![ESP] } : d));
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  let dialog = await openEdit(page);
+  const macs = dialog.getByTestId('device-mac');
+  await expect(macs.locator('.mono')).toHaveText([WIFI, MAC]);
+  await expect(macs.first().getByTestId('device-mac-first')).toHaveText('first · for the reservation');
+  await expect(macs.nth(1).getByRole('button')).toHaveText('Use for the reservation');
+  const hint = dialog.locator('[data-hint="other_mac"]');
+  await expect(hint).toContainText(`The device holds 10.10.0.42 with its MAC ${MAC} now, but the reservation is for its first MAC, ${WIFI}`);
+
+  // the hint puts the lease's MAC first: then the lease is the reserved MAC's
+  await hint.getByRole('button', { name: `Put ${MAC} first` }).click();
+  await expect(hint).toHaveCount(0);
+  await expect(macs.locator('.mono')).toHaveText([MAC, WIFI]);
+  await expect(dialog.getByTestId('device-macs-effect')).toHaveText(`${MAC} becomes the device's first MAC (it was ${WIFI}): a DHCP reservation is for it.`);
+  await expect(dialog.locator('[data-hint="first_mac"]')).toHaveText(`The reservation is for the device's first MAC, ${MAC}, not for its other one.`);
+  // and back, from the list
+  await dialog.getByRole('button', { name: `Use ${WIFI} for the reservation` }).click();
+  await expect(macs.first()).toContainText(WIFI);
+  await expect(dialog.getByTestId('device-macs-effect')).toHaveCount(0);
+  await expect(hint).toBeVisible();
+  await dialog.getByRole('button', { name: `Use ${MAC} for the reservation` }).click();
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(dialog).toBeHidden();
+
+  const drawer = page.getByRole('dialog', { name: 'Preview revision 43' });
+  await expect(drawer.getByTestId('preview-changes')).toContainText('device ESP32-42 changed');
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({ [ESP]: { identifiers: { macs: [MAC, WIFI] } } });
+  await drawer.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  expect(gw.config.devices?.[ESP]?.identifiers).toEqual({ macs: [MAC, WIFI] });
+
+  // a chosen MAC stays first: a new reservation does not put the lease's MAC first
+  dialog = await openEdit(page);
+  await expect(macs.locator('.mono')).toHaveText([MAC, WIFI]);
+  await dialog.getByRole('button', { name: `Use ${WIFI} for the reservation` }).click();
+  await dialog.getByLabel('Fixed IP (DHCP reservation)').fill('10.10.0.50');
+  await expect(macs.first()).toContainText(WIFI);
+  await expect(dialog.locator('[data-hint="first_mac"]')).toHaveText(`The reservation is for the device's first MAC, ${WIFI}, not for its other one.`);
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(page.getByRole('dialog', { name: 'Preview revision 44' })).toBeVisible();
+  expect((gw.requestsTo('POST', '/revisions').at(-1)!.body as { devices: unknown }).devices).toEqual({
+    [ESP]: { fixed_ip: '10.10.0.50', identifiers: { macs: [WIFI, MAC] } },
+  });
+});

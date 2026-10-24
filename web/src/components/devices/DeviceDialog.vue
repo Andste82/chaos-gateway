@@ -15,6 +15,11 @@
 // for a MAC that does not hold it: the dialog says so and offers to add the lease's MAC to the device as
 // its first MAC, checked (decision on #98), unless the MAC identifies another device already; removing the
 // fixed IP withdraws the offer.
+//
+// The dialog lists the device's MACs in the order the change gives them and can make any of them the
+// first one, the MAC the reservation is for ("Use for the reservation", #111; reordering only, no MAC is
+// added or removed here); the hint of a lease the device holds with another of its MACs (#96) offers the
+// same for that MAC. A MAC chosen so stays first: a new reservation no longer puts the lease's MAC first.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
@@ -29,6 +34,7 @@ import {
   foreignLeaseMac,
   formFromDevice,
   macOwner,
+  ownMac,
   warningHint,
   withFirstMac,
   type DeviceField,
@@ -67,6 +73,8 @@ const baseFixedIp = ref<string>();
 const baseNetwork = ref<string>();
 /** Whether the lease's MAC, when it is not among the device's MACs, is added as its first (#98). */
 const addMac = ref(true);
+/** The MAC the admin made the first one (#111); undefined while the order is the configuration's. */
+const firstMac = ref<string>();
 
 /** The device as the draft has it: its edit, the draft's base, or the configuration the gateway sent with the view. */
 function current(): Device {
@@ -90,6 +98,7 @@ watch(
     origin = draft.editOrigin();
     refused.value = draft.serverErrors[props.device.id] ?? {};
     addMac.value = true;
+    firstMac.value = undefined;
     refusedForm = JSON.stringify(form.value);
     tried.value = Object.keys(refused.value).length > 0;
     error.value = '';
@@ -122,8 +131,14 @@ const foreignMac = computed(() => (props.reserve && form.value.fixedIp.trim() ? 
 /** The other device the foreign MAC identifies already: it cannot be added to this one. */
 const foreignOwner = computed(() => (foreignMac.value ? macOwner(foreignMac.value, props.device.id, devices.value) : undefined));
 const addingMac = computed(() => !!foreignMac.value && !foreignOwner.value && addMac.value);
-/** The device the form changes: with the lease's MAC added first when the offer is taken. */
-const edited = computed(() => (addingMac.value ? withFirstMac(before.value, foreignMac.value!) : before.value));
+/** The device the form changes: with the lease's MAC added first when the offer is taken, and the MAC chosen first. */
+const edited = computed(() => {
+  const d = addingMac.value ? withFirstMac(before.value, foreignMac.value!) : before.value;
+  const first = ownMac(d.identifiers?.macs ?? [], firstMac.value);
+  return first ? withFirstMac(d, first) : d;
+});
+/** Whether the admin chose the first MAC (it is among the device's MACs): the lease's MAC is not put first then. */
+const ordered = computed(() => !!ownMac(edited.value.identifiers?.macs ?? [], firstMac.value));
 const macs = computed(() => edited.value.identifiers?.macs ?? []);
 const takenNames = computed(() => {
   const out = Object.entries(devices.value)
@@ -148,7 +163,15 @@ const formErrors = computed(() => deviceFormErrors(form.value, ctx.value));
 const hints = computed(() =>
   formErrors.value.fixedIp
     ? []
-    : fixedIpHints(form.value.fixedIp, { ...ctx.value, before: baseFixedIp.value, beforeNetwork: baseNetwork.value, leases: leases.data.value, leaseMac: leaseMac.value, leaseIp: leaseIp.value }),
+    : fixedIpHints(form.value.fixedIp, {
+        ...ctx.value,
+        before: baseFixedIp.value,
+        beforeNetwork: baseNetwork.value,
+        leases: leases.data.value,
+        leaseMac: leaseMac.value,
+        leaseIp: leaseIp.value,
+        ordered: ordered.value,
+      }),
 );
 const server = computed(() => {
   const byField: Partial<Record<DeviceField, string>> = {};
@@ -171,7 +194,16 @@ function shown(f: DeviceField): string | undefined {
 }
 
 const title = computed(() => `Edit ${before.value.name || props.device.name}`);
-const result = computed(() => deviceFromForm(form.value, edited.value, leaseMac.value));
+const result = computed(() => deviceFromForm(form.value, edited.value, ordered.value ? undefined : leaseMac.value));
+/** The device's MACs in the order the change gives them (the first is the one a reservation is for). */
+const resultMacs = computed(() => result.value.identifiers?.macs ?? []);
+/** The first MAC changes with this edit (by the admin's choice or a new reservation on the lease's MAC). */
+const firstChanged = computed(() => !!resultMacs.value.length && !!configuredMacs.value.length && resultMacs.value[0] !== configuredMacs.value[0]);
+
+/** Make one of the device's MACs its first, the one the reservation is for (#111). */
+function useFirst(mac: string) {
+  firstMac.value = ownMac(edited.value.identifiers?.macs ?? [], mac) ?? mac;
+}
 watch(
   [open, result],
   ([o]) => {
@@ -273,8 +305,30 @@ const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
             :data-hint="h.kind"
           >
             {{ h.text }}
+            <button
+              v-if="h.kind === 'other_mac' && h.mac"
+              type="button"
+              class="btn btn-sm ml-1"
+              data-testid="put-mac-first"
+              @click="useFirst(h.mac)"
+            >
+              Put <span class="mono">{{ h.mac }}</span> first
+            </button>
           </li>
         </ul>
+      </div>
+      <div v-if="resultMacs.length">
+        <p class="label" :id="fid('macs')">MAC addresses</p>
+        <ul class="m-0 flex list-none flex-col gap-1 p-0 text-sm" :aria-labelledby="fid('macs')" data-testid="device-macs">
+          <li v-for="(m, i) in resultMacs" :key="m" class="flex items-center gap-2" data-testid="device-mac">
+            <span class="mono">{{ m }}</span>
+            <span v-if="i === 0" class="text-xs text-text-2" data-testid="device-mac-first">first · for the reservation</span>
+            <button v-else type="button" class="btn btn-sm ml-auto" :aria-label="`Use ${m} for the reservation`" @click="useFirst(m)">Use for the reservation</button>
+          </li>
+        </ul>
+        <p v-if="firstChanged" class="m-0 mt-1.5 text-xs text-text-2" data-testid="device-macs-effect">
+          {{ resultMacs[0] }} becomes the device's first MAC (it was {{ configuredMacs[0] }}): a DHCP reservation is for it.
+        </p>
       </div>
       <div v-if="foreignMac && reserve" class="rounded-md border border-border bg-surface-2 p-3 text-sm" data-testid="reserve-mac">
         <p class="m-0">
@@ -292,11 +346,14 @@ const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
             <input v-model="addMac" type="checkbox" />
             <span>Add <span class="mono">{{ foreignMac }}</span> to the device as its first MAC</span>
           </label>
-          <p class="m-0 mt-1.5 text-xs" :class="addMac ? 'text-text-2' : 'text-fault-text'" data-testid="reserve-mac-effect">
+          <p class="m-0 mt-1.5 text-xs" :class="addMac && macs[0] === foreignMac ? 'text-text-2' : 'text-fault-text'" data-testid="reserve-mac-effect">
             <template v-if="!addMac && configuredMacs.length">
-              The reservation is for {{ configuredMacs[0] }}, which does not hold this lease: it takes effect only when the device asks for an address with that MAC.
+              The reservation is for {{ macs[0] }}, which does not hold this lease: it takes effect only when the device asks for an address with that MAC.
             </template>
             <template v-else-if="!addMac">Without a MAC the device cannot have a reservation.</template>
+            <template v-else-if="macs[0] !== foreignMac">
+              {{ foreignMac }} is added as another MAC of the device; the reservation is for {{ macs[0] }}, which does not hold this lease.
+            </template>
             <template v-else-if="configuredMacs.length">
               The reservation is for {{ foreignMac }}, the MAC that holds the lease; the device keeps {{ configuredMacs.join(', ') }} as its other
               {{ configuredMacs.length === 1 ? 'MAC' : 'MACs' }}.

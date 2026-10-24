@@ -418,10 +418,7 @@ describe('a device removed together with the objects that name it (#99)', () => 
     });
   }
   function removeAll(d: ReturnType<typeof useDraftStore>) {
-    d.setRule(C, null);
-    d.setForward(F, null);
-    d.setGroup(G, { name: 'lab', members: [OTHER] });
-    d.setDevice(DEV, null);
+    d.removeDevice({ id: DEV, name: 'esp' });
   }
 
   it('puts everything into one patch and names it in the changes', () => {
@@ -468,6 +465,40 @@ describe('a device removed together with the objects that name it (#99)', () => 
     expect(d.groups[G]).toEqual({ name: 'lab', members: [DEV, OTHER, 'x'] });
   });
 
+  it('Undo brings back what the draft had: an edit of a rule removed along, a new rule at its place, not what was deleted before', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    const D = 'a1000000-0000-4000-8000-000000000004';
+    d.setRule(C, { name: 'esp-out', source: { device: DEV }, action: 'reject' });
+    d.setRule(D, { name: 'esp-in', source: { device: 'ESP' }, action: 'drop' });
+    d.move(D, -1);
+    d.move(D, -1);
+    expect(d.effectiveOrder).toEqual([A, D, B, C]);
+    // a forward the user deleted before the removal stays deleted after its Undo
+    d.setForward(F, null);
+    removeAll(d);
+    expect(d.effectiveOrder).toEqual([A, B]);
+    expect(d.rules[D]).toBeUndefined();
+    d.restoreDevice(DEV);
+    expect(d.devices[DEV]).toBeUndefined();
+    expect(d.effectiveRules[C]?.action).toBe('reject');
+    expect(d.effectiveRules[D]?.name).toBe('esp-in');
+    expect(d.effectiveOrder).toEqual([A, D, B, C]);
+    expect(d.forwards[F]).toBeNull();
+    expect(d.groups).toEqual({});
+  });
+
+  it('Undo of one removal leaves the other device out of the group', () => {
+    const d = useDraftStore();
+    d.track(lab());
+    removeAll(d);
+    d.removeDevice({ id: OTHER, name: 'phone' });
+    expect(d.effectiveGroups[G]!.members).toEqual([]);
+    d.restoreDevice(DEV);
+    expect(d.effectiveGroups[G]!.members).toEqual([DEV]);
+    expect(d.devices[OTHER]).toBeNull();
+  });
+
   it('reapplies the group change on theirs; a group both changed is named in the overlaps', () => {
     const d = useDraftStore();
     d.track(lab());
@@ -481,6 +512,12 @@ describe('a device removed together with the objects that name it (#99)', () => 
     ]);
     d.rebase(theirs);
     expect(d.groups[G]).toEqual({ name: 'lab', description: 'theirs', members: [OTHER] });
+    // the Undo after the reapply brings the device back as the new base has it, into the group again
+    d.restoreDevice(DEV);
+    expect(d.devices[DEV]).toBeUndefined();
+    expect(d.rules[C]).toBeUndefined();
+    expect(d.effectiveGroups[G]!.members).toEqual([DEV, OTHER]);
+    d.removeDevice({ id: DEV, name: 'esp' });
     d.discard();
     expect(d.groups).toEqual({});
   });

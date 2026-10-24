@@ -44,7 +44,7 @@ describe('IPv4 of the networks', () => {
     expect(parseSubnet('10.99.0.300/24')).toBeUndefined();
   });
 
-  it('the default DHCP pool is the second half of the subnet, without the broadcast and the gateway address', () => {
+  it('the default DHCP pool is the second half of the subnet without the broadcast; configured pools replace it', () => {
     expect(effectivePools('10.10.0.1/24', undefined)).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
     expect(effectivePools('10.10.0.200/24', [])).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
     const own = [{ start: '10.10.0.100', end: '10.10.0.150' }];

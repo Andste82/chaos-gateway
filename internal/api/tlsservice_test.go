@@ -331,6 +331,58 @@ func TestEveryHandshakeIsAnEventAndCountedForItsOverlay(t *testing.T) {
 	}
 }
 
+// Plan §2.8: what a rejection proves depends on the case and on the firmware. The unknown CA and the self-signed certificate
+// are rejected by every firmware for what they are; a date or a name is tested only by a device that trusts the test CA; a
+// handshake case shows no certificate, so nothing is tested and anything the device does is expected.
+func TestARejectionIsTestedByTheCaseAndWhatTheDeviceTrusts(t *testing.T) {
+	g, _ := tlsGateway(t)
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	now := time.Now().UTC()
+	type probe struct {
+		client, kase, outcome string
+		expected              string
+		violation, tested     bool
+	}
+	probes := []probe{
+		{"10.10.0.32", "untrusted_ca", "rejected", "reject", false, true},
+		{"10.10.0.32", "self_signed", "rejected", "reject", false, true},
+		{"10.10.0.32", "expired", "rejected", "reject", false, false},
+		{"10.10.0.32", "not_yet_valid", "rejected", "reject", false, false},
+		{"10.10.0.32", "hostname_mismatch", "rejected", "reject", false, false},
+		{"10.10.0.31", "not_yet_valid", "rejected", "reject", false, true},
+		{"10.10.0.31", "hostname_mismatch", "rejected", "reject", false, true},
+		{"10.10.0.31", "untrusted_ca", "accepted", "reject", true, false},
+		{"10.10.0.32", "handshake_reset", "reset_sent", "any", false, false},
+		{"10.10.0.31", "handshake_stall", "stalled", "any", false, false},
+	}
+	var batch []any
+	for _, p := range probes {
+		batch = append(batch, map[string]any{"time": now.Format(time.RFC3339Nano), "client": p.client, "original_dst": "203.0.113.10:8883", "case": p.kase, "outcome": p.outcome})
+	}
+	if r := g.do("POST", "/internal/tls/handshakes", batch, nil, nil); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	var events []engine.Event
+	deadline := time.After(5 * time.Second)
+	for len(events) < len(probes) {
+		select {
+		case ev := <-ch:
+			if ev.Type == engine.EventTLSHandshake {
+				events = append(events, ev)
+			}
+		case <-deadline:
+			t.Fatalf("%d events", len(events))
+		}
+	}
+	for i, p := range probes {
+		d := events[i].Data
+		if d["case"] != p.kase || d["expected"] != p.expected || d["violation"] != p.violation || d["tested"] != p.tested {
+			t.Errorf("%s on %s (%s): expected %v, violation %v, tested %v", p.kase, p.client, p.outcome, d["expected"], d["violation"], d["tested"])
+		}
+	}
+}
+
 // The event of a handshake is on the stream, in the shape of the spec, with the device as its subject and a line in words that
 // says what a device that took the certificate did.
 func TestTheStreamTellsAHandshakeInWords(t *testing.T) {

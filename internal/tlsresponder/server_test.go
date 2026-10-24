@@ -279,6 +279,49 @@ func TestAConnectionNoCaseDecidesIsPassedThroughToItsDestination(t *testing.T) {
 	}
 }
 
+// What the kernel selected and no case decides may not be TLS at all (plain text on port 443): it goes on to its destination
+// unchanged, bytes that are no ClientHello included, and is no handshake of the responder's.
+func TestAPlainTextConnectionNoCaseDecidesIsPassedThroughUnchanged(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				_, _ = io.Copy(c, c)
+			}()
+		}
+	}()
+	r := newRig(t, func(ConnInfo) Decision { return Decision{Generation: 1, Passthrough: true} }, nil)
+	r.dial = func(ctx context.Context, n, a string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, n, ln.Addr().String())
+	}
+	c, err := net.Dial("tcp", r.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	const text = "GET / HTTP/1.1\r\nHost: plain.example.com\r\n\r\n"
+	if _, err := c.Write([]byte(text)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(text))
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != text {
+		t.Fatalf("%q %v", buf, err)
+	}
+	if r.srv.PassedThrough() != 1 || r.sink.count() != 0 {
+		t.Errorf("passed through %d, reports %d", r.srv.PassedThrough(), r.sink.count())
+	}
+}
+
 // A connection no case decides that the gateway would not have forwarded (the access matrix keeps the device from the server) is
 // reset: the redirect and the responder's own path to the destination must not be the way through.
 func TestAConnectionNoCaseDecidesAndTheGatewayWouldNotForwardIsResetNotPassedThrough(t *testing.T) {
@@ -398,6 +441,7 @@ func TestTheConnectionsOfARemovedCaseAreReset(t *testing.T) {
 	}
 
 	// a configuration that is not newer than the decision does not reset it: the decision may be the newer news
+	r.srv.SetConfig(cfg(5, overlayID)) // the configuration of the time of the decision
 	c2, done2 := stalled()
 	defer func() { _ = c2.Close() }()
 	r.sink.wait(t, 2)
@@ -409,6 +453,34 @@ func TestTheConnectionsOfARemovedCaseAreReset(t *testing.T) {
 	}
 	if r.srv.Resets() != 1 {
 		t.Errorf("%d resets", r.srv.Resets())
+	}
+}
+
+// A configuration that no longer holds the case may arrive while the decision is on its way back to the responder: the
+// connection is not held yet then, and SetConfig cannot reset it. It is reset when it is registered, instead of staying
+// with a stall for its whole length.
+func TestAConnectionDecidedJustBeforeItsCaseWentIsReset(t *testing.T) {
+	var r *rig
+	r = newRig(t, func(ConnInfo) Decision {
+		d := caseOf(model.TlsCaseCaseHandshakeStall)(ConnInfo{})
+		r.srv.SetConfig(&model.TlsServiceConfig{Generation: d.Generation + 1}) // the removal overtakes the decision
+		return d
+	}, func(o *Options) { o.StallFor = 30 * time.Second })
+	c, err := net.Dial("tcp", r.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = c.Write(captureHello(t, &tls.Config{ServerName: "x.example.com"}))
+	if err := readAll(c); err == nil || !strings.Contains(err.Error(), "reset") {
+		t.Errorf("the connection ended with %v, want a reset", err)
+	}
+	if r.srv.Resets() != 1 {
+		t.Errorf("%d resets", r.srv.Resets())
+	}
+	if r.sink.count() != 0 {
+		t.Errorf("%d reports of a handshake that never was", r.sink.count())
 	}
 }
 

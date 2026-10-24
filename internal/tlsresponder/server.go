@@ -2,6 +2,7 @@ package tlsresponder
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -214,16 +215,22 @@ func (s *Server) closeHeld() {
 	}
 }
 
-func (s *Server) hold(c net.Conn, overlay string, gen int64) func() {
+// hold registers a connection that a case holds, so that SetConfig can reset it. It reports false when the case went
+// between the decision and now (a configuration of a later generation, which SetConfig has taken already, does not hold
+// it): the connection is not held then and the caller resets it, as SetConfig would have.
+func (s *Server) hold(c net.Conn, overlay string, gen int64) (release func(), ok bool) {
 	h := &held{conn: c, overlay: strings.ToLower(overlay), gen: gen}
 	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if h.overlay != "" && s.cfg != nil && !s.active[h.overlay] && h.gen < s.cfg.Generation {
+		return func() {}, false
+	}
 	s.held[h] = struct{}{}
-	s.cfgMu.Unlock()
 	return func() {
 		s.cfgMu.Lock()
 		delete(s.held, h)
 		s.cfgMu.Unlock()
-	}
+	}, true
 }
 
 // reset closes a connection with a reset instead of a FIN.
@@ -269,8 +276,10 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	}
 	if dec.Case == nil {
 		switch {
-		case herr != nil:
+		case herr != nil && !errors.Is(herr, errNotTLS):
 			// nothing to pass on: it never said anything
+			// (bytes that are no ClientHello are the connection of another protocol that the selection of the kernel
+			// took along, a plain-text one on port 443: no case is about it, so it goes on unchanged like the others)
 		case !dec.Passthrough:
 			// the gateway would not have forwarded this connection (the access matrix keeps the device from the server): the redirect
 			// must not be the way through
@@ -282,8 +291,13 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		}
 		return
 	}
-	release := s.hold(c, dec.Overlay, dec.Generation)
+	release, ok := s.hold(c, dec.Overlay, dec.Generation)
 	defer release()
+	if !ok {
+		s.resets.Add(1)
+		reset(c)
+		return
+	}
 	s.serve(ctx, c, raw, herr, info, dec)
 }
 
@@ -308,7 +322,7 @@ func (s *Server) passThrough(ctx context.Context, c net.Conn, hello []byte, info
 		return
 	}
 	defer func() { _ = up.Close() }()
-	release := s.hold(c, "", 0)
+	release, _ := s.hold(c, "", 0)
 	defer release()
 	if _, err := up.Write(hello); err != nil {
 		reset(c)

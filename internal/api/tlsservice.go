@@ -162,12 +162,21 @@ func (s *Server) ResolveTlsConnection(c *gin.Context) {
 	if req.Sni != nil {
 		sni = strings.ToLower(strings.TrimSuffix(*req.Sni, "."))
 	}
+	// the generation is read before the decision is made: a case that goes in between makes the decision of a snapshot
+	// that is newer than its generation, which a configuration of a later generation resets (the responder's "reset on
+	// removal"), and never the other way round, where the connection would outlive the removal of its case
+	cfg := s.tlsConfig()
+	if cfg == nil {
+		s.write(c, newProblem(model.ErrorCodeUnavailable, "the TLS configuration cannot be made"))
+		return
+	}
+	gen := cfg.Generation
 	dec, err := s.cfg.Engine.ResolveTLS(engine.TLSConnection{Client: client, Dst: dst, SNI: sni, Names: s.hostNames(client, dst.Addr())})
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeUnavailable, "%s", firstLine(err.Error())))
 		return
 	}
-	out := model.TlsResolveResponse{Generation: s.tlsConfig().Generation}
+	out := model.TlsResolveResponse{Generation: gen}
 	if dec.Case == nil || dec.Case.TLS == nil {
 		out.Passthrough = ptr(dec.Passthrough)
 		c.JSON(200, out)

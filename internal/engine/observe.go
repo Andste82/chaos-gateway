@@ -185,6 +185,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 		reply = make(chan struct{}, 1)
 	}
 	if err := e.send(ctx, cmdObserved{obs: obs, reply: reply}); err != nil {
+		e.returnEnded(obs.Ended) // the state owner never got the read: they wait for the next one
 		return err
 	}
 	if wait {

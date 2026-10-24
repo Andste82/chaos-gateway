@@ -899,6 +899,18 @@ func TestADestroyEventOfTheWatchCountsInTheNextRead(t *testing.T) {
 	if h.e.EndedPending() != 1 {
 		t.Fatalf("the destroy event was not kept: %d", h.e.EndedPending())
 	}
+	// a failed read does not use it up: it waits for the next read that succeeds
+	h.k.SetFail(func(argv []string, stdin string) *executor.Result {
+		if argv[0] == "conntrack" && len(argv) > 1 && argv[1] == "-L" {
+			return &executor.Result{Exit: 1, Stderr: "conntrack v1.4.8: netlink error: No such file or directory\n"}
+		}
+		return nil
+	})
+	h.observe()
+	if n := h.e.EndedPending(); n != 1 {
+		t.Fatalf("a failed read took the destroy event: %d left", n)
+	}
+	h.k.SetFail(nil)
 	h.clk.Advance(time.Second)
 	h.observe()
 	// 2000 and 4000 bytes over the two seconds since the first read

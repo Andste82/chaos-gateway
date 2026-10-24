@@ -284,7 +284,7 @@ async function submit() {
           <legend class="label">DHCP</legend>
           <label class="flex items-center gap-2 text-sm"><input v-model="form.dhcpEnabled" type="checkbox" /> The gateway hands out addresses (DHCP)</label>
           <div v-if="form.dhcpEnabled" class="grid grid-cols-2 gap-4">
-            <TextField v-model="form.pools" label="Pools" mono placeholder="10.30.0.100-10.30.0.199" :error="shown('pools')" hint="Empty: the second half of the subnet." />
+            <TextField v-model="form.pools" label="Pools" mono placeholder="10.30.0.100-10.30.0.199" :error="shown('pools')" hint="Empty: the second half of the subnet, without the gateway's address." />
             <TextField v-model="form.leaseTime" label="Lease time" mono placeholder="1h" :error="shown('leaseTime')" />
           </div>
         </fieldset>

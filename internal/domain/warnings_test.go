@@ -41,6 +41,16 @@ func TestFixedIPInPool(t *testing.T) {
 			d.del(t, "networks", idIoT, "dhcp", "pools")
 			d.set(t, "10.10.0.200", "devices", idESP, "fixed_ip")
 		}, "the default pool (10.10.0.128-10.10.0.254)"},
+		{"the default pool before a gateway inside the second half (#110)", func(t *testing.T, d doc) {
+			d.del(t, "networks", idIoT, "dhcp", "pools")
+			d.set(t, "10.10.0.200/24", "networks", idIoT, "address")
+			d.set(t, "10.10.0.150", "devices", idESP, "fixed_ip")
+		}, "the default pool (10.10.0.128-10.10.0.199)"},
+		{"the default pool after a gateway inside the second half (#110)", func(t *testing.T, d doc) {
+			d.del(t, "networks", idIoT, "dhcp", "pools")
+			d.set(t, "10.10.0.200/24", "networks", idIoT, "address")
+			d.set(t, "10.10.0.201", "devices", idESP, "fixed_ip")
+		}, "the default pool (10.10.0.201-10.10.0.254)"},
 		{"the network named by its UUID", func(t *testing.T, d doc) {
 			d.set(t, idIoT, "devices", idESP, "network")
 			d.set(t, "10.10.0.150", "devices", idESP, "fixed_ip")

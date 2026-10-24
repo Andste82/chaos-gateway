@@ -84,19 +84,24 @@ export function hostOf(cidr: string | undefined): string {
 /**
  * The DHCP pools of a network: the configured ones, or the default of the spec, the second half of the
  * subnet (`DhcpScope.pools`). The default is the gateway's `kea.DefaultPool`, ported exactly (#95): from the
- * middle of the subnet, or the address after it when that is the gateway's own, to the last address before
- * the broadcast; a subnet smaller than a /29 has none. Both run the table internal/kea/testdata/default_pool.json.
+ * middle of the subnet to the last address before the broadcast, never the gateway's own address. A gateway
+ * inside that range splits it in two, the range before the gateway and the range after it, and an empty one
+ * is left out (#110); a subnet smaller than a /29 has none. Both run the table
+ * internal/kea/testdata/default_pool.json.
  */
 export function effectivePools(address: string | undefined, pools: DhcpPool[] | undefined): { pools: DhcpPool[]; isDefault: boolean } {
   if (pools?.length) return { pools, isDefault: false };
   const s = parseSubnet(address);
   if (!s || s.len > 29) return { pools: [], isDefault: true };
   const size = s.broadcast - s.network + 1;
-  let start = s.network + size / 2;
+  const start = s.network + size / 2;
   const end = s.network + size - 2;
-  if (start === s.address) start++;
-  if (start > end) return { pools: [], isDefault: true };
-  return { pools: [{ start: formatIPv4(start), end: formatIPv4(end) }], isDefault: true };
+  const gw = s.address;
+  const ranges: [number, number][] = gw < start || gw > end ? [[start, end]] : [[start, gw - 1], [gw + 1, end]];
+  return {
+    pools: ranges.filter(([from, to]) => from <= to).map(([from, to]) => ({ start: formatIPv4(from), end: formatIPv4(to) })),
+    isDefault: true,
+  };
 }
 
 /**

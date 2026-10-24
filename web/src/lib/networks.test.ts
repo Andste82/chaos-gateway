@@ -46,18 +46,26 @@ describe('IPv4 of the networks', () => {
 
   it('the default DHCP pool is the second half of the subnet without the broadcast; configured pools replace it', () => {
     expect(effectivePools('10.10.0.1/24', undefined)).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
-    expect(effectivePools('10.10.0.200/24', [])).toEqual({ pools: [{ start: '10.10.0.128', end: '10.10.0.254' }], isDefault: true });
+    // a gateway inside the second half splits it around its address (#110)
+    expect(effectivePools('10.10.0.200/24', [])).toEqual({
+      pools: [
+        { start: '10.10.0.128', end: '10.10.0.199' },
+        { start: '10.10.0.201', end: '10.10.0.254' },
+      ],
+      isDefault: true,
+    });
     const own = [{ start: '10.10.0.100', end: '10.10.0.150' }];
     expect(effectivePools('10.10.0.1/24', own)).toEqual({ pools: own, isDefault: false });
   });
 
   // The table that `TestDefaultPoolForEverySubnetSizeAndGatewayPosition` (internal/kea) runs against
-  // kea.DefaultPool: every subnet size from /16 to /32 with the gateway at the start, the middle and the end of
-  // the subnet. The browser names the pool the gateway hands out (#95); the tests run from web/.
+  // kea.DefaultPool: every subnet size from /16 to /32 with the gateway at the start of the subnet, at the end
+  // of its first half, at its middle, in the middle of its second half and on its last usable address. The
+  // browser names the pools the gateway hands out (#95, #110); the tests run from web/.
   const defaultPools = JSON.parse(readFileSync('../internal/kea/testdata/default_pool.json', 'utf8')) as {
     address: string;
     gateway_at: string;
-    pool: { start: string; end: string } | null;
+    pools: { start: string; end: string }[];
   }[];
 
   it('the table covers every subnet size from /16 to /30', () => {
@@ -65,8 +73,8 @@ describe('IPv4 of the networks', () => {
     for (let bits = 16; bits <= 30; bits++) expect(sizes.has(bits), `/${bits}`).toBe(true);
   });
 
-  it.each(defaultPools)('the default pool of $address (the gateway at the $gateway_at) is the one of kea.DefaultPool', (c) => {
-    expect(effectivePools(c.address, undefined)).toEqual({ pools: c.pool ? [c.pool] : [], isDefault: true });
+  it.each(defaultPools)('the default pools of $address (the gateway at the $gateway_at) are the ones of kea.DefaultPool', (c) => {
+    expect(effectivePools(c.address, undefined)).toEqual({ pools: c.pools, isDefault: true });
   });
 });
 
@@ -88,6 +96,9 @@ describe('a fixed address inside a DHCP pool (#76: a hint, not an error)', () =>
     expect(reservationPool({ address: '10.10.0.1/24', dhcp: {} }, '10.10.0.200')).toEqual({ pool: { start: '10.10.0.128', end: '10.10.0.254' }, isDefault: true });
     expect(reservationPoolHint({ address: '10.10.0.1/24', dhcp: { enabled: true } }, '10.10.0.200')).toContain('the default DHCP pool 10.10.0.128–10.10.0.254');
     expect(reservationPool({ address: '10.10.0.1/24', dhcp: {} }, '10.10.0.42')).toBeUndefined();
+    // a gateway inside the second half splits the default pool: the hint names the part the address lies in (#110)
+    expect(reservationPoolHint({ address: '10.10.0.200/24', dhcp: {} }, '10.10.0.150')).toContain('the default DHCP pool 10.10.0.128–10.10.0.199');
+    expect(reservationPoolHint({ address: '10.10.0.200/24', dhcp: {} }, '10.10.0.220')).toContain('the default DHCP pool 10.10.0.201–10.10.0.254');
   });
 
   it('has nothing to say outside the pools, without DHCP or for an address that is none', () => {

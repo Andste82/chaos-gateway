@@ -153,8 +153,8 @@ func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (k
 			}
 			sub.Pools = append(sub.Pools, kea.Pool{Start: a, End: b})
 		}
-	} else if p, ok := kea.DefaultPool(br.Address, gw); ok {
-		sub.Pools = []kea.Pool{p}
+	} else if ps := kea.DefaultPool(br.Address, gw); len(ps) > 0 {
+		sub.Pools = ps
 	} else {
 		t.errorf(CodeDHCP, n.Name, "network %q is too small for a DHCP pool: name one", n.Name)
 		return sub, false

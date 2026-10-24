@@ -91,20 +91,33 @@ func SubnetID(networkID string, taken map[int]bool) int {
 	return id
 }
 
-// DefaultPool is the second half of the subnet without the network, broadcast and gateway addresses
-// (plan: "Default - the second half of the subnet").
-func DefaultPool(p netip.Prefix, gateway netip.Addr) (Pool, bool) {
+// DefaultPool is the default of a network without pools of its own: the second half of the subnet up to
+// the last usable address (plan: "Default - the second half of the subnet"), never the gateway's own
+// address. A gateway inside that range splits it in two, the range before the gateway and the range after
+// it, and an empty one is left out (#110). A subnet smaller than a /29 has none (nil).
+func DefaultPool(p netip.Prefix, gateway netip.Addr) []Pool {
 	if !p.Addr().Is4() || p.Bits() > 29 {
-		return Pool{}, false
+		return nil
 	}
 	base := p.Masked().Addr().As4()
 	size := uint32(1) << (32 - p.Bits())
 	start := toU32(base) + size/2
 	end := toU32(base) + size - 2 // the last usable address
-	if start == toU32(gateway.As4()) {
-		start++
+	if !gateway.Is4() {
+		return []Pool{{Start: fromU32(start), End: fromU32(end)}}
 	}
-	return Pool{Start: fromU32(start), End: fromU32(end)}, start <= end
+	gw := toU32(gateway.As4())
+	if gw < start || gw > end {
+		return []Pool{{Start: fromU32(start), End: fromU32(end)}}
+	}
+	var pools []Pool
+	if start < gw {
+		pools = append(pools, Pool{Start: fromU32(start), End: fromU32(gw - 1)})
+	}
+	if gw < end {
+		pools = append(pools, Pool{Start: fromU32(gw + 1), End: fromU32(end)})
+	}
+	return pools
 }
 
 func toU32(a [4]byte) uint32 {

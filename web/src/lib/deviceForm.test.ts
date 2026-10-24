@@ -122,6 +122,9 @@ describe('the fixed IP of a device (#73)', () => {
   it('notes that DHCP is off, and when a new reservation takes effect', () => {
     const off: Network = { ...iot, dhcp: { enabled: false } };
     expect(fixedIpHints('10.10.0.50', ctx({ network: off })).map((h) => h.kind)).toEqual(['dhcp_off', 'first_mac']);
+    // no scope at all is DHCP off as well (#94): no pool hint for the default pool, no renewal note
+    const none: Network = { ...iot, dhcp: undefined };
+    expect(fixedIpHints('10.10.0.150', ctx({ network: none })).map((h) => h.kind)).toEqual(['dhcp_off', 'first_mac']);
     expect(fixedIpHints('10.10.0.50', ctx()).find((h) => h.kind === 'dhcp_off')).toBeUndefined();
     expect(fixedIpHints('10.10.0.50', ctx()).find((h) => h.kind === 'renewal')?.text).toBe(
       'The device gets 10.10.0.50 when it renews its lease, which takes up to half the lease time (30 min).',

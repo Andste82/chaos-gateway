@@ -312,6 +312,15 @@ func TestAStaleEntryGivesItsAddressToTheNewHolder(t *testing.T) {
 	if id.Owner[ip] != tDev || strings.Count(types(ev), EventDeviceIdentityChanged) != 2 {
 		t.Errorf("back: owner %v, events %v", id.Owner, types(ev))
 	}
+	// the entry goes stale again and a device of no configuration gets the address leased: the discovered
+	// device has it now
+	const unknownMAC = "02:00:00:00:00:77"
+	active := model.DhcpLeaseState("active")
+	leases := []model.DhcpLease{{Ip: "10.10.0.31", Mac: unknownMAC, ExpiresAt: t0.Add(time.Hour), State: &active}}
+	id, _, _ = tr.step(cfg, observation{At: t0.Add(4 * time.Second), Neighbors: []domain.Neighbor{staleNeigh("10.10.0.31", macCf)}, Leases: leases})
+	if id.Owner[ip] != DeviceID(unknownMAC) || len(id.Addresses[tDev]) != 0 {
+		t.Errorf("leased to a discovered device: owner %v", id.Owner)
+	}
 }
 
 // issue #79: an established connection that outlives an unplugged device does not keep it online; a

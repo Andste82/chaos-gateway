@@ -140,11 +140,12 @@ type claim struct {
 }
 
 // yieldToOthers drops the yielding claims of an address that another device claims too: the new
-// holder of an address wins over a device's stale entry.
-func yieldToOthers(cs []claim) []claim {
+// holder of an address wins over a device's stale entry. found reports that a discovered device (one
+// whose MAC no device of the namespace has) is seen with the address now, which takes it away as well.
+func yieldToOthers(cs []claim, found bool) []claim {
 	out := cs[:0:0]
 	for _, c := range cs {
-		if c.yielding && claimedByOther(cs, c.device) {
+		if c.yielding && (found || claimedByOther(cs, c.device)) {
 			continue
 		}
 		out = append(out, c)
@@ -291,6 +292,19 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 			add(ip, claim{device: id, strength: claimNeighbor})
 		}
 	}
+	// the addresses a discovered device with a MAC of its own is seen with now (a lease, a neighbor entry):
+	// another device has the address, so a stale entry that lingers there gives way (issue #93)
+	foundAt := map[netip.Addr]bool{}
+	for _, d := range obs.Discovered {
+		for _, m := range d.MACs {
+			if _, known := macs[lower(m)]; !known {
+				for _, ip := range d.IPs {
+					foundAt[ip] = true
+				}
+				break
+			}
+		}
+	}
 
 	ips := make([]netip.Addr, 0, len(claims))
 	for ip := range claims {
@@ -298,7 +312,7 @@ func ResolveIdentity(cfg *model.Configuration, obs Observed, prev *Identity) Ide
 	}
 	sort.Slice(ips, func(i, j int) bool { return ips[i].Less(ips[j]) })
 	for _, ip := range ips {
-		cs := yieldToOthers(claims[ip])
+		cs := yieldToOthers(claims[ip], foundAt[ip])
 		if len(cs) == 0 {
 			continue
 		}

@@ -703,9 +703,10 @@ func (m *Manager) removeFiles(gone []*capState, quota int64) {
 	}
 }
 
-// stoppedByQuota reports whether the quota stopped the capture while it ran (Manager.mu held).
+// stoppedByQuota reports whether the quota stopped the capture while it ran (Manager.mu held): the manager asked for the
+// stop because of the quota, and the capture ended with it (not with an end of its own that came first, nor failed).
 func (c *capState) stoppedByQuota() bool {
-	return c.pending != nil && c.pending.reason == model.CaptureStopReasonSize
+	return c.pending != nil && c.pending.reason == model.CaptureStopReasonSize && c.rec.StopReason != nil && *c.rec.StopReason == model.CaptureStopReasonSize
 }
 
 func stoppedAt(c *capState) time.Time {

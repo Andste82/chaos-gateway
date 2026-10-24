@@ -621,7 +621,9 @@ func TestOfTwoCapturesWhoseCountersArriveAtOnceOnlyTheOneThatPassesTheQuotaStops
 	for i := 0; i < 20; i++ {
 		dir := t.TempDir()
 		m, op, _ := newManagerWithQuota(t, dir, 10*mib)
+		op.mu.Lock()
 		op.hang = true // the test ends the capture that is stopped, with its counters
+		op.mu.Unlock()
 		ctx := context.Background()
 		var ids []uuid.UUID
 		var ss []*stream

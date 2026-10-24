@@ -10,7 +10,10 @@
 // fields, until the form is changed.
 //
 // The Reserve action of the DHCP leases card (#75) opens the dialog with `reserve`: the lease's address as
-// the fixed IP in the lease's network, and the lease's MAC as the one put first.
+// the fixed IP in the lease's network, and the lease's MAC as the one put first. A lease whose MAC is not
+// among the device's MACs (the gateway names the device by the lease's address, say) would be reserved
+// for a MAC that does not hold it: the dialog says so and offers to add the lease's MAC to the device as
+// its first MAC, checked (decision on #98), unless the MAC identifies another device already.
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { getActiveRevision } from '../../api/generated/hooks/revisions/revisions';
@@ -22,8 +25,11 @@ import {
   deviceFromForm,
   draftDevices,
   fixedIpHints,
+  foreignLeaseMac,
   formFromDevice,
+  macOwner,
   warningHint,
+  withFirstMac,
   type DeviceField,
   type DeviceForm,
   type DeviceFormContext,
@@ -58,6 +64,8 @@ const before = ref<Device>({ name: '' });
 /** Its fixed IP and network in the draft's base: a reservation that is not new takes no renewal to take effect. */
 const baseFixedIp = ref<string>();
 const baseNetwork = ref<string>();
+/** Whether the lease's MAC, when it is not among the device's MACs, is added as its first (#98). */
+const addMac = ref(true);
 
 /** The device as the draft has it: its edit, the draft's base, or the configuration the gateway sent with the view. */
 function current(): Device {
@@ -80,6 +88,7 @@ watch(
     if (props.reserve) form.value = { ...form.value, network: props.reserve.network, fixedIp: props.reserve.ip };
     origin = draft.editOrigin();
     refused.value = draft.serverErrors[props.device.id] ?? {};
+    addMac.value = true;
     refusedForm = JSON.stringify(form.value);
     tried.value = Object.keys(refused.value).length > 0;
     error.value = '';
@@ -94,7 +103,7 @@ const networks = computed(() =>
 );
 const network = computed(() => (form.value.network ? draft.effectiveNetworks[form.value.network] : undefined));
 const leases = useLeases(() => (network.value?.type === 'lan' ? form.value.network : undefined));
-const macs = computed(() => before.value.identifiers?.macs ?? []);
+const configuredMacs = computed(() => before.value.identifiers?.macs ?? []);
 const leaseMac = computed(() => (props.reserve ? props.reserve.mac : props.device.observed.lease?.mac));
 /** The address of the current lease, when it is in the form's network (a reservation of it keeps the address). */
 const leaseIp = computed(() => {
@@ -104,6 +113,14 @@ const leaseIp = computed(() => {
 
 /** The devices as the draft has them (the other reservations, the names taken). */
 const devices = computed<Record<string, Device>>(() => draftDevices(draft.baseConfig?.devices, draft.devices));
+/** The reserved lease's MAC when it is not among the device's MACs; the dialog offers to add it (#98). */
+const foreignMac = computed(() => (props.reserve ? foreignLeaseMac(configuredMacs.value, props.reserve.mac) : undefined));
+/** The other device the foreign MAC identifies already: it cannot be added to this one. */
+const foreignOwner = computed(() => (foreignMac.value ? macOwner(foreignMac.value, props.device.id, devices.value) : undefined));
+const addingMac = computed(() => !!foreignMac.value && !foreignOwner.value && addMac.value);
+/** The device the form changes: with the lease's MAC added first when the offer is taken. */
+const edited = computed(() => (addingMac.value ? withFirstMac(before.value, foreignMac.value!) : before.value));
+const macs = computed(() => edited.value.identifiers?.macs ?? []);
 const takenNames = computed(() => {
   const out = Object.entries(devices.value)
     .filter(([id]) => id !== props.device.id)
@@ -150,7 +167,7 @@ function shown(f: DeviceField): string | undefined {
 }
 
 const title = computed(() => `Edit ${before.value.name || props.device.name}`);
-const result = computed(() => deviceFromForm(form.value, before.value, leaseMac.value));
+const result = computed(() => deviceFromForm(form.value, edited.value, leaseMac.value));
 watch(
   [open, result],
   ([o]) => {
@@ -254,6 +271,35 @@ const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
             {{ h.text }}
           </li>
         </ul>
+      </div>
+      <div v-if="foreignMac && reserve" class="rounded-md border border-border bg-surface-2 p-3 text-sm" data-testid="reserve-mac">
+        <p class="m-0">
+          The lease of <span class="mono">{{ reserve.ip }}</span> is held by MAC <span class="mono">{{ foreignMac }}</span>, which is not among the device's
+          MACs<template v-if="configuredMacs.length"> (<span class="mono">{{ configuredMacs.join(', ') }}</span>)</template>. A DHCP reservation is for the
+          device's first MAC.
+        </p>
+        <p v-if="foreignOwner" class="m-0 mt-2 text-fault-text" data-testid="reserve-mac-effect">
+          {{ foreignMac }} already identifies device {{ foreignOwner.name }}, so it cannot be added to this one<template v-if="configuredMacs.length"
+            >: the reservation is for {{ configuredMacs[0] }}, which does not hold this lease</template
+          >.
+        </p>
+        <template v-else>
+          <label class="mt-2 flex items-center gap-2 text-text">
+            <input v-model="addMac" type="checkbox" />
+            <span>Add <span class="mono">{{ foreignMac }}</span> to the device as its first MAC</span>
+          </label>
+          <p class="m-0 mt-1.5 text-xs" :class="addMac ? 'text-text-2' : 'text-fault-text'" data-testid="reserve-mac-effect">
+            <template v-if="!addMac && configuredMacs.length">
+              The reservation is for {{ configuredMacs[0] }}, which does not hold this lease: it takes effect only when the device asks for an address with that MAC.
+            </template>
+            <template v-else-if="!addMac">Without a MAC the device cannot have a reservation.</template>
+            <template v-else-if="configuredMacs.length">
+              The reservation is for {{ foreignMac }}, the MAC that holds the lease; the device keeps {{ configuredMacs.join(', ') }} as its other
+              {{ configuredMacs.length === 1 ? 'MAC' : 'MACs' }}.
+            </template>
+            <template v-else>The reservation is for {{ foreignMac }}, the MAC that holds the lease.</template>
+          </p>
+        </template>
       </div>
 
       <p v-if="server.general.length" class="field-error" role="alert" data-testid="device-form-refused">The gateway refused the device: {{ server.general.join(' ') }}</p>

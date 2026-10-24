@@ -10,10 +10,13 @@ import {
   draftDevices,
   fixedIpError,
   fixedIpHints,
+  foreignLeaseMac,
   formFromDevice,
+  macOwner,
   renewalTime,
   reservationMacs,
   warningHint,
+  withFirstMac,
   type ReservationHintContext,
 } from './deviceForm';
 import { reservationPoolHint } from './networks';
@@ -184,6 +187,26 @@ describe('the device dialog (#73)', () => {
     expect('fixed_ip' in cleared).toBe(false);
     const noNet = deviceFromForm({ ...f, network: '' }, esp);
     expect('network' in noNet).toBe(false);
+  });
+
+  it("offers the MAC of a lease that is not among the device's MACs as its first (#98)", () => {
+    const LEASE = '02:00:00:00:00:99';
+    expect(foreignLeaseMac([MAC, WIFI], WIFI.toUpperCase())).toBeUndefined();
+    expect(foreignLeaseMac([MAC], undefined)).toBeUndefined();
+    expect(foreignLeaseMac([MAC], LEASE)).toBe(LEASE);
+    expect(foreignLeaseMac([], LEASE)).toBe(LEASE);
+    expect(withFirstMac({ ...esp, identifiers: { macs: [MAC, WIFI], ipv4: ['10.10.0.60'] } }, LEASE)).toEqual({
+      ...esp,
+      identifiers: { macs: [LEASE, MAC, WIFI], ipv4: ['10.10.0.60'] },
+    });
+    expect(withFirstMac({ name: 'x' }, LEASE).identifiers).toEqual({ macs: [LEASE] });
+    // added, a new reservation stays on it (the lease's MAC is first already)
+    const reserved = deviceFromForm({ ...formFromDevice(esp), fixedIp: '10.10.0.60' }, withFirstMac(esp, LEASE), LEASE);
+    expect(reserved.identifiers).toEqual({ macs: [LEASE, MAC, WIFI] });
+    expect(valid(reserved)).toBe(true);
+    const devices: Record<string, Device> = { [ESP]: esp, [CAM]: { name: 'cam-1', identifiers: { macs: [LEASE.toUpperCase()] } } };
+    expect(macOwner(LEASE, ESP, devices)?.name).toBe('cam-1');
+    expect(macOwner(MAC, ESP, devices)).toBeUndefined();
   });
 
   it('checks the name and the fixed IP', () => {

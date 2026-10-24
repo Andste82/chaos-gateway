@@ -120,28 +120,42 @@ func running(t *testing.T, up Exchanger, cfg *model.DnsServiceConfig, mod func(*
 	if cfg != nil {
 		s.SetConfig(cfg)
 	}
-	l, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// The port is found on UDP and then taken on TCP too, so another process may have taken the TCP port in
+	// between (under load, with other test packages running): try again with a new port.
+	var addr string
+	var done chan error
+	var cancel context.CancelFunc
+	for attempt := 0; ; attempt++ {
+		l, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr = l.LocalAddr().String()
+		_ = l.Close()
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		done = make(chan error, 1)
+		go func() { done <- s.Serve(ctx, addr) }()
+		select {
+		case <-s.Ready():
+		case err := <-done:
+			cancel()
+			if attempt < 9 {
+				continue
+			}
+			t.Fatalf("the proxy does not listen: %v", err)
+		case <-time.After(5 * time.Second):
+			cancel()
+			t.Fatal("the proxy does not listen")
+		}
+		break
 	}
-	addr := l.LocalAddr().String()
-	_ = l.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Serve(ctx, addr) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
 			t.Errorf("serve: %v", err)
 		}
 	})
-	select {
-	case <-s.Ready():
-	case err := <-done:
-		t.Fatalf("the proxy does not listen: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the proxy does not listen")
-	}
 	return s, addr
 }
 

@@ -1392,8 +1392,8 @@ applying a revision does to overlays" in "Overlays in the engine and over the AP
   input order; `TestTheWinnerOfALevelDoesNotDependOnTheInputOrder` pins the fix. The tests E1–E8
   and E12 exist twice: as pure domain tests (`resolve_test.go`, with the example configuration) and
   through the store (`internal/overlay/precedence_test.go`: write, replace, expire, reset, then
-  resolve); E9 is the compiler's golden of M10 (`TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate`, measured on the real kernel by `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit`), E10 follows with the tunnel faults, E11 in M21. E5 resolves the DNS family, which only takes
-  effect in the kernel from M20; its resolution is already tested.
+  resolve); E9 is the compiler's golden of M10 (`TestE9ABadLTEProfileOnANetworkGivesEveryDeviceItsOwnQueueWithTheFullRate`, measured on the real kernel by `TestAnIotRateOfTwoMbitGivesEveryDeviceOfTheNetworkItsOwnTwoMbit`), E10 follows with the tunnel faults, E11 in M21. E5 resolves the DNS family, which takes
+  effect in the DNS proxy since M20 (`compiler/dns.go`, "DNS faults and hostname selectors (M20)").
 - **Classification tables** (`domain/table.go`, `domain/sources.go`). `World.Sources(identity)` lists
   the sources of traffic (every device with its addresses, every address range that identifies a
   device, and the stretches of network addresses that no device owns); `World.Table(source,
@@ -1562,8 +1562,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DNS M20, TLS M21,
-  DHCP M23) are refused with `unsupported_feature` before they reach the owner. The
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: TLS M21,
+  DHCP M23; the kind `dns` has been supported since M20) are refused with `unsupported_feature` before they reach the owner. The
   kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
   mtu and tunnel families since M10 (see "Extended faults (M10)"), the kind `profile` since M11 (see
   "Profiles (M11)").
@@ -1637,8 +1637,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   interface is the one the source's network arrives on), so the policy rules and the tables they
   select are evaluated by the kernel and not re-implemented; `table` is 100 for traffic from a test
   network, and "no route" is an answer (`unreachable`, with the kernel's message), not an error. A
-  hostname destination has no address to look up: no route (and no kernel section) until M20 resolves
-  names.
+  hostname destination has no address to look up: no route (and no kernel section). Since M20 `explain` judges
+  the rules and the DNS faults that name it, and a destination that is an address takes the names the device got for it.
 - **A data race this found.** `domain.IsNormalized` (every compile calls it through `NewWorld`) stored
   each map entry back into the configuration it only looked at; with the state owner validating an
   overlay while the apply loop compiled, `-race` reported it. A read-only visit does not write any more
@@ -2534,11 +2534,11 @@ and LAST_ACK.
   names its ICMP type. A drop rule on `udp/53`
   is what `explain` names for the gateway's DNS address and for 169.254.100.2 alike
   (`TestExplainNamesTheRuleThatDecidesAndFollowsOverlaysAndOrder`). A hostname destination has no address
-  to judge and is not explained by rules (the rules that name hostnames are not compiled before M20).
+  to judge; since M20 the rules that name hostnames are compiled and `explain` matches them against the names the device got for the address.
   This resolves P2-M8a-07.
 - **Endpoints.** `GET /rules` lists the configured rules in the order of `access_rule_order` with `state`
   (`effective` when the rule is in the packet path, `disabled` for `enabled: false` and for a rule the
-  kernel does not run: the hostname rule before M20) and `counters` (the active revision only), behind
+  kernel does not run: before M20 the hostname rule) and `counters` (the active revision only), behind
   `system_rules` (the anti-lockout rule with its counter). `GET /rules/{id}` takes an id or a name.
   `GET /overlays` and `/overlays/{id}` show a rule overlay with `state` and `counters` too;
   `/overlays?kind=rule` lists them. `GET /capabilities` has the overlay kind `rule` and the feature
@@ -3287,7 +3287,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 
 - **The catalogue** (`domain/builtin.go`). `normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`,
   `intermittent` have fixed UUIDs (version 5 of the name) and reserved names; `dns-broken` and `tls-broken` exist in the
-  catalogue and stay unavailable until M20 and M21. They are not part of any configuration: a key equal to a built-in
+  catalogue; `dns-broken` has been available since M20, `tls-broken` stays unavailable until M21. They are not part of any configuration: a key equal to a built-in
   UUID and a name equal to a built-in name (any case) are `reserved_name`, so a configured profile can never shadow one.
   Custom profiles are the `profiles` of the configuration, keyed by UUID. They are created, changed and deleted with a
   candidate revision like every configured object (P2-M11-02; decided by the maintainer on 2026-10-11: no endpoints of
@@ -4550,11 +4550,11 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   and resolves every reference to its UUID. That resolved scenario is the run's `snapshot`, with the revision
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
-  naming the milestone: a `dns` step (M20), `tls`
-  (M21), `dhcp` (M23), a profile with a DNS or TLS part, and a `wait` for a host name (M20), and, on a gateway
+  naming the milestone: a `tls`
+  (M21) or `dhcp` (M23) step, a profile with a TLS part (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20), and, on a gateway
   without a capture volume, `capture: true` or a `capture` step (see Packet captures (M17)); `GET
-  /capabilities` lists `step_types` (profile, fault, rule, wireguard, capture, wait, remove, restore) and, since M16, the
-  `check_types` (a check of `tls_rejected` or `tls_accepted` is M21, one for a host name M20). Nothing is stored
+  /capabilities` lists `step_types` (profile, fault, rule, dns since M20, wireguard, capture, wait, remove, restore) and, since M16, the
+  `check_types` (a check of `tls_rejected` or `tls_accepted` is M21; one for a host name works since M20). Nothing is stored
   for a refused scenario.
 - **One run per target, the queue.** Two targets overlap when they share a device or a network
   (`scopeTokens`: the ids of a scope's devices from the snapshot, a group's members whether the snapshot knows
@@ -4766,8 +4766,8 @@ Plan §2.10 and M16. A scenario's `checks` evaluate what the gateway observes of
 that is tied to a step, and a fault, rule or profile of a run that matched no packet is reported, because a `passed` run
 whose fault never hit proves nothing. M15 refused a scenario with checks (`unsupported_feature`, M16); this build runs
 them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `traffic_seen`, `traffic_not_seen` and
-`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` arrive with M21 and a check for a host name
-(a `destination` or an `except` with `hostname`) with M20: both are still `422 unsupported_feature`.
+`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` arrive with M21 (`422 unsupported_feature` until then); a check for a host name
+(a `destination` or an `except` with `hostname`) came with M20.
 
 ### How it works
 
@@ -5016,8 +5016,8 @@ operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`
   interface per network of its members, the members of that network in its filter), a network or `global` (every bridge and
   the WireGuard interfaces of the role test), and adds the protocol, the ports and the destination: an address or prefix, a network
   (`domain.World.NetworkPrefixes`, the same prefixes an access rule uses), or `uplink` (every address outside the configured
-  networks and the management network, `World.NonUplinkPrefixes`, as the filter's `NotPeers`). A host name is `422
-  unsupported_feature` until M20, a `remote_network` source `validation_failed`. The **uplink** is the uplink interface, all
+  networks and the management network, `World.NonUplinkPrefixes`, as the filter's `NotPeers`). A host name is
+  the addresses the gateway's DNS answered for it since M20 (`422 validation_failed` `unresolved_hostname` before one has), a `remote_network` source `validation_failed`. The **uplink** is the uplink interface, all
   packets, after NAT. A scope that spans more than 16 interfaces is refused.
   **The admin tunnel is never recorded.** A WireGuard network of the role `management` is part of the management network
   (plan §2.16) and carries the admin's TLS and SSH sessions, so no scope resolves to its interface: `global` skips it, and
@@ -5241,7 +5241,7 @@ what they leave out.
   directory is made with mode 0700 and its files have 0600 (captures hold raw traffic, a key log is a secret), the JUnit file 0644 (P4-AUDIT-30).
   `--no-queue` is `?queue=false` (`409 target_busy`).
 - **`--to` of the fault flags** is `uplink`, an address (a bare one is a /32, an IPv6 one a /128) or prefix, a hostname (`mqtt.example.com`,
-  `*.example.com`; the gateway refuses it as `unsupported_feature` until M20), or the name of a network; `network:<name>` and
+  `*.example.com`; the gateway accepts it since M20), or the name of a network; `network:<name>` and
   `hostname:<name>` say which is meant where the form is ambiguous (a network may be called `lab.net`) (P4-AUDIT-35).
 - **The lease is renewed automatically.** A run that is waited for gets a lease (30 s unless `--lease` says otherwise, `0`
   for none) and the CLI renews it at a third of its length until the run has ended, so a CI job that is killed leaves no
@@ -5577,7 +5577,7 @@ checks, waits and captures that name a host use the same addresses.
   reports the addresses it gave, a short TTL its TTL. A call that fails does not stop the answer (decision 7).
 - **The engine** (`engine/hostsets.go`). `RecordResolutions` keeps a mirror of the sets (client, address, the time each element runs
   out, the names it has), writes only what is new or has less than half of its lifetime left, and gives the writes of all callers that
-  arrive meanwhile to the executor as one request (group commit). The lifetime is max(TTL, 10 minutes). The mirror takes the
+  arrive meanwhile to the executor as one request (group commit; more than `executor.MaxDNSElements` elements go in several requests, and a request that a plan's replacement of the set overtook is not entered into the mirror). The lifetime is max(TTL, 10 minutes). The mirror takes the
   flows of every read of the connections (`refresh`): an element with a flow of its client to its address and less than half of its
   lifetime left is written again with the full lifetime, so a long-lived connection keeps its fault past a short TTL and past ten
   minutes. After a restart the elements the kernel still holds are adopted from the listing the first apply reads back, with the time they have left.
@@ -5603,7 +5603,8 @@ checks, waits and captures that name a host use the same addresses.
   entry names the overlay when the fault changed the answer, and the engine publishes `dns_fault_triggered` (at most once per overlay and device in 10 s).
   A DNS fault competes only with DNS faults (E5). The state of a DNS overlay is `effective` while it is in a list; `GET /overlays` names what overrides it.
   The counter of a DNS overlay, and of the `dns` part of an activated profile, is the number of answers the fault changed (packets, no bytes), kept in memory like the log (its epoch is the start of the API);
-  a DNS step, or a "DNS broken" step, that changed no answer is a `zero_hit` of the run ("the DNS fault of step X changed no answer").
+  a DNS step that changed no answer is a `zero_hit` of the run ("the DNS fault of step X changed no answer"); a profile step, "DNS broken" included, is judged by the counter of its activation, which adds
+  the answers its `dns` part changed to the packets of its other parts, and says "the profile of step X matched no packet".
 - **Hardcoded resolvers** (`compiler/service.go`). A network with `dns.redirect_hardcoded` gets the DNAT of the gateway's address for every other destination of UDP and TCP port 53 too, except what lies in
   its own segments (the network and the networks behind its routers: switched or routed back out of the bridge, never ours, §2.2); an access rule judges a redirected query by
   the resolver the device meant. `dns.block_dot` drops TCP 853 of the network in the chain `dot_block`, jumped to after the access rules (an `allow` rule is an exception) and before the
@@ -5648,9 +5649,9 @@ Taken by best practice where the plan leaves room (the one that needs the mainta
 ### Tests
 
 Level 0, all run here: `compiler/hostnames_test.go` (sets, rules, order, per-device rules, MTU, the nft parser accepts the transaction: `scenarioHostnames` is in `transactionScenarios`), `dns_test.go` (the entries of the proxy's list, E5, order),
-`dnsredirect_test.go`, `domain` (the unavailable families), `executor/dnssets_test.go` (decode and scope of the operation, the transaction's JSON, refresh and its fallback, an update beside a plan on the executor and over the socket, one request at a time),
+`dnsredirect_test.go`, `forward_test.go` (the responder form of a hostname rule), `domain` (the unavailable families, the matching of `*.suffix`), `executor/dnssets_test.go` (decode and scope of the operation, the transaction's JSON, refresh and its fallback, an update beside a plan on the executor and over the socket, one request at a time),
 `apply/dnssets_test.go` (the elements survive every apply on the simulated kernel, verify does not compare them, a set that goes), `engine/hostsets_test.go` and `hostsets_internal_test.go` (the set holds the report when the call returns, no second write,
-refresh at half, the group commit, a flow keeps an element alive, an update beside a held plan, an update for a replaced set waits and lands in the new one, adoption after a restart, the names),
+refresh at half, the group commit, a flow keeps an element alive, an update beside a held plan, an update for a replaced set waits and lands in the new one, a request that was on its way while a plan replaced the set is not remembered as written, a large batch is split into requests the executor takes, adoption after a restart, the names),
 `dnsproxy/faults_test.go` (every action over UDP and TCP, sources, names, order, the report before the answer, CNAMEs, batching, dedup, a failing report), `api/dnsfaults_test.go` (the configuration, state, resolutions endpoint, events, capabilities), `run/hostnames_test.go`
 (checks and a wait for a host), the capture of a host in `api/captures_test.go`. Web: `lib/faults.test.ts` (DNS chips), `lib/rules.test.ts`; the Playwright specs of profiles, rules, the Linux view and the scenarios pass.
 

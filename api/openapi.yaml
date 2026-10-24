@@ -6033,6 +6033,7 @@ components:
         rcode:
           type: string
           example: NOERROR
+          description: The response code of the answer; `TIMEOUT` for a query that a `timeout` fault left without an answer (M20).
         answers:
           type: array
           items: {type: string}

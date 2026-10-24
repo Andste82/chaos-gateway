@@ -341,6 +341,38 @@ func TestEveryRuleMatchesForwardedConnectionsWithTheTargetAsResponder(t *testing
 	}
 }
 
+// A rule with a hostname destination (M20) has its responder form too: the DNS-derived set is looked up with the
+// device that answers (the reply source) and the peer that opened the connection (the original source), the
+// pair in the order the proxy reports it (the device that asked, then the address in the answer), and the Go mirror
+// matches it with the names the answering device got for the peer.
+func TestARuleWithAHostnameDestinationMatchesForwardedConnectionsWithTheTargetAsResponder(t *testing.T) {
+	w := forwardWorld(t)
+	w.addConfigRule(ruleA, `{name: by-name, source: {device: esp32-42}, destination: {hostname: broker.example.com}, protocol: tcp, ports: [8883], action: drop}`)
+	tg := w.compile(nil)
+	if tg.HasErrors() || len(tg.DNSSets) != 1 {
+		t.Fatalf("problems %+v, sets %+v", tg.Problems, tg.DNSSets)
+	}
+	a := tg.Access.Rules[0]
+	set := tg.DNSSets[0].Name
+	rules := renderRules(chainOf(t, tg, AccessForwardChain))
+	want := []string{
+		fmt.Sprintf(`ct original ip saddr @%s ct original ip saddr . ct original ip daddr @%s meta l4proto tcp ct original proto-dst 8883 counter %q last drop`, a.SourceSet, set, a.Counter),
+		fmt.Sprintf(`ct status dnat ct reply ip saddr @%s ct reply ip saddr . ct original ip saddr @%s meta l4proto tcp ct reply proto-src 8883 counter %q last drop`, a.SourceSet, set, a.Counter),
+	}
+	if !slices.Equal(rules, want) {
+		t.Fatalf("access_forward:\n%s\nwant\n%s", strings.Join(rules, "\n"), strings.Join(want, "\n"))
+	}
+	peer, target := netip.MustParseAddr("198.51.100.7"), netip.MustParseAddr("10.10.0.42")
+	tup := ForwardedTuple(peer, netip.MustParseAddr("203.0.113.1"), "tcp", 8080, target, 8883)
+	if r := tg.Access.Winner(tup); r != nil {
+		t.Errorf("a forwarded connection matched without a name: %s", r.Name)
+	}
+	tup.PeerNames = []string{"broker.example.com"}
+	if r := tg.Access.Winner(tup); r == nil || r.ID != ruleA {
+		t.Errorf("a forwarded connection from a peer the device resolved: %+v", r)
+	}
+}
+
 // "Also cut existing connections" reaches forwarded connections too: the cut window of the forward chain
 // has the responder form of the cutting rule (the reset goes to the peer that opened the connection) and
 // the responder forms of the rules before it as returns; the input chain's window has none.

@@ -864,6 +864,52 @@ func TestAConntrackEventTriggersAnObservationWithoutWaitingForThePoll(t *testing
 	})
 }
 
+// issue #91 test: the final counters of a [DESTROY] event of the conntrack watch reach the device's
+// traffic in the next read, although that read no longer sees the connection.
+func TestADestroyEventOfTheWatchCountsInTheNextRead(t *testing.T) {
+	h, _ := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.31", macCfg)})
+	h.k.SetConntrack("tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=1 dport=2 packets=1 bytes=100 src=203.0.113.10 dst=10.10.0.31 sport=2 dport=1 packets=1 bytes=100 [ASSURED] mark=0 use=1\n")
+	h.observe() // the first read learns the counters
+	h.clk.Advance(time.Second)
+	h.observe()
+	if d := h.device(devID); d == nil || !d.TrafficKnown || d.UploadBps != 0 || d.FlowsActive != 1 {
+		t.Fatalf("%+v", d)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := h.e.FollowConntrack(ctx, 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !h.k.HasConntrackWatch() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !h.k.HasConntrackWatch() {
+		t.Fatal("the watch never opened")
+	}
+	// the connection moves 2000 bytes up and 4000 down, then ends: no read sees it any more
+	h.k.SetConntrack("")
+	h.k.ScriptConntrackEvent(`[DESTROY] tcp      6 src=10.10.0.31 dst=203.0.113.10 sport=1 dport=2 packets=5 bytes=2100 src=203.0.113.10 dst=10.10.0.31 sport=2 dport=1 packets=6 bytes=4100 [ASSURED] mark=0 delta-time=2 id=7`)
+	for h.e.EndedPending() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.e.EndedPending() != 1 {
+		t.Fatalf("the destroy event was not kept: %d", h.e.EndedPending())
+	}
+	h.clk.Advance(time.Second)
+	h.observe()
+	// 2000 and 4000 bytes over the two seconds since the first read
+	if d := h.device(devID); d == nil || !d.TrafficKnown || d.UploadBps != 1000 || d.DownloadBps != 2000 || d.FlowsActive != 0 {
+		t.Fatalf("%+v", d)
+	}
+	if n := h.e.EndedPending(); n != 0 {
+		t.Errorf("the read did not take the destroy event: %d left", n)
+	}
+}
+
 func TestConcurrentICMPFlowsDoNotCollide(t *testing.T) {
 	h, _ := dhcpHarness(t)
 	h.mustApply(h.revision(withDHCPAndDevice))

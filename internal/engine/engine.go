@@ -263,6 +263,11 @@ type Engine struct {
 	conntrackWatching atomic.Bool
 	conntrackMu       sync.Mutex
 	lastConntrack     time.Time
+	// ended are the final counters of the connections the watch reported destroyed since the last
+	// conntrack read, oldest first (issue #91): the next read adds what each moved after the read
+	// before, which no read sees any more.
+	endedMu sync.Mutex
+	ended   []FlowCounters
 	// hostChanged is closed, and replaced by a new channel, when the state owner takes an observed
 	// host that differs from the one before (PreviewAwaitingUplink waits for it).
 	hostMu      sync.Mutex

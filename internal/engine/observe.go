@@ -128,7 +128,14 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 	// the connections: addresses that are in use, and hosts behind tunnels. Once a watch streams
 	// (M6a-04), the ticker's own re-read is a fallback only, at most every conntrackFallback: the
 	// watch already triggers a fresh read whenever something actually changed.
-	if fromTick && e.conntrackWatching.Load() && e.conntrackFresh() {
+	reuse := fromTick && e.conntrackWatching.Load() && e.conntrackFresh()
+	// the connections the watch saw end are taken before the read (issue #91): one that ends while
+	// the read runs is still in it, or is reported after it, and then waits for the next read
+	var ended []FlowCounters
+	if !reuse {
+		ended = e.takeEnded()
+	}
+	if reuse {
 		obs.Active, obs.UnknownSources = e.lastActive()
 	} else if cout, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadConntrack}); err == nil && len(cout.Data) > 0 {
 		var flows []linux.Conntrack
@@ -136,18 +143,16 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 			behind := routedPrefixes(snap)
 			seen := map[netip.Addr]bool{}
 			obs.ConntrackRead = true
+			obs.Ended = ended
 			for _, f := range flows {
-				ip, err := netip.ParseAddr(f.Original.Src)
-				if err != nil {
+				fc, forwarded, ok := flowCounters(f)
+				if !ok {
 					continue
 				}
+				ip := fc.Src
 				obs.Active[ip] = true
-				fc := FlowCounters{Key: flowID(f), Src: ip, Up: Traffic{f.Original.Packets, f.Original.Bytes}, Down: Traffic{f.Reply.Packets, f.Reply.Bytes}}
-				if target, ok := forwardTarget(f); ok {
-					obs.Active[target] = true
-					fc.Dst = target // a forward's traffic is the target device's, not the gateway address's
-				} else if dst, err := netip.ParseAddr(f.Original.Dst); err == nil {
-					fc.Dst = dst
+				if forwarded {
+					obs.Active[fc.Dst] = true
 				}
 				obs.Flows = append(obs.Flows, fc)
 				if !seen[ip] && inAny(behind, ip) {
@@ -164,6 +169,9 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 		e.logObserveError(err)
 		obs.ObserveError = err.Error()
 		obs.Active, obs.UnknownSources = e.lastActive()
+	}
+	if !obs.ConntrackRead {
+		e.returnEnded(ended) // no read to count them in: they wait for the next one
 	}
 	if e.cfg.DHCP != nil {
 		if ls, err := e.cfg.DHCP.Leases(ctx); err == nil {
@@ -220,6 +228,74 @@ func forwardTarget(f linux.Conntrack) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return r, true
+}
+
+// flowCounters turns a tracked connection into its counters: Src is the original source, Dst the
+// original destination or, for a port forward, the target device (forwarded is then set), since a
+// forward's traffic is the target device's, not the gateway address's.
+func flowCounters(f linux.Conntrack) (fc FlowCounters, forwarded, ok bool) {
+	ip, err := netip.ParseAddr(f.Original.Src)
+	if err != nil {
+		return FlowCounters{}, false, false
+	}
+	fc = FlowCounters{Key: flowID(f), Src: ip, Up: Traffic{f.Original.Packets, f.Original.Bytes}, Down: Traffic{f.Reply.Packets, f.Reply.Bytes}}
+	if target, ok := forwardTarget(f); ok {
+		fc.Dst, forwarded = target, true
+	} else if dst, err := netip.ParseAddr(f.Original.Dst); err == nil {
+		fc.Dst = dst
+	}
+	return fc, forwarded, true
+}
+
+// maxEnded bounds the destroyed connections kept for the next conntrack read: while nothing reads
+// (the poller is not running), the oldest are kept and later ones dropped.
+const maxEnded = 16384
+
+// noteConntrackEvent keeps the final counters of a connection the conntrack watch reports destroyed
+// (issue #91): with nf_conntrack_acct on, a [DESTROY] event carries what the connection moved over
+// its whole life, including what it moved after the last read. Other events, and a destroy without
+// counters, carry nothing to keep.
+func (e *Engine) noteConntrackEvent(raw json.RawMessage) {
+	var ev linux.ConntrackEvent
+	if json.Unmarshal(raw, &ev) != nil || ev.Type != "destroy" {
+		return
+	}
+	if ev.Original.Packets == 0 && ev.Reply.Packets == 0 && ev.Original.Bytes == 0 && ev.Reply.Bytes == 0 {
+		return
+	}
+	fc, _, ok := flowCounters(ev.Conntrack)
+	if !ok {
+		return
+	}
+	e.endedMu.Lock()
+	defer e.endedMu.Unlock()
+	if len(e.ended) < maxEnded {
+		e.ended = append(e.ended, fc)
+	}
+}
+
+// takeEnded returns the destroyed connections kept since the last take, oldest first, and forgets them.
+func (e *Engine) takeEnded() []FlowCounters {
+	e.endedMu.Lock()
+	defer e.endedMu.Unlock()
+	out := e.ended
+	e.ended = nil
+	return out
+}
+
+// returnEnded puts taken connections back, ahead of the ones that ended since, when the read they were
+// taken for did not happen.
+func (e *Engine) returnEnded(ended []FlowCounters) {
+	if len(ended) == 0 {
+		return
+	}
+	e.endedMu.Lock()
+	defer e.endedMu.Unlock()
+	all := append(ended, e.ended...)
+	if len(all) > maxEnded {
+		all = all[:maxEnded]
+	}
+	e.ended = all
 }
 
 func (e *Engine) setActive(a map[netip.Addr]bool, unknown []netip.Addr) {

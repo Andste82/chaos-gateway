@@ -1048,7 +1048,13 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   go stale for longer than the fallback window. `GET /flows` and `Engine.Flows()` always read conntrack
   live on demand, independent of the watch or the poller. Each flow also carries `StartedAt`
   (M6a-03, `nf_conntrack_timestamp`, read with `conntrack -o ktimestamp`'s `start=` field) and the API
-  exposes it as `started_at` when the kernel reports one.
+  exposes it as `started_at` when the kernel reports one. A `[DESTROY]` event carries the connection's
+  final counters (`nf_conntrack_acct`); the engine keeps them (`noteConntrackEvent`, at most
+  `maxEnded`) until the next conntrack read takes them as `observation.Ended` (issue #91), and the
+  tracker adds what each moved after the last read that saw it (`tracker.readFlows`). The read takes
+  them before it runs, so a connection that ends during the read waits for the next one; a destroy
+  reported only after the read that already missed the connection finds its counters among the
+  tracker's `gone` connections, kept for one read, so nothing counts twice.
 - **Identity updates.** A change of the addresses of known devices makes a desired state flagged
   `IdentityOnly`; the apply loop then sends `NftAddElements` and `NftDelElements` for the changed sets
   instead of rebuilding the ruleset, and verifies. A device that has no set yet (a new one) needs a full

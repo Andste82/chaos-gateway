@@ -71,6 +71,15 @@ func TestParseConntrackEventLine(t *testing.T) {
 		}
 	}
 
+	// issue #91: with nf_conntrack_acct on, a destroy carries the final counters of both directions
+	destroy := `[DESTROY] tcp      6 src=10.10.0.10 dst=203.0.113.10 sport=45566 dport=80 packets=12 bytes=1490 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=45566 packets=10 bytes=48211 [ASSURED] mark=0 delta-time=3 id=3260047744`
+	ev, ok = ParseConntrackEventLine(destroy)
+	if !ok || ev.Type != "destroy" || ev.ID != 3260047744 || ev.TimeoutSeconds != 0 || ev.State != "" ||
+		ev.Original.Src != "10.10.0.10" || ev.Original.SPort != 45566 || ev.Reply.Src != "203.0.113.10" ||
+		ev.Original.Packets != 12 || ev.Original.Bytes != 1490 || ev.Reply.Packets != 10 || ev.Reply.Bytes != 48211 {
+		t.Errorf("%+v %v", ev, ok)
+	}
+
 	// an ICMP line's echo id inside a tuple must not be confused with the trailing entry id
 	icmp := `[NEW] icmp     1 29 src=10.10.0.10 dst=203.0.113.10 type=8 code=0 id=7 src=203.0.113.10 dst=10.10.0.10 type=0 code=0 id=7 id=99`
 	ev, ok = ParseConntrackEventLine(icmp)

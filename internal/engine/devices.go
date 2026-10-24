@@ -79,6 +79,9 @@ type observation struct {
 	// ticked observation that reused the last read, or whose read failed, has neither.
 	ConntrackRead bool
 	Flows         []FlowCounters
+	// Ended are the final counters of the connections the conntrack watch reported destroyed since
+	// the previous read, oldest first (issue #91); set only with ConntrackRead.
+	Ended []FlowCounters
 	// ObserveError is set when reading the connections failed; the snapshot carries it so the API and
 	// the health check can tell a stale reading from a fresh one with nothing in it.
 	ObserveError string
@@ -128,6 +131,11 @@ type tracker struct {
 	// that are cumulative for the life of a connection into what moved since.
 	flows    map[string]FlowCounters
 	lastRead time.Time
+	// gone are the connections the last read no longer saw and no destroy event had reported, with
+	// their counters as of the read before it: the watch can report a destroy only after the read
+	// that already missed the connection, and what that read counted must not count again (issue
+	// #91). They are kept for one read.
+	gone map[string]FlowCounters
 	// traffic holds each device's byte deltas of the reads within rateWindow.
 	traffic map[string][]trafficSample
 	// leases is the expiry of each MAC's active lease as last seen: a new or renewed lease is evidence.
@@ -170,9 +178,11 @@ func (t *tracker) discovered() []domain.DiscoveredDevice {
 }
 
 // readFlows turns a conntrack read into what moved per address since the previous read. Each
-// connection counts by itself: one that is new since the previous read brings all its counters, one
-// that ended brings nothing, so a long connection that ends does not hide the traffic of the others.
-// The first read only learns the counters.
+// connection counts by itself: one that is new since the previous read brings all its counters, so a
+// long connection that ends does not hide the traffic of the others. One that ended since the
+// previous read is gone from this one; the final counters of its destroy event (obs.Ended) bring what
+// it moved after the previous read, or all of it when it started after that read (issue #91). The
+// first read only learns the counters.
 func (t *tracker) readFlows(obs observation) map[netip.Addr]*addrDelta {
 	out := map[netip.Addr]*addrDelta{}
 	get := func(a netip.Addr) *addrDelta {
@@ -184,11 +194,10 @@ func (t *tracker) readFlows(obs observation) map[netip.Addr]*addrDelta {
 		return d
 	}
 	first := t.lastRead.IsZero()
-	next := make(map[string]FlowCounters, len(obs.Flows))
-	for _, f := range obs.Flows {
-		next[f.Key] = f
-		up, down := f.Up, f.Down
-		p, known := t.flows[f.Key]
+	// since returns what f moved since p, the counters it had when it was last read, if known. Smaller
+	// counters under a known key are a new connection with the same tuple: all of it is new.
+	since := func(f, p FlowCounters, known bool) (up, down Traffic) {
+		up, down = f.Up, f.Down
 		switch {
 		case known && p.Up.Bytes <= up.Bytes && p.Down.Bytes <= down.Bytes && p.Up.Packets <= up.Packets && p.Down.Packets <= down.Packets:
 			up = Traffic{up.Packets - p.Up.Packets, up.Bytes - p.Up.Bytes}
@@ -196,21 +205,58 @@ func (t *tracker) readFlows(obs observation) map[netip.Addr]*addrDelta {
 		case first:
 			up, down = Traffic{}, Traffic{}
 		}
-		// (smaller counters under a known key: a new connection with the same tuple, all of it is new)
+		return up, down
+	}
+	add := func(f FlowCounters, up, down Traffic, active bool) *addrDelta {
+		n := 0
+		if active {
+			n = 1
+		}
 		s := get(f.Src)
 		s.upload += up.Bytes
 		s.download += down.Bytes
-		s.flows++
-		s.sent = s.sent || up.Packets > 0 || (first && !known)
+		s.flows += n
+		s.sent = s.sent || up.Packets > 0
 		if f.Dst.IsValid() {
 			d := get(f.Dst)
 			d.upload += down.Bytes
 			d.download += up.Bytes
-			d.flows++
+			d.flows += n
 			d.sent = d.sent || down.Packets > 0
 		}
+		return s
 	}
-	t.flows = next
+	if !first {
+		for _, f := range obs.Ended {
+			// a destroy reported only after the read that already missed the connection finds its
+			// counters among the gone ones
+			p, known := t.flows[f.Key]
+			if !known {
+				p, known = t.gone[f.Key]
+			}
+			up, down := since(f, p, known)
+			add(f, up, down, false)
+			// those counters are used up: a connection with the same tuple in this read, or a later
+			// destroy of one, is a new connection and brings all of its own
+			delete(t.flows, f.Key)
+			delete(t.gone, f.Key)
+		}
+	}
+	next := make(map[string]FlowCounters, len(obs.Flows))
+	for _, f := range obs.Flows {
+		next[f.Key] = f
+		p, known := t.flows[f.Key]
+		up, down := since(f, p, known)
+		s := add(f, up, down, true)
+		s.sent = s.sent || (first && !known)
+	}
+	gone := map[string]FlowCounters{}
+	for k, f := range t.flows {
+		if _, ok := next[k]; !ok {
+			gone[k] = f
+		}
+	}
+	t.flows, t.gone = next, gone
 	return out
 }
 

@@ -798,10 +798,11 @@ func TestWatchStreamsEventsAndStoppingItKillsTheCommand(t *testing.T) {
 
 	// a line the parser rejects is skipped, not delivered as a zero-value event
 	fs.scripted <- "garbage"
-	fs.scripted <- `[DESTROY] tcp      6 src=10.10.0.10 dst=203.0.113.10 sport=1 dport=80 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=1 id=1`
+	// issue #91: a destroy passes its final counters through
+	fs.scripted <- `[DESTROY] tcp      6 src=10.10.0.10 dst=203.0.113.10 sport=1 dport=80 packets=3 bytes=180 src=203.0.113.10 dst=10.10.0.10 sport=80 dport=1 packets=2 bytes=5000 [ASSURED] mark=0 delta-time=1 id=1`
 	select {
 	case ev := <-events:
-		if ev.Type != "destroy" {
+		if ev.Type != "destroy" || ev.Original.Bytes != 180 || ev.Reply.Packets != 2 || ev.Reply.Bytes != 5000 {
 			t.Errorf("%+v", ev)
 		}
 	case <-time.After(time.Second):

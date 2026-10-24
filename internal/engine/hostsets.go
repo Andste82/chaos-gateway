@@ -553,13 +553,3 @@ func (h *hostSets) addrs(pattern string) []netip.Addr {
 	sort.Slice(out, func(i, j int) bool { return out[i].Less(out[j]) })
 	return out
 }
-
-// HostnameMatches reports whether a selector (an exact name or `*.suffix`) matches one of the names.
-func hostnameMatchesAny(pattern string, names []string) bool {
-	for _, n := range names {
-		if domain.HostnameMatches(pattern, n) {
-			return true
-		}
-	}
-	return false
-}

@@ -219,11 +219,6 @@ type hostRule struct {
 	expr []any
 }
 
-// isHostname reports whether a candidate selects a hostname.
-func isHostname(c domain.Candidate) bool {
-	return c.Match.Destination != nil && c.Match.Destination.Hostname != nil
-}
-
 // hostFaultRules turns the hostname candidates of the sources' tables into the rules that stand in
 // front of the lookup levels: one rule per fault (and per device, for a fault that has a queue for
 // each), strongest first, matching the source, the traffic and the DNS-derived set of the selector.

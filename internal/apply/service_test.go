@@ -7,6 +7,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -172,5 +173,57 @@ func TestARestartedHolderLeavesAnOldNamespaceThatIsReplaced(t *testing.T) {
 	st, _ = apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(e.compile(holder)))
 	if st.Service == nil || !st.Service.HolderMatches || len(st.Service.PeerAddrs) != 1 {
 		t.Errorf("%+v", st.Service)
+	}
+}
+
+// plan §3.3, "Redirect inside": the namespace holds the chain that redirects the connections that arrive for other
+// addresses to the TLS responder, and a namespace that lacks it (an earlier version made it, or its holder was
+// replaced and the pair made anew) gets it with the next apply.
+func TestTheServiceNamespaceRedirectsOtherAddressesToTheTLSResponder(t *testing.T) {
+	e := newEnv(t)
+	e.k.ServiceNamespace("cgsvc")
+	tg := e.compile(withService)
+	e.apply(tg)
+	list := func() string {
+		r, err := e.k.InService("cgsvc").Run(context.Background(), executor.Command{Tool: executor.ToolNft, Args: []string{"-j", "list", "table", "inet", "chaosgw"}})
+		if err != nil || r.Exit != 0 {
+			t.Fatalf("%v %+v", err, r)
+		}
+		return r.Stdout
+	}
+	got := list()
+	for _, want := range []string{`"name":"svc_redirect"`, `"hook":"prerouting"`, `"type":"nat"`, `"redirect":{"port":9443}`, `"169.254.100.2"`, `"svc1"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the namespace's table lacks %s:\n%s", want, got)
+		}
+	}
+	st, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tg))
+	if err != nil || st.Service == nil || !st.Service.Redirect {
+		t.Fatalf("the state does not show the redirect: %+v %v", st.Service, err)
+	}
+
+	// a namespace without the chain does not verify and is healed by the next apply
+	e.k.InService("cgsvc").Reset()
+	st, err = apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tg))
+	if err != nil || st.Service.Redirect {
+		t.Fatalf("%+v %v", st.Service, err)
+	}
+	found := false
+	for _, m := range apply.Verify(tg, st) {
+		found = found || m.Subsystem == "service"
+	}
+	if !found {
+		t.Error("verify does not notice the missing redirect")
+	}
+	res := e.apply(e.compile(withService))
+	if !strings.Contains(strings.Join(res.Plan.Summary, "\n"), "no redirect to the TLS responder") {
+		t.Errorf("the redirect is not made again:\n%s", strings.Join(res.Plan.Summary, "\n"))
+	}
+	if !strings.Contains(list(), `"redirect":{"port":9443}`) {
+		t.Error("the redirect is still missing")
+	}
+	// and an apply that finds it there does not touch the namespace
+	if res := e.apply(e.compile(withService)); strings.Contains(strings.Join(res.Plan.Summary, "\n"), "service namespace") {
+		t.Errorf("the namespace is planned again:\n%s", strings.Join(res.Plan.Summary, "\n"))
 	}
 }

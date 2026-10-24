@@ -68,6 +68,10 @@ type ServiceState struct {
 	// HolderMatches is false when the namespace is not the one of the holder process that was asked
 	// for: the holder container restarted and left the old namespace behind.
 	HolderMatches bool
+	// Redirect is true when the namespace holds the chain that redirects connections for other addresses to the TLS
+	// responder (executor.ServiceRedirectChain, written when the namespace is made): a namespace that an earlier
+	// version made lacks it.
+	Redirect bool
 }
 
 // Want names what to read besides the basics: sysctls and offloads exist per interface.
@@ -373,6 +377,15 @@ func readService(ctx context.Context, ex Exec, ns, peer string, pid int) *Servic
 		return &ServiceState{}
 	}
 	st := &ServiceState{Exists: true, HolderMatches: ss.HolderMatches}
+	if rs, err := ex.Do(ctx, read(ns, executor.ReadNft, "")); err == nil {
+		if ruleset, err := decode[linux.Ruleset](rs, 0, "service nft"); err == nil {
+			for _, o := range ruleset.Objects {
+				if o.Chain != nil && o.Chain.Name == executor.ServiceRedirectChain {
+					st.Redirect = true
+				}
+			}
+		}
+	}
 	if links, err := decode[[]linux.Link](out, 0, "service links"); err == nil {
 		for _, l := range links {
 			if l.Name == peer {

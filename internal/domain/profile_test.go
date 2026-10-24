@@ -20,30 +20,26 @@ func TestTheFamiliesOfAProfileAreItsPartsInReportingOrder(t *testing.T) {
 	}
 }
 
-// Plan §2.9: "TLS broken" arrives with M21, the other built-in profiles are usable now ("DNS broken"
-// since M20, P2-M11-01); a custom profile is judged by its parts.
+// Plan §2.9: every built-in profile is usable ("DNS broken" since M20, "TLS broken" since M21, P2-M11-01); a
+// custom profile is judged by its parts: only a tls part with the case intercept, which M22 brings, is not.
 func TestOnlyProfilesWithAPartOfALaterFamilyAreUnavailable(t *testing.T) {
 	for _, b := range BuiltinProfiles() {
-		parts := UnavailableParts(b.Profile)
-		switch b.Profile.Name {
-		case "tls-broken":
-			if len(parts) != 1 || parts[0] != (UnavailablePart{FamilyTLS, "M21"}) {
-				t.Errorf("%s: %+v", b.Profile.Name, parts)
-			}
-		default:
-			if len(parts) != 0 {
-				t.Errorf("%s is unavailable: %+v", b.Profile.Name, parts)
-			}
+		if parts := UnavailableParts(b.Profile); len(parts) != 0 {
+			t.Errorf("%s is unavailable: %+v", b.Profile.Name, parts)
 		}
 		// the milestone the catalogue records is the one the rule names
 		if (b.Milestone != "") != (len(UnavailableParts(b.Profile)) > 0) {
 			t.Errorf("%s: catalogue milestone %q, parts %+v", b.Profile.Name, b.Milestone, UnavailableParts(b.Profile))
 		}
 	}
-	both := model.Profile{Parts: model.ProfileParts{
+	cases := model.Profile{Parts: model.ProfileParts{
 		Impairment: &model.ImpairmentParams{}, Dns: &model.DnsFault{Action: "servfail"}, Tls: &model.TlsCase{Case: "expired"}}}
-	if got := UnavailableParts(both); len(got) != 1 || got[0] != (UnavailablePart{FamilyTLS, "M21"}) {
-		t.Errorf("%+v", got)
+	if got := UnavailableParts(cases); len(got) != 0 {
+		t.Errorf("a certificate case is available since M21: %+v", got)
+	}
+	cases.Parts.Tls = &model.TlsCase{Case: "intercept"}
+	if got := UnavailableParts(cases); len(got) != 1 || got[0] != (UnavailablePart{FamilyTLS, "M22"}) {
+		t.Errorf("the case intercept arrives with M22: %+v", got)
 	}
 }
 

@@ -548,7 +548,41 @@ func planServiceNS(o *ServiceNS) []Step {
 		{Cmd: inside("addr", "replace", o.PeerCIDR, "dev", o.PeerIf)},
 		{Cmd: inside("link", "set", "dev", o.PeerIf, "up")},
 		{Cmd: inside("route", "replace", "default", "via", hostIP, "dev", o.PeerIf)},
+		// the redirect of the connections that arrive for another address to the TLS responder: a fixed document, so
+		// the namespace needs no further command of the gateway when a case comes or goes
+		{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(serviceRedirectRuleset(o)), NS: o.Name}},
 	}...)
+}
+
+// serviceRedirectRuleset is the nftables JSON of the chain inside the service namespace that redirects TCP
+// connections that arrive on the namespace's end of the pair for another address than its own to the TLS
+// responder. The namespace's own address is left out: it is the DNS proxy's, and the replies of the services' own
+// connections come to it. Only new connections are redirected (a NAT chain sees the first packet of a connection
+// only); the packet of a connection that is not new to the gateway but is to this namespace is a new connection
+// here, which the responder answers with a reset (a case with cut_existing relies on it).
+func serviceRedirectRuleset(o *ServiceNS) []byte {
+	peer := strings.SplitN(o.PeerCIDR, "/", 2)[0]
+	str := func(kind string, f map[string]any) map[string]any {
+		f["family"], f["table"] = NftFamily, NftTable
+		return map[string]any{kind: f}
+	}
+	mt := func(left, right any, op string) any {
+		return map[string]any{"match": map[string]any{"op": op, "left": left, "right": right}}
+	}
+	cmds := []any{
+		map[string]any{"add": map[string]any{"table": map[string]any{"family": NftFamily, "name": NftTable}}},
+		map[string]any{"add": str("chain", map[string]any{"name": ServiceRedirectChain, "type": "nat", "hook": "prerouting", "prio": -100, "policy": "accept"})},
+		map[string]any{"flush": str("chain", map[string]any{"name": ServiceRedirectChain})},
+		map[string]any{"add": str("rule", map[string]any{"chain": ServiceRedirectChain, "expr": []any{
+			mt(map[string]any{"meta": map[string]any{"key": "iifname"}}, o.PeerIf, "=="),
+			mt(map[string]any{"meta": map[string]any{"key": "nfproto"}}, "ipv4", "=="),
+			mt(map[string]any{"meta": map[string]any{"key": "l4proto"}}, "tcp", "=="),
+			mt(map[string]any{"payload": map[string]any{"protocol": "ip", "field": "daddr"}}, peer, "!="),
+			map[string]any{"redirect": map[string]any{"port": ServiceTLSPort}},
+		}})},
+	}
+	b, _ := json.Marshal(map[string]any{"nftables": cmds})
+	return b
 }
 
 func planWireGuard(o *WireGuard) []Step {

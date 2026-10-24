@@ -207,8 +207,9 @@ func TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive(
 }
 
 // A profile with a part of a later milestone is stored but cannot be activated: the whole activation is
-// refused with the milestone, and nothing changes. The built-in tls-broken is the same (the dns part
-// has been available since M20).
+// refused with the milestone, and nothing changes. What is not available is the tls part with the case
+// intercept (M22); the dns part has been available since M20 and the certificate and handshake cases, the
+// built-in tls-broken among them, since M21.
 func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -218,13 +219,12 @@ func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing
 				Impairment: &model.ImpairmentParams{Latency: ptr("50ms")},
 				Dns:        &model.DnsFault{Action: "delay", Delay: ptr("2s")},
 			}},
-			profGlitch: {Name: "glitch", Parts: model.ProfileParts{Tls: &model.TlsCase{Case: "expired"}}},
+			profGlitch: {Name: "glitch", Parts: model.ProfileParts{Tls: &model.TlsCase{Case: "intercept"}}},
 		}
 	}))
 	gen := h.e.Snapshot().Generation
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\nprofile: glitch":     "M21",
-		"target: {network: IoT}\nprofile: tls-broken": "M21",
+		"target: {network: IoT}\nprofile: glitch": "M22",
 	} {
 		_, err := h.put(alice, body)
 		var ue *engine.UnsupportedOverlayError
@@ -302,7 +302,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 		return withProfiles(map[string]model.Profile{profFlaky: p})
 	}
 	withDNS := func(p *model.Profile) { p.Parts.Dns = &model.DnsFault{Action: "delay", Delay: ptr("2s")} }
-	withTLS := func(p *model.Profile) { p.Parts.Tls = &model.TlsCase{Case: "expired"} }
+	withTLS := func(p *model.Profile) { p.Parts.Tls = &model.TlsCase{Case: "intercept"} }
 	h.mustApply(h.revision(flaky(nil)))
 	res := h.mustPut(alice, "target: {network: IoT}\nprofile: flaky")
 	id := res.Overlay.Id.String()
@@ -311,7 +311,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name, family, milestone string
 		mod                     func(*model.Profile)
-	}{{"a tls part", "tls", "M21", withTLS}} {
+	}{{"a tls part with the case intercept", "tls", "M22", withTLS}} {
 		rev := h.revision(flaky(c.mod))
 		_, err := h.apply(rev)
 		var ue *engine.UnsupportedProfileRevisionError
@@ -373,7 +373,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 		t.Error("the profile with a tls part was activated")
 	} else {
 		var ue *engine.UnsupportedOverlayError
-		if !errors.As(err, &ue) || ue.Milestone != "M21" {
+		if !errors.As(err, &ue) || ue.Milestone != "M22" {
 			t.Errorf("got %v", err)
 		}
 	}
@@ -389,7 +389,7 @@ func TestARollbackThatGivesAnActivatedProfileBackItsTLSPartRemovesTheActivation(
 	h := overlaysHarness(t)
 	flaky := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
 	withDNS := flaky
-	withDNS.Parts.Tls = &model.TlsCase{Case: "expired"}
+	withDNS.Parts.Tls = &model.TlsCase{Case: "intercept"}
 	h.mustApply(h.revision(withProfiles(map[string]model.Profile{profFlaky: withDNS})))
 	keep := h.mustPut(bob, "target: {network: Lab}\nprofile: lte")
 	rev := h.revision(func(c *model.Configuration) {

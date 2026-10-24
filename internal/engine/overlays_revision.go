@@ -15,7 +15,7 @@ import (
 // revision that deletes an object an overlay refers to is refused, unless it is applied with force,
 // which removes those overlays; a revision that merges a discovered device into a configured one
 // moves the overlays of the discovered device to the configured one; a revision that gives a profile
-// a part this build cannot resolve (dns, tls) is refused while an overlay activates that profile.
+// a part this build cannot resolve (a tls part with the case intercept) is refused while an overlay activates that profile.
 // Overlays are never part of a revision, so all of it is decided here, by the state owner, in the
 // same step that starts the apply.
 
@@ -42,7 +42,7 @@ func (e *ErrOverlaysOrphaned) Error() string {
 }
 
 // UnsupportedProfileRevisionError is returned by Apply, and reported by Preview, for a revision that
-// gives a profile a part of a later milestone (a tls part before M21) while an
+// gives a profile a part of a later milestone (a tls part with the case intercept before M22) while an
 // overlay activates the profile. checkProfileAvailable refuses the same activation at the write, so no
 // activation runs half a profile (P2-M11-05, decided on 2026-10-11); nothing has changed. The revision
 // is accepted again once the activation is gone, and the profile is then stored but cannot be activated.

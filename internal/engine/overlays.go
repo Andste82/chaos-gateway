@@ -77,13 +77,13 @@ func (e *CompileError) Error() string {
 }
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
-// /capabilities): faults of the impairment, mtu and tunnel families, DNS faults (the kind dns, M20),
-// profile activations, access rules and WireGuard actions; the kinds tls (M21) and dhcp (M23) follow
-// with their milestones. A profile is activated as a whole: one with a tls part is refused until its
-// family exists (checkProfileAvailable).
+// /capabilities): faults of the impairment, mtu and tunnel families, DNS faults (the kind dns, M20), TLS cases
+// (the kind tls, M21; the case intercept follows with M22), profile activations, access rules and WireGuard
+// actions; the kind dhcp (M23) follows with its milestone. A profile is activated as a whole: one with a part
+// this build cannot resolve (a tls part with the case intercept) is refused (checkProfileAvailable).
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindWireguard}
-	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTunnel}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindWireguard}
+	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyTunnel}
 )
 
 // CheckOverlaySupported returns an *UnsupportedOverlayError for an overlay request that needs a
@@ -113,7 +113,10 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 	case "dns":
 		return nil // M20
 	case "tls":
-		return &UnsupportedOverlayError{What: "a TLS case", Milestone: "M21"}
+		if req.Tls != nil && req.Tls.Case == model.TlsCaseCaseIntercept {
+			return &UnsupportedOverlayError{What: "the TLS case intercept", Milestone: "M22"}
+		}
+		return nil // M21
 	case "dhcp":
 		return &UnsupportedOverlayError{What: "a DHCP action", Milestone: "M23"}
 	}
@@ -479,7 +482,7 @@ func (o *owner) validPut(c cmdOverlayPut) (*model.OverlayRequest, bool) {
 }
 
 // checkProfileAvailable refuses the activation of a profile that has a part this build cannot
-// resolve (a tls part before M21), with the milestone that brings it. The
+// resolve (a tls part with the case intercept before M22), with the milestone that brings it. The
 // request has passed ValidateOverlay, so its profile is a UUID the configuration or the built-in
 // catalogue knows. Nil for every other request.
 func checkProfileAvailable(cfg *model.Configuration, req *model.OverlayRequest) error {

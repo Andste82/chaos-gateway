@@ -118,6 +118,9 @@ type Snapshot struct {
 	// DNSFaults are the DNS faults of the last applied target in the order the DNS proxy tries them, for each source
 	// (plan §2.6): the proxy's configuration.
 	DNSFaults []compiler.DNSFault
+	// TLSCases are the TLS cases of the last applied target in the order the TLS responder tries them, for each
+	// source (plan §2.8): the responder's configuration.
+	TLSCases []compiler.TLSCase
 	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
 	DHCPError string
 	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first
@@ -238,9 +241,11 @@ type Engine struct {
 	flap *flapper
 	// hosts is the mirror of the DNS-derived address sets and their writer (hostsets.go); the apply loop tells it what the
 	// kernel holds, the API's DNS endpoints feed it.
-	hosts  *hostSets
-	events *bus
-	sup    *supervisor.Supervisor
+	hosts *hostSets
+	// tlsWorld is the world of the last snapshot the TLS responder asked a decision for (tls.go).
+	tlsWorld tlsWorld
+	events   *bus
+	sup      *supervisor.Supervisor
 
 	ctx     context.Context
 	cancel  context.CancelFunc

@@ -342,11 +342,27 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 			out.Service = "dns_proxy"
 		}
 	}
+	// a TLS case that decides the connection: it is answered by the TLS responder (plan §2.8), unless something in front
+	// of the redirect stops the connection first: an access rule (E11: access rules before redirects), the gateway's
+	// protection or the guard of the management network. The access matrix is not asked: the answer comes from the gateway.
+	if snap.Service != nil && out.Service == "" && domain.Winner(results, domain.FamilyTLS) != nil && !stoppedBeforeTheRedirect(out.Access) {
+		out.Service = "tls_responder"
+	}
 	if out.Service == "" {
 		out.Service = "none"
 	}
 
 	return out, nil
+}
+
+// stoppedBeforeTheRedirect reports whether the verdict is a drop, reject or reset that stands in front of the redirect to the
+// TLS responder in the forward chain: an access rule's, the gateway's protection of itself, or the management guard (which
+// the matrix explanation reports with the management network in its reason).
+func stoppedBeforeTheRedirect(a ExplainAccess) bool {
+	if a.Verdict == "allow" {
+		return false
+	}
+	return a.Layer != domain.AccessMatrix || strings.Contains(a.Reason, "management")
 }
 
 // explainRoute asks the kernel for the route of the traffic (`ip route get`, through the policy rules and table

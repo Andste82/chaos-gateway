@@ -82,5 +82,8 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	out["hostnames"] = scenarioHostnames(t)
 	// the hardcoded resolvers of a network (M20): the DNAT of every other destination of port 53 and the DoT chain
 	out["dns-network"] = compileDNSNet(t, true, true, true)
+	// the TLS cases (M21): the chain that selects connections for the responder (conntrack mark, service mark, a
+	// hostname set, the uplink's set shared with an access rule) and the accept towards the service namespace
+	out["tls"] = scenarioTLS(t)
 	return out
 }

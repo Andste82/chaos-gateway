@@ -25,6 +25,8 @@ const (
 	EventDNSSetEpoch = "dns_set_epoch"
 	// EventDNSFaultTriggered says that a DNS fault changed an answer (the proxy's query log carries it).
 	EventDNSFaultTriggered = "dns_fault_triggered"
+	// EventTLSHandshake is the outcome of a handshake with the TLS responder (plan §2.8, M21).
+	EventTLSHandshake = "tls_handshake"
 	// The events of runs (internal/run, M15).
 	EventRunQueued   = "run_queued"
 	EventRunStarted  = "run_started"

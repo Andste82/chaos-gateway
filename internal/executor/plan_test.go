@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -374,6 +375,7 @@ func TestPlanServiceNamespaceGolden(t *testing.T) {
 		`[cgsvc] ip addr replace 169.254.100.2/30 dev svc1`,
 		`[cgsvc] ip link set dev svc1 up`,
 		`[cgsvc] ip route replace default via 169.254.100.1 dev svc1`,
+		`[cgsvc] nft -j -f -`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -387,6 +389,58 @@ func TestPlanServiceNamespaceGolden(t *testing.T) {
 	steps = mustPlan(t, `{"type":"service_ns","action":"delete","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`)
 	if len(steps) != 1 || steps[0].Cmd.String() != "ip link delete dev svc0 type veth" || !steps[0].RunIfProbeOK {
 		t.Errorf("%+v", steps)
+	}
+}
+
+// The redirect inside the namespace is a fixed document: the same chain every time, written inside the service
+// namespace and nowhere else, redirecting the TCP connections that arrive on the peer's end for another address than
+// the namespace's own to the port of the TLS responder (plan §3.3). The nftables parser accepts it.
+func TestTheServiceNamespaceRedirectIsAFixedDocumentForTheTLSResponder(t *testing.T) {
+	steps := mustPlan(t, goodServiceNS+`}`)
+	last := steps[len(steps)-1]
+	if last.Cmd.Tool != ToolNft || last.Cmd.NS != "cgsvc" || strings.Join(last.Cmd.Args, " ") != "-j -f -" || last.Probe != nil || last.Guard != nil {
+		t.Fatalf("%+v", last)
+	}
+	if err := CheckNftRuleset(json.RawMessage(last.Cmd.Stdin)); err != nil {
+		t.Fatalf("the executor's own scope refuses the document: %v", err)
+	}
+	var doc struct {
+		Nftables []map[string]map[string]map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal([]byte(last.Cmd.Stdin), &doc); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, item := range doc.Nftables {
+		for cmd, obj := range item {
+			for kind := range obj {
+				kinds = append(kinds, cmd+" "+kind)
+			}
+		}
+	}
+	if strings.Join(kinds, ", ") != "add table, add chain, flush chain, add rule" {
+		t.Errorf("%v", kinds)
+	}
+	for _, want := range []string{`"name":"svc_redirect"`, `"hook":"prerouting"`, `"type":"nat"`, `"prio":-100`, `"right":"svc1"`, `"right":"tcp"`, `"op":"!="`, `"right":"169.254.100.2"`, `"redirect":{"port":9443}`} {
+		if !strings.Contains(last.Cmd.Stdin, want) {
+			t.Errorf("the document lacks %s:\n%s", want, last.Cmd.Stdin)
+		}
+	}
+	if ServiceTLSPort != 9443 || ServiceRedirectChain != "svc_redirect" {
+		t.Errorf("%d %s", ServiceTLSPort, ServiceRedirectChain)
+	}
+	// the same document every time, and another peer address in it for another pair
+	again := mustPlan(t, goodServiceNS+`}`)
+	if again[len(again)-1].Cmd.Stdin != last.Cmd.Stdin {
+		t.Error("the document differs between two plans")
+	}
+	if nft, err := exec.LookPath("nft"); err == nil {
+		cmd := exec.Command(nft, "-j", "-c", "-f", "-")
+		cmd.Stdin = strings.NewReader(last.Cmd.Stdin)
+		out, err := cmd.CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "Operation not permitted") {
+			t.Errorf("nft rejects the document: %s", out)
+		}
 	}
 }
 

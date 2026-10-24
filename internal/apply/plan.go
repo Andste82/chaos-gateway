@@ -486,6 +486,8 @@ func serviceDiffers(w *compiler.ServiceNS, s *State) string {
 		return "namespace " + w.Name + " is missing"
 	case !s.Service.HolderMatches:
 		return fmt.Sprintf("namespace %s is not the one of its holder (process %d)", w.Name, w.HolderPID)
+	case !s.Service.Redirect:
+		return fmt.Sprintf("namespace %s has no redirect to the TLS responder", w.Name)
 	}
 	l, ok := s.Links[w.HostIf]
 	switch {

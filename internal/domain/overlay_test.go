@@ -325,9 +325,8 @@ func TestBuiltinProfiles(t *testing.T) {
 			t.Errorf("%s: bad or duplicate id %s", p.Profile.Name, p.ID)
 		}
 		ids[p.ID] = true
-		wantMilestone := map[string]string{"tls-broken": "M21"}[p.Profile.Name]
-		if p.Milestone != wantMilestone {
-			t.Errorf("%s: milestone %q, want %q", p.Profile.Name, p.Milestone, wantMilestone)
+		if p.Milestone != "" {
+			t.Errorf("%s: milestone %q, want none: every built-in profile is usable", p.Profile.Name, p.Milestone)
 		}
 	}
 	if IsBuiltinProfileID(idProfile) {

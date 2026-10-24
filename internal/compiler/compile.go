@@ -52,7 +52,7 @@ type Input struct {
 	// Overlays are the active overlays (plan §2.1.1): they are never part of a revision. Their
 	// references are UUIDs. Faults and profile activations among them take part in the precedence
 	// resolution, rules are compiled into the access chains (access.go); kinds that no compiled
-	// mechanism implements yet (DNS, TLS, DHCP) are ignored here.
+	// mechanism implements yet (DHCP actions) are ignored here.
 	Overlays []model.Overlay
 	// FaultIDs is the allocation of fault ids of the previous compile (Target.FaultIDs): a fault
 	// that is still there keeps its id, so its tc classes and counters stay (plan §3.3, "ids are
@@ -264,7 +264,12 @@ type Target struct {
 	// by id: what the DNS proxy reports resolutions for and the engine writes them into (hostnames.go).
 	DNSSets []DNSSet `json:"dns_sets,omitempty"`
 	// DNSFaults are the DNS faults the proxy answers with, in the order of their rank for each source (dns.go).
-	DNSFaults   []DNSFault `json:"dns_faults,omitempty"`
+	DNSFaults []DNSFault `json:"dns_faults,omitempty"`
+	// TLSCases are the TLS cases the responder serves, in the order of their rank for each source (tls.go); tlsRules
+	// are the rules that select their connections for the responder and tlsSets the sets they need.
+	TLSCases    []TLSCase `json:"tls_cases,omitempty"`
+	tlsRules    []Rule
+	tlsSets     []SetDef
 	host        *hostBuild
 	hostSetDefs []SetDef
 	// Forwards are the port forwards in the packet path (plan §2.2 layer 4, M35a), sorted by name and id;

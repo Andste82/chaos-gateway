@@ -381,7 +381,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 |---|---|
 | M1: container image has no non-root user (`deploy/Dockerfile`) | M29 |
 | ~~M2: overlay `expires_at` / `lease_expires_at` not set by `NewOverlay`~~ — set since M8a (`internal/overlay/store.go`, P2-AUDIT-16) | M8a |
-| M3: DNS set updates spawn `nft` per call, no persistent netlink connection | M20 (plan §3.4) |
+| ~~M3: DNS set updates spawn `nft` per call, no persistent netlink connection~~ — done in M20: the executor operation `nft_dns_elements` writes them on a persistent netlink connection (google/nftables) beside the plans | M20 (plan §3.4) |
 | M4: verify matches rules by comment hash only (expressions not compared) | M38 drift detection (partial) |
 | M4: Docker started after the last apply is not noticed (`DOCKER-USER`) | M38 drift detection (partial) |
 | M4c: received-prefix list in routing view | M14 |
@@ -401,7 +401,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M0: S7 coexistence with netplan, NetworkManager, systemd-networkd | M28 (no explicit test named: add one to the M28 tests) |
 | M0: S4 TLS 1.2 vs 1.3, connection reuse, control from the core | M21, M22 |
 | M0: IPv6 never spiked | M32 |
-| M0: persistent nft session for DNS-derived sets (DNS over TCP is done in M6b) | M20 |
+| ~~M0: persistent nft session for DNS-derived sets (DNS over TCP is done in M6b)~~ — done in M20 | M20 |
 | M0: `image.yml` has never run (ghcr push, release tags) | M28 |
 | M0: persistent faults for DNS, TLS, DHCP and profile activations (D31) | M39 |
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
@@ -410,7 +410,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | Overlay removal on stop | M27 |
-| M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions` | M20 |
+| ~~M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions`~~ — done in M20 | M20 |
 | M6b: classification sets the service mark (bit 20) that table 102 routes on | M20/M21 (confirmed 2026-10-11, P2-M7-01) |
 | M6b: TLS responder joins the service namespace | M21 |
 
@@ -581,7 +581,7 @@ with P2-AUDIT-17, a low item the work on P2-AUDIT-15 found (fourth table, 16 row
 | P2-M8b-06 | Tolerance for the spread of a jitter and for "no change" | Confirmed: 0.5 to 1.5 times the uniform spread plus 2 ms; median within ±2 ms + 5 % of before and no loss |
 | P2-M8b-07 | A burst through a delay fault loses replies in the echo server's own output path on a slow runner | Confirmed: the burst test accounts for the echo server's own output errors (`Icmp.OutErrors`) and the host's receive drops and fails on any packet nothing counts; the burst is not paced |
 | P2-M9-01 | An allow rule in the input path | **Changed:** it accepts, so it also opens the gateway's closed ports for its selector; the UI/API port rule for other sources and the anti-lockout rule stand in front of the rules |
-| P2-M9-02 | A rule that names a hostname is not compiled before M20 | **Transferred to the plan:** M20's acceptance criteria (`docs/plan.md`) include a drop rule with a hostname destination that blocks the addresses the device resolved; until then the rule stays out of the chain with the warning `hostname_unresolved` |
+| P2-M9-02 | A rule that names a hostname is not compiled before M20 | **Transferred to the plan, delivered by M20:** the rule looks up the DNS-derived set of the name and a drop rule blocks the addresses the device resolved (`TestADropRuleWithAHostnameBlocksTheResolvedAddressesOnTheRealKernel`, `TestADNSDerivedSetIsDynamicKeyedOnTheDeviceAndTheAddressAndHasATimeout`); the warning `hostname_unresolved` is gone |
 | P2-M9-03 | The type of a `reject` | **Changed:** chosen per rule with `reject_with` (`port_unreachable` by default, `host_unreachable`, `admin_prohibited`, `no_route`) |
 | P2-M9-04 | The network scope and the networks behind a test network's static routes | **Changed:** "network X" includes them, for rules and faults alike |
 | P2-M9-05 | Fault counters count packets a rule drops afterwards | Confirmed: left as it is |
@@ -598,7 +598,7 @@ with P2-AUDIT-17, a low item the work on P2-AUDIT-15 found (fourth table, 16 row
 | P2-M10-06 | The WireGuard actions | Confirmed |
 | P2-M10-07 | One IFB with a fixed name; the host's ingress qdisc is shared | Confirmed |
 | P2-M10-08 | The per-packet delay check of the update test on a loaded runner | **Changed:** the measured stream is at least 200 packets (sent 5 ms apart); the bounds and the rule that none is more than 10 ms outside stay |
-| P2-M11-01 | A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21 | **Transferred to the plan:** M20 (`dns`) and M21 (`tls`) lift `domain.unavailableFamilies` family by family, and their acceptance criteria include that such a profile activates and its part competes in its family; until then the activation is refused with `unsupported_feature` |
+| P2-M11-01 | A profile with a DNS or TLS part is stored but cannot be activated before M20 and M21 | **Transferred to the plan:** M20 (`dns`) and M21 (`tls`) lift `domain.unavailableFamilies` family by family, and their acceptance criteria include that such a profile activates and its part competes in its family; until then the activation is refused with `unsupported_feature`. **The `dns` family is lifted (M20):** `dns-broken` and a custom profile with a `dns` part activate and compete in the DNS family (E5); `tls` follows with M21 |
 | P2-M11-02 | Custom profiles only through candidate revisions, no endpoints of their own | Confirmed: no `POST /profiles`; the configuration's `profiles` are created, changed and deleted with a revision |
 | P2-M11-03 | The rate of the built-in Bad LTE end to end | **Changed:** a UDP measurement above the rate was added (`TestTheRateOfBadLTEShapesUDPSentAboveItEndToEnd`) |
 | P2-M11-04 | The accuracy check of a profile with a rate and a jitter | Confirmed: a bound is enough for the ordered delay |
@@ -2432,3 +2432,20 @@ found that no later milestone of the plan completes and that need a decision of 
 - Acceptance: the plan has the milestone (or the decision to leave it out) and its design.
 - Needs maintainer: no (decided 2026-10-19: option (a))
 - Effort: M
+
+## Phase 5 open items
+
+Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`. Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
+
+### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Plan §3.3 says "hostname selectors are ordered rules against the per-device DNS-derived sets, placed at their level"; §2.4 resolves faults by a total precedence (overlay before configuration, then ten levels of specificity, then the newer). The addresses of a hostname selector are known at run time only, so the compiler cannot put it into the interval maps whose elements are the resolved winners (the table of `domain.Table`). M20 puts the rules of the hostname faults in front of the four lookup levels, strongest first among themselves (overlay before configuration, level, newer), and takes out of a source's rules every hostname fault that a fault of a higher rank without destination and ports (the whole device, group, network or global scope) covers for all of its traffic. What it does not do: a fault of a higher rank that names a destination or ports (an overlay "device A → port 8883" against a configured "device A + host X", or a device fault of one destination against a group fault of a host name) loses to the hostname rule for the traffic both select, where §2.4 would give it to the stronger one. The exact resolution needs one of the alternatives below, each with a cost the plan did not weigh.
+- Evidence: `docs/development.md` "DNS faults and hostname selectors (M20)", decision 2; `domain.rankHostnames` (`internal/domain/table.go`), `compiler.hostFaultRules` (`internal/compiler/hostnames.go`); `TestHostnameFaultsAreTriedStrongestFirstAndAFaultOfTheWholeSourceOfAHigherRankTakesThemOut`.
+- Task: decide whether the approximation is acceptable for V1. The deviation only shows with two faults of one family that overlap in traffic and rank the other way round.
+- Options: (a) accept it and keep the documentation of the limit (what M20 does); (b) split the lookup tables by rank: the static candidates between two hostname candidates form a segment with its own four maps, and the chain alternates segment, hostname rules, segment (exact, costs four maps per distinct rank of a hostname fault and a table build per segment); (c) let the engine write, at every resolution, the winner for (device, address) into a verdict map of its own at level 2 (exact for traffic without a port selector, needs a port-aware second map for the others and a rebuild when a fault changes).
+- Recommendation: (a) until a scenario shows a wrong result; (b) when it does.
+- Acceptance: the plan states which of the three holds, and the tests of §2.4 (E1 to E12) have a case with a hostname selector if (b) or (c) is chosen.
+- Needs maintainer: yes
+- Effort: L

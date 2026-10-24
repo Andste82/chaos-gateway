@@ -14,6 +14,7 @@ import (
 var fuzzSeeds = []string{
 	`{"type":"nft_apply","ruleset":` + goodNft + `}`,
 	`{"type":"nft_add_elements","namespace":"ns1","set":"dns_a","elements":["192.0.2.1","10.0.0.0/8","aa:bb:cc:dd:ee:ff"],"timeout_seconds":60}`,
+	`{"type":"nft_dns_elements","namespace":"ns1","updates":[{"set":"dns_0123456789_abcdef","elements":[{"client":"10.10.0.5","addr":"203.0.113.7","timeout_seconds":600},{"client":"10.10.0.6","addr":"203.0.113.8","timeout_seconds":60,"replace":true}]}]}`,
 	`{"type":"routing","routes":[{"action":"replace","family":4,"table":100,"dst":"default","via":"10.0.0.1","dev":"wan0","metric":10},{"action":"replace","family":6,"table":102,"dst":"::/0","type":"prohibit"}],"rules":[{"action":"add","family":4,"priority":1000,"from":"10.10.0.0/24","fwmark":"0x10/0xff","iif":"lan0","table":100}]}`,
 	`{"type":"tc","entries":[{"object":"qdisc","action":"replace","dev":"wan0","parent":"root","handle":"1:","args":["htb","default","10"]},{"object":"filter","action":"add","dev":"wan0","parent":"1:","args":["protocol","ip","prio","1","u32","match","ip","src","10.0.0.0/24","flowid","1:10"]},{"object":"qdisc","action":"add","dev":"lan0","parent":"ingress"}]}`,
 	`{"type":"offloads","devs":["wan0"]}`,

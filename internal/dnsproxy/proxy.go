@@ -302,10 +302,8 @@ func (s *Server) answerFaulted(ctx context.Context, r *dns.Msg, client netip.Add
 	}
 	switch f.action {
 	case model.DnsFaultActionDelay:
-		select {
-		case <-s.opt.Clock.After(f.delay):
-		case <-ctx.Done():
-		}
+		// not bounded by ctx: that is the time the upstream may take, and a delay longer than that is asked for
+		<-s.opt.Clock.After(f.delay)
 	case model.DnsFaultActionTruncate:
 		resp.Answer, resp.Ns, resp.Extra = nil, nil, nil
 		resp.Truncated = true

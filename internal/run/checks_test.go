@@ -105,6 +105,25 @@ func (h *harness) tickUntil(what string, cond func() bool) {
 	}
 }
 
+// tickArmedUntil lets the clock run in the steps of a poll until the condition holds, taking each step only once a
+// timer is pending: for the phase of a run in which the loop of the checks is the only one that waits on the clock.
+// The loop arms its next wake only after it has evaluated a poll; a step taken before that moves the clock past the
+// wake unseen, and a loaded machine takes many such steps, so the run ends seconds late on the fake clock.
+func (h *harness) tickArmedUntil(what string, cond func() bool) {
+	h.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		eventually(h.t, what, func() bool { return h.clk.Pending() > 0 || cond() })
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatalf("timed out waiting for %s", what)
+		}
+		h.clk.Advance(250 * time.Millisecond)
+	}
+}
+
 func (h *harness) check(id uuid.UUID, i int) model.CheckResult {
 	h.t.Helper()
 	r := h.get(id)
@@ -225,7 +244,7 @@ func TestReconnectedFailsWhenTheWindowClosesWithoutAConnection(t *testing.T) {
 	h := newHarness(t)
 	h.obs.addFlow(tcpFlow("old", 8883, "ESTABLISHED"))
 	r := h.untilRestore(outage)
-	h.tickUntil("the end of the run", func() bool { return h.get(r.Id).Status != model.RunStatusRunning })
+	h.tickArmedUntil("the end of the run", func() bool { return h.get(r.Id).Status != model.RunStatusRunning })
 	done := h.get(r.Id)
 	if done.Status != model.RunStatusFailed || done.Reason == nil || !strings.Contains(*done.Reason, "reconnected tcp/8883") {
 		t.Fatalf("run %s: %v", done.Status, done.Reason)

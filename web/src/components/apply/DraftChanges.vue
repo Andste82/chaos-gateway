@@ -29,7 +29,7 @@ const invalidRules = computed(() => Object.keys(draft.invalid).length);
 const invalidScenarios = computed(() => Object.keys(draft.invalidScenarios).length);
 const invalidCount = computed(() => invalidRules.value + invalidScenarios.value);
 const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
-const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Device', client: 'WireGuard client', matrix: 'Access', network: 'Network', routing: 'Routing', forward: 'Port forward', scenario: 'Scenario' };
+const kinds = { rule: 'Rule', fault: 'Fault', profile: 'Profile', device: 'Device', group: 'Group', client: 'WireGuard client', matrix: 'Access', network: 'Network', routing: 'Routing', forward: 'Port forward', scenario: 'Scenario' };
 const inWords = (c: DraftChange) => `${[kinds[c.kind], c.name, c.field].filter(Boolean).join(' ')}: ${c.from} → ${c.to}`;
 const yours = computed(() => draft.changes(names.value).map(inWords));
 const overlaps = (theirs: Configuration) => draft.overlaps(theirs, names.value).map(inWords);

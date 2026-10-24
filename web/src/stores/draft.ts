@@ -6,6 +6,7 @@ import type {
   Configuration,
   ConfigurationPatch,
   Device,
+  Group,
   ImpairmentParams,
   MatrixEntry,
   Network,
@@ -19,6 +20,7 @@ import type {
   WireGuardClient,
   WireGuardNetwork,
 } from '../api/generated/model';
+import { deviceReferences, groupWithMember } from '../lib/devices';
 import { forwardChanges, forwardTitle } from '../lib/forwards';
 import { faultChips, describeScope, describeTunnel, impairmentCombines, impairmentKeys, impairmentOf, withImpairment, type Names } from '../lib/faults';
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
@@ -89,6 +91,8 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
   if (key === 'action') return accessLabels[v as keyof typeof accessLabels] ?? String(v);
   // a scenario's steps by their ids, its checks by their number
   if (key === 'steps' && Array.isArray(v)) return v.map((x) => (x as { id?: string }).id ?? '?').join(', ') || '—';
+  // a group's members by the names of the devices
+  if (key === 'members' && Array.isArray(v)) return v.map((x) => names.device?.(String(x)) ?? String(x)).join(', ') || '—';
   if (key === 'checks' && Array.isArray(v)) return v.length ? `${v.length} ${v.length === 1 ? 'check' : 'checks'}` : '—';
   if (Array.isArray(v)) {
     return v
@@ -119,7 +123,7 @@ export interface EditOrigin {
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward' | 'scenario';
+  kind: 'rule' | 'fault' | 'device' | 'group' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward' | 'scenario';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
@@ -127,7 +131,7 @@ export interface DraftChange extends FieldChange {
 
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
- * access rules, their order, configured faults, custom profiles, adopted devices, networks (P3-M14-01), WireGuard clients, the access
+ * access rules, their order, configured faults, custom profiles, adopted devices, groups (#99), networks (P3-M14-01), WireGuard clients, the access
  * matrix, the routing (P3-M14-01), the port forwards (M35a) and the scenarios (M19), edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
@@ -148,6 +152,12 @@ export const useDraftStore = defineStore('draft', () => {
   const profiles = ref<Record<string, Profile | null>>({});
   /** Devices added to the configuration (adopted), by id. */
   const devices = ref<Record<string, Device | null>>({});
+  /**
+   * Groups changed or deleted (`null`), by id: the UI has no group editor (groups are configured via YAML
+   * or the API); a device removed together with the objects that name it takes itself out of their
+   * members (#99).
+   */
+  const groups = ref<Record<string, Group | null>>({});
   /** WireGuard clients added, changed or deleted (`client: null`), by client id with their hub. */
   const clients = ref<Record<string, { network: string; client: WireGuardClient | null }>>({});
   /** The entries of the access matrix, when they were edited. */
@@ -173,6 +183,7 @@ export const useDraftStore = defineStore('draft', () => {
       Object.keys(faults.value).length > 0 ||
       Object.keys(profiles.value).length > 0 ||
       Object.keys(devices.value).length > 0 ||
+      Object.keys(groups.value).length > 0 ||
       Object.keys(clients.value).length > 0 ||
       Object.keys(networks.value).length > 0 ||
       routing.value !== undefined ||
@@ -382,6 +393,53 @@ export const useDraftStore = defineStore('draft', () => {
       devices.value = rest;
     } else {
       devices.value = { ...devices.value, [id]: device === null ? null : cloneJSON(device) };
+    }
+  }
+
+  const baseGroups = computed<Record<string, Group>>(() => baseConfig.value?.groups ?? {});
+  /** The groups as the draft has them: base with the edits. */
+  const effectiveGroups = computed<Record<string, Group>>(() => {
+    const out: Record<string, Group> = { ...baseGroups.value };
+    for (const [id, g] of Object.entries(groups.value)) {
+      if (g === null) delete out[id];
+      else out[id] = g;
+    }
+    return out;
+  });
+
+  /** A group changed or deleted (`null`); a group back at its base is no change. */
+  function setGroup(id: string, group: Group | null) {
+    clearServerErrors(id);
+    const before = baseGroups.value[id];
+    if ((group === null && before === undefined) || (group !== null && before !== undefined && jsonEqual(before, group))) {
+      const { [id]: _drop, ...rest } = groups.value;
+      groups.value = rest;
+    } else {
+      groups.value = { ...groups.value, [id]: group === null ? null : cloneJSON(group) };
+    }
+  }
+
+  /**
+   * Undoes the removal of a configured device of the base (the device list's and the detail's Undo):
+   * the device comes back, and so do the objects of the base that named it and that the draft deleted
+   * or took it out of (a removal together with them, #99): rules, faults and port forwards come back
+   * as the base has them, a group gets the device back as a member.
+   */
+  function restoreDevice(id: string) {
+    const before = baseConfig.value?.devices?.[id];
+    if (!before || devices.value[id] !== null) return;
+    setDevice(id, before);
+    const device = { id, name: before.name };
+    const refs = deviceReferences(device, { rules: baseRules.value, faults: baseFaults.value, groups: baseGroups.value, forwards: baseForwards.value });
+    for (const r of refs) {
+      if (r.kind === 'rule') restoreRule(r.id);
+      else if (r.kind === 'fault') restoreFault(r.id);
+      else if (r.kind === 'forward' && forwards.value[r.id] === null) restoreForward(r.id);
+      else if (r.kind === 'group') {
+        const now = groups.value[r.id];
+        if (now === null) setGroup(r.id, baseGroups.value[r.id]!);
+        else if (now) setGroup(r.id, groupWithMember(baseGroups.value[r.id]!, now, device));
+      }
     }
   }
 
@@ -657,6 +715,19 @@ export const useDraftStore = defineStore('draft', () => {
         if (out.length === count) out.push({ kind: 'device', id, name, field: 'settings', from: 'as before', to: 'changed' });
       }
     }
+    const deviceName = (ref: string) => names.device?.(ref) ?? baseConfig.value?.devices?.[ref]?.name ?? ref;
+    for (const [id, g] of Object.entries(groups.value)) {
+      const before = baseGroups.value[id];
+      const name = g?.name ?? before?.name ?? id;
+      if (g === null) out.push({ kind: 'group', id, name, field: 'group', from: 'present', to: 'deleted' });
+      else if (!before) out.push({ kind: 'group', id, name, field: 'group', from: '—', to: 'added' });
+      else {
+        const count = out.length;
+        const members = (x: Group) => (x.members ?? []).map(deviceName).join(', ');
+        if (members(before) !== members(g)) out.push({ kind: 'group', id, name, field: 'members', from: members(before) || '—', to: members(g) || '—' });
+        if (out.length === count) out.push({ kind: 'group', id, name, field: 'settings', from: 'as before', to: 'changed' });
+      }
+    }
     for (const [id, { network, client }] of Object.entries(clients.value)) {
       const before = clientsIn(baseConfig.value, network)[id];
       const name = client?.name ?? before?.name ?? id;
@@ -722,6 +793,7 @@ export const useDraftStore = defineStore('draft', () => {
     const faultIds = new Set(cs.filter((c) => c.kind === 'fault').map((c) => c.id));
     const profileIds = new Set(cs.filter((c) => c.kind === 'profile').map((c) => c.id));
     const deviceIds = new Set(cs.filter((c) => c.kind === 'device').map((c) => c.id));
+    const groupIds = new Set(cs.filter((c) => c.kind === 'group').map((c) => c.id));
     const clientIds = new Set(cs.filter((c) => c.kind === 'client').map((c) => c.id));
     const networkIds = new Set(cs.filter((c) => c.kind === 'network').map((c) => c.id));
     const forwardIds = new Set(cs.filter((c) => c.kind === 'forward').map((c) => c.id));
@@ -731,6 +803,7 @@ export const useDraftStore = defineStore('draft', () => {
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
       profileIds.size ? `${profileIds.size} ${profileIds.size === 1 ? 'profile' : 'profiles'}` : '',
       deviceIds.size ? `${deviceIds.size} ${deviceIds.size === 1 ? 'device' : 'devices'}` : '',
+      groupIds.size ? `${groupIds.size} ${groupIds.size === 1 ? 'group' : 'groups'}` : '',
       networkIds.size ? `${networkIds.size} ${networkIds.size === 1 ? 'network' : 'networks'}` : '',
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
       forwardIds.size ? `${forwardIds.size} port ${forwardIds.size === 1 ? 'forward' : 'forwards'}` : '',
@@ -808,6 +881,13 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) dp[id] = p;
     }
     if (Object.keys(dp).length) out.devices = dp;
+    // a group's members are an array: the merge patch replaces them whole
+    const gp: Record<string, unknown> = {};
+    for (const [id, g] of Object.entries(groups.value)) {
+      const p = createMergePatch(baseGroups.value[id], g);
+      if (p !== undefined) gp[id] = p;
+    }
+    if (Object.keys(gp).length) out.groups = gp as ConfigurationPatch['groups'];
     // a network's own settings, and the clients of a hub inside it (a network deleted takes its clients along)
     const np: Record<string, Record<string, unknown> | null> = {};
     for (const [id, n] of Object.entries(networks.value)) {
@@ -897,6 +977,7 @@ export const useDraftStore = defineStore('draft', () => {
     compare('fault', faults.value, old?.faults ?? {}, theirs.faults ?? {}, named);
     compare('profile', profiles.value, old?.profiles ?? {}, theirs.profiles ?? {}, named);
     compare('device', devices.value, old?.devices ?? {}, theirs.devices ?? {}, named);
+    compare('group', groups.value, old?.groups ?? {}, theirs.groups ?? {}, named);
     compare('network', networks.value, networkSettings(old), networkSettings(theirs), named);
     compare('forward', forwards.value, old?.port_forwards ?? {}, theirs.port_forwards ?? {}, forwardTitle);
     compare('scenario', scenarios.value, old?.scenarios ?? {}, theirs.scenarios ?? {}, named);
@@ -985,6 +1066,7 @@ export const useDraftStore = defineStore('draft', () => {
     faults.value = reapply('fault', faults.value, old?.faults ?? {}, theirFaults);
     profiles.value = reapply('profile', profiles.value, old?.profiles ?? {}, rev.configuration.profiles ?? {});
     devices.value = reapply('device', devices.value, old?.devices ?? {}, theirDevices);
+    groups.value = reapply('group', groups.value, old?.groups ?? {}, rev.configuration.groups ?? {});
     networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
     forwards.value = reapply('forward', forwards.value, old?.port_forwards ?? {}, rev.configuration.port_forwards ?? {});
     scenarios.value = reapply('scenario', scenarios.value, old?.scenarios ?? {}, rev.configuration.scenarios ?? {});
@@ -1036,6 +1118,7 @@ export const useDraftStore = defineStore('draft', () => {
     faults.value = {};
     profiles.value = {};
     devices.value = {};
+    groups.value = {};
     clients.value = {};
     networks.value = {};
     routing.value = undefined;
@@ -1128,6 +1211,7 @@ export const useDraftStore = defineStore('draft', () => {
     faults,
     profiles,
     devices,
+    groups,
     clients,
     networks,
     routing,
@@ -1166,6 +1250,9 @@ export const useDraftStore = defineStore('draft', () => {
     restoreFault,
     restoreProfile,
     setDevice,
+    restoreDevice,
+    effectiveGroups,
+    setGroup,
     setClient,
     setNetwork,
     restoreNetwork,

@@ -95,7 +95,7 @@ function removed(d: DeviceView): boolean {
 }
 function undoRemoval(e: Event, d: DeviceView) {
   refocusAfterSwap(e);
-  draft.setDevice(d.id, draft.baseConfig?.devices?.[d.id] ?? null);
+  draft.restoreDevice(d.id);
 }
 
 // the device dialog (#73) and the removal dialog, for a configured device; mounted for the device

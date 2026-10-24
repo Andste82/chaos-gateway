@@ -405,7 +405,7 @@ DHCP is both infrastructure and a test instrument.
 
 Selected traffic (by device, port or hostname) is redirected transparently to one of two components. No proxy configuration is needed on the device.
 
-- **TLS responder** (part of the core, Go) for certificate test cases. It terminates the connection itself with a deliberately broken certificate generated for the requested SNI and never forwards traffic. A correct device aborts anyway.
+- **TLS responder** (part of the core, Go) for certificate test cases. It terminates the connection itself with a deliberately broken certificate generated for the requested SNI and never forwards what a device sends it. A correct device aborts anyway. A connection that the kernel selected but no case decides (a server name no case names, a shared CDN address) is passed on to its destination unchanged, and only if the gateway would have forwarded it (M21, `docs/development.md`).
 - **TLS interception proxy** based on mitmproxy (sidecar, see §3.1) for inspection and manipulation.
 
 Spike S4 confirmed the cases below on real TLS clients.
@@ -452,7 +452,7 @@ Named fault sets, built-in and user-defined:
 | DNS broken | DNS SERVFAIL |
 | TLS broken | handshake reset on TLS ports |
 
-Values are one-way per direction. Profiles apply to a device, group, network or globally, and can be activated with a TTL. The built-in values are starting points to be calibrated. "DNS broken" became available with M20, "TLS broken" becomes available with the TLS milestone (M21).
+Values are one-way per direction. Profiles apply to a device, group, network or globally, and can be activated with a TTL. The built-in values are starting points to be calibrated. "DNS broken" became available with M20, "TLS broken" with the TLS milestone (M21).
 
 ## 2.10 Scenarios and Runs
 
@@ -1008,7 +1008,7 @@ the privilege for the raw sockets, writes the packet files into it as the owner 
 chaos-gateway/
   api/                openapi.yaml (source of truth), examples/ (fixtures + validate.py)
   cmd/
-    chaosgw/          subcommands: api, exec, dns, kea-hook, svcns, admin (tls is a stub: M21)
+    chaosgw/          subcommands: api, exec, dns, tls, kea-hook, svcns, admin
     chaosctl/         CLI (a main over internal/ctl, M18)
   internal/
     clock/            injectable clock
@@ -1042,7 +1042,7 @@ chaos-gateway/
   deploy/             container image (multi-arch), compose files, host setup
   docs/
   sidecars/tls-proxy/ mitmproxy addon (later)
-  profiles/  scenarios/  capture/  tlsresponder/ (later)
+  profiles/  scenarios/  capture/  tlsresponder/ (M21)
 ```
 
 ## 3.8 Deployment
@@ -1541,6 +1541,7 @@ M4c-10); coalescing in the apply loop (§3.11); executor reader pool, so reads (
 - Tests: `openssl s_client`/`curl` with TLS 1.2 and 1.3 — untrusted/expired/wrong-host/self-signed are rejected by a correct client; a deliberately insecure client is flagged by the check; golden test E11; a client trusting the test CA passes the "untrusted CA" case; upload and download latency apply to connections to the responder (service namespace); the responder reads the original destination; the same cases work for a WireGuard client.
 - Acceptance (carried over from Phase 2, decided 2026-10-11): a profile with a `tls` part, custom or the built-in "TLS broken", activates and its TLS part competes in the TLS family, with the `tls` family lifted from `domain.unavailableFamilies` (`docs/open-items.md` P2-M11-01; until then the activation is refused with `unsupported_feature`).
 - Depends on: M9, M16, S4, S16.
+- **Status:** implemented on the branch `phase-5` (not merged), not done yet. Everything in Scope, Tests and Acceptance above is implemented: the responder (`chaosgw tls`, `internal/tlsresponder`) with the two CAs and the download, the redirect of selected new connections through the service namespace (the conntrack mark, `cut_existing`, the reset on removal), the five certificate cases and the three handshake cases, the no-SNI fallback, the events per handshake with the expectation from `trusts_test_ca`, the checks `tls_rejected` and `tls_accepted`, the "TLS broken" profile and the step type `tls` (the `tls` family is lifted from `domain.unavailableFamilies`, P2-M11-01), E11 as a golden test. All level 0 tests pass here. The level 1 tests (`internal/api/e2e_tls_test.go`) are written, vetted with `-tags testbed` and wired into both CI testbed jobs and the nightly matrix with `M21_LEVEL1`, but were not run here (no KVM, no namespaces): the kernel side is verified by CI only until its run is green. One point needs a decision of the maintainer, in `docs/open-items.md` under "Phase 5 open items": P5-M21-01 (TLS cases cannot be made in the web UI's "Add fault" and step dialogs or with `chaosctl`; the same gap as P5-M20-02, which recommends one form for both). The status becomes "done" when the level 1 run is green and the item is decided.
 
 **M22 — TLS interception and HTTP faults** (L)
 - Scope: mitmproxy sidecar management and control from the core, test CA management (generate, download for dev firmware), HTTP(S)/WebSocket inspection, URL blocking, error codes, delay/throttle, modification, connection abort, key log for captures; block-UDP-443 option; interception scenario step type.

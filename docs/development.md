@@ -1030,7 +1030,8 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
   The identity does not flap either (issue #93, option (a), decided 2026-10-24): `ResolveIdentity` keeps
   the stale (STALE, DELAY, PROBE) neighbor entry of a configured device as a lingering claim of its
   address (`claim.yielding`, the device's least current address) that gives way to any claim of another
-  device on the address (`yieldToOthers`), so a device with a static address set on itself (no lease, no
+  device on the address (`yieldToOthers`), a discovered device seen with it included (a lease or neighbor
+  entry of a MAC no configured device has), so a device with a static address set on itself (no lease, no
   fixed IP) keeps its address between two confirmations and no `device_identity_changed` is sent. A
   probe's stale entry still counts only while the address carries connections. Tests:
   `TestAStaleNeighborOfAConfiguredDeviceKeepsItsAddress`, `TestAStaleNeighborClaimGivesWayToAnotherDevice`,

@@ -387,6 +387,20 @@ func TestAStaleNeighborClaimGivesWayToAnotherDevice(t *testing.T) {
 	o.FixedIp = nil
 	devs[otherID] = o
 
+	// a device no configured device covers (a MAC of no device) that has the address now: a lease, a
+	// confirmed entry on another interface
+	const foundID, foundMAC = "cccccccc-dddd-4eee-8fff-000000000000", "02:00:00:00:00:77"
+	found := []DiscoveredDevice{{ID: foundID, MACs: []string{foundMAC}, IPs: []netip.Addr{addr}}}
+	for name, obs := range map[string]Observed{
+		"a discovered device's lease": {Neighbors: []Neighbor{stale}, Leases: []model.DhcpLease{lease(addr.String(), foundMAC, time.Hour)}, Discovered: found},
+		"a discovered device's entry": {Neighbors: []Neighbor{stale, {IP: addr, MAC: foundMAC}}, Discovered: found},
+	} {
+		id := ResolveIdentity(cfg, obs, nil)
+		if id.Owner[addr] != foundID || len(id.Conflicts) != 0 || len(id.Addresses[idESP]) != 0 {
+			t.Errorf("%s: owner %v, conflicts %v", name, id.Owner, id.Conflicts)
+		}
+	}
+
 	// two stale entries of two devices: another device claims the address for each, so neither keeps it
 	id := ResolveIdentity(cfg, Observed{Neighbors: []Neighbor{stale, {IP: addr, MAC: otherMAC, Stale: true}}}, nil)
 	if owner, owned := id.Owner[addr]; owned || len(id.Conflicts) != 0 {

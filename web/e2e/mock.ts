@@ -523,7 +523,7 @@ export class MockGateway {
     overlay_kinds: ['fault', 'profile', 'rule', 'wireguard'],
     fault_families: ['impairment', 'mtu', 'tunnel'],
     step_types: ['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
-    check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen'],
+    check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted'],
   };
   private nextRun = 1;
   uplink: UplinkView = {

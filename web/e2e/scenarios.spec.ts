@@ -688,7 +688,30 @@ test('a step of a type this build cannot edit is shown and kept; the check types
   expect(sent.steps![0]).toEqual({ id: 'dns', at: '2s', dns: { action: 'nxdomain', names: ['broker.example.com'] } });
   await page.getByRole('button', { name: 'Back to editing' }).click();
   await page.getByTestId('add-check').click();
-  await expect(dialog(page, 'Add check').getByLabel('Check', { exact: true }).locator('option')).toHaveText(['Reconnected', 'No connection', 'Traffic seen', 'Traffic not seen', 'DNS query seen']);
+  await expect(dialog(page, 'Add check').getByLabel('Check', { exact: true }).locator('option')).toHaveText(['Reconnected', 'No connection', 'Traffic seen', 'Traffic not seen', 'DNS query seen', 'TLS rejected', 'TLS accepted']);
+});
+
+// M21: the two TLS checks are in the editor once the gateway lists them; they take the connection the device meant (a selector
+// like the traffic checks) and are written as `tls_rejected` and `tls_accepted`.
+test('a TLS check is added with the connection the device meant and sent as its own check type', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto(`/scenarios/${SCN_MQTT}`);
+  await page.getByTestId('add-check').click();
+  const c = dialog(page, 'Add check');
+  await c.getByLabel('Check', { exact: true }).selectOption('tls_rejected');
+  await expect(c).toContainText('aborts a TLS handshake with the gateway');
+  await c.getByLabel('Opens when', { exact: true }).selectOption('restore');
+  await c.getByLabel('Protocol', { exact: true }).selectOption('tcp');
+  await c.getByLabel('Ports', { exact: true }).fill('8883');
+  await c.getByLabel('Name in the report').fill('rejects the broken certificate');
+  await c.getByRole('button', { name: 'Add to the changes' }).click();
+  await expect(c).toBeHidden();
+  await expect(page.getByTestId('check').last()).toContainText('rejects the broken certificate');
+  await expect(page.getByTestId('check').last()).toContainText('TLS rejected: TCP 8883');
+  await page.getByRole('button', { name: 'Preview & apply' }).click();
+  const sent = (gw.requestsTo('POST', '/revisions')[0]!.body as { scenarios: Record<string, Partial<Scenario>> }).scenarios[SCN_MQTT]!;
+  expect(sent.checks!.at(-1)).toMatchObject({ name: 'rejects the broken certificate', tls_rejected: { protocol: 'tcp', ports: [8883] }, window: { from: 'restore' } });
 });
 
 test('while a revision waits for confirmation, a scenario cannot be run', async ({ page }) => {

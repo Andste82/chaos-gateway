@@ -47,6 +47,21 @@ describe('fault chips', () => {
     expect(overlayChips({ ...base, dns: { action: 'short_ttl', ttl: '1s' } } as Overlay)).toEqual(['DNS TTL 1s']);
     expect(overlayChips({ ...base, dns: { action: 'truncate' } } as Overlay)).toEqual(['DNS truncate']);
   });
+
+  it('say which certificate case a TLS case shows and to which connections', () => {
+    const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'tls' } as const;
+    expect(overlayChips({ ...base, tls: { case: 'expired' } } as Overlay)).toEqual(['TLS expired']);
+    expect(overlayChips({ ...base, tls: { case: 'self_signed', ports: [8883, 443], sni: ['broker.example.com'] } } as Overlay)).toEqual([
+      'TLS self signed · 8883, 443 · SNI broker.example.com',
+    ]);
+    expect(
+      overlayChips({ ...base, tls: { case: 'untrusted_ca', port_ranges: [{ from: 8000, to: 8100 }], destination: { cidr: '203.0.113.0/24' }, cut_existing: true } } as Overlay),
+    ).toEqual(['TLS untrusted ca · 8000-8100 · 203.0.113.0/24 · cuts existing']);
+    expect(overlayChips({ ...base, tls: { case: 'handshake_reset', destination: { hostname: '*.example.com' } } } as Overlay)).toEqual([
+      'TLS handshake reset · *.example.com',
+    ]);
+    expect(overlayChips({ ...base } as Overlay)).toEqual(['TLS case']);
+  });
 });
 
 describe('selectors in words', () => {

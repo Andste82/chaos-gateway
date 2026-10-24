@@ -71,8 +71,8 @@ export const checkTypeHints: Record<CheckType, string> = {
   traffic_seen: 'A packet of a connection of the target is seen inside the window. Passes at the first one.',
   traffic_not_seen: 'No packet of a connection of the target is seen inside the window, except to the destinations allowed below.',
   dns_query_seen: 'A device of the target asks the gateway for the name inside the window.',
-  tls_rejected: 'The device aborted the TLS handshake with the responder.',
-  tls_accepted: 'The device completed the handshake.',
+  tls_rejected: 'A device of the target aborts a TLS handshake with the gateway\'s responder inside the window: it was shown a certificate and did not take it. Passes at the first one.',
+  tls_accepted: 'A device of the target completes a TLS handshake with the responder inside the window: it took the certificate. The finding of the security check, for a case it must reject.',
 };
 
 const stepKeys: StepType[] = ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'];

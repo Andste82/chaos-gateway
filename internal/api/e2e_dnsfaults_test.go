@@ -149,13 +149,17 @@ func (b *faultBed) setElements(pattern string) []string {
 	return nil
 }
 
-// waitHostnameSet waits until the plan that holds the DNS-derived set of a hostname fault is in the kernel: an answer the proxy gives before
-// that has no set to write the address to, and the element would not be there when the device connects.
-func (b *faultBed) waitHostnameSet(t *testing.T) {
+// waitHostnameSet waits until the DNS-derived set of a hostname fault is in the kernel and the proxy has the fault's host name, so that the next
+// answer it gives for the name fills the set: an answer given before that has no set to write the address to, and the device that asked is not
+// selected when it connects. The device asks again until the proxy has written the pair.
+func (b *faultBed) waitHostnameSet(t *testing.T, host string) {
 	t.Helper()
 	waitFor(t, 20*time.Second, "the DNS-derived set exists in the kernel", func() bool {
 		out, err := b.top.GW.Run(context.Background(), "nft", "list", "sets", "inet", "chaosgw")
 		return err == nil && strings.Contains(out, "set dns_")
+	})
+	waitFor(t, 20*time.Second, "the proxy has written the address of "+host+" to the set", func() bool {
+		return b.addrOf(host) == testbed.ServerAddr && len(b.setElements(host)) > 0
 	})
 }
 
@@ -319,7 +323,7 @@ func TestAHostnameFaultAffectsOnlyTrafficToTheResolvedAddressesOnTheRealKernel(t
 func TestALongLivedConnectionKeepsItsHostnameFaultPastAOneSecondTTLOnTheRealKernel(t *testing.T) {
 	b := newFaultBed(t, "--local-ttl=1")
 	b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"100ms","destination":{"hostname":"`+brokerHost+`"}}}`)
-	b.waitHostnameSet(t)
+	b.waitHostnameSet(t, brokerHost)
 	out, err := b.dig(brokerHost, "+noall", "+answer")
 	if f := strings.Fields(out); err != nil || len(f) < 2 || f[1] != "1" {
 		t.Fatalf("the answer does not carry a TTL of 1 s: %q %v", out, err)
@@ -399,7 +403,7 @@ func dialIn(ns *testbed.Namespace, addr string) (net.Conn, error) {
 func TestTheDNSDerivedSetSurvivesTenOverlayChangesOnTheRealKernel(t *testing.T) {
 	b := newFaultBed(t)
 	hid := b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"100ms","destination":{"hostname":"`+brokerHost+`"}}}`)
-	b.waitHostnameSet(t)
+	b.waitHostnameSet(t, brokerHost)
 	if got := b.addrOf(brokerHost); got != testbed.ServerAddr {
 		t.Fatal(got)
 	}

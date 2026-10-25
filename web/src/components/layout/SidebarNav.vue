@@ -21,7 +21,7 @@ const items: NavItem[] = [
   { label: 'Faults', icon: 'faults', to: '/faults' },
   { label: 'Profiles', icon: 'profiles', to: '/profiles' },
   { label: 'Scenarios', icon: 'scenarios', to: '/scenarios' },
-  { label: 'Captures', icon: 'captures', later: 'a later milestone' },
+  { label: 'Captures', icon: 'captures', to: '/captures' },
   { label: 'Diagnostics', icon: 'diagnostics', later: 'M24' },
   { label: 'Activity', icon: 'activity', later: 'a later milestone' },
 ];

@@ -19,7 +19,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
 | `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
 | `internal/capture` | the packet capture engine (M17): the filter of a capture (a selector as a user space matcher and as a classic BPF program), the pcap and pcapng writers and reader, the files of a capture with ring buffer and size limit, and the session that reads AF_PACKET sockets (runs in the executor) |
-| `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit, the stream to the executor, the download, and the TLS key log of a capture with the clients a scope covers (M22) |
+| `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit (and the report of both for the Captures screen, M23a), the stream to the executor, the download, and the TLS key log of a capture with the clients a scope covers (M22) |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -42,7 +42,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
-| `web/` | the web app (M12; scenarios M19): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
+| `web/` | the web app (M12; scenarios M19; captures M23a): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
@@ -5388,7 +5388,7 @@ milestones and on the configuration draft of M13.
 
 - **Routes** (`src/router.ts`): `/scenarios` (the list; the first scenario is shown), `/scenarios/:id` (id or name; `?tab=yaml|runs`,
   `?run=<id>` shows a run) and `/runs/:id` (the page of one run, also of an inline run that has no scenario of its own). The
-  navigation entry Scenarios is a link now; Captures stays a disabled entry until M23a (P4-M19-01, closed).
+  navigation entry Scenarios is a link now; Captures stayed a disabled entry until M23a (P4-M19-01, closed; see "Captures UI (M23a)").
 - **A scenario is an object of the configuration,** so it is changed like a profile (M13): the dialogs "Add to the changes" put the
   scenario into the draft (`useDraftStore().setScenario`, `scenarios`), the unapplied-changes bar counts it ("2 changes in 1
   scenario"), the preview drawer and the concurrent-change dialog take it to the gateway as a merge patch (`scenarios` in
@@ -6023,6 +6023,125 @@ lease, the router, the DNS server and the domain it was given). The script of th
 | A device fault stays attached after the forced new IP | `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel` (level 1: the fault's delay at the new address, the kernel's identity map, the fault count), `TestADeviceFaultStaysAttachedAfterTheForcedNewIPAndTheDeviceFollowsItsAddress` (level 0: the identity map and the fault of the device after the move) |
 | Scope: DHCP scenario step type | `dhcp` in `run.SupportedStepTypes`, `TestARunWithADHCPStepAppliesItAndTakesItOut`, `TestARunWhoseDHCPStepCannotBeCarriedOutEndsAsAnError`, `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` (capabilities) |
 | Scope: the overlay kind `dhcp` (refused with `unsupported_feature` until M23, plan M8a) | `TestADHCPActionReachesTheServersConfigurationAndLeavesWithItsOverlay`, `TestADHCPActionIsEffectiveWhileTheServerRunsItAndDisabledWhereNothingServesDHCP`, `TestCapabilitiesNameWhatOverlaysThisBuildTakes` |
+
+## Captures UI (M23a)
+
+Plan §2.17 "Captures" and M23a. The Captures screen and the capture panel of the device detail, on the API and the engine of M17.
+The one addition to the API is `GET /captures/storage`; everything else is the web app. The design of the screen is part of the
+milestone and is in plan §2.17 (the row "Captures" of the table of screens; it was listed under "Not yet designed" before).
+
+### How it works
+
+- **Storage.** The spec has `GET /captures/storage` (`getCaptureStorage`, scope `read`, `x-milestone: M23a`) with the schema
+  `CaptureStorage`: `quota_bytes` (the configuration's `settings.retention.captures_quota`, else `--capture-quota`), `used_bytes` (the
+  sum of the sizes of all captures, a running one as the executor last reported it, the number the quota decides on),
+  `volume_total_bytes`, `volume_free_bytes` and `free_percent` (left out when the volume cannot be read, so the UI does not make up a
+  free space), `min_free_percent` (10), `disk_low` (below the limit, decided with the same number as the stop and the refusal),
+  `running` and `max_running` (8). `capturemgr.Manager.Storage` makes it, `Server.GetCaptureStorage` serves it; a deployment without a
+  capture volume answers it with `422 unsupported_feature` like every capture operation. Nothing else on the server changed: the
+  list, start, stop, delete and download are M17's.
+- **Routes and navigation** (`src/router.ts`, `SidebarNav.vue`): `/captures`. The navigation entry Captures is a link (it was a disabled
+  entry until M23a). An event whose subject is a capture links to it (`lib/links.ts`).
+- **The screen** (`views/CapturesView.vue`): the storage card (`StorageCard.vue`: the quota as a bar with `1.0 GiB of 5.0 GiB`, the
+  free space of the volume with the limit, the running captures; a red notice when the volume is below the limit, a plain one when the
+  quota is used up) and the list (`CaptureRow.vue` in a grid: name with the format and the mark SENSITIVE, scope, state, size, packets,
+  dropped, start, run and the actions). The list is `useCaptures` (`composables/gateway.ts`: every page of `GET /captures`, read every 2 s
+  while one runs and every 15 s otherwise), the storage `useCaptureStorage` (the same rhythm). A list that cannot be read says so
+  (`LoadError`) instead of showing the empty state.
+- **The state** (`lib/captures.ts` `captureState`) is a dot and a label: *Running*, *Stopped* (a user), *Ended · duration*, *Ended · size limit*,
+  *Ended with its run* (all grey, as asked), *Stopped · quota*, *Stopped · disk low* and *Failed* (red, the gateway's `message` under the label:
+  the capture is shorter than asked or damaged; what it recorded stays and can be downloaded). The API gives no separate reason for
+  the quota: a stop by `size` that has a `message` is the quota (the capture reached the space left in it, or the captures together
+  passed it); the size limit the user chose ends without a message (`capturemgr.finish`).
+- **Actions** (`CaptureActions.vue`, shared by the screen and the panel): *Stop* (a running capture; answers when the files are closed),
+  *Download* and *Key log* (plain links to `GET /captures/{id}/download` and `?part=keylog`), *Delete* (a stopped capture only, after a
+  dialog that names its size). Every action is recorded for the `</> API` panel and refreshes the list and the storage.
+- **New capture** (`CaptureDialog.vue`, `lib/captures.ts` `CaptureForm`): the form of the request of `POST /captures`. Scope: Device,
+  Network, Selector (a source of everything, a network, a group or a device, and the traffic fields the fault dialog and the scenario
+  steps use: `TrafficFields.vue`) or Uplink; duration; size limit; under *Advanced* the format, the packet length and a ring buffer that
+  replaces the size limit (the request never has both, as the API refuses it). `captureErrors` mirrors the limits of the gateway
+  (a size of at least 64 KiB, 2 to 100 files, a packet length of 64 to 262144, a duration that is not zero) so Start waits until the form is
+  valid; what only the gateway can know (a device without an address, a host name nobody asked for yet, a size above the quota) comes back
+  as `422` with a pointer, `captureFieldOf` finds the field, and a refusal of an advanced field opens *Advanced*. The refusals without a
+  field (`capacity_exceeded`: a low disk, eight captures running, the quota used by running ones) stand under the form. From a device's page
+  the scope is fixed to the device.
+- **The device detail** (`CapturePanel.vue`): the captures whose scope is the device, by UUID or by name, or a selector whose source is the
+  device (`isDeviceCapture`), newest first, in the compact form of the row, with the same actions; *Capture* opens the dialog with the
+  device as its scope, *All captures* links to the screen.
+- **Live updates** (`composables/eventStream.ts`): `capture_started`, `capture_stopped` and `disk_low` invalidate `['captures']` (the list and
+  the storage) and, for the first two, the runs as before. Three toasts: the quota stopped a capture (`capture_stopped` with the reason `size`
+  and a message), a capture failed (`error`), and the disk ran low (`disk_low`); a stop by a user or by the duration is no news to the
+  user who asked for it.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 5 item in `open-items.md` for M23a):
+
+1. **The storage is an operation of its own (`GET /captures/storage`)** and not a field of `CapturePage`: the free space of the volume is not
+   a property of a page of captures (a filtered list or a later page would repeat it), and a client that wants only the quota should not read
+   the list. It is additive (plan §2.15: the version stays `/api/v1`).
+2. **A download is a plain link, not a request that the page buffers.** A capture can be a gigabyte (the default limit is 1 GiB), the browser
+   streams a link to disk, and the file name comes from the gateway's `Content-Disposition` (`attachment`, the name of the capture), so the
+   link has no `download` attribute: a link with one is not seen by Playwright's request interception, so the test could not check the request.
+   If the capture is gone meanwhile, the browser shows the gateway's error page instead of a file (the list is at most 2 s old and does not
+   offer a link for a capture it does not have).
+3. **The key log is offered only for a capture that has one (`keylog: true`) and only with the scope `full`;** a capture marked `sensitive` is
+   downloaded only with `full`, too (the gateway checks both, the UI does not offer what the gateway would refuse). The admin's session has
+   `full`, so the cases of a token with a smaller scope are a test of the mock (`sessionScope`), not of a screen anyone will see.
+4. **The management networks are not offered in the dialog.** The gateway never records the admin's tunnel and refuses a scope that names one
+   (`management_network`, decided 2026-10-19, P4-AUDIT-16); the dialog leaves the WireGuard networks of the role management out of the
+   choices of a network and of a selector's source, so the refusal is not the way to find that out. The refusal is still shown under the field
+   when a name is typed in by hand through another client.
+5. **A capture the quota stopped is a red state, a stop by the size limit the user chose is not.** The first is shorter than the user can
+   know without looking (they asked for 1 GiB and the quota had less), the second is the capture doing what was asked. The tone follows the
+   plan's colours: red for what failed, grey for what ended as asked, blue for what runs.
+6. **Delete asks first,** unlike Stop: the files of a capture, and often a bug that took an hour to reproduce, are gone for good, and the
+   gateway has no undo. The dialog names the size.
+7. **The screen needs the capability.** Until `GET /capabilities` has answered nothing asks for captures (a deployment without a capture volume
+   would answer every call with `422 unsupported_feature`); a gateway whose features lack `captures` gets one sentence instead of the list and
+   no *New capture*, here and in the device's panel. Capabilities that cannot be read do not keep the screen from trying.
+8. **No filter and no search yet.** The list is every capture newest first; the quota keeps it short (the oldest stopped captures go first),
+   and the runs' captures are reached from their run (the Run column links to it). A filter by run or device is a later refinement, not
+   part of plan M23a's scope.
+
+### Tests
+
+Level 0, all run here. Go: `internal/api/captures_test.go` `TestTheStorageOfTheCapturesIsTheQuotaTheSizesAndTheFreeSpace` (the
+quota of the configuration, the sizes of a running and a stopped capture, the volume against the limit and exactly at it, the delete that
+gives the size back, the token that only reads) with the response checked against the spec like every test of that file, the token
+scopes and the deployment without a volume in the tests that list their operations, and `misc_test.go` (the operation belongs to a milestone
+that is in the build). Web unit tests (`make test-web`, vitest, 505 tests in 39 files with the older ones): `lib/captures.test.ts` (the states and
+the quota tell from the size limit, the sizes, the storage view, the scope in words and the captures of a device, the form and the request it
+makes, the checks of the limits, the field a refusal names) and `composables/eventStream.test.ts` (the events read the captures, the three
+toasts and the ends that have none) and the route in `router.test.ts`. Playwright against the mocked API (`make test-e2e`,
+`e2e/captures.spec.ts`, 18 tests): the navigation link; the list with all its columns and the storage; the counters of a running capture
+following the gateway; starting a capture on a device, seeing it run in the panel and in the list, downloading it while it runs, stopping it,
+downloading it; the panel of a device lists only its captures; a capture the quota, a low disk or a failure ended is shown as such and one the
+size limit ended is not; the live stop by the quota and the low disk with their toasts; a capture started elsewhere appearing in both places;
+deleting from the list and from the panel with the question; the key log and the mark SENSITIVE, and the same with a smaller scope; New
+capture for a network, a selector, the uplink with a ring buffer and a pcap file, with the request that is sent; the messages under the
+fields and Start that waits; the refusals of the gateway under their fields, opening *Advanced* and below the form; the request in the API
+panel and in the dialog and no admin tunnel among the choices; a gateway without a capture volume; a list that cannot be read; the API
+panel of the screen.
+
+Nothing of M23a needs a VM or a namespace: the captures themselves are M17's level 1 tests, and the screen runs against the mocked API
+(plan M23a "Tests"), so no test is left to CI beyond the ones it runs anyway.
+
+### Acceptance map (plan M23a "Tests" and Scope)
+
+| Plan M23a | Test |
+|---|---|
+| Tests: start a capture on a device, see it running in the list and in the device detail, stop it and download it | `a capture of a device: start it on the device, see it running there and in the list, stop it and download it`, `the device's panel lists only the captures of that device …` |
+| Tests: a capture that hit the quota or the free-space limit is shown as such | `a capture the quota or a low disk ended is shown as such, one the size limit ended is not`, `a capture that the quota or the disk stops while the screen is open shows up at once, with a toast`; `lib/captures.test.ts` (the states) |
+| Tests: deleting a capture removes it from both places | `deleting a capture removes it from the list and from the device, after a question` |
+| Scope: list of captures (name, scope, state, size, packets, dropped, started, the run) | `the list shows name, scope, state, size, packets, dropped, start and run, and the storage`, `the counters of a running capture follow the gateway` |
+| Scope: "New capture" with the scope of the request, format, snap length, duration, size or ring buffer | `New capture: a network, a selector and the uplink, with the limits, as the request has them`, `New capture: each message stands under its field …`, `New capture: the gateway refuses a field …`, `New capture shows the request in the API panel …`; `lib/captures.test.ts` (the form) |
+| Scope: stop, download, the key log only with scope `full`, delete | the tests above, `the TLS key log is offered only for a capture that has one …`, `without the scope full there is no key log …` |
+| Scope: the quota and the free space | `TestTheStorageOfTheCapturesIsTheQuotaTheSizesAndTheFreeSpace` (the API), the storage assertions of the list tests (the card, the low-disk notice) |
+| Scope: the device detail's panel with a "Capture" action | `a capture of a device: …`, `the device's panel lists only the captures …` |
+| Scope: the events keep the list live | `a capture that the quota or the disk stops while the screen is open …`, `a capture that starts elsewhere … appears … without a reload`; `composables/eventStream.test.ts` |
+| Scope: the navigation entry becomes a link | `the navigation entry Captures is a link to the screen`; `router.test.ts` |
+| Scope: the design is added to §2.17 | plan §2.17, the row "Captures" of the table of screens; "Not yet designed" no longer lists it |
 
 ## Generated code
 

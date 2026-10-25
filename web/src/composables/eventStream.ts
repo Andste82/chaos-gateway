@@ -36,8 +36,11 @@ export const invalidates: Partial<Record<EventType, string[][]>> = {
   run_step: [['runs']],
   run_check: [['runs']],
   run_finished: [['runs'], ['overlays'], ['devices'], ['faults'], ['state']],
-  capture_started: [['runs']],
-  capture_stopped: [['runs']],
+  // a capture of a run is one of the run's artifacts; the list of captures and the storage (the quota, the free
+  // space) change with each start and end, and a low disk stops captures
+  capture_started: [['runs'], ['captures']],
+  capture_stopped: [['runs'], ['captures']],
+  disk_low: [['captures']],
   device_discovered: [['devices'], ['networks']],
   device_online: [['devices']],
   device_offline: [['devices']],
@@ -102,6 +105,19 @@ function toast(ev: GatewayEvent, toasts: ReturnType<typeof useToastStore>) {
     case 'apply_failed':
       toasts.push('error', 'Apply failed', ev.message);
       break;
+    case 'disk_low':
+      toasts.push('error', 'The disk of the captures is low', 'Running captures stop and new ones are refused until space is free: delete captures.');
+      break;
+    case 'capture_stopped': {
+      // an end the user did not ask for: the quota (a stop by size with a message; the size limit the user chose has none),
+      // or a failure. A stop by a low disk has its own event.
+      const reason = ev.data?.['reason'];
+      const message = ev.data?.['message'];
+      const name = subjectName(ev) || 'A capture';
+      if (reason === 'size' && typeof message === 'string') toasts.push('fault', `${name} stopped: quota reached`, message);
+      else if (reason === 'error') toasts.push('error', `${name} failed`, typeof message === 'string' ? message : undefined);
+      break;
+    }
     case 'safe_mode':
       toasts.push('error', 'Safe mode: forwarding is disabled', ev.message);
       break;

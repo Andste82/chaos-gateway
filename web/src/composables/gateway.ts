@@ -7,11 +7,12 @@ import { computed, watch } from 'vue';
 import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
 import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles, listScenarios } from '../api/generated/hooks/config/config';
+import { getCaptureStorage, listCaptures } from '../api/generated/hooks/captures/captures';
 import { getRun, listRuns } from '../api/generated/hooks/runs/runs';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, DeviceView, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import type { AccessRuleView, Capture, DeviceView, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { isRunOf, mergeRuns } from '../lib/runs';
@@ -198,6 +199,43 @@ export function useRun(id: () => string | undefined) {
       const s = q.state.data?.status;
       return s === 'queued' || s === 'running' ? 1_000 : false;
     },
+  });
+}
+
+/**
+ * The captures, newest first (M23a). The counters of a running capture grow without an event of their own (the
+ * gateway reads them once a second), so the list is read every 2 s while one runs; the events of a capture read it
+ * at once, and it is polled slowly otherwise.
+ */
+export function useCaptures(enabled: () => boolean = () => true) {
+  return useQuery({
+    queryKey: ['captures', 'all'],
+    queryFn: ({ signal }) => fetchAll<Capture>((cursor) => listCaptures({ limit: 500, cursor }, { signal }), signal),
+    enabled: computed(enabled),
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status === 'running') ? 2_000 : 15_000),
+  });
+}
+
+/** What the captures take of the quota and of the volume, and how many run. */
+export function useCaptureStorage(enabled: () => boolean = () => true) {
+  return useQuery({
+    queryKey: ['captures', 'storage'],
+    queryFn: ({ signal }) => getCaptureStorage({ signal }),
+    enabled: computed(enabled),
+    refetchInterval: (q) => (q.state.data?.running ? 2_000 : 15_000),
+  });
+}
+
+/**
+ * Whether this deployment can capture: a gateway without a capture volume lacks the feature `captures`
+ * and answers every capture operation with `unsupported_feature`. Undefined until the capabilities are known, so
+ * nothing asks for captures before; capabilities that cannot be read do not keep the captures from being tried.
+ */
+export function useCanCapture() {
+  const caps = useCapabilities();
+  return computed<boolean | undefined>(() => {
+    if (caps.data.value) return caps.data.value.features.includes('captures');
+    return caps.error.value ? true : undefined;
   });
 }
 

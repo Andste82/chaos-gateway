@@ -4119,7 +4119,8 @@ type Event struct {
 	// Type Every type the event bus can carry. `observed_changed` fires when the observed state
 	// (devices, leases, flows) changes without a configuration change behind it.
 	// `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
-	// produced from M28 on. `events_lost` is synthetic: the server sends it instead of a replay
+	// produced from M28 on. `dhcp_leases_deleted` says that the DHCP action `delete_lease` deleted leases
+	// (`data`: `overlay`, `network`, for a device's action `device`, and `count`). `events_lost` is synthetic: the server sends it instead of a replay
 	// when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
 	// the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
 	// `expired`).
@@ -4129,7 +4130,8 @@ type Event struct {
 // EventType Every type the event bus can carry. `observed_changed` fires when the observed state
 // (devices, leases, flows) changes without a configuration change behind it.
 // `service_restarted` is declared for a managed service (Kea, BIRD, the DNS proxy) restart,
-// produced from M28 on. `events_lost` is synthetic: the server sends it instead of a replay
+// produced from M28 on. `dhcp_leases_deleted` says that the DHCP action `delete_lease` deleted leases
+// (`data`: `overlay`, `network`, for a device's action `device`, and `count`). `events_lost` is synthetic: the server sends it instead of a replay
 // when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
 // the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
 // `expired`).

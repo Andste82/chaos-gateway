@@ -518,7 +518,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `tunnel_parameter` | A tunnel fault sets a parameter other than latency, jitter, loss, burst_loss, blackout or flapping. |
 | `invalid_dns_fault` | A DNS fault's action and its fields do not match (a field required by the action is missing, or set for the wrong one). |
 | `invalid_tls_case` | A TLS case's fields do not match its case (protocol not tcp, interception fields outside `intercept`, ...). |
-| `invalid_dhcp_action` | A DHCP action's fields do not match (`lease_time` only for `short_lease`, `options` only for `set_options`). |
+| `invalid_dhcp_action` | A DHCP action's fields do not match (`lease_time` only for `short_lease`, `options` only for `set_options`, `ip` only for `force_new_ip`), or the engine cannot carry out `force_new_ip` (the device has no MAC address or no local network, its network has DHCP off, the address named is not inside the network or belongs to another host, no address of the pools is free; the path says whether it is the target or the address). |
 | `invalid_overlay` | An overlay request names zero, or both, of `client` and `link`. |
 | `invalid_flapping` | A flapping fault's `up` or `down` is zero. |
 | `invalid_rate` | A fault's `rate` is below 8 bit/s (netem limits in bytes per second: such a rate would not limit at all). |
@@ -1565,8 +1565,7 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DHCP M23;
-  the kind `dns` has been supported since M20, the kind `tls` since M21, with its case `intercept` since M22) are refused with `unsupported_feature` before they reach the owner. The
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`; none is left: the kind `dns` has been supported since M20, the kind `tls` since M21, with its case `intercept` since M22, the kind `dhcp` since M23) would be refused with `unsupported_feature` before they reach the owner. The
   kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
   mtu and tunnel families since M10 (see "Extended faults (M10)"), the kind `profile` since M11 (see
   "Profiles (M11)").
@@ -4554,9 +4553,9 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
   naming the milestone: a `tls` step
-  with the case `intercept` is supported since M22 (the interception step), a `dhcp` step (M23) is not (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20, a `tls` step and a profile with a certificate or handshake case since M21), and, on a gateway
+  with the case `intercept` is supported since M22 (the interception step), a `dhcp` step since M23 (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20, a `tls` step and a profile with a certificate or handshake case since M21), and, on a gateway
   without a capture volume, `capture: true` or a `capture` step (see Packet captures (M17)); `GET
-  /capabilities` lists `step_types` (profile, fault, rule, dns since M20, tls since M21, wireguard, capture, wait, remove, restore) and, since M16, the
+  /capabilities` lists `step_types` (profile, fault, rule, dns since M20, tls since M21, dhcp since M23, wireguard, capture, wait, remove, restore) and, since M16, the
   `check_types` (the checks `tls_rejected` and `tls_accepted` since M21; one for a host name works since M20). Nothing is stored
   for a refused scenario.
 - **One run per target, the queue.** Two targets overlap when they share a device or a network
@@ -5919,6 +5918,106 @@ The kernel side (the drop of UDP 443, the hand-over inside the namespace, the pr
 | Scope: key log for captures | `TestTheKeyLogGoesToTheRunningCapturesThatCoverTheDeviceOnly`, `TestACaptureKeepsTheKeyLogItWasGivenWhileItRan` |
 | Scope: block-UDP-443 option | the compiler tests of the QUIC row, the level 1 test |
 | Scope: interception scenario step type | `TestAnInterceptionStepWritesTheOverlayWithItsRulesAndCountsConnections`, `TestAnInterceptionStepOfARunIsSeenByTheTLSChecksOnTheRealKernel` |
+
+## DHCP test actions (M23)
+
+Plan §2.4 (the DHCP family), §2.7 (test actions) and M23. DHCP is a test instrument as well as infrastructure: five actions change what Kea does, for a
+network or for one device, as overlays (`POST /overlays` with `dhcp`, or the step type `dhcp`), with an owner, a TTL and a lease like every other overlay. They are
+`short_lease` (the lease time, below 120 s if you like), `delete_lease` (acts once), `force_new_ip` (the device's reservation moves, its renewal is refused),
+`set_options` (router, DNS servers, domain, NTP servers, custom options) and `silence` (Kea does not answer). The server cannot make a client renew at once (plan §2.7
+and risk 11), so every test of an action that a client notices at its renewal uses a short lease: the lease time says when the client comes back.
+
+### How it works
+
+- **Resolution** (`domain/dhcp.go`). The family competes like the others (§2.4): the more specific scope wins, a device (level 4) over its network (level 8), and the newer overlay wins
+  at the same scope, so a device has one effective action and an action of the network does not apply to a device with an action of its own. `World.DHCPActions` gives the
+  winner of every network and every device an action names; `delete_lease` is no state and is not among them (`World.DHCPDeletions`). The scopes are a device and a
+  network (`invalid_target` for a group, the global scope or a remote network), and `force_new_ip` takes a device only: a reservation is one device's.
+- **Kea** (`compiler/dhcpaction.go`, laid over the configuration `compileKea` made, after the faults are compiled). The target's Kea configuration carries the effects, so
+  `config-set` is all the engine does, and every apply sends the configuration with the actions in force (and without those whose overlay went):
+
+  | Action | Network | Device |
+  |---|---|---|
+  | `short_lease` | the subnet's `valid-lifetime`, with `min-valid-lifetime` and `max-valid-lifetime` set to it | a client class (`cgw-lease-<s>-<min>-<max>`, one per lease time, the MACs of its devices) with the same three values: Kea applies the class before the subnet |
+  | `set_options` | the subnet's options with the fields of the action replaced | the device's host reservation (no address of its own unless it has one) with the configured options and the action's: Kea applies a reservation before the subnet |
+  | `silence` | the class `DROP` with the test `pkt.iface == '<bridge>'`, less the devices an action of their own takes out | the class `DROP` with `pkt4.mac == 0x...` for every MAC of the device |
+  | `force_new_ip` | (refused) | the reservation of the device's first MAC (§2.7) gets the address of the overlay; the device's `fixed_ip` is replaced while the overlay lasts |
+  | `delete_lease` | `Target.Kea.Deletions`: every lease of the subnet | the same with the device's MACs |
+
+  What the network's action changed and the device's does not is put back for the device (the device's action wins, §2.4): a device with `set_options` while its network has a
+  short lease gets a lease class with the configured lease time, a device with `short_lease` or `force_new_ip` while its network has `set_options` a reservation with the
+  configured options, and a device with another action than `silence` is an exception of the network's DROP. `kea.Config` has `LeaseClasses`, `Silenced` (one `DROP` class of all
+  of them), reservations with options and no address, and the lease bounds of a subnet; Kea does not take an empty `client-classes` list, so the key is left out without classes.
+- **The address of `force_new_ip`** (`engine/dhcpaction.go`). The compiler needs a stable address (a compile of every apply must give the same reservation, and the lease the device
+  takes must not change it), so the engine chooses it when the action is written and the overlay keeps it as `dhcp.ip`. A request may name one (inside the device's network, not
+  the gateway's, the network's or the broadcast address, and not one another host holds); without one the engine takes the last address of the pools, going down, that is not taken: leased
+  (whoever holds the lease), held by a known device, the `fixed_ip` of a device, or the address of another overlay of the kind. The DHCP server allocates from the start of a pool,
+  so the address a device is moved to is the one it takes last. The write is refused when the device has no MAC address (a configured device's MACs come from the configuration, so
+  a device that was not seen yet works), its network has no DHCP, or the pools are full (`invalid_dhcp_action` at `/target` or `/dhcp/ip`). Writing the action again chooses again:
+  while the device has not taken the address it is the same one, and once it holds it the device is moved on.
+- **`delete_lease`** acts when it is written and stays in the list until its TTL or its owner removes it. The compiler lists it in `Target.Kea.Deletions` with a key of the overlay's
+  id and the time it was written (a new write is a new key), and the engine does the deletions right after Kea took the configuration (`Engine.deleteLeases`, in `syncDHCP`, so the
+  answer of a write comes after the deletion): `lease4-wipe` for a network, the leases of the device's MACs (`lease4-get-page` and `lease4-del`) for a device. A key is done once;
+  a key the target no longer lists is forgotten. A deletion Kea could not do is a `DHCPError` of the snapshot ("the DHCP server could not delete leases") and is tried again with
+  the configuration every five seconds, so a Kea that was down when the action was written does it when it is back, while the overlay exists. The event `dhcp_leases_deleted` (overlay,
+  network, device, count) says what was done. A client that renews gets the same address again (spike S6); the action is for the test of what a device does without its lease, not of a new address.
+- **The state of the overlay.** `effective` while Kea is configured with it (a deletion: once it is listed), `overridden` with `overridden_by` while a newer action of its scope wins, `disabled` while
+  nothing could use it: its network has DHCP off, or its device has no MAC address the server could know it by, or no network (the compile says so with the warning `dhcp_action_inactive`). The
+  winner of a scope is known from the overlays, not from the traffic of the devices, so a device that was not seen yet overrides as well.
+- **The rest.** `dhcp` is among the overlay kinds, the fault families and (as `dhcp.actions`) the features of the capabilities, and `dhcp` among the step types: a step creates the overlay of the run
+  like any other (`domain.StepRequest`), `force_new_ip` of a device of a network without DHCP ends the run as `error` with the reason, and a `restore` or the end of the run removes the actions.
+  The actions have no counter, so a `dhcp` step is never a zero hit. The UI names an action in its chips ("DHCP short lease 7s", "DHCP new IP 10.10.0.200", "DHCP options · router, DNS"), refreshes the
+  devices and networks on `dhcp_leases_deleted` and shows the event in the recent events (P5-M23-01 is the form).
+
+### Decisions
+
+Taken by best practice where the plan leaves room (the one that needs the maintainer is `P5-M23-01` in `open-items.md`):
+
+1. **The actions compete, they do not combine.** The overlay key of a DHCP action is its `action` (§2.15), so a short lease and a silence of one device are two overlays, and the domain's precedence (a device beats its network, the
+   newer wins at one scope; `TestDHCPActionsOnADeviceBeatThoseOnTheNetwork` is the test of the resolution from Phase 2) says one of them is in force for a device. Layering them as Kea does by itself would make a state that the resolution (`explain`,
+   `overridden_by`) cannot describe. A device that needs two changes at once is not served by this; `set_options` carries all the options of one action, and a lease time of its own is a second action of the same device that would replace it.
+2. **`force_new_ip` is a device's action.** The plan says "change the reservation", and a reservation is a device's (a network has leases, not reservations); a network-wide move would be one reservation per lease, chosen at the
+   time of the write, which a device that comes later would not get. `ip` is optional on write (the gateway chooses) so a test that needs a known address can name it, and always there when the overlay is read.
+3. **The address is chosen when the action is written and kept in the overlay.** Derived at every compile it would follow the leases (the lease the device takes would change the address, and the next apply would
+   move it again). The cost is one more field of the API, `dhcp.ip`, which also tells the tester where the device is going.
+4. **The reservation is for the first MAC, and it replaces the `fixed_ip` while the overlay lasts.** As §2.7 says for `fixed_ip`; Kea refuses two reservations for one client in a subnet, so the action takes the place of the configured one and the configured one is back
+   when the overlay goes (the client is refused once more and goes back to its address at its next renewal).
+5. **A short lease sets the bounds as well.** A client that asks for a lease time (option 51) is given it within `min-valid-lifetime` and `max-valid-lifetime`, which a subnet keeps at 5 s and an hour (or the lease time, if that is more): a client that asks for an hour
+   would get the hour from a subnet whose lease time is seven seconds. `TestAShortLeaseOfASubnetIsWhatEveryClientGetsEvenOneThatAsksForAnHour` shows it with the real Kea.
+6. **Silence is Kea's class `DROP`.** The packet is dropped before a subnet is selected, so the client gets no offer, no acknowledgement and no NAK, whichever message it sends (`TestSilencedClientsAreNotAnsweredAndTheOthersAre` sends a
+   discover, a renewal and a restart); the class is exact and does not depend on how Kea answers a packet that no subnet fits. A network is silenced by the interface its packets come in on (`pkt.iface`, Kea 2.x and later, the version the image pins is 3.0.3) and a device by its MAC addresses (`pkt4.mac`).
+7. **An action that nothing can use is accepted and says so.** A network with DHCP off, or a device that has no MAC (a WireGuard client, a probe), is a valid target: the configuration can change under the overlay (DHCP is switched on, the device
+   gets a MAC), so the overlay is `disabled` with the warning and starts to act when it can. `force_new_ip` is the exception, since its address cannot be chosen without a network that serves DHCP, so it is refused at the write.
+8. **`set_options` replaces fields.** A field the action names replaces the configured one; an empty list of servers sets nothing (as in the scope of a network, where an empty list leaves the default); `domain` set to an empty string removes it. A device's options
+   are the configured ones with its own, never the network's overlay (decision 1).
+9. **A deletion is done once per write.** The overlay stays in the list, and the key (overlay id and the time of the write) makes the next apply skip it, a rewrite do it again, and a Kea that restarted not repeat it. It is tried again while it failed and the overlay exists;
+   if that is too long for a use, the TTL of the overlay is the bound.
+10. **The tests talk DHCP to the real Kea on the loopback.** `internal/kea/dhcpwire_testbed_test.go` makes the test a relay agent at 127.0.0.2 (`giaddr`), so Kea, started with UDP sockets on `lo`, selects its subnet by the relay's address and answers on port 67; the offer, the
+    acknowledgement, the NAK and the silence are read off the packets. It needs root and Kea (no namespace), so it runs here and in the testbed jobs, and pins what no mock could: the lease classes, `DROP` with an interface test, the options of a reservation and the NAK.
+
+### Tests
+
+Level 0, all run here: `kea/kea_test.go` (the rendering of lease classes, `DROP`, bounds and option reservations, the refusals of the checks, and Kea's own `-t` accepting them), `domain/overlay_test.go` and `validate_scenario_test.go` (the rules of the action's fields, `ip`, the targets),
+`compiler/dhcpaction_test.go` (each action for a network and a device, a discovered device, the combinations in which the device's action beats the network's and what is put back, the newer action of a scope, actions that reach nobody, the deletions and their keys, the document is deterministic, Kea's check),
+`engine/dhcpaction_test.go` (the configuration of the server with and without the overlay, the address of `force_new_ip` and its checks, a full pool, `delete_lease` once and again and for a device, a deletion that failed and is done later, an action that cannot reach anybody), `api/dhcpaction_test.go` (the states and `overridden_by`, the address over the API, the refusals with their paths, the deletion and its event on the stream,
+a run with a `dhcp` step and one that ends as an error) with the capabilities of `misc_test.go`, `overlays_test.go` and `runs_test.go`. Web: `lib/faults.test.ts` (the chips). The Kea tests of `kea/dhcpwire_testbed_test.go` (build tag `testbed`, root and Kea) pass here: `TestAShortLeaseOfASubnetIsWhatEveryClientGetsEvenOneThatAsksForAnHour`,
+`TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient`, `TestSilencedClientsAreNotAnsweredAndTheOthersAre`, `TestAReservationOfAnotherAddressNaksTheRenewalAndTheClientGetsTheReservedAddress`, `TestAReservationWithOptionsOnlyChangesTheOptionsOfItsClient` and `TestDeletingLeasesRemovesThoseOfTheClientsOrTheSubnetAndTheClientGetsTheSameAddressBack`.
+
+Level 1 (written, vetted with `-tags testbed`, run by CI with `$M23_LEVEL1`, not run here: no KVM, no namespaces): `engine/integration_dhcpactions_test.go`, with busybox's `udhcpc` in the client namespaces against the real Kea in the gateway's namespace (the lines of the client's script say each event and the
+lease, the router, the DNS server and the domain it was given). The script of the bed does not flush the address at a `renew` any more (the address does not change then, and the flush took the default route of a test that was measuring).
+
+### Acceptance map (plan M23 "Tests" and Scope)
+
+| Plan M23 | Test |
+|---|---|
+| `udhcpc` in the testbed observes each behavior: short leases | `TestAShortLeaseOfTheNetworkIsWhatUdhcpcGetsAndItRenewsSoonOnTheRealKernel`, `TestAShortLeaseOfADeviceReachesOnlyThatDeviceOnTheRealKernel` (level 1), `TestAShortLeaseOfASubnetIsWhatEveryClientGetsEvenOneThatAsksForAnHour`, `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient` (the real Kea, here) |
+| … lease deletion | `TestDeletingTheLeaseRemovesItAndTheClientGetsTheSameAddressAtItsRenewalOnTheRealKernel` (level 1), `TestDeletingLeasesRemovesThoseOfTheClientsOrTheSubnetAndTheClientGetsTheSameAddressBack` (the real Kea), `TestDeleteLeaseDeletesOnceWhenItIsWrittenAndAgainWhenItIsWrittenAgain` |
+| … forced new IP via reservation change (NAK) | `TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel` (level 1), `TestAReservationOfAnotherAddressNaksTheRenewalAndTheClientGetsTheReservedAddress` (the real Kea: the NAK of the renewal and of the restart, then the reserved address) |
+| … option changes | `TestSetOptionsChangeWhatTheClientIsToldOnTheRealKernel` (level 1), `TestAReservationWithOptionsOnlyChangesTheOptionsOfItsClient`, `TestSetOptionsReplacesTheFieldsItNamesOfTheNetworksOptions`, `TestSetOptionsOfADeviceIsItsReservationWithTheConfiguredOptionsAndItsOwn` |
+| … silence | `TestSilenceLeavesTheClientWithoutAnAnswerOnTheRealKernel` (level 1), `TestSilencedClientsAreNotAnsweredAndTheOthersAre` (the real Kea) |
+| A device fault stays attached after the forced new IP | `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel` (level 1: the fault's delay at the new address, the kernel's identity map, the fault count) |
+| Scope: DHCP scenario step type | `dhcp` in `run.SupportedStepTypes`, `TestARunWithADHCPStepAppliesItAndTakesItOut`, `TestARunWhoseDHCPStepCannotBeCarriedOutEndsAsAnError`, `TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit` (capabilities) |
+| Scope: the overlay kind `dhcp` (refused with `unsupported_feature` until M23, plan M8a) | `TestADHCPActionReachesTheServersConfigurationAndLeavesWithItsOverlay`, `TestADHCPActionIsEffectiveWhileTheServerRunsItAndDisabledWhereNothingServesDHCP`, `TestCapabilitiesNameWhatOverlaysThisBuildTakes` |
 
 ## Generated code
 

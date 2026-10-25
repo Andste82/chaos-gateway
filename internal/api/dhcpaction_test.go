@@ -33,6 +33,11 @@ func TestADHCPActionIsEffectiveWhileTheServerRunsItAndDisabledWhereNothingServes
 	if ov["kind"] != "dhcp" || ov["state"] != "disabled" {
 		t.Errorf("%v", ov)
 	}
+	// a deletion has nothing to delete leases of, and it is not "overridden" by the action of its scope
+	g.dhcpOverlay(`{"target":{"network":"IoT"},"dhcp":{"action":"silence"}}`)
+	if del := g.dhcpOverlay(`{"target":{"network":"IoT"},"dhcp":{"action":"delete_lease"}}`); del["state"] != "disabled" || del["overridden_by"] != nil {
+		t.Errorf("%v", del)
+	}
 	// IoT serves DHCP
 	g = dhcpGateway(t)
 	ov = g.dhcpOverlay(`{"target":{"network":"IoT"},"dhcp":{"action":"short_lease","lease_time":"7s"},"ttl":"10m"}`)

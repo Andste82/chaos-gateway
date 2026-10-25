@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Andste82/chaos-gateway/internal/domain"
 )
 
 // Profiles over the API (plan M11): the catalogue, custom profiles through revisions, activation as an
@@ -152,11 +154,9 @@ func TestACustomProfileIsCreatedChangedAndDeletedWithRevisions(t *testing.T) {
 	}
 }
 
-// A profile with a part of a later milestone can be defined and is listed as unavailable; activating it is
-// refused with the milestone. A dns part is available since M20 and a tls part with a certificate or handshake case since
-// M21 (P2-M11-01): such a profile is listed as available and activates; a tls part with the case intercept
-// waits for M22.
-func TestACustomProfileWithAnInterceptPartIsStoredButCannotBeActivatedAndOneWithADNSOrTLSPartCan(t *testing.T) {
+// A custom profile with any part can be activated: a dns part is available since M20, a tls part with a certificate or handshake
+// case since M21 (P2-M11-01) and one with the case intercept since M22; every one is listed as available.
+func TestACustomProfileWithAnInterceptPartIsAvailableAndActivatesLikeOneWithADNSOrTLSPart(t *testing.T) {
 	g := ready(t)
 	rev := g.mustPatch(map[string]any{"profiles": map[string]any{
 		pSlowNS: map[string]any{"name": "slow-dns-lte", "parts": map[string]any{
@@ -175,23 +175,12 @@ func TestACustomProfileWithAnInterceptPartIsStoredButCannotBeActivatedAndOneWith
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	items := profileItems(t, g)
-	for _, name := range []string{"slow-dns-lte", "expiring"} {
+	for _, name := range []string{"slow-dns-lte", "expiring", "glitch"} {
 		if it := items[name]; it["available"] != true {
 			t.Errorf("%s: %v", name, it)
 		}
 	}
-	it := items["glitch"]
-	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M22") {
-		t.Errorf("%v", it)
-	}
-	r := g.createOverlay(`{"target":{"network":"IoT"},"profile":"glitch"}`)
-	if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(r.json(t)["detail"].(string), "M22") {
-		t.Errorf("%d %s", r.Status, r.Body)
-	}
-	if n := len(g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)); n != 0 {
-		t.Errorf("%d overlays", n)
-	}
-	for _, name := range []string{"slow-dns-lte", "expiring", "tls-broken"} {
+	for _, name := range []string{"slow-dns-lte", "expiring", "glitch", "tls-broken"} {
 		if r := g.createOverlay(`{"target":{"network":"IoT"},"profile":"` + name + `"}`); r.Status != 201 && r.Status != 200 { // the same target: 200 replaces
 			t.Errorf("%s: %d %s", name, r.Status, r.Body)
 		}
@@ -370,10 +359,12 @@ func TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences(t *testing.T)
 	}
 }
 
-// A revision that gives an activated profile a tls part with the case intercept is refused when it is applied, with
+// A revision that gives an activated profile a part of a family this build does not implement is refused when it is applied, with
 // unsupported_feature, the profile and the milestone, and nothing changes. The preview says the same. Without the
-// activation the revision is accepted (P2-M11-05). A dns part is not refused (M20), nor is a certificate case (M21).
-func TestARevisionThatAddsAnInterceptPartToAnActivatedProfileIsRefusedOverTheAPI(t *testing.T) {
+// activation the revision is accepted (P2-M11-05). A dns part is not refused (M20), nor is a certificate case (M21) or the case
+// intercept (M22): every family is implemented, so the test names the tls family as one that is not (domain.SetUnavailableFamilies)
+// once it has seen that these parts are accepted.
+func TestARevisionThatAddsAPartOfAnUnavailableFamilyToAnActivatedProfileIsRefusedOverTheAPI(t *testing.T) {
 	g := ready(t)
 	flaky := func(parts map[string]any) map[string]any {
 		return map[string]any{"profiles": map[string]any{pFlaky: map[string]any{"name": "flaky", "parts": parts}}}
@@ -394,14 +385,23 @@ func TestARevisionThatAddsAnInterceptPartToAnActivatedProfileIsRefusedOverTheAPI
 	if r := g.apply(g.mustPatch(withCert)); r.Status != 200 {
 		t.Fatalf("a certificate case is available since M21: %d %s", r.Status, r.Body)
 	}
-	withTLS := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": map[string]any{"case": "intercept"}})
+	withIntercept := flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": map[string]any{"case": "intercept"}})
+	if r := g.apply(g.mustPatch(withIntercept)); r.Status != 200 {
+		t.Fatalf("the case intercept is available since M22: %d %s", r.Status, r.Body)
+	}
+	// the tls part goes again (a merge patch deletes a part that is null): from here on that family is the one that is not available
+	if r := g.apply(g.mustPatch(flaky(map[string]any{"impairment": map[string]any{"latency": "100ms"}, "tls": nil}))); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	t.Cleanup(domain.SetUnavailableFamilies(map[string]string{domain.FamilyTLS: "M99"}))
+	withTLS := withIntercept
 	rev := g.mustPatch(withTLS)
 	for _, path := range []string{"/revisions/" + itoa(rev) + "/preview", "/revisions/" + itoa(rev) + "/apply", "/revisions/" + itoa(rev) + "/apply?force=true"} {
 		r := g.do("POST", path, nil, nil, nil)
 		if r.Status != 422 || r.code(t) != "unsupported_feature" {
 			t.Fatalf("%s: %d %s", path, r.Status, r.Body)
 		}
-		if d := r.json(t)["detail"].(string); !strings.Contains(d, "flaky") || !strings.Contains(d, "M22") {
+		if d := r.json(t)["detail"].(string); !strings.Contains(d, "flaky") || !strings.Contains(d, "M99") {
 			t.Errorf("%s: the detail does not name the profile and the milestone: %s", path, d)
 		}
 	}
@@ -422,7 +422,7 @@ func TestARevisionThatAddsAnInterceptPartToAnActivatedProfileIsRefusedOverTheAPI
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	it = profileItems(t, g)["flaky"]
-	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M22") {
+	if it["available"] != false || !strings.Contains(it["unavailable_reason"].(string), "M99") {
 		t.Errorf("%v", it)
 	}
 }

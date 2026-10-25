@@ -47,3 +47,17 @@ func SetTLSPoll(wait, tick time.Duration) (restore func()) {
 	tlsPoll.wait, tlsPoll.tick = wait, tick
 	return func() { tlsPoll = old }
 }
+
+// TLSHandshakeOutcomes are the outcomes of the handshakes the server has logged for a client address, oldest first: what the checks of the
+// runs read.
+func TLSHandshakeOutcomes(s *Server, client string) []string {
+	s.tls.logMu.Lock()
+	defer s.tls.logMu.Unlock()
+	var out []string
+	for _, h := range s.tls.entries {
+		if h.report.Client == client {
+			out = append(out, string(h.report.Outcome))
+		}
+	}
+	return out
+}

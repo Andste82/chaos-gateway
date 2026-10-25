@@ -131,6 +131,8 @@ type Manager struct {
 	mu     sync.Mutex
 	caps   map[uuid.UUID]*capState
 	closed bool
+
+	keyWorld keylogState
 }
 
 // capState is one capture. The record and the pending stop are guarded by Manager.mu.
@@ -146,6 +148,10 @@ type capState struct {
 	clamped bool
 	files   []string
 	fileMu  sync.Mutex
+	// ending is set when the executor has reported the end of the capture: the key log takes no more lines (guarded by
+	// Manager.mu), and keyMu serializes the writes to and the download of the key log
+	ending bool
+	keyMu  sync.Mutex
 }
 
 type pendingStop struct {
@@ -574,6 +580,7 @@ func (m *Manager) finish(c *capState, ev *executor.CaptureEvent) {
 		m.mu.Unlock()
 		return
 	}
+	c.ending = true
 	v, files := c.rec, c.files
 	v.Packets, v.SizeBytes, v.Dropped = ptr(ev.Packets), ptr(ev.Size), ptr(ev.Dropped)
 	if len(ev.Files) > 0 {
@@ -895,17 +902,16 @@ func (m *Manager) Open(id uuid.UUID, part string) (*Download, error) {
 	}
 	rec, dir := c.rec, c.dir
 	m.mu.Unlock()
+	name := deref(rec.Name)
+	if name == "" {
+		name = "capture-" + id.String()[:8]
+	}
 	if part == "keylog" {
-		// the proxy that writes a key log arrives with M22: no capture has one yet
-		return nil, ErrNoKeylog
+		return m.openKeylog(c, rec, name)
 	}
 	format := capture.PCAPNG
 	if rec.Format != nil && string(*rec.Format) == string(capture.PCAP) {
 		format = capture.PCAP
-	}
-	name := deref(rec.Name)
-	if name == "" {
-		name = "capture-" + id.String()[:8]
 	}
 	return &Download{
 		Name:        safeFileName(name) + format.Ext(),

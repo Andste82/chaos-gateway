@@ -27,6 +27,9 @@ const (
 	EventDNSFaultTriggered = "dns_fault_triggered"
 	// EventTLSHandshake is the outcome of a handshake with the TLS responder (plan §2.8, M21).
 	EventTLSHandshake = "tls_handshake"
+	// EventHTTPFaultTriggered says that a rule of an interception case acted on an HTTP exchange (M22; the log of the
+	// exchanges carries each one).
+	EventHTTPFaultTriggered = "http_fault_triggered"
 	// The events of runs (internal/run, M15).
 	EventRunQueued   = "run_queued"
 	EventRunStarted  = "run_started"

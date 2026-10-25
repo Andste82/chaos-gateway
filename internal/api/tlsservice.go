@@ -121,7 +121,15 @@ func (s *Server) tlsConfig() *model.TlsServiceConfig {
 // GetTlsServiceConfig implements GET /internal/tls/config: the configuration at once when its generation is newer than
 // `after`, else a long poll that ends with 204.
 func (s *Server) GetTlsServiceConfig(c *gin.Context, params model.GetTlsServiceConfigParams) {
-	s.tls.lastPollAt.Store(s.clk.Now().UnixNano())
+	if params.Consumer != nil && !params.Consumer.Valid() {
+		s.write(c, newProblem(model.ErrorCodeBadRequest, "consumer is responder or proxy, not %q", *params.Consumer))
+		return
+	}
+	if params.Consumer != nil && *params.Consumer == model.Proxy {
+		s.intercept.lastPollAt.Store(s.clk.Now().UnixNano())
+	} else {
+		s.tls.lastPollAt.Store(s.clk.Now().UnixNano())
+	}
 	deadline := s.clk.Now().Add(tlsPoll.wait)
 	for {
 		cfg := s.tlsConfig()
@@ -184,6 +192,10 @@ func (s *Server) ResolveTlsConnection(c *gin.Context) {
 	}
 	tc := *dec.Case.TLS
 	out.Case = &tc
+	if tc.Case == model.TlsCaseCaseIntercept {
+		// the proxy's connection to the destination goes the same way a passed-through one does (M22)
+		out.Passthrough = ptr(dec.Passthrough)
+	}
 	if id, err := uuid.Parse(dec.Case.ID); err == nil {
 		out.Overlay = &id
 	}
@@ -244,7 +256,7 @@ func (s *Server) PostTlsHandshakes(c *gin.Context) {
 		s.tls.seq++
 		h.seq = s.tls.seq
 		s.tls.entries = append(s.tls.entries, h)
-		if h.report.Overlay != nil {
+		if h.report.Overlay != nil && countsForTheOverlay(h.report) {
 			s.countTLS(h.report.Overlay.String())
 		}
 	}
@@ -304,6 +316,16 @@ func (s *Server) handshakeEvent(snap *engine.Snapshot, h loggedHandshake) map[st
 		ev["tested"] = tlsresponder.IsCertificateCase(kind) && r.Outcome == model.TlsHandshakeReportOutcomeRejected && domain.TLSTested(kind, trusts)
 	}
 	return ev
+}
+
+// countsForTheOverlay says whether a report is a connection the overlay held. The interception proxy reports what the device did
+// with its certificate (`accepted`, `rejected`, ...) for a connection the responder has counted already, when it handed it over
+// (`intercepted`, or `proxy_unavailable` when it could not): counting both would count every connection twice (M22).
+func countsForTheOverlay(r model.TlsHandshakeReport) bool {
+	if r.Case == nil || *r.Case != string(model.TlsCaseCaseIntercept) {
+		return true
+	}
+	return r.Outcome == model.TlsHandshakeReportOutcomeIntercepted || r.Outcome == model.TlsHandshakeReportOutcomeProxyUnavailable
 }
 
 // countTLS counts a handshake of an overlay. Called with logMu held.

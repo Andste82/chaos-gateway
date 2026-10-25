@@ -2,6 +2,7 @@ package domain
 
 import (
 	"net/netip"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +347,17 @@ func (v *validator) dnsFault(path string, d model.DnsFault) {
 	}
 }
 
+// MaxHTTPRules is how many HTTP rules a case of the TLS interception may have, and MaxHTTPDelay the longest delay of
+// one: the proxy reads them with each configuration, and a request that waits longer than ten minutes is a
+// stalled one, which the stall cases of the responder test.
+const (
+	MaxHTTPRules = 64
+	MaxHTTPDelay = 10 * time.Minute
+)
+
+// httpMethod is what the method of an HTTP match may look like: a token of letters, digits and hyphens.
+var httpMethod = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+
 func (v *validator) tlsCase(path string, t model.TlsCase) {
 	match := convert[model.TrafficMatch](t)
 	// TLS runs over TCP: an omitted protocol means tcp, so ports are fine without one
@@ -363,8 +375,25 @@ func (v *validator) tlsCase(path string, t model.TlsCase) {
 		v.add(path+"/intercept", CodeInvalidTLSCase, "interception settings belong to the case intercept")
 	}
 	if t.Intercept != nil {
-		for i, r := range deref(t.Intercept.HttpRules) {
+		rules := deref(t.Intercept.HttpRules)
+		if len(rules) > MaxHTTPRules {
+			v.add(path+"/intercept/http_rules", CodeInvalidTLSCase, "a case has at most %d HTTP rules, this one has %d", MaxHTTPRules, len(rules))
+		}
+		for i, r := range rules {
 			rp := schema.Pointer(path+"/intercept/http_rules", itoa(i))
+			if r.Delay != nil {
+				if got, ok := parseDuration(*r.Delay); !ok || got <= 0 || got > MaxHTTPDelay {
+					v.add(rp+"/delay", CodeInvalidDuration, "the delay must be longer than zero and at most %s", MaxHTTPDelay)
+				}
+			}
+			if r.Rate != nil {
+				if bits, ok := parseBitrate(*r.Rate); !ok || bits < 8 {
+					v.add(rp+"/rate", CodeInvalidRate, "a rate of %s is below 8 bit/s: give a rate of at least 8bit", *r.Rate)
+				}
+			}
+			if m := r.Match; m != nil && m.Method != nil && !httpMethod.MatchString(*m.Method) {
+				v.add(rp+"/match/method", CodeInvalidTLSCase, "%q is not an HTTP method", *m.Method)
+			}
 			need := func(field string, present bool, action string) {
 				if string(r.Action) == action && !present {
 					v.add(rp+"/"+field, CodeInvalidTLSCase, "the action %s needs %s", action, field)

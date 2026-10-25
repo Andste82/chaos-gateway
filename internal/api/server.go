@@ -96,6 +96,8 @@ type Server struct {
 	streams atomic.Int64
 	dns     dnsState
 	tls     tlsState
+	// intercept is what the interception proxy reported (M22)
+	intercept interceptState
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated
 	// endpoint must not give every caller its own round trip to the executor.
 	health healthProbeCache

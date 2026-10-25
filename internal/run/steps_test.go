@@ -646,12 +646,6 @@ name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
 `, ""},
-		"tls interception step": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, tls: {case: intercept}}]
-`, "M22"},
-
 		"dhcp step": {`
 name: c
 target: {device: esp32-42}

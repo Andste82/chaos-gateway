@@ -78,9 +78,9 @@ func (e *CompileError) Error() string {
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
 // /capabilities): faults of the impairment, mtu and tunnel families, DNS faults (the kind dns, M20), TLS cases
-// (the kind tls, M21; the case intercept follows with M22), profile activations, access rules and WireGuard
+// (the kind tls, M21, with the case intercept of M22), profile activations, access rules and WireGuard
 // actions; the kind dhcp (M23) follows with its milestone. A profile is activated as a whole: one with a part
-// this build cannot resolve (a tls part with the case intercept) is refused (checkProfileAvailable).
+// this build cannot resolve is refused (checkProfileAvailable); every part of a profile is available since M22.
 var (
 	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindWireguard}
 	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyTunnel}
@@ -113,10 +113,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 	case "dns":
 		return nil // M20
 	case "tls":
-		if req.Tls != nil && req.Tls.Case == model.TlsCaseCaseIntercept {
-			return &UnsupportedOverlayError{What: "the TLS case intercept", Milestone: "M22"}
-		}
-		return nil // M21
+		return nil // M21, and the case intercept: M22
 	case "dhcp":
 		return &UnsupportedOverlayError{What: "a DHCP action", Milestone: "M23"}
 	}
@@ -482,7 +479,7 @@ func (o *owner) validPut(c cmdOverlayPut) (*model.OverlayRequest, bool) {
 }
 
 // checkProfileAvailable refuses the activation of a profile that has a part this build cannot
-// resolve (a tls part with the case intercept before M22), with the milestone that brings it. The
+// resolve (none since M22), with the milestone that brings it. The
 // request has passed ValidateOverlay, so its profile is a UUID the configuration or the built-in
 // catalogue knows. Nil for every other request.
 func checkProfileAvailable(cfg *model.Configuration, req *model.OverlayRequest) error {

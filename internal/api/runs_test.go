@@ -351,10 +351,11 @@ func TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName(t *testing.T) {
 
 func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.T) {
 	g, _ := readyRuns(t)
-	// the TLS checks and the TLS step are in this build (M21); the case intercept is not (M22)
-	tlsStep := inlineRun("t", iotTarget, step("a", "0s", "tls", map[string]any{"case": "intercept"}))
-	if r := g.postRun(tlsStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M22") {
-		t.Errorf("tls interception: %d %s", r.Status, r.Body)
+	// the TLS checks and the TLS step are in this build (M21) with the case intercept (M22): the step that has no milestone yet
+	// is the DHCP action
+	dhcpStep := inlineRun("t", iotTarget, step("a", "0s", "dhcp", map[string]any{"action": "silence"}))
+	if r := g.postRun(dhcpStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M23") {
+		t.Errorf("a dhcp step: %d %s", r.Status, r.Body)
 	}
 	bad := inlineRun("b", map[string]any{"device": "nobody"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
 	r := g.postRun(bad, "")

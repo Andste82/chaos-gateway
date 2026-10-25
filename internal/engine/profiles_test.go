@@ -206,11 +206,12 @@ func TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive(
 	h.verifyKernelWithOverlays()
 }
 
-// A profile with a part of a later milestone is stored but cannot be activated: the whole activation is
-// refused with the milestone, and nothing changes. What is not available is the tls part with the case
-// intercept (M22); the dns part has been available since M20 and the certificate and handshake cases, the
-// built-in tls-broken among them, since M21.
+// A profile with a part of a family that this build does not implement is stored but cannot be activated: the whole
+// activation is refused with the milestone, and nothing changes. Every family is implemented since M22 (the case intercept
+// was the last), so the test names the tls family as unavailable (domain.SetUnavailableFamilies); the dns part has been
+// available since M20 and the certificate and handshake cases, the built-in tls-broken among them, since M21.
 func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing.T) {
+	t.Cleanup(domain.SetUnavailableFamilies(map[string]string{domain.FamilyTLS: "M99"}))
 	h := newHarness(t)
 	h.start()
 	h.mustApply(h.revision(func(c *model.Configuration) {
@@ -224,7 +225,7 @@ func TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges(t *testing
 	}))
 	gen := h.e.Snapshot().Generation
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\nprofile: glitch": "M22",
+		"target: {network: IoT}\nprofile: glitch": "M99",
 	} {
 		_, err := h.put(alice, body)
 		var ue *engine.UnsupportedOverlayError
@@ -294,6 +295,8 @@ func TestAnActiveProfileFollowsItsNewDefinition(t *testing.T) {
 // is the addition of a dns part: the activation then competes in the DNS family, too.
 func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 	h := overlaysHarness(t)
+	// the tls family is the one that is not available here: every family is implemented in the product (M22)
+	t.Cleanup(domain.SetUnavailableFamilies(map[string]string{domain.FamilyTLS: "M99"}))
 	flaky := func(mod func(*model.Profile)) func(*model.Configuration) {
 		p := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
 		if mod != nil {
@@ -311,7 +314,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name, family, milestone string
 		mod                     func(*model.Profile)
-	}{{"a tls part with the case intercept", "tls", "M22", withTLS}} {
+	}{{"a tls part with the case intercept", "tls", "M99", withTLS}} {
 		rev := h.revision(flaky(c.mod))
 		_, err := h.apply(rev)
 		var ue *engine.UnsupportedProfileRevisionError
@@ -373,7 +376,7 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 		t.Error("the profile with a tls part was activated")
 	} else {
 		var ue *engine.UnsupportedOverlayError
-		if !errors.As(err, &ue) || ue.Milestone != "M22" {
+		if !errors.As(err, &ue) || ue.Milestone != "M99" {
 			t.Errorf("got %v", err)
 		}
 	}
@@ -386,6 +389,8 @@ func TestARevisionThatAddsATLSPartToAnActivatedProfileIsRefused(t *testing.T) {
 // a revision that took the tls part out of a profile is removed when the rollback brings the part back
 // (overlay_orphaned, reason rollback): no activation runs half a profile.
 func TestARollbackThatGivesAnActivatedProfileBackItsTLSPartRemovesTheActivation(t *testing.T) {
+	// the tls family is not available here, as in the test of the revision above
+	t.Cleanup(domain.SetUnavailableFamilies(map[string]string{domain.FamilyTLS: "M99"}))
 	h := overlaysHarness(t)
 	flaky := impairmentProfile("flaky", model.ImpairmentParams{Latency: ptr("100ms")})
 	withDNS := flaky

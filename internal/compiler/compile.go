@@ -267,8 +267,10 @@ type Target struct {
 	DNSFaults []DNSFault `json:"dns_faults,omitempty"`
 	// TLSCases are the TLS cases the responder serves, in the order of their rank for each source (tls.go); tlsRules
 	// are the rules that select their connections for the responder and tlsSets the sets they need.
-	TLSCases    []TLSCase `json:"tls_cases,omitempty"`
-	tlsRules    []Rule
+	TLSCases []TLSCase `json:"tls_cases,omitempty"`
+	tlsRules []Rule
+	// tlsDrops are the rules of block_quic of the interception cases (tlsBlockQUIC)
+	tlsDrops    []Rule
 	tlsSets     []SetDef
 	host        *hostBuild
 	hostSetDefs []SetDef

@@ -85,5 +85,7 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	// the TLS cases (M21): the chain that selects connections for the responder (conntrack mark, service mark, a
 	// hostname set, the uplink's set shared with an access rule) and the accept towards the service namespace
 	out["tls"] = scenarioTLS(t)
+	// the interception cases (M22): the UDP 443 drop of block_quic next to the selection of the connections
+	out["intercept"] = scenarioIntercept(t)
 	return out
 }

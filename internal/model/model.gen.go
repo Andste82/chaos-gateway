@@ -866,6 +866,7 @@ const (
 	EventTypeDnsFaultTriggered     EventType = "dns_fault_triggered"
 	EventTypeDnsSetEpoch           EventType = "dns_set_epoch"
 	EventTypeEventsLost            EventType = "events_lost"
+	EventTypeHttpFaultTriggered    EventType = "http_fault_triggered"
 	EventTypeNetworkDegraded       EventType = "network_degraded"
 	EventTypeNetworkRestored       EventType = "network_restored"
 	EventTypeObservedChanged       EventType = "observed_changed"
@@ -925,6 +926,8 @@ func (e EventType) Valid() bool {
 	case EventTypeDnsSetEpoch:
 		return true
 	case EventTypeEventsLost:
+		return true
+	case EventTypeHttpFaultTriggered:
 		return true
 	case EventTypeNetworkDegraded:
 		return true
@@ -1338,6 +1341,108 @@ func (e HttpRuleAction) Valid() bool {
 	case HttpRuleActionStatus:
 		return true
 	case HttpRuleActionThrottle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterceptFlowActions.
+const (
+	InterceptFlowActionsAbort    InterceptFlowActions = "abort"
+	InterceptFlowActionsBlock    InterceptFlowActions = "block"
+	InterceptFlowActionsDelay    InterceptFlowActions = "delay"
+	InterceptFlowActionsModify   InterceptFlowActions = "modify"
+	InterceptFlowActionsStatus   InterceptFlowActions = "status"
+	InterceptFlowActionsThrottle InterceptFlowActions = "throttle"
+)
+
+// Valid indicates whether the value is a known member of the InterceptFlowActions enum.
+func (e InterceptFlowActions) Valid() bool {
+	switch e {
+	case InterceptFlowActionsAbort:
+		return true
+	case InterceptFlowActionsBlock:
+		return true
+	case InterceptFlowActionsDelay:
+		return true
+	case InterceptFlowActionsModify:
+		return true
+	case InterceptFlowActionsStatus:
+		return true
+	case InterceptFlowActionsThrottle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterceptFlowProtocol.
+const (
+	InterceptFlowProtocolHttp      InterceptFlowProtocol = "http"
+	InterceptFlowProtocolTcp       InterceptFlowProtocol = "tcp"
+	InterceptFlowProtocolWebsocket InterceptFlowProtocol = "websocket"
+)
+
+// Valid indicates whether the value is a known member of the InterceptFlowProtocol enum.
+func (e InterceptFlowProtocol) Valid() bool {
+	switch e {
+	case InterceptFlowProtocolHttp:
+		return true
+	case InterceptFlowProtocolTcp:
+		return true
+	case InterceptFlowProtocolWebsocket:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterceptFlowReportActions.
+const (
+	InterceptFlowReportActionsAbort    InterceptFlowReportActions = "abort"
+	InterceptFlowReportActionsBlock    InterceptFlowReportActions = "block"
+	InterceptFlowReportActionsDelay    InterceptFlowReportActions = "delay"
+	InterceptFlowReportActionsModify   InterceptFlowReportActions = "modify"
+	InterceptFlowReportActionsStatus   InterceptFlowReportActions = "status"
+	InterceptFlowReportActionsThrottle InterceptFlowReportActions = "throttle"
+)
+
+// Valid indicates whether the value is a known member of the InterceptFlowReportActions enum.
+func (e InterceptFlowReportActions) Valid() bool {
+	switch e {
+	case InterceptFlowReportActionsAbort:
+		return true
+	case InterceptFlowReportActionsBlock:
+		return true
+	case InterceptFlowReportActionsDelay:
+		return true
+	case InterceptFlowReportActionsModify:
+		return true
+	case InterceptFlowReportActionsStatus:
+		return true
+	case InterceptFlowReportActionsThrottle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterceptFlowReportProtocol.
+const (
+	InterceptFlowReportProtocolHttp      InterceptFlowReportProtocol = "http"
+	InterceptFlowReportProtocolTcp       InterceptFlowReportProtocol = "tcp"
+	InterceptFlowReportProtocolWebsocket InterceptFlowReportProtocol = "websocket"
+)
+
+// Valid indicates whether the value is a known member of the InterceptFlowReportProtocol enum.
+func (e InterceptFlowReportProtocol) Valid() bool {
+	switch e {
+	case InterceptFlowReportProtocolHttp:
+		return true
+	case InterceptFlowReportProtocolTcp:
+		return true
+	case InterceptFlowReportProtocolWebsocket:
 		return true
 	default:
 		return false
@@ -2240,13 +2345,15 @@ func (e TlsCaseCase) Valid() bool {
 
 // Defines values for TlsHandshakeReportOutcome.
 const (
-	TlsHandshakeReportOutcomeAccepted     TlsHandshakeReportOutcome = "accepted"
-	TlsHandshakeReportOutcomeClientClosed TlsHandshakeReportOutcome = "client_closed"
-	TlsHandshakeReportOutcomeCloseSent    TlsHandshakeReportOutcome = "close_sent"
-	TlsHandshakeReportOutcomeRejected     TlsHandshakeReportOutcome = "rejected"
-	TlsHandshakeReportOutcomeResetSent    TlsHandshakeReportOutcome = "reset_sent"
-	TlsHandshakeReportOutcomeStalled      TlsHandshakeReportOutcome = "stalled"
-	TlsHandshakeReportOutcomeTimeout      TlsHandshakeReportOutcome = "timeout"
+	TlsHandshakeReportOutcomeAccepted         TlsHandshakeReportOutcome = "accepted"
+	TlsHandshakeReportOutcomeClientClosed     TlsHandshakeReportOutcome = "client_closed"
+	TlsHandshakeReportOutcomeCloseSent        TlsHandshakeReportOutcome = "close_sent"
+	TlsHandshakeReportOutcomeIntercepted      TlsHandshakeReportOutcome = "intercepted"
+	TlsHandshakeReportOutcomeProxyUnavailable TlsHandshakeReportOutcome = "proxy_unavailable"
+	TlsHandshakeReportOutcomeRejected         TlsHandshakeReportOutcome = "rejected"
+	TlsHandshakeReportOutcomeResetSent        TlsHandshakeReportOutcome = "reset_sent"
+	TlsHandshakeReportOutcomeStalled          TlsHandshakeReportOutcome = "stalled"
+	TlsHandshakeReportOutcomeTimeout          TlsHandshakeReportOutcome = "timeout"
 )
 
 // Valid indicates whether the value is a known member of the TlsHandshakeReportOutcome enum.
@@ -2257,6 +2364,10 @@ func (e TlsHandshakeReportOutcome) Valid() bool {
 	case TlsHandshakeReportOutcomeClientClosed:
 		return true
 	case TlsHandshakeReportOutcomeCloseSent:
+		return true
+	case TlsHandshakeReportOutcomeIntercepted:
+		return true
+	case TlsHandshakeReportOutcomeProxyUnavailable:
 		return true
 	case TlsHandshakeReportOutcomeRejected:
 		return true
@@ -2517,6 +2628,24 @@ func (e DownloadCaptureParamsPart) Valid() bool {
 	case DownloadCaptureParamsPartCapture:
 		return true
 	case DownloadCaptureParamsPartKeylog:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetTlsServiceConfigParamsConsumer.
+const (
+	Proxy     GetTlsServiceConfigParamsConsumer = "proxy"
+	Responder GetTlsServiceConfigParamsConsumer = "responder"
+)
+
+// Valid indicates whether the value is a known member of the GetTlsServiceConfigParamsConsumer enum.
+func (e GetTlsServiceConfigParamsConsumer) Valid() bool {
+	switch e {
+	case Proxy:
+		return true
+	case Responder:
 		return true
 	default:
 		return false
@@ -4464,12 +4593,16 @@ type HostInterfacePage struct {
 // Hostname Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
 type Hostname = string
 
-// HttpMatch defines model for HttpMatch.
+// HttpMatch A rule without `match` selects every request. Every given field must match.
 type HttpMatch struct {
 	// Host Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
-	Host       *Hostname `json:"host,omitempty"`
-	Method     *string   `json:"method,omitempty"`
-	PathPrefix *string   `json:"path_prefix,omitempty"`
+	Host *Hostname `json:"host,omitempty"`
+
+	// Method The request method, compared without regard to case.
+	Method *string `json:"method,omitempty"`
+
+	// PathPrefix The request path, without the query, starts with it.
+	PathPrefix *string `json:"path_prefix,omitempty"`
 }
 
 // HttpModify defines model for HttpModify.
@@ -4482,10 +4615,17 @@ type HttpModify struct {
 
 // HttpRule defines model for HttpRule.
 type HttpRule struct {
+	// Action `block` answers 403 with a short text and never reaches the server; `status` answers with the given status code and an
+	// empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
+	// sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
+	// sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
+	// connection to the device; `modify` changes the request and response as `modify` says.
 	Action HttpRuleAction `json:"action"`
 
 	// Delay For `delay`.
-	Delay  *Duration   `json:"delay,omitempty"`
+	Delay *Duration `json:"delay,omitempty"`
+
+	// Match A rule without `match` selects every request. Every given field must match.
 	Match  *HttpMatch  `json:"match,omitempty"`
 	Modify *HttpModify `json:"modify,omitempty"`
 
@@ -4496,7 +4636,11 @@ type HttpRule struct {
 	Status *int `json:"status,omitempty"`
 }
 
-// HttpRuleAction defines model for HttpRule.Action.
+// HttpRuleAction `block` answers 403 with a short text and never reaches the server; `status` answers with the given status code and an
+// empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
+// sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
+// sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
+// connection to the device; `modify` changes the request and response as `modify` says.
 type HttpRuleAction string
 
 // ImpairmentParams Flat `NetemParams` apply to both directions. Alternatively `upload` and/or `download`
@@ -4568,12 +4712,121 @@ type ImportFilter struct {
 	MaxPrefixes     *int                 `json:"max_prefixes,omitempty"`
 }
 
+// InterceptFlow defines model for InterceptFlow.
+type InterceptFlow struct {
+	// Actions The actions of the rules that acted on the exchange, in the order they acted.
+	Actions *[]InterceptFlowActions `json:"actions,omitempty"`
+	Client  Ipv4                    `json:"client"`
+
+	// Device Filled in by the API from the observed state.
+	Device     *Uuid    `json:"device,omitempty"`
+	DurationMs *float32 `json:"duration_ms,omitempty"`
+
+	// Error Why the exchange ended without a response (the server did not answer, the device went away).
+	Error *string `json:"error,omitempty"`
+	Host  *string `json:"host,omitempty"`
+
+	// Messages WebSocket messages, both directions.
+	Messages *int64  `json:"messages,omitempty"`
+	Method   *string `json:"method,omitempty"`
+
+	// OriginalDst `ip:port` the device meant.
+	OriginalDst string `json:"original_dst"`
+	Overlay     *Uuid  `json:"overlay,omitempty"`
+
+	// Path The request target, cut at 1024 characters.
+	Path *string `json:"path,omitempty"`
+
+	// Protocol `tcp` is a connection that is no HTTP: its bytes are counted, not read.
+	Protocol      InterceptFlowProtocol `json:"protocol"`
+	RequestBytes  *int64                `json:"request_bytes,omitempty"`
+	ResponseBytes *int64                `json:"response_bytes,omitempty"`
+
+	// Status The status code the device got, absent when it got none.
+	Status *int `json:"status,omitempty"`
+
+	// Time When the request arrived at the proxy (the connection was opened, for a stream).
+	Time time.Time `json:"time"`
+}
+
+// InterceptFlowActions defines model for InterceptFlow.Actions.
+type InterceptFlowActions string
+
+// InterceptFlowProtocol `tcp` is a connection that is no HTTP: its bytes are counted, not read.
+type InterceptFlowProtocol string
+
+// InterceptFlowPage defines model for InterceptFlowPage.
+type InterceptFlowPage struct {
+	Items      []InterceptFlow `json:"items"`
+	NextCursor *string         `json:"next_cursor,omitempty"`
+}
+
+// InterceptFlowReport defines model for InterceptFlowReport.
+type InterceptFlowReport struct {
+	// Actions The actions of the rules that acted on the exchange, in the order they acted.
+	Actions    *[]InterceptFlowReportActions `json:"actions,omitempty"`
+	Client     Ipv4                          `json:"client"`
+	DurationMs *float32                      `json:"duration_ms,omitempty"`
+
+	// Error Why the exchange ended without a response (the server did not answer, the device went away).
+	Error *string `json:"error,omitempty"`
+	Host  *string `json:"host,omitempty"`
+
+	// Messages WebSocket messages, both directions.
+	Messages *int64  `json:"messages,omitempty"`
+	Method   *string `json:"method,omitempty"`
+
+	// OriginalDst `ip:port` the device meant.
+	OriginalDst string `json:"original_dst"`
+	Overlay     *Uuid  `json:"overlay,omitempty"`
+
+	// Path The request target, cut at 1024 characters.
+	Path *string `json:"path,omitempty"`
+
+	// Protocol `tcp` is a connection that is no HTTP: its bytes are counted, not read.
+	Protocol      InterceptFlowReportProtocol `json:"protocol"`
+	RequestBytes  *int64                      `json:"request_bytes,omitempty"`
+	ResponseBytes *int64                      `json:"response_bytes,omitempty"`
+
+	// Status The status code the device got, absent when it got none.
+	Status *int `json:"status,omitempty"`
+
+	// Time When the request arrived at the proxy (the connection was opened, for a stream).
+	Time time.Time `json:"time"`
+}
+
+// InterceptFlowReportActions defines model for InterceptFlowReport.Actions.
+type InterceptFlowReportActions string
+
+// InterceptFlowReportProtocol `tcp` is a connection that is no HTTP: its bytes are counted, not read.
+type InterceptFlowReportProtocol string
+
+// InterceptKeylogBatch defines model for InterceptKeylogBatch.
+type InterceptKeylogBatch struct {
+	Client  Ipv4     `json:"client"`
+	Lines   []string `json:"lines"`
+	Overlay *Uuid    `json:"overlay,omitempty"`
+}
+
 // InterceptSettings Only with case `intercept` (M22). Requires the device to trust the test CA.
 type InterceptSettings struct {
-	// BlockQuic Drop UDP 443 for the selected traffic, forcing TCP.
-	BlockQuic *bool       `json:"block_quic,omitempty"`
+	// BlockQuic Drop UDP 443 of the selected clients (and destination, when the case names one) while the case is in force, so
+	// that a client that tries QUIC / HTTP/3 falls back to TCP, which the proxy can intercept. QUIC itself is not
+	// intercepted.
+	BlockQuic *bool `json:"block_quic,omitempty"`
+
+	// HttpRules Applied in order to every HTTP request of the intercepted connections (HTTP/1.1 and HTTP/2, WebSocket handshakes
+	// included) that the rule's `match` selects. Every matching rule applies, in the order written, until one of the
+	// terminal actions (`block`, `status`, `abort`) has acted: nothing after it does. `delay` holds the request (and so the
+	// response) back, `modify` changes headers and bodies, `throttle` paces the bytes towards the device. A
+	// connection that is no HTTP (MQTT over TLS, a raw stream) is matched by the rules that name no `path_prefix` and no
+	// `method`: `block` and `abort` close it, `delay` holds it back once, `throttle` paces it.
 	HttpRules *[]HttpRule `json:"http_rules,omitempty"`
-	Keylog    *bool       `json:"keylog,omitempty"`
+
+	// Keylog Give the TLS secrets of the intercepted connections to the captures that run while the device talks
+	// (`GET /captures/{id}/download?part=keylog`), so Wireshark can decrypt the capture. A capture that receives
+	// secrets is marked `sensitive`. The proxy writes the log whatever this says; `false` keeps it from the captures.
+	Keylog *bool `json:"keylog,omitempty"`
 }
 
 // InterfaceRef A host interface, identified by MAC address and/or name (plan §3.4). If both are given, the MAC wins and the name is updated when it changes.
@@ -5029,8 +5282,11 @@ type Overlay struct {
 	Target *Scope `json:"target,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+	// with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+	// device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+	// show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
 	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
 	// `sni` or a destination count as destination: a case without selectors on a device has
 	// level 3, with an SNI level 1.
@@ -5186,8 +5442,11 @@ type OverlayRequest struct {
 	Target *Scope `json:"target,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+	// with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+	// device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+	// show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
 	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
 	// `sni` or a destination count as destination: a case without selectors on a device has
 	// level 3, with an SNI level 1.
@@ -5720,8 +5979,11 @@ type ProfileParts struct {
 	Mtu        *MtuParams        `json:"mtu,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+	// with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+	// device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+	// show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
 	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
 	// `sni` or a destination count as destination: a case without selectors on a device has
 	// level 3, with an SNI level 1.
@@ -6445,8 +6707,11 @@ type Step struct {
 	Target *Scope `json:"target,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-	// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-	// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+	// with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+	// device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+	// show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
 	// level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
 	// `sni` or a destination count as destination: a case without selectors on a device has
 	// level 3, with an SNI level 1.
@@ -6519,8 +6784,11 @@ type SystemInfo struct {
 type SystemInfoArch string
 
 // TlsCase TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-// (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-// Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+// with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+// device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+// show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
 // level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
 // `sni` or a destination count as destination: a case without selectors on a device has
 // level 3, with an SNI level 1.
@@ -6559,7 +6827,11 @@ type TlsHandshakeReport struct {
 	// must be rejected); `client_closed` - the client went away before it was shown a certificate;
 	// `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
 	// responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
-	// (`handshake_stall`).
+	// (`handshake_stall`); `intercepted` - the responder handed the connection to the interception proxy (case
+	// `intercept`; this is the report that counts the connection for its overlay), `proxy_unavailable` - it could not
+	// (the proxy is not running or refused the connection) and reset the connection. The proxy reports what the
+	// device did with its certificate as `accepted`, `rejected`, `client_closed` or `timeout`, with the case `intercept`;
+	// those reports are not counted again.
 	Outcome    TlsHandshakeReportOutcome `json:"outcome"`
 	Overlay    *Uuid                     `json:"overlay,omitempty"`
 	Sni        *string                   `json:"sni,omitempty"`
@@ -6572,7 +6844,11 @@ type TlsHandshakeReport struct {
 // must be rejected); `client_closed` - the client went away before it was shown a certificate;
 // `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
 // responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
-// (`handshake_stall`).
+// (`handshake_stall`); `intercepted` - the responder handed the connection to the interception proxy (case
+// `intercept`; this is the report that counts the connection for its overlay), `proxy_unavailable` - it could not
+// (the proxy is not running or refused the connection) and reset the connection. The proxy reports what the
+// device did with its certificate as `accepted`, `rejected`, `client_closed` or `timeout`, with the case `intercept`;
+// those reports are not counted again.
 type TlsHandshakeReportOutcome string
 
 // TlsResolveRequest defines model for TlsResolveRequest.
@@ -6610,7 +6886,7 @@ type TlsResolveResponse struct {
 	// Overlay The overlay that decides the connection (the activation, for the `tls` part of a profile); absent when no case does.
 	Overlay *Uuid `json:"overlay,omitempty"`
 
-	// Passthrough Only without a `case`: whether the gateway would have forwarded the connection if it had not been selected, judged
+	// Passthrough Without a `case`, and with the case `intercept`: whether the gateway would have forwarded the connection if it had not been selected, judged
 	// by the access rules and the access matrix on the original destination. The responder passes the connection through
 	// only when this is true and resets it otherwise: the answer of the gateway must not let a device reach a server that the
 	// matrix keeps it from.
@@ -7120,6 +7396,20 @@ type GetGroupParams struct {
 	Revision *RevisionQuery `form:"revision,omitempty" json:"revision,omitempty"`
 }
 
+// ListInterceptFlowsParams defines parameters for ListInterceptFlows.
+type ListInterceptFlowsParams struct {
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	Device *Ref    `form:"device,omitempty" json:"device,omitempty"`
+
+	// Host Exact host name or `*.suffix`
+	Host  *string    `form:"host,omitempty" json:"host,omitempty"`
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
+
+	// Faulted Only exchanges a rule acted on.
+	Faulted *bool `form:"faulted,omitempty" json:"faulted,omitempty"`
+}
+
 // GetDnsServiceConfigParams defines parameters for GetDnsServiceConfig.
 type GetDnsServiceConfigParams struct {
 	After *int64 `form:"after,omitempty" json:"after,omitempty"`
@@ -7131,10 +7421,20 @@ type PostDnsQueriesJSONBody = []DnsQueryLogEntry
 // PostDnsResolutionsJSONBody defines parameters for PostDnsResolutions.
 type PostDnsResolutionsJSONBody = []DnsResolution
 
+// PostInterceptFlowsJSONBody defines parameters for PostInterceptFlows.
+type PostInterceptFlowsJSONBody = []InterceptFlowReport
+
+// PostInterceptKeylogJSONBody defines parameters for PostInterceptKeylog.
+type PostInterceptKeylogJSONBody = []InterceptKeylogBatch
+
 // GetTlsServiceConfigParams defines parameters for GetTlsServiceConfig.
 type GetTlsServiceConfigParams struct {
-	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	After    *int64                             `form:"after,omitempty" json:"after,omitempty"`
+	Consumer *GetTlsServiceConfigParamsConsumer `form:"consumer,omitempty" json:"consumer,omitempty"`
 }
+
+// GetTlsServiceConfigParamsConsumer defines parameters for GetTlsServiceConfig.
+type GetTlsServiceConfigParamsConsumer string
 
 // PostTlsHandshakesJSONBody defines parameters for PostTlsHandshakes.
 type PostTlsHandshakesJSONBody = []TlsHandshakeReport
@@ -7408,6 +7708,12 @@ type PostDnsQueriesJSONRequestBody = PostDnsQueriesJSONBody
 
 // PostDnsResolutionsJSONRequestBody defines body for PostDnsResolutions for application/json ContentType.
 type PostDnsResolutionsJSONRequestBody = PostDnsResolutionsJSONBody
+
+// PostInterceptFlowsJSONRequestBody defines body for PostInterceptFlows for application/json ContentType.
+type PostInterceptFlowsJSONRequestBody = PostInterceptFlowsJSONBody
+
+// PostInterceptKeylogJSONRequestBody defines body for PostInterceptKeylog for application/json ContentType.
+type PostInterceptKeylogJSONRequestBody = PostInterceptKeylogJSONBody
 
 // PostTlsHandshakesJSONRequestBody defines body for PostTlsHandshakes for application/json ContentType.
 type PostTlsHandshakesJSONRequestBody = PostTlsHandshakesJSONBody

@@ -193,3 +193,43 @@ steps:
 		t.Fatalf("warnings %+v", ws)
 	}
 }
+
+// The step type for the interception (plan §2.10, M22) is the step `tls` with the case `intercept`: it writes the overlay with the
+// settings of the step, and a step that handled no connection is a zero hit like the other TLS steps.
+func TestAnInterceptionStepWritesTheOverlayWithItsRulesAndCountsConnections(t *testing.T) {
+	h := newHarness(t)
+	h.obs.stepCounters["inspect"] = &model.Counter{Packets: 3, Epoch: 1}
+	h.obs.stepCounters["idle"] = &model.Counter{Epoch: 1}
+	r := h.start(`
+name: intercept
+target: {device: esp32-42}
+steps:
+  - id: inspect
+    at: 0s
+    tls:
+      case: intercept
+      ports: [443]
+      intercept:
+        block_quic: false
+        http_rules:
+          - {match: {host: api.example.com, path_prefix: /v1/}, action: status, status: 503}
+          - {action: delay, delay: 200ms}
+  - {id: idle, at: 1s, tls: {case: intercept, ports: [8443]}}
+`)
+	h.waitStep(r.Id, "inspect", model.RunStepStatusApplied)
+	if len(h.gw.writes) != 1 {
+		t.Fatalf("%+v", h.gw.writes)
+	}
+	tc := h.gw.writes[0].Request.Tls
+	if tc == nil || tc.Case != model.TlsCaseCaseIntercept || tc.Intercept == nil || tc.Intercept.BlockQuic == nil || *tc.Intercept.BlockQuic ||
+		tc.Intercept.HttpRules == nil || len(*tc.Intercept.HttpRules) != 2 || (*tc.Intercept.HttpRules)[0].Action != model.HttpRuleActionStatus {
+		t.Fatalf("%+v", tc)
+	}
+	h.advance(time.Second)
+	h.waitStep(r.Id, "idle", model.RunStepStatusApplied)
+	done := h.waitStatus(r.Id, model.RunStatusPassed)
+	ws := deref(done.Warnings)
+	if len(ws) != 1 || ws[0].Code != model.ZeroHit || *ws[0].Step != "idle" || !strings.Contains(ws[0].Message, "the TLS case of step idle held no connection") {
+		t.Fatalf("warnings %+v", ws)
+	}
+}

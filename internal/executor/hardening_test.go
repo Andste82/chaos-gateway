@@ -546,7 +546,7 @@ func TestTLSProxyContainerHardeningProfile(t *testing.T) {
 	if len(p.Tmpfs) != 1 || !strings.HasPrefix(p.Tmpfs[0], "/tmp:") || args["--confdir"] != "/tmp/mitmproxy" {
 		t.Errorf("tmpfs %v, confdir %q", p.Tmpfs, args["--confdir"])
 	}
-	// the tmpfs is the proxy's: it runs as 65532, and a tmpfs that is root's with mode 0700 could not be written (found by the smoke test of the container)
+	// the tmpfs is the proxy's: it runs as 65532, and a tmpfs that is root's with mode 0700 could not be written (found by reading the compose file for the smoke test of the container, which had not run yet)
 	if len(p.Tmpfs) == 1 && (!strings.Contains(p.Tmpfs[0], "uid=65532") || !strings.Contains(p.Tmpfs[0], "gid=65532") || p.User != "65532:65532") {
 		t.Errorf("the tmpfs %v is not owned by the user the proxy runs as (%q)", p.Tmpfs, p.User)
 	}

@@ -276,6 +276,8 @@ type interceptRig struct {
 	overlay atomic.Value   // the overlay that decides the connections of the device (a string); interceptOverlay until a test says otherwise
 	roots   *x509.CertPool // what the device trusts: the test CA
 	control string
+	// upstreamCAFile is the CA file the proxy was started with (empty when the installation gave it none)
+	upstreamCAFile string
 }
 
 type riglOpt struct {
@@ -365,6 +367,7 @@ func newInterceptRig(t *testing.T, o riglOpt) *interceptRig {
 			t.Fatal(err)
 		}
 	}
+	ir.upstreamCAFile = upCA
 	ir.proxy, err = testbed.StartProxy(py, testbed.ProxyOptions{Listen: listen, Control: ir.control, API: ir.gw.srv.URL, TokenFile: tokenFile, CADir: ir.caDir, UpstreamCA: upCA, UpstreamInsecure: o.upstreamInsecure, Dir: pdir})
 	if err != nil {
 		t.Fatal(err)

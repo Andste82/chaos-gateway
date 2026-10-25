@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -251,4 +252,34 @@ func TestTheKeyLogHoldsTheSecretsOfTheProxysConnectionWhenACaseChangedHowItIsVer
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("the proxy's key log lacks the secrets of one of the two connections (the device holds %d lines)", len(deviceLines))
+}
+
+// A policy that cannot be applied does not fall back to a connection nobody verified: the CA file of the installation is gone when a case asks
+// for own_ca (the proxy reads it for the case), so the connection is refused and the exchange says that the policy could not be applied. The
+// other policies and a case without one are not affected, and the file coming back is enough for own_ca to serve the server again.
+func TestACaseWhoseCAFileCannotBeReadIsRefusedAndNeverServedUnverified(t *testing.T) {
+	ir := newInterceptRig(t, riglOpt{upstreamInsecure: true}) // the installation has a CA file, and verifies nothing
+	ir.gw.waitApplied(t)
+	ir.policy("own_ca")
+	ir.wantServed(hostName, "/readable")
+	pem, err := os.ReadFile(ir.upstreamCAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ir.upstreamCAFile); err != nil {
+		t.Fatal(err)
+	}
+	o := ir.wantRefused(hostName, "/gone", "could not be applied")
+	if !strings.Contains(o.body, "Certificate verify failed") {
+		t.Errorf("the device is told why: %q", o.body)
+	}
+	ir.policy("insecure")
+	ir.wantServed(hostName, "/insecure")
+	ir.policy("verify")
+	ir.wantRefused(hostName, "/verify", "self-signed certificate")
+	if err := os.WriteFile(ir.upstreamCAFile, pem, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ir.policy("own_ca")
+	ir.wantServed(hostName, "/back")
 }

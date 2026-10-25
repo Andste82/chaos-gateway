@@ -439,8 +439,12 @@ func TestTheUpstreamPolicyOfACaseDecidesWhetherTheProxyAcceptsTheServersCertific
 	b.untilIntercepted(t, "/warm")
 	for _, c := range []struct{ policy, want string }{{"verify", "502"}, {"own_ca", "200"}, {"insecure", "200"}, {"verify", "502"}, {"", "200"}} {
 		b.remove(t, id)
+		handed := b.srv.Intercepted()
 		id = b.overlay(t, caseWith(c.policy))
-		waitFor(t, 60*time.Second, "the case with the policy "+c.policy+" is in force: "+c.want, func() bool { return status("/policy") == c.want })
+		// a 200 is also what a connection that no case selects gets, so it counts only when the responder has handed a connection to the proxy since the case is there
+		waitFor(t, 60*time.Second, "the case with the policy "+c.policy+" is in force: "+c.want, func() bool {
+			return status("/policy") == c.want && (c.want != "200" || b.srv.Intercepted() > handed)
+		})
 	}
 	// what the device is told when the proxy refuses the server, and the exchange that says why
 	b.remove(t, id)

@@ -206,6 +206,47 @@ func TestAConnectionNoCaseDecidesMayPassThroughOnlyWhereTheGatewayWouldForwardIt
 	}
 }
 
+// The namespace's connection reaches the other test networks since P5-M21-02, so the matrix decides there as it does for the
+// uplink: a server in another test network is passed on only where an entry allows it (the default keeps the networks apart), and
+// the management network stays out of reach whatever the matrix says for the other networks.
+func TestAConnectionNoCaseDecidesIsPassedToAnotherTestNetworkOnlyWhereTheMatrixAllowsIt(t *testing.T) {
+	h := tlsHarness(t)
+	h.mustPut(alice, "target: {network: IoT}\ntls: {case: expired, ports: [8883], sni: [broker.example.com]}")
+	ask := func(dst string) engine.TLSDecision {
+		t.Helper()
+		dec, err := h.e.ResolveTLS(engine.TLSConnection{Client: netip.MustParseAddr("10.10.0.31"), Dst: netip.MustParseAddrPort(dst), SNI: "other.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dec
+	}
+	if dec := ask("10.20.0.13:8883"); dec.Case != nil || dec.Passthrough {
+		t.Fatalf("the default keeps the test networks apart: %+v", dec)
+	}
+	setMatrix := func(entries ...model.MatrixEntry) {
+		h.mustApply(h.revision(func(c *model.Configuration) {
+			withDHCPAndDevice(c)
+			d := (*c.Devices)[devID]
+			d.TrustsTestCa = ptr(true)
+			(*c.Devices)[devID] = d
+			c.AccessMatrix = &model.AccessMatrix{Entries: &entries}
+		}))
+	}
+	iot, lab := iotID, "1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32"
+	setMatrix(model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &lab}, Policy: model.MatrixEntryPolicyAllow})
+	if dec := ask("10.20.0.13:8883"); dec.Case != nil || !dec.Passthrough {
+		t.Errorf("an entry allows the network IoT to reach the network Lab: %+v", dec)
+	}
+	// the management network stays closed to a device under test (the guard), whatever is allowed towards the other networks
+	if dec := ask("192.168.56.10:8883"); dec.Case != nil || dec.Passthrough {
+		t.Errorf("a connection to the management network is passed on: %+v", dec)
+	}
+	setMatrix(model.MatrixEntry{From: model.MatrixEndpoint{Network: &iot}, To: model.MatrixEndpoint{Network: &lab}, Policy: model.MatrixEntryPolicyDeny})
+	if dec := ask("10.20.0.13:8883"); dec.Case != nil || dec.Passthrough {
+		t.Errorf("a deny entry keeps the network IoT from the network Lab: %+v", dec)
+	}
+}
+
 func TestExplainSaysTheTLSResponderAnswersWhenACaseDecides(t *testing.T) {
 	h := tlsHarness(t)
 	h.mustPut(alice, "target: {device: esp32-42}\ntls: {case: expired, ports: [8883]}")

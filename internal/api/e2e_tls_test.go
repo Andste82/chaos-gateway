@@ -558,7 +558,7 @@ func TestAConnectionNoCaseDecidesReachesAServerInAnotherTestNetworkAndBehindAWir
 			labID: map[string]any{"type": "lan", "name": "Lab", "address": testbed.LAN1Gateway + "/24",
 				"interfaces": []any{map[string]any{"name": "lan1", "mac": testbed.GWLan1MAC}}},
 			// the tunnel carries only what the client may reach: the test network, where the device is that opens the connections
-			hubID: map[string]any{"clients": map[string]any{"9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d": map[string]any{"reachable": []any{map[string]any{"network": iotID}}}}}},
+			hubID: map[string]any{"clients": map[string]any{rAID: map[string]any{"reachable": []any{map[string]any{"network": iotID}}}}}},
 		"access_matrix": map[string]any{"entries": []any{iotToHub, iotToSite, iotToLab}}})
 	if r := b.g.apply(id); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)

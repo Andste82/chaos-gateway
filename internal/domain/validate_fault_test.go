@@ -270,6 +270,15 @@ func TestProfileRules(t *testing.T) {
 		{"a modify rule without its changes", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"modify"}]}}`), "profiles", idProfile, "parts", "tls")
 		}, pr + "/tls/intercept/http_rules/0/modify", CodeInvalidTLSCase},
+		{"a modify rule with a header name that is none", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"modify","modify":{"response_headers":{"X Bad:":"1"}}}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/modify/response_headers/X Bad:", CodeInvalidTLSCase},
+		{"a modify rule with a header value that has a line break", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"modify","modify":{"request_headers":{"X-Ok":"a\r\nInjected: 1"}}}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/modify/request_headers/X-Ok", CodeInvalidTLSCase},
+		{"a modify rule that replaces the empty text", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"modify","modify":{"response_body_replace":[{"search":"","replace":"x"}]}}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/modify/response_body_replace/0/search", CodeInvalidTLSCase},
 		{"more http rules than a case may have", func(t *testing.T, d doc) {
 			rules := strings.TrimSuffix(strings.Repeat(`{"action":"abort"},`, MaxHTTPRules+1), ",")
 			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[`+rules+`]}}`), "profiles", idProfile, "parts", "tls")

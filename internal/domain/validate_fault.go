@@ -358,6 +358,23 @@ const (
 // httpMethod is what the method of an HTTP match may look like: a token of letters, digits and hyphens.
 var httpMethod = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
 
+// httpHeaderName is a header name as RFC 9110 writes it (a token): the proxy sets it on a request or a response, and a name with a
+// colon, a space or a line break would not survive the serialization of either.
+var httpHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// httpHeaders checks the headers a `modify` rule sets: valid names, and values without a line break or a NUL byte (an empty value
+// removes the header).
+func (v *validator) httpHeaders(path string, headers *map[string]string) {
+	for _, name := range sortedKeys(deref(headers)) {
+		if !httpHeaderName.MatchString(name) {
+			v.add(schema.Pointer(path, name), CodeInvalidTLSCase, "%q is not a header name", name)
+		}
+		if strings.ContainsAny(deref(headers)[name], "\r\n\x00") {
+			v.add(schema.Pointer(path, name), CodeInvalidTLSCase, "the value of the header %q has a line break or a NUL byte", name)
+		}
+	}
+}
+
 func (v *validator) tlsCase(path string, t model.TlsCase) {
 	match := convert[model.TrafficMatch](t)
 	// TLS runs over TCP: an omitted protocol means tcp, so ports are fine without one
@@ -406,6 +423,15 @@ func (v *validator) tlsCase(path string, t model.TlsCase) {
 			need("delay", r.Delay != nil, "delay")
 			need("rate", r.Rate != nil, "throttle")
 			need("modify", r.Modify != nil, "modify")
+			if m := r.Modify; m != nil {
+				v.httpHeaders(rp+"/modify/request_headers", m.RequestHeaders)
+				v.httpHeaders(rp+"/modify/response_headers", m.ResponseHeaders)
+				for j, b := range deref(m.ResponseBodyReplace) {
+					if b.Search == "" {
+						v.add(schema.Pointer(rp+"/modify/response_body_replace", itoa(j))+"/search", CodeInvalidTLSCase, "the text to search for must not be empty")
+					}
+				}
+			}
 		}
 	}
 }

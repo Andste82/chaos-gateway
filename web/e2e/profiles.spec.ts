@@ -19,7 +19,7 @@ function lab(): MockGateway {
       id: TLS_BROKEN,
       builtin: true,
       available: false,
-      unavailable_reason: 'the tls part with the case intercept arrives with milestone M22',
+      unavailable_reason: 'the tls part arrives with a later milestone',
       config: { name: 'tls-intercept', parts: { tls: { case: 'intercept' } } },
     },
     { id: 'c0000000-0000-4000-8000-0000000000c1', builtin: false, available: true, config: { name: 'slow-lab', parts: { impairment: { latency: '20ms' }, mtu: { size: 1280 } } } },
@@ -46,7 +46,7 @@ test('cards with their parameters and where each profile is active, with the rem
   await expect(card(page, 'slow-lab')).toContainText('custom');
   await expect(card(page, 'slow-lab')).toContainText('MTU 1280');
   // a profile whose family comes later says so and cannot be activated
-  await expect(card(page, 'tls-intercept')).toContainText('the tls part with the case intercept arrives with milestone M22');
+  await expect(card(page, 'tls-intercept')).toContainText('the tls part arrives with a later milestone');
   await expect(card(page, 'tls-intercept').getByRole('button', { name: /^Activate/ })).toBeDisabled();
 });
 

@@ -6000,9 +6000,10 @@ type ProfileView struct {
 	// activation produces.
 	Activations *[]ProfileActivation `json:"activations,omitempty"`
 
-	// Available False while a part of the profile is not in this build: a `tls` part with the case `intercept`
-	// (M22); the `dns` family has been available since M20 and the certificate and handshake cases of the
-	// `tls` family, `tls-broken` among them, since M21. Such a profile can be defined and shown, but activating it
+	// Available False while a part of the profile is not in this build. Every part is available since M22 (the `dns` family
+	// since M20, the certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, and the
+	// case `intercept` since M22), so this is true for every profile today; the field stays for a part a later
+	// milestone adds. A profile with a part that is not in the build can be defined and shown, but activating it
 	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
 	// such a part while an overlay activates it (the profile and the milestone are named; remove
 	// the activation first, `force` does not lift it), so that no activation runs half a profile.
@@ -6018,7 +6019,7 @@ type ProfileView struct {
 
 	// UnavailableReason Set when `available` is false - the part and the milestone that brings it.
 	//
-	// Example: the tls part with the case intercept arrives with milestone M22
+	// Example: the <part> part arrives with milestone <Mnn>
 	UnavailableReason *string `json:"unavailable_reason,omitempty"`
 }
 

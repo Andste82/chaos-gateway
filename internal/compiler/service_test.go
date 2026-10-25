@@ -156,6 +156,83 @@ func TestTheServiceNamespaceIsRoutedAndFailsClosed(t *testing.T) {
 	}
 }
 
+// What a service opens towards the test networks and the tunnels (P5-M21-02): the forward chain accepts svc0 towards the interfaces
+// of the test networks (the bridges and the WireGuard networks of the role test) and never towards the management interface or the
+// WireGuard networks of the role management; the namespace's address is masqueraded on the way out like at the uplink.
+func TestAServiceReachesTheTestNetworksAndTheTunnelsButNotTheManagementNetwork(t *testing.T) {
+	tg := withService(t)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	var test SetDef
+	for _, s := range tg.Nft.Sets {
+		if strings.HasPrefix(s.Name, "ifs_test_") {
+			test = s
+		}
+	}
+	members := map[string]bool{}
+	for _, e := range test.Elements {
+		members[e] = true
+	}
+	if len(tg.Bridges) == 0 || len(tg.WireGuard) == 0 {
+		t.Fatalf("the configuration has %d bridges and %d WireGuard networks", len(tg.Bridges), len(tg.WireGuard))
+	}
+	for _, b := range tg.Bridges {
+		if !members[b.Name] {
+			t.Errorf("the bridge %s is not a destination of the namespace: %v", b.Name, test.Elements)
+		}
+	}
+	for _, w := range tg.WireGuard {
+		if got, want := members[w.Name], w.Role != "management"; got != want {
+			t.Errorf("the WireGuard network %s (role %q) is a destination of the namespace: %v, want %v", w.Name, w.Role, got, want)
+		}
+	}
+	if members[tg.Management.Name] || members[tg.Uplink.Name] {
+		t.Errorf("the management interface or the uplink is in the set of the test networks: %v", test.Elements)
+	}
+	fwd := renderRules(chainByName(t, tg, "forward"))
+	accept := indexOfLine(fwd, "meta iifname svc0 meta oifname @"+test.Name+" accept")
+	up := indexOfLine(fwd, "meta iifname svc0 meta oifname "+tg.Uplink.Name+" accept")
+	if accept < 0 || up < 0 {
+		t.Fatalf("the accept towards the test networks (%d) or the uplink (%d) is missing:\n%s", accept, up, strings.Join(fwd, "\n"))
+	}
+	// it stands behind the access rules, the guard of the management network and the matrix, which judge the original connection
+	for _, before := range []string{"jump mgmt_guard", "ct state { established, related } accept"} {
+		if i := indexOfLine(fwd, before); i < 0 || i > accept {
+			t.Errorf("%q (index %d) does not stand before the accept (index %d)", before, i, accept)
+		}
+	}
+	for _, line := range fwd {
+		if strings.Contains(line, "meta iifname svc0") && strings.Contains(line, "oifname "+tg.Management.Name) {
+			t.Errorf("the namespace is accepted towards the management interface: %s", line)
+		}
+	}
+	// the namespace's address is translated on the way out, towards the uplink and towards the test networks
+	post := renderRules(chainByName(t, tg, "postrouting"))
+	if indexOfLine(post, "ip saddr 169.254.100.0/30 meta oifname "+tg.Uplink.Name+" masquerade") < 0 {
+		t.Errorf("the namespace is not masqueraded towards the uplink:\n%s", strings.Join(post, "\n"))
+	}
+	if indexOfLine(post, "ip saddr 169.254.100.0/30 meta oifname @"+test.Name+" masquerade") < 0 {
+		t.Errorf("the namespace is not masqueraded towards the test networks:\n%s", strings.Join(post, "\n"))
+	}
+	// no namespace, nothing of it
+	plain := compileWG(t, nil)
+	for _, line := range append(renderRules(chainByName(t, plain, "forward")), renderRules(chainByName(t, plain, "postrouting"))...) {
+		if strings.Contains(line, "svc0") || strings.Contains(line, "169.254.100") {
+			t.Errorf("a rule for the service namespace without one: %s", line)
+		}
+	}
+}
+
+func indexOfLine(lines []string, want string) int {
+	for i, l := range lines {
+		if strings.Contains(l, want) {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestTheServiceNamespaceIsPartOfTheHash(t *testing.T) {
 	a, b := compileWG(t, nil), withService(t)
 	if a.Hash == b.Hash {

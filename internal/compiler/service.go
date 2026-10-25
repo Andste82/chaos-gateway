@@ -118,9 +118,9 @@ func (t *Target) serviceInput() []Rule {
 	}
 }
 
-// serviceForward leaves nothing to chance: a packet for the namespace's subnet that does not leave
+// serviceForwardGuard leaves nothing to chance: a packet for the namespace's subnet that does not leave
 // through svc0 (the namespace is missing) is dropped, never routed to the uplink; the queries that
-// were redirected to the DNS proxy and what the services send upstream are accepted.
+// were redirected to the DNS proxy and what the services send out are accepted by serviceForward.
 func (t *Target) serviceForwardGuard() []Rule {
 	if t.Service == nil {
 		return nil
@@ -128,7 +128,13 @@ func (t *Target) serviceForwardGuard() []Rule {
 	return []Rule{newRule(eq(payload("ip", "daddr"), prefixValue(t.Service.HostCIDR.Masked())), match(meta("oifname"), "!=", t.Service.HostIf), counter("forward_drop"), verdict("drop"))}
 }
 
-func (t *Target) serviceForward(ifsCG string, uplink string) []Rule {
+// serviceForward accepts the queries that were redirected to the DNS proxy and what the services send out of the namespace:
+// towards the uplink, and towards the test networks and the WireGuard tunnels of the test role (ifsTest), where the servers
+// are that a connection passed on by the TLS responder or the interception proxy has to reach (plan M21, P5-M21-02). The rule
+// stands after the access rules and the matrix: they cannot judge the connection (it comes in on svc0, from the namespace's
+// address), so the API judged the original connection before a service opened this one (`AccessDecision`), and the management
+// network (the management interface, the WireGuard networks of the role management) is not among the interfaces it accepts.
+func (t *Target) serviceForward(ifsCG, ifsTest string, uplink string) []Rule {
 	if t.Service == nil {
 		return nil
 	}
@@ -140,6 +146,7 @@ func (t *Target) serviceForward(ifsCG string, uplink string) []Rule {
 	if uplink != "" {
 		out = append(out, newRule(iifname(t.Service.HostIf), oifname(uplink), verdict("accept")))
 	}
+	out = append(out, newRule(iifname(t.Service.HostIf), oifSet(ifsTest), verdict("accept")))
 	return out
 }
 
@@ -199,11 +206,21 @@ func (t *Target) serviceRedirect(tp *topo) []Rule {
 	return rules
 }
 
-// serviceMasquerade lets the services reach the upstream resolver with the uplink's address.
-func (t *Target) serviceMasquerade(uplink string) *Rule {
-	if t.Service == nil || uplink == "" {
+// serviceMasquerade lets the services reach the upstream resolver, and the servers a passed-on connection goes to, with the
+// address of the interface the connection leaves through: the uplink's and, towards the test networks and the WireGuard
+// tunnels of the test role (ifsTest), the gateway's own address in that network. A server there knows a route to the gateway
+// (a tunnel's AllowedIPs carry its tunnel address, a host's default route leads to it), not one to the namespace's link-local
+// address.
+func (t *Target) serviceMasquerade(uplink, ifsTest string) []Rule {
+	if t.Service == nil {
 		return nil
 	}
-	r := newRule(eq(payload("ip", "saddr"), prefixValue(t.Service.PeerCIDR.Masked())), oifname(uplink), map[string]any{"masquerade": nil})
-	return &r
+	src := eq(payload("ip", "saddr"), prefixValue(t.Service.PeerCIDR.Masked()))
+	masq := map[string]any{"masquerade": nil}
+	var out []Rule
+	if uplink != "" {
+		out = append(out, newRule(src, oifname(uplink), masq))
+	}
+	out = append(out, newRule(src, oifSet(ifsTest), masq))
+	return out
 }

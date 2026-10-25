@@ -296,7 +296,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 	forward.Rules = append(forward.Rules, explicit...)
 	// default matrix: local test networks may reach the uplink, everything else is denied
 	forward.Rules = append(forward.Rules, implicit...)
-	forward.Rules = append(forward.Rules, t.serviceForward(ifsCG.Name, uplink)...)
+	forward.Rules = append(forward.Rules, t.serviceForward(ifsCG.Name, ifsTest.Name, uplink)...)
 	if uplink != "" {
 		forward.Rules = append(forward.Rules, newRule(iifSet(ifsLan.Name), oifname(uplink), verdict("accept")))
 	}
@@ -318,9 +318,7 @@ func (t *Target) compileNft(cfg *model.Configuration, tp *topo, dynamic []SetDef
 			post.Rules = append(post.Rules, newRule(match, oifname(uplink), counter(name), map[string]any{"masquerade": nil}))
 		}
 	}
-	if r := t.serviceMasquerade(uplink); r != nil {
-		post.Rules = append(post.Rules, *r)
-	}
+	post.Rules = append(post.Rules, t.serviceMasquerade(uplink, ifsTest.Name)...)
 	sort.Strings(t.Nft.Counters)
 	t.Nft.Chains = []Chain{forward, input, post, guard}
 	if dot != nil {

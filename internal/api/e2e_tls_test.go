@@ -531,6 +531,98 @@ func TestAConnectionNoCaseDecidesReachesTheRealServerOnTheRealKernel(t *testing.
 	b.remove(t, id)
 }
 
+// peerServerScript is the real server of the bed, but it says whom it sees: the first line is "hello from the real server" and
+// the address its peer has.
+var peerServerScript = strings.Replace(strings.Replace(realServerScript,
+	"        c = ctx.wrap_socket(raw, server_side=True)\n", "        peer = raw.getpeername()[0]\n        c = ctx.wrap_socket(raw, server_side=True)\n", 1),
+	`c.sendall(b"hello from the real server\n")`, `c.sendall(("hello from the real server " + peer + "\n").encode())`, 1)
+
+// A connection that no case decides is passed on to servers in other test networks and behind WireGuard clients too, not only behind
+// the uplink (plan M21, P5-M21-02): the case selects everything of the network IoT to port 8883 (no destination), the name the
+// device asks for is named by no case, so the responder passes the connection on through the service namespace, and the device gets
+// the answer of a server in the network Lab and of one in the network behind the WireGuard client rA. The server sees the gateway's
+// address in the network it is in (the namespace's address, masqueraded on the way out), not the device's. Where the access matrix
+// refuses the connection, the responder resets it instead of passing it on.
+func TestAConnectionNoCaseDecidesReachesAServerInAnotherTestNetworkAndBehindAWireGuardClientOnTheRealKernel(t *testing.T) {
+	if !strings.Contains(peerServerScript, "peer = raw.getpeername()") || !strings.Contains(peerServerScript, `+ peer +`) {
+		t.Fatal("the script of the server that names its peer does not apply to the real server's script")
+	}
+	b := newTLSBed(t)
+	const labID = "5d3a8e6f-2b1c-4d7e-9f08-a1b2c3d4e5f6"
+	iotToLab := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "Lab"}, "policy": "allow"}
+	iotToHub := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "lab-hub"}, "policy": "allow"}
+	iotToSite := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "site-b"}, "policy": "allow"}
+	// a second test network with a server of its own, and the WireGuard client rA with a server in the network behind it
+	id := b.g.mustPatch(map[string]any{
+		"networks": map[string]any{
+			labID: map[string]any{"type": "lan", "name": "Lab", "address": testbed.LAN1Gateway + "/24",
+				"interfaces": []any{map[string]any{"name": "lan1", "mac": testbed.GWLan1MAC}}},
+			// the tunnel carries only what the client may reach: the test network, where the device is that opens the connections
+			hubID: map[string]any{"clients": map[string]any{"9a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d": map[string]any{"reachable": []any{map[string]any{"network": iotID}}}}}},
+		"access_matrix": map[string]any{"entries": []any{iotToHub, iotToSite, iotToLab}}})
+	if r := b.g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	r := b.g.do("GET", "/networks/lab-hub/clients/rA/export", nil, nil, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	conf := filepath.Join(t.TempDir(), "wgra.conf")
+	if err := os.WriteFile(conf, r.Body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.top.RC.Must("wg-quick", "up", conf)
+	waitFor(t, 30*time.Second, "the tunnel carries traffic", func() bool { return pingOK(b.top.RC, "", "10.99.0.1") })
+	b.top.C.Start("python3", "-c", peerServerScript, b.publicCert, b.publicKey, "8883")
+	b.top.RC.Start("python3", "-c", peerServerScript, b.publicCert, b.publicKey, "8883")
+	servers := []struct {
+		name, addr, sees string
+	}{
+		{"the server in the network Lab", testbed.ClientCAddr, testbed.LAN1Gateway},
+		{"the server behind the WireGuard client", testbed.ClientNetHost, "10.99.0.1"},
+	}
+	// without a case the device reaches both itself: the gateway routes the connection, the server sees the device
+	for _, srv := range servers {
+		waitFor(t, 60*time.Second, srv.name+" answers the device", func() bool {
+			r := b.client(b.top.A, srv.addr, 8883, tlsBroker, "strict", b.publicOnly, "any", 3, 0)
+			return r["ok"] == true && r["line"] == "hello from the real server "+testbed.ClientAAddr
+		})
+	}
+
+	oid := b.overlay(t, `{"target":{"network":"IoT"},"tls":{"case":"self_signed","ports":[8883],"sni":["`+tlsOther+`"]}}`)
+	b.untilServed(t, 8883, tlsOther)
+	for _, srv := range servers {
+		before := b.srv.PassedThrough()
+		var res map[string]any
+		waitFor(t, 60*time.Second, srv.name+" answers through the responder", func() bool {
+			res = b.client(b.top.A, srv.addr, 8883, tlsBroker, "strict", b.publicOnly, "any", 5, 0)
+			t.Logf("%s: %v", srv.name, res)
+			return res["ok"] == true && b.srv.PassedThrough() > before
+		})
+		if want := "hello from the real server " + srv.sees; res["line"] != want {
+			t.Errorf("%s: the device got %v, want the line %q (the server sees the gateway's address, not the device's)", srv.name, res["line"], want)
+		}
+		// the name the case names is shown the responder's certificate, at the same address
+		if r := b.client(b.top.A, srv.addr, 8883, tlsOther, "strict", b.publicOnly, "any", 3, 0); r["kind"] != "verify" {
+			t.Errorf("%s, the name of the case: %v", srv.name, r)
+		}
+	}
+
+	// the matrix keeps the device from both networks: nothing is passed on any more, the responder resets the connections that no
+	// case decides, and the device does not reach the servers
+	b.g.token = b.admin
+	if r := b.g.apply(b.g.mustPatch(map[string]any{"access_matrix": map[string]any{"entries": []any{iotToSite}}})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	for _, srv := range servers {
+		denied := b.srv.Denied()
+		waitFor(t, 40*time.Second, "the matrix keeps the device from "+srv.name+", the responder included", func() bool {
+			return b.client(b.top.A, srv.addr, 8883, tlsBroker, "strict", b.publicOnly, "any", 3, 0)["ok"] != true && b.srv.Denied() > denied
+		})
+	}
+	b.remove(t, oid)
+}
+
 // The handshake cases act on the ClientHello and show no certificate: a reset, a close (a FIN) and silence.
 func TestTheHandshakeCasesBreakTheHandshakeOnTheRealKernel(t *testing.T) {
 	b := newTLSBed(t)

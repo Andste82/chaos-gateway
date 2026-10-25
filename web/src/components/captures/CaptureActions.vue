@@ -48,6 +48,7 @@ async function stop() {
     await refresh();
   } catch (e) {
     toasts.push('error', `${label.value} could not be stopped`, errorMessage(e));
+    await refresh(); // the capture may be gone (the quota deleted it) or have ended meanwhile
   } finally {
     busy.value = false;
   }

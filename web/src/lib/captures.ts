@@ -204,7 +204,11 @@ export function captureErrors(f: CaptureForm): Partial<Record<CaptureField, stri
     if (!/^[0-9]+$/.test(snap) || n < 64 || n > defaultSnaplen) e.snaplen = `A number of bytes from 64 to ${defaultSnaplen}.`;
   }
   const duration = f.duration.trim();
-  if (duration && (!/^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$/.test(duration) || !(durationMs(duration) ?? 0))) e.duration = 'A duration like 90s, 5m or 1h.';
+  if (duration) {
+    // the gateway wants at least a second (`invalid_duration`); a text that is no duration is another message
+    if (!/^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$/.test(duration)) e.duration = 'A duration like 90s, 5m or 1h.';
+    else if ((durationMs(duration) ?? 0) < 1000) e.duration = 'At least 1s.';
+  }
   if (f.limit === 'size') {
     const size = f.maxSize.trim();
     if (size) {

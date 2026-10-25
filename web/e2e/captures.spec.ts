@@ -283,6 +283,31 @@ test('deleting a capture removes it from the list and from the device, after a q
   await expect(rows(page)).toContainText('running-one');
 });
 
+test('a capture that is gone when it is stopped or deleted says so and leaves the list at once', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.captures = [
+    capture({ id: C1, name: 'live', scope: { uplink: true }, status: 'running', stop_reason: undefined, stopped_at: undefined }),
+    capture({ id: C2, name: 'old-one', scope: { uplink: true } }),
+  ];
+  await open(gw, page, '/captures');
+  await expect(rows(page)).toHaveCount(2);
+  // the quota deleted the stopped one at the gateway while the list was still the older one; nothing polls so soon
+  gw.captures = gw.captures.filter((c) => c.id !== C2);
+  await row(page, 'old-one').getByRole('button', { name: 'Delete old-one' }).click();
+  await page.getByRole('dialog', { name: 'Delete capture' }).getByTestId('capture-delete-confirm').click();
+  await expect(toast(page, 'old-one could not be deleted')).toBeVisible();
+  await expect(rows(page)).toHaveCount(1, { timeout: 1_000 });
+
+  // the same for a running capture that is gone when it is stopped (a running capture is read every 2 s: the limit
+  // is shorter than that, so only the read after the refusal can have removed the row)
+  gw.captures = [];
+  await row(page, 'live').getByRole('button', { name: 'Stop live' }).click();
+  await expect(toast(page, 'live could not be stopped')).toBeVisible();
+  await expect(rows(page)).toHaveCount(0, { timeout: 1_000 });
+  await expect(page.getByTestId('empty-state')).toContainText('No captures yet');
+  expect(gw.requestsTo('POST', `/captures/${C1}/stop`)).toHaveLength(1);
+});
+
 test('the TLS key log is offered only for a capture that has one, and a sensitive capture is marked', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.captures = [

@@ -70,8 +70,8 @@ func ctlMakesDNSFaults(t *testing.T, g *gw, clk *clock.Fake) {
 	// json prints the overlay, which the command line of a job can read
 	if r := g.ctl("dns", "set", "nxdomain", "--network", "IoT", "--name", "j.example.com", "--json"); r.code != 0 || !strings.Contains(r.out, `"kind": "dns"`) {
 		t.Errorf("%+v", r)
-	} else {
-		ids = append(ids, overlayIDsOfKind(t, g, "dns")...)
+	} else if n := len(overlayIDsOfKind(t, g, "dns")); n != len(ids)+1 {
+		t.Errorf("the fault of --json is one more DNS overlay: %d overlays, want %d", n, len(ids)+1)
 	}
 
 	// what the command line can see without the gateway

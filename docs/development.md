@@ -6236,7 +6236,7 @@ actions on the device detail and the network card and as the step `dhcp`, the do
 
 ### Decisions
 
-Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 5 item for M23b; it closes P5-M20-02, P5-M21-01 and P5-M23-01):
+Taken by best practice where the plan leaves room (none needs the maintainer; the milestone closes P5-M20-02, P5-M21-01 and P5-M23-01; the two small points it leaves in the code are `P5-M23b-01` and `P5-M23b-02` in `open-items.md`, and the milestone stays partial for them):
 
 1. **DNS and TLS are kinds of the Add fault dialog, DHCP is not.** The plan names the DNS and the TLS "in the Add fault dialog" and the DHCP actions "on the device detail and the network card"; a DHCP action is no fault of a traffic selector (it
    changes what a server does, for a device or a network, never for a group or everything) and §2.7 says DHCP is shown in the network and device views. The faults screen lists all three, and edits the DHCP actions in their dialog.

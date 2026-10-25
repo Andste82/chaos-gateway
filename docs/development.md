@@ -9,7 +9,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
 | `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
-| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with` |
+| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM; the starter of the interception proxy for the tests that run the real mitmproxy (M22) |
@@ -42,7 +42,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
-| `web/` | the web app (M12; scenarios M19; captures M23a): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
+| `web/` | the web app (M12; scenarios M19; captures M23a; the forms of the DNS, TLS and DHCP kinds M23b): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
@@ -6188,6 +6188,107 @@ Nothing of M23a needs a VM or a namespace: the captures themselves are M17's lev
 | Scope: the events keep the list live | `a capture that the quota or the disk stops while the screen is open …`, `a capture that starts elsewhere … appears … without a reload`; `composables/eventStream.test.ts` |
 | Scope: the navigation entry becomes a link | `the navigation entry Captures is a link to the screen`; `router.test.ts` |
 | Scope: the design is added to §2.17 | plan §2.17, the row "Captures" of the table of screens; "Not yet designed" no longer lists it |
+
+## Forms for the application-layer kinds (M23b)
+
+Plan §2.17 ("Forms for the application-layer kinds") and M23b. M20 to M23 deliver the DNS faults, the TLS cases and the DHCP test actions in the API; the
+milestone makes them in the web app and with `chaosctl`: a DNS fault and a TLS case in the "Add fault" dialog and as the steps `dns` and `tls`, the DHCP
+actions on the device detail and the network card and as the step `dhcp`, the download of the test CA, and the commands `chaosctl dns set`, `tls set` and
+`dhcp set`. There is no change of the API: everything the forms send is the request of M20, M21 and M23 as the spec has it (`OverlayRequest` with `dns`,
+`tls` or `dhcp`, `Step`), and the generated code is unchanged. The design is in §2.17; it closes P5-M20-02, P5-M21-01 and P5-M23-01.
+
+### How it works
+
+- **Three libraries, one per family** (`web/src/lib/dnsForm.ts`, `tlsForm.ts`, `dhcpForm.ts`). Each has the form's state (the text of the fields, as typed), `…Errors` (the
+  checks under the fields, by field name: `dnsDelay`, `tlsSni`, `leaseTime`, …; host names, server names and durations use the regular expressions of the generated Zod schemas, so a field is valid
+  where the gateway's schema accepts it, and the ports and the destination the checks of the other selectors), `…Body` (the `dns`, `tls` or `dhcp` part of the request: only what the chosen action uses, since the gateway refuses the other
+  fields), `…ToForm` (an existing fault or step read back: sending it unchanged is the identity, which the tests pin), the words (`dnsEffect`, `tlsEffect`,
+  `dhcpEffect`, `tlsScope`) the preview sentences are made of, and `…FieldOf` (the field a problem of the gateway belongs to, by its JSON pointer below the part).
+- **The three components** (`components/faults/DnsFields.vue`, `TlsFields.vue`, `components/dhcp/DhcpFields.vue`) are the fields and nothing else; the "Add fault"
+  dialog, the DHCP dialog and the step dialog put them in their forms, so a fault from the dialog and the step that makes it are the same fields. Labels and
+  messages are tied as everywhere (`aria-invalid`, `aria-describedby` to the message under the field, else to the hint); the case, the action and the options have
+  a sentence of what they do.
+- **The Add fault dialog** (`FaultDialog.vue`, `lib/faultForm.ts`). `FaultFamily` has two more members, `dns` and `tls`: the kind choice of the dialog, not a family of a fault
+  body. `formToOverlay` makes `{target, dns}` or `{target, tls}` for them (and the `ttl` of the shared duration choice, now `lifetimeOf`, which the DHCP dialog uses too),
+  `overlayToForm` opens an overlay of any of the three kinds (an edit keeps its remaining time as before), `previewSentence` says what it does, `fieldOf` maps the pointers
+  `/dns/…` and `/tls/…`. The two kinds are overlays only (decision 1): the dialog takes *Save as* away while one is chosen and does not offer them while it is
+  set to Configuration. A device the TLS case is aimed at is looked up for `trusts_test_ca`, which decides the note under the three cases signed by the test CA.
+- **The DHCP card and dialog** (`components/dhcp/DhcpActionsCard.vue`, `DhcpActionDialog.vue`). The card is on the device detail (in the aside, under the Network card) and on the
+  selected local test network of the Networks screen (above the leases). It lists the `dhcp` overlays whose target is exactly its device or network (read with the
+  overlays of the screens, `useOverlays`), and a button per action opens the dialog with the action chosen. The dialog's request is
+  `{target, dhcp, ttl}`; its action is fixed when an action is edited, and a refusal of the gateway (`/dhcp/ip`, `/dhcp/lease_time`, `/dhcp/options/…`) goes under the
+  field. The faults screen edits a DHCP action in the same dialog.
+- **The address of a forced new IP** is chosen by the gateway when the action is written and is only in the overlay as it reads back (`dhcp.ip`, decision 3 of M23): the dialog
+  reads the answer of `POST /overlays` and says it in the success toast, and the card says it in the line of the action for as long as the action exists.
+- **The test CA** (`components/ui/TestCaLink.vue`): a plain link to `GET /tls/ca` (no `download` attribute: the browser saves the gateway's file named by its
+  `Content-Disposition`, as for a capture), in the TLS fields of both dialogs, as the button **Test CA** in the header of the Faults screen and in the *Test CA* row of the device's identity card.
+- **The step dialog** (`StepDialog.vue`, `lib/stepForm.ts`). `editableTypes` has `dns`, `tls` and `dhcp` (the step types follow the capabilities as before; a gateway without
+  `dhcp` does not offer it), `StepForm` has the three forms, `stepFormErrors` their checks and `stepFieldOf` the pointers `dns/…`, `tls/…`, `dhcp/…`. The target of a DHCP step is the
+  step's narrowing or the scenario's target: `dhcpTargetProblem` (`lib/scenarioRules.ts`) is the gateway's `dhcpTarget` (a device or a network, a forced new IP a device) and is applied by the
+  dialog, which shows it under *Acts on* as soon as the type is chosen, and by `scenarioProblems`, so the YAML view and an import show it too. The timeline's line of a step
+  is the chips of the faults screen (`dnsChips`, `tlsChips`, `dhcpChips`), which say what the step carries ("DNS answer 10.9.0.1 · broker.example.com").
+- **`chaosctl`** (`internal/ctl/appfamilies.go`). `dns set <action>`, `tls set <case>` and `dhcp set <action>` take the action or the case as their argument (dashes or underscores:
+  `wrong-answer`, `not-yet-valid`) and the flags of the fields (`--name`, `--delay`, `--answer`, `--answer-ttl`; `--port`, `--sni`, `--to`, `--cut-existing`; `--lease-time`, `--ip`, `--router`,
+  `--dns-server`, `--domain`, `--no-domain`, `--ntp-server`, `--option code=value`), the target of `fault set` (`--device`, `--group`, `--network`, `--global`; a DHCP action only `--device` or
+  `--network`) and `--ttl` and `--lease`. What the command line can see is refused with exit 2 before a request (an unknown action, a field the action needs and lacks or does not use);
+  what only the gateway knows is its refusal with the pointer, exit 2 as for every command. Standard output is the id of the overlay (`--json`: the overlay), `dhcp set force-new-ip` says the
+  address on standard error.
+
+### Decisions
+
+Taken by best practice where the plan leaves room (none needs the maintainer, so there is no Phase 5 item for M23b; it closes P5-M20-02, P5-M21-01 and P5-M23-01):
+
+1. **DNS and TLS are kinds of the Add fault dialog, DHCP is not.** The plan names the DNS and the TLS "in the Add fault dialog" and the DHCP actions "on the device detail and the network card"; a DHCP action is no fault of a traffic selector (it
+   changes what a server does, for a device or a network, never for a group or everything) and §2.7 says DHCP is shown in the network and device views. The faults screen lists all three, and edits the DHCP actions in their dialog.
+2. **A DNS fault and a TLS case are overlays only.** The API has no configured DNS fault or TLS case (`ConfigFault` has three families; M20 decision 3), so the dialog does not offer to save them in the configuration instead of hiding the choice and failing at the
+   preview: while one of the two kinds is chosen there is no *Save as*, and while it is set to Configuration there are no such kinds, each with its sentence.
+3. **A TLS case has no protocol field.** TLS runs over TCP and the API takes ports without a protocol for it; a new case sends none, and a case that was written with `protocol: tcp` keeps it when it is opened and saved again (the form never drops what it does not show).
+   The checks of the ports use TCP (`tlsErrors`), so "ports need the protocol TCP or UDP" is not shown for a field that has no protocol.
+4. **The interception case is kept, not edited.** A `tls` overlay or step with the case `intercept` is opened with its settings and its rules and sends them back as they were (the case is shown as "Interception · its settings and rules are kept as they
+   are"); a new case is made of the eight cases of the responder. The form of the rules is M23c's, which builds on this dialog. Changing the case of an opened interception to another drops its settings, because the gateway refuses them with any other case.
+5. **The test CA is a link, in three places.** A plain link keeps the file out of the page's memory and names it as the gateway does (decision 2 of M23a); it is where a tester needs it (the TLS fields, the device whose *Test CA* row says "not trusted") and
+   where a person looks for the certificate without a case in mind (the Faults screen). The regeneration, and any question before it, is M23c's.
+6. **The trust note comes from the device.** §2.8: the expected result of a case comes from `trusts_test_ca`. The three cases that the test CA signs say, for one configured device, what that device does with them, and for anything else what a device that trusts the CA does; the
+   other cases say nothing, since every device must reject them.
+7. **DHCP actions are off where they could change nothing, with the reason shown.** A network with DHCP off, and a forced new IP of a device without a MAC address (the gateway refuses it), disable their buttons and say why under them, instead of the refusal or an overlay in the state
+   `disabled` that nobody asked for. The gateway accepts the other case (an action on a network without DHCP is `disabled` and starts to act when DHCP is switched on, M23 decision 7), so the card is stricter than the API and a client of the API is not.
+8. **An edited DHCP action keeps its action.** The key of an action is its action (§2.15), so changing it would be another action; the select is fixed in the edit dialog, and the way to another action is its button. An action of another owner (a token, a run) that is edited is
+   written as the admin's and the old one is removed, as the fault dialog does.
+9. **The same duration choice for every overlay dialog.** The fault dialog's choices (1 min to until removed, keeping the remaining time of an edited overlay, an own TTL that is not one of them) are `lifetimeOf`, `untilText` and `overlayLifetime` in `lib/faultForm.ts` and serve the DHCP
+   dialog too; a deleted lease is done once, when the action is written, and "Duration" says how long it stays in the list.
+10. **A step names what it carries.** The timeline's line for the three types is the chips of the faults screen (the delay of a DNS step, the addresses of a wrong answer, the ports and the cut of a TLS case, the lease time and the address of a DHCP action), where it said the action
+    only; the order of the types in the step dialog puts the three after Fault (`stepTypes`), where they were last and not offered.
+11. **`chaosctl` takes the action as an argument and has its own flag for the TTL of the answers.** `fault set` is flags only because a fault has no kind to name; these three have an action or a case. The TTL of a `short_ttl` answer is `--answer-ttl`, because `--ttl` is the lifetime of the
+    overlay for every command. `tls set intercept` is refused with the way to make it (`overlay create -f`): its rules have no flags until M23c's commands exist. `chaosctl with` takes these overlays as `--overlay` files, as it does for every kind it has no flags for.
+12. **The mock's capabilities are those of the gateway.** `e2e/mock.ts` now lists the overlay kinds `dns`, `tls` and `dhcp` and their step types, as `GET /capabilities` does; two older Playwright tests that pinned the offered step types (`scenarios.spec.ts`) and a DNS step that "the editor does not make, kept as it is" were changed on purpose: the step is edited with its form, and a type the gateway does not list (a gateway of an older build) is not offered.
+13. **No level 1 test.** Nothing of the milestone needs a kernel: the forms send the requests of M20, M21 and M23 whose behavior on the real kernel those milestones' level 1 tests pin, and a form's request against the real API is shown by the other two levels: every body the Playwright tests of the forms capture is parsed with the spec's Zod schema (`CreateOverlayBody`, the same document the contract tests of the API use), and
+    `chaosctl`, which sends the same requests, is run in-process against the real API on the simulated kernel (`TestChaosctlOverlays/MakesDNSFaults`, `MakesTLSCases`, `MakesDHCPActions`), including the gateway's refusals with their pointers that the forms put under their fields.
+
+### Tests
+
+Level 0, all run here. Web unit tests (`make test-web`): `lib/dnsForm.test.ts`, `tlsForm.test.ts` and `dhcpForm.test.ts` (the body of each action and case checked against the spec's schema, the checks under each field, an existing fault read back and sent unchanged, the words, the pointers), `lib/faultForm.test.ts`
+(the DNS and TLS kinds: the request, the checks, an overlay opened and sent back, the preview, the pointers, the shared lifetime), `lib/stepForm.test.ts` (the three step types through the form, their checks, the DHCP target, the pointers, an interception step that comes back as it was),
+`lib/scenarioRules.test.ts` (the target of a DHCP action in the scenario's problems) and `lib/scenarios.test.ts` (the lines of the steps). Playwright against the mocked API (`make test-e2e`, `e2e/app-layer-forms.spec.ts`, 18 tests): a DNS fault from the dialog of a device with its checks, the request, the list and an edit that keeps the overlay;
+a DNS fault for a network from the faults screen and the kinds that are not offered for a configured fault; the gateway's refusal of a DNS fault and of a TLS case under their fields; a TLS case with every field, its trust note, the download of the test CA and the request; the handshake cases, the defaults, a case edited so that its key changes, an interception case that keeps its settings; the test CA from the
+faults screen and the device detail; the DHCP card of a device (a short lease with its checks, the request, the list, an edit, the removal), a forced new IP with the address the gateway chose and the address that is named, delete lease, set options (the checks, the reserved codes, the domain taken away) and silence, the refusals under their fields, the buttons that are off (a device without a MAC, a network without DHCP), the network card
+with the four actions of a network, an action that another overrides and the edit from the faults screen; the three step types made in the step dialog, shown on the timeline and sent in the revision, a DHCP step of a scenario that targets a group, a DHCP step on a network and its edit. Go: `internal/ctl/appfamilies_test.go` (the flags of the three commands and the bodies they become, the checks before a request),
+`internal/api/ctl_appfamilies_test.go` (the commands against the real API on the simulated kernel: each action and case with the overlay read back, the same key replacing the overlay, `--json`, the refusals of the command line and of the gateway with their pointers, the address of a forced new IP, deleting what was made).
+
+No test is left to CI beyond the ones it runs anyway: the Playwright suite and the Go tests run in the jobs that run them for every milestone.
+
+### Acceptance map (plan M23b "Scope" and "Tests")
+
+| Plan M23b | Test |
+|---|---|
+| A DNS fault made from its form, the request sent matches the API's | `a DNS fault: made in the Add fault dialog of a device …`, `a DNS fault for a network from the faults screen …`; `lib/dnsForm.test.ts` (every action is a fault the spec accepts), `lib/faultForm.test.ts` |
+| A TLS case made from its form | `a TLS case: its selection, the checks, the note about the test CA, the request, and the download of the CA`, `a TLS case: handshake cases, the default ports …`, `an interception case is opened with its settings kept as they are`; `lib/tlsForm.test.ts` |
+| A DHCP action made from its form, the address `force_new_ip` is given shown | `the DHCP card of a device …`, `a forced new IP shows the address the gateway chose, and the address that is named`, `delete lease, set options and silence of a device …`, `the network card …`; `lib/dhcpForm.test.ts` |
+| Each of the three as a step in the step dialog | `the steps dns, tls and dhcp: made with the same fields …`, `a DHCP step of a scenario that targets a group …`, `a DHCP step on a network offers no forced new IP …`, `a DNS step is edited with the DNS fields`; `lib/stepForm.test.ts` |
+| The validation messages | the `toHaveAccessibleDescription` assertions of the tests above, the refusals under the fields (`the gateway's refusal of a DNS fault`, `… of a TLS case`, `… of a DHCP action stands under the field it names`); `…Errors` and `…FieldOf` in the unit tests |
+| The CA download | `a TLS case: its selection …` (the TLS fields), `the test CA is downloaded from the faults screen and from the device detail` |
+| The `chaosctl` flags tested in-process against the API on the simulated kernel | `TestChaosctlOverlays/MakesDNSFaults`, `MakesTLSCases`, `MakesDHCPActions`; `TestTheFlagsOfADNSFaultBecomeItsBody`, `TestTheFlagsOfATLSCaseBecomeItsBody`, `TestTheFlagsOfADHCPActionBecomeItsBody` |
+| One level 1 flow only if something needs the kernel | none needed (decision 13) |
+| The design is added to §2.17 | plan §2.17, "Forms for the application-layer kinds (M23b)" and the rows of the table of screens |
 
 ## Generated code
 

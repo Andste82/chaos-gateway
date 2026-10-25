@@ -52,17 +52,21 @@ func (m *Manager) AppendKeylog(client netip.Addr, lines []string) {
 		return
 	}
 	w := m.keyWorld.worldOf(snap)
+	type target struct {
+		c     *capState
+		scope model.CaptureScope
+	}
 	m.mu.Lock()
-	var targets []*capState
+	var targets []target
 	for _, c := range m.caps {
 		if c.rec.Status == model.CaptureStatusRunning && !c.ending {
-			targets = append(targets, c)
+			targets = append(targets, target{c, c.rec.Scope})
 		}
 	}
 	m.mu.Unlock()
-	for _, c := range targets {
-		if Covers(snap, w, c.rec.Scope, client) {
-			m.appendKeylog(c, lines)
+	for _, t := range targets {
+		if Covers(snap, w, t.scope, client) {
+			m.appendKeylog(t.c, lines)
 		}
 	}
 }

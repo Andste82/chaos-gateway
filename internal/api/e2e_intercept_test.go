@@ -94,9 +94,11 @@ func newInterceptBed(t *testing.T) *interceptBed {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// the cleanups run last in, first out: the one of the bed that ends b.ctx runs after this one, so the control interface has a context of its own
+	cctx, cancelControl := context.WithCancel(b.ctx)
 	done := make(chan struct{})
-	go func() { _ = b.srv.ServeControlOn(b.ctx, ln); close(done) }()
-	t.Cleanup(func() { <-done })
+	go func() { _ = b.srv.ServeControlOn(cctx, ln); close(done) }()
+	t.Cleanup(func() { cancelControl(); <-done })
 
 	// the HTTPS server of the real server, with the certificate of the CA a device trusts as a public one
 	dir := t.TempDir()

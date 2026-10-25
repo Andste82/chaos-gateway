@@ -145,7 +145,7 @@ func newInterceptResponder(t *testing.T, p *fakeProxy, passthrough bool, dst net
 			o.Proxy = p.addr()
 		}
 	})
-	r.dst = dst
+	r.setDst(dst)
 	return r
 }
 
@@ -180,7 +180,7 @@ func TestAConnectionOfTheCaseInterceptIsHandedToTheProxyWithWhoItIs(t *testing.T
 	p := newFakeProxy(t)
 	r := newInterceptResponder(t, p, true, netip.AddrPort{})
 	up := tlsEchoUpstream(t, r, "broker.example.com")
-	r.dst = netip.MustParseAddrPort(up)
+	r.setDst(netip.MustParseAddrPort(up))
 
 	c, err := r.dialTLS(pool(r.cas.Test), "broker.example.com", tls.VersionTLS12, tls.VersionTLS13)
 	if err != nil {
@@ -243,7 +243,7 @@ func TestAConnectionThatIsNoTLSIsHandedOverWithItsFirstBytesInOnePiece(t *testin
 	if len(p.first) != 1 || string(p.first[0]) != reqText {
 		t.Errorf("the proxy's first bytes: %q", p.first)
 	}
-	if rep := r.sink.reports; len(rep) > 0 && rep[0].Sni != nil {
+	if rep := r.sink.all(); len(rep) > 0 && rep[0].Sni != nil {
 		t.Errorf("a connection without a ClientHello has no server name: %+v", rep[0])
 	}
 }

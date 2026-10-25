@@ -57,10 +57,11 @@ func WatchCAs(ctx context.Context, clk clock.Clock, dir string, iss *Issuer, int
 	}
 }
 
-// stamp is what tells that the CA files changed: their sizes and times.
-func stamp(dir string) [4]int64 {
-	var out [4]int64
-	for i, n := range []string{testCAFile + ".pem", unknownCAFile + ".pem"} {
+// stamp is what tells that the CA files changed: the sizes and times of the certificates and of the keys (a regeneration writes the
+// key and then the certificate, but a pair put there by hand comes in any order, and a change of either must be looked at).
+func stamp(dir string) [8]int64 {
+	var out [8]int64
+	for i, n := range []string{testCAFile + ".pem", testCAFile + ".key", unknownCAFile + ".pem", unknownCAFile + ".key"} {
 		if fi, err := os.Stat(filepath.Join(dir, n)); err == nil {
 			out[2*i], out[2*i+1] = fi.Size(), fi.ModTime().UnixNano()
 		}

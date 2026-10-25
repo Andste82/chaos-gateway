@@ -401,6 +401,9 @@ func TestAnActionThatReachesNobodySaysSo(t *testing.T) {
 	if tg.Kea != nil || tg.HasErrors() {
 		t.Fatalf("%+v %+v", tg.Kea, tg.Problems)
 	}
+	if got := problemsOf(tg, CodeDHCPInactive); len(got) != 2 || !strings.Contains(got[0], "no network serves DHCP") {
+		t.Errorf("both actions say they have no effect: %v", got)
+	}
 	// a network that has DHCP off while another serves it, a device without a MAC, a device that is not known
 	w = dhcpWorld(t, false)
 	w.dhcp(`{target: {network: Lab}, dhcp: {action: short_lease, lease_time: 5s}}`, 0)

@@ -721,6 +721,62 @@ loop:
 	g.mustStartCapture(map[string]any{"scope": map[string]any{"uplink": true}})
 }
 
+// M23a: the screen of the captures shows what the captures take of the quota and of the volume. The numbers are the
+// quota of the configuration, the sum of the sizes of the captures (a running one as the executor last reported it), the
+// free space of the volume against the limit and the captures that run against the most that run at once.
+func TestTheStorageOfTheCapturesIsTheQuotaTheSizesAndTheFreeSpace(t *testing.T) {
+	g, _ := capGateway(t, func(o *options) { o.captureQuota = 300 << 10 })
+	storage := func() map[string]any {
+		t.Helper()
+		r := g.do("GET", "/captures/storage", nil, nil, nil)
+		if r.Status != 200 {
+			t.Fatalf("GET /captures/storage: %d %s", r.Status, r.Body)
+		}
+		return r.json(t)
+	}
+	s := storage()
+	if s["quota_bytes"] != float64(300<<10) || s["used_bytes"] != float64(0) || s["running"] != float64(0) || s["max_running"] != float64(capturemgr.MaxRunning) ||
+		s["disk_low"] != false || s["min_free_percent"] != float64(10) || s["free_percent"] != float64(60) || s["volume_total_bytes"] != float64(1000) {
+		t.Fatalf("an empty volume: %v", s)
+	}
+	id := g.mustStartCapture(map[string]any{"scope": map[string]any{"network": "IoT"}})["id"].(string)
+	for i := 0; i < 20; i++ {
+		g.cap.Frame("br-iot", udpFrame(macESP, macGW, "10.10.0.31", "203.0.113.10", uint16(1000+i), 53, 900), false)
+	}
+	if s := storage(); s["running"] != float64(1) {
+		t.Errorf("a running capture: %v", s)
+	}
+	size := g.stopCapture(id)["size_bytes"].(float64)
+	if size < 18<<10 {
+		t.Fatalf("the capture has %v bytes", size)
+	}
+	if s := storage(); s["used_bytes"] != size || s["running"] != float64(0) {
+		t.Errorf("a stopped capture of %v bytes: %v", size, s)
+	}
+	// the free space against the limit: below 10 % the volume is low
+	g.cap.freePc.Store(4)
+	if s := storage(); s["disk_low"] != true || s["free_percent"] != float64(4) {
+		t.Errorf("a full volume: %v", s)
+	}
+	g.cap.freePc.Store(10)
+	if s := storage(); s["disk_low"] != false {
+		t.Errorf("exactly at the limit is not below it: %v", s)
+	}
+	// deleting the capture gives its size back
+	if r := g.do("DELETE", "/captures/"+id, nil, nil, nil); r.Status != 204 {
+		t.Fatalf("%d", r.Status)
+	}
+	if s := storage(); s["used_bytes"] != float64(0) {
+		t.Errorf("after the delete: %v", s)
+	}
+	// the token that only reads may read it
+	g.token = ""
+	g.mintToken("read")
+	if r := g.do("GET", "/captures/storage", nil, nil, nil); r.Status != 200 {
+		t.Errorf("read: %d", r.Status)
+	}
+}
+
 // ---- tokens, idempotency, restarts, no volume
 
 func TestCapturesFollowTheScopesOfTokens(t *testing.T) {
@@ -825,7 +881,7 @@ func TestADeploymentWithoutACaptureVolumeCannotCapture(t *testing.T) {
 	g.finishSetup()
 	g.badRequest = true
 	defer func() { g.badRequest = false }()
-	for _, c := range []struct{ method, path string }{{"GET", "/captures"}, {"POST", "/captures"}, {"GET", "/captures/" + espID}, {"DELETE", "/captures/" + espID}, {"GET", "/captures/" + espID + "/download"}} {
+	for _, c := range []struct{ method, path string }{{"GET", "/captures"}, {"GET", "/captures/storage"}, {"POST", "/captures"}, {"GET", "/captures/" + espID}, {"DELETE", "/captures/" + espID}, {"GET", "/captures/" + espID + "/download"}} {
 		var body any
 		if c.method == "POST" {
 			body = map[string]any{"scope": map[string]any{"uplink": true}}

@@ -1810,6 +1810,25 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Capture'}
         default: {$ref: '#/components/responses/Problem'}
+  /captures/storage:
+    get:
+      tags: [captures]
+      operationId: getCaptureStorage
+      summary: What the captures take of the quota and of the volume
+      description: |
+        The sum of the sizes of all captures (a running capture as of the last second) against the quota
+        (`settings.retention.captures_quota`, 5 GiB by default), the free space of the capture volume against the limit
+        below which captures stop and new ones are refused (10 %), and the number of running captures against the
+        most that run at once. The screen of the captures shows it.
+      x-milestone: M23a
+      x-required-scope: read
+      responses:
+        '200':
+          description: Storage
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CaptureStorage'}
+        default: {$ref: '#/components/responses/Problem'}
   /captures/{captureId}:
     parameters:
       - $ref: '#/components/parameters/CaptureId'
@@ -5777,6 +5796,22 @@ components:
             sensitive:
               type: boolean
               description: Contains a key log or decrypted traffic.
+
+    CaptureStorage:
+      type: object
+      required: [quota_bytes, used_bytes, min_free_percent, disk_low, running, max_running]
+      properties:
+        quota_bytes: {type: integer, format: int64, description: The total size all captures may take.}
+        used_bytes: {type: integer, format: int64, description: 'The size of all captures, a running one as of the last second.'}
+        volume_total_bytes: {type: integer, format: int64, description: Absent when the gateway cannot read the volume.}
+        volume_free_bytes: {type: integer, format: int64, description: Absent when the gateway cannot read the volume.}
+        free_percent:
+          type: number
+          description: The free space of the volume in percent; absent when the gateway cannot read the volume.
+        min_free_percent: {type: number, description: Below this free space new captures are refused and running ones stop (`disk_low`).}
+        disk_low: {type: boolean, description: The volume has less free space than the limit.}
+        running: {type: integer, description: Captures that run now.}
+        max_running: {type: integer, description: The most captures that run at once.}
 
     # ============================================================ diagnostics and probes
     DiagnosticRequest:

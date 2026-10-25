@@ -3258,6 +3258,36 @@ type CaptureScope struct {
 // CaptureScopeUplink defines model for CaptureScope.Uplink.
 type CaptureScopeUplink bool
 
+// CaptureStorage defines model for CaptureStorage.
+type CaptureStorage struct {
+	// DiskLow The volume has less free space than the limit.
+	DiskLow bool `json:"disk_low"`
+
+	// FreePercent The free space of the volume in percent; absent when the gateway cannot read the volume.
+	FreePercent *float32 `json:"free_percent,omitempty"`
+
+	// MaxRunning The most captures that run at once.
+	MaxRunning int `json:"max_running"`
+
+	// MinFreePercent Below this free space new captures are refused and running ones stop (`disk_low`).
+	MinFreePercent float32 `json:"min_free_percent"`
+
+	// QuotaBytes The total size all captures may take.
+	QuotaBytes int64 `json:"quota_bytes"`
+
+	// Running Captures that run now.
+	Running int `json:"running"`
+
+	// UsedBytes The size of all captures, a running one as of the last second.
+	UsedBytes int64 `json:"used_bytes"`
+
+	// VolumeFreeBytes Absent when the gateway cannot read the volume.
+	VolumeFreeBytes *int64 `json:"volume_free_bytes,omitempty"`
+
+	// VolumeTotalBytes Absent when the gateway cannot read the volume.
+	VolumeTotalBytes *int64 `json:"volume_total_bytes,omitempty"`
+}
+
 // CertificateInfo defines model for CertificateInfo.
 type CertificateInfo struct {
 	DnsNames          *[]string  `json:"dns_names,omitempty"`

@@ -274,8 +274,11 @@ func TestProxyVariablesAreNotPassedIntoNamespaces(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:3128")
 	bed := testbed.New(t)
 	ns := bed.Add("env")
-	if out := ns.Must("env"); strings.Contains(strings.ToLower(out), "proxy") {
-		t.Fatalf("proxy variables leaked into the namespace:\n%s", out)
+	// the names of the variables, not their values: the make target of a level 1 run carries the names of tests (-expect-pass) in ARGS
+	for _, line := range strings.Split(ns.Must("env"), "\n") {
+		if name, _, _ := strings.Cut(line, "="); strings.Contains(strings.ToLower(name), "proxy") {
+			t.Fatalf("proxy variable %s leaked into the namespace", name)
+		}
 	}
 }
 

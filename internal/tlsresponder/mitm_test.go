@@ -83,7 +83,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 			h(w, r)
 		}
 	}
-	mux.HandleFunc("GET /internal/tls/config", auth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/internal/tls/config", auth(func(w http.ResponseWriter, r *http.Request) {
 		var after int64
 		_, _ = fmt.Sscan(r.URL.Query().Get("after"), &after)
 		if r.URL.Query().Get("consumer") != "proxy" {
@@ -121,7 +121,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 			w.WriteHeader(http.StatusNoContent)
 		})
 	}
-	mux.HandleFunc("POST /internal/tls/handshakes", collect(func(raw []json.RawMessage) {
+	mux.HandleFunc("POST /api/v1/internal/tls/handshakes", collect(func(raw []json.RawMessage) {
 		for _, m := range raw {
 			var h model.TlsHandshakeReport
 			if err := json.Unmarshal(m, &h); err == nil {
@@ -129,7 +129,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 			}
 		}
 	}))
-	mux.HandleFunc("POST /internal/intercept/flows", collect(func(raw []json.RawMessage) {
+	mux.HandleFunc("POST /api/v1/internal/intercept/flows", collect(func(raw []json.RawMessage) {
 		for _, m := range raw {
 			var f map[string]any
 			if err := json.Unmarshal(m, &f); err == nil {
@@ -137,7 +137,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 			}
 		}
 	}))
-	mux.HandleFunc("POST /internal/intercept/keylog", collect(func(raw []json.RawMessage) {
+	mux.HandleFunc("POST /api/v1/internal/intercept/keylog", collect(func(raw []json.RawMessage) {
 		for _, m := range raw {
 			var f map[string]any
 			if err := json.Unmarshal(m, &f); err == nil {

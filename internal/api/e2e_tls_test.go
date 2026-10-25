@@ -124,8 +124,10 @@ type tlsBed struct {
 	trust string
 	// publicOnly is the file of the CA of the real server alone: a production firmware that trusts no test CA
 	publicOnly string
-	mu         sync.Mutex
-	seen       []map[string]any
+	// publicCert and publicKey are the certificate of the real server and its key
+	publicCert, publicKey string
+	mu                    sync.Mutex
+	seen                  []map[string]any
 	// base is the API as the service namespace reaches it, tokenFile the service token, ctx lives as long as the responder
 	base, tokenFile string
 	ctx             context.Context
@@ -173,7 +175,7 @@ func newTLSBed(t *testing.T, mods ...func(o *tlsresponder.Options, serviceNS str
 	}
 	pub, _ := os.ReadFile(pubCA)
 	b.trust = filepath.Join(dir, "trust.pem")
-	b.publicOnly = pubCA
+	b.publicOnly, b.publicCert, b.publicKey = pubCA, srvCert, srvKey
 	if err := os.WriteFile(b.trust, append(append([]byte(nil), pub...), r.Body...), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +404,7 @@ func TestOpenSSLAndCurlRejectTheCertificatesOfTheCasesOnTheRealKernel(t *testing
 			cmd.Stdin = strings.NewReader("")
 			out, err := cmd.CombinedOutput()
 			cancel()
-			if err == nil || !strings.Contains(string(out), c.openssl) {
+			if err == nil || !strings.Contains(strings.ToLower(string(out)), strings.ToLower(c.openssl)) { // OpenSSL 3 writes "hostname mismatch"
 				t.Errorf("%s with %s: openssl %v: %s", c.kase, version, err, out)
 			}
 		}
@@ -698,12 +700,14 @@ func TestUploadAndDownloadLatencyApplyToConnectionsToTheResponderOnTheRealKernel
 	b.remove(t, fault)
 }
 
-// The same cases work for a client of a WireGuard network, from the tunnel: its connection is redirected into the service namespace
-// like one of a local network, and the answer goes back through the tunnel.
+// The same cases work for a client of a WireGuard network, from the tunnel: its connection (to an address of the test network, since the tunnel
+// carries nothing else) is redirected into the service namespace like one of a local network, and the answer goes back through the tunnel.
 func TestTheSameCasesWorkForAWireGuardClientOnTheRealKernel(t *testing.T) {
 	b := newTLSBed(t)
 	id := b.g.mustPatch(map[string]any{"networks": map[string]any{hubID: map[string]any{"clients": map[string]any{
-		"6e7f8091-aabb-4c2d-8e3f-4a5b6c7d8e9f": map[string]any{"name": "rC", "address": "10.99.0.4", "keepalive": "1s", "key": map[string]any{"mode": "generated"}},
+		"6e7f8091-aabb-4c2d-8e3f-4a5b6c7d8e9f": map[string]any{"name": "rC", "address": "10.99.0.4", "keepalive": "1s", "key": map[string]any{"mode": "generated"},
+			// the tunnel carries only what the client may reach: the test network, where a connection to A's address and the port of the case is redirected
+			"reachable": []any{map[string]any{"network": iotID}}},
 	}}}})
 	if r := b.g.apply(id); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
@@ -722,18 +726,19 @@ func TestTheSameCasesWorkForAWireGuardClientOnTheRealKernel(t *testing.T) {
 	b.overlay(t, `{"target":{"network":"lab-hub"},"tls":{"case":"expired","ports":[8883]}}`)
 	var res map[string]any
 	waitFor(t, 60*time.Second, "the client of the tunnel is shown the responder's certificate", func() bool {
-		res = b.client(b.top.RC, testbed.ServerAddr, 8883, tlsBroker, "strict", b.trust, "any", 4, 0)
+		res = b.client(b.top.RC, testbed.ClientAAddr, 8883, tlsBroker, "strict", b.trust, "any", 4, 0)
+		t.Logf("the client of the tunnel: %v", res)
 		return res["kind"] == "verify"
 	})
 	if !strings.Contains(fmt.Sprint(res["error"]), "certificate has expired") {
 		t.Errorf("%v", res)
 	}
 	ev := b.waitHandshake(t, 0)
-	if ev["client"] != "10.99.0.4" || ev["original_dst"] != testbed.ServerAddr+":8883" || ev["case"] != "expired" || ev["outcome"] != "rejected" {
+	if ev["client"] != "10.99.0.4" || ev["original_dst"] != testbed.ClientAAddr+":8883" || ev["case"] != "expired" || ev["outcome"] != "rejected" {
 		t.Errorf("%v", ev)
 	}
 	// an insecure client of the tunnel completes the handshake
-	if r := b.client(b.top.RC, testbed.ServerAddr, 8883, tlsBroker, "insecure", "", "any", 4, 0); r["ok"] != true {
+	if r := b.client(b.top.RC, testbed.ClientAAddr, 8883, tlsBroker, "insecure", "", "any", 4, 0); r["ok"] != true {
 		t.Errorf("an insecure client of the tunnel: %v", r)
 	}
 }

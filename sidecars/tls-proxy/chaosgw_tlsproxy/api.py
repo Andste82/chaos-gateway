@@ -27,7 +27,7 @@ class ApiError(Exception):
 
 class ServiceClient:
     def __init__(self, base: str, token_file: str = "", cert_file: str = "", timeout: float = 10.0):
-        self.base = base.rstrip("/")
+        self.base = base.rstrip("/") + "/api/v1"  # the internal API is below /api/v1, like the Go clients (svcapi) address it
         self.token_file = token_file
         self.timeout = timeout
         self._ctx: ssl.SSLContext | None = None

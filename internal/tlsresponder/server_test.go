@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -80,6 +84,46 @@ func TestACorrectClientRejectsTheCertificateOfEveryCase(t *testing.T) {
 				}
 				if got := r.res.last(t); got.SNI != "broker.example.com" || got.Dst != r.dst || got.Client != netip.MustParseAddr("127.0.0.1") {
 					t.Errorf("the responder asked for %+v", got)
+				}
+			})
+		}
+	}
+}
+
+// An OpenSSL client (Python's ssl module) that rejects the certificate sends its alert in the clear with TLS 1.3, since it has no
+// key for its own side yet: the report still says that the device rejected it, and with which alert.
+func TestAnAlertOfAnOpenSSLClientSentInTheClearIsARejection(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3")
+	}
+	const script = `import socket, ssl, sys
+ctx = ssl.create_default_context(cafile=sys.argv[1])
+if sys.argv[2] == "1.2":
+    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+else:
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+host, port = sys.argv[3].rsplit(":", 1)
+try:
+    ctx.wrap_socket(socket.create_connection((host, int(port)), timeout=5), server_hostname="broker.example.com")
+    sys.exit(1)
+except ssl.SSLCertVerificationError:
+    pass
+`
+	for _, kase := range []model.TlsCaseCase{model.TlsCaseCaseUntrustedCa, model.TlsCaseCaseExpired, model.TlsCaseCaseHostnameMismatch} {
+		for _, v := range versions {
+			t.Run(string(kase)+" "+v.name, func(t *testing.T) {
+				r := newRig(t, caseOf(kase), nil)
+				ca := filepath.Join(t.TempDir(), "ca.pem")
+				if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.cas.Test.Cert.Raw}), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				version := strings.TrimPrefix(v.name, "TLS ")
+				if out, err := exec.Command("python3", "-c", script, ca, version, r.addr).CombinedOutput(); err != nil {
+					t.Fatalf("the client did not reject the certificate: %v %s", err, out)
+				}
+				rep := r.sink.wait(t, 1)[0]
+				if rep.Outcome != model.TlsHandshakeReportOutcomeRejected || rep.Alert == nil || *rep.Alert == "" || *rep.Alert == "handshake_error" || deref(rep.TlsVersion) != v.name {
+					t.Fatalf("%+v alert %v", rep, deref(rep.Alert))
 				}
 			})
 		}

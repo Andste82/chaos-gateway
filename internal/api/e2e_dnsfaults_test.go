@@ -149,6 +149,16 @@ func (b *faultBed) setElements(pattern string) []string {
 	return nil
 }
 
+// waitHostnameSet waits until the plan that holds the DNS-derived set of a hostname fault is in the kernel: an answer the proxy gives before
+// that has no set to write the address to, and the element would not be there when the device connects.
+func (b *faultBed) waitHostnameSet(t *testing.T) {
+	t.Helper()
+	waitFor(t, 20*time.Second, "the DNS-derived set exists in the kernel", func() bool {
+		out, err := b.top.GW.Run(context.Background(), "nft", "list", "sets", "inet", "chaosgw")
+		return err == nil && strings.Contains(out, "set dns_")
+	})
+}
+
 func (b *faultBed) pingMedian(t *testing.T, dst string, n int) (time.Duration, float64) {
 	t.Helper()
 	res, err := testbed.Ping(context.Background(), b.top.A, dst, n, 100*time.Millisecond)
@@ -309,6 +319,7 @@ func TestAHostnameFaultAffectsOnlyTrafficToTheResolvedAddressesOnTheRealKernel(t
 func TestALongLivedConnectionKeepsItsHostnameFaultPastAOneSecondTTLOnTheRealKernel(t *testing.T) {
 	b := newFaultBed(t, "--local-ttl=1")
 	b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"100ms","destination":{"hostname":"`+brokerHost+`"}}}`)
+	b.waitHostnameSet(t)
 	out, err := b.dig(brokerHost, "+noall", "+answer")
 	if f := strings.Fields(out); err != nil || len(f) < 2 || f[1] != "1" {
 		t.Fatalf("the answer does not carry a TTL of 1 s: %q %v", out, err)
@@ -388,6 +399,7 @@ func dialIn(ns *testbed.Namespace, addr string) (net.Conn, error) {
 func TestTheDNSDerivedSetSurvivesTenOverlayChangesOnTheRealKernel(t *testing.T) {
 	b := newFaultBed(t)
 	hid := b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"100ms","destination":{"hostname":"`+brokerHost+`"}}}`)
+	b.waitHostnameSet(t)
 	if got := b.addrOf(brokerHost); got != testbed.ServerAddr {
 		t.Fatal(got)
 	}

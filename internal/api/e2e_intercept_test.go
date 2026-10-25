@@ -191,7 +191,8 @@ func TestADeviceTrustingTheTestCASeesTheModifiedResponsesAndDelaysOnTheRealKerne
 	// connection reuse: three requests in one curl call are one connection (curl's num_connects is 1 for the first request and 0 for the others),
 	// so the responder hands over once more, not three times
 	before := b.srv.Intercepted()
-	out, err = b.curl("-o", "/dev/null", "-w", "%{num_connects} ", b.url("/r1"), "-o", "/dev/null", "-w", "%{num_connects} ", b.url("/r2"), "-o", "/dev/null", "-w", "%{num_connects}", b.url("/r3"))
+	// (curl applies the last -w to every transfer of the call, and -o has to be given once for each)
+	out, err = b.curl("-o", "/dev/null", "-o", "/dev/null", "-o", "/dev/null", "-w", "%{num_connects} ", b.url("/r1"), b.url("/r2"), b.url("/r3"))
 	if err != nil || strings.TrimSpace(out) != "1 0 0" {
 		t.Errorf("curl reused the connection: %v %q", err, out)
 	}
@@ -299,8 +300,9 @@ func TestAnInterceptionStepOfARunIsSeenByTheTLSChecksOnTheRealKernel(t *testing.
 				}
 				args := []string{b.url("/probe"), "-o", "/dev/null"}
 				if !trusting {
-					// a device that trusts only the public CA
-					_, _ = b.top.A.Run(context.Background(), "curl", append([]string{"-sS", "--max-time", "5", "--cacert", b.publicOnly, "--resolve", fmt.Sprintf("%s:%d:%s", tlsBroker, httpsPort, b.srvIP)}, args...)...)
+					// a device that trusts only the public CA and says so in the handshake (curl completes the handshake and checks the certificate
+					// after it, which a server cannot tell from a device that takes the certificate)
+					_ = b.client(b.top.A, b.srvIP, httpsPort, tlsBroker, "strict", b.publicOnly, "any", 5, 0)
 				} else {
 					_, _ = b.curl(args...)
 				}

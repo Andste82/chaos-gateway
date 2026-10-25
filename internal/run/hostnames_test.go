@@ -143,7 +143,9 @@ steps:
   - {id: broken, at: 0s, dns: {action: servfail, names: [broker.example.com]}}
   - {id: slow,   at: 1s, dns: {action: delay, delay: 2s}}
   - {id: gone,   at: 2s, remove: broken}
+  - {id: end,    at: 10s, remove: slow}
 `)
+	// the last step is far off: a run that has done its steps takes its overlays out, and the test looks at them before that
 	h.waitStep(r.Id, "broken", model.RunStepStatusApplied)
 	ovs := h.gw.overlays()
 	if len(ovs) != 1 || ovs[0].Kind != model.OverlayKindDns || ovs[0].Dns == nil || ovs[0].Dns.Action != model.DnsFaultActionServfail ||

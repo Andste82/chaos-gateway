@@ -2438,7 +2438,7 @@ found that no later milestone of the plan completes and that need a decision of 
 
 Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23a so far; CI run 40196370688 on `6a0ec5e` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
 
-- **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1) and P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels; the level 1 test has not run in CI yet, M21 stays partial until it has). The forms are built (M23b, on the branch `phase-5b`); the interception UI is not built yet, it is the work of M23c.
+- **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1) and P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels; the level 1 test has not run in CI yet, M21 stays partial until it has). The forms are built (M23b, on the branch `phase-5b`; M23b stays partial for the two small points of the code in P5-M23b-01 and P5-M23b-02, neither needs the maintainer); the interception UI is not built yet, it is the work of M23c.
 - **Closed, implemented on the branch `phase-5b`:** P5-M22-03 (option (b), the per-case field `upstream`; the level 1 tests and the new CI job have not run in CI yet, M22 stays partial until they have).
 - **Waiting for H1:** P5-M22-02 (the proxy is part of H1; the release notes say that it is not validated on ARM64 until the measurement exists).
 
@@ -2559,3 +2559,29 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the design of the actions in §2.17.
 - Needs maintainer: no (decided 2026-10-25: option (b), M23b)
 - Effort: M
+
+### P5-M23b-01 The branch of the step dialog for a step type without a form is unreachable and no test covers it
+
+- Status: open
+- Severity: low
+- Reason: found by the review of M23b. M23b gives `dns`, `tls` and `dhcp` their forms, so every step type of this build is edited with a form. `StepForm.kept`, `editableTypes` and the branch of `StepDialog.vue` that says "This step is edited in the YAML view" were made for a type that the dialog cannot edit; none is reachable now, and the Playwright test that covered them (a DNS step "the editor does not make, kept as it is") was changed on purpose, decision 12 of M23b. The code was left in place for a step type that a later build adds. It is dead code, not a defect, and nothing tests it.
+- Evidence: `web/src/lib/stepForm.ts` (`editableTypes`, `StepForm.kept`), `web/src/components/scenarios/StepDialog.vue`, `docs/development.md` "Forms for the application-layer kinds (M23b)", decision 12.
+- Task: remove the branch and `kept`, or keep them and cover them with a unit test of `lib/stepForm.ts` that opens a step of a type outside `editableTypes` and sends it back unchanged.
+- Options: (a) remove them, a later type brings its own form or the branch back with its test; (b) keep them and add the unit test.
+- Recommendation: (b) while M23c or a later milestone may still add a step type (the YAML view is then the way to edit it until its form exists); (a) when none does.
+- Acceptance: either the branch is gone with `kept` and `editableTypes`, or a test opens a step of a type that has no form and shows that it is kept and sent back unchanged.
+- Needs maintainer: no (a choice between two cleanups of the code, the recommendation applies unless the maintainer prefers the other)
+- Effort: S
+
+### P5-M23b-02 The DHCP card of a device that is in no served network says "DHCP is off in this network"
+
+- Status: open
+- Severity: low
+- Reason: found by the review of M23b. The device detail shows the DHCP card for a device in a network the gateway serves, and for a WireGuard client; a device that is in no network the gateway serves and is no WireGuard client gets the card with the text "DHCP is off in this network", which says something about a network it has none of. It is a rare case (a device that has been seen only on a network that was removed from the configuration) and the card is correct in its effect (its buttons are off).
+- Evidence: `web/src/components/dhcp/DhcpActionsCard.vue` (the DHCP card of the device detail), `docs/development.md` "Forms for the application-layer kinds (M23b)", decision 7.
+- Task: say what is true for such a device ("This device is in no network with DHCP"), or leave the card out for it as for a device of a gateway without DHCP actions.
+- Options: (a) another text under the card for a device without a served network; (b) no card for it.
+- Recommendation: (a), because the card is where a tester looks for the lease of a device and the reason is better shown than the card missing.
+- Acceptance: a Playwright test of a device without a served network shows the card with the new text (or no card), and its buttons are off.
+- Needs maintainer: no (the wording of a text and the choice of (a) or (b) follow the recommendation unless the maintainer prefers the other)
+- Effort: S

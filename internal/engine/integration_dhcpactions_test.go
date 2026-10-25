@@ -193,7 +193,13 @@ func TestDeletingTheLeaseRemovesItAndTheClientGetsTheSameAddressAtItsRenewalOnTh
 
 	// the action of the device deletes A's lease and not B's
 	before := renews(logA)
+	events, stop := b.e.Subscribe()
+	defer stop()
 	b.put("target: {device: " + devAID + "}\ndhcp: {action: delete_lease}")
+	// the deletion is done when the write returns: the event says that Kea held a lease of the device and that it was deleted
+	if evs := collect(events, engine.EventDHCPLeasesDeleted); len(evs) != 1 || evs[0].Data["device"] != devAID || evs[0].Data["count"] != 1 {
+		t.Errorf("the event of the deletion of the device's lease: %+v", evs)
+	}
 	if got := b.keaLeaseOf(testbed.ClientAMAC); got != "" && renews(logA) == before {
 		t.Errorf("Kea still holds the lease %s of the device after the deletion", got)
 	}
@@ -211,6 +217,9 @@ func TestDeletingTheLeaseRemovesItAndTheClientGetsTheSameAddressAtItsRenewalOnTh
 	// the action of the network deletes the leases of both
 	beforeA, beforeB := renews(logA), renews(logB)
 	b.put("target: {network: IoT}\ndhcp: {action: delete_lease}")
+	if evs := collect(events, engine.EventDHCPLeasesDeleted); len(evs) != 1 || evs[0].Data["network"] != tIoT || evs[0].Data["count"] != 2 {
+		t.Errorf("the event of the deletion of the network's leases: %+v", evs)
+	}
 	if renews(logA) == beforeA && renews(logB) == beforeB {
 		if ls, err := b.kc.Leases(context.Background()); err != nil || len(ls) != 0 {
 			t.Errorf("Kea holds %+v after the deletion of the network's leases (%v)", ls, err)

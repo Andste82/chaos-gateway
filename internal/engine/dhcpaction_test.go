@@ -2,10 +2,13 @@ package engine_test
 
 import (
 	"errors"
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/kea"
@@ -202,6 +205,125 @@ func TestForceNewIPHasNoAddressLeftToGiveInAFullPool(t *testing.T) {
 	var ve domain.ValidationErrors
 	if !errors.As(err, &ve) || len(ve) != 1 || !strings.Contains(ve[0].Message, "no address of the pools") {
 		t.Errorf("%v", err)
+	}
+}
+
+// A network whose gateway splits the pool in two (or that names several pools) takes the address from the last pool, and
+// goes back to the one before it when the last is taken: "going down from the end of the last pool".
+func TestForceNewIPTakesTheLastAddressOfTheLastPoolAndGoesBackToThePoolBeforeIt(t *testing.T) {
+	h, f, _ := dhcpActionHarness(t)
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		n := (*c.Networks)[iotID]
+		lan, _ := n.AsLanNetwork()
+		lan.Dhcp = &model.DhcpScope{Pools: &[]model.DhcpPool{{Start: "10.10.0.100", End: "10.10.0.140"}, {Start: "10.10.0.200", End: "10.10.0.201"}}}
+		_ = n.FromLanNetwork(lan)
+		(*c.Networks)[iotID] = n
+		(*c.Devices)[devID] = withFixed((*c.Devices)[devID], "10.10.0.31")
+	}))
+	sid := 0
+	for id := range h.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	res := h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	if ip := derefS(res.Overlay.Dhcp.Ip); ip != "10.10.0.201" {
+		t.Fatalf("the device is moved to %q, want the last address of the last pool (10.10.0.201)", ip)
+	}
+	f.setLeases(lease("10.10.0.201", "02:00:00:00:00:98", sid), lease("10.10.0.200", "02:00:00:00:00:99", sid))
+	h.observe()
+	res = h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	if ip := derefS(res.Overlay.Dhcp.Ip); ip != "10.10.0.140" {
+		t.Errorf("the device is moved to %q, want the last address of the pool before when the last is taken (10.10.0.140)", ip)
+	}
+}
+
+// Plan M23 "a device fault stays attached after the forced new IP", without the real kernel: the device is the MAC, so the address it
+// takes after the move replaces the old one in the identity map and the fault of the device is still in force for it. (The same on the
+// real kernel, with a measured delay: TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel.)
+func TestADeviceFaultStaysAttachedAfterTheForcedNewIPAndTheDeviceFollowsItsAddress(t *testing.T) {
+	h, f, sid := dhcpActionHarness(t)
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.mustPut(alice, "target: {device: esp32-42}\nfault: {latency: 150ms}")
+	h.barrier()
+	faults := h.e.Snapshot().Faults
+	// the identity map holds the configured fixed address beside the one the device was seen at
+	if len(faults) != 1 || h.deviceSetElements(devID) != "10.10.0.150,10.10.0.31" {
+		t.Fatalf("setup: %d faults, the identity map holds %q", len(faults), h.deviceSetElements(devID))
+	}
+
+	res := h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	moved := derefS(res.Overlay.Dhcp.Ip)
+	// the client renewed, was refused and took the reserved address
+	f.setLeases(lease(moved, macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor(moved, macCfg)})
+	h.observe()
+	h.barrier()
+	d := h.device(devID)
+	if d == nil || !slices.ContainsFunc(d.Addresses, func(a netip.Addr) bool { return a.String() == moved }) || slices.ContainsFunc(d.Addresses, func(a netip.Addr) bool { return a.String() == "10.10.0.150" }) {
+		t.Fatalf("the device after the move: %+v", d)
+	}
+	if got := h.deviceSetElements(devID); !strings.Contains(got, moved) || strings.Contains(got, "10.10.0.150") {
+		t.Errorf("the identity map holds %q for the device, want its new address %s and no longer the old one", got, moved)
+	}
+	after := h.e.Snapshot().Faults
+	if len(after) != 1 || after[0].ID != faults[0].ID {
+		t.Errorf("the fault of the device after the move: %+v, before %+v", after, faults)
+	}
+}
+
+// An action whose configuration the DHCP server refuses (an option it cannot parse, a lease time it does not take) is refused when it
+// is written: the server would keep the configuration it has, and the retry would send the same one for ever, so no later
+// change of a network or another action would reach the server.
+func TestAnActionTheDHCPServerRefusesIsRefusedWhenItIsWritten(t *testing.T) {
+	h, f, _ := dhcpActionHarness(t)
+	f.mu.Lock()
+	f.testFn = func(tg *compiler.KeaTarget) error {
+		for _, s := range tg.Config.Subnets {
+			if s.Domain == "bad.test" {
+				return &kea.Error{Command: "config-test", Result: 1, Text: "option data is not valid"}
+			}
+		}
+		return nil
+	}
+	f.mu.Unlock()
+	applies := f.calls()
+	_, err := h.put(alice, "target: {network: IoT}\ndhcp: {action: set_options, options: {domain: bad.test}}")
+	var ce *engine.CompileError
+	if !errors.As(err, &ce) || len(ce.Problems) != 1 || ce.Problems[0].Code != compiler.CodeDHCP || !strings.Contains(ce.Problems[0].Message, "option data is not valid") {
+		t.Fatalf("%v", err)
+	}
+	if got := h.e.Snapshot().Overlays; len(got) != 0 || f.calls() != applies {
+		t.Errorf("a refused action was kept or sent: %+v, %d applies after %d", got, f.calls(), applies)
+	}
+	// the server takes another action, and the one that was refused did not stop it
+	h.mustPut(alice, "target: {network: IoT}\ndhcp: {action: set_options, options: {domain: ok.test}}")
+	if s := f.last().Config.Subnets[0]; s.Domain != "ok.test" {
+		t.Errorf("%+v", s)
+	}
+}
+
+// A server that is down, or that refuses the configured configuration as well, is no reason to refuse an action: the first takes it
+// when it is back, the second did not refuse because of the action.
+func TestAnActionIsNotRefusedForADownServerOrAConfigurationTheServerRefusesWithoutIt(t *testing.T) {
+	h, f, _ := dhcpActionHarness(t)
+	f.mu.Lock()
+	f.testFn = func(tg *compiler.KeaTarget) error {
+		if tg.Config.Subnets[0].LeaseSeconds == 7 { // down for the check of the action, and only that
+			return errors.New("kea: the control socket /run/kea/kea4-ctrl.sock: connection refused")
+		}
+		return nil
+	}
+	f.mu.Unlock()
+	h.mustPut(alice, "target: {network: IoT}\ndhcp: {action: short_lease, lease_time: 7s}")
+	f.mu.Lock()
+	f.testFn = nil
+	f.mu.Unlock()
+	f.setTestErr(&kea.Error{Command: "config-test", Result: 1, Text: "the interface br-iot is not there"})
+	h.mustPut(alice, "target: {network: IoT}\ndhcp: {action: silence}")
+	if got := h.e.Snapshot().Overlays; len(got) != 2 {
+		t.Errorf("%+v", got)
 	}
 }
 

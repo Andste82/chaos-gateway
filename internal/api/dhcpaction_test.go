@@ -207,3 +207,16 @@ func TestARunWhoseDHCPStepCannotBeCarriedOutEndsAsAnError(t *testing.T) {
 		t.Errorf("%v", done["reason"])
 	}
 }
+
+func TestAnActionTheDHCPServerRefusesIsA422AndIsNotKept(t *testing.T) {
+	g := dhcpGateway(t)
+	g.mintToken("overlays")
+	g.dhcp.setRefuse("bad.test")
+	r := g.createOverlay(`{"target":{"network":"IoT"},"dhcp":{"action":"set_options","options":{"domain":"bad.test"}}}`)
+	if r.Status != 422 || !strings.Contains(string(r.Body), "validation_failed") || !strings.Contains(string(r.Body), "option data is not valid") {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	if n := len(g.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)); n != 0 {
+		t.Errorf("a refused action was kept: %d overlays", n)
+	}
+}

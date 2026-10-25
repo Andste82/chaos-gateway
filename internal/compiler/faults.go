@@ -25,7 +25,7 @@ import (
 //   - the tc tree (tc.go): one class per active (id, direction) with its netem leaf.
 //
 // Faults of the MTU, DNS, TLS and DHCP families and the tunnel family take no part here: they
-// resolve into other mechanisms (pmtu.go, dns.go, tls.go, tunnel.go; the DHCP actions follow with M23).
+// resolve into other mechanisms (pmtu.go, dns.go, tls.go, tunnel.go, dhcpaction.go).
 
 // Problem codes of the fault compiler.
 const (

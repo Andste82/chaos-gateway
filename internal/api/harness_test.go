@@ -624,6 +624,8 @@ type fakeDHCP struct {
 	err    error
 	// deleted are the calls of DeleteLeases: the subnet and the MAC addresses
 	deleted []fakeDeletion
+	// refuse, when set, is what Test answers for a configuration with this domain option (a server that refuses it)
+	refuse string
 }
 
 type fakeDeletion struct {
@@ -654,7 +656,20 @@ func (f *fakeDHCP) setErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
 
 func (f *fakeDHCP) Reopen(ctx context.Context, t *compiler.KeaTarget) error { return f.Apply(ctx, t) }
 
-func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error { return nil }
+func (f *fakeDHCP) Test(_ context.Context, t *compiler.KeaTarget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t != nil && f.refuse != "" {
+		for _, s := range t.Config.Subnets {
+			if s.Domain == f.refuse {
+				return &kea.Error{Command: "config-test", Result: 1, Text: "option data is not valid"}
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeDHCP) setRefuse(domain string) { f.mu.Lock(); f.refuse = domain; f.mu.Unlock() }
 
 func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
 	f.mu.Lock()

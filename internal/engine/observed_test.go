@@ -34,7 +34,9 @@ type fakeDHCP struct {
 	reopens []*compiler.KeaTarget
 	err     error
 	testErr error
-	leases  []kea.Lease
+	// testFn, when set, decides what Test answers for a target (instead of testErr)
+	testFn func(*compiler.KeaTarget) error
+	leases []kea.Lease
 	// deleted records the deletions of leases (DeleteLeases); deleteErr fails them
 	deleted   []deletion
 	deleteErr error
@@ -96,9 +98,12 @@ func (f *fakeDHCP) deletions() []deletion {
 
 func (f *fakeDHCP) setDeleteErr(err error) { f.mu.Lock(); f.deleteErr = err; f.mu.Unlock() }
 
-func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error {
+func (f *fakeDHCP) Test(_ context.Context, t *compiler.KeaTarget) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.testFn != nil {
+		return f.testFn(t)
+	}
 	return f.testErr
 }
 

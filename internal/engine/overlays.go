@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/kea"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/overlay"
@@ -384,13 +386,28 @@ func (o *owner) lastCheckpoint() *overlay.Checkpoint {
 // The same compile as the apply loop's; a problem of the configuration itself is not the overlay's.
 func (o *owner) compileProblems() []compiler.Problem {
 	o.e.dryCompiles.Add(1)
+	tg := o.dryTarget(o.ov.list)
+	var out []compiler.Problem
+	for _, p := range tg.Problems {
+		if p.Severity == compiler.SevError && (p.Code == compiler.CodeCapacityExceeded || p.Code == compiler.CodeFaultInvalid) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		out = o.dhcpProblems(tg)
+	}
+	return out
+}
+
+// dryTarget compiles what the kernel would be given with these overlays.
+func (o *owner) dryTarget(list []model.Overlay) *compiler.Target {
 	cfg, rev := o.liveConfig(), o.liveRevision()
 	var id *domain.Identity
 	if o.identity != nil {
 		cp := *o.identity
 		id = &cp
 	}
-	in := o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, o.ov.list, allocationOf(&o.snap), o.e.retirer.IDs())
+	in := o.e.input(cfg, o.host, compiler.Generation{Revision: rev, Seq: o.gen + 1}, id, list, allocationOf(&o.snap), o.e.retirer.IDs())
 	// the peers are reached where the last poll saw them: the check needs the classes of the tunnel faults
 	// that would exist, and they exist for the peers that have an address
 	in.PeerEndpoints = map[string]netip.AddrPort{}
@@ -402,15 +419,47 @@ func (o *owner) compileProblems() []compiler.Problem {
 	for id, ep := range o.fresh {
 		in.PeerEndpoints[id] = ep
 	}
-	tg := compiler.Compile(in)
-	var out []compiler.Problem
-	for _, p := range tg.Problems {
-		if p.Severity == compiler.SevError && (p.Code == compiler.CodeCapacityExceeded || p.Code == compiler.CodeFaultInvalid) {
-			out = append(out, p)
+	return compiler.Compile(in)
+}
+
+// dhcpProblems asks the DHCP server whether it takes the configuration the DHCP actions make (Kea's config-test, as the
+// preview of a revision does): an option that Kea cannot parse, or a lease time it refuses, would otherwise be accepted
+// here and then keep every later configuration from reaching the server (the retry sends the same one). Only a refusal
+// of the server counts: a server that is down takes the configuration when it is back, and one that refuses the
+// configured configuration as well (an interface it has not detected yet) did not refuse because of an action.
+func (o *owner) dhcpProblems(tg *compiler.Target) []compiler.Problem {
+	d := o.e.cfg.DHCP
+	if d == nil || tg.Kea == nil || !slices.ContainsFunc(o.ov.list, func(ov model.Overlay) bool { return ov.Kind == model.OverlayKindDhcp }) {
+		return nil
+	}
+	refused := func(t *compiler.KeaTarget) error {
+		ctx, cancel := context.WithTimeout(context.Background(), dhcpTestTimeout)
+		defer cancel()
+		err := d.Test(ctx, t)
+		var ke *kea.Error
+		if errors.As(err, &ke) {
+			return err
+		}
+		return nil
+	}
+	err := refused(tg.Kea)
+	if err == nil {
+		return nil
+	}
+	var rest []model.Overlay
+	for _, ov := range o.ov.list {
+		if ov.Kind != model.OverlayKindDhcp {
+			rest = append(rest, ov)
 		}
 	}
-	return out
+	if base := o.dryTarget(rest); base.Kea != nil && refused(base.Kea) != nil {
+		return nil
+	}
+	return []compiler.Problem{{Severity: compiler.SevError, Code: compiler.CodeDHCP, Message: "the DHCP server refuses the configuration of the action: " + err.Error()}}
 }
+
+// dhcpTestTimeout bounds the check of an action's configuration, which the state owner waits for.
+const dhcpTestTimeout = 3 * time.Second
 
 // maxPutBatch bounds how many overlay writes are accepted before they are checked together: a
 // burst is checked in a few compiles, and the first writers of a very large one do not wait for

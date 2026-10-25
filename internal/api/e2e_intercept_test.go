@@ -100,13 +100,8 @@ func newInterceptBed(t *testing.T) *interceptBed {
 	go func() { _ = b.srv.ServeControlOn(cctx, ln); close(done) }()
 	t.Cleanup(func() { cancelControl(); <-done })
 
-	// the HTTPS server of the real server, with the certificate of the CA a device trusts as a public one
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, cert, key := writePublicServer(t, dir, tlsBroker)
-	b.top.Server.Start("python3", "-c", httpsServerScript, cert, key, strconv.Itoa(httpsPort))
+	// the HTTPS server of the real server, with the certificate of the CA a device trusts as a public one (the proxy verifies it against that CA)
+	b.top.Server.Start("python3", "-c", httpsServerScript, b.publicCert, b.publicKey, strconv.Itoa(httpsPort))
 
 	ib.proxy, err = testbed.StartProxy(py, testbed.ProxyOptions{
 		Namespace: b.ns, Listen: proxyListen, Control: "http://" + controlListen, API: b.base, TokenFile: b.tokenFile,

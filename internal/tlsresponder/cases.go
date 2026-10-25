@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -94,7 +95,8 @@ func (s *Server) certificate(ctx context.Context, c net.Conn, hello []byte, info
 			return nil, nil
 		},
 	}
-	conn := tls.Server(&prefixConn{Conn: c, prefix: hello}, cfg)
+	tap := &tapConn{Conn: c}
+	conn := tls.Server(&prefixConn{Conn: tap, prefix: hello}, cfg)
 	hctx, cancel := context.WithTimeout(ctx, s.opt.HandshakeTimeout)
 	defer cancel()
 	err = conn.HandshakeContext(hctx)
@@ -109,8 +111,74 @@ func (s *Server) certificate(ctx context.Context, c net.Conn, hello []byte, info
 		rep.TlsVersion = &v
 	}
 	outcome, alert := classify(err)
+	if outcome == model.TlsHandshakeReportOutcomeClientClosed && alert == "handshake_error" {
+		// a TLS 1.3 client that dislikes the certificate may send its alert unprotected (OpenSSL does, the handshake keys of its
+		// own side do not exist yet): crypto/tls fails to decrypt it (bad record MAC), but it is the device's rejection
+		if name := plainAlert(tap.read()); name != "" {
+			outcome, alert = model.TlsHandshakeReportOutcomeRejected, name
+		}
+	}
 	finish(outcome, alert)
 	reset(c)
+}
+
+// tapConn remembers the first bytes the client sent after its ClientHello, for the alert that crypto/tls does not report.
+type tapConn struct {
+	net.Conn
+	mu  sync.Mutex
+	buf []byte
+}
+
+// tapLimit bounds what a tapConn keeps: an alert and a change cipher spec are a few bytes.
+const tapLimit = 256
+
+func (t *tapConn) Read(b []byte) (int, error) {
+	n, err := t.Conn.Read(b)
+	t.mu.Lock()
+	if room := tapLimit - len(t.buf); n > 0 && room > 0 {
+		t.buf = append(t.buf, b[:min(n, room)]...)
+	}
+	t.mu.Unlock()
+	return n, err
+}
+
+func (t *tapConn) read() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]byte(nil), t.buf...)
+}
+
+// plainAlert is the name of the first alert in the TLS records of b that is sent in the clear, past the change cipher spec
+// records of the compatibility mode; "" when there is none.
+func plainAlert(b []byte) string {
+	for len(b) >= 5 {
+		n := int(b[3])<<8 | int(b[4])
+		if len(b) < 5+n {
+			return ""
+		}
+		switch b[0] {
+		case 20: // change_cipher_spec
+		case 21: // alert: level, description
+			if n != 2 {
+				return ""
+			}
+			return alertByNumber[b[6]]
+		default:
+			return ""
+		}
+		b = b[5+n:]
+	}
+	return ""
+}
+
+// alertByNumber names the alerts of RFC 8446 section 6 by their number, for the ones a client sends about a certificate.
+var alertByNumber = map[byte]string{
+	0: "close_notify", 10: "unexpected_message", 20: "bad_record_mac", 40: "handshake_failure", 42: "bad_certificate",
+	43: "unsupported_certificate", 44: "certificate_revoked", 45: "certificate_expired", 46: "certificate_unknown", 47: "illegal_parameter",
+	48: "unknown_ca", 49: "access_denied", 50: "decode_error", 51: "decrypt_error", 70: "protocol_version", 71: "insufficient_security",
+	80: "internal_error", 86: "inappropriate_fallback", 90: "user_canceled", 109: "missing_extension", 110: "unsupported_extension",
+	112: "unrecognized_name", 113: "bad_certificate_status_response", 115: "unknown_psk_identity", 116: "certificate_required",
+	120: "no_application_protocol",
 }
 
 // helloFailure is the outcome of a connection whose ClientHello could not be read.

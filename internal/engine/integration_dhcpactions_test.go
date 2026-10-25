@@ -301,7 +301,7 @@ func TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel(t *testing.
 	}
 	b.top.A.Must("ip", "route", "replace", "default", "via", testbed.LAN0Gateway)
 	d := b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool {
-		return len(d.Addresses) > 0 && d.Addresses[0].String() == moved
+		return contains(addrStrings(d.Addresses), moved) // the old address stays in the list until the neighbor entry goes
 	})
 	if d.ID != devAID {
 		t.Errorf("the device with the new address is %s, want the device of the MAC (%s)", d.ID, devAID)
@@ -338,8 +338,9 @@ func TestSetOptionsChangeWhatTheClientIsToldOnTheRealKernel(t *testing.T) {
 	if !ok {
 		t.Fatal("B got no lease")
 	}
-	// the device's options replace the network's: its router is its own, the rest are the configured ones (the gateway as DNS server)
-	if field(bl, "router") != "10.10.0.8" || field(bl, "dns") != testbed.LAN0Gateway || field(bl, "domain") != "" {
+	// the device's options replace the network's: its router is its own, the DNS servers are the configured ones (the gateway). The domain is not
+	// configured, so the reservation does not list it and Kea's merge leaves the subnet's, which is the network's action (see development.md, decision 8)
+	if field(bl, "router") != "10.10.0.8" || field(bl, "dns") != testbed.LAN0Gateway || field(bl, "domain") != "net.test" {
 		t.Errorf("the options of the device's action: %s", bl)
 	}
 }
@@ -376,4 +377,13 @@ func TestSilenceLeavesTheClientWithoutAnAnswerOnTheRealKernel(t *testing.T) {
 	if _, ok := waitLine(t, b.udhcpc(b.top.B, 8), "bound", 1, 30*time.Second); !ok {
 		t.Fatal("the network is still silent after the action went")
 	}
+}
+
+// addrStrings is the text of addresses.
+func addrStrings(l []netip.Addr) []string {
+	out := make([]string, 0, len(l))
+	for _, a := range l {
+		out = append(out, a.String())
+	}
+	return out
 }

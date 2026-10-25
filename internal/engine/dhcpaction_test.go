@@ -182,7 +182,7 @@ func TestForceNewIPChecksTheAddressItIsGivenAndTheDeviceItMoves(t *testing.T) {
 }
 
 func TestForceNewIPHasNoAddressLeftToGiveInAFullPool(t *testing.T) {
-	h, f, sid := dhcpActionHarness(t)
+	h, f, _ := dhcpActionHarness(t)
 	h.mustApply(h.revision(func(c *model.Configuration) {
 		withDHCPAndDevice(c)
 		n := (*c.Networks)[iotID]
@@ -192,7 +192,7 @@ func TestForceNewIPHasNoAddressLeftToGiveInAFullPool(t *testing.T) {
 		(*c.Networks)[iotID] = n
 		(*c.Devices)[devID] = withFixed((*c.Devices)[devID], "10.10.0.31")
 	}))
-	sid = 0
+	sid := 0
 	for id := range h.e.Snapshot().KeaNetworks {
 		sid = id
 	}

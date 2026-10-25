@@ -355,7 +355,9 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		// scope wins, and `disabled` while nothing could use it: its network has DHCP off, or its device cannot be reached
 		// by the DHCP server (the compiler's warning says which)
 		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyDHCP)
-		if overridden(st) {
+		if overridden(st) && ov.Dhcp != nil && ov.Dhcp.Action == model.DeleteLease {
+			st = model.EffectStateDisabled // it acts once and competes with nothing: it is not in force because nothing could carry it out
+		} else if overridden(st) {
 			// the newer action of its scope: known from the overlays, not from the traffic of the devices, since a device that
 			// was not seen yet is a target as well
 			if w, ok := oc.dhcpWinner(ov.Target); ok && !strings.EqualFold(w.ID, ov.Id.String()) {

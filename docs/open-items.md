@@ -2435,7 +2435,7 @@ found that no later milestone of the plan completes and that need a decision of 
 
 ## Phase 5 open items
 
-Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M22 so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
+Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23 so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
 
@@ -2538,5 +2538,18 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: a test reads `GET /intercept/flows` itself (`chaosctl` or the client library) after the run, the run's captures with the key log are the evidence; (b) a check type `http_exchange` (host, path prefix, method, status, with the window of the others) and a log of the run's exchanges as an artifact (`kind: http_exchanges`, a JSONL file kept with the run).
 - Recommendation: (a) for V1; (b) after a user needs a pass or a fail of a run by what the device asked.
 - Acceptance: the plan has the check type (or the decision to leave it out) and the artifact.
+- Needs maintainer: yes
+- Effort: M
+
+### P5-M23-01 DHCP test actions cannot be made in the web UI or with `chaosctl`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. M23 delivers the DHCP family in the API (an overlay of the kind `dhcp` with the actions `short_lease`, `delete_lease`, `force_new_ip`, `set_options` and `silence`, the step type `dhcp`, the event `dhcp_leases_deleted`) and the UI labels and lists them (the chips of a DHCP action, a `dhcp` step in a scenario). §2.17 lists "DHCP lease and DHCP test actions" among the contents of the device detail, and §2.7 says the UI shows DHCP inside the network and device views, but the milestones that build those views (M12 to M14) deliver the lease and no actions, and M23's scope names the scenario step type, not a form. No later milestone of the plan adds one (M23a is the Captures screen). `chaosctl` (M18) has flags for impairment faults and profiles only (`chaosctl overlay create` takes a request document of any kind, a DHCP action included). A DHCP action is made today with the API or the generated clients, with `chaosctl overlay create` and a document, or in the YAML of a scenario (the step list keeps a `dhcp` step it does not edit). It is the same gap as P5-M20-02 and P5-M21-01 for the DNS and TLS families, with two differences: the actions belong on the device detail and the network card (a button "Force a new IP", "Delete lease", a lease time and options form) rather than in the "Add fault" dialog, and `force_new_ip` is a device's action whose address the gateway chooses and shows.
+- Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `dhcp`), `web/src/views/DeviceDetailView.vue` (the header comment names the DHCP test actions as arriving later), `internal/ctl/overlays.go`; `docs/development.md` "DHCP test actions (M23)".
+- Task: decide with P5-M20-02 and P5-M21-01 whether V1 needs DHCP actions in the UI (the actions of the device detail and of the network card, a `dhcp` step in the step dialog) and in `chaosctl` (`chaosctl dhcp`), and in which milestone.
+- Options: (a) leave it: the API, the clients and scenario files are the way to make DHCP actions, the UI shows them; (b) the actions on the device detail and the network card and a `dhcp` step in the step dialog, with Playwright tests, and `chaosctl dhcp` flags (the DNS and TLS forms of P5-M20-02 and P5-M21-01 are decided together, so the application-layer kinds are designed once).
+- Recommendation: (b) for the device detail (it is in §2.17 already and is where a tester looks for "force a new IP"), together with the DNS and TLS forms; M23 is optional for V1 (plan §5), and so is its UI.
+- Acceptance: the plan has the milestone (or the decision to leave it out) and the design of the actions in §2.17.
 - Needs maintainer: yes
 - Effort: M

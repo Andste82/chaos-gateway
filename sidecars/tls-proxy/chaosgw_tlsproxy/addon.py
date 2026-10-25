@@ -10,6 +10,8 @@ What the addon does:
 
 * follows the gateway's configuration (the cases of the kind `intercept` with their rules) by long poll;
 * applies the rules to every request (`rules.py`): delay, status, block, abort, throttle, modify;
+* applies the case's policy for the certificates of the real servers (`upstream`: the bundle, the installation's CA file or no check;
+  `tls_start_server`), where it differs from the installation's, which mitmproxy applies itself;
 * reports every exchange (`/internal/intercept/flows`) and what the device did with the proxy's certificate
   (`/internal/tls/handshakes`, the report of the responder's handshakes with the case `intercept`);
 * gives the TLS secrets of the connections to the gateway (`/internal/intercept/keylog`), attributed to the device, so that
@@ -30,7 +32,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from mitmproxy import http, tcp, tls
+import certifi
+from mitmproxy import ctx, http, tcp, tls
+from mitmproxy.net import tls as net_tls
+from OpenSSL import SSL
 
 from . import rules as R
 from .api import Batcher, Control, Follower, ServiceClient
@@ -56,6 +61,8 @@ class CaseConfig:
     keylog: bool = True
     block_quic: bool = True
     has_throttle: bool = False
+    # the policy for the certificates of the servers (`intercept.upstream`); None: the installation's default
+    upstream: str | None = None
 
 
 @dataclass
@@ -68,6 +75,8 @@ class Origin:
     device: str = ""
     original_dst: str = ""
     sni: str = ""
+    # what the upstream policy did to the proxy's connection to the server, for the report if that connection fails
+    upstream_note: str = ""
     # key log lines of this connection that wait for the next flush
     keylines: list[str] = field(default_factory=list)
 
@@ -96,6 +105,39 @@ def classify_client_failure(error: str | None) -> tuple[str, str | None]:
     if "timed out" in low or "timeout" in low:
         return "timeout", None
     return "client_closed", "handshake_error"
+
+
+_upstream_contexts: dict[tuple, SSL.Context] = {}
+
+
+def _upstream_context(plan: R.UpstreamPlan) -> SSL.Context:
+    """A client context that only differs from mitmproxy's in what it trusts: the CA file of the plan (the bundle of mitmproxy when there
+    is none), or nothing at all for a refusal. The connection keeps the versions, ciphers and options mitmproxy gave it when it was made
+    from its own context (the key log callback is OpenSSL's per session context, which stays mitmproxy's: the secrets of the connection are still
+    logged, which a test pins). Contexts are kept: one per trust store, as mitmproxy keeps its own."""
+    ca_file = None if plan.refuse or not plan.verify else (plan.ca_file or certifi.where())
+    stamp = None
+    if ca_file:
+        stamp = os.stat(ca_file).st_mtime_ns  # a CA file that is replaced is read again
+    key = (plan.verify, ca_file, stamp)
+    ssl_ctx = _upstream_contexts.get(key)
+    if ssl_ctx is None:
+        ssl_ctx = SSL.Context(SSL.TLS_CLIENT_METHOD)
+        ssl_ctx.set_verify(SSL.VERIFY_PEER if plan.verify else SSL.VERIFY_NONE, None)
+        if ca_file:
+            ssl_ctx.load_verify_locations(ca_file, None)
+        if len(_upstream_contexts) >= 16:
+            _upstream_contexts.clear()
+        _upstream_contexts[key] = ssl_ctx
+    return ssl_ctx
+
+
+def apply_upstream_plan(conn: SSL.Connection, plan: R.UpstreamPlan) -> None:
+    """Changes how `conn` (made by mitmproxy, not connected yet) verifies the server's certificate. The trust store belongs to the
+    context, which is switched; whether a certificate is verified at all belongs to the connection, which is set. The host name that is
+    checked stays what mitmproxy set on the connection."""
+    conn.set_context(_upstream_context(plan))
+    SSL._lib.SSL_set_verify(conn._ssl, SSL.VERIFY_PEER if plan.verify else SSL.VERIFY_NONE, SSL._ffi.NULL)  # type: ignore[attr-defined]
 
 
 class KeylogSink:
@@ -164,8 +206,6 @@ class Addon:
     # ---- lifecycle
 
     def load(self, loader) -> None:
-        from mitmproxy.net import tls as net_tls
-
         net_tls.log_master_secret = self.keysink
 
     async def running(self) -> None:
@@ -203,6 +243,7 @@ class Addon:
                 keylog=ic.get("keylog", True) is not False,
                 block_quic=ic.get("block_quic", True) is not False,
                 has_throttle=any(r.action == "throttle" for r in rs),
+                upstream=R.parse_upstream(ic.get("upstream")),
             )
         self.cases = cases
         self.loaded.set()
@@ -256,6 +297,36 @@ class Addon:
         outcome, alert = classify_client_failure(data.conn.error)
         self._handshake(data, outcome, alert)
 
+    async def tls_start_server(self, data: tls.TlsData) -> None:
+        """The proxy's own TLS connection to the server. A case that asks for another policy than the installation's gets the verification
+        of the connection changed. This addon is before mitmproxy's own in the chain, so the connection is made here by calling the hook
+        of mitmproxy's `tlsconfig` addon (which then finds it made and leaves it), and its trust store (and whether the certificate is
+        verified at all) is replaced; nothing else of the connection is."""
+        o = self.origin(data.context.client)
+        case = await self.case_of(o)
+        if case is None or case.upstream is None or data.is_dtls:
+            return
+        tlsconfig = ctx.master.addons.get("tlsconfig")
+        if tlsconfig is None:
+            raise RuntimeError("mitmproxy has no tlsconfig addon: the upstream policy of a case cannot be applied")
+        if data.ssl_conn is None:
+            tlsconfig.tls_start_server(data)
+        try:
+            plan = R.upstream_plan(case.upstream, bool(ctx.options.ssl_insecure), ctx.options.ssl_verify_upstream_trusted_ca or None)
+            if plan is None:
+                return
+            apply_upstream_plan(data.ssl_conn, plan)
+            if o is not None and plan.note:
+                o.upstream_note = plan.note
+                log.warning("%s: the connection to %s is refused", plan.note, data.conn.sni or data.conn.address)
+        except Exception:
+            # a hook that fails leaves mitmproxy's own connection, with the policy of the installation, which may verify less than the
+            # case wants: refuse every certificate instead
+            log.exception("the upstream policy of a case cannot be applied: the connection to the server is refused")
+            apply_upstream_plan(data.ssl_conn, R.UpstreamPlan(verify=True, refuse=True))
+            if o is not None:
+                o.upstream_note = "the upstream policy of the case could not be applied"
+
     def tls_established_server(self, data: tls.TlsData) -> None:
         self._attribute_server(data)
 
@@ -263,7 +334,10 @@ class Addon:
         self._attribute_server(data)
         o = self.origin(data.context.client)
         host = data.conn.sni or (data.conn.address[0] if data.conn.address else "")
-        self._report_flow(o, {"protocol": "tcp", "host": host, "error": f"TLS to the server failed: {data.conn.error}"[:512], "time": now_iso()})
+        error = f"TLS to the server failed: {data.conn.error}"
+        if o is not None and o.upstream_note:
+            error += f" ({o.upstream_note})"
+        self._report_flow(o, {"protocol": "tcp", "host": host, "error": error[:512], "time": now_iso()})
 
     def _attribute_server(self, data: tls.TlsData) -> None:
         try:

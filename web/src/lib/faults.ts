@@ -111,7 +111,7 @@ export function dnsChips(d: DnsFault): string[] {
 
 /**
  * The chips of a TLS case: "TLS expired · 8883", "TLS self signed · broker.example.com", "TLS untrusted ca · 203.0.113.0/24 · cuts existing". The
- * interception adds what its settings change: "TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log".
+ * interception adds what its settings change: "TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log · servers not verified".
  */
 export function tlsChips(t: TlsCase): string[] {
   const what = `TLS ${t.case.replace(/_/g, ' ')}`;
@@ -129,6 +129,9 @@ export function tlsChips(t: TlsCase): string[] {
     if (rules) parts.push(`${rules} HTTP rule${rules === 1 ? '' : 's'}`);
     if (t.intercept?.block_quic === false) parts.push('QUIC allowed');
     if (t.intercept?.keylog === false) parts.push('no key log');
+    // the policy for the servers' certificates (P5-M22-03); nothing when the case leaves it to the installation
+    const policy = t.intercept?.upstream;
+    if (policy) parts.push({ verify: 'servers verified (bundle)', own_ca: 'servers verified (own CA)', insecure: 'servers not verified' }[policy]);
   }
   return [parts.length ? `${what} · ${parts.join(' · ')}` : what];
 }

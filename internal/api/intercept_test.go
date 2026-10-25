@@ -93,6 +93,56 @@ func TestTheProxyFetchesTheRulesOfTheInterceptionCasesAndIsTheOneTheHealthCheckS
 	})
 }
 
+// The upstream policy of a case (P5-M22-03) is part of the settings the proxy fetches, for each value, and a case without it carries none (the
+// proxy then applies the installation's default). A value the spec does not know and the policy on a certificate case are refused when the
+// overlay is written.
+func TestTheUpstreamPolicyOfACaseReachesTheProxyAndAnInvalidOneIsRefused(t *testing.T) {
+	defer api.SetTLSPoll(300*time.Millisecond, 20*time.Millisecond)()
+	g, admin := tlsGateway(t)
+	const body = `{"target":%s,"tls":{"case":"intercept","ports":[443],"intercept":{%s}}}`
+	// one overlay per policy, on devices of their own: an overlay of the same scope would replace the one before it
+	devices := map[string]string{"verify": `{"device":"esp32-42"}`, "own_ca": `{"device":"esp32-43"}`, "insecure": `{"group":"sensors"}`, "": `{"network":"IoT"}`}
+	ids := map[string]any{}
+	g.asAdmin(admin, func() {
+		g.badRequest = true
+		defer func() { g.badRequest = false }()
+		for name, doc := range map[string]string{
+			"an unknown policy":              fmt.Sprintf(body, `{"device":"esp32-42"}`, `"upstream":"trust_everyone"`),
+			"a policy that is not text":      fmt.Sprintf(body, `{"device":"esp32-42"}`, `"upstream":true`),
+			"a policy on a certificate case": `{"target":{"device":"esp32-42"},"tls":{"case":"expired","intercept":{"upstream":"insecure"}}}`,
+			"the word default":               fmt.Sprintf(body, `{"device":"esp32-42"}`, `"upstream":"default"`),
+		} {
+			if r := g.createOverlay(doc); r.Status != 400 && r.Status != 422 {
+				t.Errorf("%s: %d %s", name, r.Status, r.Body)
+			}
+		}
+		g.badRequest = false
+		for u, dev := range devices {
+			settings := `"block_quic":true`
+			if u != "" {
+				settings = `"upstream":"` + u + `"`
+			}
+			ov := g.mustCreateOverlay(fmt.Sprintf(body, dev, settings))
+			ids[u] = ov["id"]
+			if got, _ := ov["tls"].(map[string]any)["intercept"].(map[string]any)["upstream"]; (got == nil) != (u == "") || (u != "" && got != u) {
+				t.Errorf("the overlay of %q says %v", u, got)
+			}
+		}
+	})
+	cfg := g.do("GET", "/internal/tls/config?consumer=proxy", nil, nil, nil).json(t)
+	got := map[any]map[string]any{}
+	for _, c := range cfg["cases"].([]any) {
+		m := c.(map[string]any)
+		got[m["overlay"]] = m["intercept"].(map[string]any)
+	}
+	for u := range devices {
+		v, ok := got[ids[u]]["upstream"]
+		if (u == "") == ok || (ok && v != u) {
+			t.Errorf("a case with the policy %q reaches the proxy with %v", u, got[ids[u]])
+		}
+	}
+}
+
 // A case that names the proxy while no proxy polls is a problem the health check names (the connections of the case are reset), and a gateway
 // without a case does not mind a proxy that is not there.
 func TestAnInterceptionCaseWithoutAProxyThatPollsMakesTheHealthCheckDegraded(t *testing.T) {

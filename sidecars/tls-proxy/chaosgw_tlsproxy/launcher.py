@@ -90,9 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--control", default="http://127.0.0.1:9445", help="the responder's control interface")
     p.add_argument("--confdir", default="/tmp/mitmproxy")
     p.add_argument("--upstream-ca-file", default=os.environ.get("CHAOSGW_UPSTREAM_CA_FILE", ""),
-                   help="CA certificates (PEM) that verify the real servers, instead of the bundle of the image")
+                   help="CA certificates (PEM) that verify the real servers, instead of the bundle of the image: the installation's default, and what a case with `upstream: own_ca` verifies against")
     p.add_argument("--upstream-insecure", action="store_true", default=os.environ.get("CHAOSGW_UPSTREAM_INSECURE") == "1",
-                   help="do not verify the certificates of the real servers (a lab with private servers)")
+                   help="do not verify the certificates of the real servers (a lab with private servers): the installation's default, which a case can change with `upstream`")
     p.add_argument("--verbosity", default=os.environ.get("CHAOSGW_MITM_VERBOSITY", "info"), choices=["error", "warn", "info", "alert", "debug"],
                    help="how much mitmproxy logs (debug shows its decisions: protocol detection, hooks)")
     a = p.parse_args(argv)

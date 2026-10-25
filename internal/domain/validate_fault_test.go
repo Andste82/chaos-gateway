@@ -249,6 +249,12 @@ func TestProfileRules(t *testing.T) {
 		{"interception settings on a certificate case", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"case":"expired","intercept":{}}`), "profiles", idProfile, "parts", "tls")
 		}, pr + "/tls/intercept", CodeInvalidTLSCase},
+		{"an upstream policy that is none", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"upstream":"trust_everyone"}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/upstream", "enum"}, // the spec's enum: verify, own_ca, insecure
+		{"an upstream policy on a certificate case", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"expired","intercept":{"upstream":"insecure"}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept", CodeInvalidTLSCase},
 		{"an http status rule without a status", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"status"}]}}`), "profiles", idProfile, "parts", "tls")
 		}, pr + "/tls/intercept/http_rules/0/status", CodeInvalidTLSCase},
@@ -304,6 +310,18 @@ func TestEveryHTTPRuleActionIsAcceptedWithItsField(t *testing.T) {
 		{"action":"throttle","rate":"8bit"},
 		{"action":"abort"},
 		{"action":"modify","modify":{"request_headers":{"User-Agent":""},"response_headers":{"X-Test":"1"},"response_body_replace":[{"search":"a","replace":"b"}]}}]}}`), "profiles", idProfile, "parts", "tls")
+	wantValid(t, d.validate(t))
+}
+
+// Each value of the upstream policy of an interception case (P5-M22-03) is accepted, and so is none (the installation's default).
+func TestEveryUpstreamPolicyOfAnInterceptionCaseIsAccepted(t *testing.T) {
+	for _, u := range []string{"verify", "own_ca", "insecure"} {
+		d := baseDoc(t)
+		d.set(t, obj(t, `{"case":"intercept","intercept":{"upstream":"`+u+`"}}`), "profiles", idProfile, "parts", "tls")
+		wantValid(t, d.validate(t))
+	}
+	d := baseDoc(t)
+	d.set(t, obj(t, `{"case":"intercept","intercept":{}}`), "profiles", idProfile, "parts", "tls")
 	wantValid(t, d.validate(t))
 }
 
